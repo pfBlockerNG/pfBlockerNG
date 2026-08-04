@@ -81,11 +81,12 @@ committed):
 - **`pre-push`** enforces the release tag scheme before anything is pushed (single source:
   [`scripts/release-version.sh`](scripts/release-version.sh)):
 
-| Commit reachable from | Required tag form                     |
-| --------------------- | ------------------------------------- |
-| `origin/main`         | `vX.Y.Z` (stable)                     |
-| `origin/devel` only   | `vX.Y.Z.alpha.N` / `.beta.N` / `.rc.N` (prerelease) |
-| Neither, or malformed | push is rejected                      |
+| Release channel | Required tag form |
+| --- | --- |
+| Stable | `vX.Y.Z` |
+| Testing | `vX.Y.Z.aN` / `.bN` / `.rN`, where `Z != 0` |
+| Edge | `vX.Y.0.aN` / `.bN` / `.rN` |
+| Malformed or mismatched trailer | push is rejected |
 
 Activate the hooks once after cloning (git cannot auto-apply a committed hooks
 path):
@@ -640,15 +641,16 @@ hand; the workflow validates the scheme, commits the changelog, and **creates + 
 on the changelog commit. The tag scheme (single source:
 [`scripts/release-version.sh`](scripts/release-version.sh)) is enforced before anything is cut:
 
-- **Prerelease** — `vX.Y.Z.alpha.N` / `.beta.N` / `.rc.N`, from `devel` only.
-- **Stable** — `vX.Y.Z`, from `main` only.
+- **Edge prerelease** — `vX.Y.0.aN` / `.bN` / `.rN`.
+- **Testing prerelease** — `vX.Y.Z.aN` / `.bN` / `.rN`, where `Z != 0`.
+- **Stable** — `vX.Y.Z`.
 
 ```sh
 # Dry-run (the default): validate + build, publish nothing
-gh workflow run release.yml -f tag=v4.0.0.alpha.1
+gh workflow run release.yml -f tag=v4.0.0.a1 -f channel=edge -f source=release/4.0
 
 # Cut the real release
-gh workflow run release.yml -f tag=v4.0.0.alpha.1 -f dry_run=false
+gh workflow run release.yml -f tag=v4.0.0.a1 -f channel=edge -f source=release/4.0 -f dry_run=false
 ```
 
 The release workflow will:

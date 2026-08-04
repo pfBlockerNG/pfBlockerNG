@@ -64,7 +64,7 @@ def _invalid(tag: str) -> ValueError:
 
 
 def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:
-    """Parse one strict release tag using explicit channel context."""
+    """Parse one strict release tag and validate its channel context."""
     if not isinstance(tag, str) or not tag or len(tag) > 128 or not tag.isascii():
         raise _invalid(tag)
 
@@ -98,6 +98,9 @@ def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:
         if channel == "stable":
             raise ValueError("preview tag requires testing or edge channel")
         major, minor, patch = (match.group(name) for name in ("major", "minor", "patch"))
+        expected_channel = "edge" if patch == "0" else "testing"
+        if channel != expected_channel:
+            raise ValueError(f"preview tag patch {patch} requires {expected_channel} channel")
         stage_code = match.group("stage")
         stage = {"a": "alpha", "b": "beta", "r": "rc"}[stage_code]
         sequence = match.group("sequence")

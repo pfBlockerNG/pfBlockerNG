@@ -1653,7 +1653,7 @@ def test_default_builder_forwards_project_record_contract(tmp_path: Path, monkey
     record.write_text("{}\n")
     record_data = {
         "channel": "testing",
-        "canonical_package_version": "4.0.0.a1",
+        "canonical_package_version": "4.0.1.a1",
         "emitted_identity": "pfSense-pkg-pfBlockerNG",
         "matrix_row": {"variant": "CE"},
     }
@@ -1664,7 +1664,7 @@ def test_default_builder_forwards_project_record_contract(tmp_path: Path, monkey
 
     def fake_run(cmd: list[str], *, check: bool) -> None:
         seen.extend(cmd)
-        (out / "pfSense-pkg-pfBlockerNG-4.0.0.a1.pkg").touch()
+        (out / "pfSense-pkg-pfBlockerNG-4.0.1.a1.pkg").touch()
         assert check is True
 
     monkeypatch.setattr(brp.subprocess, "run", fake_run)
@@ -1676,16 +1676,16 @@ def test_default_builder_forwards_project_record_contract(tmp_path: Path, monkey
         py_flavor="py311",
         variant="CE",
         build_record=record,
-        pkgversion="4.0.0.a1",
+        pkgversion="4.0.1.a1",
         out_dir=out,
     )
 
-    assert result.name == "pfSense-pkg-pfBlockerNG-4.0.0.a1.pkg"
+    assert result.name == "pfSense-pkg-pfBlockerNG-4.0.1.a1.pkg"
     assert seen[seen.index("--channel") + 1] == "testing"
     assert "devel" not in seen
     assert seen[seen.index("--variant") + 1] == "CE"
     assert seen[seen.index("--build-record") + 1] == str(record)
-    assert seen[seen.index("--pkgversion") + 1] == "4.0.0.a1"
+    assert seen[seen.index("--pkgversion") + 1] == "4.0.1.a1"
 
 
 def test_default_matrix_builder_fails_closed_without_record(tmp_path: Path) -> None:
@@ -1700,11 +1700,11 @@ def test_default_builder_reuses_existing_exact_output(tmp_path: Path, monkeypatc
     out.mkdir()
     record_path = tmp_path / "record.json"
     record_path.write_text("{}\n")
-    expected = out / "pfSense-pkg-pfBlockerNG-4.0.0.a1.pkg"
+    expected = out / "pfSense-pkg-pfBlockerNG-4.0.1.a1.pkg"
     expected.write_bytes(b"already-built")
     record = {
         "channel": "testing",
-        "canonical_package_version": "4.0.0.a1",
+        "canonical_package_version": "4.0.1.a1",
         "emitted_identity": "pfSense-pkg-pfBlockerNG",
         "matrix_row": {"variant": "CE"},
     }
@@ -1724,7 +1724,7 @@ def test_default_builder_reuses_existing_exact_output(tmp_path: Path, monkeypatc
         py_flavor="py311",
         variant="CE",
         build_record=record_path,
-        pkgversion="4.0.0.a1",
+        pkgversion="4.0.1.a1",
         out_dir=out,
     )
 
@@ -1820,7 +1820,7 @@ def test_retain_by_channel_uses_validated_annotation_for_canonical_packages(tmp_
       When one package per retention channel is requested
       Then testing is retained in the devel bucket and stable in the stable bucket
     """
-    testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.0.a1", "pfSense-pkg-pfBlockerNG-stable-looking.pkg")
+    testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.1.a1", "pfSense-pkg-pfBlockerNG-stable-looking.pkg")
     stable = _make_annotated_project_pkg(tmp_path, "stable", "4.0.0", "pfSense-pkg-pfBlockerNG-devel-looking.pkg")
 
     kept = brp.retain_by_channel([testing, stable], keep_devel=1, keep_stable=1)
@@ -1830,7 +1830,7 @@ def test_retain_by_channel_uses_validated_annotation_for_canonical_packages(tmp_
 
 def test_retain_by_channel_keeps_annotated_edge_outside_testing_window(tmp_path: Path) -> None:
     """Canonical edge packages remain untouched while testing is retention-limited."""
-    testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.0.a1", "testing.pkg")
+    testing = _make_annotated_project_pkg(tmp_path, "testing", "4.0.1.a1", "testing.pkg")
     edge_old = _make_annotated_project_pkg(tmp_path, "edge", "4.0.0.b1", "edge-old.pkg")
     edge_new = _make_annotated_project_pkg(tmp_path, "edge", "4.0.0.b2", "edge-new.pkg")
 

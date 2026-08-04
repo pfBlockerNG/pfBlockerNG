@@ -83,6 +83,8 @@ identities, the complete row emitted by `read-version-matrix.sh --print-build`,
 FreeBSD-ports SHA, route, `source_date_epoch`, and a deterministic build-input
 digest. It then emits exactly
 `pfSense-pkg-pfBlockerNG` regardless of the native recipe. The record's source
+channel must match its canonical tag: prereleases targeting `X.Y.0` are Edge;
+prereleases targeting `X.Y.Z` with `Z != 0` are Testing. The record's source
 tag/SHA and Ports SHA must resolve in clean Git checkouts with no hidden index
 flags or escaping tracked symlinks. Project mode therefore requires a
 `USE_GITHUB` recipe and `--local-src`; embedded recipes and remote-only source

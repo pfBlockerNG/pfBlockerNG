@@ -10,23 +10,20 @@ current repository revision supplies the operational job names and inputs.
 ## Channel contract
 
 All channels publish the exact package identity `pfSense-pkg-pfBlockerNG`. Channel is
-metadata and catalog placement, not a package-name suffix. Channel is explicit and
-configured, and never inferred from a tag suffix. The tag trailer carries only the channel,
-using `pfBlockerNG-Release-Channel: <stable|testing|edge>`; the exact configured release line
-is validated separately. Every operation uses a pinned source SHA.
+metadata and catalog placement, not a package-name suffix. The tag trailer carries the
+channel using `pfBlockerNG-Release-Channel: <stable|testing|edge>`; the tag and trailer must
+agree with the deterministic version rule below. The exact configured release line is
+validated separately. Every operation uses a pinned source SHA.
 
 | Channel | Source | Tag and package version | Release and notes |
 | --- | --- | --- | --- |
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final Release; authored notes |
-| Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` / exact version | prerelease; authored notes |
-| Edge | configured `release/X.Y` | same Testing grammar / exact version | follows Testing; authored notes |
+| Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` with `Z != 0` / exact version | prerelease; authored notes |
+| Edge | configured `release/X.Y` | `vX.Y.0.aN`, `.bN`, or `.rN` / exact version | prerelease; authored notes |
 | Nightly | explicit pinned source SHA | untagged; date counter only | no GitHub Release; no release notes |
 
-Stable, Testing, and Edge share one release-line target. Edge follows Testing only when no distinct target
-exists; distinct-target Edge uses its configured target/line. With no distinct
-target configured, mirror the exact existing Testing Release and artifact bytes,
-checksums, source, provenance, tag, and notes. Do not rebuild or create a second Release.
-When the target becomes Stable, Edge follows Testing until a new target exists.
+Stable, Testing, and Edge may share a release line, but their tagged versions select the
+channel mechanically: patch zero is Edge; a nonzero patch is Testing.
 
 ## Nightly identity and ordering
 
@@ -50,15 +47,15 @@ verified from that source. The release workflow creates the tag only after build
 pass and leaves a draft; `release-with-changelog` authors notes and publishes it. Nightly
 creates no tag, Release, or notes and must not enter the release-note path.
 
-Use `scripts/release-version.sh` as the parser and validator. It receives the tag and explicit
-channel/source context; callers must not duplicate its grammar or guess a channel from a
-suffix. A published Release is immutable. Asset, checksum, source, and provenance identity
+Use `scripts/release-version.sh` as the parser and validator. It receives the tag and
+channel/source context and rejects a channel that disagrees with the patch-zero rule. A
+published Release is immutable. Asset, checksum, source, and provenance identity
 must remain paired, and an existing identity may be retried only without rebuilding it.
 
 ## Maintained lines and fixes
 
-Stable and Testing can coexist on every maintained `release/X.Y`; one explicitly configured
-line supplies Edge. Branch-name ordering never selects an Edge line. Fixes start on the oldest
+Stable, Testing, and Edge can coexist on every maintained `release/X.Y`; the tagged patch
+number selects Testing or Edge. Branch-name ordering never selects a channel. Fixes start on the oldest
 affected maintained line, then move forward with `git cherry-pick -x` through newer lines and
 finally the configured development source, with separate PRs and gates.
 

@@ -139,7 +139,7 @@ def test_build_matrix_row_rejects_missing_unknown_wrong_type_and_non_live(mutato
     "channel,tag,classification,version,recipe",
     [
         ("stable", "v2.8.0", "final", "2.8.0", "pfSense-pkg-pfBlockerNG"),
-        ("testing", "v2.8.0.a1", "alpha", "2.8.0.a1", "pfSense-pkg-pfBlockerNG-testing"),
+        ("testing", "v2.8.1.a1", "alpha", "2.8.1.a1", "pfSense-pkg-pfBlockerNG-testing"),
         ("edge", "v2.8.0.r1", "rc", "2.8.0.r1", "pfSense-pkg-pfBlockerNG-edge"),
         ("nightly", None, "nightly", "20260804_1", "pfSense-pkg-pfBlockerNG-nightly"),
     ],

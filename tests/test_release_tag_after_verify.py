@@ -562,7 +562,7 @@ def test_the_tag_classifier_runs_from_a_trusted_ref() -> None:
 def _published_tag_fixture(
     tmp_path: Path,
     tag: str,
-    trailer: str | tuple[str, ...] | None = "testing",
+    trailer: str | tuple[str, ...] | None = "edge",
     source_line: str = "release/4.0",
 ) -> Path:
     """Create a fetched tag object for the published-workflow step."""
@@ -599,7 +599,7 @@ def _published_tag_fixture(
 def _run_classify_step(
     tmp_path: Path,
     tag: str,
-    trailer: str | tuple[str, ...] | None = "testing",
+    trailer: str | tuple[str, ...] | None = "edge",
     release_prerelease: str = "true",
 ) -> tuple[subprocess.CompletedProcess[str], dict[str, str]]:
     """Execute the REAL tag-classification step body under sh."""
@@ -629,7 +629,7 @@ def _run_classify_step(
 def _run_classify_with_source_line(tmp_path: Path, tag: str, source_line: str) -> subprocess.CompletedProcess[str]:
     """Run the published classifier against an explicitly chosen remote release line."""
     script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["resolve"], "Classify the tag"))
-    repo = _published_tag_fixture(tmp_path, tag, "testing", source_line)
+    repo = _published_tag_fixture(tmp_path, tag, "edge", source_line)
     output_file = tmp_path / "gh_output_route"
     output_file.write_text("")
     return subprocess.run(  # noqa: S603
@@ -658,7 +658,7 @@ def _run_port_sync_validation(portversion: str) -> subprocess.CompletedProcess[s
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "SOURCE": "release/4.0",
-            "CHANNEL": "testing",
+            "CHANNEL": "edge",
             "TAG": "v4.0.0.a1",
             "PORTVERSION": portversion,
         },
@@ -709,7 +709,7 @@ def test_an_off_scheme_published_tag_reports_the_real_reason(tmp_path: Path) -> 
 def test_a_scheme_tag_classifies_cleanly(tmp_path: Path) -> None:
     completed, outputs = _run_classify_step(tmp_path, "v4.0.0.a7")
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert outputs["channel"] == "testing", outputs
+    assert outputs["channel"] == "edge", outputs
     assert outputs["source"] == "release/4.0", outputs
     assert outputs["portversion"] == "4.0.0.a7", outputs
 
@@ -755,11 +755,11 @@ def test_tag_step_writes_and_validates_the_release_channel_trailer() -> None:
     [
         None,
         (),
-        ("testing", "testing"),
-        ("testing", "edge"),
-        ("testing\npfblockerng-release-channel: edge",),
-        ("testing\npfblockerng-release-channel:edge",),
-        ("testing\nPFBLOCKERNG-RELEASE-CHANNEL:\tedge",),
+        ("edge", "edge"),
+        ("edge", "testing"),
+        ("edge\npfblockerng-release-channel: testing",),
+        ("edge\npfblockerng-release-channel:testing",),
+        ("edge\nPFBLOCKERNG-RELEASE-CHANNEL:\ttesting",),
         ("bogus",),
     ],
     ids=[
@@ -780,15 +780,15 @@ def test_published_workflow_rejects_invalid_channel_trailers(tmp_path: Path, tra
 
 
 def test_published_workflow_passes_the_validated_channel_to_classifier(tmp_path: Path) -> None:
-    completed, outputs = _run_classify_step(tmp_path, "v4.0.0.a7", "testing")
+    completed, outputs = _run_classify_step(tmp_path, "v4.0.0.a7", "edge")
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    assert outputs["channel"] == "testing", outputs
+    assert outputs["channel"] == "edge", outputs
     assert outputs["source"] == "release/4.0", outputs
 
 
 @pytest.mark.parametrize(
     ("tag", "trailer", "release_prerelease"),
-    [("v4.0.0", "stable", "true"), ("v4.0.0.a7", "testing", "false")],
+    [("v4.0.0", "stable", "true"), ("v4.0.0.a7", "edge", "false")],
 )
 def test_published_workflow_rejects_release_flag_mismatch(
     tmp_path: Path, tag: str, trailer: str, release_prerelease: str
@@ -815,7 +815,7 @@ def _run_suites_decision(tmp_path: Path, tag: str, force_suites: str) -> dict[st
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "INPUT_TAG": tag,
-            "INPUT_CHANNEL": "stable" if tag == "v4.0.0" else "testing",
+            "INPUT_CHANNEL": "stable" if tag == "v4.0.0" else "edge",
             "INPUT_SOURCE": "release/4.0",
             "FORCE_SUITES": force_suites,
             "GITHUB_OUTPUT": str(output_file),

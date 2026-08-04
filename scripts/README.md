@@ -14,18 +14,15 @@ none of this ships in the release archive (which contains only `src/`).
 ## Release channel contract
 
 Release authoring follows issue #2140. All channels publish the exact package identity
-`pfSense-pkg-pfBlockerNG`; channel is explicit/configured metadata carried in each distinct
-release's immutable `pfBlockerNG-Release-Channel: <stable|testing|edge>` tag trailer, never a
-package-name suffix or inferred tag shape. A follower Edge reuses the Testing tag and its
-`testing` trailer. Every operation uses a pinned source SHA.
+`pfSense-pkg-pfBlockerNG`; channel is metadata carried in each distinct release's immutable
+`pfBlockerNG-Release-Channel: <stable|testing|edge>` tag trailer, never a package-name suffix.
+The tag and trailer must agree with the deterministic rule below. Every operation uses a
+pinned source SHA.
 
 - Stable uses `vX.Y.Z` / `X.Y.Z`.
-- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version.
-- Edge uses the same Testing grammar. Edge follows Testing only when no distinct target exists;
-  distinct-target Edge uses its configured target/line. Without a distinct target, reuse the
-  same Release and artifact bytes, checksums, source,
-  provenance, tag, and notes: no rebuild and no second Release. If its target becomes Stable,
-  Edge follows Testing until a new target is configured.
+- Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version when
+  `Z != 0`.
+- Edge uses the same prerelease grammar when `Z == 0`.
 - Nightly is an independent untagged snapshot from a pinned source SHA with no GitHub Release and no release
   notes. Changed input uses UTC `YYYYMMDD`, then `YYYYMMDD_1`/`_2` for same-day changes;
   unchanged or skipped days are no-ops. Identity includes source SHA, FreeBSD-ports SHA,
@@ -34,7 +31,8 @@ package-name suffix or inferred tag shape. A follower Edge reuses the Testing ta
 Keep the Ports recipe static: no routine version commit, no target final, and no PORTEPOCH.
 Bare date versions intentionally outrank semantic releases; reverse movement requires an
 explicit repo-qualified downgrade. `scripts/release-version.sh` remains the parser; callers
-must pass explicit channel context and must not reimplement or infer its grammar.
+pass channel context, and the parser rejects any context that disagrees with the patch-zero
+Edge / nonzero-patch Testing rule.
 
 ## Supported-version matrix
 
