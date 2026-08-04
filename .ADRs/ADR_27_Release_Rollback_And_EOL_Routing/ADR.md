@@ -383,3 +383,10 @@ Fixes start on the oldest affected maintained line and are cherry-picked with `-
 lines and then `devel`, each through its own PR and gates. This preserves linear history and does
 not create a downgrade path. Issue #2148 may add explicit cross-channel return behavior, but cannot
 generally supersede the no-downgrade contract without a separate owner decision.
+
+## Amendment — 2026-08-04: Nightly source identity is explicit (issue #2140)
+
+Nightly source identity is an explicit pinned pfBlockerNG SHA plus the FreeBSD-ports SHA and
+matrix/dependency digest; no branch inference selects the source. Earlier `devel` statements
+remain historical descriptions of the compatibility publication path and do not define the
+issue #2140 authoring contract.
