@@ -571,12 +571,17 @@ jobs:
           export LEG
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
+          # Nightly fixture version: 3.2.16.YYYYMMDD[_N], UTC date with an
+          # optional counter for multiple same-day runs.
+          NIGHTLY_DATE="$(date -u +%Y%m%d)"
+          NIGHTLY_COUNT="${NIGHTLY_COUNT:-1}"
+          NIGHTLY_VERSION="3.2.16.${NIGHTLY_DATE}.${NIGHTLY_COUNT}"
           PKG="$(sh scripts/build-leg.sh \
             --channel    nightly \
             --abi        "$ABI" \
             --py-flavor  "$PY_FLAVOR" \
             --php        "$PHP_VERSION" \
-            --pkgversion 3.2.16.20260606.2 \
+            --pkgversion "$NIGHTLY_VERSION" \
             --annotate   "commit=${{ github.sha }}")"
           echo "SMOKE_NIGHTLY_PKG=$PKG" >> "$GITHUB_ENV"
 

@@ -4,9 +4,9 @@
 # Single source of truth for the tag scheme: scripts/release-version.sh.
 #
 # Rules:
-#   - vX.Y.Z                       -> commit must be reachable from origin/main   (stable)
-#   - vX.Y.Z.alpha.N|.beta.N|.rc.N -> commit on origin/devel but NOT origin/main  (prerelease)
-#   - neither branch, or a malformed version tag -> rejected
+#   - every versioned tag is annotated and carries exactly one explicit channel trailer
+#   - its commit must be reachable from the exact release/X.Y line derived by the parser
+#   - malformed metadata, an unknown channel, or an unreachable release line -> rejected
 #   - agent (CLAUDECODE=1 or CODEX_THREAD_ID set) branch push rewriting remote
 #     history -> allowed only when the advertised remote oid equals the local
 #     remote-tracking ref, i.e. the history being overwritten was fetched
@@ -18,6 +18,7 @@
 z40="0000000000000000000000000000000000000000"
 ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || ROOT="."
 CLASSIFY="${ROOT}/scripts/release-version.sh"
+[ -f "$CLASSIFY" ] || [ -z "${PFB_ROOT:-}" ] || CLASSIFY="${PFB_ROOT}/scripts/release-version.sh"
 
 # Both loops below consume the per-ref update list, so capture stdin once.
 updates=$(cat)
@@ -34,34 +35,56 @@ while IFS=' ' read -r _local_ref local_sha remote_ref _remote_sha; do
     # Only enforce versioned tags (vX.Y.Z and vX.Y.Z.<suffix>)
     case "$tag" in v[0-9]*.[0-9]*.[0-9]*) ;; *) continue ;; esac
 
-    # Dereference annotated tags to the underlying commit
-    commit=$(git rev-parse --verify "${local_sha}^{commit}" 2>/dev/null) \
-        || commit="$local_sha"
-
-    on_main=0
-    on_devel=0
-    git merge-base --is-ancestor "$commit" "origin/main"  2>/dev/null && on_main=1
-    git merge-base --is-ancestor "$commit" "origin/devel" 2>/dev/null && on_devel=1
-
-    if [ "$on_main" = 0 ] && [ "$on_devel" = 0 ]; then
-        echo "error: '$tag' does not point to a commit reachable from 'origin/main' or 'origin/devel'" >&2
-        echo "       Push the commit to the appropriate branch and wait for CI to pass before tagging." >&2
-        exit 1
-    fi
-
-    # A commit merged into main must be a STABLE tag; a commit only on devel must
-    # be a PRERELEASE tag. Delegate the shape + branch<->channel check to the
-    # single source of truth so the hook and the workflow never drift.
-    if [ "$on_main" = 1 ]; then branch="main"; else branch="devel"; fi
-
     if [ ! -f "$CLASSIFY" ]; then
         echo "error: ${CLASSIFY} not found — cannot validate the tag scheme" >&2
         exit 1
     fi
 
-    if ! err=$(sh "$CLASSIFY" "$tag" "$branch" 2>&1 >/dev/null); then
-        echo "error: tag '$tag' is not valid for branch '$branch':" >&2
+    tag_ref="refs/tags/${tag}"
+    type=$(git cat-file -t "$tag_ref" 2>/dev/null || true)
+    if [ "$type" != "tag" ]; then
+        if [ -z "$type" ]; then
+            echo "error: '$tag' does not point to a commit reachable from an exact release/X.Y line" >&2
+            exit 1
+        fi
+        echo "error: tag '$tag' must be an annotated tag" >&2
+        exit 1
+    fi
+
+    raw_tag_message=$(git for-each-ref --format='%(contents)' "$tag_ref")
+    trailers=$(printf '%s\n' "$raw_tag_message" | git interpret-trailers --parse)
+    channel_count=$(printf '%s\n' "$raw_tag_message" | grep -Ec '^pfBlockerNG-Release-Channel: ' || true)
+    if [ "$channel_count" -ne 1 ]; then
+        echo "error: tag '$tag' must carry exactly one release-channel trailer" >&2
+        exit 1
+    fi
+    channel_line=$(printf '%s\n' "$trailers" | grep -F 'pfBlockerNG-Release-Channel:' || true)
+    case "$channel_line" in
+        'pfBlockerNG-Release-Channel: stable') channel=stable ;;
+        'pfBlockerNG-Release-Channel: testing') channel=testing ;;
+        'pfBlockerNG-Release-Channel: edge') channel=edge ;;
+        *) channel= ;;
+    esac
+    if [ -z "$channel" ]; then
+        echo "error: tag '$tag' has an unknown release-channel trailer" >&2
+        exit 1
+    fi
+
+    # Classify from the explicit trailer, never from a suffix or branch name.
+    if ! err=$(sh "$CLASSIFY" "$tag" "$channel" 2>&1 >/dev/null); then
+        echo "error: tag '$tag' is not valid for channel '$channel':" >&2
         printf '%s\n' "$err" | sed 's/^/       /' >&2
+        exit 1
+    fi
+
+    release_line=$(sh "$CLASSIFY" "$tag" "$channel" | sed -n 's/^release_line=//p')
+    commit=$(git rev-parse --verify "${tag_ref}^{commit}" 2>/dev/null) || {
+        echo "error: tag '$tag' does not resolve to a commit" >&2
+        exit 1
+    }
+    if ! git merge-base --is-ancestor "$commit" "origin/$release_line" 2>/dev/null; then
+        echo "error: '$tag' does not point to a commit reachable from 'origin/$release_line'" >&2
+        echo "       Push the commit to the exact release line and wait for CI to pass before tagging." >&2
         exit 1
     fi
 done <<PFB_TAG_UPDATES
