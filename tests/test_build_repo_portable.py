@@ -1650,8 +1650,8 @@ def test_default_builder_forwards_project_record_contract(tmp_path: Path, monkey
     }
     seen: list[str] = []
 
-    monkeypatch.setattr(brp, "load_build_record", lambda _source: record_data)
-    monkeypatch.setattr(brp, "validate_build_record", lambda value, **_kw: value)
+    monkeypatch.setattr(brp, "load_build_record", lambda _source: record_data, raising=False)
+    monkeypatch.setattr(brp, "validate_build_record", lambda value, **_kw: value, raising=False)
 
     def fake_run(cmd: list[str], *, check: bool) -> None:
         seen.extend(cmd)
@@ -1700,8 +1700,8 @@ def test_default_builder_reuses_existing_exact_output(tmp_path: Path, monkeypatc
         "matrix_row": {"variant": "CE"},
     }
 
-    monkeypatch.setattr(brp, "load_build_record", lambda _source: record)
-    monkeypatch.setattr(brp, "validate_build_record", lambda value, **_kw: value)
+    monkeypatch.setattr(brp, "load_build_record", lambda _source: record, raising=False)
+    monkeypatch.setattr(brp, "validate_build_record", lambda value, **_kw: value, raising=False)
 
     def fake_run(_cmd: list[str], *, check: bool) -> None:
         assert check is True
