@@ -2232,6 +2232,20 @@ def test_project_rejects_external_source_symlinks_in_payload(tmp_path: Path, lin
     assert bpp.main(_project_args(ports, portdir, record, source=source)) == 1
 
 
+def test_project_rejects_source_payload_symlink_loop(tmp_path: Path) -> None:
+    ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable", github=True)
+    source = tmp_path / "source"
+    link = source / "src/usr/local/share/pfSense-pkg-pfBlockerNG/loop"
+    link.symlink_to("loop")
+    _git(source, "add", "-A")
+    _git(source, "-c", "commit.gpgsign=false", "commit", "-qm", "symlink-loop")
+    source_sha = _git(source, "rev-parse", "HEAD")
+    _git(source, "tag", "-f", "v4.0.0")
+    record = _record("stable", ports_sha, source_sha=source_sha)
+
+    assert bpp.main(_project_args(ports, portdir, record, source=source)) == 1
+
+
 def test_project_rejects_tracked_source_root_symlink(tmp_path: Path) -> None:
     ports, portdir, ports_sha, _source_sha = _make_channel_port(tmp_path, "stable", github=True)
     source = tmp_path / "source"
