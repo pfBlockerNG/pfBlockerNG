@@ -81,6 +81,14 @@ def test_fresh_tagged_and_nightly_mutations_call_callback_once() -> None:
     assert _run(_request(nightly, None), _observed()) == ("mutated", ["mutate"])
 
 
+def test_nightly_noop_requires_observed_existing_package() -> None:
+    nightly = replace(_nightly(), outcome="unchanged")
+    calls: list[str] = []
+    with pytest.raises(ValueError, match="no-op"):
+        API.apply_release_mutation(_request(nightly, None), _observed(), lambda: calls.append("mutate"))
+    assert calls == []
+
+
 def test_exact_existing_artifact_and_build_input_are_unchanged() -> None:
     observed = _observed(
         existing_pkg_version=STABLE.pkg_version,
