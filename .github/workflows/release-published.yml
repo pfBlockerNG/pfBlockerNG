@@ -86,6 +86,14 @@ jobs:
             exit 1
           fi
           eval "$OUT"   # sets version / channel / prerelease / prekind / portversion
+          if ! git fetch origin "$release_line" --tags; then
+            echo "::error::cannot fetch the derived source line origin/${release_line} for ${TAG}"; exit 1
+          fi
+          COMMIT=$(git rev-parse --verify "refs/tags/${TAG}^{commit}" 2>/dev/null) || {
+            echo "::error::published tag ${TAG} does not resolve to a commit"; exit 1; }
+          if ! git merge-base --is-ancestor "$COMMIT" "origin/${release_line}"; then
+            echo "::error::published tag ${TAG} commit is not reachable from origin/${release_line}"; exit 1
+          fi
           {
             echo "tag=${TAG}"
             echo "channel=${release_channel}"
