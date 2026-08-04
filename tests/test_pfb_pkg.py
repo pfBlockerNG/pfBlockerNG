@@ -358,12 +358,19 @@ def test_inspect_and_validate_project_pkg_full_cascade(tmp_path: Path, compressi
     assert pfb_pkg.validate_project_pkg(pkg, record, expected_manifest=full)["record"] == record
 
 
-def test_validate_project_pkg_rejects_native_identity_in_share_payload(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "native_path",
+    [
+        "/usr/local/share/pfSense-pkg-pfBlockerNG-testing/rogue",
+        "/usr/local/pkg/pfSense-pkg-pfBlockerNG-testing/rogue",
+    ],
+)
+def test_validate_project_pkg_rejects_native_identity_in_payload_path(tmp_path: Path, native_path: str) -> None:
     payload = {
         "/usr/local/share/pfSense-pkg-pfBlockerNG/info.xml": (
             b"<pfsensepkgs><package><name>pfBlockerNG</name><version>2.8.0</version></package></pfsensepkgs>"
         ),
-        "/usr/local/share/pfSense-pkg-pfBlockerNG-testing/rogue": b"native payload",
+        native_path: b"native payload",
         "/usr/local/pkg/pfblockerng/pfb_stub.py": b"print('ok')\n",
     }
     pkg, record, _ = _synthetic_pkg(tmp_path, payload=payload, compression="plain")
@@ -446,6 +453,13 @@ def test_inspect_pkg_decodes_archive_once_and_returns_only_used_evidence(
             "annotation mismatch",
         ),
         (
+            lambda c, f, p: (
+                c["annotations"].update(channel_alias="pfSense-pkg-pfBlockerNG-testing"),
+                f["annotations"].update(channel_alias="pfSense-pkg-pfBlockerNG-testing"),
+            ),
+            "native identity.*annotation",
+        ),
+        (
             lambda c, f, p: p.update({"/usr/local/pkg/new": b"x"}),
             "payload inventory differs",
         ),
@@ -454,6 +468,10 @@ def test_inspect_pkg_decodes_archive_once_and_returns_only_used_evidence(
                 install="#!/bin/sh\n/usr/local/bin/php -f /etc/rc.packages pfSense-pkg-pfBlockerNG-testing ${2}\n"
             ),
             "suffixed native identity",
+        ),
+        (
+            lambda c, f, p: f["scripts"].update({"pre-install": "#!/bin/sh\necho pfSense-pkg-pfBlockerNG-testing\n"}),
+            "unexpected lifecycle scripts",
         ),
         (
             lambda c, f, p: (
