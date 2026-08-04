@@ -1348,7 +1348,7 @@ jobs:
           else
             printf '%s' "$SOURCE" | grep -Eq '^release/[0-9]+\.[0-9]+$' || {
               echo "::error::invalid prerelease source line: ${SOURCE}"; exit 1; }
-            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(alpha|beta|rc)\.[1-9][0-9]*$' || {
+            printf '%s' "$PORTVERSION" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.[abr][1-9][0-9]*$' || {
               echo "::error::invalid prerelease PORTVERSION/tag: ${TAG}"; exit 1; }
           fi
 
