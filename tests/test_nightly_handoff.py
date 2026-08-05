@@ -99,3 +99,24 @@ def test_handoff_rejects_missing_build_result() -> None:
             matrix_digest="c" * 64,
             run_id="123",
         )
+
+
+def test_handoff_rejects_forged_input_digest() -> None:
+    candidate, state, result = _plan()
+    forged = np.Candidate(
+        allocation=np.replace_allocation(candidate.allocation, input_digest="f" * 64),
+        generation=candidate.generation,
+    )
+
+    with pytest.raises(np.ProvenanceError, match="input digest"):
+        np.build_handoff(
+            candidate=forged,
+            state=state,
+            build_rows=[_row()],
+            route_rows=[_row(ci=True)],
+            results=[result],
+            source_sha="a" * 40,
+            ports_sha="b" * 40,
+            matrix_digest="c" * 64,
+            run_id="123",
+        )

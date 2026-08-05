@@ -344,6 +344,7 @@ jobs:
             --candidate plan/allocation.json \
             --artifacts artifacts.json \
             --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --expected-input-digest "$(jq -r '.allocation.input_digest' nightly-handoff.json)" \
             --output nightly-state.json
 
       - name: Upload verified publisher handoff

@@ -123,6 +123,19 @@ def test_same_version_with_different_input_or_bytes_fails_closed() -> None:
         np.complete(state, different_bytes, [_artifact(different_bytes.allocation, payload=b"other")], run_id="100")
 
 
+def test_completion_rejects_digest_not_verified_by_handoff() -> None:
+    first = _candidate(np.empty_state())
+
+    with pytest.raises(np.ProvenanceError, match="completion input digest"):
+        np.complete(
+            np.empty_state(),
+            first,
+            [_artifact(first.allocation)],
+            run_id="100",
+            expected_input_digest="f" * 64,
+        )
+
+
 def test_ports_only_identity_is_part_of_digest() -> None:
     first = _candidate(np.empty_state())
     changed = _candidate(np.empty_state(), ports_sha=PORTS_B)
