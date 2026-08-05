@@ -202,11 +202,15 @@ def derive_destinations_from_git(
     tag_commit = git_optional("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
     if current_commit and tag_commit and current_commit != tag_commit:
         raise ValueError(f"current tag {tag!r} does not match the selected source commit")
-    if tag_commit:
-        tag_type = git_optional("cat-file", "-t", f"refs/tags/{tag}")
+    # Gate on the ref existing, not on the peel: an annotated tag may point at a
+    # non-commit object, and skipping these checks then accepts a mistagged release.
+    tag_type = git_optional("cat-file", "-t", f"refs/tags/{tag}")
+    if tag_type:
         expected_channel: Channel = primary_channel_for_tag(tag)
         if tag_type != "tag":
             raise ValueError(f"current tag {tag!r} must be an annotated tag")
+        if not tag_commit:
+            raise ValueError(f"current tag {tag!r} does not point at a commit")
         if not has_exact_channel_trailer(tag, expected_channel):
             raise ValueError(f"current tag {tag!r} lacks the exact {expected_channel} release trailer")
     selected_commit = current_commit or tag_commit
