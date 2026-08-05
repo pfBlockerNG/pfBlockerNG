@@ -57,15 +57,15 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 
 <!-- role-registry:begin -->
 
-| Role | Tiers | Mutation | Independent | Claude bindings | Codex bindings |
-| ---- | ----- | -------- | ----------- | --------------- | -------------- |
-| explorer | small+top | read-only | no | session | agent:analyst, agent:analyst-top |
-| planner | top+mid | read-only | no | session | agent:planner |
-| implementer | small | workspace-write | no | session | agent:implementer |
-| verifier | small | read-only | yes | session | agent:adversarial-reviewer |
-| reviewer | small+top+mid | read-only | yes | session | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid |
-| publisher | small | workspace-write | no | policy:landing.md | policy:landing.md |
-| coordinator | small | workspace-write | no | policy:workflow.md | policy:workflow.md |
+| Role | Tiers | Mutation | Independent | Claude bindings | Codex bindings | Copilot bindings |
+| ---- | ----- | -------- | ----------- | --------------- | -------------- | ---------------- |
+| explorer | small+top | read-only | no | session | agent:analyst, agent:analyst-top | agent:analyst, agent:analyst-top |
+| planner | top+mid | read-only | no | session | agent:planner | agent:planner |
+| implementer | small | workspace-write | no | session | agent:implementer | agent:implementer |
+| verifier | small | read-only | yes | session | agent:adversarial-reviewer | agent:adversarial-reviewer |
+| reviewer | small+top+mid | read-only | yes | session | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid | agent:adversarial-reviewer, agent:adversarial-reviewer-top, agent:adversarial-reviewer-mid |
+| publisher | small | workspace-write | no | policy:landing.md | policy:landing.md | policy:landing.md |
+| coordinator | small | workspace-write | no | policy:workflow.md | policy:workflow.md | policy:workflow.md |
 
 <!-- role-registry:end -->
 
@@ -236,27 +236,30 @@ goes through [`model-tiers.conf`](../model-tiers.conf).
 
 ### Claude
 
-| Role | Native definition |
-| ---- | ----------------- |
-| explorer | fresh read-only sub-agents with packet-scoped briefs (small default; top allowed for verdict quality); the harness `Explore` agent type for ad-hoc read-only fan-out |
-| planner | the top-level session itself (delegation.md "Plan top-tier, implement small-tier") |
-| implementer | a fresh small-tier sub-agent executing THE BRIEF in the assigned worktree |
-| verifier | a fresh small-tier sub-agent (never the brief author's model) re-deriving one step; fresh read-only validator sub-agents for per-finding validation |
-| reviewer | a fresh read-only sub-agent implementing the [`landing.md`](landing.md) reviewer contract (small default; top for large/complex; mid when top is unavailable) |
-| publisher | the session (or a small-tier delegate) following [`landing.md`](landing.md) |
-| coordinator | the session following [`workflow.md`](workflow.md) |
+Roles are fresh sub-agents of the harness, not files: **explorer** takes a packet-scoped
+brief (small default, top for verdict quality; the `Explore` type for ad-hoc read-only
+fan-out); **implementer** executes THE BRIEF in the assigned worktree at small tier;
+**verifier** re-derives one step, never on the brief author's model, plus read-only
+validators per finding; **reviewer** implements the [`landing.md`](landing.md) contract
+(small default, top for large or complex, mid when top is unavailable). **planner**,
+**publisher**, and **coordinator** are the session itself (a small-tier delegate may
+publish), following [`delegation.md`](delegation.md), [`landing.md`](landing.md), and
+[`workflow.md`](workflow.md).
 
 ### Codex
 
-| Role | Native definition |
-| ---- | ----------------- |
-| explorer | `.codex/agents/analyst.toml` (small), `.codex/agents/analyst-top.toml` (top) |
-| planner | `.codex/agents/planner.toml` (top) |
-| implementer | `.codex/agents/implementer.toml` (small, workspace-write) |
-| verifier | `.codex/agents/adversarial-reviewer.toml` (small) |
-| reviewer | `.codex/agents/adversarial-reviewer.toml` (small), `.codex/agents/adversarial-reviewer-top.toml` (top), `.codex/agents/adversarial-reviewer-mid.toml` (mid, top-unavailable substitute) |
-| publisher | the session following [`landing.md`](landing.md) |
-| coordinator | the session following [`workflow.md`](workflow.md) |
+One TOML file per role at `.codex/agents/<role>.toml` — the registry's Codex column names
+each binding, `model` carries the tier and `sandbox_mode` the mutation boundary. `reviewer`
+uses the `-top` file for a large or complex PR and `-mid` as the top-unavailable substitute.
+`publisher` and `coordinator` stay the session, following [`landing.md`](landing.md) and
+[`workflow.md`](workflow.md).
+
+### Copilot
+
+Same roles and tiers as Codex, one file per role at `.github/agents/<role>.agent.md`
+(launched from `/agents`): `model` carries the tier, and the mutation boundary rides a
+`<!-- mutation: read-only|workspace-write -->` marker in the body, Copilot having no
+`sandbox_mode` of its own.
 
 ## Decisions
 

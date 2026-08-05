@@ -144,6 +144,11 @@ Vendor-specific surfaces live in each vendor's own adapter, never in this neutra
 - **Codex** → `.agents/context/codex-adapter.md`. Codex reads this bootstrap natively but not
   that file; **read it at session start** for the canonical-noun → Codex translation table and
   Codex specifics (subagents, attribution, resume, hook/marker surfaces).
+- **GitHub Copilot** → `.github/copilot-instructions.md` (the thin adapter Copilot loads
+  itself; it points here) plus `.agents/context/copilot-adapter.md` for the canonical-noun →
+  Copilot translation table and Copilot specifics (custom agents in `.github/agents/`, repo
+  hooks in `.github/hooks/`, the pid session marker the git hooks read, attribution).
+  **Read both at session start.**
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die. Drop
 articles/filler/pleasantries/hedging; fragments OK; technical terms exact; code unchanged.

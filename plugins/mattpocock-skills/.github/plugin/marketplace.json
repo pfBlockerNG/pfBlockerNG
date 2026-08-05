@@ -1,0 +1,23 @@
+{
+  "name": "mattpocock",
+  "owner": {
+    "name": "Matt Pocock",
+    "url": "https://www.aihero.dev"
+  },
+  "plugins": [
+    {
+      "name": "mattpocock-skills",
+      "description": "Matt Pocock's agent skills for real engineering — grilling, spec/ticket flows, TDD, code review, domain modelling and more.",
+      "source": "./",
+      "category": "engineering",
+      "tags": [
+        "engineering",
+        "skills",
+        "tdd",
+        "code-review",
+        "grilling"
+      ],
+      "skills": "codex/skills/"
+    }
+  ]
+}

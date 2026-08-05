@@ -64,7 +64,7 @@ staged_specplumb=0; staged_has '^tests/shell/(spec_helper\.sh|bin/|fixtures/)' &
 staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
 staged_agentcfg=0
 printf '%s\n' "$staged_all" | grep -qE \
-	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|model-tiers\.conf$)|\.codex/|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
+	'^(AGENTS\.md|CLAUDE\.md|docs/misc/codex-migration\.md|\.claude/(skills|workflows)/|\.agents/(skills/|context/|model-tiers\.conf$)|\.codex/|\.github/(agents|hooks)/|\.github/copilot-instructions\.md|scripts/agent/check-agent-config-parity\.sh|tests/shell/agent_config_parity_spec\.sh)' \
 	&& staged_agentcfg=1
 
 # The detailed policy/procedures have one canonical source. Codex files are

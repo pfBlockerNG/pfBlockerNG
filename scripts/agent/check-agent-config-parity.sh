@@ -120,8 +120,9 @@ if [ ! -f "$tiers" ]; then
 	echo 'agent-config-parity: missing shared model tier mapping: .agents/model-tiers.conf' >&2
 	fail=1
 else
-	top_claude=''; top_codex=''; mid_claude=''; mid_codex=''
-	small_claude=''; small_codex=''
+	top_claude=''; top_codex=''; top_copilot=''
+	mid_claude=''; mid_codex=''; mid_copilot=''
+	small_claude=''; small_codex=''; small_copilot=''
 	while IFS= read -r tier_line || [ -n "$tier_line" ]; do
 		case "$tier_line" in
 		''|'#'*) continue ;;
@@ -144,6 +145,9 @@ else
 			MID_CODEX) tier_current=$mid_codex ;;
 			SMALL_CLAUDE) tier_current=$small_claude ;;
 			SMALL_CODEX) tier_current=$small_codex ;;
+			TOP_COPILOT) tier_current=$top_copilot ;;
+			MID_COPILOT) tier_current=$mid_copilot ;;
+			SMALL_COPILOT) tier_current=$small_copilot ;;
 			*)
 				printf 'agent-config-parity: unknown model tier key: %s\n' \
 					"$tier_key" >&2
@@ -164,6 +168,9 @@ else
 			MID_CODEX) mid_codex=$tier_value ;;
 			SMALL_CLAUDE) small_claude=$tier_value ;;
 			SMALL_CODEX) small_codex=$tier_value ;;
+			TOP_COPILOT) top_copilot=$tier_value ;;
+			MID_COPILOT) mid_copilot=$tier_value ;;
+			SMALL_COPILOT) small_copilot=$tier_value ;;
 			esac
 		;;
 		*)
@@ -173,7 +180,8 @@ else
 			;;
 		esac
 	done < "$tiers"
-	for tier_key in TOP_CLAUDE TOP_CODEX MID_CLAUDE MID_CODEX SMALL_CLAUDE SMALL_CODEX; do
+	for tier_key in TOP_CLAUDE TOP_CODEX TOP_COPILOT MID_CLAUDE MID_CODEX MID_COPILOT \
+		SMALL_CLAUDE SMALL_CODEX SMALL_COPILOT; do
 		case "$tier_key" in
 		TOP_CLAUDE) tier_value=$top_claude ;;
 		TOP_CODEX) tier_value=$top_codex ;;
@@ -181,6 +189,9 @@ else
 		MID_CODEX) tier_value=$mid_codex ;;
 		SMALL_CLAUDE) tier_value=$small_claude ;;
 		SMALL_CODEX) tier_value=$small_codex ;;
+		TOP_COPILOT) tier_value=$top_copilot ;;
+		MID_COPILOT) tier_value=$mid_copilot ;;
+		SMALL_COPILOT) tier_value=$small_copilot ;;
 		esac
 		if [ -z "$tier_value" ]; then
 			printf 'agent-config-parity: missing model tier assignment: %s\n' \
@@ -204,6 +215,22 @@ else
 			fail=1
 		fi
 	}
+	check_copilot_role_model() {
+		role=$1
+		expected=$2
+		file="$root/.github/agents/$role.agent.md"
+		if [ ! -f "$file" ]; then
+			printf 'agent-config-parity: missing Copilot agent role: .github/agents/%s.agent.md\n' "$role" >&2
+			fail=1
+			return
+		fi
+		actual=$(sed -n 's/^model: *\(.*\)$/\1/p' "$file" | head -n 1)
+		if [ -z "$expected" ] || [ "$actual" != "$expected" ]; then
+			printf 'agent-config-parity: .github/agents/%s.agent.md model %s, expected %s\n' \
+				"$role" "${actual:-<missing>}" "${expected:-<missing-tier-value>}" >&2
+			fail=1
+		fi
+	}
 	check_role_model planner "$top_codex"
 	check_role_model implementer "$small_codex"
 	check_role_model analyst "$small_codex"
@@ -211,6 +238,13 @@ else
 	check_role_model adversarial-reviewer "$small_codex"
 	check_role_model adversarial-reviewer-top "$top_codex"
 	check_role_model adversarial-reviewer-mid "$mid_codex"
+	check_copilot_role_model planner "$top_copilot"
+	check_copilot_role_model implementer "$small_copilot"
+	check_copilot_role_model analyst "$small_copilot"
+	check_copilot_role_model analyst-top "$top_copilot"
+	check_copilot_role_model adversarial-reviewer "$small_copilot"
+	check_copilot_role_model adversarial-reviewer-top "$top_copilot"
+	check_copilot_role_model adversarial-reviewer-mid "$mid_copilot"
 fi
 
 # issue #1431: the committed workflow inventory retired; only skills must exist.

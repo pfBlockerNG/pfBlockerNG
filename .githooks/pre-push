@@ -101,9 +101,22 @@ PFB_TAG_UPDATES
 
 # Agent lease-by-effect guard (issue #1307): deny an agent branch rewrite over
 # remote history it never fetched (advertised remote oid != remote-tracking ref).
+# Copilot exports no environment marker to spawned shells, so its session is read
+# from the pid marker its sessionStart hook writes into the common git dir; a
+# marker whose pid is gone is ignored, so a stale file cannot gate a human push.
+copilot_session() {
+	[ -n "${COPILOT_AGENT_PROMPT:-}" ] && return 0
+	pfb_marker=$(git rev-parse --git-common-dir 2>/dev/null)/pfb-copilot-session
+	[ -r "$pfb_marker" ] || return 1
+	pfb_pid=$(cat "$pfb_marker" 2>/dev/null) || return 1
+	case "$pfb_pid" in '' | *[!0-9]*) return 1 ;; esac
+	kill -0 "$pfb_pid" 2>/dev/null
+}
+
 agent_runtime=0
 [ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
 [ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! copilot_session || agent_runtime=1
 if [ "$agent_runtime" = "1" ]; then
     remote_name="${1:-origin}"
     while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do

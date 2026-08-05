@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "type": "command",
+        "bash": "sh \"$(git rev-parse --show-toplevel)/scripts/agent/copilot-session-hook.sh\" start",
+        "timeoutSec": 120
+      }
+    ],
+    "sessionEnd": [
+      {
+        "type": "command",
+        "bash": "sh \"$(git rev-parse --show-toplevel)/scripts/agent/copilot-session-hook.sh\" end",
+        "timeoutSec": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "printf '%s' '{\"additionalContext\":\"SESSION MODES: PONYTAIL full — YAGNI, reuse existing code, stdlib/native first, shortest correct diff; review-only tasks stay fully thorough. CAVEMAN full — terse connective prose, exact technical content and evidence. AGENTS.md and the routed .agents/policy/ files are binding. Public-facing text and documentation use normal professional grammar.\"}'",
+        "timeoutSec": 5
+      }
+    ]
+  }
+}
