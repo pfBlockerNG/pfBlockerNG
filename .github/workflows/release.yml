@@ -1021,6 +1021,8 @@ jobs:
           set -eu
           PORTS_SHA=$(git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports refs/heads/pfblockerng/use-github | awk 'NR == 1 { print $1 }')
           [ -n "$PORTS_SHA" ] || { echo "::error::FreeBSD-ports branch has no resolvable SHA"; exit 1; }
+          # The heredoc below runs in a child process; $GITHUB_ENV only reaches LATER steps.
+          export PORTS_SHA
           echo "PORTS_SHA=${PORTS_SHA}" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import json
