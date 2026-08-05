@@ -6302,6 +6302,12 @@ PYTHON;
 	$command = array($timeout_bin, '-s', 'TERM', '-k', '1', '5', $python, '-c', $probe);
 	$result = pfb_lint_probe_run($command, $content);
 	if ($result['failure'] !== '') {
+		// The probe compiles what it reads -- an over-pipe-buffer body can EPIPE the stdin
+		// write loop (failure = 'stdin write failed') while stderr already holds a real
+		// line-mapped SyntaxError; prefer that over the generic launch-failed warning.
+		if (!pfb_is_blank($result['stderr'])) {
+			return pfb_lint_parse_py_stderr($result['stderr']);
+		}
 		return [['line' => 1, 'message' => 'python syntax checker launch failed: ' . $result['failure'], 'severity' => 'warning']];
 	}
 	if ($result['exit'] === 0) {
