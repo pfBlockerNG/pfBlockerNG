@@ -4,7 +4,7 @@ or emoji.
 
 Context supplies the repository in the Context, current tag, explicit channel, primary kind,
 destination tuple, previous/base tag, exact commit range, pinned source SHA, draft URL,
-verified asset inventory, draft title date, and exact Final line.
+admitted source branch, verified asset inventory, draft title date, and exact Final line.
 Destination tuple is catalogue fan-out only: do not create a second release, notes range,
 or changelog section for another destination. Tag grammar is only `vX.Y.Z`,
 `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN`; use the explicit channel and primary kind from

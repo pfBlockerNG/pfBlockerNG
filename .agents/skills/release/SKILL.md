@@ -44,7 +44,7 @@ prerelease patch rule. Use a pinned source SHA for every channel.
 0. Reject Nightly as an explicit no-op before tag, Release, workflow-run, or range lookup.
    Nightly performs no lookup and no mutation here.
 1. Resolve trusted inputs: exact tag, explicit channel and release target, configured
-   source line, admitted branch (`release/X.Y`), supported workflow ref, and pinned source
+   source line, admitted source branch (`release/X.Y`), supported workflow ref, and pinned source
    SHA. Validate the tag with `scripts/release-version.sh`; do not reimplement its grammar.
 2. Dispatch the current `release.yml` workflow with those inputs and **explicitly set
    `dry_run=false`**. The workflow default is `true`; omitting this field is invalid for a
@@ -53,7 +53,7 @@ prerelease patch rule. Use a pinned source SHA for every channel.
    `gh workflow run release.yml --ref <workflow-ref> -f tag=<tag> -f channel=<channel> -f source=<release/X.Y> -f dry_run=false`.
 3. Read final `draft-healthcheck` job outputs: `primary_kind`, ordered
    `destination_tuple`, `previous_tag`, `base_tag`, `base_sha`, `commit_range`, pinned
-   `source_sha`, `draft_url`, and JSON `assets`. Verify the run completed successfully,
+   `source_sha`, admitted `source_branch`, `draft_url`, and JSON `assets`. Verify the run completed successfully,
    the admitted branch and immutable tag trailer agree, the tag resolves to the pinned SHA,
    verify exact source SHA, and every expected exact asset is attached to the one draft. A
    missing, stale, changed, or contradictory output stops without publication.

@@ -67,6 +67,7 @@ def test_tagged_release_skill_requires_exact_run_identity_and_one_draft() -> Non
         "workflow run",
         "primary kind",
         "destination tuple",
+        "source branch",
         "one tag creates one draft",
         "exact source SHA",
         "exact asset",
@@ -156,16 +157,23 @@ def test_concrete_primary_routes_and_destination_fanout(
 
 
 def test_family_scoped_previous_bases_and_explicit_empty_range() -> None:
-    stable_first = _candidate("v4.0.0")
+    assert select_previous_release_tag(
+        "v4.0.0.a1",
+        "edge",
+        (
+            _candidate("v3.2.17", ancestor_of_current=True),
+            _candidate("v3.2.19", ancestor_of_current=False),
+        ),
+    ) == "v3.2.17"
+
     assert select_previous_release_tag(
         "v4.0.0",
         "stable",
         (
-            stable_first,
-            _candidate("v3.2.15", on_source_line=True, ancestor_of_current=False),
-            _candidate("v4.0.0.a1"),
+            _candidate("v3.2.18", ancestor_of_current=True),
+            _candidate("v3.2.19", ancestor_of_current=False),
         ),
-    ) == "v3.2.15"
+    ) == "v3.2.18"
 
     assert select_previous_release_tag(
         "v4.0.1.a2",
@@ -181,7 +189,7 @@ def test_family_scoped_previous_bases_and_explicit_empty_range() -> None:
         "v5.0.0.a1",
         "edge",
         (_candidate("v4.0.2", on_source_line=True, ancestor_of_current=False),),
-    ) == "v4.0.2"
+    ) is None
     assert (
         select_previous_release_tag(
             "v4.0.1.a1",
@@ -202,6 +210,7 @@ def test_workflow_propagates_trusted_release_contract_outputs() -> None:
         "base_tag:",
         "commit_range:",
         "source_sha:",
+        "source_branch:",
         "draft_url:",
         "assets:",
         "select_previous_release_tag",
@@ -224,6 +233,7 @@ def test_draft_healthcheck_propagates_final_asset_handoff() -> None:
         "base_sha:",
         "commit_range:",
         "source_sha:",
+        "source_branch:",
         "draft_url:",
         "assets:",
     ):

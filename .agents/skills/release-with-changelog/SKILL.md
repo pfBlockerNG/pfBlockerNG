@@ -65,7 +65,7 @@ do not invent a predecessor or use an unrelated global tag. Omit empty or intern
 
 1. Run `release` first and wait for its exact workflow run. Read final
    `draft-healthcheck` outputs and confirm run ID/attempt, `primary_kind`,
-   `destination_tuple`, admitted branch, `source_sha`, `draft_url`, JSON `assets`,
+   `destination_tuple`, admitted source branch, `source_sha`, `source_branch`, `draft_url`, JSON `assets`,
    `previous_tag`, `base_tag`, and `commit_range`. Nightly performs no lookup or mutation.
 2. Verify the family-scoped base and exact commit range against the pinned tag. Wrong
    branch or kind, stale draft, missing asset, changed SHA, empty/internal range used as non-empty,
