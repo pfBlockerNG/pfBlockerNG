@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.release_version import derive_destinations
+from scripts.release_version import derive_destinations, get_tags_zero_after
 
 
 def _destinations(
@@ -65,3 +65,15 @@ def test_current_tag_branch_mismatch_fails_before_classification() -> None:
 
 def test_missing_anchor_is_none_safe() -> None:
     assert _destinations("v4.0.1.a1", ["v4.0.0.a1"]) == ("testing", "edge")
+
+
+def test_zero_prereleases_use_numeric_family_not_sequence_order() -> None:
+    tags = ["v4.2.0.a1", "v4.0.0", "v3.9.0.a1", "v4.1.1.a1", "v4.1.56"]
+    branches = {
+        "v4.2.0.a1": "release/4.2",
+        "v4.0.0": "release/4.0",
+        "v3.9.0.a1": "release/3.9",
+        "v4.1.1.a1": "release/4.1",
+        "v4.1.56": "release/4.1",
+    }
+    assert get_tags_zero_after("v4.0.0", tags, tag_branches=branches) == ["v4.2.0.a1"]
