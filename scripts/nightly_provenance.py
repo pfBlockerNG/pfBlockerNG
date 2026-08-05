@@ -309,6 +309,7 @@ def build_handoff(
     results: Sequence[Mapping[str, object]],
     source_sha: str,
     ports_sha: str,
+    matrix_sha: str,
     matrix_digest: str,
     run_id: str,
     source_ref: str = "",
@@ -323,6 +324,8 @@ def build_handoff(
         raise ProvenanceError("handoff requires a build allocation")
     if (candidate.allocation.source_sha, candidate.allocation.ports_sha) != (source_sha, ports_sha):
         raise ProvenanceError("handoff source identity does not match allocation")
+    if not _SHA.fullmatch(matrix_sha):
+        raise ProvenanceError("handoff matrix_sha is malformed")
     if not _DIGEST.fullmatch(matrix_digest):
         raise ProvenanceError("handoff matrix_digest is malformed")
     expected_input_digest = combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
@@ -398,6 +401,7 @@ def build_handoff(
         "allocation": asdict(candidate.allocation),
         "source_sha": source_sha,
         "ports_sha": ports_sha,
+        "matrix_sha": matrix_sha,
         "matrix_digest": matrix_digest,
         "build_matrix": normalized_build_rows,
         "route_matrix": normalized_route_rows,
@@ -410,8 +414,17 @@ def _read_json(path: Path, *, default: object | None = None) -> object:
         if default is not None:
             return default
         raise ProvenanceError(f"missing JSON file: {path}")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        value: dict[str, object] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ProvenanceError(f"duplicate JSON key: {key}")
+            value[key] = item
+        return value
+
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
     except (OSError, json.JSONDecodeError) as exc:
         raise ProvenanceError(f"invalid JSON file {path}: {exc}") from exc
 
@@ -508,6 +521,7 @@ def _command_handoff(args: argparse.Namespace) -> int:
         results=result_values,
         source_sha=args.source_sha,
         ports_sha=args.ports_sha,
+        matrix_sha=args.matrix_sha,
         matrix_digest=args.matrix_digest,
         run_id=args.run_id,
         source_ref=args.source_ref,
@@ -557,6 +571,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handoff_parser.add_argument("--results-dir", required=True)
     handoff_parser.add_argument("--source-sha", required=True)
     handoff_parser.add_argument("--ports-sha", required=True)
+    handoff_parser.add_argument("--matrix-sha", required=True)
     handoff_parser.add_argument("--matrix-digest", required=True)
     handoff_parser.add_argument("--run-id", required=True)
     handoff_parser.add_argument("--source-ref", default="")

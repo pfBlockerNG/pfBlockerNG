@@ -84,6 +84,8 @@ The caller selects the source line before generation. Stable, Testing, and Edge 
 configured `release/X.Y`; Nightly receives an explicit pinned source SHA. Source identity is
 immutable and exact.
 Every generated artifact records source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
+The matrix digest includes one pinned `ci-metadata` commit SHA used for both BUILD and ROUTE
+rows.
 Missing, malformed, conflicting, or changed observations fail closed before mutation.
 
 The branch-independent workflow in `.github/workflows/nightly.yml` uses the same pinned-input

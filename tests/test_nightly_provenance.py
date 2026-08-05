@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -141,6 +142,14 @@ def test_ports_only_identity_is_part_of_digest() -> None:
     changed = _candidate(np.empty_state(), ports_sha=PORTS_B)
 
     assert first.allocation.input_digest != changed.allocation.input_digest
+
+
+def test_duplicate_json_keys_fail_closed(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text('{"schema": 1, "schema": 1}', encoding="utf-8")
+
+    with pytest.raises(np.ProvenanceError, match="duplicate JSON key"):
+        np._read_json(state_path)
 
 
 @pytest.mark.parametrize(

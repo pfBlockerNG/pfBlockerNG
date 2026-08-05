@@ -71,11 +71,13 @@ def test_handoff_accepts_complete_build_and_route_rows() -> None:
         results=[result],
         source_sha="a" * 40,
         ports_sha="b" * 40,
+        matrix_sha="d" * 40,
         matrix_digest="c" * 64,
         run_id="123",
     )
 
     assert handoff["kind"] == "nightly-handoff"
+    assert handoff["matrix_sha"] == "d" * 40
     builds = handoff["builds"]
     route_matrix = handoff["route_matrix"]
     assert isinstance(builds, list) and len(builds) == 1
@@ -96,6 +98,7 @@ def test_handoff_rejects_missing_build_result() -> None:
             results=[],
             source_sha="a" * 40,
             ports_sha="b" * 40,
+            matrix_sha="d" * 40,
             matrix_digest="c" * 64,
             run_id="123",
         )
@@ -117,6 +120,7 @@ def test_handoff_rejects_forged_input_digest() -> None:
             results=[result],
             source_sha="a" * 40,
             ports_sha="b" * 40,
+            matrix_sha="d" * 40,
             matrix_digest="c" * 64,
             run_id="123",
         )
