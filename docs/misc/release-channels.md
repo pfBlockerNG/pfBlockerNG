@@ -40,6 +40,15 @@ and `Z != 0` selects Testing.
 - Stable, Testing, and Edge create at most one Release for an exact tag. Published Releases
   are immutable; retry only the exact same identity without rebuilding.
 
+## Destination tuple
+
+Each tagged build writes its ordered destination tuple into the existing `pfb_build_record`
+inside the `.pkg` archive. The tuple is derived from the tag chronology and release-line
+ancestry on every run: Edge patch-zero prereleases route to `(edge,)`; later Testing
+prereleases route to `(testing,)` or `(testing, edge)`; final tags route to `(stable, testing)`
+or `(stable, testing, edge)`. The package publisher copies that same archive to each listed
+catalogue folder. No sidecar, follower state, rebuild, or second Release is created for fan-out.
+
 ## Nightly generation
 
 Nightly is independent and untagged. It creates no GitHub Release and no release notes. Generate

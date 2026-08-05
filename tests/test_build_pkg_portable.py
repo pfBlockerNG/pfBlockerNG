@@ -1493,6 +1493,12 @@ def _record(
         "freebsd_ports_sha": ports_sha,
         "route": route,
         "source_date_epoch": 1700000000,
+        "destinations": {
+            "stable": ["stable", "testing"],
+            "testing": ["testing"],
+            "edge": ["edge"],
+            "nightly": ["nightly"],
+        }[channel],
         "build_input_digest": "",
     }
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)

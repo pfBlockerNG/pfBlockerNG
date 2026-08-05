@@ -1345,6 +1345,12 @@ def _build_record_for(entry: dict[str, Any], channel: str, version: str) -> dict
         "freebsd_ports_sha": "b" * 64,
         "route": f"{channel}/ce-2.8",
         "source_date_epoch": 1_700_000_000,
+        "destinations": {
+            "stable": ["stable", "testing"],
+            "testing": ["testing"],
+            "edge": ["edge"],
+            "nightly": ["nightly"],
+        }[channel],
         "build_input_digest": "",
     }
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
@@ -1895,6 +1901,12 @@ def _canonical_retention_record(channel: str, version: str) -> dict[str, object]
         "freebsd_ports_sha": "b" * 64,
         "route": f"{channel}/ce-2.8",
         "source_date_epoch": 1_700_000_000,
+        "destinations": {
+            "stable": ["stable", "testing"],
+            "testing": ["testing"],
+            "edge": ["edge"],
+            "nightly": ["nightly"],
+        }[channel],
         "build_input_digest": "",
     }
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
