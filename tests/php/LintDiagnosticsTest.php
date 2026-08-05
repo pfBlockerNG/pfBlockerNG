@@ -287,6 +287,26 @@ final class LintDiagnosticsTest extends TestCase
 		$this->assertSame([], pfb_lint_py_diagnostics("print('ok')\n", $pythonFixture, $timeoutFixture));
 	}
 
+	public function testPyDiagnosticsStdinWriteFailurePrefersParseableStderr(): void
+	{
+		// The probe compiles what it reads, so a body over the OS pipe buffer (~64KiB) can
+		// EPIPE the stdin write loop while stderr already holds the SyntaxError's line.
+		// The fake "timeout_bin" closes stdin immediately and writes that diagnostic
+		// before exiting; $pythonFixture is never actually exec'd (ignored argv).
+		$timeoutFixture = $this->fixture(
+			'exec 0<&-' . "\n" .
+			'printf "line 2: invalid syntax\n" 1>&2' . "\n" .
+			'exit 1'
+		);
+		$pythonFixture = $this->fixture('exit 0');
+		// ~256KiB: over the OS pipe buffer, under the endpoint's 1MiB cap.
+		$content = str_repeat('x', 300000) . "\n";
+		$this->assertSame(
+			[['line' => 2, 'message' => 'invalid syntax', 'severity' => 'error']],
+			pfb_lint_py_diagnostics($content, $pythonFixture, $timeoutFixture)
+		);
+	}
+
 	public function testPyDiagnosticsMissingPythonIsLineOneWarning(): void
 	{
 		$timeoutFixture = $this->fixture('exit 0');
