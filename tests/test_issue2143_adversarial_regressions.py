@@ -80,12 +80,9 @@ def test_wrong_branch_does_not_count_without_a_separate_valid_later_tag() -> Non
 
 def test_sync_ports_uses_only_exact_channel_recipe_paths() -> None:
     sync = RELEASE.split("sync-ports-fork:", 1)[1]
-    for port in (
-        "net/pfSense-pkg-pfBlockerNG",
-        "net/pfSense-pkg-pfBlockerNG-testing",
-        "net/pfSense-pkg-pfBlockerNG-edge",
-    ):
-        assert port in sync
+    assert '"stable") PORT_PATH="net/pfSense-pkg-pfBlockerNG"' in sync
+    assert '"testing") PORT_PATH="net/pfSense-pkg-pfBlockerNG-testing"' in sync
+    assert '"edge") PORT_PATH="net/pfSense-pkg-pfBlockerNG-edge"' in sync
     assert "pfSense-pkg-pfBlockerNG-devel" not in sync
     assert '"stable")' in sync and '"testing")' in sync and '"edge")' in sync
     assert "*)" in sync and "unknown channel" in sync

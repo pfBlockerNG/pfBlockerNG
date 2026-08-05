@@ -25,3 +25,8 @@ def test_manual_callback_validates_published_release_and_derives_tuple() -> None
     assert "derive_destinations_from_git" in MANUAL
     assert '-f destinations="$DESTINATIONS"' in MANUAL
     assert "gh release list" not in MANUAL
+
+
+def test_published_callback_uses_full_history_for_branch_ancestry() -> None:
+    checkout = PUBLISHED.split("uses: actions/checkout@v6", 1)[1].split("      - name: Classify", 1)[0]
+    assert "fetch-depth: 0" in checkout

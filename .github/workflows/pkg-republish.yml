@@ -38,6 +38,9 @@ jobs:
           set -eu
           [ -n "$RELEASE_ID" ] || { echo "::error::release_id is required"; exit 1; }
           [ -n "$RELEASE_TAG" ] || { echo "::error::release_tag is required"; exit 1; }
+          case "$RELEASE_ID" in
+            ''|*[!0-9]*) echo "::error::release_id must be a decimal GitHub Release id"; exit 1 ;;
+          esac
           RELEASE_JSON=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
           ACTUAL_TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')
           RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
