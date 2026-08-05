@@ -106,22 +106,27 @@ def get_tags_zero_after(
     *,
     tag_branches: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """Return later patch-zero prereleases whose tags are on their own release lines."""
+    """Return higher-family patch-zero prereleases on their own release lines."""
     if tag_for_zero is None:
         return []
     ordered = list(tags)
     try:
-        start = ordered.index(tag_for_zero) + 1
+        anchor_major, anchor_minor, _anchor_patch, _anchor_stage, _anchor_sequence = _tag_shape(tag_for_zero)
     except ValueError:
         return []
     branches = tag_branches or {}
     result: list[str] = []
-    for candidate in ordered[start:]:
+    for candidate in ordered:
         try:
             major, minor, patch, stage, _sequence = _tag_shape(candidate)
         except ValueError:
             continue
-        if patch == "0" and stage is not None and branches.get(candidate) == f"release/{major}.{minor}":
+        if (
+            patch == "0"
+            and stage is not None
+            and (int(major), int(minor)) > (int(anchor_major), int(anchor_minor))
+            and branches.get(candidate) == f"release/{major}.{minor}"
+        ):
             result.append(candidate)
     return result
 

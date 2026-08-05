@@ -11,11 +11,14 @@ from scripts.release_version import derive_destinations_from_git
 from tests.gitenv import scrubbed_git_env
 
 
-def _git(repo: Path, *args: str) -> str:
+def _git(repo: Path, *args: str, extra_env: dict[str, str] | None = None) -> str:
+    env = scrubbed_git_env()
+    if extra_env:
+        env.update(extra_env)
     result = subprocess.run(
         ["git", *args],
         cwd=repo,
-        env=scrubbed_git_env(),
+        env=env,
         check=True,
         capture_output=True,
         text=True,
@@ -58,3 +61,26 @@ def test_classifier_rejects_moved_existing_tag(tmp_path: Path) -> None:
     _git(repo, "tag", "-a", "-m", "testing", "v4.0.1.a1", moved)
     with pytest.raises(ValueError, match="does not match the selected source commit"):
         derive_destinations_from_git("v4.0.1.a1", "release/4.0", repo, current_commit=current)
+
+
+def test_classifier_ignores_lower_family_even_when_created_later(tmp_path: Path) -> None:
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    _git(repo, "checkout", "-q", "main")
+    _git(repo, "branch", "release/3.9")
+    _git(repo, "checkout", "-q", "release/3.9")
+    _commit(repo, "lower family")
+    _git(
+        repo,
+        "tag",
+        "-a",
+        "-m",
+        "edge",
+        "-m",
+        "pfBlockerNG-Release-Channel: edge",
+        "v3.9.0.a1",
+        extra_env={"GIT_COMMITTER_DATE": "2099-01-01T00:00:00Z"},
+    )
+    assert derive_destinations_from_git("v4.0.1.a1", "release/4.0", repo, current_commit=current) == (
+        "testing",
+        "edge",
+    )
