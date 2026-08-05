@@ -99,14 +99,20 @@ jobs:
           )"
 
           STATE_SHA=""
-          if STATE_RESPONSE="$(gh api \
+          STATE_RESPONSE_FILE="$(mktemp)"
+          STATE_ERROR_FILE="$(mktemp)"
+          trap 'rm -f "$STATE_RESPONSE_FILE" "$STATE_ERROR_FILE"' EXIT
+          if gh api \
               "repos/${GITHUB_REPOSITORY}/contents/nightly-state.json?ref=nightly-state" \
-              2>/dev/null)"; then
-            STATE_SHA="$(printf '%s' "$STATE_RESPONSE" | jq -r '.sha')"
-            printf '%s' "$STATE_RESPONSE" \
-              | jq -r '.content' | tr -d '\n' | base64 --decode > state.json
-          else
+              >"$STATE_RESPONSE_FILE" 2>"$STATE_ERROR_FILE"; then
+            STATE_SHA="$(jq -r '.sha' "$STATE_RESPONSE_FILE")"
+            jq -r '.content' "$STATE_RESPONSE_FILE" \
+              | tr -d '\n' | base64 --decode > state.json
+          elif grep -Eq 'HTTP[^0-9]*404' "$STATE_ERROR_FILE"; then
             printf '%s\n' '{"schema":1,"generation":0,"records":[]}' > state.json
+          else
+            cat "$STATE_ERROR_FILE" >&2
+            exit 1
           fi
           python3 scripts/nightly_provenance.py validate --state state.json
 
