@@ -9582,6 +9582,26 @@
             }
         ]
     },
+    "pfb_stage_publish": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "target",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "extract",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            }
+        ]
+    },
     "pfb_stdout_is_terminal": {
         "returnsRef": false,
         "returnType": "bool",

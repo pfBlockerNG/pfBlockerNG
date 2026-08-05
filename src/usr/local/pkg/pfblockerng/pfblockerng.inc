@@ -3991,6 +3991,27 @@ function pfb_download_initial_retval(): int {
 	return 1;
 }
 
+/**
+ * Publish an extraction atomically. $extract writes to a staged path beside $target and
+ * returns its exit code; $target is replaced only once that code reports success, so a
+ * failed extraction leaves the publication already in service untouched.
+ *
+ * @param callable(string):int $extract
+ */
+function pfb_stage_publish(string $target, callable $extract): bool {
+	$staged = @tempnam(dirname($target), '.pfbstage_');
+	if ($staged === FALSE) {
+		return FALSE;
+	}
+	// issue #2169: tempnam() creates at 0600, but published feeds have unprivileged readers.
+	if (!pfb_download_extraction_succeeded((int) $extract($staged)) ||
+	    !@chmod($staged, 0644) || !@rename($staged, $target)) {
+		unlink_if_exists($staged);
+		return FALSE;
+	}
+	return TRUE;
+}
+
 function pfb_download_retval_success(?int $retval): bool {
 	return $retval === 0;
 }
@@ -13215,8 +13236,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'asn') {
-				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
-				if (!pfb_download_extraction_succeeded($retval)) {
+				$retval = pfb_download_initial_retval();
+				if (!pfb_stage_publish($head_download,
+				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+					exec("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+					return $retval;
+				})) {
 					pfb_logger("\n[pfb_download] asn extraction failed (gunzip exit {$retval})", 2);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
@@ -13372,7 +13397,16 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					return PfbDownloadResult::failure();
 				}
 				pfb_logger('.', 1);
-				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
+				$retval = pfb_download_initial_retval();
+				if (!pfb_stage_publish($orig_download,
+				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+					exec("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+					return $retval;
+				})) {
+					pfb_logger("\n[pfb_download] gzip extraction failed (gunzip exit {$retval})", 2);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
 			}
 		}
 		elseif ($file_type == 'application/x-bzip2') {
@@ -13387,7 +13421,16 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 			pfb_logger('.', 1);
-			exec("/usr/bin/bzip2 -dkc {$file_dwn_esc} > {$file_org_esc}", $output, $retval);
+			$retval = pfb_download_initial_retval();
+			if (!pfb_stage_publish($orig_download,
+			    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+				exec("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+				return $retval;
+			})) {
+				pfb_logger("\n[pfb_download] bzip2 extraction failed (bzip2 exit {$retval})", 2);
+				unlink_if_exists($file_download);
+				return PfbDownloadResult::failure();
+			}
 		}
 		elseif ($file_type == 'application/zip') {
 			if (!pfb_validate_archive($file_download, $file_type)) {
@@ -13413,7 +13456,16 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
 				} else {
 					// ADR-46: stdout extraction -- member names never reach the filesystem.
-					exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);
+					$retval = pfb_download_initial_retval();
+					if (!pfb_stage_publish($head_download,
+					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+						exec("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+						return $retval;
+					})) {
+						pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
 				}
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
@@ -13593,7 +13645,16 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// supports `set -o pipefail`.
 				// ADR-46: stdout extraction (-xOf) -- member names never reach the
 				// filesystem, so no member-name guard is needed on this path.
-				exec("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > {$file_org_esc}", $output, $retval);
+				$retval = pfb_download_initial_retval();
+				if (!pfb_stage_publish($orig_download,
+				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+					exec("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged), $output, $retval);
+					return $retval;
+				})) {
+					pfb_logger("\n[pfb_download] zip extraction failed (tar exit {$retval})", 2);
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::failure();
+				}
 			}
 
 			// ZIP inner-content gate (issue #808): probe the EXTRACTED payload

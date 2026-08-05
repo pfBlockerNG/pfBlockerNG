@@ -76,7 +76,8 @@ final class DownloadRetvalFailsafeTest extends TestCase
 		$this->assertNotFalse($end);
 		$scope = substr(self::$source, $body, $end - $body);
 		$gate = strpos($scope, 'if (pfb_download_retval_success($retval)) {');
-		$extract = strpos($scope, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$file_org_esc}", $output, $retval);');
+		// issue #2169: the generic gzip branch stages its output before publishing.
+		$extract = strpos($scope, 'exec("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);');
 		$this->assertNotFalse($gate);
 		$this->assertNotFalse($extract);
 		$this->assertLessThan($gate, $extract);
