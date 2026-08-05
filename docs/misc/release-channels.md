@@ -45,7 +45,7 @@ and `Z != 0` selects Testing.
 Each tagged release emits one native `.pkg` source asset per build-role matrix row, named with
 the package version, Variant, and pfSense version. The tuple is not stored in the package
 manifest, build record, or a separate metadata file. A reviewed publication callback derives
-the tuple from tag chronology and release-line ancestry on every run: Edge patch-zero
+the tuple from numeric release-family ordering and release-line ancestry on every run: Edge patch-zero
 prereleases route to `(edge,)`; later Testing prereleases route to `(testing,)` or
 `(testing, edge)`; final tags route to `(stable, testing)` or `(stable, testing, edge)`. The
 package publisher receives that tuple, strips the row suffix from the source asset name, and
