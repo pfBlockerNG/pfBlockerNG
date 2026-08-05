@@ -118,9 +118,8 @@ jobs:
 
   # ── 1. Poke the self-hosted pkg repository to republish (ADR-17) ──────────
   # The pkg catalog is hosted + deployed by the SEPARATE pfBlockerNG/pkg repo: its own
-  # publish.yml enumerates this repo's PUBLISHED Releases (the durable store), consumes
-  # their .pkg assets for the release/<varver>/ subtree (arch-less; issue #1806 — devel
-  # = latest prerelease, stable = latest stable),
+  # publish.yml consumes the exact published Release assets and the freshly derived
+  # destination tuple for the release/<varver>/ subtree (arch-less; issue #1806),
   # and deploys to its OWN GitHub Pages via same-repo OIDC — no cross-repo deploy key.
   # We just trigger it so the new Release appears at pfblockerng.github.io/pkg within
   # seconds (its daily schedule is the backstop).
