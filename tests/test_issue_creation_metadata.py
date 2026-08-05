@@ -99,6 +99,9 @@ def test_human_ticket_procedures_make_labels_optional() -> None:
     triage = _read("plugins/mattpocock-skills/codex/skills/triage/SKILL.md")
     assert "category is expressed with the native **type**, not a label" in triage
 
+    # to-tickets carries the one local customization that is NOT issue-type policy:
+    # a frontier-workflow sentence absent from upstream. Pinned here so a re-vendor
+    # cannot silently drop it — the vendored tree has no other guard for it.
     tickets = _read("plugins/mattpocock-skills/codex/skills/to-tickets/SKILL.md")
     assert "Work the frontier one ticket at a time with `/implement`" in tickets
 
