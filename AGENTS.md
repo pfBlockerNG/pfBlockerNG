@@ -1,10 +1,10 @@
 # pfBlockerNG — agent bootstrap (canonical)
 
 This file is the **canonical, vendor-neutral agent policy bootstrap**. Claude Code loads it
-through the thin `CLAUDE.md` adapter (`@AGENTS.md` import); Codex reads it
-natively. Detailed policy lives in `.agents/policy/`, domain context in
-`.agents/context/` and `docs/misc/` — loaded per the routing table
-below, never all at once. Shared behavior changes land there, never in a vendor copy.
+through `CLAUDE.md` (`@AGENTS.md` import), Codex natively, Copilot via
+`.github/copilot-instructions.md`. Detailed policy lives in `.agents/policy/`, domain
+context in `.agents/context/` and `docs/misc/` — loaded per the routing table below, never
+all at once. Shared behavior changes land there, never in a vendor copy.
 
 ## Scope — the pfBlockerNG-org default
 

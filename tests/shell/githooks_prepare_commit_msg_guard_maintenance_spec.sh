@@ -17,7 +17,7 @@ Describe 'prepare-commit-msg fixture maintenance isolation (issue #2055)'
 
   run_subject() {
     cd "$PFB_ROOT" || return
-    env -u SHELLSPEC_MODE GIT_TRACE2_EVENT="$trace" shellspec --no-quick --fail-no-examples \
+    env -u SHELLSPEC_MODE -u COPILOT_AGENT_PROMPT GIT_TRACE2_EVENT="$trace" shellspec --no-quick --fail-no-examples \
       --shell "$(command -v dash)" "$subject_spec"
   }
 

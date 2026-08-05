@@ -1,17 +1,24 @@
 #shellcheck shell=sh
 # Copilot session detection in the git hooks (issue #2177). Copilot CLI exports
 # NO environment variable to the shells it spawns (upstream feature request), so
-# the repo's Copilot sessionStart hook writes a marker holding the CLI's pid into
-# the COMMON git dir and sessionEnd removes it. Both guards that gate on "is an
-# agent driving this" — the prepare-commit-msg primary-checkout block (#1262) and
-# the pre-push lease-by-effect guard (#1307) — must read that marker.
+# its sessionStart hook records the CLI pid under <common-git-dir>/
+# pfb-copilot-sessions/ and sessionEnd removes that record. Both guards that gate
+# on "is an agent driving this" — the prepare-commit-msg primary-checkout block
+# (#1262) and the pre-push lease-by-effect guard (#1307) — must read those records.
+#
+# Records are created by RUNNING the real marker script, never by hand-writing a
+# file: an earlier revision recorded $PPID, which named the dispatcher shell that
+# exits immediately, and a fixture that injected its own live pid could not see
+# that every real session was already dead on arrival.
 #
 # The liveness check is the point of the stale rows: a session killed without its
-# sessionEnd hook leaves the marker behind, and a marker whose pid is gone must
-# NOT turn the human owner's own commit into a blocked "agent" commit.
+# sessionEnd hook leaves its record behind, and a record whose pid is gone must
+# NOT turn the human owner's own commit into a blocked "agent" commit. The
+# concurrency row is the other half — ending one of two live sessions must not
+# disarm the guards for the one still running.
 #
 # The cloud agent is the one Copilot surface with an environment marker of its
-# own (COPILOT_AGENT_PROMPT), so it is detected without the file.
+# own (COPILOT_AGENT_PROMPT), so it is detected without any record.
 
 Describe 'Copilot session detection in the git hooks (issue #2177)'
   pcm_hook="${PFB_ROOT}/.githooks/prepare-commit-msg"
@@ -32,25 +39,40 @@ Describe 'Copilot session detection in the git hooks (issue #2177)'
     git_fixture -C "$primary" worktree add -q "$wt" -b spec-branch
     printf '%s\n' 'msg' > "${primary}/.git/PCM_MSG"
     printf '%s\n' 'msg' > "${primary}/.git/worktrees/wt/PCM_MSG"
-    marker="${primary}/.git/pfb-copilot-session"
+    sessions="${primary}/.git/pfb-copilot-sessions"
+    marker_script="${PFB_ROOT}/scripts/agent/copilot-session-marker.sh"
+    # A second live process to stand in for a concurrent session; killed in cleanup.
+    sleep 300 &
+    other_pid=$!
   }
 
   cleanup() {
+    kill "$other_pid" 2>/dev/null
     rm -rf "$base"
   }
 
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  # A live marker: this spec's own shell is running, so its pid is alive.
-  live_marker() {
-    printf '%s\n' "$$" > "$marker"
+  # Every record below is produced by the production script; PFB_COPILOT_PID is
+  # its documented seam, standing in for the `copilot` ancestor that only exists
+  # under a real CLI session.
+  record_for() {
+    ( cd "$primary" && PFB_COPILOT_PID="$1" sh "$marker_script" start )
+  }
+  end_for() {
+    ( cd "$primary" && PFB_COPILOT_PID="$1" sh "$marker_script" end )
   }
 
-  # A stale marker: pid 2^22 + 1 is above every attainable pid on the supported
-  # platforms, so it can never name a live process.
+  # This spec's own shell is running, so its pid is alive.
+  live_marker() {
+    record_for "$$"
+  }
+
+  # pid 2^22 + 1 is above the maximum on the supported platforms (macOS
+  # kern.maxproc and Linux pid_max both cap below it), so it names no process.
   stale_marker() {
-    printf '%s\n' '4194305' > "$marker"
+    record_for '4194305'
   }
 
   # Env is cleared per row because the suite itself may run under CLAUDECODE=1
@@ -97,16 +119,47 @@ Describe 'Copilot session detection in the git hooks (issue #2177)'
     The stderr should equal ''
   End
 
-  It 'reads the marker from a linked worktree, whose own git dir does not hold it'
+  It 'reads the records from a linked worktree, whose own git dir does not hold them'
     live_marker
     marker_seen() {
       cd "$wt" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
         -u COPILOT_AGENT_PROMPT sh -c \
-        'test -r "$(git rev-parse --git-common-dir)/pfb-copilot-session" && echo found'
+        'test -e "$(git rev-parse --git-common-dir)/pfb-copilot-sessions/'"$$"'" && echo found'
     }
     When run marker_seen
     The status should equal 0
     The stdout should include 'found'
+  End
+
+  It 'keeps the guard armed for a session that is still running when another ends'
+    live_marker
+    record_for "$other_pid"
+    end_for "$other_pid"
+    When run copilot_pcm_in "$primary" .git/PCM_MSG
+    The status should equal 1
+    The stderr should include 'primary checkout'
+  End
+
+  It 'disarms only once every recorded session has ended'
+    live_marker
+    record_for "$other_pid"
+    end_for "$other_pid"
+    end_for "$$"
+    When run copilot_pcm_in "$primary" .git/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  It 'records nothing when no Copilot CLI is in the process tree'
+    # The production path with the seam unset: the ancestor walk finds no
+    # `copilot` process, so a spec shell must not be mistaken for a session.
+    no_ancestor() {
+      ( cd "$primary" && sh "$marker_script" start )
+      ls "$sessions" 2>/dev/null | wc -l | tr -d ' '
+    }
+    When run no_ancestor
+    The status should equal 0
+    The stdout should include '0'
   End
 
   It 'credits the Copilot-specific coauthor identity'

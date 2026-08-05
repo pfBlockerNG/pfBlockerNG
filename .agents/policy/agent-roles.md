@@ -1,17 +1,17 @@
 # Agent role families — shared contract
 
-- **Scope:** vendor-neutral agent role families for Claude and Codex: what each role is
+- **Scope:** vendor-neutral agent role families for Claude, Codex, and Copilot: what each role is
   for, what it may read and mutate, what it must return, and which model tier serves it
   (issue [#1387](https://github.com/pfBlockerNG/pfBlockerNG/issues/1387); companion to
   the fresh-session ticket workflow in [`workflow.md`](workflow.md)).
-- **Load-when:** defining or routing an agent role; changing `.codex/agents/`,
+- **Load-when:** defining or routing an agent role; changing `.codex/agents/`, `.github/agents/`,
   `.agents/model-tiers.conf`, or this registry.
 - **Owner:** repo owner. **Last-verified:** 2026-07-17.
 
 ## Goal
 
 One semantic contract per role family, mapped explicitly onto each vendor's native
-definitions, so both clients stay behaviorally aligned without identical files, models,
+definitions, so every client stays behaviorally aligned without identical files, models,
 tools, or wording. Context-window pollution is the enemy: a role loads its purpose-built
 context slice (its contract section plus the packet's Required reading), never the whole
 policy corpus.
@@ -25,12 +25,12 @@ policy corpus.
 - The delegation contract (`.agents/policy/delegation.md`: brief → handoff → gate) and the task-packet /
   checkpoint schemas ([`workflow.md`](workflow.md)) bind every role unchanged; a role
   contract may narrow them, never weaken them.
-- `scripts/check_agent_roles.py` validates the registry below against both vendors'
+- `scripts/check_agent_roles.py` validates the registry below against each vendor's
   definitions if and only if either side changes (pre-commit + CI). It checks semantic
   fields — tier vocabulary, mutation boundaries, binding targets, model-tier pins —
   never textual identity, so vendor-native wording stays free.
 
-## Tier economics (Sol/Luna discipline, both vendors)
+## Tier economics (Sol/Luna discipline, every vendor)
 
 - **small** is the default executor tier: implementation, verification, review, triage,
   publishing, and coordination all start small.
@@ -269,7 +269,7 @@ Deviations from issue #1387's starting six, with rationale:
   permissions, evidence schema, and escalation contract; it differs only in scope cap
   and skipped wrapping stages. The repo already models this as a routing parameter
   (`WEIGHT: light` phases), and Codex defines one implementer role.
-- **planner added**: the de-facto top-tier role both vendors already define
+- **planner added**: the de-facto top-tier role every vendor already defines
   (`.codex/agents/planner.toml`; the Claude session + Reconcile stage). The expensive
   tier needs an explicit contract precisely because it is expensive.
 - **code reviewer split into verifier + reviewer**: different outputs (gate record vs
@@ -291,7 +291,7 @@ Deviations from issue #1387's starting six, with rationale:
 ## Acceptance criteria
 
 - Every registry role has a contract section carrying all eight semantic fields, and
-  explicit Claude and Codex bindings that resolve to real files (or `session`).
+  explicit Claude, Codex, and Copilot bindings that resolve to real files (or `session`).
 - `scripts/check_agent_roles.py --all` passes on the tree; it fails loudly when a
   vendor definition drifts from the registry (retiered model pin, sandbox/mutation
   mismatch, orphaned vendor role, missing contract field) while tolerating any

@@ -25,19 +25,27 @@
 
 set -u
 
-# Copilot exports no environment marker to the shells it spawns, so its session
-# is detected from the marker the repo's sessionStart hook writes into the COMMON
-# git dir (shared by every worktree) and sessionEnd removes. The pid liveness
-# check is what keeps a session that died without its sessionEnd hook from
-# turning the owner's own later commit into a blocked "agent" commit. The cloud
-# agent needs no marker: it sets COPILOT_AGENT_PROMPT itself.
+# Copilot exports no environment marker to the shells it spawns, so its sessions
+# are detected from the per-session records the repo's sessionStart hook writes
+# into the COMMON git dir (shared by every worktree), one file per live CLI pid.
+# ANY live record arms the guard, so ending one of several concurrent sessions
+# cannot disarm it; a record whose pid is gone is ignored, so a session that died
+# without its sessionEnd hook cannot turn the owner's own later commit into a
+# blocked "agent" commit. The cloud agent needs no record: it sets
+# COPILOT_AGENT_PROMPT itself.
 copilot_session() {
 	[ -n "${COPILOT_AGENT_PROMPT:-}" ] && return 0
-	pfb_marker=$(git rev-parse --git-common-dir 2>/dev/null)/pfb-copilot-session
-	[ -r "$pfb_marker" ] || return 1
-	pfb_pid=$(cat "$pfb_marker" 2>/dev/null) || return 1
-	case "$pfb_pid" in '' | *[!0-9]*) return 1 ;; esac
-	kill -0 "$pfb_pid" 2>/dev/null
+	pfb_sessions=$(git rev-parse --git-common-dir 2>/dev/null)/pfb-copilot-sessions
+	[ -d "$pfb_sessions" ] || return 1
+	for pfb_record in "$pfb_sessions"/*; do
+		[ -e "$pfb_record" ] || continue
+		pfb_pid=${pfb_record##*/}
+		# `kill -0 0` signals this process group and always succeeds, so 0 is
+		# rejected with the malformed names rather than trusted as a session.
+		case "$pfb_pid" in '' | 0 | *[!0-9]*) continue ;; esac
+		kill -0 "$pfb_pid" 2>/dev/null && return 0
+	done
+	return 1
 }
 
 # Agent worktree guard (issue #1262): abort a Claude Code, Codex, or Copilot

@@ -7,7 +7,8 @@
 #   - every versioned tag is annotated and carries exactly one explicit channel trailer
 #   - its commit must be reachable from the exact release/X.Y line derived by the parser
 #   - malformed metadata, an unknown channel, or an unreachable release line -> rejected
-#   - agent (CLAUDECODE=1 or CODEX_THREAD_ID set) branch push rewriting remote
+#   - agent (CLAUDECODE=1, CODEX_THREAD_ID set, or a live Copilot session record)
+#     branch push rewriting remote
 #     history -> allowed only when the advertised remote oid equals the local
 #     remote-tracking ref, i.e. the history being overwritten was fetched
 #     (--force-with-lease's check, applied to the push's effect regardless of
@@ -101,16 +102,23 @@ PFB_TAG_UPDATES
 
 # Agent lease-by-effect guard (issue #1307): deny an agent branch rewrite over
 # remote history it never fetched (advertised remote oid != remote-tracking ref).
-# Copilot exports no environment marker to spawned shells, so its session is read
-# from the pid marker its sessionStart hook writes into the common git dir; a
-# marker whose pid is gone is ignored, so a stale file cannot gate a human push.
+# Copilot exports no environment marker to spawned shells, so its sessions are
+# read from the per-session pid records its sessionStart hook writes into the
+# common git dir; any live record arms the guard and a record whose pid is gone is
+# ignored, so a stale file cannot gate a human push.
 copilot_session() {
 	[ -n "${COPILOT_AGENT_PROMPT:-}" ] && return 0
-	pfb_marker=$(git rev-parse --git-common-dir 2>/dev/null)/pfb-copilot-session
-	[ -r "$pfb_marker" ] || return 1
-	pfb_pid=$(cat "$pfb_marker" 2>/dev/null) || return 1
-	case "$pfb_pid" in '' | *[!0-9]*) return 1 ;; esac
-	kill -0 "$pfb_pid" 2>/dev/null
+	pfb_sessions=$(git rev-parse --git-common-dir 2>/dev/null)/pfb-copilot-sessions
+	[ -d "$pfb_sessions" ] || return 1
+	for pfb_record in "$pfb_sessions"/*; do
+		[ -e "$pfb_record" ] || continue
+		pfb_pid=${pfb_record##*/}
+		# `kill -0 0` signals this process group and always succeeds, so 0 is
+		# rejected with the malformed names rather than trusted as a session.
+		case "$pfb_pid" in '' | 0 | *[!0-9]*) continue ;; esac
+		kill -0 "$pfb_pid" 2>/dev/null && return 0
+	done
+	return 1
 }
 
 agent_runtime=0

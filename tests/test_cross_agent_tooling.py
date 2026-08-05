@@ -41,17 +41,27 @@ def test_copilot_session_start_carries_the_modes_and_the_session_marker() -> Non
     config = json.loads((ROOT / ".github/hooks/pfblockerng.json").read_text(encoding="utf-8"))
     assert config["version"] == 1
 
-    start = json.dumps(config["hooks"]["sessionStart"])
-    assert "copilot-session-hook.sh" in start
-    end = json.dumps(config["hooks"]["sessionEnd"])
-    assert "copilot-session-hook.sh" in end, "the session marker is never removed"
+    # The ACTION matters, not just the script name: a sessionEnd wired to `start`
+    # would leave every session recorded forever.
+    for event, action in (("sessionStart", "start"), ("sessionEnd", "end")):
+        commands = [entry["bash"] for entry in config["hooks"][event] if "bash" in entry]
+        assert any(command.endswith(f'copilot-session-hook.sh" {action}') for command in commands), (
+            f"copilot {event} does not dispatch `{action}`"
+        )
 
-    # The capsule and the marker live in the dispatcher, because the same script
-    # backs the user-level install (repo-level hooks did not fire in CLI 1.0.78).
+    # subagentStart carries its own capsule, exactly as the other two vendors pin
+    # SessionStart AND SubagentStart.
+    commands = [entry["bash"] for entry in config["hooks"]["subagentStart"] if "bash" in entry]
+    assert any(command.endswith('copilot-session-hook.sh" subagent') for command in commands)
+
+    # Both capsules live in the dispatcher, because the same script backs the
+    # user-level install (repo-level hooks did not fire in CLI 1.0.78).
     dispatcher = (ROOT / "scripts/agent/copilot-session-hook.sh").read_text(encoding="utf-8")
-    missing = [mode for mode in MODES if mode not in dispatcher]
-    assert not missing, f"copilot sessionStart capsule missing {missing}"
-    assert "additionalContext" in dispatcher
+    capsules = [line for line in dispatcher.splitlines() if line.startswith('{"additionalContext"')]
+    assert len(capsules) == 2, "expected a session capsule and a subagent capsule"
+    for capsule in capsules:
+        missing = [mode for mode in MODES if mode not in capsule]
+        assert not missing, f"copilot capsule missing {missing}"
 
     marker_script = ROOT / "scripts/agent/copilot-session-marker.sh"
     assert marker_script.exists()
@@ -77,9 +87,13 @@ def test_copilot_instructions_route_at_the_canonical_bootstrap() -> None:
 
 
 def test_copilot_roles_are_pinned_and_defined() -> None:
-    tiers = (ROOT / ".agents/model-tiers.conf").read_text(encoding="utf-8")
+    tiers = dict(
+        line.split("=", 1)
+        for line in (ROOT / ".agents/model-tiers.conf").read_text(encoding="utf-8").splitlines()
+        if "=" in line and not line.startswith("#")
+    )
     for tier in ("TOP_COPILOT", "MID_COPILOT", "SMALL_COPILOT"):
-        assert f"\n{tier}=" in tiers, f"{tier} is unpinned"
+        assert tiers.get(tier), f"{tier} is unpinned"
 
     agents = {path.name for path in (ROOT / ".github/agents").glob("*.agent.md")}
     codex_agents = {path.stem for path in (ROOT / ".codex/agents").glob("*.toml")}

@@ -310,6 +310,8 @@ def _agent_md_front_matter(text: str) -> dict[str, str]:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
+    if not any(line.strip() == "---" for line in lines[1:]):
+        return {}  # unterminated front matter is malformed, not an open block
     fields: dict[str, str] = {}
     for line in lines[1:]:
         if line.strip() == "---":

@@ -18,8 +18,8 @@
     "subagentStart": [
       {
         "type": "command",
-        "bash": "printf '%s' '{\"additionalContext\":\"SESSION MODES: PONYTAIL full — YAGNI, reuse existing code, stdlib/native first, shortest correct diff; review-only tasks stay fully thorough. CAVEMAN full — terse connective prose, exact technical content and evidence. AGENTS.md and the routed .agents/policy/ files are binding. Public-facing text and documentation use normal professional grammar.\"}'",
-        "timeoutSec": 5
+        "bash": "sh \"$(git rev-parse --show-toplevel)/scripts/agent/copilot-session-hook.sh\" subagent",
+        "timeoutSec": 10
       }
     ]
   }

@@ -21,7 +21,11 @@ while [ $# -gt 0 ]; do
 		--uninstall) uninstall=1 ;;
 		--root)
 			shift
-			root=${1:-}
+			[ $# -gt 0 ] && [ -n "${1:-}" ] || {
+				echo 'install-copilot-hooks: --root needs a directory' >&2
+				exit 2
+			}
+			root=$1
 			;;
 		*)
 			echo "install-copilot-hooks: unknown argument: $1" >&2
@@ -60,6 +64,20 @@ dispatcher="${root}/scripts/agent/copilot-session-hook.sh"
 	exit 1
 }
 
+# The hook file is built by interpolation, so a path carrying JSON-significant
+# characters would emit a file Copilot silently refuses to parse. The newline is
+# matched through a variable holding a literal one: `$(printf '\n')` collapses to
+# the empty string in a command substitution, and `*""*` matches every path.
+pfb_nl='
+'
+pfb_bs=$(printf '\134') # octal escape: a literal '\' trips shellcheck SC1003
+case "$dispatcher" in
+	*'"'* | *"$pfb_bs"* | *"$pfb_nl"* | *"$(printf '\t')"*)
+		echo "install-copilot-hooks: checkout path contains a character that cannot be embedded in JSON: $dispatcher" >&2
+		exit 1
+		;;
+esac
+
 mkdir -p "$hook_dir" || exit 1
 cat > "$hook_file" <<PFB_COPILOT_HOOKS
 {
@@ -76,6 +94,13 @@ cat > "$hook_file" <<PFB_COPILOT_HOOKS
       {
         "type": "command",
         "bash": "sh \\"${dispatcher}\\" end",
+        "timeoutSec": 10
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "sh \\"${dispatcher}\\" subagent",
         "timeoutSec": 10
       }
     ]
