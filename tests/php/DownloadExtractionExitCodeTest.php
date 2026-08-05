@@ -74,8 +74,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($asn);
 		$this->assertNotFalse($top1m);
 		$scope = substr(self::$source, $asn, $top1m - $asn);
-		$this->assertStringContainsString('exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);', $scope);
-		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+		$this->assertStringContainsString(
+			'exec("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);', $scope);
+		// issue #2169: the exit code is now gated inside pfb_stage_publish(), which
+		// publishes onto the live target only when it reports success.
+		$this->assertStringContainsString('if (!pfb_stage_publish($head_download,', $scope);
 	}
 
 	/**
@@ -129,7 +132,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($top1m);
 		$scope = substr(self::$source, $geoip, $top1m - $geoip);
 		$this->assertStringContainsString('exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);', $scope);
-		$this->assertStringContainsString('exec("/usr/bin/tar -xOf {$file_dwn_esc} > {$header_esc}", $output, $retval);', $scope);
+		$this->assertStringContainsString(
+			'exec("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);', $scope);
+		// issue #2169: the stdout mode publishes through the staged helper; the
+		// directory mode still reaches the shared zero-only gate below it.
+		$this->assertStringContainsString('if (!pfb_stage_publish($head_download,', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
 
