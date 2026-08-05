@@ -43,15 +43,25 @@ jobs:
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
       source_sha: ${{ steps.plan.outputs.source_sha }}
       ports_sha: ${{ steps.plan.outputs.ports_sha }}
+      matrix_sha: ${{ steps.plan.outputs.matrix_sha }}
       matrix_digest: ${{ steps.plan.outputs.matrix_digest }}
       source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
     steps:
-      - name: Checkout explicit source ref
+      - name: Checkout trusted workflow tools
+        uses: actions/checkout@v6
+        with:
+          ref: devel
+          fetch-depth: 0
+          persist-credentials: false
+          path: trusted
+
+      - name: Checkout explicit source ref as package input
         uses: actions/checkout@v6
         with:
           ref: ${{ env.SOURCE_REF }}
           fetch-depth: 0
           persist-credentials: false
+          path: source
 
       - name: Resolve pinned source, Ports, and live matrices
         id: inputs
@@ -63,8 +73,10 @@ jobs:
             echo "::error::missing NIGHTLY_SOURCE_REF configuration"
             exit 1
           fi
-          SOURCE_SHA="$(git rev-parse "${SOURCE_REF}^{commit}")"
-          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$SOURCE_SHA")"
+          TRUSTED_DIR="${GITHUB_WORKSPACE}/trusted"
+          SOURCE_DIR="${GITHUB_WORKSPACE}/source"
+          SOURCE_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+          SOURCE_DATE_EPOCH="$(git -C "$SOURCE_DIR" show -s --format=%ct "$SOURCE_SHA")"
 
           case "$PORTS_REPO" in
             http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;
@@ -82,21 +94,31 @@ jobs:
               ;;
           esac
 
-          BUILD_MATRIX="$(sh scripts/read-version-matrix.sh --print-build)"
-          ROUTE_MATRIX="$(sh scripts/read-version-matrix.sh --print-route)"
-          BUILD_COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
-          ROUTE_COUNT="$(printf '%s' "$ROUTE_MATRIX" | jq 'length')"
-          if [ "$BUILD_COUNT" -eq 0 ] || [ "$ROUTE_COUNT" -eq 0 ]; then
+          matrix_nonempty() {
+            [ "$(printf '%s' "$1" | jq 'length')" -gt 0 ]
+          }
+          if matrix_nonempty '[]'; then
+            echo "::error::matrix gate red canary passed"
+            exit 1
+          fi
+          echo "matrix gate red canary: expected rejection"
+
+          git -C "$TRUSTED_DIR" fetch origin ci-metadata
+          MATRIX_SHA="$(git -C "$TRUSTED_DIR" rev-parse FETCH_HEAD)"
+          BUILD_MATRIX="$(sh "$TRUSTED_DIR/scripts/read-version-matrix.sh" \
+            --ref "$MATRIX_SHA" --print-build)"
+          ROUTE_MATRIX="$(sh "$TRUSTED_DIR/scripts/read-version-matrix.sh" \
+            --ref "$MATRIX_SHA" --print-route)"
+          if ! matrix_nonempty "$BUILD_MATRIX" || ! matrix_nonempty "$ROUTE_MATRIX"; then
             echo "::error::missing live BUILD/ROUTE matrix rows"
             exit 1
           fi
-          MATRIX_DIGEST="$(
-            jq -S -c -n \
-              --argjson build "$BUILD_MATRIX" \
-              --argjson route "$ROUTE_MATRIX" \
-              '{build: $build, route: $route}' \
-              | sha256sum | cut -d' ' -f1
-          )"
+          MATRIX_PAYLOAD="$(jq -S -c -n \
+            --arg matrix_sha "$MATRIX_SHA" \
+            --argjson build "$BUILD_MATRIX" \
+            --argjson route "$ROUTE_MATRIX" \
+            '{matrix_sha: $matrix_sha, build: $build, route: $route}')"
+          MATRIX_DIGEST="$(printf '%s' "$MATRIX_PAYLOAD" | sha256sum | cut -d' ' -f1)"
 
           STATE_SHA=""
           STATE_RESPONSE_FILE="$(mktemp)"
@@ -114,12 +136,12 @@ jobs:
             cat "$STATE_ERROR_FILE" >&2
             exit 1
           fi
-          python3 scripts/nightly_provenance.py validate --state state.json
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" validate --state state.json
 
           mkdir -p plan
           # Durable generation checks reject stale completions before state mutation.
           BUILD_DATE="$(date -u +%Y%m%d)"
-          python3 scripts/nightly_provenance.py allocate \
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" allocate \
             --state state.json \
             --output plan/allocation.json \
             --build-date "$BUILD_DATE" \
@@ -132,12 +154,14 @@ jobs:
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha
           printf '%s\n' "$PORTS_SHA" > plan/ports-sha
+          printf '%s\n' "$MATRIX_SHA" > plan/matrix-sha
           printf '%s\n' "$MATRIX_DIGEST" > plan/matrix-digest
           printf '%s\n' "$SOURCE_DATE_EPOCH" > plan/source-date-epoch
 
           {
             echo "source_sha=$SOURCE_SHA"
             echo "ports_sha=$PORTS_SHA"
+            echo "matrix_sha=$MATRIX_SHA"
             echo "matrix_digest=$MATRIX_DIGEST"
             echo "source_date_epoch=$SOURCE_DATE_EPOCH"
           } >> "$GITHUB_OUTPUT"
@@ -154,6 +178,7 @@ jobs:
             echo "allocation=$ALLOCATION"
             echo "source_sha=${{ steps.inputs.outputs.source_sha }}"
             echo "ports_sha=${{ steps.inputs.outputs.ports_sha }}"
+            echo "matrix_sha=${{ steps.inputs.outputs.matrix_sha }}"
             echo "matrix_digest=${{ steps.inputs.outputs.matrix_digest }}"
             echo "source_date_epoch=${{ steps.inputs.outputs.source_date_epoch }}"
             echo "build_matrix<<NIGHTLY_BUILD_MATRIX"
@@ -179,12 +204,21 @@ jobs:
       matrix:
         include: ${{ fromJson(needs.prepare.outputs.build_matrix) }}
     steps:
-      - name: Checkout pinned source
+      - name: Checkout trusted workflow tools
+        uses: actions/checkout@v6
+        with:
+          ref: devel
+          fetch-depth: 0
+          persist-credentials: false
+          path: trusted
+
+      - name: Checkout pinned source as package input
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.source_sha }}
           fetch-depth: 0
           persist-credentials: false
+          path: source
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -206,6 +240,8 @@ jobs:
           RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
           PORTS_REPO: ${{ env.PORTS_REPO }}
           PORTS_REF: ${{ env.PORTS_REF }}
+          TRUSTED_DIR: ${{ github.workspace }}/trusted
+          SOURCE_DIR: ${{ github.workspace }}/source
         run: |
           set -eu
           mkdir -p result
@@ -219,13 +255,13 @@ jobs:
           PORTS_DIR="${RUN_ROOT}/${RUN_ID}/ports"
           OUT_DIR="${RUN_ROOT}/${RUN_ID}/out"
 
-          python3 scripts/nightly_provenance.py record \
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" record \
             --allocation allocation.json \
             --matrix-row row.json \
             --source-date-epoch "$SOURCE_DATE_EPOCH" \
             --output build-record.json
           PKG="$(
-            sh scripts/build-leg.sh \
+            sh "$TRUSTED_DIR/scripts/build-leg.sh" \
               --ports-repo "$PORTS_REPO" \
               --ports-ref "$PORTS_REF" \
               --channel nightly \
@@ -234,7 +270,7 @@ jobs:
               --abi "FreeBSD:${FREEBSD_MAJOR}:amd64" \
               --py-flavor "$PY_FLAVOR" \
               --php "$PHP_VERSION" \
-              --local-src . \
+              --local-src "$SOURCE_DIR" \
               --pkgversion "$PKG_VERSION" \
               --ports-dir "$PORTS_DIR" \
               --out-dir "$OUT_DIR"
@@ -244,10 +280,10 @@ jobs:
             echo "::error::FreeBSD-ports checkout changed during build"
             exit 1
           fi
-          python3 - "$PKG" build-record.json <<'PY'
+          PYTHONPATH="$TRUSTED_DIR/scripts" python3 - "$PKG" build-record.json <<'PY'
           import json
           import sys
-          from scripts.pfb_pkg import validate_project_pkg
+          from pfb_pkg import validate_project_pkg
 
           validate_project_pkg(sys.argv[1], json.loads(open(sys.argv[2], encoding="utf-8").read()))
           PY
@@ -292,13 +328,14 @@ jobs:
             exit 1
           fi
 
-      - name: Checkout pinned source for handoff validation
+      - name: Checkout trusted workflow tools for handoff validation
         if: needs.prepare.outputs.outcome == 'build'
         uses: actions/checkout@v6
         with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          fetch-depth: 1
+          ref: devel
+          fetch-depth: 0
           persist-credentials: false
+          path: trusted
 
       - name: Download pinned plan
         if: needs.prepare.outputs.outcome == 'build'
@@ -321,10 +358,12 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          MATRIX_SHA: ${{ needs.prepare.outputs.matrix_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
+          TRUSTED_DIR: ${{ github.workspace }}/trusted
         run: |
           set -eu
-          python3 scripts/nightly_provenance.py handoff \
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" handoff \
             --state plan/state.json \
             --allocation plan/allocation.json \
             --build-matrix plan/build-matrix.json \
@@ -332,6 +371,7 @@ jobs:
             --results-dir results \
             --source-sha "$SOURCE_SHA" \
             --ports-sha "$PORTS_SHA" \
+            --matrix-sha "$MATRIX_SHA" \
             --matrix-digest "$MATRIX_DIGEST" \
             --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
             --source-ref "$SOURCE_REF" \
@@ -339,7 +379,7 @@ jobs:
             --ports-ref "$PORTS_REF" \
             --output nightly-handoff.json
           jq '[.builds[].artifact]' nightly-handoff.json > artifacts.json
-          python3 scripts/nightly_provenance.py complete \
+          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" complete \
             --state plan/state.json \
             --candidate plan/allocation.json \
             --artifacts artifacts.json \
