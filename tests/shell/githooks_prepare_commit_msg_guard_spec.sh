@@ -44,15 +44,15 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   # Direct hook invocations: cwd selects primary vs linked worktree; env is
   # set explicitly per row because the suite itself may run under CLAUDECODE=1.
   agent_hook_in() {
-    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 \
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 \
       sh "$hook" "$2"
   }
   codex_hook_in() {
-    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE \
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
       CODEX_THREAD_ID=codex-test sh "$hook" "$2"
   }
   human_hook_in() {
-    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
       sh "$hook" "$2"
   }
 
@@ -112,7 +112,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
 
   It 'passes an agent commit in a managed-remote session (owner email marker set)'
     managed_hook() {
-      cd "$primary" && env -u CODEX_THREAD_ID CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=owner@example.com \
+      cd "$primary" && env -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=owner@example.com \
         sh "$hook" .git/PCM_MSG
     }
     When run managed_hook
@@ -128,7 +128,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       cd "$primary" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && echo change >> seed.txt && git_fixture add seed.txt \
-        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git commit -n -m blocked # git-env-scrub-guard: allow hook-under-test commit
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 git commit -n -m blocked # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit
     The status should not equal 0
@@ -141,7 +141,7 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       cd "$primary" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && echo change >> seed.txt && git_fixture add seed.txt \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git commit -n -m allowed # git-env-scrub-guard: allow hook-under-test commit
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT git commit -n -m allowed # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit_human
     The status should equal 0

@@ -33,7 +33,7 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
       git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' "$sha"
       tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
       printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -48,7 +48,7 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
       git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' "$sha"
       tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
       printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -61,7 +61,7 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
       git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
       git_fixture tag -a v9.9.9.r1 -m v9.9.9.r1 -m 'pfBlockerNG-Release-Channel: testing' "$sha"
       printf '%s\n' "HEAD $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -77,7 +77,7 @@ Describe 'pre-push tag-scheme loop still consumes the update list (issue #1307)'
 pfBlockerNG-Release-Channel: edge' -m 'pfBlockerNG-Release-Channel: testing' "$sha"
       tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
       printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -90,7 +90,7 @@ pfBlockerNG-Release-Channel: edge' -m 'pfBlockerNG-Release-Channel: testing' "$s
       git_fixture update-ref refs/remotes/origin/release/9.9 "$sha"
       git_fixture tag v9.9.9.r1 "$sha"
       printf '%s\n' "refs/tags/v9.9.9.r1 $sha refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -106,7 +106,7 @@ pfBlockerNG-Release-Channel: edge' -m 'pfBlockerNG-Release-Channel: testing' "$s
 pfBlockerNG-Release-Channel: testing' "$sha"
       tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
       printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -122,7 +122,7 @@ pfBlockerNG-Release-Channel: testing' "$sha"
 pfblockerng-release-channel: edge' "$sha"
       tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
       printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag
@@ -139,7 +139,7 @@ pfblockerng-release-channel:edge
 PFBLOCKERNG-RELEASE-CHANNEL:	edge' "$sha"
       tag_object="$(git_fixture rev-parse refs/tags/v9.9.9.r1)"
       printf '%s\n' "refs/tags/v9.9.9.r1 $tag_object refs/tags/v9.9.9.r1 0000000000000000000000000000000000000000" \
-        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
           sh "$hook" origin "${base}/repo"
     }
     When run push_tag

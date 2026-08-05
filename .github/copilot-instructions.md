@@ -19,12 +19,12 @@ appliance, POSIX sh only.
   `mattpocock-skills` plugin installs from `plugins/mattpocock-skills/.github/plugin/`.
 - Session lifecycle hooks run from `~/.copilot/hooks/pfblockerng.json`, installed once with
   `sh scripts/agent/install-copilot-hooks.sh`: they inject the mode capsules and write the
-  session marker the git hooks read. Repo-level `.github/hooks/pfblockerng.json` holds the
+  session record the git hooks read. Repo-level `.github/hooks/pfblockerng.json` holds the
   same wiring for the day the CLI honours it — as of 1.0.78 it does not.
 - Custom agents live in `.github/agents/*.agent.md`, tiered per `.agents/model-tiers.conf`.
 - Copilot exports no environment marker to spawned shells, so `.githooks/pre-push` and
-  `.githooks/prepare-commit-msg` detect the session through that marker file. Never delete
-  it mid-session, and never work around a guard it trips.
+  `.githooks/prepare-commit-msg` detect sessions through those records. Never delete one
+  mid-session, and never work around a guard it trips.
 - Copilot has no verified co-author identity here: the human owner stays author, committer,
   and signer, and Copilot authorship is disclosed in the PR body, never as a
   `Co-authored-by:` trailer for Copilot itself.

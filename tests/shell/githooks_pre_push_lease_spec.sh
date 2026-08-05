@@ -56,16 +56,16 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   # per row (the suite itself may run under CLAUDECODE=1).
   agent_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+      | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
   }
   codex_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE CODEX_THREAD_ID=codex-test \
+      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT CODEX_THREAD_ID=codex-test \
         sh "$hook" origin "${base}/remote.git"
   }
   human_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+      | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
         sh "$hook" origin "${base}/remote.git"
   }
 
@@ -130,7 +130,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" && printf '%s\n%s\n' \
         "refs/heads/new $a_local refs/heads/new $Z40" \
         "refs/heads/devel $a_local refs/heads/devel $remote_tip" \
-        | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+        | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
     }
     When run two_refs
     The status should equal 1
@@ -150,7 +150,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID CLAUDECODE=1 git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force
     The status should not equal 0
@@ -163,7 +163,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL CODEX_THREAD_ID=codex-test git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u COPILOT_AGENT_PROMPT CODEX_THREAD_ID=codex-test git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_codex
     The status should not equal 0
@@ -176,7 +176,7 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_human
     The status should equal 0

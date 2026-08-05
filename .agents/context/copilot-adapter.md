@@ -36,11 +36,14 @@ Copilot specifics:
 - **The mode capsules ride the instructions file first.** `sessionStart` also emits them,
   but a CLI build that drops `sessionStart` output (upstream bug) must not take the modes
   with it, so `.github/copilot-instructions.md` is the reliable carrier.
-- **Session marker.** Copilot sets no environment variable in the shells it spawns, so
-  `sessionStart` (via that install) writes the CLI pid to `<common-git-dir>/pfb-copilot-session` and
-  `sessionEnd` removes it; `.githooks/prepare-commit-msg` and `.githooks/pre-push` treat a
-  live marker as an agent runtime. A marker whose pid is gone is ignored. The cloud agent
-  sets `COPILOT_AGENT_PROMPT` and needs no marker.
+- **Session records.** Copilot sets no environment variable in the shells it spawns, so
+  `sessionStart` (via that install) records the CLI pid under
+  `<common-git-dir>/pfb-copilot-sessions/` and `sessionEnd` removes that one record;
+  `.githooks/prepare-commit-msg` and `.githooks/pre-push` treat ANY live record as an agent
+  runtime, so ending one of several concurrent sessions cannot disarm the guards. A record
+  whose pid is gone is ignored and pruned. The pid is resolved by walking up to the `copilot`
+  ancestor — the hook's own shell exits immediately, so recording it would expire on the
+  spot. The cloud agent sets `COPILOT_AGENT_PROMPT` and needs no record.
 - **Reviews** use `adversarial-reviewer`(-`top`/-`mid`) from `.github/agents/` per
   `.agents/policy/landing.md`. The Copilot **code-review bot** stays disabled by owner
   directive — an unrelated surface.
