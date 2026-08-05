@@ -21,10 +21,10 @@ while [ $# -gt 0 ]; do
 		--uninstall) uninstall=1 ;;
 		--root)
 			shift
-			[ $# -gt 0 ] && [ -n "${1:-}" ] || {
+			if [ $# -eq 0 ] || [ -z "${1:-}" ]; then
 				echo 'install-copilot-hooks: --root needs a directory' >&2
 				exit 2
-			}
+			fi
 			root=$1
 			;;
 		*)
