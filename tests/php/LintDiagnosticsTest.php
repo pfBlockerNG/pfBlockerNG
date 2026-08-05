@@ -190,9 +190,7 @@ final class LintDiagnosticsTest extends TestCase
 		// \n sits in the FORMAT string (before the %s value) so printf(1) expands it to a
 		// real newline -- a \n glued onto the end of the %s-substituted VALUE itself is
 		// never escape-processed and would ship as a literal backslash-n.
-		// Needs no drain (issue #2173): the write race is unobservable here because a
-		// non-blank stderr takes the same parse path whether or not the write EPIPEs.
-		$timeoutFixture = $this->fixture(<<<'SH'
+		$timeoutFixture = $this->drainingFixture(<<<'SH'
 			printf '%s\n' '/dev/stdin: 2: Syntax error: end of file unexpected (expecting "fi")' 1>&2
 			exit 2
 			SH);
