@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.release_version import derive_destinations, get_tags_zero_after
+from scripts.release_version import derive_destinations, get_tags_zero_after, primary_channel_for_tag
 
 
 def _destinations(
@@ -77,3 +77,17 @@ def test_zero_prereleases_use_numeric_family_not_sequence_order() -> None:
         "v4.1.56": "release/4.1",
     }
     assert get_tags_zero_after("v4.0.0", tags, tag_branches=branches) == ["v4.2.0.a1"]
+
+
+@pytest.mark.parametrize(
+    ("tag", "expected"),
+    [("v4.0.0", "stable"), ("v4.0.1.a1", "testing"), ("v4.0.0.a1", "edge")],
+)
+def test_primary_channel_for_tag_matches_release_shape(tag: str, expected: str) -> None:
+    assert primary_channel_for_tag(tag) == expected
+
+
+@pytest.mark.parametrize("tag", ["v4.0", "v4.0.0.x1", "v04.0.0"])
+def test_primary_channel_for_tag_rejects_malformed_tag(tag: str) -> None:
+    with pytest.raises(ValueError, match="invalid release tag"):
+        primary_channel_for_tag(tag)

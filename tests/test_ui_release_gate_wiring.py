@@ -989,6 +989,15 @@ def test_healthcheck_nonempty_matrix_with_matching_pkgs_still_passes(tmp_path: P
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
+def test_healthcheck_rejects_wrong_main_asset_when_pkg_count_matches(tmp_path: Path) -> None:
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix='[{"variant":"CE","pfsense_version":"2.8"}]',
+        assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfSense-pkg-pfBlockerNG-4.0.0-Plus-2.8.pkg"}]',
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
 def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
     """issue #1806 B1 (delta review finding): attach-pkgs's pfBlockerNG-relpkg-*
     sweep ALSO attaches each row's dep .pkg artifact

@@ -49,6 +49,7 @@ jobs:
           # silently inherit the hole. Same rule as the dispatch workflow's ports helper. Do not
           # "simplify" this to the event ref or the release tag.
           ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Classify the tag

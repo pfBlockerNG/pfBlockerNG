@@ -1088,6 +1088,7 @@ jobs:
 
           PKG="$(sh scripts/build-leg.sh \
             --channel    "$PKG_CHANNEL" \
+            --variant    "$VARIANT" \
             --ports-ref  "$PORTS_SHA" \
             --abi        "$ABI" \
             --py-flavor  "$PY" \

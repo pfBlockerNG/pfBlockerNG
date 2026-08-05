@@ -170,8 +170,8 @@ A Stable, Testing, or Edge release dispatch triggers `release.yml`, which reads 
 one row per build-role Variant/pfSense version — and builds one `.pkg` per row against its
 `(freebsd_version, php_version)` pair. Row-qualified artifacts are attached to the **GitHub
 Release** as `pfSense-pkg-pfBlockerNG-<version>-<Variant>-<pfsense_version>.pkg`; each archive's
-bytes and native manifest stay unchanged. A build failure surfaces in CI but must **not** block
-the `ports-pr` step (the ports PR is the real distribution path).
+bytes and native manifest stay unchanged. A build failure blocks the tag, Release, and
+`sync-ports-fork` gates.
 
 The `sync-ports-fork` job in `release.yml` also updates `PORTREVISION` on the ports fork using
 `scripts/portrevision-rebuild.sh`: when the release tag carries the same PORTVERSION already
