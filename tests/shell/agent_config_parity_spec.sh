@@ -2,6 +2,10 @@
 # The Claude/Codex configuration uses one detailed source plus thin discovery
 # adapters. Pin inventory coverage and the source-reference contract so a new
 # skill or workflow cannot silently disappear from Codex.
+#
+# Copilot (issue #2177) needs no skill adapter — it scans .agents/skills/ itself —
+# so only its tier vocabulary and role model pins are checked here, in its own
+# .github/agents/<role>.agent.md front matter.
 
 Describe 'check-agent-config-parity.sh'
   guard="${PFB_ROOT}/scripts/agent/check-agent-config-parity.sh"
@@ -10,7 +14,7 @@ Describe 'check-agent-config-parity.sh'
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/agentcfg.XXXXXX")"
     mkdir -p "$work/.claude/skills/example" "$work/.claude/workflows" \
       "$work/.agents/skills/example" "$work/.agents/skills/review" \
-      "$work/.codex/agents"
+      "$work/.codex/agents" "$work/.github/agents"
     printf '%s\n' 'canonical skill' > "$work/.claude/skills/example/SKILL.md"
     printf '%s\n' 'canonical workflow' > "$work/.claude/workflows/review.js"
     printf '%s\n' '---' 'name: example' 'description: fixture' '---' \
@@ -18,8 +22,11 @@ Describe 'check-agent-config-parity.sh'
     printf '%s\n' '---' 'name: review' 'description: fixture' '---' \
       '../../../.claude/workflows/review.js' > "$work/.agents/skills/review/SKILL.md"
     printf '%s\n' 'TOP_CLAUDE=claude-fable-5' 'TOP_CODEX=gpt-5.6-sol' \
+      'TOP_COPILOT=gpt-5.6-sol' \
       'MID_CLAUDE=claude-opus-4-8' 'MID_CODEX=gpt-5.6-terra' \
-      'SMALL_CLAUDE=claude-sonnet-5' 'SMALL_CODEX=gpt-5.6-luna' > "$work/.agents/model-tiers.conf"
+      'MID_COPILOT=gpt-5.6-terra' \
+      'SMALL_CLAUDE=claude-sonnet-5' 'SMALL_CODEX=gpt-5.6-luna' \
+      'SMALL_COPILOT=gpt-5.6-luna' > "$work/.agents/model-tiers.conf"
     for role_model in \
       'planner gpt-5.6-sol' \
       'implementer gpt-5.6-luna' \
@@ -30,6 +37,8 @@ Describe 'check-agent-config-parity.sh'
       'adversarial-reviewer-mid gpt-5.6-terra'; do
       set -- $role_model
       printf 'model = "%s"\n' "$2" > "$work/.codex/agents/$1.toml"
+      printf '%s\n' '---' "name: $1" 'description: fixture' "model: $2" '---' \
+        > "$work/.github/agents/$1.agent.md"
     done
   }
 
@@ -51,6 +60,29 @@ Describe 'check-agent-config-parity.sh'
     When run sh "$guard" --root "$work"
     The status should equal 0
     The output should equal 'agent-config-parity: 1 skills + 0 workflows mapped'
+  End
+
+  It 'rejects a retiered Copilot role model'
+    printf '%s\n' '---' 'name: planner' 'description: fixture' 'model: gpt-5.6-luna' '---' \
+      > "$work/.github/agents/planner.agent.md"
+    When run sh "$guard" --root "$work"
+    The status should equal 1
+    The stderr should include '.github/agents/planner.agent.md model gpt-5.6-luna, expected gpt-5.6-sol'
+  End
+
+  It 'rejects a role with no Copilot agent definition'
+    rm "$work/.github/agents/adversarial-reviewer-mid.agent.md"
+    When run sh "$guard" --root "$work"
+    The status should equal 1
+    The stderr should include 'missing Copilot agent role: .github/agents/adversarial-reviewer-mid.agent.md'
+  End
+
+  It 'rejects a tier vocabulary that forgot a Copilot pin'
+    grep -v '^MID_COPILOT=' "$work/.agents/model-tiers.conf" > "$work/tiers.tmp"
+    mv "$work/tiers.tmp" "$work/.agents/model-tiers.conf"
+    When run sh "$guard" --root "$work"
+    The status should equal 1
+    The stderr should include 'missing model tier assignment: MID_COPILOT'
   End
 
   It 'rejects a canonical skill with no Codex adapter'

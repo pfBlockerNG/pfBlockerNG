@@ -33,23 +33,27 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 _TIERS_TEXT = (
     "TOP_CLAUDE=claude-top-x\n"
     "TOP_CODEX=codex-top\n"
+    "TOP_COPILOT=copilot-top\n"
     "MID_CLAUDE=claude-mid-x\n"
     "MID_CODEX=codex-mid\n"
+    "MID_COPILOT=copilot-mid\n"
     "SMALL_CLAUDE=claude-small-x\n"
     "SMALL_CODEX=codex-small\n"
+    "SMALL_COPILOT=copilot-small\n"
 )
 
 _HEADER_ROWS = (
-    "| Role | Tiers | Mutation | Independent | Claude bindings | Codex bindings |",
-    "| ---- | ----- | -------- | ----------- | --------------- | -------------- |",
+    "| Role | Tiers | Mutation | Independent | Claude bindings | Codex bindings | Copilot bindings |",
+    "| ---- | ----- | -------- | ----------- | --------------- | -------------- | ---------------- |",
 )
 
 _ROWS = (
-    "| builder | small | workspace-write | no | workflow:build | agent:builder |",
-    "| checker | small+top | read-only | yes | workflow:check | agent:checker, agent:checker-top |",
-    "| lander | small | workspace-write | no | skill:land | skill:land |",
-    "| steward | top | read-only | no | session | session |",
-    "| keeper | small | workspace-write | no | policy:flow.md | policy:flow.md |",
+    "| builder | small | workspace-write | no | workflow:build | agent:builder | agent:builder |",
+    "| checker | small+top | read-only | yes | workflow:check | agent:checker, agent:checker-top "
+    "| agent:checker, agent:checker-top |",
+    "| lander | small | workspace-write | no | skill:land | skill:land | skill:land |",
+    "| steward | top | read-only | no | session | session | session |",
+    "| keeper | small | workspace-write | no | policy:flow.md | policy:flow.md | policy:flow.md |",
 )
 _ROLE_NAMES = ("builder", "checker", "lander", "steward", "keeper")
 
@@ -69,6 +73,10 @@ def _toml(model: str, sandbox: str) -> str:
     return f'name = "x"\nmodel = "{model}"\nsandbox_mode = "{sandbox}"\n'
 
 
+def _agent_md(model: str, mutation: str) -> str:
+    return f"---\nname: x\ndescription: fixture\nmodel: {model}\n---\n\n<!-- mutation: {mutation} -->\n\nbody\n"
+
+
 def _write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -84,6 +92,9 @@ def make_tree(
     builder_toml: str | None = None,
     checker_toml: str | None = None,
     checker_top_toml: str | None = None,
+    builder_agent_md: str | None = None,
+    checker_agent_md: str | None = None,
+    checker_top_agent_md: str | None = None,
 ) -> Path:
     _write(root / ".agents/model-tiers.conf", tiers)
     _write(root / ".agents/policy/agent-roles.md", doc if doc is not None else _doc())
@@ -94,6 +105,18 @@ def make_tree(
     _write(root / ".codex/agents/builder.toml", builder_toml or _toml("codex-small", "workspace-write"))
     _write(root / ".codex/agents/checker.toml", checker_toml or _toml("codex-small", "read-only"))
     _write(root / ".codex/agents/checker-top.toml", checker_top_toml or _toml("codex-top", "read-only"))
+    _write(
+        root / ".github/agents/builder.agent.md",
+        builder_agent_md or _agent_md("copilot-small", "workspace-write"),
+    )
+    _write(
+        root / ".github/agents/checker.agent.md",
+        checker_agent_md or _agent_md("copilot-small", "read-only"),
+    )
+    _write(
+        root / ".github/agents/checker-top.agent.md",
+        checker_top_agent_md or _agent_md("copilot-top", "read-only"),
+    )
     return root
 
 
@@ -166,13 +189,13 @@ def test_registry_row_column_count(tmp_path: Path) -> None:
 
 
 def test_unknown_tier_token(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| giant | huge | read-only | no | session | session |")
+    rows = (*_ROWS, "| giant | huge | read-only | no | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "giant")))
     _assert_flags(_problems(tmp_path), "Tiers must be distinct")
 
 
 def test_duplicate_tier_token(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| twice | small+small | read-only | no | session | session |")
+    rows = (*_ROWS, "| twice | small+small | read-only | no | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "twice")))
     _assert_flags(_problems(tmp_path), "Tiers must be distinct")
 
@@ -184,37 +207,37 @@ def test_duplicate_role(tmp_path: Path) -> None:
 
 
 def test_invalid_role_id(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| Builder2! | small | read-only | no | session | session |")
+    rows = (*_ROWS, "| Builder2! | small | read-only | no | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows))
     _assert_flags(_problems(tmp_path), "invalid role id")
 
 
 def test_bad_mutation_value(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| muta | small | writable | no | session | session |")
+    rows = (*_ROWS, "| muta | small | writable | no | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "muta")))
     _assert_flags(_problems(tmp_path), "Mutation must be one of")
 
 
 def test_bad_independent_value(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| indy | small | read-only | maybe | session | session |")
+    rows = (*_ROWS, "| indy | small | read-only | maybe | session | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "indy")))
     _assert_flags(_problems(tmp_path), "Independent must be yes/no")
 
 
 def test_claude_agent_kind_rejected(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| xrole | small | read-only | no | agent:builder | session |")
+    rows = (*_ROWS, "| xrole | small | read-only | no | agent:builder | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "xrole")))
     _assert_flags(_problems(tmp_path), "Claude binding 'agent:builder'")
 
 
 def test_codex_workflow_kind_rejected(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| yrole | small | read-only | no | session | workflow:build |")
+    rows = (*_ROWS, "| yrole | small | read-only | no | session | workflow:build | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "yrole")))
     _assert_flags(_problems(tmp_path), "Codex binding 'workflow:build'")
 
 
 def test_empty_binding_cell(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| zrole | small | read-only | no |  | session |")
+    rows = (*_ROWS, "| zrole | small | read-only | no |  | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "zrole")))
     _assert_flags(_problems(tmp_path), "empty Claude binding")
 
@@ -225,13 +248,13 @@ def test_empty_binding_cell(tmp_path: Path) -> None:
 
 
 def test_session_binding_with_target_rejected(tmp_path: Path) -> None:
-    rows = _ROWS[:3] + ("| steward | top | read-only | no | session:evil | session |",) + _ROWS[4:]
+    rows = _ROWS[:3] + ("| steward | top | read-only | no | session:evil | session | session |",) + _ROWS[4:]
     make_tree(tmp_path, doc=_doc(rows=rows))
     _assert_flags(_problems(tmp_path), "Claude binding 'session:evil'")
 
 
 def test_registry_blank_row_rejected(tmp_path: Path) -> None:
-    make_tree(tmp_path, doc=_doc(rows=(*_ROWS, "|  |  |  |  |  |  |")))
+    make_tree(tmp_path, doc=_doc(rows=(*_ROWS, "|  |  |  |  |  |  |  |")))
     _assert_flags(_problems(tmp_path), "invalid role id")
 
 
@@ -370,7 +393,7 @@ def test_codex_primary_tier_uncovered(tmp_path: Path) -> None:
 
 
 def test_codex_conflicting_mutation_roles(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| auditor | small | read-only | yes | workflow:check | agent:builder |")
+    rows = (*_ROWS, "| auditor | small | read-only | yes | workflow:check | agent:builder | agent:builder |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "auditor")))
     _assert_flags(_problems(tmp_path), "bound by roles with conflicting Mutation")
 
@@ -387,7 +410,7 @@ def test_skill_binding_missing(tmp_path: Path) -> None:
 
 
 def test_policy_binding_missing(tmp_path: Path) -> None:
-    rows = (*_ROWS, "| scribe | small | read-only | no | policy:missing.md | session |")
+    rows = (*_ROWS, "| scribe | small | read-only | no | policy:missing.md | session | session |")
     make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "scribe")))
     _assert_flags(_problems(tmp_path), "policy binding 'missing.md' has no")
 

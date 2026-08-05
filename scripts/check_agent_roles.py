@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Validate the shared agent role registry against both vendors' role definitions.
+"""Validate the shared agent role registry against every vendor's role definitions.
 
 `.agents/policy/agent-roles.md` is the shared, vendor-neutral role-family
 contract (issue #1387). Its machine-readable registry table binds every role to
-Claude surfaces (`.claude/workflows/*.js`, skills, policy docs, the session) and
-Codex surfaces (`.codex/agents/*.toml`, skills, policy docs, the session). This
+Claude surfaces (`.claude/workflows/*.js`, skills, policy docs, the session),
+Codex surfaces (`.codex/agents/*.toml`, skills, policy docs, the session), and
+Copilot surfaces (`.github/agents/*.agent.md`, skills, policy docs, the
+session — issue #2177). This
 checker validates the SEMANTIC fields — tier vocabulary, mutation boundaries,
 binding targets, model-tier pins, contract-section completeness — never textual
 identity, so vendor-native wording may differ freely while capability drift (a
@@ -13,7 +15,8 @@ missing contract field) fails loudly.
 
 CONDITIONAL: in --staged / --diff mode the full validation runs IF AND ONLY IF
 the change touches a role surface (.agents/policy/, .agents/model-tiers.conf,
-.codex/agents/, .claude/workflows/, .agents/skills/, or this checker); otherwise
+.codex/agents/, .github/agents/, .claude/workflows/, .agents/skills/, or this
+checker); otherwise
 it reports the skip and exits 0. --all validates unconditionally.
 
 Usage:
@@ -41,6 +44,7 @@ from typing import NamedTuple
 _ROLES_DOC = ".agents/policy/agent-roles.md"
 _TIERS_CONF = ".agents/model-tiers.conf"
 _CODEX_AGENTS = ".codex/agents"
+_COPILOT_AGENTS = ".github/agents"
 _CLAUDE_WORKFLOWS = ".claude/workflows"
 _SKILLS = ".agents/skills"
 _POLICY = ".agents/policy"
@@ -48,21 +52,37 @@ _POLICY = ".agents/policy"
 # Role surfaces: full validation triggers iff a changed path is one of these
 # files or sits under one of these directories.
 _TRIGGER_FILES = (_ROLES_DOC, _TIERS_CONF, "scripts/check_agent_roles.py")
-_TRIGGER_DIRS = (f"{_CODEX_AGENTS}/", f"{_CLAUDE_WORKFLOWS}/", f"{_SKILLS}/", f"{_POLICY}/")
+_TRIGGER_DIRS = (
+    f"{_CODEX_AGENTS}/",
+    f"{_COPILOT_AGENTS}/",
+    f"{_CLAUDE_WORKFLOWS}/",
+    f"{_SKILLS}/",
+    f"{_POLICY}/",
+)
 
 _BEGIN = "<!-- role-registry:begin -->"
 _END = "<!-- role-registry:end -->"
-_HEADER = ("Role", "Tiers", "Mutation", "Independent", "Claude bindings", "Codex bindings")
+_HEADER = (
+    "Role",
+    "Tiers",
+    "Mutation",
+    "Independent",
+    "Claude bindings",
+    "Codex bindings",
+    "Copilot bindings",
+)
 _TIERS = ("top", "mid", "small")
 _MUTATIONS = ("read-only", "workspace-write")
 _CLAUDE_KINDS = ("workflow", "skill", "policy")
 _CODEX_KINDS = ("agent", "skill", "policy")
-_TIER_KEYS = tuple(f"{tier.upper()}_{vendor}" for tier in _TIERS for vendor in ("CLAUDE", "CODEX"))
+_COPILOT_KINDS = ("agent", "skill", "policy")
+_TIER_KEYS = tuple(f"{tier.upper()}_{vendor}" for tier in _TIERS for vendor in ("CLAUDE", "CODEX", "COPILOT"))
 _ROLE_ID = re.compile(r"[a-z][a-z0-9-]*")
 # A DIRECTLY QUOTED model id is a pin; a mid-prose mention inside a longer
 # string is not — that tolerance is what "no textual identity" means here.
 _CLAUDE_MODEL_PIN = re.compile(r"""['"](claude-[a-z0-9.-]+)['"]""")
 _ESCAPE = re.compile(r"(?<![\w-])roles-ok:[^\S\r\n]*\S")
+_MUTATION_MARKER = re.compile(r"<!--\s*mutation:\s*([a-z-]+)\s*-->")
 # The eight semantic fields every role's contract section must carry.
 _SECTION_FIELDS = (
     "Purpose & routing",
@@ -83,6 +103,7 @@ class Role(NamedTuple):
     independent: str
     claude: tuple[tuple[str, str], ...]  # (kind, target); ("session", "")
     codex: tuple[tuple[str, str], ...]
+    copilot: tuple[tuple[str, str], ...]
 
 
 def _parse_tiers_conf(text: str, problems: list[str]) -> dict[str, str]:
@@ -155,7 +176,7 @@ def _parse_registry(doc: str, problems: list[str]) -> list[Role]:
         if len(cells) != len(_HEADER):
             problems.append(f"{_ROLES_DOC}: registry row needs {len(_HEADER)} columns: {line.strip()}")
             continue
-        name, tiers_cell, mutation, independent, claude_cell, codex_cell = cells
+        name, tiers_cell, mutation, independent, claude_cell, codex_cell, copilot_cell = cells
         ok = True
         if not _ROLE_ID.fullmatch(name):
             problems.append(f"{_ROLES_DOC}: invalid role id: {name!r}")
@@ -179,8 +200,9 @@ def _parse_registry(doc: str, problems: list[str]) -> list[Role]:
             ok = False
         claude = _parse_bindings(claude_cell, _CLAUDE_KINDS, "Claude", name, problems)
         codex = _parse_bindings(codex_cell, _CODEX_KINDS, "Codex", name, problems)
+        copilot = _parse_bindings(copilot_cell, _COPILOT_KINDS, "Copilot", name, problems)
         if ok:
-            roles.append(Role(name, tiers, mutation, independent, claude, codex))
+            roles.append(Role(name, tiers, mutation, independent, claude, codex, copilot))
     return roles
 
 
@@ -279,9 +301,85 @@ def _check_codex_agents(
             )
 
 
+def _agent_md_front_matter(text: str) -> dict[str, str]:
+    """Read the flat scalar fields of a `.agent.md` YAML front matter.
+
+    Deliberately tiny: the only field this checker reads there is `model`, so a
+    full YAML parser would add a dependency for one string.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if not line.strip() or line.lstrip().startswith("#") or line[:1].isspace():
+            continue
+        key, sep, value = (part.strip() for part in line.partition(":"))
+        if sep and value:
+            fields[key] = value
+    return fields
+
+
+def _agent_md_mutation(text: str) -> str | None:
+    """Read the `<!-- mutation: ... -->` marker.
+
+    Copilot CLI 1.0.78 warns `unknown field ignored` for any front-matter key
+    outside its own schema, so the mutation boundary rides an HTML comment that
+    the CLI passes through untouched.
+    """
+    found = _MUTATION_MARKER.search(text)
+    return found.group(1) if found else None
+
+
+def _check_copilot_agents(
+    root: Path, agent_roles: dict[str, list[Role]], tiers_conf: dict[str, str], problems: list[str]
+) -> None:
+    agent_model: dict[str, str | None] = {}
+    for target, bound in sorted(agent_roles.items()):
+        path = root / _COPILOT_AGENTS / f"{target}.agent.md"
+        names = "/".join(sorted(role.name for role in bound))
+        agent_model[target] = None
+        if not path.is_file():
+            problems.append(f"role(s) {names}: missing Copilot agent {_COPILOT_AGENTS}/{target}.agent.md")
+            continue
+        fields = _agent_md_front_matter(path.read_text(encoding="utf-8", errors="replace"))
+        if not fields:
+            problems.append(f"{_COPILOT_AGENTS}/{target}.agent.md: missing YAML front matter")
+            continue
+        if not fields.get("description"):
+            problems.append(f"{_COPILOT_AGENTS}/{target}.agent.md: front matter has no description")
+        model = fields.get("model")
+        allowed = {tiers_conf.get(f"{tier.upper()}_COPILOT") for role in bound for tier in role.tiers} - {None}
+        if model is not None:
+            agent_model[target] = model
+        if model is None or model not in allowed:
+            problems.append(
+                f"{_COPILOT_AGENTS}/{target}.agent.md model {model!r} is not a Copilot model of "
+                f"the tier(s) declared for role(s) {names}"
+            )
+        mutations = {role.mutation for role in bound}
+        mutation = _agent_md_mutation(path.read_text(encoding="utf-8", errors="replace"))
+        if len(mutations) > 1:
+            problems.append(f"{_COPILOT_AGENTS}/{target}.agent.md is bound by roles with conflicting Mutation: {names}")
+        elif mutation != next(iter(mutations)):
+            problems.append(
+                f"{_COPILOT_AGENTS}/{target}.agent.md mutation marker {mutation!r} != role Mutation "
+                f"'{next(iter(mutations))}' ({names})"
+            )
+    for role in {role.name: role for bound in agent_roles.values() for role in bound}.values():
+        bound_agents = [target for kind, target in role.copilot if kind == "agent"]
+        primary = tiers_conf.get(f"{role.tiers[0].upper()}_COPILOT")
+        if primary is not None and not any(agent_model.get(target) == primary for target in bound_agents):
+            problems.append(
+                f"role '{role.name}': no Copilot agent binding runs its primary tier '{role.tiers[0]}' ({primary})"
+            )
+
+
 def _check_file_bindings(root: Path, roles: list[Role], problems: list[str]) -> None:
     for role in roles:
-        for kind, target in role.claude + role.codex:
+        for kind, target in role.claude + role.codex + role.copilot:
             if kind == "skill" and not (root / _SKILLS / target / "SKILL.md").is_file():
                 problems.append(f"role '{role.name}': skill binding '{target}' has no {_SKILLS}/{target}/SKILL.md")
             elif kind == "policy" and not (root / _POLICY / target).is_file():
@@ -290,9 +388,11 @@ def _check_file_bindings(root: Path, roles: list[Role], problems: list[str]) -> 
 
 def _check_orphans(root: Path, roles: list[Role], problems: list[str]) -> None:
     claimed_agents = {target for role in roles for kind, target in role.codex if kind == "agent"}
+    claimed_copilot = {target for role in roles for kind, target in role.copilot if kind == "agent"}
     claimed_workflows = {target for role in roles for kind, target in role.claude if kind == "workflow"}
     for directory, suffix, claimed, side in (
         (root / _CODEX_AGENTS, ".toml", claimed_agents, "Codex role"),
+        (root / _COPILOT_AGENTS, ".agent.md", claimed_copilot, "Copilot role"),
         (root / _CLAUDE_WORKFLOWS, ".js", claimed_workflows, "Claude workflow"),
     ):
         if not directory.is_dir():
@@ -300,7 +400,9 @@ def _check_orphans(root: Path, roles: list[Role], problems: list[str]) -> None:
                 problems.append(f"missing directory: {directory.relative_to(root)}")
             continue
         for path in sorted(directory.glob(f"*{suffix}")):
-            if path.stem not in claimed:
+            # Path.stem strips ONE suffix, so a Copilot `<name>.agent.md` keeps
+            # its `.agent` half — take the target off the full name instead.
+            if path.name[: -len(suffix)] not in claimed:
                 problems.append(f"{path.relative_to(root)}: {side} not claimed by any registry row")
 
 
@@ -324,6 +426,7 @@ def validate(root: Path) -> tuple[int, list[str]]:
     _check_file_bindings(root, roles, problems)
     workflow_roles: dict[str, list[Role]] = {}
     agent_roles: dict[str, list[Role]] = {}
+    copilot_roles: dict[str, list[Role]] = {}
     for role in roles:
         for kind, target in role.claude:
             if kind == "workflow":
@@ -331,8 +434,12 @@ def validate(root: Path) -> tuple[int, list[str]]:
         for kind, target in role.codex:
             if kind == "agent":
                 agent_roles.setdefault(target, []).append(role)
+        for kind, target in role.copilot:
+            if kind == "agent":
+                copilot_roles.setdefault(target, []).append(role)
     _check_claude_workflows(root, workflow_roles, tiers_conf, problems)
     _check_codex_agents(root, agent_roles, tiers_conf, problems)
+    _check_copilot_agents(root, copilot_roles, tiers_conf, problems)
     _check_orphans(root, roles, problems)
     return len(roles), problems
 

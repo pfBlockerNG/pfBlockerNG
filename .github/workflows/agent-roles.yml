@@ -15,6 +15,7 @@ on:
       - '.agents/model-tiers.conf'
       - 'scripts/check_agent_roles.py'
       - '.codex/agents/**'
+      - '.github/agents/**'
       - '.claude/workflows/**'
       - '.agents/skills/**'
       - '.agents/policy/**'

@@ -35,6 +35,74 @@ def test_token_savior_hooks_preserve_upstream_opt_in_defaults() -> None:
             assert variable not in serialized, f"{path} overrides opt-in {variable}"
 
 
+def test_copilot_session_start_carries_the_modes_and_the_session_marker() -> None:
+    # Copilot's own schema: repo hooks live in .github/hooks/*.json, events are
+    # camelCase, and only sessionStart output is processed for additionalContext.
+    config = json.loads((ROOT / ".github/hooks/pfblockerng.json").read_text(encoding="utf-8"))
+    assert config["version"] == 1
+
+    start = json.dumps(config["hooks"]["sessionStart"])
+    assert "copilot-session-hook.sh" in start
+    end = json.dumps(config["hooks"]["sessionEnd"])
+    assert "copilot-session-hook.sh" in end, "the session marker is never removed"
+
+    # The capsule and the marker live in the dispatcher, because the same script
+    # backs the user-level install (repo-level hooks did not fire in CLI 1.0.78).
+    dispatcher = (ROOT / "scripts/agent/copilot-session-hook.sh").read_text(encoding="utf-8")
+    missing = [mode for mode in MODES if mode not in dispatcher]
+    assert not missing, f"copilot sessionStart capsule missing {missing}"
+    assert "additionalContext" in dispatcher
+
+    marker_script = ROOT / "scripts/agent/copilot-session-marker.sh"
+    assert marker_script.exists()
+    body = marker_script.read_text(encoding="utf-8")
+    assert "pfb-copilot-session" in body
+    assert "--git-common-dir" in body, "the marker must be shared across worktrees"
+
+    installer = (ROOT / "scripts/agent/install-copilot-hooks.sh").read_text(encoding="utf-8")
+    assert "copilot-session-hook.sh" in installer
+
+
+def test_copilot_instructions_route_at_the_canonical_bootstrap() -> None:
+    instructions = (ROOT / ".github/copilot-instructions.md").read_text(encoding="utf-8")
+    assert "AGENTS.md" in instructions, "Copilot is never sent to the canonical bootstrap"
+    assert ".agents/context/copilot-adapter.md" in instructions
+    for mode in ("PONYTAIL", "CAVEMAN"):
+        assert mode in instructions
+
+    adapter = ROOT / ".agents/context/copilot-adapter.md"
+    assert adapter.exists()
+    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert ".agents/context/copilot-adapter.md" in bootstrap, "AGENTS.md never names the Copilot adapter"
+
+
+def test_copilot_roles_are_pinned_and_defined() -> None:
+    tiers = (ROOT / ".agents/model-tiers.conf").read_text(encoding="utf-8")
+    for tier in ("TOP_COPILOT", "MID_COPILOT", "SMALL_COPILOT"):
+        assert f"\n{tier}=" in tiers, f"{tier} is unpinned"
+
+    agents = {path.name for path in (ROOT / ".github/agents").glob("*.agent.md")}
+    codex_agents = {path.stem for path in (ROOT / ".codex/agents").glob("*.toml")}
+    assert {f"{name}.agent.md" for name in codex_agents} == agents, "Copilot role coverage diverges from Codex"
+
+
+def test_mattpocock_plugin_is_installable_by_copilot() -> None:
+    plugin_root = ROOT / "plugins/mattpocock-skills"
+    manifest = json.loads((plugin_root / ".github/plugin/plugin.json").read_text(encoding="utf-8"))
+    assert manifest["name"] == "mattpocock-skills"
+
+    claude = json.loads((plugin_root / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == claude["version"], "the Copilot manifest drifted from the plugin version"
+
+    # Points at the existing vendor-neutral tree: no third copy of every skill.
+    skills = manifest["skills"]
+    assert skills == "codex/skills/"
+    assert (plugin_root / skills).is_dir()
+
+    marketplace = json.loads((plugin_root / ".github/plugin/marketplace.json").read_text(encoding="utf-8"))
+    assert [entry["name"] for entry in marketplace["plugins"]] == ["mattpocock-skills"]
+
+
 def test_mattpocock_skills_are_project_enabled_for_claude_and_listed_for_codex() -> None:
     claude = json.loads((ROOT / ".claude/settings.json").read_text(encoding="utf-8"))
     assert claude["enabledPlugins"]["mattpocock-skills@mattpocock"] is True
