@@ -67,7 +67,9 @@ case "$action" in
 		# Redirection failures (a read-only .git) are reported by the SHELL, not
 		# by the command, so the whole block is silenced rather than each line.
 		{
-			mkdir -p "$sessions" && : > "${sessions}/${pid}"
+			# `true >` not `: >`: a redirection error on a SPECIAL builtin aborts
+			# the whole shell under ash/dash (issues #1172, #1850).
+			mkdir -p "$sessions" && true > "${sessions}/${pid}"
 		} 2>/dev/null || exit 0
 		;;
 	end)
