@@ -134,11 +134,14 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
         "setup-matt-pocock-skills",
         "tdd",
         "teach",
+        "to-questionnaire",
         "to-spec",
         "to-tickets",
         "triage",
+        "wait-what",
         "wayfinder",
-        "writing-great-skills",
+        "wizard",
+        "writing-for-agents",
     }
     retained = {
         "batch-grill-me",
@@ -154,9 +157,7 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
         "scaffold-exercises",
         "setup-pre-commit",
         "setup-ts-deep-modules",
-        "to-questionnaire",
         "ubiquitous-language",
-        "wizard",
         "writing-beats",
         "writing-fragments",
         "writing-shape",
@@ -172,7 +173,7 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
     }
 
     assert claude["name"] == codex["name"] == "mattpocock-skills"
-    assert claude["version"] == codex["version"] == "1.2.0"
+    assert claude["version"] == codex["version"] == "1.2.2"
     assert claude_skills == claude_dirs == codex_skills == promoted
     assert len(claude["skills"]) == len(promoted)
     assert codex["skills"] == "./skills/"
@@ -200,11 +201,12 @@ def test_mattpocock_plugin_packages_promoted_skills_once() -> None:
         "improve-codebase-architecture",
         "setup-matt-pocock-skills",
         "teach",
+        "to-questionnaire",
         "to-spec",
         "to-tickets",
         "triage",
+        "wait-what",
         "wayfinder",
-        "writing-great-skills",
     }
     for name in promoted:
         claude_root = plugin / "claude-skills" / name

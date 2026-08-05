@@ -23,8 +23,8 @@
     // .claude/skills/<name> is a symlink onto it, but the glob walker
     // FOLLOWS symlinked directories (confirmed empirically), so both paths
     // need an entry or the same files get linted twice, once unignored.
-    ".agents/skills/{batch-grill-me,cavecrew,caveman,caveman-commit,caveman-compress,caveman-help,caveman-review,caveman-stats,claude-handoff,design-an-interface,edit-article,git-guardrails-claude-code,loop-me,migrate-to-shoehorn,obsidian-vault,qa,request-refactor-plan,scaffold-exercises,setup-pre-commit,setup-ts-deep-modules,to-questionnaire,ubiquitous-language,wizard,writing-beats,writing-fragments,writing-shape}/**",
-    ".claude/skills/{batch-grill-me,cavecrew,caveman,caveman-commit,caveman-compress,caveman-help,caveman-review,caveman-stats,claude-handoff,design-an-interface,edit-article,git-guardrails-claude-code,loop-me,migrate-to-shoehorn,obsidian-vault,qa,request-refactor-plan,scaffold-exercises,setup-pre-commit,setup-ts-deep-modules,to-questionnaire,ubiquitous-language,wizard,writing-beats,writing-fragments,writing-shape}/**",
+    ".agents/skills/{batch-grill-me,cavecrew,caveman,caveman-commit,caveman-compress,caveman-help,caveman-review,caveman-stats,claude-handoff,design-an-interface,edit-article,git-guardrails-claude-code,loop-me,migrate-to-shoehorn,obsidian-vault,qa,request-refactor-plan,scaffold-exercises,setup-pre-commit,setup-ts-deep-modules,ubiquitous-language,writing-beats,writing-fragments,writing-shape}/**",
+    ".claude/skills/{batch-grill-me,cavecrew,caveman,caveman-commit,caveman-compress,caveman-help,caveman-review,caveman-stats,claude-handoff,design-an-interface,edit-article,git-guardrails-claude-code,loop-me,migrate-to-shoehorn,obsidian-vault,qa,request-refactor-plan,scaffold-exercises,setup-pre-commit,setup-ts-deep-modules,ubiquitous-language,writing-beats,writing-fragments,writing-shape}/**",
     // Vendored upstream plugin tree (Codex local marketplace source).
     "plugins/**"
   ]
