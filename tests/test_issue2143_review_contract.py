@@ -39,6 +39,13 @@ def test_manual_republish_inputs_are_individually_required() -> None:
     assert "required: true" in _input_block("release_tag")
 
 
+def test_release_build_leg_step_binds_variant_from_the_matrix_row() -> None:
+    """The invocation test supplies VARIANT itself, so pin the step env that defines it."""
+    step = RELEASE.split("      - name: Build the .pkg via build-leg.sh", 1)[1].split("        run: |", 1)[0]
+    assert "VARIANT:" in step
+    assert "${{ matrix.variant }}" in step.split("VARIANT:", 1)[1].split("\n", 1)[0]
+
+
 def test_release_build_leg_passes_variant_to_builder(tmp_path: Path) -> None:
     marker = '          PKG="$(sh scripts/build-leg.sh \\\n'
     invocation = marker + RELEASE.split(marker, 1)[1].split("          PKG_DIR=", 1)[0]
