@@ -32,10 +32,10 @@ jobs:
   resolve:
     name: Resolve the published tag
     runs-on: ubuntu-latest
-    # No job-level `outputs:`. This job previously published tag/source/portversion for the ports
-    # bump; that bump moved into the release run and took every consumer with it, and an
-    # output nobody reads reads as a live contract. What survives is the GATE: an
-    # off-scheme published tag fails here, and `repo-publish` hangs off it via `needs:`.
+    outputs:
+      release_id: ${{ steps.classify.outputs.release_id }}
+      release_tag: ${{ steps.classify.outputs.tag }}
+      source_repository: ${{ steps.classify.outputs.source_repository }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -55,6 +55,8 @@ jobs:
         env:
           TAG: ${{ github.event.release.tag_name }}
           RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_ID: ${{ github.event.release.id }}
+          SOURCE_REPOSITORY: ${{ github.repository }}
         run: |
           set -eu
           [ -n "$TAG" ] || { echo "::error::the published release carries no tag"; exit 1; }
@@ -95,6 +97,8 @@ jobs:
           fi
           {
             echo "tag=${TAG}"
+            echo "release_id=${RELEASE_ID:-}"
+            echo "source_repository=${SOURCE_REPOSITORY:-}"
             echo "channel=${release_channel}"
             echo "source=${release_line}"
             echo "portversion=${portversion}"
@@ -132,5 +136,11 @@ jobs:
         # start a workflow there (cannot push code).
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SOURCE_REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
+          RELEASE_ID:         ${{ needs.resolve.outputs.release_id }}
+          RELEASE_TAG:        ${{ needs.resolve.outputs.release_tag }}
         run: |
-          gh workflow run publish.yml -R pfBlockerNG/pkg
+          gh workflow run publish.yml -R pfBlockerNG/pkg \
+            -f source_repository="$SOURCE_REPOSITORY" \
+            -f release_id="$RELEASE_ID" \
+            -f release_tag="$RELEASE_TAG"

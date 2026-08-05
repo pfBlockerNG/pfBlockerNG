@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import re
+import subprocess
 import sys
 from dataclasses import dataclass
 from datetime import date
-from typing import Literal, Sequence
+from pathlib import Path
+from typing import Literal, Mapping, Sequence
 
 PACKAGE = "pfSense-pkg-pfBlockerNG"
 
@@ -26,6 +28,19 @@ _NIGHTLY_RE = re.compile(r"^(?P<date>[0-9]{8})$")
 _NIGHTLY_PKG_RE = re.compile(r"^(?P<date>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RELEASE_TEXT = 128
+
+
+def _tag_shape(tag: str) -> tuple[str, str, str, str | None, str | None]:
+    """Return strict tag components without inferring a destination channel."""
+    if not isinstance(tag, str) or not tag or len(tag) > _MAX_RELEASE_TEXT or not tag.isascii():
+        raise _invalid(tag)
+    match = _FINAL_RE.fullmatch(tag)
+    if match:
+        return (match.group("major"), match.group("minor"), match.group("patch"), None, None)
+    match = _PREVIEW_RE.fullmatch(tag)
+    if match:
+        return tuple(match.group(name) for name in ("major", "minor", "patch", "stage", "sequence"))  # type: ignore[return-value]
+    raise _invalid(tag)
 
 
 @dataclass(frozen=True)
@@ -61,6 +76,154 @@ class NightlyAllocation:
 
 def _invalid(tag: str) -> ValueError:
     return ValueError(f"invalid release tag: {tag!r}")
+
+
+def get_tag(
+    major: str | int,
+    minor: str | int,
+    patch: str | int,
+    tags: Sequence[str] = (),
+    *,
+    branch: str | None = None,
+    tag_branches: Mapping[str, str] | None = None,
+) -> str | None:
+    """Return an exact valid tag, optionally restricted to one release line."""
+    expected = (str(major), str(minor), str(patch))
+    branches = tag_branches or {}
+    for candidate in tags:
+        try:
+            shape = _tag_shape(candidate)
+        except ValueError:
+            continue
+        if shape[:3] == expected and shape[3] is None and (branch is None or branches.get(candidate) == branch):
+            return candidate
+    return None
+
+
+def get_tags_zero_after(
+    tag_for_zero: str | None,
+    tags: Sequence[str] = (),
+    *,
+    tag_branches: Mapping[str, str] | None = None,
+) -> list[str]:
+    """Return later patch-zero prereleases whose tags are on their own release lines."""
+    if tag_for_zero is None:
+        return []
+    ordered = list(tags)
+    try:
+        start = ordered.index(tag_for_zero) + 1
+    except ValueError:
+        return []
+    branches = tag_branches or {}
+    result: list[str] = []
+    for candidate in ordered[start:]:
+        try:
+            major, minor, patch, stage, _sequence = _tag_shape(candidate)
+        except ValueError:
+            continue
+        if patch == "0" and stage is not None and branches.get(candidate) == f"release/{major}.{minor}":
+            result.append(candidate)
+    return result
+
+
+def derive_destinations(
+    tag: str,
+    *,
+    branch: str,
+    ordered_tags: Sequence[str] = (),
+    tag_branches: Mapping[str, str] | None = None,
+) -> tuple[Channel, ...]:
+    """Derive the ordered catalogue tuple for one release tag."""
+    major, minor, patch, stage, _sequence = _tag_shape(tag)
+    release_line = f"release/{major}.{minor}"
+    if branch != release_line:
+        raise ValueError(f"current tag {tag!r} is not on {release_line!r}")
+    branches = tag_branches or {}
+    if tag in branches and branches[tag] != release_line:
+        raise ValueError(f"current tag {tag!r} is not on {release_line!r}")
+    if stage is not None and patch == "0":
+        return ("edge",)
+    anchor = get_tag(major, minor, 0, ordered_tags, branch=release_line, tag_branches=branches)
+    has_later_zero = bool(get_tags_zero_after(anchor, ordered_tags, tag_branches=branches))
+    if stage is not None:
+        return ("testing",) if has_later_zero else ("testing", "edge")
+    return ("stable", "testing") if has_later_zero else ("stable", "testing", "edge")
+
+
+def derive_destinations_from_git(
+    tag: str,
+    branch: str,
+    repo: str | Path = ".",
+    *,
+    current_commit: str | None = None,
+) -> tuple[Channel, ...]:
+    """Derive destinations from tag chronology and release-line ancestry."""
+    repo_path = str(repo)
+    major, minor, _patch, _stage, _sequence = _tag_shape(tag)
+    expected_branch = f"release/{major}.{minor}"
+    if branch != expected_branch:
+        raise ValueError(f"current tag {tag!r} is not on {expected_branch!r}")
+
+    def git(*args: str) -> str:
+        result = subprocess.run(["git", "-C", repo_path, *args], capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"git {' '.join(args)} failed")
+        return result.stdout.strip()
+
+    def git_optional(*args: str) -> str:
+        result = subprocess.run(["git", "-C", repo_path, *args], capture_output=True, text=True, check=False)
+        return result.stdout.strip() if result.returncode == 0 else ""
+
+    def is_edge_tag(candidate: str) -> bool:
+        if git_optional("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
+            return False
+        contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
+        trailer_result = subprocess.run(
+            ["git", "-C", repo_path, "interpret-trailers", "--parse"],
+            input=contents,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if trailer_result.returncode != 0:
+            raise RuntimeError(f"git interpret-trailers failed for {candidate}")
+        trailers = trailer_result.stdout.splitlines()
+        return trailers == ["pfBlockerNG-Release-Channel: edge"]
+
+    tags = git("for-each-ref", "--sort=creatordate", "--format=%(refname:strip=2)", "refs/tags/").splitlines()
+    tag_commit = git_optional("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
+    if current_commit and tag_commit and current_commit != tag_commit:
+        raise ValueError(f"current tag {tag!r} does not match the selected source commit")
+    selected_commit = current_commit or tag_commit
+    if selected_commit:
+        branch_ref = f"refs/remotes/origin/{branch}"
+        if not git_optional("show-ref", "--verify", branch_ref):
+            branch_ref = branch
+        result = subprocess.run(
+            ["git", "-C", repo_path, "merge-base", "--is-ancestor", selected_commit, branch_ref], check=False
+        )
+        if result.returncode != 0:
+            raise ValueError(f"current tag {tag!r} is not reachable from {branch!r}")
+
+    branch_map: dict[str, str] = {}
+    for candidate in tags:
+        try:
+            major, minor, patch, stage, _sequence = _tag_shape(candidate)
+        except ValueError:
+            continue
+        line = f"release/{major}.{minor}"
+        if patch == "0" and stage is not None and not is_edge_tag(candidate):
+            if candidate == tag:
+                raise ValueError(f"current tag {tag!r} lacks the exact Edge release trailer")
+            continue
+        commit = git("rev-parse", "--verify", f"refs/tags/{candidate}^{{commit}}")
+        ref = f"refs/remotes/origin/{line}"
+        if not git_optional("show-ref", "--verify", ref):
+            ref = line
+        result = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit, ref], check=False)
+        if result.returncode == 0:
+            branch_map[candidate] = line
+    return derive_destinations(tag, branch=branch, ordered_tags=tags, tag_branches=branch_map)
 
 
 def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:

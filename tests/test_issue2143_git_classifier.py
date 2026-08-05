@@ -1,0 +1,60 @@
+"""Git-backed issue #2143 source-SHA and moved-tag gates."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+import pytest
+
+from scripts.release_version import derive_destinations_from_git
+from tests.gitenv import scrubbed_git_env
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=scrubbed_git_env(),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip()
+
+
+def _commit(repo: Path, message: str) -> str:
+    (repo / "marker").write_text(message + "\n", encoding="utf-8")
+    _git(repo, "add", "marker")
+    _git(repo, "commit", "-qm", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _repo_with_release_line(tmp_path: Path) -> tuple[Path, str, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.name", "Issue 2143")
+    _git(repo, "config", "user.email", "issue2143@example.invalid")
+    anchor = _commit(repo, "anchor")
+    _git(repo, "branch", "release/4.0")
+    _git(repo, "tag", "v4.0.0", anchor)
+    _git(repo, "checkout", "-q", "release/4.0")
+    current = _commit(repo, "selected source")
+    return repo, anchor, current
+
+
+def test_classifier_validates_selected_sha_before_tag_classification(tmp_path: Path) -> None:
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    assert derive_destinations_from_git("v4.0.1.a1", "release/4.0", repo, current_commit=current) == (
+        "testing",
+        "edge",
+    )
+
+
+def test_classifier_rejects_moved_existing_tag(tmp_path: Path) -> None:
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    moved = _commit(repo, "moved tag")
+    _git(repo, "tag", "-a", "-m", "testing", "v4.0.1.a1", moved)
+    with pytest.raises(ValueError, match="does not match the selected source commit"):
+        derive_destinations_from_git("v4.0.1.a1", "release/4.0", repo, current_commit=current)
