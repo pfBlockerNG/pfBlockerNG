@@ -52,11 +52,6 @@ globally.
 - Edge: nearest preceding Stable or Edge-primary in the same family. If the family has
   neither, use the previous family's last Stable.
 
-Stable: previous Stable in the same family. Testing: nearest preceding Stable or
-Testing-primary. Edge: nearest preceding Stable or Edge-primary. Each candidate stays on
-the same release line; a destination copy does not create a second Release. A destination
-fan-out does not run notes twice.
-
 Use exact `commit_range` from final `draft-healthcheck` output after checking that
 `base_tag` has required family and primary kind. If no valid base exists, use an empty range;
 do not invent a predecessor or use an unrelated global tag. Omit empty or internal-only sections from notes.
