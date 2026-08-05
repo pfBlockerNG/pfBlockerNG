@@ -82,6 +82,23 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
+	 * pfb_download() decompresses bzip2 feeds onto the live publication; pin this
+	 * comment-free branch and its staged-publish guard so the branch cannot revert
+	 * to a raw redirect. Comments/docblocks cannot define this scope.
+	 */
+	public function testBzip2BodyCapturesAndChecksExit(): void
+	{
+		$bzip2 = strpos(self::$source, "elseif (\$file_type == 'application/x-bzip2') {");
+		$zip = strpos(self::$source, "elseif (\$file_type == 'application/zip') {", $bzip2 === FALSE ? 0 : $bzip2);
+		$this->assertNotFalse($bzip2);
+		$this->assertNotFalse($zip);
+		$scope = substr(self::$source, $bzip2, $zip - $bzip2);
+		$this->assertStringContainsString(
+			'exec("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);', $scope);
+		$this->assertStringContainsString('if (!pfb_stage_publish($orig_download,', $scope);
+	}
+
+	/**
 	 * pfb_download() gunzips TOP1M into a staged file before publication; this
 	 * live filesystem/exec path is pinned independently of all other branches.
 	 * Comments/docblocks cannot define this scope.
