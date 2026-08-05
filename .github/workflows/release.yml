@@ -707,15 +707,21 @@ jobs:
     permissions:
       contents: write
 
-    # Only what a downstream job reads. version/prerelease stay STEP outputs
-    # (steps.meta.*), consumed inside this job by the body/title and softprops steps —
-    # re-exporting them claimed a contract nothing downstream ever used.
+    # These outputs are the handoff consumed by draft-healthcheck and
+    # /release-with-changelog. Keep every identity field on the workflow boundary.
     outputs:
-      tag:         ${{ steps.meta.outputs.tag }}
-      source:      ${{ steps.meta.outputs.source }}
-      channel:     ${{ steps.meta.outputs.channel }}
-      portversion: ${{ steps.meta.outputs.portversion }}
-      dry_run:     ${{ steps.meta.outputs.dry_run }}
+      tag:               ${{ steps.meta.outputs.tag }}
+      source:            ${{ steps.meta.outputs.source }}
+      channel:           ${{ steps.meta.outputs.channel }}
+      portversion:       ${{ steps.meta.outputs.portversion }}
+      dry_run:           ${{ steps.meta.outputs.dry_run }}
+      primary_kind:      ${{ steps.prev_tag.outputs.primary_kind }}
+      destination_tuple: ${{ steps.prev_tag.outputs.destination_tuple }}
+      previous_tag:      ${{ steps.prev_tag.outputs.previous_tag }}
+      base_tag:          ${{ steps.prev_tag.outputs.base_tag }}
+      base_sha:          ${{ steps.prev_tag.outputs.base_sha }}
+      commit_range:      ${{ steps.prev_tag.outputs.commit_range }}
+      source_sha:        ${{ needs.prepare-release.outputs.sha }}
 
     steps:
       - uses: actions/checkout@v6
@@ -792,45 +798,110 @@ jobs:
 
       - name: Find the previous release tag (compare base)
         id: prev_tag
-        # The previous release = the highest-version tag of the SAME channel that is an
-        # ANCESTOR of the current release's commit — the natural "previous release of this
-        # channel" the notes diff against. Falls back to the highest ancestor tag of any
-        # channel, then to the next-lower version tag overall, so a genesis release (no
-        # same-channel predecessor) still gets a meaningful compare base. The commit is
-        # this job's checkout — the pinned release SHA, which is what the tag points at.
+        # Base selection is family- and primary-kind-scoped. The trusted helper rejects
+        # destination copies, unrelated families, future tags, and non-ancestor tags.
         env:
-          TAG:     ${{ steps.meta.outputs.tag }}
-          CHANNEL: ${{ steps.meta.outputs.channel }}
+          TAG:         ${{ steps.meta.outputs.tag }}
+          CHANNEL:     ${{ steps.meta.outputs.channel }}
+          SOURCE:      ${{ steps.meta.outputs.source }}
+          PINNED_SHA:   ${{ needs.prepare-release.outputs.sha }}
+          REPOSITORY:  ${{ github.workspace }}
         run: |
-          COMMIT="HEAD"
-          # 1) Highest-version SAME-channel ancestor tag. release-version.sh classifies
-          #    each tag's channel; the `|| true` guards keep pipefail from tripping on an
-          #    empty tag list / a non-scheme tag.
-          PREV=$(git tag --sort=-version:refname \
-            | { grep -v "^${TAG}$" || true; } \
-            | while read -r t; do
-                git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null || continue
-                tch=$(git for-each-ref --format='%(contents)' "refs/tags/${t}" \
-                  | git interpret-trailers --parse \
-                  | sed -n 's/^pfBlockerNG-Release-Channel: \(stable\|testing\|edge\)$/\1/p') || true # retired-token-ok: exact canonical trailer extraction
-                [ "$(printf '%s\n' "$tch" | sed '/^$/d' | wc -l | tr -d ' ')" -eq 1 ] || continue
-                [ "$tch" = "$CHANNEL" ] && { echo "$t"; break; }
-              done) || true
-          # 2) Fallback: highest-version ANCESTOR tag of ANY channel.
-          if [ -z "$PREV" ]; then
-            PREV=$(git tag --sort=-version:refname \
-              | { grep -v "^${TAG}$" || true; } \
-              | while read -r t; do
-                  git merge-base --is-ancestor "$t" "$COMMIT" 2>/dev/null && { echo "$t"; break; }
-                done) || true
-          fi
-          # 3) Final fallback (rebased/diverged history): the next-lower version tag overall.
-          if [ -z "$PREV" ]; then
-            PREV=$( { git tag; echo "$TAG"; } | LC_ALL=C sort -V -r | uniq \
-              | awk -v cur="$TAG" 'found{print; exit} $0==cur{found=1}' ) || true
-          fi
-          echo "tag=${PREV}" >> "$GITHUB_OUTPUT"
-          echo "Previous ${CHANNEL} release tag: ${PREV:-<none>}"
+          set -eu
+          git fetch origin '+refs/heads/release/*:refs/remotes/origin/release/*' --tags --force
+          PYTHONPATH="${GITHUB_WORKSPACE}/pfblockerng-src" \
+            python3 - "$TAG" "$CHANNEL" "$SOURCE" "$PINNED_SHA" "$REPOSITORY" "$GITHUB_OUTPUT" <<'PY'
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          from scripts.release_version import (
+              ReleaseTagCandidate,
+              derive_destinations_from_git,
+              parse_release_tag,
+              primary_channel_for_tag,
+              select_previous_release_tag,
+          )
+
+          tag, channel, source, pinned_sha, repository, output_path = sys.argv[1:]
+
+          def git(*args: str, input_text: str | None = None) -> str:
+              result = subprocess.run(
+                  ["git", *args],
+                  cwd=repository,
+                  input=input_text,
+                  capture_output=True,
+                  text=True,
+                  check=False,
+              )
+              if result.returncode:
+                  raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
+              return result.stdout.strip()
+
+          def git_ok(*args: str) -> bool:
+              return subprocess.run(["git", *args], cwd=repository, check=False).returncode == 0
+
+          def exact_primary_trailer(candidate: str, primary: str) -> bool:
+              if git("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
+                  return False
+              contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
+              trailers = git("interpret-trailers", "--parse", input_text=contents).splitlines()
+              return trailers == [f"pfBlockerNG-Release-Channel: {primary}"]
+
+          current = parse_release_tag(tag, channel)
+          if current.release_line != source:
+              raise ValueError(f"{tag} is not on {source}")
+          candidates: list[ReleaseTagCandidate] = []
+          for candidate_tag in git(
+              "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/"
+          ).splitlines():
+              try:
+                  primary = primary_channel_for_tag(candidate_tag)
+                  info = parse_release_tag(candidate_tag, primary)
+                  if not exact_primary_trailer(candidate_tag, primary):
+                      continue
+                  candidate_sha = git("rev-parse", f"refs/tags/{candidate_tag}^{{commit}}")
+              except (RuntimeError, ValueError):
+                  continue
+              line_ref = f"refs/remotes/origin/{info.release_line}"
+              if not git_ok("show-ref", "--verify", line_ref):
+                  line_ref = info.release_line
+              candidates.append(
+                  ReleaseTagCandidate(
+                      tag=candidate_tag,
+                      info=info,
+                      primary=primary,
+                      on_source_line=git_ok(
+                          "merge-base", "--is-ancestor", candidate_sha, line_ref
+                      ),
+                      ancestor_of_current=git_ok(
+                          "merge-base", "--is-ancestor", candidate_sha, pinned_sha
+                      ),
+                  )
+              )
+
+          previous = select_previous_release_tag(tag, channel, candidates)
+          base_sha = git("rev-parse", f"refs/tags/{previous}^{{commit}}") if previous else ""
+          destinations = derive_destinations_from_git(
+              tag, source, repository, current_commit=pinned_sha
+          )
+          values = {
+              "primary_kind": primary_channel_for_tag(tag),
+              "destination_tuple": ",".join(destinations),
+              "previous_tag": previous or "",
+              "base_tag": previous or "",
+              "base_sha": base_sha,
+              "commit_range": f"{previous}...{tag}" if previous else "",
+          }
+          # No valid family-scoped base produces an empty range; it is never fabricated.
+          with Path(output_path).open("a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          print(
+              f"Primary {values['primary_kind']}; destinations {values['destination_tuple']}; "
+              f"base {values['base_tag'] or '<none>'}; range {values['commit_range'] or '<empty>'}"
+          )
+          PY
 
       - name: Prepare the compare link
         id: notes_prep
@@ -840,7 +911,7 @@ jobs:
         env:
           REPO: ${{ github.repository }}
           TAG:  ${{ steps.meta.outputs.tag }}
-          PREV: ${{ steps.prev_tag.outputs.tag }}
+          PREV: ${{ steps.prev_tag.outputs.previous_tag }}
         run: |
           set -u
           if [ -n "$PREV" ]; then
@@ -1266,6 +1337,26 @@ jobs:
     runs-on: ubuntu-latest
     needs: [prepare-release, release, attach-pkgs, read-matrix]
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false' }}
+    outputs:
+      # release-with-changelog consumes these exact run outputs:
+      # needs.draft-healthcheck.outputs.primary_kind,
+      # needs.draft-healthcheck.outputs.destination_tuple,
+      # needs.draft-healthcheck.outputs.previous_tag,
+      # needs.draft-healthcheck.outputs.base_tag,
+      # needs.draft-healthcheck.outputs.base_sha,
+      # needs.draft-healthcheck.outputs.commit_range,
+      # needs.draft-healthcheck.outputs.source_sha,
+      # needs.draft-healthcheck.outputs.draft_url,
+      # needs.draft-healthcheck.outputs.assets.
+      primary_kind:      ${{ needs.release.outputs.primary_kind }}
+      destination_tuple: ${{ needs.release.outputs.destination_tuple }}
+      previous_tag:      ${{ needs.release.outputs.previous_tag }}
+      base_tag:          ${{ needs.release.outputs.base_tag }}
+      base_sha:          ${{ needs.release.outputs.base_sha }}
+      commit_range:      ${{ needs.release.outputs.commit_range }}
+      source_sha:        ${{ needs.release.outputs.source_sha }}
+      draft_url:         ${{ steps.verify.outputs.draft_url }}
+      assets:            ${{ steps.verify.outputs.assets }}
     permissions:
       # write for VISIBILITY, not to mutate: this job only READS the draft, but a DRAFT
       # Release is invisible to a `contents: read` GITHUB_TOKEN. PROBED 2026-07-29 (run
@@ -1278,6 +1369,7 @@ jobs:
       contents: write
     steps:
       - name: Health-check the draft release is complete
+        id: verify
         # Expected assets: the source archive + exactly one .pkg per release-matrix row
         # PLUS one dep .pkg per extra_pkgs entry across every row. The
         # pfBlockerNG-relpkg-* sweep also picks up each row's dependency artifact.
@@ -1340,6 +1432,10 @@ jobs:
           [ "$FAIL" -eq 0 ] || exit 1
 
           URL=$(printf '%s' "$META" | jq -r '.url')
+          ASSETS=$(printf '%s' "$META" | jq -c '[.assets[].name] | sort')
+          OUTPUT_PATH="${GITHUB_OUTPUT:-/dev/null}"
+          echo "draft_url=${URL}" >> "$OUTPUT_PATH"
+          echo "assets=${ASSETS}" >> "$OUTPUT_PATH"
           echo "Healthcheck passed — draft ${TAG} is complete."
           {
             echo "## ${TAG} is DRAFTED and complete"

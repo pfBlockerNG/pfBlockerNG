@@ -60,6 +60,17 @@ class ReleaseInfo:
     package: str
 
 
+@dataclass(frozen=True)
+class ReleaseTagCandidate:
+    """A validated tag and the ancestry facts needed for base selection."""
+
+    tag: str
+    info: ReleaseInfo
+    primary: Channel
+    on_source_line: bool
+    ancestor_of_current: bool
+
+
 NightlyOutcome = Literal["build", "unchanged"]
 
 
@@ -251,6 +262,63 @@ def primary_channel_for_tag(tag: str) -> Channel:
     if stage is None:
         return "stable"
     return "edge" if patch == "0" else "testing"
+
+
+def _release_order(info: ReleaseInfo) -> tuple[int, int, int, int, int]:
+    major, minor, patch = (int(part) for part in info.target_final.split("."))
+    stage_rank = {"alpha": 0, "beta": 1, "rc": 2, "final": 3}[info.stage]
+    return (major, minor, patch, stage_rank, int(info.sequence or 0))
+
+
+def _release_family(info: ReleaseInfo) -> tuple[int, int]:
+    major, minor = info.release_line.removeprefix("release/").split(".")
+    return int(major), int(minor)
+
+
+def select_previous_release_tag(
+    current_tag: str,
+    channel: Channel,
+    candidates: Sequence[ReleaseTagCandidate],
+) -> str | None:
+    """Select a family-scoped notes base from validated tag/ancestry facts."""
+    current = parse_release_tag(current_tag, channel)
+    primary = primary_channel_for_tag(current_tag)
+    allowed = {
+        "stable": {"stable"},
+        "testing": {"stable", "testing"},
+        "edge": {"stable", "edge"},
+    }[primary]
+    current_family = _release_family(current)
+    current_order = _release_order(current)
+
+    same_family = [
+        candidate
+        for candidate in candidates
+        if candidate.tag != current_tag
+        and candidate.info.release_line == current.release_line
+        and candidate.primary in allowed
+        and candidate.on_source_line
+        and candidate.ancestor_of_current
+        and _release_order(candidate.info) < current_order
+    ]
+    if same_family:
+        return max(same_family, key=lambda candidate: _release_order(candidate.info)).tag
+
+    if primary not in {"stable", "edge"}:
+        return None
+    previous_family_stables = [
+        candidate
+        for candidate in candidates
+        if candidate.primary == "stable"
+        and candidate.on_source_line
+        and _release_family(candidate.info) < current_family
+    ]
+    if not previous_family_stables:
+        return None
+    return max(
+        previous_family_stables,
+        key=lambda candidate: (_release_family(candidate.info), _release_order(candidate.info)),
+    ).tag
 
 
 def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:

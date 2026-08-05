@@ -46,14 +46,17 @@ prerelease patch rule. Use a pinned source SHA for every channel.
 1. Resolve trusted inputs: exact tag, explicit channel and release target, configured
    source line, admitted branch (`release/X.Y`), supported workflow ref, and pinned source
    SHA. Validate the tag with `scripts/release-version.sh`; do not reimplement its grammar.
-2. Dispatch the current `release.yml` workflow with those inputs. Record its exact workflow run
-   ID and attempt; never substitute a newer run, branch tip, or local result.
-3. Require workflow output for the primary kind, ordered destination tuple, source line,
-   pinned SHA, tag, draft URL, and asset inventory. Verify the run completed successfully,
+2. Dispatch the current `release.yml` workflow with those inputs and **explicitly set
+   `dry_run=false`**. The workflow default is `true`; omitting this field is invalid for a
+   real release. Record its exact workflow run ID and attempt; never substitute a newer run,
+   branch tip, or local result. The dispatch shape is:
+   `gh workflow run release.yml --ref <workflow-ref> -f tag=<tag> -f channel=<channel> -f source=<release/X.Y> -f dry_run=false`.
+3. Read final `draft-healthcheck` job outputs: `primary_kind`, ordered
+   `destination_tuple`, `previous_tag`, `base_tag`, `base_sha`, `commit_range`, pinned
+   `source_sha`, `draft_url`, and JSON `assets`. Verify the run completed successfully,
    the admitted branch and immutable tag trailer agree, the tag resolves to the pinned SHA,
-   and verify the exact source SHA and every expected exact asset is attached to the one draft.
-   A missing, stale, changed,
-   or contradictory output stops without publication.
+   verify exact source SHA, and every expected exact asset is attached to the one draft. A
+   missing, stale, changed, or contradictory output stops without publication.
 4. Confirm required checks are green for that pinned source. A docs-only tip may inherit the
    nearest checked ancestor; do not silently ignore a failed check. Confirm no published
    Release already owns the tag.
