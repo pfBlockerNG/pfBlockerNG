@@ -37,8 +37,9 @@ def test_manual_republish_validates_decimal_release_identity(tmp_path: Path) -> 
         bin_dir = tmp_path / f"case-{index}"
         bin_dir.mkdir()
         gh = bin_dir / "gh"
+        payload = f'{{"tag_name":"v4.0.0","draft":{str(draft).lower()},"prerelease":false}}'
         gh.write_text(
-            f'#!/bin/sh\nprintf \'%s\\n\' \'{{"tag_name":"v4.0.0","draft":{str(draft).lower()}}}\'\n',
+            f"#!/bin/sh\nprintf '%s\\n' '{payload}'\n",
             encoding="utf-8",
         )
         gh.chmod(0o755)

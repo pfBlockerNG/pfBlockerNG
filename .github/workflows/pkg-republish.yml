@@ -44,11 +44,23 @@ jobs:
           RELEASE_JSON=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
           ACTUAL_TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')
           RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
+          RELEASE_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
           [ "$ACTUAL_TAG" = "$RELEASE_TAG" ] || {
             echo "::error::release ${RELEASE_ID} is not tagged ${RELEASE_TAG}"; exit 1;
           }
           [ "$RELEASE_DRAFT" = "false" ] || {
             echo "::error::release ${RELEASE_ID} is still a draft"; exit 1;
+          }
+          # Same identity check release-published.yml makes. This step runs before the
+          # checkout, so the tag shape stands in for the canonical parse: every tag that
+          # survives derive_destinations_from_git below is vX.Y.Z or vX.Y.Z.<stage><n>,
+          # and only the latter is a prerelease. A malformed tag fails there instead.
+          case "$RELEASE_TAG" in
+            *.*.*.*) EXPECTED_PRERELEASE=true ;;
+            *) EXPECTED_PRERELEASE=false ;;
+          esac
+          [ "$RELEASE_PRERELEASE" = "$EXPECTED_PRERELEASE" ] || {
+            echo "::error::release ${RELEASE_ID} prerelease flag does not match ${RELEASE_TAG}"; exit 1;
           }
       - uses: actions/checkout@v6
         with:
