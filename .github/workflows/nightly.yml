@@ -84,17 +84,19 @@ jobs:
             http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;
             *) PORTS_URL="https://github.com/${PORTS_REPO}.git" ;;
           esac
-          PORTS_SHA="$(git ls-remote "$PORTS_URL" "$PORTS_REF" \
+          PORTS_REFS="$(git ls-remote "$PORTS_URL" \
             "refs/heads/${PORTS_REF}" "refs/tags/${PORTS_REF}" \
-            | awk 'NR == 1 { print $1 }')"
-          case "$PORTS_SHA" in
-            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
-              ;;
-            *)
-              echo "::error::FreeBSD-ports ref did not resolve: ${PORTS_REF}"
-              exit 1
-              ;;
-          esac
+            | awk '{ print $1 }' | sort -u)"
+          PORTS_REF_COUNT="$(printf '%s\n' "$PORTS_REFS" | grep -c . || true)"
+          if [ "$PORTS_REF_COUNT" -ne 1 ]; then
+            echo "::error::FreeBSD-ports ref is missing or ambiguous: ${PORTS_REF}"
+            exit 1
+          fi
+          PORTS_SHA="$PORTS_REFS"
+          if ! printf '%s\n' "$PORTS_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::FreeBSD-ports ref did not resolve to a full SHA: ${PORTS_REF}"
+            exit 1
+          fi
 
           matrix_nonempty() {
             [ "$(printf '%s' "$1" | jq 'length')" -gt 0 ]
@@ -135,10 +137,14 @@ jobs:
           if gh api \
               "repos/${GITHUB_REPOSITORY}/contents/nightly-state.json?ref=nightly-state" \
               >"$STATE_RESPONSE_FILE" 2>"$STATE_ERROR_FILE"; then
-            STATE_SHA="$(jq -r '.sha' "$STATE_RESPONSE_FILE")"
-            jq -r '.content' "$STATE_RESPONSE_FILE" \
+            STATE_SHA="$(jq -er '.sha' "$STATE_RESPONSE_FILE")"
+            if [ "$(jq -er '.encoding' "$STATE_RESPONSE_FILE")" != "base64" ]; then
+              echo "::error::nightly-state.json is not inline base64; it likely exceeds the Contents API size limit"
+              exit 1
+            fi
+            jq -er '.content' "$STATE_RESPONSE_FILE" \
               | tr -d '\n' | base64 --decode > state.json
-          elif grep -Eq 'HTTP[^0-9]*404' "$STATE_ERROR_FILE"; then
+          elif grep -Fq '(HTTP 404)' "$STATE_ERROR_FILE"; then
             printf '%s\n' '{"schema":1,"generation":0,"records":[]}' > state.json
           else
             cat "$STATE_ERROR_FILE" >&2
@@ -258,7 +264,7 @@ jobs:
           mkdir -p result
           printf '%s\n' "$MATRIX_ROW" > row.json
           printf '%s' "$ALLOCATION_JSON" | jq '.allocation' > allocation.json
-          PKG_VERSION="$(jq -r '.allocation.pkg_version' allocation.json)"
+          PKG_VERSION="$(jq -er '.pkg_version' allocation.json)"
           FREEBSD_MAJOR="$(jq -r '.freebsd_major' row.json)"
           VARIANT="$(jq -r '.variant' row.json)"
           PY_FLAVOR="$(jq -r '.py_flavor' row.json)"
@@ -436,5 +442,17 @@ jobs:
               -f content="$CONTENT" \
               -f branch=nightly-state >/dev/null
           fi
-          gh api "${REPO}/contents/nightly-state.json?ref=nightly-state" \
-            --jq '.content' | tr -d '\n' | base64 --decode | cmp -s nightly-state.json
+          VERIFIED=0
+          for _ in 1 2 3 4 5; do
+            if gh api "${REPO}/contents/nightly-state.json?ref=nightly-state" \
+                 --jq '.content' | tr -d '\n' | base64 --decode \
+                 | cmp -s nightly-state.json; then
+              VERIFIED=1
+              break
+            fi
+            sleep 3
+          done
+          if [ "$VERIFIED" -ne 1 ]; then
+            echo "::error::persisted nightly-state.json does not match the local state document"
+            exit 1
+          fi
