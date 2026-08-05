@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from dataclasses import asdict
 from datetime import date
 from hashlib import sha256
 from pathlib import Path
@@ -150,6 +152,47 @@ def test_duplicate_json_keys_fail_closed(tmp_path: Path) -> None:
 
     with pytest.raises(np.ProvenanceError, match="duplicate JSON key"):
         np._read_json(state_path)
+
+
+@pytest.mark.parametrize("value", [" 20260804", "+20260804", "2026080", "２０２６０８０４"])
+def test_build_date_requires_eight_ascii_digits(value: str) -> None:
+    with pytest.raises(np.ProvenanceError, match="build date"):
+        np._parse_date(value)
+
+
+def test_complete_rejects_malformed_artifacts_json(tmp_path: Path) -> None:
+    first = _candidate(np.empty_state())
+    state = np.complete(np.empty_state(), first, [_artifact(first.allocation)], run_id="100")
+    retry = _candidate(state)
+    state_path = tmp_path / "state.json"
+    candidate_path = tmp_path / "candidate.json"
+    artifacts_path = tmp_path / "artifacts.json"
+    output_path = tmp_path / "output.json"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+    candidate_path.write_text(
+        json.dumps({"allocation": asdict(retry.allocation), "generation": retry.generation}),
+        encoding="utf-8",
+    )
+    artifacts_path.write_text("{}", encoding="utf-8")
+
+    assert (
+        np.main(
+            [
+                "complete",
+                "--state",
+                str(state_path),
+                "--candidate",
+                str(candidate_path),
+                "--artifacts",
+                str(artifacts_path),
+                "--run-id",
+                "100",
+                "--output",
+                str(output_path),
+            ]
+        )
+        == 1
+    )
 
 
 @pytest.mark.parametrize(

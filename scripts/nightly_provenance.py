@@ -438,6 +438,8 @@ def _write_json(path: Path, value: object) -> None:
 
 
 def _parse_date(value: str) -> date:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]{8}", value) is None:
+        raise ProvenanceError("build date must be YYYYMMDD")
     try:
         return date(int(value[:4]), int(value[4:6]), int(value[6:]))
     except (ValueError, IndexError) as exc:
@@ -469,10 +471,12 @@ def _command_complete(args: argparse.Namespace) -> int:
     )
     if type(candidate.generation) is not int:
         raise ProvenanceError("candidate generation must be an integer")
+    if not isinstance(artifacts, list):
+        raise ProvenanceError("artifacts JSON must be an array")
     result = complete(
         state,
         candidate,
-        artifacts if isinstance(artifacts, list) else [],
+        artifacts,
         run_id=args.run_id,
         expected_input_digest=args.expected_input_digest,
     )
@@ -502,6 +506,8 @@ def _command_handoff(args: argparse.Namespace) -> int:
     route_rows = _read_json(Path(args.route_matrix))
     if not isinstance(allocation_raw, dict) or not isinstance(allocation_raw.get("allocation"), dict):
         raise ProvenanceError("allocation JSON is malformed")
+    if not isinstance(state, dict):
+        raise ProvenanceError("state JSON must be an object")
     if not isinstance(build_rows, list) or not isinstance(route_rows, list):
         raise ProvenanceError("matrix JSON must be arrays")
     candidate = Candidate(
@@ -519,7 +525,7 @@ def _command_handoff(args: argparse.Namespace) -> int:
         result_values.append(result)
     handoff = build_handoff(
         candidate=candidate,
-        state=state if isinstance(state, dict) else {},
+        state=state,
         build_rows=build_rows,
         route_rows=route_rows,
         results=result_values,

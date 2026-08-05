@@ -86,6 +86,8 @@ def test_handoff_accepts_complete_build_and_route_rows() -> None:
     assert isinstance(route_matrix, list)
     assert isinstance(route_matrix[0], dict) and route_matrix[0]["ci"] is True
     assert isinstance(route_matrix[1], dict) and route_matrix[1]["role"] == "route-only"
+    assert route_matrix[1]["ci"] is False
+    assert "role" not in route_matrix[0]
 
 
 def test_handoff_rejects_missing_build_result() -> None:
