@@ -199,6 +199,7 @@ def complete(
     artifacts: Sequence[Mapping[str, str]],
     *,
     run_id: str,
+    expected_input_digest: str | None = None,
 ) -> dict[str, object]:
     """Append one verified build, or replay an identical completion idempotently."""
     normalized = validate_state(dict(state))
@@ -208,6 +209,11 @@ def complete(
         validate_nightly_allocation(candidate.allocation)
     except (TypeError, ValueError) as exc:
         raise ProvenanceError(f"invalid candidate allocation: {exc}") from exc
+    if expected_input_digest is not None:
+        if not _DIGEST.fullmatch(expected_input_digest):
+            raise ProvenanceError("expected input digest is malformed")
+        if candidate.allocation.input_digest != expected_input_digest:
+            raise ProvenanceError("completion input digest does not match verified handoff")
     if not isinstance(run_id, str) or not run_id or len(run_id) > 128 or not run_id.isascii():
         raise ProvenanceError("run_id must be non-empty ASCII of at most 128 characters")
     allocation = candidate.allocation
@@ -319,6 +325,9 @@ def build_handoff(
         raise ProvenanceError("handoff source identity does not match allocation")
     if not _DIGEST.fullmatch(matrix_digest):
         raise ProvenanceError("handoff matrix_digest is malformed")
+    expected_input_digest = combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
+    if candidate.allocation.input_digest != expected_input_digest:
+        raise ProvenanceError("handoff input digest does not match pinned inputs")
     if not build_rows or not route_rows:
         raise ProvenanceError("BUILD and ROUTE matrices must not be empty")
 
@@ -443,7 +452,13 @@ def _command_complete(args: argparse.Namespace) -> int:
     )
     if type(candidate.generation) is not int:
         raise ProvenanceError("candidate generation must be an integer")
-    result = complete(state, candidate, artifacts if isinstance(artifacts, list) else [], run_id=args.run_id)
+    result = complete(
+        state,
+        candidate,
+        artifacts if isinstance(artifacts, list) else [],
+        run_id=args.run_id,
+        expected_input_digest=args.expected_input_digest,
+    )
     _write_json(Path(args.output), result)
     return 0
 
@@ -525,6 +540,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     complete_parser.add_argument("--candidate", required=True)
     complete_parser.add_argument("--artifacts", required=True)
     complete_parser.add_argument("--run-id", required=True)
+    complete_parser.add_argument("--expected-input-digest")
     complete_parser.add_argument("--output", required=True)
     complete_parser.set_defaults(handler=_command_complete)
     record_parser = subparsers.add_parser("record")
