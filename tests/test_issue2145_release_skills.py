@@ -87,11 +87,11 @@ def test_changelog_skill_pins_family_scoped_bases_and_single_publication() -> No
         "previous family's last Stable",
         "Testing: nearest preceding Stable or Testing-primary",
         "Edge: nearest preceding Stable or Edge-primary",
-        "same release line",
+        "release line",
         "Stable primary keeps Stable notes",
         "Testing primary keeps Testing notes",
-        "does not create a second Release",
-        "does not run notes twice",
+        "one Release",
+        "running notes twice",
         "exact commit range",
         "fabricated issue or PR link",
         "withheld confirmation",
@@ -214,6 +214,7 @@ def test_workflow_propagates_trusted_release_contract_outputs() -> None:
         "draft_url:",
         "assets:",
         "select_previous_release_tag",
+        'line.startswith("pfBlockerNG-Release-Channel: ")',
         "empty range",
     )
     missing = [phrase for phrase in required if phrase not in workflow]

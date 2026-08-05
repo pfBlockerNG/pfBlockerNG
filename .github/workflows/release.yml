@@ -847,7 +847,11 @@ jobs:
               if git("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
                   return False
               contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
-              trailers = git("interpret-trailers", "--parse", input_text=contents).splitlines()
+              trailers = [
+                  line
+                  for line in git("interpret-trailers", "--parse", input_text=contents).splitlines()
+                  if line.startswith("pfBlockerNG-Release-Channel: ")
+              ]
               return trailers == [f"pfBlockerNG-Release-Channel: {primary}"]
 
           current = parse_release_tag(tag, channel)
