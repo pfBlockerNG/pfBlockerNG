@@ -311,6 +311,7 @@ def select_previous_release_tag(
         for candidate in candidates
         if candidate.primary == "stable"
         and candidate.on_source_line
+        and candidate.ancestor_of_current
         and _release_family(candidate.info) < current_family
     ]
     if not previous_family_stables:

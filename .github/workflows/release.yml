@@ -712,6 +712,7 @@ jobs:
     outputs:
       tag:               ${{ steps.meta.outputs.tag }}
       source:            ${{ steps.meta.outputs.source }}
+      source_branch:    ${{ steps.meta.outputs.source_branch }}
       channel:           ${{ steps.meta.outputs.channel }}
       portversion:       ${{ steps.meta.outputs.portversion }}
       dry_run:           ${{ steps.meta.outputs.dry_run }}
@@ -792,6 +793,7 @@ jobs:
             echo "prerelease=${prerelease}"
             echo "portversion=${portversion}"
             echo "source=${SOURCE}"
+            echo "source_branch=${SOURCE}"
             echo "dry_run=${DRY_RUN}"
           } >> "$GITHUB_OUTPUT"
           echo "Tag ${TAG}: channel=${channel} prerelease=${prerelease} portversion=${portversion} dry_run=${DRY_RUN}"
@@ -1346,6 +1348,7 @@ jobs:
       # needs.draft-healthcheck.outputs.base_sha,
       # needs.draft-healthcheck.outputs.commit_range,
       # needs.draft-healthcheck.outputs.source_sha,
+      # needs.draft-healthcheck.outputs.source_branch,
       # needs.draft-healthcheck.outputs.draft_url,
       # needs.draft-healthcheck.outputs.assets.
       primary_kind:      ${{ needs.release.outputs.primary_kind }}
@@ -1355,6 +1358,7 @@ jobs:
       base_sha:          ${{ needs.release.outputs.base_sha }}
       commit_range:      ${{ needs.release.outputs.commit_range }}
       source_sha:        ${{ needs.release.outputs.source_sha }}
+      source_branch:    ${{ needs.release.outputs.source_branch }}
       draft_url:         ${{ steps.verify.outputs.draft_url }}
       assets:            ${{ steps.verify.outputs.assets }}
     permissions:
@@ -1373,8 +1377,8 @@ jobs:
         # Expected assets: the source archive + exactly one .pkg per release-matrix row
         # PLUS one dep .pkg per extra_pkgs entry across every row. The
         # pfBlockerNG-relpkg-* sweep also picks up each row's dependency artifact.
-        # An already-published release (a re-run after someone published)
-        # short-circuits OK.
+        # A published release is stale for this draft handoff; never claim a
+        # complete draft or allow notes mutation against it.
         env:
           GH_TOKEN:     ${{ github.token }}
           TAG:          ${{ needs.release.outputs.tag }}
@@ -1387,8 +1391,8 @@ jobs:
           META=$(gh release view "$TAG" --repo "$REPO" --json isDraft,name,body,assets,url)
           IS_DRAFT=$(printf '%s' "$META" | jq -r '.isDraft')
           if [ "$IS_DRAFT" != "true" ]; then
-            echo "Release ${TAG} is already published — nothing to verify (idempotent re-run)."
-            exit 0
+            echo "::error::Release ${TAG} is not a draft; stale or already published — stop."
+            exit 1
           fi
 
           # issue #1806 B1: the release-row count PLUS the total number of

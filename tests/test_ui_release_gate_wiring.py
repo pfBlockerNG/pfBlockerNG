@@ -942,13 +942,19 @@ def _healthcheck_script() -> str:
     return script.replace("${{ github.repository }}", "owner/repo")
 
 
-def _run_healthcheck(tmp_path: Path, build_matrix: str, assets_json: str) -> subprocess.CompletedProcess[str]:
+def _run_healthcheck(
+    tmp_path: Path,
+    build_matrix: str,
+    assets_json: str,
+    *,
+    is_draft: bool = True,
+) -> subprocess.CompletedProcess[str]:
     script = _healthcheck_script()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh_stub = bin_dir / "gh"
     gh_stub.write_text(
-        f'#!/bin/sh\necho \'{{"isDraft":true,"name":"Test Release","body":"body text","assets":{assets_json}}}\'\n'
+        f'#!/bin/sh\necho \'{{"isDraft":{str(is_draft).lower()},"name":"Test Release","body":"body text","assets":{assets_json}}}\'\n'
     )
     gh_stub.chmod(0o755)
     env = {
@@ -974,6 +980,16 @@ def test_healthcheck_empty_build_matrix_fails_closed(tmp_path: Path) -> None:
         tmp_path,
         build_matrix="[]",
         assets_json='[{"name":"pfBlockerNG-src.tar.gz"}]',
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+def test_healthcheck_rejects_published_stale_release(tmp_path: Path) -> None:
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix='[{"variant":"CE","pfsense_version":"2.8"}]',
+        assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"}]',
+        is_draft=False,
     )
     assert completed.returncode != 0, completed.stdout + completed.stderr
 
