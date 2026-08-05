@@ -19,6 +19,7 @@ on:
       - "UI tests fan-out (all CI legs, live pfSense VM)"
       - "Version Tracker"
       - "Repo install (live pfSense VM)"
+      - "Nightly snapshot"
     types: [completed]
   # Red-path test handle (CLAUDE.md: a newly wired gate demonstrates its red
   # path once): simulate a failed nightly of the named workflow. The issue it

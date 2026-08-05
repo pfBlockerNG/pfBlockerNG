@@ -86,6 +86,13 @@ immutable and exact.
 Every generated artifact records source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
 Missing, malformed, conflicting, or changed observations fail closed before mutation.
 
+The branch-independent workflow in `.github/workflows/nightly.yml` uses the same pinned-input
+path for scheduled and manual runs. Scheduled runs require repository variable
+`NIGHTLY_SOURCE_REF`; manual runs require `source_ref`. The workflow serializes allocation,
+build, validation, and handoff, stores completed allocation/artifact identities in the
+`nightly-state` branch, and uploads `nightly-handoff.json` for the publisher. It does not
+publish a catalog, create a tag or Release, or mutate the FreeBSD-ports tree.
+
 ## Maintained lines and fixes
 
 Stable, Testing, and Edge destinations derive from each tagged package's grammar and exact

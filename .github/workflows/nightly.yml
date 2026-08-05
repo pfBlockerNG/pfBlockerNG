@@ -1,0 +1,380 @@
+name: Nightly snapshot
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Explicit source ref to pin for this snapshot"
+        required: true
+        type: string
+      ports_repo:
+        description: "FreeBSD-ports repository carrying the Nightly recipe"
+        required: true
+        default: "pfBlockerNG/FreeBSD-ports"
+        type: string
+      ports_ref:
+        description: "Explicit FreeBSD-ports ref to pin for this snapshot"
+        required: true
+        default: "pfblockerng/use-github"
+        type: string
+  schedule:
+    - cron: "0 9 * * *"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nightly-snapshot
+  cancel-in-progress: false
+
+env:
+  NIGHTLY_SOURCE_REF: ${{ vars.NIGHTLY_SOURCE_REF }}
+  SOURCE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.source_ref || vars.NIGHTLY_SOURCE_REF }}
+  PORTS_REPO: ${{ github.event_name == 'workflow_dispatch' && inputs.ports_repo || vars.NIGHTLY_PORTS_REPO || 'pfBlockerNG/FreeBSD-ports' }}
+  PORTS_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ports_ref || vars.NIGHTLY_PORTS_REF || 'pfblockerng/use-github' }}
+
+jobs:
+  prepare:
+    name: Pin inputs and allocate version
+    runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.plan.outputs.outcome }}
+      allocation: ${{ steps.plan.outputs.allocation }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+      ports_sha: ${{ steps.plan.outputs.ports_sha }}
+      matrix_digest: ${{ steps.plan.outputs.matrix_digest }}
+      source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
+    steps:
+      - name: Checkout explicit source ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve pinned source, Ports, and live matrices
+        id: inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          if [ -z "${SOURCE_REF:-}" ]; then
+            echo "::error::missing NIGHTLY_SOURCE_REF configuration"
+            exit 1
+          fi
+          SOURCE_SHA="$(git rev-parse "${SOURCE_REF}^{commit}")"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$SOURCE_SHA")"
+
+          case "$PORTS_REPO" in
+            http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;
+            *) PORTS_URL="https://github.com/${PORTS_REPO}.git" ;;
+          esac
+          PORTS_SHA="$(git ls-remote "$PORTS_URL" "$PORTS_REF" \
+            "refs/heads/${PORTS_REF}" "refs/tags/${PORTS_REF}" \
+            | awk 'NR == 1 { print $1 }')"
+          case "$PORTS_SHA" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*)
+              ;;
+            *)
+              echo "::error::FreeBSD-ports ref did not resolve: ${PORTS_REF}"
+              exit 1
+              ;;
+          esac
+
+          BUILD_MATRIX="$(sh scripts/read-version-matrix.sh --print-build)"
+          ROUTE_MATRIX="$(sh scripts/read-version-matrix.sh --print-route)"
+          BUILD_COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
+          ROUTE_COUNT="$(printf '%s' "$ROUTE_MATRIX" | jq 'length')"
+          if [ "$BUILD_COUNT" -eq 0 ] || [ "$ROUTE_COUNT" -eq 0 ]; then
+            echo "::error::missing live BUILD/ROUTE matrix rows"
+            exit 1
+          fi
+          MATRIX_DIGEST="$(
+            jq -S -c -n \
+              --argjson build "$BUILD_MATRIX" \
+              --argjson route "$ROUTE_MATRIX" \
+              '{build: $build, route: $route}' \
+              | sha256sum | cut -d' ' -f1
+          )"
+
+          STATE_SHA=""
+          if STATE_RESPONSE="$(gh api \
+              "repos/${GITHUB_REPOSITORY}/contents/nightly-state.json?ref=nightly-state" \
+              2>/dev/null)"; then
+            STATE_SHA="$(printf '%s' "$STATE_RESPONSE" | jq -r '.sha')"
+            printf '%s' "$STATE_RESPONSE" \
+              | jq -r '.content' | tr -d '\n' | base64 --decode > state.json
+          else
+            printf '%s\n' '{"schema":1,"generation":0,"records":[]}' > state.json
+          fi
+          python3 scripts/nightly_provenance.py validate --state state.json
+
+          mkdir -p plan
+          # Durable generation checks reject stale completions before state mutation.
+          BUILD_DATE="$(date -u +%Y%m%d)"
+          python3 scripts/nightly_provenance.py allocate \
+            --state state.json \
+            --output plan/allocation.json \
+            --build-date "$BUILD_DATE" \
+            --source-sha "$SOURCE_SHA" \
+            --ports-sha "$PORTS_SHA" \
+            --matrix-digest "$MATRIX_DIGEST"
+          cp state.json plan/state.json
+          printf '%s\n' "$STATE_SHA" > plan/state-file-sha
+          printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
+          printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
+          printf '%s\n' "$SOURCE_SHA" > plan/source-sha
+          printf '%s\n' "$PORTS_SHA" > plan/ports-sha
+          printf '%s\n' "$MATRIX_DIGEST" > plan/matrix-digest
+          printf '%s\n' "$SOURCE_DATE_EPOCH" > plan/source-date-epoch
+
+          {
+            echo "source_sha=$SOURCE_SHA"
+            echo "ports_sha=$PORTS_SHA"
+            echo "matrix_digest=$MATRIX_DIGEST"
+            echo "source_date_epoch=$SOURCE_DATE_EPOCH"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Select plan outcome
+        id: plan
+        run: |
+          set -eu
+          OUTCOME="$(jq -r '.allocation.outcome' plan/allocation.json)"
+          ALLOCATION="$(jq -c '.' plan/allocation.json)"
+          BUILD_MATRIX="$(cat plan/build-matrix.json)"
+          {
+            echo "outcome=$OUTCOME"
+            echo "allocation=$ALLOCATION"
+            echo "source_sha=${{ steps.inputs.outputs.source_sha }}"
+            echo "ports_sha=${{ steps.inputs.outputs.ports_sha }}"
+            echo "matrix_digest=${{ steps.inputs.outputs.matrix_digest }}"
+            echo "source_date_epoch=${{ steps.inputs.outputs.source_date_epoch }}"
+            echo "build_matrix<<NIGHTLY_BUILD_MATRIX"
+            printf '%s\n' "$BUILD_MATRIX"
+            echo "NIGHTLY_BUILD_MATRIX"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload pinned plan
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-plan
+          path: plan
+          if-no-files-found: error
+          retention-days: 14
+
+  build:
+    name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }})
+    needs: prepare
+    if: needs.prepare.outputs.outcome == 'build'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.build_matrix) }}
+    steps:
+      - name: Checkout pinned source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Ensure zstd encoder
+        run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
+
+      - name: Build and verify package
+        env:
+          ALLOCATION_JSON: ${{ needs.prepare.outputs.allocation }}
+          MATRIX_ROW: ${{ toJson(matrix) }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
+          RUN_ROOT: ${{ github.workspace }}/out
+          RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
+          PORTS_REPO: ${{ env.PORTS_REPO }}
+          PORTS_REF: ${{ env.PORTS_REF }}
+        run: |
+          set -eu
+          mkdir -p result
+          printf '%s\n' "$MATRIX_ROW" > row.json
+          printf '%s' "$ALLOCATION_JSON" | jq '.allocation' > allocation.json
+          PKG_VERSION="$(jq -r '.allocation.pkg_version' allocation.json)"
+          FREEBSD_MAJOR="$(jq -r '.freebsd_major' row.json)"
+          VARIANT="$(jq -r '.variant' row.json)"
+          PY_FLAVOR="$(jq -r '.py_flavor' row.json)"
+          PHP_VERSION="$(jq -r '.php_version' row.json)"
+          PORTS_DIR="${RUN_ROOT}/${RUN_ID}/ports"
+          OUT_DIR="${RUN_ROOT}/${RUN_ID}/out"
+
+          python3 scripts/nightly_provenance.py record \
+            --allocation allocation.json \
+            --matrix-row row.json \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --output build-record.json
+          PKG="$(
+            sh scripts/build-leg.sh \
+              --ports-repo "$PORTS_REPO" \
+              --ports-ref "$PORTS_REF" \
+              --channel nightly \
+              --variant "$VARIANT" \
+              --build-record build-record.json \
+              --abi "FreeBSD:${FREEBSD_MAJOR}:amd64" \
+              --py-flavor "$PY_FLAVOR" \
+              --php "$PHP_VERSION" \
+              --local-src . \
+              --pkgversion "$PKG_VERSION" \
+              --ports-dir "$PORTS_DIR" \
+              --out-dir "$OUT_DIR"
+          )"
+          ACTUAL_PORTS_SHA="$(git -C "$PORTS_DIR" rev-parse HEAD)"
+          if [ "$ACTUAL_PORTS_SHA" != "$PORTS_SHA" ]; then
+            echo "::error::FreeBSD-ports checkout changed during build"
+            exit 1
+          fi
+          python3 - "$PKG" build-record.json <<'PY'
+          import json
+          import sys
+          from scripts.pfb_pkg import validate_project_pkg
+
+          validate_project_pkg(sys.argv[1], json.loads(open(sys.argv[2], encoding="utf-8").read()))
+          PY
+          PKG_NAME="$(basename "$PKG")"
+          PKG_SHA="$(sha256sum "$PKG" | cut -d' ' -f1)"
+          cp "$PKG" "result/$PKG_NAME"
+          jq -n \
+            --argjson matrix_row "$MATRIX_ROW" \
+            --slurpfile record build-record.json \
+            --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
+            --arg name "$PKG_NAME" \
+            --arg sha256 "$PKG_SHA" \
+            '{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}}' \
+            > result/result.json
+
+      - name: Upload verified build
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-result-${{ matrix.freebsd_major }}
+          path: result
+          if-no-files-found: error
+          retention-days: 14
+
+  handoff:
+    name: Verify and hand off Nightly snapshot
+    needs: [prepare, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exit cleanly for identical input
+        if: needs.prepare.outputs.outcome == 'unchanged'
+        run: echo "Nightly input unchanged; no package or state mutation required."
+
+      - name: Require every BUILD leg
+        if: needs.prepare.outputs.outcome == 'build'
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+        run: |
+          set -eu
+          if [ "$BUILD_RESULT" != "success" ]; then
+            echo "::error::BUILD matrix failed or did not complete successfully: $BUILD_RESULT"
+            exit 1
+          fi
+
+      - name: Checkout pinned source for handoff validation
+        if: needs.prepare.outputs.outcome == 'build'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Download pinned plan
+        if: needs.prepare.outputs.outcome == 'build'
+        uses: actions/download-artifact@v7
+        with:
+          name: nightly-plan
+          path: plan
+
+      - name: Download every BUILD result
+        if: needs.prepare.outputs.outcome == 'build'
+        uses: actions/download-artifact@v7
+        with:
+          pattern: nightly-result-*
+          path: results
+          merge-multiple: false
+
+      - name: Create verified publisher handoff
+        id: handoff
+        if: needs.prepare.outputs.outcome == 'build'
+        env:
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
+        run: |
+          set -eu
+          python3 scripts/nightly_provenance.py handoff \
+            --state plan/state.json \
+            --allocation plan/allocation.json \
+            --build-matrix plan/build-matrix.json \
+            --route-matrix plan/route-matrix.json \
+            --results-dir results \
+            --source-sha "$SOURCE_SHA" \
+            --ports-sha "$PORTS_SHA" \
+            --matrix-digest "$MATRIX_DIGEST" \
+            --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --source-ref "$SOURCE_REF" \
+            --ports-repo "$PORTS_REPO" \
+            --ports-ref "$PORTS_REF" \
+            --output nightly-handoff.json
+          jq '[.builds[].artifact]' nightly-handoff.json > artifacts.json
+          python3 scripts/nightly_provenance.py complete \
+            --state plan/state.json \
+            --candidate plan/allocation.json \
+            --artifacts artifacts.json \
+            --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --output nightly-state.json
+
+      - name: Upload verified publisher handoff
+        if: steps.handoff.outcome == 'success'
+        uses: actions/upload-artifact@v7
+        with:
+          name: nightly-handoff-${{ github.run_id }}
+          path: nightly-handoff.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Persist immutable allocation and artifact identity
+        if: steps.handoff.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -eu
+          REPO="repos/${GITHUB_REPOSITORY}"
+          STATE_SHA="$(cat plan/state-file-sha)"
+          if ! gh api "${REPO}/git/ref/heads/nightly-state" >/dev/null 2>&1; then
+            gh api --method POST "${REPO}/git/refs" \
+              -f ref="refs/heads/nightly-state" \
+              -f sha="$SOURCE_SHA" >/dev/null
+          fi
+          CONTENT="$(base64 < nightly-state.json | tr -d '\n')"
+          if [ -n "$STATE_SHA" ]; then
+            gh api --method PUT "${REPO}/contents/nightly-state.json" \
+              -f message="Record Nightly ${GITHUB_RUN_ID}" \
+              -f content="$CONTENT" \
+              -f branch=nightly-state \
+              -f sha="$STATE_SHA" >/dev/null
+          else
+            gh api --method PUT "${REPO}/contents/nightly-state.json" \
+              -f message="Record Nightly ${GITHUB_RUN_ID}" \
+              -f content="$CONTENT" \
+              -f branch=nightly-state >/dev/null
+          fi
+          gh api "${REPO}/contents/nightly-state.json?ref=nightly-state" \
+            --jq '.content' | tr -d '\n' | base64 --decode | cmp -s nightly-state.json
