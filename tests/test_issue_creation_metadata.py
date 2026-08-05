@@ -89,9 +89,18 @@ def test_human_ticket_procedures_make_labels_optional() -> None:
     assert "`--label` is optional" in tracker
     assert "gh issue create --label wayfinder:map --type Task" in tracker
 
+    labels = _read("plugins/mattpocock-skills/codex/skills/setup-matt-pocock-skills/triage-labels.md")
+    assert "Category labels have been retired for issues" in labels
+
     wayfinder = _read("plugins/mattpocock-skills/codex/skills/wayfinder/SKILL.md")
     assert "`wayfinder:<type>` label" in wayfinder
     assert "native issue type `Task`" in wayfinder
+
+    triage = _read("plugins/mattpocock-skills/codex/skills/triage/SKILL.md")
+    assert "category is expressed with the native **type**, not a label" in triage
+
+    tickets = _read("plugins/mattpocock-skills/codex/skills/to-tickets/SKILL.md")
+    assert "Work the frontier one ticket at a time with `/implement`" in tickets
 
     workflow = _read(".agents/policy/workflow.md")
     assert "`wayfinder:map` and typed `Task`" in workflow
