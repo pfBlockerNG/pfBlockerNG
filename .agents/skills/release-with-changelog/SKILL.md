@@ -57,20 +57,20 @@ Testing-primary. Edge: nearest preceding Stable or Edge-primary. Each candidate 
 the same release line; a destination copy does not create a second Release. A destination
 fan-out does not run notes twice.
 
-Use the exact `base...tag` commit range from trusted workflow output after checking that its
-base has the required family and primary kind. If no valid base exists, use an empty range;
-do not invent a predecessor or use an unrelated global tag. Omit empty or internal-only
-sections from notes.
+Use exact `commit_range` from final `draft-healthcheck` output after checking that
+`base_tag` has required family and primary kind. If no valid base exists, use an empty range;
+do not invent a predecessor or use an unrelated global tag. Omit empty or internal-only sections from notes.
 
 ## Notes procedure
 
-1. Run `release` first and wait for its exact workflow run. Confirm run ID/attempt, primary
-   kind, destination tuple, admitted branch, pinned SHA, draft URL, previous tag, and every
-   expected asset. Nightly performs no lookup or mutation.
-2. Select the family-scoped base above and verify the exact commit range against the pinned
-   tag. Wrong branch or kind, stale draft, missing asset, changed SHA, or contradictory
-   workflow output stops without publication. Reject any fabricated issue or PR link or
-   withheld confirmation.
+1. Run `release` first and wait for its exact workflow run. Read final
+   `draft-healthcheck` outputs and confirm run ID/attempt, `primary_kind`,
+   `destination_tuple`, admitted branch, `source_sha`, `draft_url`, JSON `assets`,
+   `previous_tag`, `base_tag`, and `commit_range`. Nightly performs no lookup or mutation.
+2. Verify the family-scoped base and exact commit range against the pinned tag. Wrong
+   branch or kind, stale draft, missing asset, changed SHA, empty/internal range used as non-empty,
+   or contradictory workflow output stops without publication. Reject any
+   fabricated issue or PR link or withheld confirmation.
 3. From that range, keep only user-visible Features, Improvements, and Bug Fixes. Omit
    internal CI, tests, tooling, ADR-only changes, empty sections, and fabricated issue or
    PR links. Generate notes with `scripts/release-notes-prompt.txt`.
