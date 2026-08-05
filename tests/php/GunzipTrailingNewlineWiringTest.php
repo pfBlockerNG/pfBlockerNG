@@ -92,6 +92,25 @@ final class GunzipTrailingNewlineWiringTest extends TestCase
 		$this->assertSame([$raw], glob("{$this->dir}/*"));
 	}
 
+	/** A corrupt stream whose salvageable output still looks well-formed must not publish. */
+	public function testNonZeroGunzipExitBlocksPublicationOfPlausibleOutput(): void
+	{
+		$raw = "{$this->dir}/crc.raw";
+		$orig = "{$this->dir}/crc.orig";
+		$events = [];
+		$gz = (string) gzencode("replacement-line\n");
+		$gz[strlen($gz) - 5] = chr(ord($gz[strlen($gz) - 5]) ^ 0xFF);
+		$this->assertNotFalse(file_put_contents($raw, $gz));
+		$this->assertNotFalse(file_put_contents($orig, "last-good\n"));
+
+		$this->assertFalse(pfb_apply_gunzip_orig_pipeline($raw, $orig,
+			static function () use (&$events): void { $events[] = 'consume'; }
+		));
+
+		$this->assertSame("last-good\n", file_get_contents($orig));
+		$this->assertSame([], $events);
+	}
+
 	/** The supported reuse case: no fresh download, prior publication feeds the consumer. */
 	public function testMissingRawReusesPriorOrigForConsumer(): void
 	{
