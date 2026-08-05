@@ -32,8 +32,12 @@ Describe 'publish-pkg-repo.sh (issue #2146 R2)'
     echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf"
     echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg"
     echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg"
+    # An unrelated tracked file, outside docs/ entirely — G1's own fixture
+    # dirties this (never a member of any (channel, varver) target) to prove
+    # the explicit pathspec, not `git add -A`, is what actually runs.
+    echo seed > "${base}/pkg-repo/README.txt"
     ( cd "${base}/pkg-repo" && git_fixture checkout -q -b main \
-        && git_fixture add docs && git_fixture commit -q -m seed \
+        && git_fixture add docs README.txt && git_fixture commit -q -m seed \
         && git_fixture push -q origin main )
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
     original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
@@ -75,6 +79,17 @@ def main():
 
     if mode == "noop":
         print("NOOP: every destination already matches this run's verified assets")
+        return 0
+
+    if mode == "phantom":
+        # Reports a target touched WITHOUT writing anything under docs/ — the
+        # wrapper's own "reported changes but nothing is actually staged"
+        # discard path exists for exactly this: publish_release.py's own
+        # touched-report and the tree's real state can, in principle, disagree.
+        for target in os.environ.get("FAKE_TOUCHED", "").split(","):
+            target = target.strip()
+            if target:
+                print(f"updated {target}")
         return 0
 
     for target in os.environ.get("FAKE_TOUCHED", "").split(","):
@@ -180,6 +195,26 @@ PY
     The variable committed should include 'docs/.nojekyll'
   End
 
+  It 'never sweeps a stray untracked file or an unrelated dirty tracked file into the commit'
+    # G1: proves the explicit pathspec, not `git add -A`/`.`, is what runs —
+    # debris.txt is untracked, README.txt is tracked but outside every
+    # (channel, varver) target and outside the landing page's own output.
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    echo dirty >> "${base}/pkg-repo/README.txt"
+    echo stray > "${base}/pkg-repo/debris.txt"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
+    The variable committed should not include 'README.txt'
+    The variable committed should not include 'debris.txt'
+    porcelain="$(git_fixture -C "${base}/pkg-repo" status --porcelain)"
+    The variable porcelain should include 'README.txt'
+    The variable porcelain should include 'debris.txt'
+  End
+
   It 'the commit message carries the release tag and source_run_id as trailers'
     export FAKE_MODE=success
     export FAKE_TOUCHED=edge/ce-2.8
@@ -196,6 +231,37 @@ PY
 
   It 'commits nothing on a no-op run'
     export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'commits nothing when a reported touched target leaves the tree unchanged'
+    # G3: publish_release.py reports "updated edge/ce-2.8" but writes nothing
+    # under docs/ — the tree itself never changed, so `git diff --cached
+    # --quiet` after staging must find nothing to commit. Pre-seeds
+    # docs/index.html with byte-identical content to what the (also stubbed)
+    # gen_landing.py would regenerate, so the landing-page step contributes no
+    # diff either — the discard path is reached honestly, not bypassed by an
+    # incidental landing-page change.
+    git_fixture -C "${base}/pkg-repo" fetch -q origin
+    git_fixture -C "${base}/pkg-repo" checkout -q main
+    printf 'landing stub\n' > "${base}/pkg-repo/docs/index.html"
+    # docs/.nojekyll is truncate-and-recreated unconditionally whenever the
+    # script has any touched target (regardless of whether the target itself
+    # changed) — pre-seed it too, or its own first-ever creation would be a
+    # genuine diff and mask the branch this test means to reach.
+    true > "${base}/pkg-repo/docs/.nojekyll"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/index.html docs/.nojekyll \
+        && git_fixture commit -q -m preseed-landing \
+        && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
     When run script "$script"
     The status should equal 0
     The output should include 'NOOP'

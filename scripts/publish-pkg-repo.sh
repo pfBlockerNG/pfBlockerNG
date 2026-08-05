@@ -61,6 +61,16 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     # no commit, no push follows. publish_release.py's own stderr (already
     # tagged ::error:: on failure) reaches the job log via the redirect below.
     out_file=$(mktemp)
+    # Cleanup is a trap, deliberately NOT a manual `rm -f` paired with the
+    # failure branch's `exit 1` below: an `rm` immediately before an `exit`
+    # that later gets removed (by accident, by a future edit) would leave the
+    # NEXT line — an unconditional `cat "$out_file"` on the success path —
+    # tripping over a missing file and aborting via `set -e` for an unrelated
+    # reason, which would make the exit-1 guard's own removal invisible to any
+    # test asserting only "did it abort". The trap fires once, at actual
+    # script exit, however that exit happens; nothing on the path between here
+    # and there depends on `$out_file` already being gone.
+    trap 'rm -f "$out_file"' EXIT
     if ! python3 "${PFB_SRC}/scripts/publish_release.py" \
         --source-repository "$SOURCE_REPOSITORY" \
         --release-id "$RELEASE_ID" \
@@ -73,11 +83,11 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     then
         echo "::error::publish_release.py failed — aborting before any git mutation" >&2
         cat "$out_file" >&2
-        rm -f "$out_file"
         exit 1
     fi
     cat "$out_file"
     touched=$(grep '^updated ' "$out_file" | sed 's/^updated //') || true
+    trap - EXIT
     rm -f "$out_file"
 
     if [ -z "$touched" ]; then
