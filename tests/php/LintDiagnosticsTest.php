@@ -68,6 +68,16 @@ final class LintDiagnosticsTest extends TestCase
 		return $path;
 	}
 
+	/**
+	 * A fake `timeout` that consumes stdin before exiting. A fixture that exits without
+	 * reading races the probe's write loop: when the child wins, the write EPIPEs and the
+	 * probe reports a launch failure instead of the exit code under test.
+	 */
+	private function drainingFixture(string $body): string
+	{
+		return $this->fixture("cat >/dev/null\n{$body}");
+	}
+
 	// --- pfb_lint_parse_sh_stderr ---------------------------------------
 
 	public function testShParserExtractsLineMappedSyntaxError(): void
@@ -193,7 +203,7 @@ final class LintDiagnosticsTest extends TestCase
 
 	public function testShDiagnosticsSilentZeroExitIsEmpty(): void
 	{
-		$timeoutFixture = $this->fixture('exit 0');
+		$timeoutFixture = $this->drainingFixture('exit 0');
 		$shFixture = $this->fixture('exit 0');
 		$this->assertSame([], pfb_lint_sh_diagnostics("echo ok\n", $shFixture, $timeoutFixture));
 	}
@@ -218,7 +228,7 @@ final class LintDiagnosticsTest extends TestCase
 
 	public function testShDiagnosticsNonzeroExitWithEmptyStderrIsLineOneWarning(): void
 	{
-		$timeoutFixture = $this->fixture('exit 5'); // e.g. timeout SIGTERM: nonzero, nothing on stderr
+		$timeoutFixture = $this->drainingFixture('exit 5'); // e.g. timeout SIGTERM: nonzero, nothing on stderr
 		$shFixture = $this->fixture('exit 0');
 		$diagnostics = pfb_lint_sh_diagnostics("sleep 100\n", $shFixture, $timeoutFixture);
 		$this->assertCount(1, $diagnostics);
@@ -262,7 +272,7 @@ final class LintDiagnosticsTest extends TestCase
 
 	public function testPyDiagnosticsParsesPinnedFixtureStderr(): void
 	{
-		$timeoutFixture = $this->fixture('printf "line 2: invalid syntax\n" 1>&2' . "\n" . 'exit 1');
+		$timeoutFixture = $this->drainingFixture('printf "line 2: invalid syntax\n" 1>&2' . "\n" . 'exit 1');
 		$pythonFixture = $this->fixture('exit 0'); // never actually exec'd -- the fake timeout ignores argv
 		$this->assertSame(
 			[['line' => 2, 'message' => 'invalid syntax', 'severity' => 'error']],
@@ -272,7 +282,7 @@ final class LintDiagnosticsTest extends TestCase
 
 	public function testPyDiagnosticsSilentZeroExitIsEmpty(): void
 	{
-		$timeoutFixture = $this->fixture('exit 0');
+		$timeoutFixture = $this->drainingFixture('exit 0');
 		$pythonFixture = $this->fixture('exit 0');
 		$this->assertSame([], pfb_lint_py_diagnostics("print('ok')\n", $pythonFixture, $timeoutFixture));
 	}
@@ -297,7 +307,7 @@ final class LintDiagnosticsTest extends TestCase
 
 	public function testPyDiagnosticsNonzeroExitWithEmptyStderrIsLineOneWarning(): void
 	{
-		$timeoutFixture = $this->fixture('exit 5');
+		$timeoutFixture = $this->drainingFixture('exit 5');
 		$pythonFixture = $this->fixture('exit 0');
 		$diagnostics = pfb_lint_py_diagnostics("print('ok')\n", $pythonFixture, $timeoutFixture);
 		$this->assertCount(1, $diagnostics);
