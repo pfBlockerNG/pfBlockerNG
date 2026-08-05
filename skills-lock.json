@@ -121,23 +121,11 @@
       "skillPath": "skills/in-progress/setup-ts-deep-modules/SKILL.md",
       "computedHash": "bd5cbaa455454c2d6c27a1b734e0d820606da6c482bf3c79ec55fbc3f3e03ef3"
     },
-    "to-questionnaire": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/in-progress/to-questionnaire/SKILL.md",
-      "computedHash": "d8938509f3400d9977343e11e876fc6e1982b0b9c133a2f2e9d3d730a67a103e"
-    },
     "ubiquitous-language": {
       "source": "mattpocock/skills",
       "sourceType": "github",
       "skillPath": "skills/deprecated/ubiquitous-language/SKILL.md",
       "computedHash": "0395170031b57ea63f2eb22561542894c03e3047430a2f1118a06b411054429b"
-    },
-    "wizard": {
-      "source": "mattpocock/skills",
-      "sourceType": "github",
-      "skillPath": "skills/in-progress/wizard/SKILL.md",
-      "computedHash": "dab67fb9fdcc70f3a06cf2facecf58f405f478504812103b53d4c5a84765254d"
     },
     "writing-beats": {
       "source": "mattpocock/skills",

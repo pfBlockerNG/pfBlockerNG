@@ -140,9 +140,7 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 	# this stays correct regardless of migration state.
 	git ls-files \
 		| grep -v -e '^\.claude/skills/diagnosing-bugs/' -e '^\.claude/skills/git-guardrails-claude-code/' \
-			-e '^\.claude/skills/wizard/' \
 			-e '^\.agents/skills/diagnosing-bugs/' -e '^\.agents/skills/git-guardrails-claude-code/' \
-			-e '^\.agents/skills/wizard/' \
 			-e '^plugins/' \
 		| while IFS= read -r f; do
 		case $(head -n1 "$f" 2>/dev/null) in

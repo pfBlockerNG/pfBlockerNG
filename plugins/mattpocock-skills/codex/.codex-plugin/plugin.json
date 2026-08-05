@@ -1,6 +1,6 @@
 {
   "name": "mattpocock-skills",
-  "version": "1.2.0",
+  "version": "1.2.2",
   "description": "Matt Pocock's agent skills for real engineering — grilling, spec/ticket flows, TDD, code review, domain modelling and more.",
   "author": {
     "name": "Matt Pocock",
