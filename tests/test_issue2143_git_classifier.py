@@ -84,3 +84,18 @@ def test_classifier_ignores_lower_family_even_when_created_later(tmp_path: Path)
         "testing",
         "edge",
     )
+
+
+@pytest.mark.parametrize("trailer", ["pfBlockerNG-Release-Channel: testing", "plain annotation"])
+def test_classifier_rejects_patch_zero_prerelease_without_the_edge_trailer(tmp_path: Path, trailer: str) -> None:
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    _git(repo, "tag", "-a", "-m", trailer, "v4.0.0.a1", current)
+    with pytest.raises(ValueError, match="lacks the exact edge release trailer"):
+        derive_destinations_from_git("v4.0.0.a1", "release/4.0", repo, current_commit=current)
+
+
+def test_classifier_rejects_a_lightweight_current_tag(tmp_path: Path) -> None:
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    _git(repo, "tag", "v4.0.0.a1", current)
+    with pytest.raises(ValueError, match="must be an annotated tag"):
+        derive_destinations_from_git("v4.0.0.a1", "release/4.0", repo, current_commit=current)
