@@ -43,6 +43,7 @@ jobs:
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
       source_sha: ${{ steps.plan.outputs.source_sha }}
       ports_sha: ${{ steps.plan.outputs.ports_sha }}
+      tools_sha: ${{ steps.plan.outputs.tools_sha }}
       matrix_sha: ${{ steps.plan.outputs.matrix_sha }}
       matrix_digest: ${{ steps.plan.outputs.matrix_digest }}
       source_date_epoch: ${{ steps.plan.outputs.source_date_epoch }}
@@ -75,6 +76,7 @@ jobs:
           fi
           TRUSTED_DIR="${GITHUB_WORKSPACE}/trusted"
           SOURCE_DIR="${GITHUB_WORKSPACE}/source"
+          TOOLS_SHA="$(git -C "$TRUSTED_DIR" rev-parse HEAD)"
           SOURCE_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
           SOURCE_DATE_EPOCH="$(git -C "$SOURCE_DIR" show -s --format=%ct "$SOURCE_SHA")"
 
@@ -97,7 +99,12 @@ jobs:
           matrix_nonempty() {
             [ "$(printf '%s' "$1" | jq 'length')" -gt 0 ]
           }
-          if matrix_nonempty '[]'; then
+          matrix_gate() {
+            if ! matrix_nonempty "$1" || ! matrix_nonempty "$2"; then
+              return 1
+            fi
+          }
+          if matrix_gate '[]' '[]'; then
             echo "::error::matrix gate red canary passed"
             exit 1
           fi
@@ -105,19 +112,20 @@ jobs:
 
           git -C "$TRUSTED_DIR" fetch origin ci-metadata
           MATRIX_SHA="$(git -C "$TRUSTED_DIR" rev-parse FETCH_HEAD)"
-          BUILD_MATRIX="$(sh "$TRUSTED_DIR/scripts/read-version-matrix.sh" \
+          BUILD_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
             --ref "$MATRIX_SHA" --print-build)"
-          ROUTE_MATRIX="$(sh "$TRUSTED_DIR/scripts/read-version-matrix.sh" \
+          ROUTE_MATRIX="$(cd "$TRUSTED_DIR" && sh scripts/read-version-matrix.sh \
             --ref "$MATRIX_SHA" --print-route)"
-          if ! matrix_nonempty "$BUILD_MATRIX" || ! matrix_nonempty "$ROUTE_MATRIX"; then
+          if ! matrix_gate "$BUILD_MATRIX" "$ROUTE_MATRIX"; then
             echo "::error::missing live BUILD/ROUTE matrix rows"
             exit 1
           fi
           MATRIX_PAYLOAD="$(jq -S -c -n \
+            --arg tools_sha "$TOOLS_SHA" \
             --arg matrix_sha "$MATRIX_SHA" \
             --argjson build "$BUILD_MATRIX" \
             --argjson route "$ROUTE_MATRIX" \
-            '{matrix_sha: $matrix_sha, build: $build, route: $route}')"
+            '{tools_sha: $tools_sha, matrix_sha: $matrix_sha, build: $build, route: $route}')"
           MATRIX_DIGEST="$(printf '%s' "$MATRIX_PAYLOAD" | sha256sum | cut -d' ' -f1)"
 
           STATE_SHA=""
@@ -154,6 +162,7 @@ jobs:
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha
           printf '%s\n' "$PORTS_SHA" > plan/ports-sha
+          printf '%s\n' "$TOOLS_SHA" > plan/tools-sha
           printf '%s\n' "$MATRIX_SHA" > plan/matrix-sha
           printf '%s\n' "$MATRIX_DIGEST" > plan/matrix-digest
           printf '%s\n' "$SOURCE_DATE_EPOCH" > plan/source-date-epoch
@@ -161,6 +170,7 @@ jobs:
           {
             echo "source_sha=$SOURCE_SHA"
             echo "ports_sha=$PORTS_SHA"
+            echo "tools_sha=$TOOLS_SHA"
             echo "matrix_sha=$MATRIX_SHA"
             echo "matrix_digest=$MATRIX_DIGEST"
             echo "source_date_epoch=$SOURCE_DATE_EPOCH"
@@ -178,6 +188,7 @@ jobs:
             echo "allocation=$ALLOCATION"
             echo "source_sha=${{ steps.inputs.outputs.source_sha }}"
             echo "ports_sha=${{ steps.inputs.outputs.ports_sha }}"
+            echo "tools_sha=${{ steps.inputs.outputs.tools_sha }}"
             echo "matrix_sha=${{ steps.inputs.outputs.matrix_sha }}"
             echo "matrix_digest=${{ steps.inputs.outputs.matrix_digest }}"
             echo "source_date_epoch=${{ steps.inputs.outputs.source_date_epoch }}"
@@ -207,7 +218,7 @@ jobs:
       - name: Checkout trusted workflow tools
         uses: actions/checkout@v6
         with:
-          ref: devel
+          ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 0
           persist-credentials: false
           path: trusted
@@ -332,7 +343,7 @@ jobs:
         if: needs.prepare.outputs.outcome == 'build'
         uses: actions/checkout@v6
         with:
-          ref: devel
+          ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 0
           persist-credentials: false
           path: trusted
@@ -358,6 +369,7 @@ jobs:
         env:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          TOOLS_SHA: ${{ needs.prepare.outputs.tools_sha }}
           MATRIX_SHA: ${{ needs.prepare.outputs.matrix_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
           TRUSTED_DIR: ${{ github.workspace }}/trusted
@@ -371,6 +383,7 @@ jobs:
             --results-dir results \
             --source-sha "$SOURCE_SHA" \
             --ports-sha "$PORTS_SHA" \
+            --tools-sha "$TOOLS_SHA" \
             --matrix-sha "$MATRIX_SHA" \
             --matrix-digest "$MATRIX_DIGEST" \
             --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \

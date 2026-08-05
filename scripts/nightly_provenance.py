@@ -309,6 +309,7 @@ def build_handoff(
     results: Sequence[Mapping[str, object]],
     source_sha: str,
     ports_sha: str,
+    tools_sha: str,
     matrix_sha: str,
     matrix_digest: str,
     run_id: str,
@@ -324,6 +325,8 @@ def build_handoff(
         raise ProvenanceError("handoff requires a build allocation")
     if (candidate.allocation.source_sha, candidate.allocation.ports_sha) != (source_sha, ports_sha):
         raise ProvenanceError("handoff source identity does not match allocation")
+    if not _SHA.fullmatch(tools_sha):
+        raise ProvenanceError("handoff tools_sha is malformed")
     if not _SHA.fullmatch(matrix_sha):
         raise ProvenanceError("handoff matrix_sha is malformed")
     if not _DIGEST.fullmatch(matrix_digest):
@@ -401,6 +404,7 @@ def build_handoff(
         "allocation": asdict(candidate.allocation),
         "source_sha": source_sha,
         "ports_sha": ports_sha,
+        "tools_sha": tools_sha,
         "matrix_sha": matrix_sha,
         "matrix_digest": matrix_digest,
         "build_matrix": normalized_build_rows,
@@ -521,6 +525,7 @@ def _command_handoff(args: argparse.Namespace) -> int:
         results=result_values,
         source_sha=args.source_sha,
         ports_sha=args.ports_sha,
+        tools_sha=args.tools_sha,
         matrix_sha=args.matrix_sha,
         matrix_digest=args.matrix_digest,
         run_id=args.run_id,
@@ -571,6 +576,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handoff_parser.add_argument("--results-dir", required=True)
     handoff_parser.add_argument("--source-sha", required=True)
     handoff_parser.add_argument("--ports-sha", required=True)
+    handoff_parser.add_argument("--tools-sha", required=True)
     handoff_parser.add_argument("--matrix-sha", required=True)
     handoff_parser.add_argument("--matrix-digest", required=True)
     handoff_parser.add_argument("--run-id", required=True)
