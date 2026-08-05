@@ -463,12 +463,11 @@ jobs:
 
   # ── 1c. Read version matrix ──────────────────────────────────────────────
   # Read the supported-versions matrix from ci-metadata. read-version-matrix.sh
-  # (issue #1806) already dedupes the BUILD matrix to one row per distinct
-  # freebsd_major — every pfSense-pkg-pfBlockerNG port is NO_ARCH, so one
-  # wildcard-ABI .pkg build serves every edition/version sharing a major — so
-  # this job passes the reader's build_matrix output straight through; no
-  # override step needed. Runs after prepare-release (or in parallel with its
-  # skip on dry-run); build-pkgs-portable needs both.
+  # (issue #1806) still emits its deduped BUILD matrix for CI consumers. Release
+  # builds additionally consume the reader's normalized release_matrix: one
+  # build-role row per Variant/version, including rows sharing a FreeBSD major.
+  # Runs after prepare-release (or in parallel with its skip on dry-run);
+  # build-pkgs-portable needs both.
   read-matrix:
     name: Read version matrix
     runs-on: ubuntu-latest
@@ -477,11 +476,10 @@ jobs:
     # If prepare-release failed for any reason, do NOT build or publish.
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     outputs:
-      build_matrix: ${{ steps.matrices.outputs.build_matrix }}
+      release_matrix: ${{ steps.matrices.outputs.release_matrix }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
       release_stage: ${{ steps.channel.outputs.release_stage }}
-      destinations: ${{ steps.destinations.outputs.destinations }}
       source_sha: ${{ steps.destinations.outputs.source_sha }}
       # issue #1855 Part 3: 'true' | 'false' — whether the live smoke/UI suites run
       # (and therefore gate) for THIS tag. Consumed by ui-suite/smoke-suite's `if:`
@@ -542,7 +540,7 @@ jobs:
           echo "Tag: ${TAG}  →  release channel: ${release_channel}  source: ${SOURCE}  portversion: ${portversion}"
           echo "Live smoke/UI suites for this release: ${RUN_SUITES} (prekind='${prekind:-stable}', force_suites='${FORCE_SUITES:-false}')"
 
-      - name: Derive immutable destination tuple
+      - name: Validate immutable tag source
         id: destinations
         env:
           INPUT_TAG:    ${{ github.event.inputs.tag }}
@@ -557,18 +555,14 @@ jobs:
           else
             SOURCE_SHA=$(git rev-parse "origin/$INPUT_SOURCE")
           fi
-          DESTINATIONS=$(python3 - "$INPUT_TAG" "$INPUT_SOURCE" "$SOURCE_SHA" <<'PY'
-          import json
+          python3 - "$INPUT_TAG" "$INPUT_SOURCE" "$SOURCE_SHA" <<'PY' >/dev/null
           import sys
 
           from scripts.release_version import derive_destinations_from_git
 
-          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3]))))
+          list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3]))
           PY
-          )
-          echo "destinations=${DESTINATIONS}" >> "$GITHUB_OUTPUT"
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
-          printf 'Destination tuple for %s: %s\n' "$INPUT_TAG" "$DESTINATIONS"
 
       - name: Read matrix from ci-metadata
         id: matrices
@@ -927,22 +921,20 @@ jobs:
           files: ${{ env.ARCHIVE }}
 
   # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
-  # Builds ONE .pkg per DISTINCT FreeBSD major (issue #1806): read-matrix's
-  # build_matrix is already deduped by read-version-matrix.sh -- every
-  # pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI build serves
-  # every arch AND every edition/version sharing a major. Runs the portable
+  # Builds ONE .pkg per build-role version/variant row. The release_matrix is
+  # the reader's existing non-deduped BUILD/ROUTE row set, so each Release asset
+  # carries its exact pfSense row identity even when rows share a FreeBSD major.
+  # Runs the portable
   # Linux builder steps inline (no FreeBSD VM, ~3 min/leg). This is the SOLE
   # release .pkg builder: pfBlockerNG is a NO_BUILD port, so the portable
   # builder reproduces `make package` byte-for-byte (validated against it over
   # every smoke + Web-UI run on CE and Plus) and `pkg add` checks a dep is
   # PRESENT, not its version — so the portable artifact installs identically.
   #
-  # ONE JOB PER MAJOR (strategy.matrix over read-matrix's build_matrix,
-  # fail-fast: false): each leg uploads its OWN artifact, named exactly
-  # `pfBlockerNG-relpkg-fbsd<freebsd_major>` — the EXACT name ui-tests.yml's/
-  # smoke.yml's pkg_artifact_prefix consumer side downloads, so ui-suite/
-  # smoke-suite below gate on the SAME bits this job built, not a fresh
-  # rebuild of their own.
+  # ONE JOB PER RELEASE ROW (strategy.matrix over read-matrix's release_matrix,
+  # fail-fast: false): each leg uploads its OWN artifact, named
+  # `pfBlockerNG-relpkg-<variant>-<pfsense_version>` — the exact row identity
+  # consumed by ui-tests.yml/smoke.yml below.
   #
   # A leg's build failure surfaces as a red leg (fail-fast: false keeps the
   # others going). Nothing downstream lists build-pkgs-* directly, but a
@@ -952,7 +944,7 @@ jobs:
   # attach-pkgs and draft-healthcheck skip. That chain starts BEFORE the tag
   # exists, so a failed build leaves no tag and no draft behind at all.
   build-pkgs-portable:
-    name: "build .pkg — FreeBSD ${{ matrix.freebsd_major }}"
+    name: "build .pkg — ${{ matrix.variant }} ${{ matrix.pfsense_version }}"
     runs-on: ubuntu-latest
     needs: [prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
@@ -961,7 +953,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.read-matrix.outputs.build_matrix) }}
+        include: ${{ fromJson(needs.read-matrix.outputs.release_matrix) }}
 
     steps:
       - name: Checkout the pinned release source
@@ -983,20 +975,18 @@ jobs:
       - name: Ensure zstd encoder is present
         run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
-      - name: Compute this leg's LEG/ABI (one .pkg per FreeBSD major)
+      - name: Compute this leg's LEG/ABI
         id: leg
-        # issue #1806: the leg key is freebsd_major ALONE -- read-matrix's
-        # build_matrix is already deduped to one row per major, so there is no
-        # variant/version/arch left to slug. ABI's cpu segment ("amd64") is an
-        # INERT placeholder: build-pkg-portable.py wildcards the stamp for any
-        # NO_ARCH port regardless of what's given, so the one .pkg this leg
-        # builds serves every arch of this FreeBSD major.
+        # ABI's cpu segment ("amd64") is an INERT placeholder: the package is
+        # NO_ARCH, but each release row still gets its own immutable artifact.
         env:
           MAJOR: ${{ matrix.freebsd_major }}
+          VARIANT: ${{ matrix.variant }}
+          PFSENSE_VERSION: ${{ matrix.pfsense_version }}
         run: |
           set -eu
           ABI="FreeBSD:${MAJOR}:amd64"
-          LEG="fbsd${MAJOR}"
+          LEG="${VARIANT}-${PFSENSE_VERSION}"
           {
             echo "abi=${ABI}"
             echo "leg=${LEG}"
@@ -1024,7 +1014,6 @@ jobs:
           SOURCE:        ${{ github.event.inputs.source }}
           PORTVERSION:   ${{ needs.read-matrix.outputs.portversion }}
           CLASSIFICATION: ${{ needs.read-matrix.outputs.release_stage }}
-          DESTINATIONS:  ${{ needs.read-matrix.outputs.destinations }}
           COMMIT:        ${{ needs.resolve-stamp.outputs.commit }}
           CREATED:       ${{ needs.resolve-stamp.outputs.created }}
           MATRIX_ROW:    ${{ toJson(matrix) }}
@@ -1060,7 +1049,6 @@ jobs:
               "freebsd_ports_sha": os.environ["PORTS_SHA"],
               "route": f"{channel}/{row['variant'].lower()}-{major}.{minor}",
               "source_date_epoch": int(os.environ["CREATED"]),
-              "destinations": json.loads(os.environ["DESTINATIONS"]),
               "build_input_digest": "",
           }
           record["build_input_digest"] = build_input_digest(record)
@@ -1069,7 +1057,6 @@ jobs:
               encoding="utf-8",
           )
           PY
-          echo "Build record destinations: ${DESTINATIONS}"
 
       - name: Build the .pkg via build-leg.sh
         # build-leg.sh is the shared build path (local/CI/release parity — ADR-47 P3).
@@ -1085,6 +1072,8 @@ jobs:
           PHP:          ${{ matrix.php_version }}
           PY:           ${{ matrix.py_flavor }}
           MAJOR:        ${{ matrix.freebsd_major }}
+          VARIANT:      ${{ matrix.variant }}
+          PFSENSE_VERSION: ${{ matrix.pfsense_version }}
           EXTRA_PKGS:   ${{ toJson(matrix.extra_pkgs) }}
           # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
           # rename step below finds this leg's .pkg without any path remapping.
@@ -1110,10 +1099,10 @@ jobs:
           echo "Built for FreeBSD ${MAJOR}:"
           ls -l "${PKG_DIR}"
 
-          # Rename to embed the FreeBSD major, so this leg's .pkg filename
-          # stays unambiguous inside its own artifact.
+          # External Release asset name carries this row's identity. The
+          # archive bytes and native package manifest stay untouched.
           BASE="$(basename "$PKG" .pkg)"
-          RENAMED="${PKG_DIR}/${BASE}-FreeBSD-${MAJOR}.pkg"
+          RENAMED="${PKG_DIR}/${BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"
           mv "$PKG" "$RENAMED"
           echo "Renamed: ${BASE}.pkg -> $(basename "$RENAMED")"
           echo "PKG_PATH=${RENAMED}" >> "$GITHUB_ENV"
@@ -1122,8 +1111,7 @@ jobs:
           # own repo doesn't carry, e.g. textproc/py-charset-normalizer) --
           # SAME loop as build-pkg-linux.yml, from the SAME ports checkout
           # build-leg.sh just prepared above (never a second clone).
-          # read-matrix's build_matrix is already deduped one row per major, so
-          # this leg is the only one ever building this major's dep .pkgs.
+          # this release row is the only one building its row-identified dep .pkgs.
           DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
           HAS_DEP_PKGS=0
           ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
@@ -1149,43 +1137,45 @@ jobs:
             done
             HAS_DEP_PKGS=1
           fi
+          for DEP_PKG in "${DEP_PKG_DIR}"/*.pkg; do
+            [ -f "$DEP_PKG" ] || continue
+            DEP_BASE="$(basename "$DEP_PKG" .pkg)"
+            RENAMED_DEP="${DEP_PKG_DIR}/${DEP_BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"
+            mv "$DEP_PKG" "$RENAMED_DEP"
+          done
           echo "DEP_PKG_DIR=${DEP_PKG_DIR}" >> "$GITHUB_ENV"
           echo "HAS_DEP_PKGS=${HAS_DEP_PKGS}" >> "$GITHUB_ENV"
 
       - name: Upload this leg's .pkg artifact (exact-name contract, issue #1806)
-        # Name MUST equal pfBlockerNG-relpkg-fbsd<freebsd_major> -- the EXACT
-        # name ui-tests.yml's/smoke.yml's pkg_artifact_prefix download step
-        # composes when pkg_artifact_prefix: pfBlockerNG-relpkg is set (see
-        # ui-suite/smoke-suite below). Upload only on success: fail-fast:
+        # Name MUST equal pfBlockerNG-relpkg-<variant>-<pfsense_version> -- the
+        # exact row identity ui-tests.yml/smoke.yml compose when the release
+        # prefix is set. Upload only on success: fail-fast:
         # false already isolates a failed leg, so it simply uploads nothing
         # and attach-pkgs/the publish healthcheck fail closed on the missing
         # asset.
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-relpkg-fbsd${{ matrix.freebsd_major }}
+          name: pfBlockerNG-relpkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}
           path: ${{ env.PKG_PATH }}
           if-no-files-found: error
           retention-days: 7
 
       - name: Upload this leg's dep .pkg artifact (issue #1806 B1)
-        # Name MUST equal pfBlockerNG-relpkg-deppkgs-fbsd<freebsd_major> -- the
-        # EXACT name smoke.yml's/ui-tests.yml's pkg_artifact_prefix ==
-        # 'pfBlockerNG-relpkg' download steps compose (dep_pkg_artifact /
-        # the "Download dep packages" ternary). Never uploaded when
-        # extra_pkgs is empty (no empty artifacts) -- a SEPARATE artifact
-        # from the branch .pkg above, never folded into it.
+        # Name MUST equal pfBlockerNG-relpkg-deppkgs-<variant>-<pfsense_version>
+        # -- the exact row identity consumers compose. Never uploaded when
+        # extra_pkgs is empty (no empty artifacts).
         if: env.HAS_DEP_PKGS == '1'
         uses: actions/upload-artifact@v7
         with:
-          name: pfBlockerNG-relpkg-deppkgs-fbsd${{ matrix.freebsd_major }}
+          name: pfBlockerNG-relpkg-deppkgs-${{ matrix.variant }}-${{ matrix.pfsense_version }}
           path: ${{ env.DEP_PKG_DIR }}/*.pkg
           if-no-files-found: error
           retention-days: 7
 
   # ── 2c. Attach .pkg artifacts to the GitHub Release ──────────────────────
   # Downloads the .pkg from every build-pkgs leg (even failed ones — we
-  # skip missing downloads), renames each to embed the FreeBSD major for
-  # unambiguity, and appends them to the already-published GitHub Release.
+  # skip missing downloads) and appends the row-identified assets to the
+  # already-published GitHub Release.
   #
   # DEPENDENCY EDGES: attach-pkgs needs [prepare-release, release,
   # build-pkgs-portable, read-matrix] with if: !cancelled(), so it runs regardless of a
@@ -1212,11 +1202,10 @@ jobs:
           persist-credentials: false
 
       - name: Download .pkg artifacts from portable builder
-        # Each build-pkgs-portable leg uploads its OWN artifact, named
-        # pfBlockerNG-relpkg-fbsd<freebsd_major> (issue #1806); merge every
-        # leg's artifact into pkgs/ (each holds exactly one .pkg, already
-        # carrying -FreeBSD-<major> in the filename). The pattern also sweeps
-        # up each leg's pfBlockerNG-relpkg-deppkgs-fbsd<major> artifact
+        # Each build-pkgs-portable leg uploads its OWN row artifact, named
+        # pfBlockerNG-relpkg-<variant>-<pfsense_version>; merge every
+        # leg's artifact into pkgs/. The pattern also sweeps
+        # up each row's dependency artifact
         # (issue #1806 B1) -- INTENTIONAL: dep .pkgs (e.g. CE's
         # py311-charset-normalizer) are deliberate release assets, frozen
         # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
@@ -1266,7 +1255,7 @@ jobs:
   # (/release-with-changelog), and publishing then fires release-published.yml.
   #
   # This job's only job is that nobody is handed an incomplete draft: the source
-  # archive AND exactly one .pkg per build-matrix entry must be attached, and the
+  # archive AND exactly one .pkg per release-matrix row must be attached, and the
   # name/body must be non-empty. Anything missing → fail loudly, leaving the draft
   # intact for a resume.
   draft-healthcheck:
@@ -1286,17 +1275,16 @@ jobs:
       contents: write
     steps:
       - name: Health-check the draft release is complete
-        # Expected assets: the source archive + exactly one .pkg per build-matrix entry
-        # (one per distinct FreeBSD major, issue #1806) PLUS one dep .pkg per extra_pkgs
-        # entry across every (deduped) build-matrix row (issue #1806 B1: attach-pkgs's
-        # pfBlockerNG-relpkg-* sweep also picks up each major's
-        # pfBlockerNG-relpkg-deppkgs-fbsd<major> artifact -- a deliberate release asset,
-        # not a leak). An already-published release (a re-run after someone published)
+        # Expected assets: the source archive + exactly one .pkg per release-matrix row
+        # PLUS one dep .pkg per extra_pkgs entry across every row. The
+        # pfBlockerNG-relpkg-* sweep also picks up each row's dependency artifact.
+        # An already-published release (a re-run after someone published)
         # short-circuits OK.
         env:
           GH_TOKEN:     ${{ github.token }}
           TAG:          ${{ needs.release.outputs.tag }}
-          BUILD_MATRIX: ${{ needs.read-matrix.outputs.build_matrix }}
+          BUILD_MATRIX: ${{ needs.read-matrix.outputs.release_matrix }}
+          PORTVERSION:  ${{ needs.read-matrix.outputs.portversion }}
         run: |
           set -eu
           REPO="${{ github.repository }}"
@@ -1308,8 +1296,8 @@ jobs:
             exit 0
           fi
 
-          # issue #1806 B1: the distinct-major count PLUS the total number of
-          # extra_pkgs entries across the (deduped) build-matrix rows -- each
+          # issue #1806 B1: the release-row count PLUS the total number of
+          # extra_pkgs entries across the release-matrix rows -- each
           # dep .pkg is its own release asset (see attach-pkgs's comment).
           EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
           PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
@@ -1323,6 +1311,27 @@ jobs:
           [ "$SRC_COUNT" -ge 1 ] || { echo "::error::no source archive (.tar.gz) attached to the draft"; FAIL=1; }
           [ "$EXPECTED_PKGS" -ge 1 ] || { echo "::error::build matrix is empty"; FAIL=1; }
           [ "$PKG_COUNT" -eq "$EXPECTED_PKGS" ] || { echo "::error::expected ${EXPECTED_PKGS} .pkg assets, found ${PKG_COUNT} — the draft is incomplete"; FAIL=1; }
+
+          # Every release row has one exact main asset. Dependency assets carry
+          # the same row suffix; this catches a dropped or cross-row artifact
+          # even when the aggregate .pkg count happens to match.
+          while IFS= read -r ROW; do
+            VARIANT=$(printf '%s' "$ROW" | jq -r '.variant')
+            VERSION=$(printf '%s' "$ROW" | jq -r '.pfsense_version')
+            MAIN="pfSense-pkg-pfBlockerNG-${PORTVERSION}-${VARIANT}-${VERSION}.pkg"
+            if ! printf '%s' "$META" | jq -e --arg name "$MAIN" '[.assets[].name] | index($name) != null' >/dev/null; then
+              echo "::error::missing release-row asset ${MAIN}"
+              FAIL=1
+            fi
+            NEED_DEPS=$(printf '%s' "$ROW" | jq '(.extra_pkgs // []) | length')
+            HAVE_DEPS=$(printf '%s' "$META" | jq --arg suffix "-${VARIANT}-${VERSION}.pkg" --arg main "$MAIN" '[.assets[].name | select(endswith($suffix) and . != $main)] | length')
+            if [ "$HAVE_DEPS" -ne "$NEED_DEPS" ]; then
+              echo "::error::row ${VARIANT}-${VERSION} expected ${NEED_DEPS} dependency assets, found ${HAVE_DEPS}"
+              FAIL=1
+            fi
+          done <<EOF_ROWS
+          $(printf '%s' "$BUILD_MATRIX" | jq -c '.[]')
+          EOF_ROWS
           printf '%s' "$META" | jq -e '(.name // "") != "" and ((.body // "") | length) > 0' >/dev/null \
             || { echo "::error::release name or body is empty"; FAIL=1; }
           [ "$FAIL" -eq 0 ] || exit 1
@@ -1396,7 +1405,8 @@ jobs:
           filter: blob:none
           sparse-checkout: |
             net/pfSense-pkg-pfBlockerNG
-            net/pfSense-pkg-pfBlockerNG-devel
+            net/pfSense-pkg-pfBlockerNG-testing
+            net/pfSense-pkg-pfBlockerNG-edge
           sparse-checkout-cone-mode: true
 
       - name: Checkout pfBlockerNG (the release helper — TRUSTED ref, sparse)
@@ -1450,16 +1460,14 @@ jobs:
               echo "::error::invalid prerelease PORTVERSION/tag: ${TAG}"; exit 1; }
           fi
 
-          if [ "$CHANNEL" = "stable" ]; then
-            PORT_PATHS="net/pfSense-pkg-pfBlockerNG"
-            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG"
-          else
-            PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel"
-            PORTS_LABEL="net/pfSense-pkg-pfBlockerNG-devel"
-          fi
-
-          for PORT_PATH in $PORT_PATHS; do
-            MAKEFILE="${PORT_PATH}/Makefile"
+          case "$CHANNEL" in
+            "stable") PORT_PATH="net/pfSense-pkg-pfBlockerNG" ;;
+            "testing") PORT_PATH="net/pfSense-pkg-pfBlockerNG-testing" ;;
+            "edge") PORT_PATH="net/pfSense-pkg-pfBlockerNG-edge" ;;
+            *) echo "::error::unknown channel: ${CHANNEL}"; exit 1 ;;
+          esac
+          PORTS_LABEL="$PORT_PATH"
+          MAKEFILE="${PORT_PATH}/Makefile"
 
             # Read the current PORTVERSION and PORTREVISION from the Makefile before
             # editing, so the compare-and-bump helper can decide whether to increment
@@ -1490,8 +1498,7 @@ jobs:
               sed -i -e "s/^PORTVERSION=.*/&\nPORTREVISION=\t${NEW_PORTREVISION}/" "$MAKEFILE"
             fi
 
-            git add "$MAKEFILE"
-          done
+          git add "$MAKEFILE"
 
           # ONE atomic commit for every bumped port.
           if git diff --cached --quiet; then

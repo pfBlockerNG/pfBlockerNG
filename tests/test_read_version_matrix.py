@@ -194,6 +194,23 @@ def _route_matrix(repo: Path, ref: str = "ci-metadata") -> list[dict[str, Any]]:
     return json.loads(proc.stdout)  # type: ignore[no-any-return]
 
 
+def _release_matrix(repo: Path, output: Path, ref: str = "ci-metadata") -> list[dict[str, Any]]:
+    env = _clean_git_env()
+    env["GITHUB_OUTPUT"] = str(output)
+    proc = subprocess.run(
+        ["sh", str(_SCRIPT), "--ref", ref, "--file", "supported-versions.json", "--github-output"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode == 0, f"script failed (rc={proc.returncode})\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    lines = output.read_text(encoding="utf-8").splitlines()
+    start = lines.index("release_matrix<<__EOF_RELEASE_MATRIX__") + 1
+    end = lines.index("__EOF_RELEASE_MATRIX__", start)
+    return json.loads("\n".join(lines[start:end]))  # type: ignore[no-any-return]
+
+
 def _test_matrices(repo: Path, ref: str = "ci-metadata") -> tuple[list[str], list[str]]:
     """Return (python_versions, php_versions) parsed from --print-test output."""
     proc = _run(repo, "--ref", ref, "--file", "supported-versions.json", "--print-test")
@@ -206,6 +223,37 @@ def _test_matrices(repo: Path, ref: str = "ci-metadata") -> tuple[list[str], lis
     py_json = out[py_start:php_idx].strip()
     php_json = out[php_idx + len(php_label) :].strip()
     return json.loads(py_json), json.loads(php_json)
+
+
+def test_release_matrix_keeps_same_major_rows_and_normalizes_identity(tmp_path: Path) -> None:
+    ce = _ce_entry(extra_pkgs=["textproc/py-foo", "textproc/py-foo"], ci=True, mac="02:00:00:00:00:01")
+    plus_a = _plus_entry(pfsense_version="26.03", ci=False, arch="aarch64", mac="02:00:00:00:00:02")
+    plus_b = _plus_entry(pfsense_version="26.07", ci=True, arch="amd64", mac="02:00:00:00:00:03")
+    repo = _make_matrix_ref(tmp_path, [ce, plus_a, plus_b, _route_only_entry()])
+    rows = _release_matrix(repo, tmp_path / "github-output")
+    assert [(row["variant"], row["pfsense_version"]) for row in rows] == [
+        ("CE", "2.8"),
+        ("Plus", "26.03"),
+        ("Plus", "26.07"),
+    ]
+    assert rows[0]["extra_pkgs"] == ["textproc/py-foo"]
+    assert all(not {"ci", "mac", "arch"}.intersection(row) for row in rows)
+
+
+def test_release_matrix_rejects_duplicate_variant_version_rows(tmp_path: Path) -> None:
+    repo = _make_matrix_ref(tmp_path, [_plus_entry(), _plus_entry()])
+    output = tmp_path / "github-output"
+    env = _clean_git_env()
+    env["GITHUB_OUTPUT"] = str(output)
+    proc = subprocess.run(
+        ["sh", str(_SCRIPT), "--ref", "ci-metadata", "--file", "supported-versions.json", "--github-output"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert proc.returncode != 0
+    assert "duplicate (variant,pfsense_version)" in proc.stderr
 
 
 # --------------------------------------------------------------------------- #

@@ -113,7 +113,15 @@ def _step_run_script(step_lines: list[str]) -> str:
     text = "\n".join(step_lines)
     marker = "run: |\n"
     idx = text.index(marker) + len(marker)
-    return textwrap.dedent(text[idx:])
+    raw = text[idx:].splitlines()
+    first = next((line for line in raw if line.strip()), "")
+    base = len(first) - len(first.lstrip())
+    end = len(raw)
+    for i, line in enumerate(raw):
+        if line.strip() and len(line) - len(line.lstrip()) < base:
+            end = i
+            break
+    return textwrap.dedent("\n".join(raw[:end])) + "\n"
 
 
 def _job_if_block(job_lines: list[str]) -> str:
@@ -649,9 +657,8 @@ def _run_classify_with_source_line(tmp_path: Path, tag: str, source_line: str) -
 def _run_port_sync_validation(portversion: str) -> subprocess.CompletedProcess[str]:
     """Execute only the release port-version guard from sync-ports-fork."""
     script = _step_run_script(_step(_jobs()["sync-ports-fork"], "Bump PORTVERSION and push"))
-    marker = 'if [ "$CHANNEL" = "stable" ]; then'
-    _before, validation = script.split(marker, 1)
-    validation = marker + validation.split('\n\nif [ "$CHANNEL" = "stable" ]; then', 1)[0]
+    marker = 'case "$CHANNEL" in'
+    validation, _after = script.split(marker, 1)
     return subprocess.run(  # noqa: S603
         ["sh", "-c", "set -eu\n" + validation],
         cwd=ROOT,

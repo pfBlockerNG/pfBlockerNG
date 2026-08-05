@@ -159,7 +159,7 @@ def derive_destinations_from_git(
 ) -> tuple[Channel, ...]:
     """Derive destinations from tag chronology and release-line ancestry."""
     repo_path = str(repo)
-    major, minor, _patch, _stage, _sequence = _tag_shape(tag)
+    major, minor, patch, stage, _sequence = _tag_shape(tag)
     expected_branch = f"release/{major}.{minor}"
     if branch != expected_branch:
         raise ValueError(f"current tag {tag!r} is not on {expected_branch!r}")
@@ -174,7 +174,7 @@ def derive_destinations_from_git(
         result = subprocess.run(["git", "-C", repo_path, *args], capture_output=True, text=True, check=False)
         return result.stdout.strip() if result.returncode == 0 else ""
 
-    def is_edge_tag(candidate: str) -> bool:
+    def has_exact_channel_trailer(candidate: str, expected: str) -> bool:
         if git_optional("cat-file", "-t", f"refs/tags/{candidate}") != "tag":
             return False
         contents = git("for-each-ref", "--format=%(contents)", f"refs/tags/{candidate}")
@@ -187,13 +187,25 @@ def derive_destinations_from_git(
         )
         if trailer_result.returncode != 0:
             raise RuntimeError(f"git interpret-trailers failed for {candidate}")
-        trailers = trailer_result.stdout.splitlines()
-        return trailers == ["pfBlockerNG-Release-Channel: edge"]
+        trailers = [
+            line for line in trailer_result.stdout.splitlines() if line.startswith("pfBlockerNG-Release-Channel:")
+        ]
+        return trailers == [f"pfBlockerNG-Release-Channel: {expected}"]
+
+    def is_edge_tag(candidate: str) -> bool:
+        return has_exact_channel_trailer(candidate, "edge")
 
     tags = git("for-each-ref", "--sort=creatordate", "--format=%(refname:strip=2)", "refs/tags/").splitlines()
     tag_commit = git_optional("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
     if current_commit and tag_commit and current_commit != tag_commit:
         raise ValueError(f"current tag {tag!r} does not match the selected source commit")
+    if tag_commit:
+        tag_type = git_optional("cat-file", "-t", f"refs/tags/{tag}")
+        expected_channel = "stable" if stage is None else ("edge" if patch == "0" else "testing")
+        if tag_type != "tag":
+            raise ValueError(f"current tag {tag!r} must be an annotated tag")
+        if not has_exact_channel_trailer(tag, expected_channel):
+            raise ValueError(f"current tag {tag!r} lacks the exact {expected_channel} release trailer")
     selected_commit = current_commit or tag_commit
     if selected_commit:
         branch_ref = f"refs/remotes/origin/{branch}"
@@ -224,6 +236,14 @@ def derive_destinations_from_git(
         if result.returncode == 0:
             branch_map[candidate] = line
     return derive_destinations(tag, branch=branch, ordered_tags=tags, tag_branches=branch_map)
+
+
+def primary_channel_for_tag(tag: str) -> Channel:
+    """Return the channel required by a tag's primary release trailer."""
+    _major, _minor, patch, stage, _sequence = _tag_shape(tag)
+    if stage is None:
+        return "stable"
+    return "edge" if patch == "0" else "testing"
 
 
 def parse_release_tag(tag: str, channel: Channel | None = None) -> ReleaseInfo:

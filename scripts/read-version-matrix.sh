@@ -13,7 +13,7 @@
 #                        Must be reachable in the current git repo.
 #   --file <path>        Matrix file path on the ref
 #                        (default: supported-versions.json).
-#   --github-output      Write build_matrix, ci_matrix, variant, python_versions,
+#   --github-output      Write release_matrix, build_matrix, ci_matrix, variant, python_versions,
 #                        and php_versions to $GITHUB_OUTPUT (GitHub Actions step
 #                        outputs format).
 #   --print-build        Print BUILD matrix JSON to stdout. Excludes role=route-only
@@ -232,6 +232,23 @@ BUILD_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
     )
   | sort_by(.freebsd_major // "")')"
 
+# ── Release matrix: every build-role row, one artifact per version/variant ────
+# Release assets are keyed by the row identity (Variant + pfSense version), so
+# they must not inherit BUILD's FreeBSD-major deduplication. The build-role set
+# excludes route-only entries; preserve source order for stable names.
+if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
+  _RELEASE_DUPLICATES="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
+    group_by([.variant // "", .pfsense_version // ""])
+    | map(select(length > 1) | {variant: .[0].variant, pfsense_version: .[0].pfsense_version})')"
+  if [ "$(printf '%s' "$_RELEASE_DUPLICATES" | jq 'length')" -gt 0 ]; then
+    printf '::error::release matrix has duplicate (variant,pfsense_version) rows in %s: %s\n' \
+      "$MATRIX_FILE" "$(printf '%s' "$_RELEASE_DUPLICATES" | jq -c '.')" >&2
+    exit 1
+  fi
+fi
+RELEASE_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
+  map(. + {extra_pkgs: ((.extra_pkgs // []) | unique | sort)} | del(.arch, .ci, .mac))')"
+
 # ── CI matrix: the ci:true entries (ANY channel), ONE ROW PER VERSION ─────────
 # Derived from _BUILD_ROLE_ENTRIES (never the deduped BUILD_MATRIX): a smoke/UI
 # leg boots one VM per pfSense version, so it needs every version's own
@@ -314,6 +331,7 @@ if [ "$DO_GITHUB_OUTPUT" -eq 1 ]; then
   fi
   # Use heredoc delimiter to safely embed JSON (may contain special chars).
   {
+    printf 'release_matrix<<__EOF_RELEASE_MATRIX__\n%s\n__EOF_RELEASE_MATRIX__\n' "$RELEASE_MATRIX"
     printf 'build_matrix<<__EOF_BUILD_MATRIX__\n%s\n__EOF_BUILD_MATRIX__\n' "$BUILD_MATRIX"
     printf 'ci_matrix<<__EOF_CI_MATRIX__\n%s\n__EOF_CI_MATRIX__\n' "$CI_MATRIX"
     printf 'variant<<__EOF_VARIANT__\n%s\n__EOF_VARIANT__\n' "$VARIANT_ARRAY"

@@ -5,11 +5,9 @@ AND gate (mirroring smoke.yml's `all-smoke-passed`) -- including the prepare-cra
 fix -- and the ui tier's pytest-exit-5 mapper stops silently passing a full, unfiltered run
 that selected zero tests.
 
-Part 2 (release.yml side): build-pkgs-portable matrix-ifies over the read-matrix build_matrix
--- ALREADY DEDUPED to one row per distinct freebsd_major (issue #1806: every
-pfSense-pkg-pfBlockerNG port is NO_ARCH, so one wildcard-ABI .pkg build serves every
-arch and edition/version sharing a major) -- and uploads one EXACT-named artifact per
-major (`pfBlockerNG-relpkg-fbsd<freebsd_major>`); attach-pkgs merges them by pattern;
+Part 2 (release.yml side): build-pkgs-portable matrix-ifies over the read-matrix release_matrix
+-- one row per build-role Variant/version -- and uploads one EXACT-named artifact per
+row (`pfBlockerNG-relpkg-<Variant>-<pfsense_version>`); attach-pkgs merges them by pattern;
 ui-suite/smoke-suite are re-enabled, consume those exact artifacts, and gate
 tag-release (issue #1855: the tag, and therefore everything after it, waits on
 every live leg).
@@ -125,7 +123,15 @@ def _step_run_script(step_lines: list[str]) -> str:
     text = "\n".join(step_lines)
     marker = "run: |\n"
     idx = text.index(marker) + len(marker)
-    return textwrap.dedent(text[idx:])
+    raw = text[idx:].splitlines()
+    first = next((line for line in raw if line.strip()), "")
+    base = len(first) - len(first.lstrip())
+    end = len(raw)
+    for i, line in enumerate(raw):
+        if line.strip() and len(line) - len(line.lstrip()) < base:
+            end = i
+            break
+    return textwrap.dedent("\n".join(raw[:end])) + "\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -174,12 +180,12 @@ def test_ui_download_step_uses_the_prefix_when_set() -> None:
     target = [s for s in steps if any("Download the built pfBlockerNG package" in line for line in s)]
     assert len(target) == 1, "ui job must have exactly one 'Download the built pfBlockerNG package' step"
     step_text = "\n".join(target[0])
-    assert "format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major)" in step_text, (
-        f"ui download step must build the prefixed artifact name from prefix/freebsd_major, got:\n{step_text}"
+    assert "format('{0}-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version)" in step_text, (
+        f"ui download step must build the prefixed artifact name from prefix/row identity, got:\n{step_text}"
     )
     assert "inputs.pkg_artifact_prefix != ''" in step_text
-    assert "format('pfBlockerNG-pkg-{0}', matrix.version)" in step_text, (
-        "the blank-prefix fallback must stay byte-identical to the pre-#1662 literal name"
+    assert "format('pfBlockerNG-pkg-{0}-{1}', matrix.variant, matrix.version)" in step_text, (
+        "the blank-prefix fallback must carry the row identity"
     )
 
 
@@ -191,12 +197,11 @@ def test_smoke_job_threads_the_prefix_into_pkg_artifact() -> None:
     assert "inputs.pkg_artifact_prefix != ''" in pkg_artifact_line, (
         f"smoke job's pkg_artifact: must branch on inputs.pkg_artifact_prefix, got: {pkg_artifact_line}"
     )
-    assert "format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major)" in pkg_artifact_line, (
-        f"the prefix-set branch must key on freebsd_major alone (issue #1806), got: {pkg_artifact_line}"
-    )
-    assert "format('pfBlockerNG-pkg-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name)" in pkg_artifact_line, (
-        f"the blank-prefix fallback must match build-pkg's own artifact_name (fbsd<major>-<image_name>), "
-        f"got: {pkg_artifact_line}"
+    assert (
+        "format('{0}-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.pfsense_version)" in pkg_artifact_line
+    ), f"the prefix-set branch must key on Variant/version, got: {pkg_artifact_line}"
+    assert "format('pfBlockerNG-pkg-{0}-{1}', matrix.variant, matrix.pfsense_version)" in pkg_artifact_line, (
+        f"the blank-prefix fallback must match build-pkg's own row artifact_name, got: {pkg_artifact_line}"
     )
 
 
@@ -405,21 +410,19 @@ def test_success_rc_stays_zero(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_build_pkgs_portable_matrixes_over_read_matrix_build_matrix() -> None:
+def test_build_pkgs_portable_matrixes_over_read_matrix_release_matrix() -> None:
     jobs = _jobs(RELEASE_WORKFLOW)
     assert "build-pkgs-portable" in jobs
     job_text = "\n".join(jobs["build-pkgs-portable"])
     assert "strategy:" in job_text, "build-pkgs-portable must gain a strategy.matrix"
     assert "fail-fast: false" in job_text
-    assert "fromJson(needs.read-matrix.outputs.build_matrix)" in job_text, (
-        f"build-pkgs-portable must matrix over read-matrix's build_matrix output, got:\n{job_text}"
+    assert "fromJson(needs.read-matrix.outputs.release_matrix)" in job_text, (
+        f"build-pkgs-portable must matrix over read-matrix's release_matrix output, got:\n{job_text}"
     )
 
 
-def test_build_pkgs_portable_per_leg_upload_name_is_the_exact_contract() -> None:
-    """issue #1806: the artifact name keys on freebsd_major ALONE -- read-matrix's
-    build_matrix is already deduped to one row per major, so there is no
-    variant/version/arch left to slug (and no lowercasing needed)."""
+def test_build_pkgs_portable_per_row_upload_name_is_the_exact_contract() -> None:
+    """Release artifact names carry the exact Variant/version row identity."""
     jobs = _jobs(RELEASE_WORKFLOW)
     steps = _split_into_steps(jobs["build-pkgs-portable"])
     upload_steps = [s for s in steps if any("uses: actions/upload-artifact" in line for line in s)]
@@ -429,19 +432,10 @@ def test_build_pkgs_portable_per_leg_upload_name_is_the_exact_contract() -> None
     assert len(upload_steps) == 2, (
         f"expected exactly two upload-artifact steps in build-pkgs-portable, got {len(upload_steps)}"
     )
-    pkg_step = next(
-        s for s in upload_steps if any("pfBlockerNG-relpkg-fbsd" in line and "deppkgs" not in line for line in s)
-    )
+    pkg_step = next(s for s in upload_steps if any("pfBlockerNG-relpkg-${{ matrix.variant }}" in line for line in s))
     name_line = next(line for line in pkg_step if line.strip().startswith("name:"))
-    assert "pfBlockerNG-relpkg-fbsd" in name_line, (
-        f"per-leg upload name must start pfBlockerNG-relpkg-fbsd, got: {name_line}"
-    )
-    assert "matrix.freebsd_major" in name_line, (
-        f"per-leg upload name must key on matrix.freebsd_major, got: {name_line}"
-    )
-    stale_tokens = ("matrix.arch", "matrix.variant", "matrix.pfsense_version")
-    assert not any(tok in name_line for tok in stale_tokens), (
-        f"the deduped-by-major upload name must reference no variant/version/arch, got: {name_line}"
+    assert "pfBlockerNG-relpkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}" in name_line, (
+        f"per-row upload name must carry Variant/version, got: {name_line}"
     )
 
 
@@ -456,24 +450,19 @@ def test_build_pkgs_portable_dep_pkg_upload_name_is_the_exact_contract() -> None
     upload_steps = [s for s in steps if any("uses: actions/upload-artifact" in line for line in s)]
     dep_step = next(s for s in upload_steps if any("deppkgs" in line for line in s))
     name_line = next(line for line in dep_step if line.strip().startswith("name:"))
-    assert "pfBlockerNG-relpkg-deppkgs-fbsd" in name_line, (
-        f"dep-pkg upload name must be pfBlockerNG-relpkg-deppkgs-fbsd<major>, got: {name_line}"
-    )
-    assert "matrix.freebsd_major" in name_line, (
-        f"dep-pkg upload name must key on matrix.freebsd_major, got: {name_line}"
+    assert "pfBlockerNG-relpkg-deppkgs-${{ matrix.variant }}-${{ matrix.pfsense_version }}" in name_line, (
+        f"dep-pkg upload name must carry Variant/version, got: {name_line}"
     )
     if_line = next((line for line in dep_step if line.strip().startswith("if:")), "")
     assert "HAS_DEP_PKGS" in if_line, f"dep-pkg upload must be gated (never an empty artifact), got: {if_line!r}"
 
 
-def test_build_pkgs_portable_leg_step_needs_no_variant_version_or_arch() -> None:
-    """issue #1806: the leg-naming job body no longer needs matrix.variant/.pfsense_version/
-    .arch at all -- read-matrix's build_matrix is already deduped by freebsd_major, so those
-    per-version fields are meaningless on a build TARGET row."""
+def test_build_pkgs_portable_leg_step_carries_row_identity_and_abi() -> None:
+    """The leg-naming job carries the exact Variant/version identity and ABI."""
     job_text = "\n".join(_jobs(RELEASE_WORKFLOW)["build-pkgs-portable"])
     assert "matrix.freebsd_major" in job_text
-    assert "matrix.variant" not in job_text
-    assert "matrix.pfsense_version" not in job_text
+    assert "matrix.variant" in job_text
+    assert "matrix.pfsense_version" in job_text
     assert "matrix.arch" not in job_text
 
 
@@ -736,10 +725,8 @@ def test_release_suites_turn_the_released_status_gate_on(job_name: str) -> None:
 # --------------------------------------------------------------------------- #
 # Cross-contract consistency: release-side naming == part-1 consumer-side naming
 #
-# issue #1806: the release-side artifact name is now a DIRECT
-# `pfBlockerNG-relpkg-fbsd${{ matrix.freebsd_major }}` template (no per-leg
-# step-output slug, no variant/version/arch at all -- read-matrix's
-# build_matrix is already deduped to one row per freebsd_major). This test
+# issue #2143: the release-side artifact name is a DIRECT
+# `pfBlockerNG-relpkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}` template. This test
 # LIFTS the leg-naming step's `run:` body straight out of release.yml and
 # executes it under sh for every DISTINCT freebsd_major in the real build
 # matrix, comparing the emitted ABI + LEG shape and the release/ui/smoke
@@ -756,15 +743,17 @@ def _leg_step() -> list[str]:
     return target[0]
 
 
-def _run_leg_step(tmp_path: Path, freebsd_major: str) -> dict[str, str]:
+def _run_leg_step(tmp_path: Path, row: dict[str, str]) -> dict[str, str]:
     """Execute the REAL leg-naming step's `run:` body (lifted verbatim) under sh,
     with a real $GITHUB_OUTPUT file, and return the parsed step outputs."""
     script = _step_run_script(_leg_step())
-    output_file = tmp_path / f"github_output_fbsd{freebsd_major}"
+    output_file = tmp_path / f"github_output_{row['variant']}_{row['version']}"
     output_file.write_text("")
     env = {
         "PATH": os.environ.get("PATH", ""),
-        "MAJOR": freebsd_major,
+        "MAJOR": row["freebsd_major"],
+        "VARIANT": row["variant"],
+        "PFSENSE_VERSION": row["version"],
         "GITHUB_OUTPUT": str(output_file),
     }
     completed = subprocess.run(  # noqa: S603
@@ -811,6 +800,10 @@ def _resolve_matrix_arg(expr: str, row: dict[str, str]) -> str:
         return "pfBlockerNG-relpkg"
     if expr == "matrix.freebsd_major":
         return row["freebsd_major"]
+    if expr == "matrix.variant":
+        return row["variant"]
+    if expr in ("matrix.version", "matrix.pfsense_version"):
+        return row["version"]
     raise AssertionError(f"unrecognised matrix arg expression in a consumer-side format(...) call: {expr!r}")
 
 
@@ -834,14 +827,14 @@ def _consumer_side_names(row: dict[str, str]) -> tuple[str, str]:
 
 
 def _cross_contract_rows() -> list[dict[str, str]] | None:
-    """Real (deduped-by-major) BUILD-matrix rows, read via read-version-matrix.sh
-    --print-build (reads the already-fetched origin/ci-metadata ref, no network
+    """Real per-version CI rows, read via read-version-matrix.sh --print-ci
+    (reads the already-fetched origin/ci-metadata ref, no network
     needed once it's present). Returns None when the ref is unreachable in this
     environment (mirrors tests/test_matrix_collision_guard.py's _load_build_matrix
     skip contract) -- callers must skip, never fabricate rows."""
     try:
         proc = subprocess.run(  # noqa: S603
-            ["sh", "scripts/read-version-matrix.sh", "--print-build"],
+            ["sh", "scripts/read-version-matrix.sh", "--print-ci"],
             cwd=ROOT,
             capture_output=True,
             text=True,
@@ -858,14 +851,21 @@ def _cross_contract_rows() -> list[dict[str, str]] | None:
         return None
     if not isinstance(matrix, list) or not matrix:
         return None
-    return [{"freebsd_major": str(entry["freebsd_major"])} for entry in matrix]
+    return [
+        {
+            "freebsd_major": str(entry["freebsd_major"]),
+            "variant": str(entry["variant"]),
+            "version": str(entry["pfsense_version"]),
+        }
+        for entry in matrix
+    ]
 
 
 def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) -> None:
-    """For every distinct freebsd_major in the real (deduped) build matrix, execute
+    """For every real release row, execute
     the REAL leg-naming step (a sanity check that it still runs + emits a usable
     ABI/LEG) and assert the LITERAL release-side artifact name
-    (pfBlockerNG-relpkg-fbsd<major>) equals BOTH ui-tests.yml's download name AND
+    (pfBlockerNG-relpkg-<Variant>-<version>) equals BOTH ui-tests.yml's download name AND
     smoke.yml's pkg_artifact prefix-set branch -- computed from the real
     format(...) templates in those files."""
     rows = _cross_contract_rows()
@@ -879,11 +879,11 @@ def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) 
 
     failures: list[str] = []
     for row in rows:
-        outputs = _run_leg_step(tmp_path, row["freebsd_major"])
+        outputs = _run_leg_step(tmp_path, row)
         assert outputs.get("abi") == f"FreeBSD:{row['freebsd_major']}:amd64", (
             f"row {row}: leg step emitted an unexpected abi: {outputs!r}"
         )
-        release_side_name = f"pfBlockerNG-relpkg-fbsd{row['freebsd_major']}"
+        release_side_name = f"pfBlockerNG-relpkg-{row['variant']}-{row['version']}"
         ui_name, smoke_name = _consumer_side_names(row)
         if not (release_side_name == ui_name == smoke_name):
             failures.append(f"row {row}: release={release_side_name!r} ui={ui_name!r} smoke={smoke_name!r}")
@@ -956,6 +956,7 @@ def _run_healthcheck(tmp_path: Path, build_matrix: str, assets_json: str) -> sub
         "GH_TOKEN": "stub-token",
         "TAG": "v0.0.0-test",
         "BUILD_MATRIX": build_matrix,
+        "PORTVERSION": "4.0.0",
     }
     return subprocess.run(  # noqa: S603
         ["sh", "-c", script],
@@ -983,15 +984,15 @@ def test_healthcheck_nonempty_matrix_with_matching_pkgs_still_passes(tmp_path: P
     completed = _run_healthcheck(
         tmp_path,
         build_matrix='[{"variant":"CE","pfsense_version":"2.8"}]',
-        assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfBlockerNG-relpkg-ce-2.8-amd64.pkg"}]',
+        assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"}]',
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
     """issue #1806 B1 (delta review finding): attach-pkgs's pfBlockerNG-relpkg-*
-    sweep ALSO attaches each major's dep .pkg artifact
-    (pfBlockerNG-relpkg-deppkgs-fbsd<major>) -- a deliberate release asset, not
+    sweep ALSO attaches each row's dep .pkg artifact
+    (pfBlockerNG-relpkg-deppkgs-<Variant>-<version>) -- a deliberate release asset, not
     a leak. EXPECTED_PKGS must count those too, or a release with any major's
     extra_pkgs non-empty (CE today) fails this healthcheck and gets stuck as a
     draft even though every expected asset IS present (dry-run CI never
@@ -1004,14 +1005,14 @@ def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
     completed = _run_healthcheck(
         tmp_path,
         build_matrix=(
-            '[{"freebsd_major":"15","extra_pkgs":["textproc/py-charset-normalizer"]},'
-            '{"freebsd_major":"16","extra_pkgs":[]}]'
+            '[{"variant":"CE","pfsense_version":"2.8","extra_pkgs":["textproc/py-charset-normalizer"]},'
+            '{"variant":"Plus","pfsense_version":"26.03","extra_pkgs":[]}]'
         ),
         assets_json=(
             '[{"name":"pfBlockerNG-src.tar.gz"},'
-            '{"name":"pfBlockerNG-relpkg-fbsd15.pkg"},'
-            '{"name":"pfBlockerNG-relpkg-fbsd16.pkg"},'
-            '{"name":"py311-charset-normalizer-3.4.4.pkg"}]'
+            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"},'
+            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-Plus-26.03.pkg"},'
+            '{"name":"py311-charset-normalizer-3.4.4-CE-2.8.pkg"}]'
         ),
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr

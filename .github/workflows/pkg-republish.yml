@@ -30,12 +30,55 @@ jobs:
     steps:
       - name: Validate immutable source Release identity
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -eu
           [ -n "$RELEASE_ID" ] || { echo "::error::release_id is required"; exit 1; }
           [ -n "$RELEASE_TAG" ] || { echo "::error::release_tag is required"; exit 1; }
+          RELEASE_JSON=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
+          ACTUAL_TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')
+          RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
+          [ "$ACTUAL_TAG" = "$RELEASE_TAG" ] || {
+            echo "::error::release ${RELEASE_ID} is not tagged ${RELEASE_TAG}"; exit 1;
+          }
+          [ "$RELEASE_DRAFT" = "false" ] || {
+            echo "::error::release ${RELEASE_ID} is still a draft"; exit 1;
+          }
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Derive destinations from the exact Release tag
+        id: resolve
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          git fetch origin --tags --force '+refs/heads/release/*:refs/remotes/origin/release/*'
+          SOURCE_LINE=$(python3 - "$RELEASE_TAG" <<'PY'
+          import sys
+
+          from scripts.release_version import parse_release_tag, primary_channel_for_tag
+
+          tag = sys.argv[1]
+          print(parse_release_tag(tag, primary_channel_for_tag(tag)).release_line)
+          PY
+          )
+          SOURCE_SHA=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          DESTINATIONS=$(python3 - "$RELEASE_TAG" "$SOURCE_LINE" "$SOURCE_SHA" <<'PY'
+          import json
+          import sys
+
+          from scripts.release_version import derive_destinations_from_git
+
+          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3])), separators=(",", ":")))
+          PY
+          )
+          echo "destinations=${DESTINATIONS}" >> "$GITHUB_OUTPUT"
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -52,10 +95,12 @@ jobs:
           SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          DESTINATIONS: ${{ steps.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg \
             -f source_repository="$SOURCE_REPOSITORY" \
             -f release_id="$RELEASE_ID" \
             -f release_tag="$RELEASE_TAG" \
+            -f destinations="$DESTINATIONS" \
             -f source_run_id="$SOURCE_RUN_ID"
