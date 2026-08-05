@@ -136,8 +136,16 @@ final class DownloadStagePublishTest extends TestCase
 		$close = strpos($source, '})) {', $open);
 		$this->assertNotFalse($close);
 		$callback = substr($source, $open, $close - $open);
-		$this->assertStringContainsString('PFB_FILTER_FILE_MIME', $callback,
-			'the piped ZIP branch must validate the staged content before it is published');
+
+		// The probe's VERDICT must gate the publication. Asserting only that the
+		// constant appears passes while the call's result is computed and discarded,
+		// which republishes the rejected content and loses the previous file.
+		$this->assertMatchesRegularExpression(
+			'/if \(!pfb_filter\(\s*array\(escapeshellarg\(\$staged\), \$staged, \$list_download\),'
+			. '\s*PFB_FILTER_FILE_MIME[^)]*\)\) \{\s*\$inner_rejected = TRUE;\s*return [^;]+;\s*\}/',
+			$callback,
+			'the piped ZIP branch must reject the staged content before it is published, '
+			. 'not merely probe it');
 	}
 
 	/**
