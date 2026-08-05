@@ -46,10 +46,29 @@ final class GunzipTrailingNewlineWiringTest extends TestCase
 		$this->assertSame("iprep-data\n", file_get_contents($orig));
 	}
 
-	public function testGunzipFailurePreservesLegacyEtConsumerAttempt(): void
+	/** A published feed stays in service when the next download decompresses badly. */
+	public function testCorruptGzipKeepsLastGoodOrigAndSkipsConsumer(): void
 	{
 		$raw = "{$this->dir}/bad.raw";
 		$orig = "{$this->dir}/bad.orig";
+		$events = [];
+		$this->assertNotFalse(file_put_contents($orig, "last-good\n"));
+		$this->assertNotFalse(file_put_contents($raw, 'not-gzip'));
+		$this->assertSame("last-good\n", file_get_contents($orig));
+
+		$this->assertFalse(pfb_apply_gunzip_orig_pipeline($raw, $orig,
+			static function () use (&$events): void { $events[] = 'consume'; }
+		));
+
+		$this->assertSame("last-good\n", file_get_contents($orig));
+		$this->assertSame([], $events);
+	}
+
+	/** A first-ever download that fails publishes nothing rather than an empty feed. */
+	public function testCorruptGzipWithoutPriorOrigPublishesNothing(): void
+	{
+		$raw = "{$this->dir}/fresh.raw";
+		$orig = "{$this->dir}/fresh.orig";
 		$events = [];
 		$this->assertNotFalse(file_put_contents($raw, 'not-gzip'));
 
@@ -57,18 +76,47 @@ final class GunzipTrailingNewlineWiringTest extends TestCase
 			static function () use (&$events): void { $events[] = 'consume'; }
 		));
 
-		$this->assertSame(['consume'], $events);
-		$this->assertFileExists($raw);
-		$this->assertFileExists($orig);
+		$this->assertFileDoesNotExist($orig);
+		$this->assertSame([], $events);
 	}
 
-	public function testMissingRawStillRunsLegacyEtConsumer(): void
+	/** Staging a failed decompression leaves the feed directory as it was found. */
+	public function testFailedGunzipLeavesNoTemporaryFileBehind(): void
+	{
+		$raw = "{$this->dir}/litter.raw";
+		$orig = "{$this->dir}/litter.orig";
+		$this->assertNotFalse(file_put_contents($raw, 'not-gzip'));
+
+		pfb_apply_gunzip_orig_pipeline($raw, $orig, NULL);
+
+		$this->assertSame([$raw], glob("{$this->dir}/*"));
+	}
+
+	/** The supported reuse case: no fresh download, prior publication feeds the consumer. */
+	public function testMissingRawReusesPriorOrigForConsumer(): void
+	{
+		$orig = "{$this->dir}/reuse.orig";
+		$events = [];
+		$this->assertNotFalse(file_put_contents($orig, "prior\n"));
+
+		$this->assertFalse(pfb_apply_gunzip_orig_pipeline("{$this->dir}/missing.raw", $orig,
+			static function (string $published) use (&$events): void {
+				$events[] = (string) file_get_contents($published);
+			}
+		));
+
+		$this->assertSame(["prior\n"], $events);
+	}
+
+	/** Nothing to reuse and nothing downloaded means nothing to consume. */
+	public function testMissingRawWithoutPriorOrigSkipsConsumer(): void
 	{
 		$events = [];
 		$this->assertFalse(pfb_apply_gunzip_orig_pipeline("{$this->dir}/missing.raw", "{$this->dir}/missing.orig",
 			static function () use (&$events): void { $events[] = 'consume'; }
 		));
-		$this->assertSame(['consume'], $events);
+
+		$this->assertSame([], $events);
 	}
 
 	/** The ET reuse path lives in the #993 sync monolith; behavior runs above. */

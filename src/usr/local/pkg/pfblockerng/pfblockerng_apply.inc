@@ -211,17 +211,26 @@ function pfb_apply_geoip_orig_pipeline(string $source, string $orig, string $mir
 }
 
 function pfb_apply_gunzip_orig_pipeline(string $source, string $orig, ?callable $consumer = NULL): bool {
-	$retval = 1;
-	$normalized = FALSE;
+	$published = FALSE;
 	if (file_exists($source)) {
+		// issue #2115: stage beside the active file — a redirect onto $orig truncates
+		// the last-good publication before gunzip's exit status can be read.
+		$staged = "{$orig}.tmp";
 		$output = array();
-		exec('/usr/bin/gunzip -c ' . escapeshellarg($source) . ' > ' . escapeshellarg($orig), $output, $retval);
-		$normalized = pfb_apply_trailing_newline_ok($orig);
+		exec('/usr/bin/gunzip -c ' . escapeshellarg($source) . ' > ' . escapeshellarg($staged), $output, $retval);
+		if ($retval === 0 && pfb_apply_trailing_newline_ok($staged)) {
+			$published = @rename($staged, $orig);
+		}
+		if (!$published) {
+			@unlink($staged);
+			return FALSE;
+		}
 	}
-	if ($consumer !== NULL) {
+	// A missing source is the supported reuse path: consume whatever is already published.
+	if ($consumer !== NULL && file_exists($orig)) {
 		$consumer($orig);
 	}
-	return $retval === 0 && $normalized;
+	return $published;
 }
 
 /**
