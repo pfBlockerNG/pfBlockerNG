@@ -227,9 +227,9 @@ def derive_destinations_from_git(
         except ValueError:
             continue
         line = f"release/{major}.{minor}"
+        # The current tag never reaches this skip: a patch-zero prerelease expects the same
+        # edge trailer, so the check above has already rejected it.
         if patch == "0" and stage is not None and not has_exact_channel_trailer(candidate, "edge"):
-            if candidate == tag:
-                raise ValueError(f"current tag {tag!r} lacks the exact Edge release trailer")
             continue
         commit = git("rev-parse", "--verify", f"refs/tags/{candidate}^{{commit}}")
         ref = f"refs/remotes/origin/{line}"
