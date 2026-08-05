@@ -50,7 +50,6 @@ _RECORD_FIELDS = {
     "freebsd_ports_sha",
     "route",
     "source_date_epoch",
-    "destinations",
     "build_input_digest",
 }
 _RECORD_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -247,21 +246,6 @@ def validate_build_record(
     channel = record["channel"]
     if channel not in ("stable", "testing", "edge", "nightly"):
         raise _record_error("channel is invalid")
-    destinations = record["destinations"]
-    if (
-        not isinstance(destinations, list)
-        or not destinations
-        or any(destination not in ("stable", "testing", "edge", "nightly") for destination in destinations)
-    ):
-        raise _record_error("destinations must be a non-empty list of known channels")
-    allowed_destinations = {
-        "stable": (("stable", "testing"), ("stable", "testing", "edge")),
-        "testing": (("testing",), ("testing", "edge")),
-        "edge": (("edge",),),
-        "nightly": (("nightly",),),
-    }
-    if tuple(destinations) not in allowed_destinations[channel]:
-        raise _record_error("destinations do not match the channel tuple")
     row = validate_build_matrix_row(record["matrix_row"])
     if abi is not None:
         if not isinstance(abi, str) or not re.fullmatch(r"FreeBSD:[0-9]+:[A-Za-z0-9._+-]+", abi):

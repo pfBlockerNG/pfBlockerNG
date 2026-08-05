@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pfb_pkg
 import pytest
 
 from scripts.release_version import derive_destinations
@@ -66,40 +65,3 @@ def test_current_tag_branch_mismatch_fails_before_classification() -> None:
 
 def test_missing_anchor_is_none_safe() -> None:
     assert _destinations("v4.0.1.a1", ["v4.0.0.a1"]) == ("testing", "edge")
-
-
-def test_build_record_requires_ordered_destinations_and_digest_binding() -> None:
-    record = {
-        "schema": 1,
-        "channel": "testing",
-        "release_line": "release/4.0",
-        "classification": "alpha",
-        "source_tag": "v4.0.1.a1",
-        "source_sha": "a" * 40,
-        "canonical_package_version": "4.0.1.a1",
-        "native_recipe_identity": "pfSense-pkg-pfBlockerNG-testing",
-        "emitted_identity": "pfSense-pkg-pfBlockerNG",
-        "matrix_row": {
-            "pfsense_version": "2.8",
-            "channel": "CE",
-            "freebsd_version": "15.0-RELEASE",
-            "freebsd_major": "15",
-            "php_version": "8.3",
-            "py_flavor": "py311",
-            "variant": "CE",
-            "status": "active",
-            "extra_pkgs": [],
-        },
-        "freebsd_ports_sha": "b" * 40,
-        "route": "testing/ce-2.8",
-        "source_date_epoch": 0,
-        "destinations": ["testing", "edge"],
-        "build_input_digest": "",
-    }
-    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
-    assert pfb_pkg.validate_build_record(record)["destinations"] == ["testing", "edge"]
-    for forged in (["edge", "testing"], ["testing", "testing"], ["stable"], ["testing", "nightly"]):
-        bad = dict(record, destinations=forged)
-        bad["build_input_digest"] = pfb_pkg.build_input_digest(bad)
-        with pytest.raises(pfb_pkg.PkgError):
-            pfb_pkg.validate_build_record(bad)

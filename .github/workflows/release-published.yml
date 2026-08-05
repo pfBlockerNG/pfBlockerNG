@@ -36,6 +36,7 @@ jobs:
       release_id: ${{ steps.classify.outputs.release_id }}
       release_tag: ${{ steps.classify.outputs.tag }}
       source_repository: ${{ steps.classify.outputs.source_repository }}
+      destinations: ${{ steps.classify.outputs.destinations }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -87,7 +88,7 @@ jobs:
             false:false|true:true) ;;
             *) echo "::error::published Release prerelease flag does not match ${TAG}"; exit 1 ;;
           esac
-          if ! git fetch origin "$release_line" --tags; then
+          if ! git fetch origin --tags --force "+refs/heads/release/*:refs/remotes/origin/release/*"; then
             echo "::error::cannot fetch the derived source line origin/${release_line} for ${TAG}"; exit 1
           fi
           COMMIT=$(git rev-parse --verify "refs/tags/${TAG}^{commit}" 2>/dev/null) || {
@@ -95,6 +96,15 @@ jobs:
           if ! git merge-base --is-ancestor "$COMMIT" "origin/${release_line}"; then
             echo "::error::published tag ${TAG} commit is not reachable from origin/${release_line}"; exit 1
           fi
+          DESTINATIONS=$(python3 - "$TAG" "$release_line" "$COMMIT" <<'PY'
+          import json
+          import sys
+
+          from scripts.release_version import derive_destinations_from_git
+
+          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3])), separators=(",", ":")))
+          PY
+          )
           {
             echo "tag=${TAG}"
             echo "release_id=${RELEASE_ID:-}"
@@ -102,6 +112,7 @@ jobs:
             echo "channel=${release_channel}"
             echo "source=${release_line}"
             echo "portversion=${portversion}"
+            echo "destinations=${DESTINATIONS}"
           } >> "$GITHUB_OUTPUT"
           echo "Published ${TAG}: channel=${release_channel} source=${release_line} portversion=${portversion}"
 
@@ -139,10 +150,12 @@ jobs:
           SOURCE_REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
           RELEASE_ID:         ${{ needs.resolve.outputs.release_id }}
           RELEASE_TAG:        ${{ needs.resolve.outputs.release_tag }}
+          DESTINATIONS:       ${{ needs.resolve.outputs.destinations }}
           SOURCE_RUN_ID:      ${{ github.run_id }}:${{ github.run_attempt }}
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg \
             -f source_repository="$SOURCE_REPOSITORY" \
             -f release_id="$RELEASE_ID" \
             -f release_tag="$RELEASE_TAG" \
+            -f destinations="$DESTINATIONS" \
             -f source_run_id="$SOURCE_RUN_ID"

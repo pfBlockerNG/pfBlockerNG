@@ -42,12 +42,15 @@ and `Z != 0` selects Testing.
 
 ## Destination tuple
 
-Each tagged build writes its ordered destination tuple into the existing `pfb_build_record`
-inside the `.pkg` archive. The tuple is derived from the tag chronology and release-line
-ancestry on every run: Edge patch-zero prereleases route to `(edge,)`; later Testing
-prereleases route to `(testing,)` or `(testing, edge)`; final tags route to `(stable, testing)`
-or `(stable, testing, edge)`. The package publisher copies that same archive to each listed
-catalogue folder. No sidecar, follower state, rebuild, or second Release is created for fan-out.
+Each tagged release emits one native `.pkg` source asset per build-role matrix row, named with
+the package version, Variant, and pfSense version. The tuple is not stored in the package
+manifest, build record, or a separate metadata file. A reviewed publication callback derives
+the tuple from tag chronology and release-line ancestry on every run: Edge patch-zero
+prereleases route to `(edge,)`; later Testing prereleases route to `(testing,)` or
+`(testing, edge)`; final tags route to `(stable, testing)` or `(stable, testing, edge)`. The
+package publisher receives that tuple, strips the row suffix from the source asset name, and
+copies the same `.pkg` bytes to each listed catalogue folder. No follower state, rebuild, or
+second Release is created for fan-out.
 
 ## Nightly generation
 
@@ -85,9 +88,8 @@ Missing, malformed, conflicting, or changed observations fail closed before muta
 
 ## Maintained lines and fixes
 
-Stable and Testing may coexist for each maintained `release/X.Y`; exactly one explicitly
-configured line supplies Edge. Supporting simultaneous Edge lines requires an owner decision
-and separate/equal-priority catalogs; branch sorting is never a substitute. Nightly uses an
+Stable, Testing, and Edge destinations derive from each tagged package's grammar and exact
+callback inputs; no branch-bound follower line or stored Edge state selects a destination. Nightly uses an
 explicit pinned source SHA; no branch inference selects it.
 
 Fixes start on the oldest affected maintained line. Land that line through its own PR and

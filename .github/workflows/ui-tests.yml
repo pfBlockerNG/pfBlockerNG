@@ -102,7 +102,7 @@ on:
         type: string
         default: ""
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally (the build-pkg job runs as before)."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally (the build-pkg job runs as before)."
         required: false
         type: string
         default: ""
@@ -157,7 +157,7 @@ on:
         required: false
         default: ""
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally."
         required: false
         default: ""
       checkout_ref:
@@ -212,8 +212,8 @@ jobs:
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
       # Per-version artifact name so the CE + Plus builds in one run don't collide;
-      # the ui leg downloads pfBlockerNG-pkg-<its version>.
-      artifact_name: pfBlockerNG-pkg-${{ matrix.version }}
+      # the ui leg downloads the package matching its Variant + version.
+      artifact_name: pfBlockerNG-pkg-${{ matrix.variant }}-${{ matrix.version }}
       # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
       # carrying a new plist entry. Blank -> build-pkg-linux's own defaults, so a
       # normal run is byte-identical.
@@ -224,9 +224,8 @@ jobs:
       # pkg_artifact_prefix is empty, so no ternary needed here).
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
       # W1: this job matrixes over build_matrix (one row PER VERSION, never
-      # deduped by major) -- the plain per-major default name would collide if
-      # two same-major rows both carry extra_pkgs. Discriminate by image_name.
-      dep_artifact_name: pfBlockerNG-deppkgs-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
+      # deduped by major) -- row identity prevents same-major collisions.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ matrix.variant }}-${{ matrix.version }}
 
   # Compute the (tier × version) matrix and the nightly no-commit guard. Emits a
   # JSON `include` list so each leg is a distinct, independently-re-runnable job.
@@ -315,20 +314,20 @@ jobs:
           # Build matrix: ONE .pkg per distinct leg (version/ABI), independent of
           # the tier axis — the tiers for a version all install the SAME package.
           BUILD_INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
-            '[ .[] | {version: .pfsense_version, image_name, freebsd_major, php_version, py_flavor, extra_pkgs: (.extra_pkgs // [])} ]')"
+            '[ .[] | {version: .pfsense_version, variant, image_name, freebsd_major, php_version, py_flavor, extra_pkgs: (.extra_pkgs // [])} ]')"
           printf 'build_matrix={"include":%s}\n' "$BUILD_INCLUDE" >> "$GITHUB_OUTPUT"
 
           # Cross the tier set with the legs: one matrix item per (tier × leg),
-          # each carrying tier + version (= pfsense_version) + a lowercased `variant`
-          # (ce / plus, from image_name) for a variant-qualified artifact name +
+          # each carrying tier + version (= pfsense_version) + Variant for a
+          # row-qualified artifact name +
           # image_name + channel + freebsd_major (issue #1806: the download-name
           # discriminator when pkg_artifact_prefix is set -- release.yml builds one
-          # .pkg per freebsd_major, no `arch` field exists anywhere any more).
+          # .pkg per Variant/version row.
           INCLUDE="$(printf '%s\n' "$LEGS" | jq -c \
             --arg tiers "${TIERS}" \
             '($tiers | split(" ")) as $ts
              | [ $ts[] as $t | .[]
-                 | {tier: $t, version: .pfsense_version, variant: (.image_name | ltrimstr("pfsense-")),
+                 | {tier: $t, version: .pfsense_version, variant: (.variant // (.image_name | ltrimstr("pfsense-"))),
                     image_name: .image_name, channel: .channel, freebsd_major: .freebsd_major,
                     extra_pkgs: (.extra_pkgs // []),
                     release_blocking: (.release_blocking // "true")} ]')"
@@ -512,13 +511,11 @@ jobs:
         with:
           # pkg_artifact_prefix set: download the prebuilt artifact a caller
           # (e.g. release.yml) already published, named
-          # '<prefix>-fbsd<freebsd_major>' (e.g. myprefix-fbsd15) -- issue #1806:
-          # release.yml builds ONE .pkg per FreeBSD major, shared by every
-          # edition/version on it, so no variant/version/arch discriminator is
-          # needed here. Blank: the per-version artifact THIS run's build-pkg
+          # '<prefix>-<Variant>-<pfsense_version>' -- the exact release row.
+          # Blank: the per-version artifact THIS run's build-pkg
           # job just built (matrix is by version; this leg installs the
           # package matching its own pfSense base).
-          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-pkg-{0}', matrix.version) }}
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version) || format('pfBlockerNG-pkg-{0}-{1}', matrix.variant, matrix.version) }}
           path: pkg
 
       # issue #1806 D1/D2/B1: this leg's extra_pkgs (e.g. py311-charset-normalizer
@@ -541,15 +538,13 @@ jobs:
           fi
 
       # dep-pkg artifact name mirrors the branch pkg's OWN pkg_artifact_prefix
-      # ternary just above: prefix set -> '<prefix>-deppkgs-fbsd<major>'
-      # (release.yml's build-pkgs-portable is per-major-deduped, no image_name
-      # discriminator needed there); blank -> this run's own build-pkg job's
-      # dep_artifact_name (W1, discriminated by image_name).
+      # ternary just above: prefix set -> '<prefix>-deppkgs-<Variant>-<version>'
+      #; blank -> this run's own build-pkg job's dep_artifact_name.
       - name: Download dep packages
         if: steps.depmajor.outputs.needed == '1'
         uses: actions/download-artifact@v8
         with:
-          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-deppkgs-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name) }}
+          name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version) || format('pfBlockerNG-deppkgs-{0}-{1}', matrix.variant, matrix.version) }}
           path: deppkgs
 
       - name: Export SMOKE_DEP_PKGS

@@ -51,20 +51,12 @@ def _record(**overrides: object) -> dict:
         "freebsd_ports_sha": "b" * 64,
         "route": "stable/ce-2.8",
         "source_date_epoch": 0,
-        "destinations": ["stable"],
         "build_input_digest": "",
     }
     record.update(overrides)
     channel = str(record["channel"])
     if channel != "stable" and "route" not in overrides:
         record["route"] = f"{channel}/ce-2.8"
-    if "destinations" not in overrides:
-        record["destinations"] = {
-            "stable": ["stable", "testing"],
-            "testing": ["testing"],
-            "edge": ["edge"],
-            "nightly": ["nightly"],
-        }[channel]
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
     return record
 

@@ -29,6 +29,12 @@ inputs:
     default: ""
 
 outputs:
+  release_matrix:
+    description: >
+      JSON array of every build-role row, one row per pfSense version/variant.
+      Unlike build_matrix this output is not deduped by FreeBSD major; release
+      jobs use it to emit one artifact for each release/version row.
+    value: ${{ steps.read.outputs.release_matrix }}
   build_matrix:
     description: >
       JSON array of build-role entries, ALREADY DEDUPED to one row per

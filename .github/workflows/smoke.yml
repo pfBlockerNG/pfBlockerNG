@@ -97,7 +97,7 @@ on:
         required: false
         default: "3"
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally (the build-pkg job runs as before)."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally (the build-pkg job runs as before)."
         required: false
         default: ""
       checkout_ref:
@@ -141,7 +141,7 @@ on:
         type: string
         default: "3"
       pkg_artifact_prefix:
-        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-fbsd<freebsd_major>' (one .pkg per FreeBSD major, shared across editions/versions). Empty = build internally."
+        description: "Name prefix of prebuilt package artifacts (e.g. from release.yml); each leg downloads '<prefix>-<Variant>-<pfsense_version>'. Empty = build internally."
         required: false
         type: string
         default: ""
@@ -281,24 +281,18 @@ jobs:
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
       php_version: ${{ matrix.php_version }}
       py_flavor: ${{ matrix.py_flavor }}
-      # fbsd<major>-<image_name> (issue #1806 naming convention; image_name keeps
-      # this leg's artifact distinct from a same-major sibling leg in the SAME
-      # run — this job matrixes over leg_matrix, one row per VERSION, never
-      # deduped by major) — unique per version leg, stable across its shards,
-      # so the smoke job below passes the SAME name as pkg_artifact and every
-      # shard of this leg downloads this one build.
-      artifact_name: pfBlockerNG-pkg-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
+      # Variant/version row identity keeps same-major sibling legs distinct;
+      # every shard of this leg downloads this one build.
+      artifact_name: pfBlockerNG-pkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}
       ports_repo: pfBlockerNG/FreeBSD-ports
       ports_ref: pfblockerng/use-github
       # issue #1806 D1: this leg's dep .pkgs (e.g. textproc/py-charset-normalizer
       # for CE), uploaded separately when non-empty — smoke-single.yml downloads
       # + installs them (D2/D3).
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
-      # W1: this job matrixes over leg_matrix (one row PER VERSION, never
-      # deduped by major) -- the plain per-major default name would collide if
-      # two same-major rows both carry extra_pkgs. Discriminate by image_name,
-      # matching the branch artifact's own discriminator (artifact_name above).
-      dep_artifact_name: pfBlockerNG-deppkgs-fbsd${{ matrix.freebsd_major }}-${{ matrix.image_name }}
+      # W1: this job matrixes over leg_matrix (one row per version); the row
+      # identity prevents same-major collisions.
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ matrix.variant }}-${{ matrix.pfsense_version }}
 
   # ── 3. Per-leg smoke run (parallel, fail-fast: false) ────────────────────────
   #
@@ -360,19 +354,15 @@ jobs:
       # real deppkgs artifact to download -- it no longer needs forcing to '[]'.
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
       # dep_artifact composes the SAME way pkg_artifact does just below:
-      # pkg_artifact_prefix set -> '<prefix>-deppkgs-fbsd<major>' (release.yml's
-      # build-pkgs-portable is per-major-deduped, no image_name discriminator
-      # needed there); blank -> this job's own per-row dep_artifact_name above.
-      dep_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-deppkgs-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name) }}
-      # pkg_artifact_prefix set: the prebuilt artifact a caller (e.g. release.yml)
-      # already published, named '<prefix>-fbsd<freebsd_major>' (issue #1806 --
-      # release.yml builds ONE .pkg per major, shared by every variant/version on
-      # it) -- the SAME template ui-tests.yml's ui job downloads (both fan-outs
-      # consume one shared release build).
+      # pkg_artifact_prefix set -> '<prefix>-deppkgs-<Variant>-<version>';
+      # blank -> this job's own per-row dep_artifact_name above.
+      dep_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.pfsense_version) || format('pfBlockerNG-deppkgs-{0}-{1}', matrix.variant, matrix.pfsense_version) }}
+      # pkg_artifact_prefix set: the prebuilt row artifact a caller (e.g.
+      # release.yml) already published. Blank: this run's per-version build.
       # Blank: the .pkg build-pkg already produced for this version leg (issue
       # #857) -- identical to that job's artifact_name, so every shard of this
       # leg finds the SAME shared artifact and downloads it instead of rebuilding.
-      pkg_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-fbsd{1}', inputs.pkg_artifact_prefix, matrix.freebsd_major) || format('pfBlockerNG-pkg-fbsd{0}-{1}', matrix.freebsd_major, matrix.image_name) }}
+      pkg_artifact: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.pfsense_version) || format('pfBlockerNG-pkg-{0}-{1}', matrix.variant, matrix.pfsense_version) }}
       # Resolved by the prepare step: the marker, and the effective -k (an explicit
       # input, else the impacted auto-derivation, else blank = whole marker).
       pytest_marker: ${{ needs.prepare.outputs.pytest_marker || 'smoke' }}
