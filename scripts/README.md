@@ -166,12 +166,12 @@ pfBlockerNG is a `NO_BUILD` port (nothing compiles) and `pkg add` checks a depen
 
 ### Where `.pkg` artifacts land
 
-A Stable, Testing, or Edge release dispatch triggers `release.yml`, which reads `build_matrix` — already
-deduplicated by `read-version-matrix.sh` to one row per distinct FreeBSD major (issue #1806) —
-and builds one `.pkg` per row against its `(freebsd_version, php_version)` pair. Artifacts
-are attached to the **GitHub Release** named `pfBlockerNG-relpkg-fbsd<major>`; one `.pkg`
-per distinct major covers every pfSense edition/version on it. A build failure surfaces in CI
-but must **not** block the `ports-pr` step (the ports PR is the real distribution path).
+A Stable, Testing, or Edge release dispatch triggers `release.yml`, which reads `release_matrix` —
+one row per build-role Variant/pfSense version — and builds one `.pkg` per row against its
+`(freebsd_version, php_version)` pair. Row-qualified artifacts are attached to the **GitHub
+Release** as `pfSense-pkg-pfBlockerNG-<version>-<Variant>-<pfsense_version>.pkg`; each archive's
+bytes and native manifest stay unchanged. A build failure surfaces in CI but must **not** block
+the `ports-pr` step (the ports PR is the real distribution path).
 
 The `sync-ports-fork` job in `release.yml` also updates `PORTREVISION` on the ports fork using
 `scripts/portrevision-rebuild.sh`: when the release tag carries the same PORTVERSION already

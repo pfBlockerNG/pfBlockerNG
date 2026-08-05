@@ -1051,12 +1051,11 @@ Full design: ADR-39.
   `release`/`sync-ports-fork`/`attach-pkgs`. The FreeBSD `pkg repo` fidelity path
   (`scripts/build-repo.sh`) is retained as a script only. **extra_pkgs dep .pkgs (issue #1806,
   e.g. CE's `textproc/py-charset-normalizer`) ARE deliberate release assets** —
-  `release.yml`'s `build-pkgs-portable` job builds + uploads each major's dep .pkg as its own
-  `pfBlockerNG-relpkg-deppkgs-fbsd<major>` artifact; `attach-pkgs`'s existing
+  `release.yml`'s `build-pkgs-portable` job builds + uploads each release row's dep .pkg as its own
+  `pfBlockerNG-relpkg-deppkgs-<Variant>-<pfsense_version>` artifact; `attach-pkgs`'s existing
   `pfBlockerNG-relpkg-*` sweep picks it up and attaches it to the GitHub Release alongside the
-  branch `.pkg`s (frozen together — the EOL/route-only story wants this); `publish-release`'s
-  healthcheck counts them explicitly (`EXPECTED_PKGS` = distinct-major count + the total
-  extra_pkgs entries across the build matrix). The remaining follow-up is narrower: the
+  branch `.pkg`s (frozen together — the EOL/route-only story wants this); the draft healthcheck
+  counts one main asset per release row plus the total `extra_pkgs` entries. The remaining follow-up is narrower: the
   separate `pfBlockerNG/pkg` repo's `publish.yml` folding the attached dep `.pkg` into the live
   served catalog (via `build-repo-portable.py --dep-pkgs`, already built for this) is not yet
   wired there.
