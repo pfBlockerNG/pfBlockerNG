@@ -99,3 +99,21 @@ def test_classifier_rejects_a_lightweight_current_tag(tmp_path: Path) -> None:
     _git(repo, "tag", "v4.0.0.a1", current)
     with pytest.raises(ValueError, match="must be an annotated tag"):
         derive_destinations_from_git("v4.0.0.a1", "release/4.0", repo, current_commit=current)
+
+
+def _blob_tag_repo(tmp_path: Path, trailer: str) -> tuple[Path, str]:
+    """Annotate the current tag onto a blob, so `refs/tags/<tag>^{commit}` cannot peel."""
+    repo, _anchor, current = _repo_with_release_line(tmp_path)
+    blob = _git(repo, "hash-object", "-w", "marker")
+    _git(repo, "tag", "-a", "-m", trailer, "v4.0.0.a1", blob)
+    return repo, current
+
+
+@pytest.mark.parametrize(
+    "trailer",
+    ["plain annotation", "pfBlockerNG-Release-Channel: testing", "pfBlockerNG-Release-Channel: edge"],
+)
+def test_classifier_rejects_a_current_tag_that_does_not_point_at_a_commit(tmp_path: Path, trailer: str) -> None:
+    repo, current = _blob_tag_repo(tmp_path, trailer)
+    with pytest.raises(ValueError, match="does not point at a commit"):
+        derive_destinations_from_git("v4.0.0.a1", "release/4.0", repo, current_commit=current)
