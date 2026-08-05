@@ -1,0 +1,218 @@
+#shellcheck shell=sh
+# publish_pkg_repo_spec.sh — scripts/publish-pkg-repo.sh (issue #2146 R2).
+#
+# publish_release.py and gen_landing.py are stubbed (a fake PFB_SRC checkout, see
+# setup()): git mutation is the ONLY thing this script owns, and it is exactly what
+# this spec exercises — network/engine verification is publish_release.py's own,
+# already-covered PFB_SRC=... python3 -m unittest suite (pkg repo). Fixture: a bare
+# "remote" origin plus a working PKG_REPO clone already carrying one committed
+# catalogue directory (docs/edge/ce-2.8), mirroring what the release job's checkout
+# looks like before this script runs.
+#
+# CONTAINMENT (gate finding A2): the fault-injection case is the load-bearing one —
+# the stub simulates catalogue_assembly.py's own documented failure mode (a
+# mid-regeneration write-back fault: wipe the catalog descriptor files, leave an
+# orphaned .pkg, THEN exit non-zero) and this spec asserts the damaged working tree
+# never reaches a commit, and the bare origin never moves.
+
+Describe 'publish-pkg-repo.sh (issue #2146 R2)'
+  script="${PFB_ROOT}/scripts/publish-pkg-repo.sh"
+
+  setup() {
+    scrub_git_env
+    base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pubpkgrepo.XXXXXX")"
+
+    # --- bare origin + a working PKG_REPO clone with one committed catalogue ---
+    git_fixture init -q --bare "${base}/remote.git"
+    git_fixture clone -q "${base}/remote.git" "${base}/pkg-repo" 2>/dev/null
+    git_fixture -C "${base}/pkg-repo" config user.email pub@example.com
+    git_fixture -C "${base}/pkg-repo" config user.name pub
+    git_fixture -C "${base}/pkg-repo" config commit.gpgsign false
+    mkdir -p "${base}/pkg-repo/docs/edge/ce-2.8"
+    echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf"
+    echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg"
+    echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg"
+    ( cd "${base}/pkg-repo" && git_fixture checkout -q -b main \
+        && git_fixture add docs && git_fixture commit -q -m seed \
+        && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+
+    # --- fake PFB_SRC: stub publish_release.py + gen_landing.py -------------
+    # Real network/engine verification is publish_release.py's own unit suite
+    # (pkg repo); this script's OWN job is the git mutation around it, so the
+    # python calls are doubled here rather than re-verified.
+    mkdir -p "${base}/fake-src/scripts"
+    cat >"${base}/fake-src/scripts/publish_release.py" <<'PY'
+import os
+import sys
+
+
+def _arg(name, argv):
+    return argv[argv.index(name) + 1]
+
+
+def main():
+    argv = sys.argv[1:]
+    pkg_repo = _arg("--pkg-repo", argv)
+    mode = os.environ.get("FAKE_MODE", "success")
+
+    if mode == "fail":
+        # Mirrors catalogue_assembly.py's own documented third outcome (a
+        # write-back fault after the wipe): wipe the catalog descriptors and
+        # leave an orphaned .pkg, THEN report failure. The wrapper script must
+        # never stage or commit this damage.
+        damaged = os.path.join(pkg_repo, "docs", "edge", "ce-2.8")
+        os.makedirs(damaged, exist_ok=True)
+        for name in ("meta.conf", "data.pkg", "packagesite.pkg"):
+            path = os.path.join(damaged, name)
+            if os.path.exists(path):
+                os.remove(path)
+        with open(os.path.join(damaged, "orphan.pkg"), "w") as fh:
+            fh.write("damaged")
+        print("::error::simulated mid-regeneration fault", file=sys.stderr)
+        return 1
+
+    if mode == "noop":
+        print("NOOP: every destination already matches this run's verified assets")
+        return 0
+
+    for target in os.environ.get("FAKE_TOUCHED", "").split(","):
+        target = target.strip()
+        if not target:
+            continue
+        target_dir = os.path.join(pkg_repo, "docs", target)
+        os.makedirs(target_dir, exist_ok=True)
+        with open(os.path.join(target_dir, "marker.pkg"), "w") as fh:
+            fh.write(target)
+        print(f"updated {target}")
+    return 0
+
+
+sys.exit(main())
+PY
+    cat >"${base}/fake-src/scripts/gen_landing.py" <<'PY'
+import os
+import sys
+
+site = sys.argv[1]
+with open(os.path.join(site, "index.html"), "w") as fh:
+    fh.write("landing stub\n")
+print("landing stub written")
+PY
+    echo '#!/bin/sh' > "${base}/fake-src/scripts/add-repo.sh"
+
+    common_env() {
+        PFB_SRC="${base}/fake-src"
+        PKG_REPO="${base}/pkg-repo"
+        SOURCE_REPOSITORY=pfBlockerNG/pfBlockerNG
+        RELEASE_ID=1
+        RELEASE_TAG=v4.0.0.b1
+        DESTINATIONS='["edge"]'
+        SOURCE_RUN_ID=10:1
+        ASSETS_DIR="${base}/assets"
+        ROUTE_MATRIX='[{"freebsd_major":"15","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]'
+        BASE_URL=https://pfblockerng.github.io/pkg
+        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS SOURCE_RUN_ID ASSETS_DIR ROUTE_MATRIX BASE_URL
+    }
+    common_env
+    mkdir -p "${base}/assets"
+  }
+
+  cleanup() {
+    rm -rf "$base"
+  }
+
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  remote_head_now() {
+    git_fixture -C "${base}/remote.git" rev-parse refs/heads/main
+  }
+  local_head_now() {
+    git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "$original_head"
+  }
+
+  # --- landing_matrix ABI expression pins (issue #2146 R1's retired
+  # test_landing_matrix_abi.sh, re-covered here now that the transform lives
+  # in this script rather than pkg/.github/workflows/publish.yml) ------------
+
+  It 'never interpolates the retired arch matrix field'
+    When run sh -c "! grep -Fq '\\(.arch)' '${script}'"
+    The status should equal 0
+  End
+
+  It 'contains exactly one abi FreeBSD wildcard expression'
+    When run sh -c "grep -o 'abi: \"FreeBSD:[^\"]*\"' '${script}' | wc -l | tr -d ' '"
+    The output should equal 1
+  End
+
+  It 'the abi expression as written emits the NO_ARCH wildcard for freebsd_major'
+    abi_expr="$(grep -o 'abi: "FreeBSD:[^"]*"' "$script" | head -1)"
+    When run sh -c "printf '%s' '{\"freebsd_major\":\"15\"}' | jq -c '{ ${abi_expr} }'"
+    The output should equal '{"abi":"FreeBSD:15:*"}'
+  End
+
+  # --- success path ----------------------------------------------------------
+
+  It 'commits and pushes exactly the touched directory plus the landing page'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The result of function local_head_now should not equal "$original_head"
+    The result of function remote_head_now should not equal "$original_remote_head"
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should be exist
+    The path "${base}/pkg-repo/docs/index.html" should be exist
+  End
+
+  It 'stages nothing outside the touched target and the landing page'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
+    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
+    The variable committed should include 'docs/index.html'
+    The variable committed should include 'docs/.nojekyll'
+  End
+
+  It 'the commit message carries the release tag and source_run_id as trailers'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+  End
+
+  # --- no-op path --------------------------------------------------------
+
+  It 'commits nothing on a no-op run'
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  # --- A2: a damaged working tree must never reach a commit ----------------
+
+  It 'never commits or pushes a mid-regeneration fault, even though the working tree is left damaged'
+    export FAKE_MODE=fail
+    When run script "$script"
+    The status should equal 1
+    The stderr should include 'simulated mid-regeneration fault'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/orphan.pkg" should be exist
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf" should not be exist
+  End
+End
