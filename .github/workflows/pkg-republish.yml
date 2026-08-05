@@ -10,6 +10,15 @@ name: Trigger pkg repository republish
 
 on:
   workflow_dispatch:
+    inputs:
+      release_id:
+        description: Immutable source Release id
+        required: true
+        type: string
+      release_tag:
+        description: Immutable source Release tag
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -19,6 +28,14 @@ jobs:
     name: Dispatch pfBlockerNG/pkg publish.yml
     runs-on: ubuntu-latest
     steps:
+      - name: Validate immutable source Release identity
+        env:
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          [ -n "$RELEASE_ID" ] || { echo "::error::release_id is required"; exit 1; }
+          [ -n "$RELEASE_TAG" ] || { echo "::error::release_tag is required"; exit 1; }
       - name: Generate GitHub App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -32,4 +49,13 @@ jobs:
       - name: Trigger publish.yml via GitHub App token
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: gh workflow run publish.yml -R pfBlockerNG/pkg
+          SOURCE_REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+        run: |
+          gh workflow run publish.yml -R pfBlockerNG/pkg \
+            -f source_repository="$SOURCE_REPOSITORY" \
+            -f release_id="$RELEASE_ID" \
+            -f release_tag="$RELEASE_TAG" \
+            -f source_run_id="$SOURCE_RUN_ID"

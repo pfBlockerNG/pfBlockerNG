@@ -139,8 +139,10 @@ jobs:
           SOURCE_REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
           RELEASE_ID:         ${{ needs.resolve.outputs.release_id }}
           RELEASE_TAG:        ${{ needs.resolve.outputs.release_tag }}
+          SOURCE_RUN_ID:      ${{ github.run_id }}:${{ github.run_attempt }}
         run: |
           gh workflow run publish.yml -R pfBlockerNG/pkg \
             -f source_repository="$SOURCE_REPOSITORY" \
             -f release_id="$RELEASE_ID" \
-            -f release_tag="$RELEASE_TAG"
+            -f release_tag="$RELEASE_TAG" \
+            -f source_run_id="$SOURCE_RUN_ID"
