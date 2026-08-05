@@ -34,6 +34,10 @@ def test_nightly_workflow_exists_and_is_branch_independent() -> None:
     assert "--allocation plan/allocation.json" in text
     assert "--expected-input-digest" in text
     assert "PORTS_REF_COUNT" in text
+    assert "PORTS_HEAD_SHA" in text
+    assert "PORTS_TAG_SHA" in text
+    assert "refs/tags/${PORTS_REF}^{}" in text
+    assert "LC_ALL=C sort -u" in text
     assert "^[0-9a-f]{40}$" in text
     assert ".encoding" in text
     assert "(HTTP 404)" in text

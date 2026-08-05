@@ -85,14 +85,23 @@ jobs:
             *) PORTS_URL="https://github.com/${PORTS_REPO}.git" ;;
           esac
           PORTS_REFS="$(git ls-remote "$PORTS_URL" \
-            "refs/heads/${PORTS_REF}" "refs/tags/${PORTS_REF}" \
-            | awk '{ print $1 }' | sort -u)"
-          PORTS_REF_COUNT="$(printf '%s\n' "$PORTS_REFS" | grep -c . || true)"
+            "refs/heads/${PORTS_REF}" "refs/tags/${PORTS_REF}" "refs/tags/${PORTS_REF}^{}" \
+            | LC_ALL=C sort -u)"
+          PORTS_HEAD_SHA="$(printf '%s\n' "$PORTS_REFS" \
+            | awk -v ref="refs/heads/${PORTS_REF}" '$2 == ref { print $1 }')"
+          PORTS_TAG_OBJECT_SHA="$(printf '%s\n' "$PORTS_REFS" \
+            | awk -v ref="refs/tags/${PORTS_REF}" '$2 == ref { print $1 }')"
+          PORTS_TAG_SHA="$(printf '%s\n' "$PORTS_REFS" \
+            | awk -v ref="refs/tags/${PORTS_REF}^{}" '$2 == ref { print $1 }')"
+          [ -n "$PORTS_TAG_SHA" ] || PORTS_TAG_SHA="$PORTS_TAG_OBJECT_SHA"
+          PORTS_REF_COUNT=0
+          [ -n "$PORTS_HEAD_SHA" ] && PORTS_REF_COUNT=$((PORTS_REF_COUNT + 1))
+          [ -n "$PORTS_TAG_SHA" ] && PORTS_REF_COUNT=$((PORTS_REF_COUNT + 1))
           if [ "$PORTS_REF_COUNT" -ne 1 ]; then
             echo "::error::FreeBSD-ports ref is missing or ambiguous: ${PORTS_REF}"
             exit 1
           fi
-          PORTS_SHA="$PORTS_REFS"
+          PORTS_SHA="${PORTS_HEAD_SHA:-$PORTS_TAG_SHA}"
           if ! printf '%s\n' "$PORTS_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
             echo "::error::FreeBSD-ports ref did not resolve to a full SHA: ${PORTS_REF}"
             exit 1
