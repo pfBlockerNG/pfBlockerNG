@@ -13646,12 +13646,29 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				// ADR-46: stdout extraction (-xOf) -- member names never reach the
 				// filesystem, so no member-name guard is needed on this path.
 				$retval = pfb_download_initial_retval();
+				$reject_detail = array();
+				$inner_rejected = FALSE;
 				if (!pfb_stage_publish($orig_download,
-				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+				    static function (string $staged) use ($file_dwn_esc, $list_download,
+				        &$output, &$retval, &$reject_detail, &$inner_rejected): int {
 					exec("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged), $output, $retval);
+					if ($retval !== 0) {
+						return $retval;
+					}
+					// issue #2169: the inner-content gate unlinks whatever it probes, so
+					// probe the staged copy -- a rejection must not reach the publication.
+					if (!pfb_filter(array(escapeshellarg($staged), $staged, $list_download),
+					    PFB_FILTER_FILE_MIME, 'pfb_download', '', FALSE, $reject_detail)) {
+						$inner_rejected = TRUE;
+						return pfb_download_initial_retval();
+					}
 					return $retval;
 				})) {
-					pfb_logger("\n[pfb_download] zip extraction failed (tar exit {$retval})", 2);
+					if ($inner_rejected) {
+						pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
+					} else {
+						pfb_logger("\n[pfb_download] zip publish failed (tar exit {$retval})", 2);
+					}
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
