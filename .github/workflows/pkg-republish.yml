@@ -1,12 +1,13 @@
 name: Trigger pkg repository republish
 
-# Manual dispatch that fires pfBlockerNG/pkg's publish.yml via a GitHub App token.
-# The SAME cross-repo dispatch release.yml's repo-publish job runs on a release.
-# Two uses: republish the self-hosted pkg catalog on demand (the pkg repo also runs
-# daily on its own schedule), and verify the GitHub App credentials work — a FAILED
-# run means the App ID / private key is missing, misconfigured, or lacks
-# Actions:write on pfBlockerNG/pkg. Least-privilege: the generated token starts a
-# workflow in the other repo; nothing from this repo's contents is needed.
+# Manual dispatch that re-runs the SAME publish-pkg-repo.sh flow
+# release-published.yml's publish-pkg-repo job runs on a release, for a Release
+# already published. Two uses: republish the self-hosted pkg catalog on demand
+# (e.g. after a catalogue-side fix), and verify the GitHub App credentials work — a
+# FAILED run means the App ID / private key is missing, misconfigured, or lacks
+# Contents:write on pfBlockerNG/pkg. issue #2146: there is no workflow in
+# pfBlockerNG/pkg any more — this run does the verify + assemble + commit + push
+# itself, exactly like release-published.yml's job.
 
 on:
   workflow_dispatch:
@@ -24,8 +25,8 @@ permissions:
   contents: read
 
 jobs:
-  dispatch:
-    name: Dispatch pfBlockerNG/pkg publish.yml
+  publish:
+    name: Publish the pkg catalogue
     runs-on: ubuntu-latest
     steps:
       - name: Validate immutable source Release identity
@@ -94,28 +95,76 @@ jobs:
           PY
           )
           echo "destinations=${DESTINATIONS}" >> "$GITHUB_OUTPUT"
-      - name: Generate GitHub App token
+      - name: Generate GitHub App token (pkg)
         id: app-token
+        # Mint a short-lived installation token from the PKG GitHub App, scoped to
+        # pfBlockerNG/pkg with Contents:write — create-github-app-token NARROWS the
+        # token to only the permission(s) listed, so contents:write here (not
+        # actions:write) is the whole reason the token can push code.
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
-          permission-actions: write
+          permission-contents: write
 
-      - name: Trigger publish.yml via GitHub App token
+      - name: Checkout pfBlockerNG/pkg
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/pkg
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true # publish-pkg-repo.sh pushes via this token
+          path: pkg-repo
+          fetch-depth: 1
+
+      - name: Download release .pkg assets + build the digest sidecar
+        # ASSUMED: the GitHub Releases API asset object carries a `digest` field
+        # (`sha256:<hex>`) — an INDEPENDENT checksum from the CDN download itself,
+        # never recomputed from the same bytes it is meant to check. CI must confirm
+        # the live API response actually includes it; a missing digest fails this
+        # run closed. publish_release.py reads this sidecar as
+        # <assets-dir>/digests.json.
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -eu
+          mkdir -p "${RUNNER_TEMP}/assets"
+          META=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
+          PKG_ASSETS=$(printf '%s' "$META" | jq -c '[.assets[] | select(.name | endswith(".pkg"))]')
+          [ "$(printf '%s' "$PKG_ASSETS" | jq 'length')" -gt 0 ] || {
+            echo "::error::release ${RELEASE_TAG} carries no .pkg assets"; exit 1; }
+          BAD=$(printf '%s' "$PKG_ASSETS" | jq '[.[] | select((.digest // "") | startswith("sha256:") | not)] | length')
+          [ "$BAD" -eq 0 ] || {
+            echo "::error::one or more .pkg release assets have no sha256 digest from the GitHub API"; exit 1; }
+          printf '%s' "$PKG_ASSETS" \
+            | jq 'map({(.name): (.digest | ltrimstr("sha256:"))}) | add' \
+            > "${RUNNER_TEMP}/assets/digests.json"
+          gh release download "$RELEASE_TAG" -R "$REPOSITORY" --pattern '*.pkg' --dir "${RUNNER_TEMP}/assets"
+
+      - name: Read the pinned ROUTE matrix
+        id: route
+        run: |
+          set -eu
+          git fetch --no-tags --depth 1 origin \
+            "+refs/heads/ci-metadata:refs/remotes/origin/ci-metadata"
+          ROUTE_MATRIX=$(sh scripts/read-version-matrix.sh --print-route | jq -c .)
+          echo "route_matrix=${ROUTE_MATRIX}" >> "$GITHUB_OUTPUT"
+
+      - name: Publish the pkg catalogue
+        env:
+          PFB_SRC: ${{ github.workspace }}
+          PKG_REPO: ${{ github.workspace }}/pkg-repo
           SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           DESTINATIONS: ${{ steps.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
-        run: |
-          gh workflow run publish.yml -R pfBlockerNG/pkg \
-            -f source_repository="$SOURCE_REPOSITORY" \
-            -f release_id="$RELEASE_ID" \
-            -f release_tag="$RELEASE_TAG" \
-            -f destinations="$DESTINATIONS" \
-            -f source_run_id="$SOURCE_RUN_ID"
+          ASSETS_DIR: ${{ runner.temp }}/assets
+          ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
+          BASE_URL: https://pfblockerng.github.io/pkg
+        run: sh scripts/publish-pkg-repo.sh
