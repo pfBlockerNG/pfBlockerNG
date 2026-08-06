@@ -336,6 +336,9 @@ class TestRegexReduction:
             (r"^(.+\.)?AdServer\.Example$", (True, "adserver.example")),
             (r"(^|\.)Tracker\.NET$", (True, "tracker.net")),
             (r"^(www\.)?Simple\.Example\.com$", (False, "simple.example.com")),
+            # #2199: the www-opt PREFIX TOKEN ITSELF is mixed-case, not just the
+            # domain label after it -- must still fold (runtime is IGNORECASE).
+            (r"^(WWW\.)?Example\.com$", (False, "example.com")),
         )
         for inner, expected in cases:
             prod = P._dnsbl_reduce_regex(inner)
