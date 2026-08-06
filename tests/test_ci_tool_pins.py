@@ -143,9 +143,16 @@ def test_kcov_ci_build_is_pinned_to_a_commit_not_a_moving_tag() -> None:
     assert not re.search(r"--branch\s+v43\b", build_step), (
         f"kcov must not be built from the moving v43 tag; step was:\n{build_step}"
     )
-    assert re.search(rf"\b{KCOV_COMMIT_PIN}\b", build_step), (
-        f"the kcov build must check out the pinned commit {KCOV_COMMIT_PIN}; step was:\n{build_step}"
+    # Not just "the pin appears somewhere" -- the env var must feed the actual
+    # fetch+checkout, or a later edit could build a default branch while leaving
+    # the pin text dangling elsewhere in the step (unfailable regression).
+    assert f"KCOV_COMMIT: {KCOV_COMMIT_PIN}" in build_step, (
+        f"the pinned commit must be wired through KCOV_COMMIT; step was:\n{build_step}"
     )
+    assert re.search(
+        r'git -C kcov fetch --depth 1 origin "\$KCOV_COMMIT"\s+git -C kcov checkout -q FETCH_HEAD\b',
+        build_step,
+    ), f"the kcov build must fetch and check out $KCOV_COMMIT; step was:\n{build_step}"
 
     cache_steps = [
         step
@@ -153,4 +160,7 @@ def test_kcov_ci_build_is_pinned_to_a_commit_not_a_moving_tag() -> None:
         for step in [shell_tests_job.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]]
     ]
     for step in cache_steps:
-        assert KCOV_COMMIT_PIN in step, f"the kcov cache key must fold in the pinned commit; step was:\n{step}"
+        key_line = re.search(r"(?m)^\s+key:\s*(.+)$", step)
+        assert key_line and KCOV_COMMIT_PIN in key_line.group(1), (
+            f"the kcov cache key must fold in the pinned commit; step was:\n{step}"
+        )
