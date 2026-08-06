@@ -91,8 +91,40 @@ final class DownloadStagePublishTest extends TestCase
 			return 0;
 		});
 
-		$this->assertSame($this->dir, dirname($seen));
+		// realpath() on both sides -- macOS resolves sys_get_temp_dir() through a
+		// /var -> /private/var symlink and tempnam() hands back the resolved path,
+		// so the raw strings differ on the prefix while naming the same directory
+		// (issue #2192).
+		$this->assertSame(realpath($this->dir), realpath(dirname($seen)));
 		$this->assertNotSame($target, $seen);
+	}
+
+	/**
+	 * The same-filesystem invariant is about the directory, never about how the
+	 * caller spelled it. Reaching the target through a symlink makes the resolved
+	 * and unresolved forms differ on EVERY platform, so this pins the comparison
+	 * that macOS was the only platform to fail (issue #2192).
+	 */
+	public function testStagedPathSitsBesideATargetReachedThroughASymlink(): void
+	{
+		$link = "{$this->dir}/via-symlink";
+		$this->assertTrue(symlink($this->dir, $link));
+
+		$target = "{$link}/feed.orig";
+		$seen   = '';
+		$this->assertTrue(pfb_stage_publish($target, static function (string $staged) use (&$seen): int {
+			$seen = $staged;
+			file_put_contents($staged, "x\n");
+			return 0;
+		}));
+
+		// The vacuity guard: without it the assertion below could pass on a fixture
+		// whose two spellings were already identical, pinning nothing. Compared
+		// against $link, never $this->dir -- $this->dir is already canonical on a
+		// Linux runner, which would let an unresolved comparison pass there.
+		$this->assertNotSame($link, dirname($seen),
+			'setup: the symlinked target must spell its directory differently from the staged path');
+		$this->assertSame(realpath($link), realpath(dirname($seen)));
 	}
 
 	/** A staged file published at tempnam's 0600 would hide the feed from its readers. */
