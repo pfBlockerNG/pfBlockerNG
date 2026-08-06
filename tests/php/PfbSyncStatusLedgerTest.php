@@ -469,9 +469,10 @@ final class PfbSyncStatusLedgerTest extends TestCase
 				}
 				fwrite($eventChild, "CONTENDED\n");
 				// Signal delivery cuts usleep() short, so hold the window against a
-				// deadline -- the opener stays runnable and answers every probe.
-				$startAt = microtime(TRUE) + ($openerStartDelayUs / 1000000);
-				while (microtime(TRUE) < $startAt) {
+				// monotonic deadline -- the opener stays runnable and answers every probe,
+				// and a wall-clock step cannot shorten or extend the window.
+				$startAt = hrtime(TRUE) + ($openerStartDelayUs * 1000);
+				while (hrtime(TRUE) < $startAt) {
 					usleep(1000);
 				}
 				pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
@@ -487,10 +488,10 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			// The wait ends on the observed BLOCKED state. A budget counted in signal
 			// round trips is not a wait: an opener that is merely slow to reach the lock
 			// answers NOT_BLOCKED as fast as the CPU allows and exhausts it in milliseconds
-			// (#2183). The cap below is wall-clock and generous -- its only job is reaping
+			// (#2183). The cap below is monotonic and generous -- its only job is reaping
 			// a stuck run, and the pause between probes leaves the opener CPU to advance.
-			$salvageDeadline = microtime(TRUE) + 30.0;
-			while (microtime(TRUE) < $salvageDeadline) {
+			$salvageDeadline = hrtime(TRUE) + (30 * 1000000000);
+			while (hrtime(TRUE) < $salvageDeadline) {
 				if (!@posix_kill($openerPid, SIGUSR1)) {
 					$this->fail('salvage cap expired / stuck or environment: awaiting BLOCKED signal before release; opener exited');
 				}
