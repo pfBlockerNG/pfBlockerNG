@@ -1,6 +1,6 @@
 """Four-channel staged publisher — intake parsing + per-asset/run verification core.
 
-Scope (issue #2146 step S1): parse the five `publish.yml` workflow_dispatch inputs into
+Scope (issue #2146 step S1): parse the five raw release-workflow intake fields into
 a validated Intake, verify one downloaded .pkg asset against its provenance annotation
 (pulled via the pfBlockerNG source repo's own engine — never re-derived here), and run
 the whole-run cross-asset checks the design calls "Verification axes" 1-13. Tree
@@ -44,7 +44,7 @@ class EngineError(PublishError):
 
 
 class IntakeError(PublishError):
-    """One or more raw `publish.yml` dispatch inputs are invalid."""
+    """One or more raw release-workflow intake fields are invalid."""
 
 
 class AssetVerificationError(PublishError):
@@ -85,6 +85,12 @@ _REQUIRED_BUILD_REPO_PORTABLE_ATTRS = (
     "catalog_name_from_version",
     "_validate_catalog_name",
     "_pkg_matches_abi",
+    # Dereferenced by this module's _verify_dependency_asset (_PKG_SEGMENT_RE) and by
+    # catalogue_assembly.py (_CATALOG_PKG_FILES, build_repo) — same allowlist covers
+    # every caller that receives its build_repo_portable module from load_engine().
+    "_PKG_SEGMENT_RE",
+    "_CATALOG_PKG_FILES",
+    "build_repo",
 )
 
 
@@ -123,6 +129,15 @@ def load_engine(src_root: str | Path | None = None) -> Engine:
     path_added = scripts_str not in sys.path
     if path_added:
         sys.path.insert(0, scripts_str)
+
+    # Both engine modules are cached by a FIXED name (sys.modules["pfb_pkg"] /
+    # sys.modules[_ENGINE_MODULE_NAME]), so a second load_engine() call naming a
+    # different src_root would otherwise silently hand back the FIRST root's
+    # modules while this call's returned Engine.src_root claims the second root —
+    # a real but latent split (today's callers each use one root per process).
+    # Caught here, by comparing the already-cached module's own file against what
+    # THIS call would load, before either cache is trusted.
+    _require_same_origin(sys.modules.get("pfb_pkg"), pfb_pkg_path, label="pfb_pkg")
     try:
         pfb_pkg_mod = importlib.import_module("pfb_pkg")
     except ImportError as exc:
@@ -130,6 +145,7 @@ def load_engine(src_root: str | Path | None = None) -> Engine:
     _require_attrs(pfb_pkg_mod, _REQUIRED_PFB_PKG_ATTRS, "pfb_pkg")
 
     build_repo_portable_mod = sys.modules.get(_ENGINE_MODULE_NAME)
+    _require_same_origin(build_repo_portable_mod, build_repo_portable_path, label="build-repo-portable")
     if build_repo_portable_mod is None:
         spec = importlib.util.spec_from_file_location(_ENGINE_MODULE_NAME, build_repo_portable_path)
         if spec is None or spec.loader is None:
@@ -156,8 +172,31 @@ def _require_attrs(module: ModuleType, names: Sequence[str], label: str) -> None
         raise EngineError(f"{label} engine module is missing required symbol(s): {', '.join(missing)}")
 
 
+def _require_same_origin(cached: ModuleType | None, requested_path: Path, *, label: str) -> None:
+    """Fail loudly if ``cached`` (a module already in ``sys.modules`` under a fixed
+    name/key) was loaded from a file other than ``requested_path``.
+
+    load_engine() reuses ``cached`` as-is when present — the right behaviour for
+    a repeated call with the SAME src_root — but a caller naming a different
+    src_root in the same process must never receive that stale module silently.
+    """
+    if cached is None:
+        return
+    cached_file = getattr(cached, "__file__", None)
+    if not cached_file:
+        return
+    cached_path = Path(cached_file).resolve()
+    requested = requested_path.resolve()
+    if cached_path != requested:
+        raise EngineError(
+            f"{label} is already loaded from {cached_path} — cannot also load it from "
+            f"{requested}: load_engine() caches engine modules by a fixed name and "
+            "cannot back two different PFB_SRC checkouts in one process"
+        )
+
+
 # --------------------------------------------------------------------------- #
-# Intake — the five publish.yml workflow_dispatch inputs, parsed and validated.
+# Intake — the five raw release-workflow intake fields, parsed and validated.
 # --------------------------------------------------------------------------- #
 
 IntakeKind = Literal["tagged", "nightly"]
@@ -237,7 +276,7 @@ def parse_intake(
     destinations: str,
     source_run_id: str,
 ) -> Intake:
-    """Parse the five raw `publish.yml` dispatch inputs. Fails closed on anything else.
+    """Parse the five raw release-workflow intake fields. Fails closed on anything else.
 
     Kind is derived, never guessed: ``destinations == ["nightly"]`` is the only nightly
     shape; every other well-formed destinations value is tagged.

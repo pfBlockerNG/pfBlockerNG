@@ -355,12 +355,14 @@ rollback is a re-deploy.
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the
   bootstrap (`scripts/add-repo.sh`) and the inline conf in the README reuse byte-for-byte.
-- **Triggers.** `pfBlockerNG/pkg`'s `publish.yml` runs on a daily `schedule` +
-  `workflow_dispatch`, and `release.yml`'s `repo-publish` job fires it on each release
-  (`gh workflow run`, auth via a GitHub App token from `actions/create-github-app-token@v3` —
-  secrets `PKG_GITHUB_APP_ID` + `PKG_GITHUB_APP_PRIVATE_KEY`, `Actions:write` on
-  `pfBlockerNG/pkg` only). That job is additive + isolated (only `needs: [release]`), so
-  its failure never breaks the Release or the ports PR.
+- **Triggers.** `pfBlockerNG/pkg` carries no workflow of its own — it holds the served tree and
+  GitHub Pages publishes it from `main`. This repo does the publishing: the `publish-pkg-repo`
+  job in `release-published.yml` runs on the real `release: published` event, and
+  `pkg-republish.yml` re-runs the same flow on manual dispatch. Both mint a GitHub App token
+  scoped to `pfBlockerNG/pkg` with `contents: write` (`actions/create-github-app-token@v3`,
+  secrets `PKG_GITHUB_APP_ID` + `PKG_GITHUB_APP_PRIVATE_KEY`), then run
+  `scripts/publish-pkg-repo.sh`, which commits the assembled catalogue into `pkg`. A publish
+  failure never breaks the Release or the ports PR.
 
 See [ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
 

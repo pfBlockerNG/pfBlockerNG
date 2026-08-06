@@ -119,10 +119,22 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     stage_paths="docs/.nojekyll"
     [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
     [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
+    # write_site() also publishes a self-contained add-repo.sh into the site root —
+    # the landing page's bootstrap one-liner fetches it from there.
+    [ -f "${PKG_REPO}/docs/add-repo.sh" ] && stage_paths="${stage_paths} docs/add-repo.sh"
     for target in $touched; do
         stage_paths="${stage_paths} docs/${target}"
     done
-    # shellcheck disable=SC2086  # stage_paths is a controlled, space-separated pathspec list
+    # gen_landing.py's all_dirs() regenerates a per-directory autoindex at
+    # EVERY existing level, not just this run's touched targets — stage every
+    # directory's index.html too, matching what actually changed on disk.
+    docs_root="${PKG_REPO}/docs"
+    dir_indexes=$(find "$docs_root" -mindepth 1 -type d -print | while IFS= read -r d; do
+        [ -f "${d}/index.html" ] && printf 'docs/%s/index.html\n' "${d#"${docs_root}/"}"
+    done)
+    stage_paths="${stage_paths}
+${dir_indexes}"
+    # shellcheck disable=SC2086  # stage_paths is a controlled, space/newline-separated pathspec list
     git -C "$PKG_REPO" add -- $stage_paths
 
     if git -C "$PKG_REPO" diff --cached --quiet; then
@@ -133,11 +145,28 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
 
     commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\n' \
         "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID")
-    git -C "$PKG_REPO" commit --quiet -m "$commit_message"
+    # Fixed bot identity via per-invocation -c flags, not repo config: a bare CI
+    # checkout carries no git identity, and this script must not depend on one
+    # being configured elsewhere (matches release.yml/module-durations.yml's
+    # direct-to-repo commits).
+    git -C "$PKG_REPO" \
+        -c user.name="github-actions[bot]" \
+        -c user.email="github-actions[bot]@users.noreply.github.com" \
+        commit --quiet -m "$commit_message"
 
-    if git -C "$PKG_REPO" push origin HEAD:main; then
+    if push_out=$(git -C "$PKG_REPO" push origin HEAD:main 2>&1); then
+        printf '%s\n' "$push_out" >&2
         echo "publish-pkg-repo: ADVANCE — pushed $(git -C "$PKG_REPO" rev-parse HEAD)"
         exit 0
+    fi
+    printf '%s\n' "$push_out" >&2
+
+    # Retry only a genuine non-fast-forward rejection (another run advanced
+    # main); anything else (auth, network, protected-branch policy) is a hard
+    # failure and must not be retried.
+    if ! printf '%s' "$push_out" | grep -qiE 'non-fast-forward|fetch first|\[rejected\]'; then
+        echo "::error::push failed for a reason other than remote contention — aborting without retry" >&2
+        exit 1
     fi
 
     echo "publish-pkg-repo: push rejected (attempt ${attempt}/${MAX_PUSH_ATTEMPTS}) — another run advanced main; re-syncing and retrying" >&2

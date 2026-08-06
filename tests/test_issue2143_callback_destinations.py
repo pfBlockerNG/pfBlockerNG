@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _workflow_steps import extract_step
+
 PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
 MANUAL = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
 
@@ -12,7 +17,7 @@ MANUAL = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-
 def _publish_step(workflow: str) -> str:
     """The "Publish the pkg catalogue" step body (the in-repo publisher carrier that
     replaced the retired `gh workflow run publish.yml -R pfBlockerNG/pkg` dispatch)."""
-    return workflow.split("- name: Publish the pkg catalogue", 1)[1]
+    return extract_step(workflow, "Publish the pkg catalogue")
 
 
 def test_published_callback_derives_and_forwards_the_fresh_tuple() -> None:

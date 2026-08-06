@@ -418,7 +418,7 @@ def test_only_the_pkg_repo_dispatch_waits_for_the_published_release() -> None:
     genuinely cannot run before the publish. The ports bump has no such dependency --
     it needs the tag and the version, both of which exist by the end of the run."""
     jobs = _jobs()
-    assert "repo-publish" not in jobs, "the pkg-repo dispatch must not run before the release is published"
+    assert "publish-pkg-repo" not in jobs, "the pkg-repo dispatch must not run before the release is published"
     assert "sync-ports-fork" in jobs, "the ports bump belongs at the end of the release run"
 
 

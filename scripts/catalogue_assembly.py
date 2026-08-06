@@ -4,9 +4,8 @@ sitting on disk: the tree itself IS the state.
 Scope: no ledger, no git, no network, no scratch tree, no backup/rollback. The
 retired design staged a whole multi-catalogue ``Plan`` into a scratch tree and
 moved it into place with a recoverable per-target swap; that machinery existed
-to protect a durable ledger this repo no longer has. Under the corrected
-architecture (see the design doc landed alongside this change) the release
-job itself IS the transaction: it drops verified ``.pkg`` assets straight into
+to protect a durable ledger this repo no longer has. Under this architecture the
+release job itself IS the transaction: it drops verified ``.pkg`` assets straight into
 ``site_root/<channel>/<varver>/``, calls ``regenerate_catalogue`` to rebuild
 that one directory from whatever is now present, and commits ``site_root`` to
 ``main`` — a failed run simply never reaches that commit, so there is nothing
@@ -245,7 +244,7 @@ def verify_multi_destination_identity(
         manifest = pfb_pkg.read_compact_manifest(source_path)
         canonical_name = f"{manifest['name']}-{manifest['version']}.pkg"
 
-        baseline: tuple[bytes, str, object] | None = None
+        baseline: tuple[str, object] | None = None
         for channel, varver in destinations:
             dest_path = site_root / channel / varver / canonical_name
             if not dest_path.is_file():
@@ -253,11 +252,13 @@ def verify_multi_destination_identity(
                     f"{canonical_name}: missing at destination {channel}/{varver}, "
                     f"expected from fan-out of {source_path}"
                 )
-            data = dest_path.read_bytes()
-            sha256 = hashlib.sha256(data).hexdigest()
+            # sha256 alone already detects any byte divergence — keeping the raw
+            # bytes of every destination copy alive in `baseline` is wasted memory
+            # for a fan-out that can span every varver on the tree.
+            sha256 = hashlib.sha256(dest_path.read_bytes()).hexdigest()
             dest_manifest = pfb_pkg.read_compact_manifest(dest_path)
             record = brp._canonical_build_record(dest_path, dest_manifest)
-            current = (data, sha256, record)
+            current = (sha256, record)
             if baseline is None:
                 baseline = current
                 continue

@@ -16,9 +16,15 @@ this module only reports which ``(channel, varver)`` directories it touched.
 
 No-op behaviour: a ``(channel, varver)`` target whose desired files (this run's
 canonical asset + any dependency assets that ABI-match its ROUTE row) are already
-present, byte-identical, at the destination is left untouched entirely — no copy, no
-prune, no regenerate. There is no ledger; "already published" is read straight off the
-files already on disk.
+present, byte-identical, at the destination AND whose catalog descriptor
+(meta.conf/data.pkg/packagesite.pkg) is complete is left untouched entirely — no
+copy, no prune, no regenerate. There is no ledger; "already published" is read
+straight off the files already on disk. A destination whose descriptor is
+incomplete (a prior run's write-back fault) is regenerated even when the ``.pkg``
+payload itself is unchanged. A destination file sharing an incoming asset's
+canonical name but carrying DIFFERENT bytes is never overwritten: same
+name/version with different bytes, source, or provenance raises
+``DestinationConflictError`` instead.
 
 Nightly intake is not handled here: ``run()`` accepts only ``kind == "tagged"`` intake
 and fails closed otherwise.
@@ -30,13 +36,14 @@ reads that from a ``digests.json`` sidecar inside ``--assets-dir`` — ``{"<file
 from the GitHub Releases API's own per-asset ``digest`` field before downloading.
 
 stdlib-only, Python 3.11. The engine is loaded via ``publish_catalogues.load_engine()``
-— explicit ``src_root`` or the ``PFB_SRC`` environment variable (the workflow sets
-``PFB_SRC`` to the source-repo checkout it already has, per the design doc).
+— explicit ``src_root`` or the ``PFB_SRC`` environment variable (the calling workflow
+sets ``PFB_SRC`` to the source-repo checkout it already has).
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -69,6 +76,15 @@ class PublishReleaseError(Exception):
     detected. Engine errors (``pc.PublishError`` / ``ca.CatalogueAssemblyError`` /
     the dynamically-loaded ``pfb_pkg.PkgError`` / ``build_repo_portable.BuildRepoError``)
     propagate UNWRAPPED — this module never re-derives a check those already make."""
+
+
+class DestinationConflictError(PublishReleaseError):
+    """An existing destination file shares its canonical name with an incoming
+    asset but carries different bytes — same name/version, different source or
+    provenance. A distinct subclass (rather than a generic PublishReleaseError)
+    so an operator can tell "the catalogue already holds a different build of
+    this exact version" apart from a digest-sidecar or target-resolution
+    failure by exception type alone."""
 
 
 # --------------------------------------------------------------------------- #
@@ -159,7 +175,7 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
     brp = engine.build_repo_portable
     targets: dict[str, _Target] = {}
     for asset in run_result.canonical_assets:
-        row = asset.record["matrix_row"]
+        row = pc._canonical_record(asset)["matrix_row"]
         varver = brp.catalog_name_from_version(row["pfsense_version"], row["variant"])
         if varver in targets:
             raise PublishReleaseError(
@@ -197,23 +213,61 @@ def _asset_map(target: _Target) -> dict[str, Path]:
 # --------------------------------------------------------------------------- #
 
 
+def _files_identical(a: Path, b: Path) -> bool:
+    """True iff ``a`` and ``b`` hold the same bytes.
+
+    Checks size first: the common case (a genuinely new build) almost always
+    differs there, so most calls never read either file's contents."""
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    return a.read_bytes() == b.read_bytes()
+
+
 def _drop_assets(dest_dir: Path, asset_map: Mapping[str, Path]) -> bool:
     """Copy every ``asset_map`` entry into ``dest_dir`` under its own name.
 
-    Returns True iff at least one entry was missing or byte-different at the
-    destination — the caller uses this to decide whether this target needs
+    Returns True iff at least one entry was missing at the destination — the
+    caller uses this to decide whether this target needs
     ``prune_retained``/``regenerate_catalogue`` at all (the no-op contract: an
     already-identical destination is left completely untouched, never re-copied,
-    re-pruned, or re-regenerated)."""
+    re-pruned, or re-regenerated).
+
+    An existing destination file with the SAME canonical name but DIFFERENT
+    bytes is a hard failure, never an overwrite: issue #2146's contract is that
+    a name/version collision with different bytes, source, or provenance fails
+    closed instead of silently replacing the published artifact."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     changed = False
     for name, src in asset_map.items():
         dest = dest_dir / name
-        if dest.is_file() and dest.read_bytes() == src.read_bytes():
-            continue
+        if dest.is_file():
+            if _files_identical(dest, src):
+                continue
+            raise DestinationConflictError(
+                f"{dest}: already publishes a different build of {name} — "
+                f"existing sha256={hashlib.sha256(dest.read_bytes()).hexdigest()}, "
+                f"incoming sha256={hashlib.sha256(src.read_bytes()).hexdigest()}"
+            )
         shutil.copy2(src, dest)
         changed = True
     return changed
+
+
+def _catalogue_descriptor_complete(dest_dir: Path, engine: pc.Engine) -> bool:
+    """True iff every catalog descriptor artifact ``build_repo`` emits is present
+    in ``dest_dir``.
+
+    catalogue_assembly.regenerate_catalogue's own docstring names the fault
+    window this closes: a write-back fault after the destination wipe can leave
+    the directory missing meta.conf/data.pkg/packagesite.pkg even though the
+    ``.pkg`` payload alone (all ``_drop_assets`` compares) is untouched and
+    byte-identical on a rerun — which would otherwise report a NOOP over an
+    unservable catalogue. ``_CATALOG_PKG_FILES`` is the engine's own name for
+    the two ``*.pkg``-named descriptor files; the engine has no equivalent
+    constant for ``meta.conf`` (only its CONTENT, ``META_CONF``), so that name
+    is listed directly here."""
+    brp = engine.build_repo_portable
+    return all((dest_dir / name).is_file() for name in (*brp._CATALOG_PKG_FILES, "meta.conf"))
 
 
 @dataclass(frozen=True)
@@ -250,6 +304,8 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
         for channel in intake.destinations:
             dest_dir = site_root / channel / varver
             changed = _drop_assets(dest_dir, asset_map)
+            if not changed and not _catalogue_descriptor_complete(dest_dir, engine):
+                changed = True
             for src in asset_map.values():
                 source_index.setdefault(src.resolve(), []).append((channel, varver))
             if changed:

@@ -1485,8 +1485,8 @@ jobs:
       - name: Generate GitHub App token (FreeBSD-ports)
         id: ports-token
         # Mint a short-lived installation token from the PKG GitHub App, scoped to
-        # pfBlockerNG/FreeBSD-ports with Contents:write — the same App used by
-        # repo-publish, no standalone PAT to rotate. REQUIRES the App to be installed
+        # pfBlockerNG/FreeBSD-ports with Contents:write — the same App the pkg
+        # catalogue publish uses, no standalone PAT to rotate. REQUIRES the App to be installed
         # on FreeBSD-ports with Contents:write; if it is not, this step fails loudly
         # ('not installed on ... repositories' / permission error) — the clear signal
         # to grant it, rather than a confusing empty-token checkout failure.

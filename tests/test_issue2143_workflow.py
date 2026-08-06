@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _workflow_steps import extract_step
+
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
 REPUBLISH = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
@@ -25,9 +30,9 @@ def test_published_callback_dispatches_exact_release_identity() -> None:
     assert "release_id" in PUBLISHED
     assert "release_tag" in PUBLISHED
     assert "source_repository" in PUBLISHED
-    # In-repo "Publish the pkg catalogue" step (commit 07016c70) replaced the retired
+    # The in-repo "Publish the pkg catalogue" step replaced the retired
     # `gh workflow run publish.yml -f <name>=<value>` dispatch to pfBlockerNG/pkg.
-    step = PUBLISHED.split("- name: Publish the pkg catalogue", 1)[1]
+    step = extract_step(PUBLISHED, "Publish the pkg catalogue")
     assert "RELEASE_ID: ${{ needs.resolve.outputs.release_id }}" in step
     assert "DESTINATIONS: ${{ needs.resolve.outputs.destinations }}" in step
     assert "gh release list" not in PUBLISHED
