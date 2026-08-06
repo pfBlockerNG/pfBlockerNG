@@ -159,7 +159,11 @@ PY
     git_fixture -C "${base}/remote.git" rev-parse refs/heads/main
   }
   local_head_now() {
-    git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "$original_head"
+    # A failed resolution reports a sentinel, never $original_head: the containment
+    # example asserts the head still EQUALS $original_head, so substituting it on
+    # failure would let an unreadable repository (deleted ref, broken .git, detached
+    # HEAD after a failed checkout -B) pass as "HEAD did not move".
+    git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "UNRESOLVABLE-main"
   }
 
   # --- landing_matrix ABI expression pins (issue #2146 R1's retired
