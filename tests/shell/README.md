@@ -16,8 +16,8 @@ shellspec tests/shell/ip_pre_aws_spec.sh   # a single spec
 shellspec --kcov              # with coverage (writes ./coverage/, needs kcov)
 ```
 
-Install: `brew install shellspec` (macOS) or the official installer
-(`curl -fsSL https://git.io/shellspec | sh`); `kcov` is only needed for `--kcov`.
+Install per [`CONTRIBUTING.md`](../../CONTRIBUTING.md) ("Shell tests (shellspec)"),
+which pins the version CI verifies; `kcov` is only needed for `--kcov`.
 The pre-commit hook and CI run the suite automatically when `shellspec` is present.
 
 ## Layout
