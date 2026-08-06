@@ -253,7 +253,7 @@ PY
     The variable porcelain should include 'debris.txt'
   End
 
-  # --- A1: the script must be self-sufficient for git identity -------------
+  # --- the script must be self-sufficient for git identity -----------------
 
   It 'commits with a fixed bot identity even when no git identity is configured anywhere'
     # Reproduces the GitHub-hosted-runner state: no user.name/user.email in the
@@ -357,11 +357,11 @@ PY
     The path "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf" should not be exist
   End
 
-  # --- A3: the push resync-retry loop ---------------------------------------
+  # --- the push resync-retry loop -------------------------------------------
   # A pre-receive hook in the bare origin drives deterministic rejections
   # (a counter file rejects the first N attempts, or all of them). Its own
   # message carries a non-fast-forward-shaped phrase ("fetch first") so the
-  # rejection is classified as remote contention (A4), matching what a real
+  # rejection is classified as remote contention, matching what a real
   # racing push looks like from the client's side.
 
   It 're-syncs and republishes after a rejected push, without rebasing the local commit'
@@ -411,7 +411,7 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
-  # --- A4: a hard push failure is not remote contention ---------------------
+  # --- a hard push failure is not remote contention -------------------------
 
   It 'a push that fails for an authentication-shaped reason makes exactly one attempt and does not retry'
     # A client-side pre-push hook stands in for an expired token / network
