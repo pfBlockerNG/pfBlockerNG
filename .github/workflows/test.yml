@@ -199,7 +199,25 @@ jobs:
           persist-credentials: false
 
       - name: Install ShellCheck
-        run: sudo apt-get install -y shellcheck
+        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
+        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
+        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
+        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
+        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
+        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
+          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
+            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
 
       - name: Forbid bash shebangs
         # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
@@ -280,11 +298,19 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install jq and dash
-        # jq drives the ip_pre_AWS_*.sh region filters (required). dash is
-        # installed explicitly — the shellspec run below pins it as the test
-        # shell; never rely on the runner image happening to carry it.
-        run: sudo apt-get update && sudo apt-get install -y jq dash
+      - name: Require jq and dash
+        # jq drives the ip_pre_AWS_*.sh region filters; dash is the test shell the
+        # shellspec run below pins. ubuntu-24.04 ships both, and neither changes a gate
+        # verdict by version, so installing them over the image bought nothing. Assert
+        # them instead: a runner image that drops one must fail this job loudly rather
+        # than let the suite fall back to whatever /bin/sh is (#2185).
+        run: |
+          command -v jq >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: jq'; exit 1; }
+          command -v dash >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: dash'; exit 1; }
+          jq --version
+          dash -c 'echo "dash: $(command -v dash)"'
 
       - name: Install iprange
         # Real `iprange --except` set-subtraction (ADR-53 P3): the same
