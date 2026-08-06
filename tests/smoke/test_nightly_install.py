@@ -43,6 +43,7 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM
+from .pkg_identity import branch_pkg_name
 from .test_repo_install import (
     _box_real_varver,
     _ensure_egress_open,
@@ -59,9 +60,12 @@ from .test_repo_install import (
 pytestmark = pytest.mark.repo
 
 NIGHTLY_NAME = "pfSense-pkg-pfBlockerNG-nightly"
-DEVEL_NAME = "pfSense-pkg-pfBlockerNG-devel"
+# The DEVEL_* names below are historical: they mean "the branch package, whichever channel it
+# was built on" (the ports tree retired the -devel channel; the devel branch now builds edge).
+# Nightly is the one package with a fixed name of its own, so it stays a literal.
+DEVEL_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 NIGHTLY_REPO = "pfblockerng-nightly"  # the %R origin a nightly install reports
-DEVEL_REPO = "pfblockerng"  # %R origin of the controlled -devel install (the shared release repo)
+DEVEL_REPO = "pfblockerng"  # %R origin of the controlled branch-package install (the shared release repo)
 
 SPIKE = "/tmp/pfb_nightly_spike"
 NIGHTLY_DIR = f"{SPIKE}/nightly"  # the file:// nightly catalog

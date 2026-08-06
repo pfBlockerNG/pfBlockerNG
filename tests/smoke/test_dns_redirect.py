@@ -51,11 +51,12 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
+from .pkg_identity import branch_pkg_name
 
 pytestmark = pytest.mark.smoke
 
-# Package name on the devel channel (matches test_smoke_managed_objects.py).
-_PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
+# Branch package name, read off the built .pkg (matches test_smoke_managed_objects.py).
+_PKG_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 
 # Marker prefix for DNS-redirect owned rules (mirrors PFB_DNS_REDIR_DESCR_V4_PFX).
 _REDIR_DESCR_PFX = "pfB_DNS_Redirect_"

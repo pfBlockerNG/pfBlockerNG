@@ -173,10 +173,10 @@ jobs:
             # regardless of what's given, so every arch of this FreeBSD major
             # is served by the one build this triggers.
             ABI="FreeBSD:${MAJOR}:amd64"
-            # Channel maps to pkg channel: CE on devel branch -> devel, main -> stable
-            # For standalone tracker runs we use 'devel' as the pkg channel by default.
+            # Channel maps to pkg channel: the devel branch's prerelease line -> edge,
+            # main -> stable. For standalone tracker runs we use 'edge' by default.
             # A real release tag push always uses release.yml; this is a build smoke-check.
-            PKG_CHANNEL="devel"
+            PKG_CHANNEL="edge"
 
             if [ "$DRY_RUN" = "true" ]; then
               echo "  [DRY-RUN] WOULD dispatch build-pkg-linux.yml:"

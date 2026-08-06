@@ -167,11 +167,12 @@ The portable Linux builder reproduces `make package` for this `NO_BUILD` port. F
 
 ```sh
 python3 scripts/build-pkg-portable.py \
-  --ports /path/to/FreeBSD-ports --channel devel --local-src . \
+  --ports /path/to/FreeBSD-ports --channel edge --local-src . \
   --abi FreeBSD:15:amd64 --py-flavor py311 --php 8.3 --out out/
 ```
 
-`--ports` is a FreeBSD-ports checkout containing `net/pfSense-pkg-pfBlockerNG-devel`.
+`--ports` is a FreeBSD-ports checkout containing `net/pfSense-pkg-pfBlockerNG-edge`
+(the channel the devel branch builds; `--channel` accepts stable, testing, edge, nightly).
 `pkg add` checks a dep is PRESENT, not its version, so this `.pkg` installs on the
 baked-deps image.
 

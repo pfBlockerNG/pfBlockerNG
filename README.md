@@ -215,9 +215,9 @@ retained versions per pfSense edition, with their commit and date.
 ### Building from the FreeBSD ports tree
 
 On a FreeBSD machine with the ports tree available, the package can be built
-directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or
-`net/pfSense-pkg-pfBlockerNG-devel` (devel); the resulting `.pkg` lands in
-`work/pkg/`.
+directly — `make package` in `net/pfSense-pkg-pfBlockerNG` (stable) or the
+channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
+`devel` branch builds); the resulting `.pkg` lands in `work/pkg/`.
 
 ## Documentation
 

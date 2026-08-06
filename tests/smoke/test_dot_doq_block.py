@@ -55,11 +55,12 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
+from .pkg_identity import branch_pkg_name
 
 pytestmark = pytest.mark.smoke
 
-# Package name on the devel channel (matches test_dns_redirect.py).
-_PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
+# Branch package name, read off the built .pkg (matches test_dns_redirect.py).
+_PKG_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 
 # Marker prefix for DoT/DoQ-block owned rules (mirrors PFB_DOT_BLOCK_DESCR_PFX). Doubles as
 # the ``_is_block_853_line`` ownership anchor in ``pfctl -sr`` output (#813, #849): plain

@@ -8,7 +8,8 @@ How these were obtained (and how to re-verify — see CLAUDE.md "Investigating t
 live system"): on a live box, `pkg info` (installed set), `pkg info -d <pkg>`
 (a package's declared deps), `php -v` / `python --version`. The authoritative
 dependency list is the port Makefile `RUN_DEPENDS`
-(`net/pfSense-pkg-pfBlockerNG-devel`); the tables below are a hand-maintained
+(`net/pfSense-pkg-pfBlockerNG-edge`, the channel the devel branch builds — the
+`-devel` recipe was retired from the ports tree, issue #2166); the tables below are a hand-maintained
 mirror — confirm against the port (or a built `.pkg`) when baking an image.
 
 ## 2.8.x (CE)
@@ -71,7 +72,7 @@ them from the local pkg db **offline** (see `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_R
 
 These are the port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes a
 pre-existing drift against the port Makefile: this table had stopped at 9),
-verified against `net/pfSense-pkg-pfBlockerNG-devel/Makefile`. To bake them
+verified against `net/pfSense-pkg-pfBlockerNG-edge/Makefile`. To bake them
 onto an image, run
 [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh)
 on the box (as root):

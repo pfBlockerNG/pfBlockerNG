@@ -94,10 +94,11 @@ from ._matrix import (
     own_variant,
 )
 from .conftest import SmokeVM
+from .pkg_identity import branch_pkg_name
 
 pytestmark = pytest.mark.repo
 
-PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
+PKG_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 
 # Our repo conf on the guest + the served catalog root. The conf name follows the
 # CLAUDE.md "match the surrounding pattern" rule: pfSense's own conf is
@@ -820,7 +821,7 @@ def test_install_from_our_repo_lands_all_files(repo_vm: SmokeVM) -> None:
     with NO ``-r`` — picks ours.
 
     Given the package ABSENT (``pkg query %v`` fails),
-    When ``pkg install -y pfSense-pkg-pfBlockerNG-devel`` runs (NO ``-r``, NO ``-f``),
+    When ``pkg install -y <the branch package>`` runs (NO ``-r``, NO ``-f``),
     Then it installs from OUR repo (``pkg query %R`` == ``pfblockerng``), with
       no "Missing dependency" (RUN_DEPENDS resolved), AND every file the package
       registers (``pkg info -l``) is present on-box (> 50) — the install really wrote

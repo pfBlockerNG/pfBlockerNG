@@ -33,9 +33,9 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: "pfBlockerNG channel/port (devel|stable)"
+        description: "pfBlockerNG channel/port — one of stable, testing, edge, nightly (the builder rejects anything else)"
         required: false
-        default: "devel"
+        default: "edge"
       abi:
         description: "Target ABI — FreeBSD:<freebsd_major>:<arch> for the target pfSense base, per the ci-metadata version matrix"
         required: false
@@ -73,7 +73,7 @@ on:
       channel:
         required: false
         type: string
-        default: "devel"
+        default: "edge"
       abi:
         required: false
         type: string

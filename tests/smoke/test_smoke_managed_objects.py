@@ -33,11 +33,12 @@ import pytest
 
 from . import helpers as h
 from .conftest import SmokeVM, _StubDnsServer
+from .pkg_identity import branch_pkg_name
 
 pytestmark = pytest.mark.smoke
 
-# Package name on the devel channel (matches test_repo_install.py's PKG_NAME).
-_PKG_NAME = "pfSense-pkg-pfBlockerNG-devel"
+# Branch package name, read off the built .pkg (matches test_repo_install.py's PKG_NAME).
+_PKG_NAME = branch_pkg_name(os.environ.get("SMOKE_PKG"))
 
 # Descr markers that identify pfBlockerNG-owned objects (mirrors pfb_is_managed_obj in pfblockerng.inc).
 _AUTO_VIP_DESCR_V4 = "pfB_AUTO_VIP_v4"
