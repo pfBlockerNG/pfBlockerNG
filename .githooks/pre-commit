@@ -139,8 +139,8 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 	# content (pre-migration) or a symlink onto it — exempt both prefixes so
 	# this stays correct regardless of migration state.
 	git ls-files \
-		| grep -v -e '^\.claude/skills/diagnosing-bugs/' -e '^\.claude/skills/git-guardrails-claude-code/' \
-			-e '^\.agents/skills/diagnosing-bugs/' -e '^\.agents/skills/git-guardrails-claude-code/' \
+		| grep -v -e '^\.claude/skills/git-guardrails-claude-code/' \
+			-e '^\.agents/skills/git-guardrails-claude-code/' \
 			-e '^plugins/' \
 		| while IFS= read -r f; do
 		case $(head -n1 "$f" 2>/dev/null) in

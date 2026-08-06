@@ -213,8 +213,8 @@ jobs:
             done
           }
           bad=$(git ls-files | grep -v \
-            -e '^\.claude/skills/diagnosing-bugs/' -e '^\.claude/skills/git-guardrails-claude-code/' \
-            -e '^\.agents/skills/diagnosing-bugs/' -e '^\.agents/skills/git-guardrails-claude-code/' \
+            -e '^\.claude/skills/git-guardrails-claude-code/' \
+            -e '^\.agents/skills/git-guardrails-claude-code/' \
             -e '^plugins/' | find_bash_shebangs)
           if [ -n "$bad" ]; then
             echo "bash shebang not allowed (use #!/bin/sh):"; echo "$bad"; exit 1
