@@ -321,10 +321,26 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y iprange
 
       - name: Install shellspec
-        # Pinned release tarball; the executable runs from its extracted tree.
+        # Pinned upstream release ASSET, verified by SHA-256 before anything is extracted;
+        # the executable then runs from that tree. This replaced a source-archive tarball
+        # piped straight into tar: GitHub generates that archive on demand from the tag,
+        # so its bytes are not a stable artifact — a re-tag upstream would swap what runs
+        # the POSIX gate and the workflow would not notice (#2194). An uploaded release
+        # asset is immutable. Extracted outside the checkout so the repo tree stays clean.
+        # Same shape as the ShellCheck pin above.
+        env:
+          SHELLSPEC_VERSION: 0.28.1
+          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
         run: |
-          curl -fsSL https://github.com/shellspec/shellspec/archive/refs/tags/0.28.1.tar.gz | tar -xz
-          echo "$PWD/shellspec-0.28.1" >> "$GITHUB_PATH"
+          curl -fsSLo shellspec-dist.tar.gz \
+            "https://github.com/shellspec/shellspec/releases/download/${SHELLSPEC_VERSION}/shellspec-dist.tar.gz"
+          echo "${SHELLSPEC_SHA256}  shellspec-dist.tar.gz" | sha256sum -c -
+          tar -xzf shellspec-dist.tar.gz -C "$HOME"
+          rm -f shellspec-dist.tar.gz
+          echo "$HOME/shellspec" >> "$GITHUB_PATH"
+          installed="$("$HOME/shellspec/shellspec" --version)"
+          [ "$installed" = "$SHELLSPEC_VERSION" ] || {
+            echo "shellspec is $installed, expected $SHELLSPEC_VERSION"; exit 1; }
 
       - name: Run shellspec
         # Functional gate for the shell scripts, pinned to dash — the
