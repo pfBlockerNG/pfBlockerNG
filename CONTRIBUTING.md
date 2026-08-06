@@ -328,22 +328,22 @@ Full options: [`scripts/deploy.sh`](scripts/deploy.sh).
 ### How the `pkg` repository is published (GitHub Pages)
 
 The self-hosted repository (installed per the [README](README.md#option-2--this-forks-self-hosted-pkg-repository))
-is a **derived index** — there is no stateful store to maintain. It is hosted and
-deployed by the **separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo**
-(its `publish.yml`), which deploys to **its own** GitHub Pages via same-repo OIDC — no
-cross-repo deploy key. On each run it builds the current **devel** `.pkg` per matrix entry
-(running this repo's `scripts/build-pkg-portable.py` against a checkout of the source),
-folds in the `.pkg` assets of **all** GitHub Releases, buckets by `<varver>` (edition +
-pfSense major.minor, e.g. `ce-2.8` / `plus-26.03` — **arch-less**: every pfBlockerNG `.pkg`
-is NO_ARCH, so one directory serves every CPU arch of a FreeBSD major; issue #1806),
-**regenerates** a fresh `pkg` catalog (`meta.conf`/`packagesite.pkg`/`data.pkg`) per
-varver, and deploys the whole `release/<varver>/` (+ `nightly/<varver>/`) tree. The site is
-replaced each run (no history), so every published version is retained for free and a
-rollback is a re-deploy.
+is a **derived index** — there is no stateful store to maintain. The
+**separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo** holds the served
+tree and GitHub Pages publishes it straight from that repo's `main`; it carries no workflow
+of its own. **This** repo does the publishing (see **Triggers** below): the exact `.pkg`
+assets of the published Release are verified, dropped into the catalogue directory of every
+channel the release's destination tuple names, and committed. Each catalogue is then
+**regenerated** from the files present in that directory (`meta.conf`/`packagesite.pkg`/`data.pkg`
+per `<channel>/<varver>`) — so the tree itself is the state, and a rollback is installing a
+retained older version rather than re-deploying a site.
 
-- **Per-`<varver>` tree, arch-less.** One catalog under `release/<varver>/` (and
-  `nightly/<varver>/` for the nightly channel) per edition + pfSense major.minor present in
-  the ci-metadata version matrix (`supported-versions.json`) — no per-ABI/arch subdirectory.
+- **Per-`<varver>` tree, arch-less.** One catalog under `<channel>/<varver>/` (channels
+  `stable`, `testing`, `edge` and `nightly`) per edition + pfSense major.minor present in
+  the ci-metadata version matrix (`supported-versions.json`) — `<varver>` is edition +
+  pfSense major.minor, e.g. `ce-2.8` / `plus-26.03`, and is **arch-less**: every pfBlockerNG
+  `.pkg` is NO_ARCH, so one directory serves every CPU arch of a FreeBSD major (issue #1806)
+  — no per-ABI/arch subdirectory.
   The client conf's `url:` is fully resolved for the box's own edition/version at bootstrap
   time — there is no `${ABI}` pkg(8) variable any more; a boot-time `rc.d` hook
   (`pfblockerng_repo_generate.sh`, ADR-39) rewrites the conf on a pfSense OS upgrade that
