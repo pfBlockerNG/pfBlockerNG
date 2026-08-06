@@ -433,7 +433,7 @@ def test_the_published_workflow_carries_only_the_pkg_repo_dispatch() -> None:
     """Publishing a release must still refresh the pkg repo -- and nothing else: the
     ports bump already happened at the end of the release run."""
     jobs = _jobs(PUBLISHED_WORKFLOW)
-    assert "repo-publish" in jobs, sorted(jobs)
+    assert "publish-pkg-repo" in jobs, sorted(jobs)
     assert "sync-ports-fork" not in jobs, sorted(jobs)
 
 
@@ -490,7 +490,8 @@ def test_the_bump_before_publish_ordering_is_recorded_where_it_used_to_be_enforc
     text = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
     assert "nightly" in text.lower(), text
     graph = {name: _needs(lines) for name, lines in _jobs(PUBLISHED_WORKFLOW).items()}
-    assert "sync-ports-fork" not in graph.get("repo-publish", set()), graph
+    assert "publish-pkg-repo" in graph, sorted(graph)
+    assert "sync-ports-fork" not in graph["publish-pkg-repo"], graph
 
 
 # Jobs that hold a credential worth stealing AND execute a repository script as shell:

@@ -21,13 +21,17 @@ def test_manual_republish_requires_exact_release_identity() -> None:
 
 
 def test_republish_and_published_callbacks_forward_exact_run_identity() -> None:
+    # The retired `gh workflow run publish.yml -f <name>=<value>` dispatch was replaced
+    # by an in-repo job (commit 07016c70) that forwards the same identity via env vars
+    # on the "Publish the pkg catalogue" step.
     for workflow in (REPUBLISH, PUBLISHED):
-        assert "-f source_repository=" in workflow
-        assert "-f release_id=" in workflow
-        assert "-f release_tag=" in workflow
-        assert "-f source_run_id=" in workflow
-        assert "github.run_id" in workflow
-        assert "github.run_attempt" in workflow
+        step = workflow.split("- name: Publish the pkg catalogue", 1)[1]
+        assert "SOURCE_REPOSITORY:" in step
+        assert "RELEASE_ID:" in step
+        assert "RELEASE_TAG:" in step
+        assert "SOURCE_RUN_ID:" in step
+        assert "github.run_id" in step
+        assert "github.run_attempt" in step
         assert "gh release list" not in workflow
 
 
