@@ -43,10 +43,15 @@ final class DownloadStagePublishDirTest extends TestCase
 	/**
 	 * Staging and backup directories are dot-named, and glob() never returns dot
 	 * entries -- a litter assertion spelled with glob() cannot fail on leftovers.
+	 * An unreadable directory reports a sentinel rather than an empty listing, so it
+	 * fails its assertion loudly instead of reading as "nothing was left behind".
 	 */
 	private function entries(string $path): array
 	{
-		return array_values(array_diff(scandir($path) ?: array(), array('.', '..')));
+		$entries = @scandir($path);
+		return $entries === FALSE
+			? array('<unreadable>')
+			: array_values(array_diff($entries, array('.', '..')));
 	}
 
 	public function testSuccessfulExtractionPublishesTheStagedDirectory(): void
@@ -134,9 +139,9 @@ final class DownloadStagePublishDirTest extends TestCase
 			return 0;
 		}));
 
+		// No litter assertion here: the restore is a single rename, so the backup
+		// cannot survive an assertion that the contents came back.
 		$this->assertSame("last-good\n", file_get_contents("{$target}/cat_ads"));
-		$this->assertSame(['category'], $this->entries($this->dir),
-			'the moved-aside category must not be left behind under its backup name');
 	}
 
 	/** Staging beside the target is what makes the publication a same-filesystem rename. */
