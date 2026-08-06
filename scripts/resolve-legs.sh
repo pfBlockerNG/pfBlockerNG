@@ -114,7 +114,7 @@ _rl_legs() {
         FILTERED="$(printf '%s\n' "$CI_MATRIX" | jq -c '.')"
     else
         FILTERED="$(printf '%s\n' "$CI_MATRIX" | jq -c \
-            '[ .[] | select(.channel == "CE") ] | sort_by(.pfsense_version | split(".") | map(tonumber)) | .[0:1]')"
+            '[ .[] | select(.channel == "CE") ] | sort_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)) | .[0:1]')"
         [ "$(printf '%s' "$FILTERED" | jq 'length')" -ne 0 ] \
             || { printf '::error::impacted scope found no CE leg in the CI matrix\n' >&2; exit 1; }
     fi
