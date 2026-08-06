@@ -312,6 +312,28 @@ class TestRegexReduction:
                 assert domain == sdom, inner
                 assert wildcard == (cls == "zone"), inner
 
+    def test_regex_reduction_case_folds_literal_to_lowercase(self) -> None:
+        # Issue #2099: the domain-literal grammar was lowercase-only, so a
+        # mixed-case regex like /^Example\.com$/ never reduced to a domain rule
+        # -- even though it matches identically (IGNORECASE) to its lowercase
+        # twin at runtime -- and stayed a full per-query compiled regex (a
+        # missed optimisation, not a wrong match, per the issue). Reducing it
+        # must fold to the CANONICAL LOWERCASE key, mirroring how the plain-
+        # domain path (normalise()) already lowercases before validating.
+        spike = _spike()
+        cases = (
+            (r"^Example\.com$", (False, "example.com")),
+            (r"^(.+\.)?AdServer\.Example$", (True, "adserver.example")),
+            (r"(^|\.)Tracker\.NET$", (True, "tracker.net")),
+            (r"^(www\.)?Simple\.Example\.com$", (False, "simple.example.com")),
+        )
+        for inner, expected in cases:
+            prod = P._dnsbl_reduce_regex(inner)
+            assert prod == expected, inner
+            assert spec.reduce_regex(inner) == expected, inner
+            wildcard, domain = expected
+            assert spike.reduce_pattern("/" + inner + "/") == ("zone" if wildcard else "data", domain), inner
+
 
 # --------------------------------------------------------------------------- #
 # 3. DATA vs ZONE: an ABP wildcard block is a zone at its own key at any depth

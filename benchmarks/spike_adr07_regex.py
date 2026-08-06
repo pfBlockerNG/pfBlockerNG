@@ -150,7 +150,7 @@ def categorise(line: str) -> str:
 # no other regex metacharacter. Anything with a char-class, quantifier on a label,
 # alternation in the body, or an unescaped/floating dot is IRREDUCIBLE.
 
-_DOMAIN_LITERAL = re.compile(r"^[a-z0-9_-]+(?:\\\.[a-z0-9_-]+)+$")  # underscore per #723
+_DOMAIN_LITERAL = re.compile(r"^[A-Za-z0-9_-]+(?:\\\.[A-Za-z0-9_-]+)+$")  # underscore #723; case-fold #2099
 
 _WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
 _EXACT_PREFIXES = (r"^",)
@@ -175,7 +175,7 @@ def reduce_pattern(pat: str) -> tuple[str, str] | None:
     for pre in _WILDCARD_PREFIXES:
         if body.startswith(pre):
             lit = body[len(pre) :]
-            dom = lit.replace("\\.", ".")
+            dom = lit.replace("\\.", ".").lower()
             if _DOMAIN_LITERAL.match(lit):
                 return "zone", dom
             return None
@@ -186,7 +186,7 @@ def reduce_pattern(pat: str) -> tuple[str, str] | None:
             # allow an optional (www\.)? prefix, fold to the exact base domain
             if lit.startswith(r"(www\.)?"):
                 lit = lit[len(r"(www\.)?") :]
-            dom = lit.replace("\\.", ".")
+            dom = lit.replace("\\.", ".").lower()
             if _DOMAIN_LITERAL.match(lit):
                 return "data", dom
             return None
