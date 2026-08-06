@@ -9,12 +9,18 @@ PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encodin
 MANUAL = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
 
 
+def _publish_step(workflow: str) -> str:
+    """The "Publish the pkg catalogue" step body (the in-repo publisher carrier that
+    replaced the retired `gh workflow run publish.yml -R pfBlockerNG/pkg` dispatch)."""
+    return workflow.split("- name: Publish the pkg catalogue", 1)[1]
+
+
 def test_published_callback_derives_and_forwards_the_fresh_tuple() -> None:
     assert "derive_destinations_from_git" in PUBLISHED
     assert "current_commit=sys.argv[3]" in PUBLISHED
     assert "+refs/heads/release/*:refs/remotes/origin/release/*" in PUBLISHED
     assert "destinations=${DESTINATIONS}" in PUBLISHED
-    assert '-f destinations="$DESTINATIONS"' in PUBLISHED
+    assert "DESTINATIONS: ${{ needs.resolve.outputs.destinations }}" in _publish_step(PUBLISHED)
     assert "gh release list" not in PUBLISHED
 
 
@@ -23,7 +29,7 @@ def test_manual_callback_validates_published_release_and_derives_tuple() -> None
     assert "jq -r '.draft'" in MANUAL
     assert "primary_channel_for_tag" in MANUAL
     assert "derive_destinations_from_git" in MANUAL
-    assert '-f destinations="$DESTINATIONS"' in MANUAL
+    assert "DESTINATIONS: ${{ steps.resolve.outputs.destinations }}" in _publish_step(MANUAL)
     assert "gh release list" not in MANUAL
 
 
