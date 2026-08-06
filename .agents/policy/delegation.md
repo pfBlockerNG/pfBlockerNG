@@ -15,7 +15,7 @@ the effort knob: workflows still set their required effort independently.
 The role families built on these tiers (explorer, planner, implementer,
 verifier, reviewer, publisher, coordinator) are specified with their vendor
 bindings in [`agent-roles.md`](agent-roles.md);
-`scripts/check_agent_roles.py` keeps both vendors' definitions aligned
+`scripts/check_agent_roles.py` keeps every vendor's definitions aligned
 whenever either side changes.
 
 Substantial coding work is **planned and gated by the top tier** (falling back

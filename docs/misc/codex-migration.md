@@ -45,7 +45,7 @@ symlink; a provider-specific runtime change stays in that provider's adapter.
 | --- | --- | --- |
 | `CLAUDE.md` adapter | native `AGENTS.md` + `.agents/context/codex-adapter.md` | Same canonical bootstrap; Codex's vendor adapter is `.agents/context/codex-adapter.md`, mirroring `CLAUDE.md`. |
 | `.claude/skills/*` symlinks | `.agents/skills/*` | One shared detailed procedure per skill. |
-| `.claude/workflows/*.js` | *(retired 2026-07-17, #1431)* | Superseded by the fresh-session policy: `.agents/policy/workflow.md` + `landing.md`; both clients use fresh native sub-agents. |
+| `.claude/workflows/*.js` | *(retired 2026-07-17, #1431)* | Superseded by the fresh-session policy: `.agents/policy/workflow.md` + `landing.md`; every client uses fresh native sub-agents. |
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |

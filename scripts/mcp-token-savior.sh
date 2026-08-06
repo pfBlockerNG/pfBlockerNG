@@ -11,7 +11,7 @@
 #   WORKSPACE_ROOTS        comma-separated project roots (default: every usable worktree
 #                          of the current Git repository, otherwise current directory)
 #   CLAUDE_PROJECT_ROOT    active root hint understood by Token Savior (default: current
-#                          Git worktree; applies to Claude and Codex clients)
+#                          Git worktree; applies to every agent client)
 #   TOKEN_SAVIOR_CLIENT    telemetry client label (default: claude-code; Codex config
 #                          passes codex explicitly)
 #   TOKEN_SAVIOR_PROFILE   server tool profile (default: optimized)

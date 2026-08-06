@@ -1,6 +1,6 @@
 # Ubiquitous Language
 
-Domain: agent reasoning-effort and model-selection configuration (Claude Code + Codex in this repository).
+Domain: agent reasoning-effort and model-selection configuration (Claude Code, Codex, and GitHub Copilot in this repository).
 
 ## Effort and model selection
 
