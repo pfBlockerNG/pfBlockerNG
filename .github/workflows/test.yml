@@ -292,7 +292,7 @@ jobs:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
 
-    # The commit upstream's v43 tag pointed at when the pin was taken. Job-level so the
+    # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
     # cache keys below can carry it: a tag is a moving reference, so re-pinning kcov has
     # to roll the cache over too, or a stale build would answer the new key (#2198).
     env:
@@ -389,21 +389,20 @@ jobs:
       - name: Build kcov from source (cache miss)
         # Only runs when the cache is cold. best-effort: a compile failure still
         # leaves CI green (coverage is informational).
-        # The clone resolves the v43 TAG, which upstream can move, so what it produced is
-        # checked against KCOV_COMMIT before anything is built from it (#2198). A mismatch
-        # fails this step: the build is swallowed by continue-on-error, so the cache save
-        # is skipped, kcov stays absent, and the coverage step reports it instead of
-        # measuring with a tool nobody pinned.
+        # KCOV_COMMIT (kcov v43) is fetched by commit id, so a re-tag upstream cannot
+        # change what gets built: the moving reference is never consulted. `git clone
+        # --branch` takes a ref only, hence the init + fetch-by-SHA + checkout shape —
+        # GitHub serves any reachable commit over smart HTTP (#2202).
         id: build-kcov
         if: steps.cache-kcov.outputs.cache-hit != 'true'
         continue-on-error: true
         run: |
           sudo apt-get update && sudo apt-get install -y \
             binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
-          git clone --depth 1 --branch v43 https://github.com/SimonKagstrom/kcov
-          cloned="$(git -C kcov rev-parse HEAD)"
-          [ "$cloned" = "$KCOV_COMMIT" ] || {
-            echo "kcov v43 resolves to $cloned, expected $KCOV_COMMIT (upstream re-tag?)"; exit 1; }
+          git init -q kcov
+          git -C kcov remote add origin https://github.com/SimonKagstrom/kcov
+          git -C kcov fetch --depth 1 origin "$KCOV_COMMIT"
+          git -C kcov checkout -q FETCH_HEAD
           cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
           cmake --build kcov/build --parallel "$(nproc)"
           cmake --install kcov/build

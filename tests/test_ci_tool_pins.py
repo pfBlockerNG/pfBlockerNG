@@ -128,8 +128,8 @@ def test_no_doc_offers_an_unpinned_shellspec_installer() -> None:
 
 
 def test_kcov_ci_build_is_pinned_to_an_immutable_commit() -> None:
-    """`--branch v43` resolves through a tag, which upstream can move: the coverage tool
-    that gets built — and cached under the key below — would change silently (#2198)."""
+    """A tag is a moving reference, so the coverage tool that gets built — and cached
+    under the key below — must be selected by commit id, never by `v43` (#2198/#2202)."""
     shell_tests_job = _job(_workflow(), "shell-tests", "php-syntax")
     build_step = shell_tests_job.split("      - name: Build kcov from source (cache miss)\n", 1)[1].split(
         "\n      - name:", 1
@@ -141,16 +141,17 @@ def test_kcov_ci_build_is_pinned_to_an_immutable_commit() -> None:
     assert f"KCOV_COMMIT: {KCOV_PIN}" in shell_tests_job, (
         f"the kcov build must pin the commit v43 resolves to; job was:\n{shell_tests_job}"
     )
-    # A clone by tag is fine as long as what it produced is checked against the pin before
-    # anything is built from it — the guard is the branch that fails, not the clone.
-    assert re.search(r"^\s*\[ \"\$cloned\" = \"\$KCOV_COMMIT\" \] \|\|", build_step, re.MULTILINE), (
-        f"the cloned tree must be asserted to be the pinned commit, with a branch that fails"
-        f" the step when it is not; step was:\n{build_step}"
+    # The fetch itself names the commit, so the tag never decides which objects arrive.
+    assert re.search(r'git -C kcov fetch [^\n]*"\$KCOV_COMMIT"', build_step), (
+        f"the pinned commit must be fetched directly; step was:\n{build_step}"
+    )
+    assert not re.search(r"--branch\b|\bv43\b", build_step.replace("# ", "", 1).split("run: |", 1)[1]), (
+        f"no command in the step may reach upstream through the moving tag; step was:\n{build_step}"
     )
     # Anchored on the build invocation, not a bare `cmake` — the apt-get line installs a
-    # package by that name, and matching it would pass no matter where the check sits.
-    assert build_step.index("rev-parse HEAD") < build_step.index("cmake -S kcov"), (
-        f"verify the clone before building from it; step was:\n{build_step}"
+    # package by that name, and matching it would pass no matter where the checkout sits.
+    assert build_step.index("checkout -q FETCH_HEAD") < build_step.index("cmake -S kcov"), (
+        f"check the pinned commit out before building from it; step was:\n{build_step}"
     )
 
     keys = re.findall(r"^\s+key: (kcov-.+)$", shell_tests_job, re.MULTILINE)
