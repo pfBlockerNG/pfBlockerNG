@@ -5,6 +5,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SHELLCHECK_PIN = "v0.11.0"
 SHELLSPEC_PIN = "0.28.1"
+KCOV_COMMIT_PIN = "a39874f938ce13f7a65f253120d1ec946b349ffe"
 
 
 def _workflow() -> str:
@@ -112,3 +113,44 @@ def test_shellspec_job_requires_jq_and_dash_instead_of_installing_them() -> None
             f"{tool} must be asserted present, with a branch that fails the job when it is not;"
             f" step was:\n{require_step}"
         )
+
+
+def test_ci_shellspec_pin_matches_the_documented_local_version() -> None:
+    """A local install must be the same shellspec CI verifies against, in the same
+    shape as the ShellCheck version tie above."""
+    documented = re.findall(
+        r"[Ss]hellspec.{0,300}?\bpins\s+\*\*(\d+\.\d+\.\d+)\*\*",
+        (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"),
+        re.DOTALL,
+    )
+
+    assert documented, "CONTRIBUTING.md must document the shellspec version CI pins"
+    assert set(documented) == {SHELLSPEC_PIN}, (
+        f"CONTRIBUTING.md documents shellspec {documented}, CI pins {SHELLSPEC_PIN}"
+    )
+
+
+def test_kcov_ci_build_is_pinned_to_a_commit_not_a_moving_tag() -> None:
+    """`--branch v43` tracks a moving tag: a re-tag upstream swaps what gets built and
+    cached under the `kcov-*` key with nothing noticing. The build must check out a
+    fixed commit SHA instead, and that SHA must be folded into both cache steps' keys
+    so a re-pin busts the cache rather than silently keeping the old binary."""
+    shell_tests_job = _job(_workflow(), "shell-tests", "php-syntax")
+    build_step = shell_tests_job.split("      - name: Build kcov from source (cache miss)\n", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+
+    assert not re.search(r"--branch\s+v43\b", build_step), (
+        f"kcov must not be built from the moving v43 tag; step was:\n{build_step}"
+    )
+    assert re.search(rf"\b{KCOV_COMMIT_PIN}\b", build_step), (
+        f"the kcov build must check out the pinned commit {KCOV_COMMIT_PIN}; step was:\n{build_step}"
+    )
+
+    cache_steps = [
+        step
+        for name in ("Restore cached kcov binary", "Save kcov binary to cache")
+        for step in [shell_tests_job.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]]
+    ]
+    for step in cache_steps:
+        assert KCOV_COMMIT_PIN in step, f"the kcov cache key must fold in the pinned commit; step was:\n{step}"

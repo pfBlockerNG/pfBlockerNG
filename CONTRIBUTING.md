@@ -162,9 +162,14 @@ shellspec            # from the repo root; reads ./.shellspec
 shellspec --kcov     # with coverage (informational; needs kcov)
 ```
 
-Install with `brew install shellspec` (macOS) or the official installer
-(`curl -fsSL https://git.io/shellspec | sh`). The pre-commit hook and CI run it
-automatically when `shellspec` is present (coverage is informational, no floor).
+CI pins **0.28.1**; install that same release locally (Homebrew and most
+distributions carry it, but check what your package manager actually gives
+you — `shellspec --version`) with `brew install shellspec` (macOS) or the
+official installer pinned to that version
+(`curl -fsSL https://git.io/shellspec | sh -s 0.28.1`) — an unpinned
+`| sh` installs whatever is latest, the same drift CI closed on the CI side
+(#2194). The pre-commit hook and CI run it automatically when `shellspec` is
+present (coverage is informational, no floor).
 See [`tests/shell/README.md`](tests/shell/README.md) for the harness contracts
 (the `iprange` PATH shim, the AWS fixture, and the `PFB_SOURCED` source-for-test
 pattern).

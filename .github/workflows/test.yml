@@ -378,18 +378,28 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ~/.local/kcov
-          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
+          key: kcov-a39874f938ce13f7a65f253120d1ec946b349ffe-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
 
       - name: Build kcov from source (cache miss)
         # Only runs when the cache is cold. best-effort: a compile failure still
-        # leaves CI green (coverage is informational).
+        # leaves CI green (coverage is informational). Pinned to a commit, not the
+        # `v43` tag: a tag is a moving reference and a re-tag upstream would swap
+        # what gets built and cached under this key with nothing noticing. `--branch`
+        # only accepts a ref (tag/branch), so a commit pin needs the
+        # init/fetch-by-sha/checkout shape below instead of `clone --branch`
+        # (GitHub serves any reachable commit SHA over the smart HTTP protocol).
         id: build-kcov
         if: steps.cache-kcov.outputs.cache-hit != 'true'
         continue-on-error: true
+        env:
+          KCOV_COMMIT: a39874f938ce13f7a65f253120d1ec946b349ffe
         run: |
           sudo apt-get update && sudo apt-get install -y \
             binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
-          git clone --depth 1 --branch v43 https://github.com/SimonKagstrom/kcov
+          mkdir kcov && git -C kcov init -q
+          git -C kcov remote add origin https://github.com/SimonKagstrom/kcov
+          git -C kcov fetch --depth 1 origin "$KCOV_COMMIT"
+          git -C kcov checkout -q FETCH_HEAD
           cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
           cmake --build kcov/build --parallel "$(nproc)"
           cmake --install kcov/build
@@ -402,7 +412,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: ~/.local/kcov
-          key: kcov-v43-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
+          key: kcov-a39874f938ce13f7a65f253120d1ec946b349ffe-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
 
       - name: Install kcov runtime deps and add to PATH
         # Runtime shared libs (libcurl, libelf, libdw) needed on both cache hit
