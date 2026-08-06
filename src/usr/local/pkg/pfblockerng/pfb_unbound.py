@@ -4431,7 +4431,7 @@ def _dnsbl_reduce_regex(inner: str) -> tuple[bool, str] | None:
     for pre in _DNSBL_RX_EXACT_PREFIXES:
         if body.startswith(pre):
             lit = body[len(pre) :]
-            if lit.startswith(_DNSBL_RX_WWW_OPT):
+            if lit[: len(_DNSBL_RX_WWW_OPT)].lower() == _DNSBL_RX_WWW_OPT:
                 lit = lit[len(_DNSBL_RX_WWW_OPT) :]
             if _DNSBL_RX_DOMAIN_LITERAL.match(lit):
                 return False, lit.replace("\\.", ".").lower()

@@ -211,7 +211,7 @@ def reduce_regex(inner: str) -> tuple[bool, str] | None:
     for pre in _EXACT_PREFIXES:
         if body.startswith(pre):
             lit = body[len(pre) :]
-            if lit.startswith(r"(www\.)?"):
+            if lit[: len(r"(www\.)?")].lower() == r"(www\.)?":
                 lit = lit[len(r"(www\.)?") :]
             if _DOMAIN_LITERAL.match(lit):
                 return False, lit.replace("\\.", ".").lower()

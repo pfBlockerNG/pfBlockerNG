@@ -42,7 +42,7 @@ matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS kill-gat
 `benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
 runnable via the manual-only CI `benchmarks` job. See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
 
-### DNSBL regex case-insensitivity invariant (#2079, #2097, #2098, #2099)
+### DNSBL regex case-insensitivity invariant (#2079, #2097, #2098, #2099, #2199)
 
 Domain names are case-insensitive, so **everything that evaluates a domain-matching regex
 must be too** — by lowercasing for plain comparison, by `re.IGNORECASE` for a compiled
@@ -52,6 +52,10 @@ atom-overlap probe); the domain-literal reduction grammar (prod `pfb_unbound.py`
 reference oracle `tests/test_adr07_decision_spec.py`, and the benchmark spike
 `benchmarks/spike_adr07_regex.py` — kept in lockstep) admits either case and lowercases the
 folded key at fold time, so a mixed-case literal reduces identically to its lowercase twin.
+The exact-form fold's optional `(www\.)?` prefix strip is the one fixed-text token in the
+grammar that contains a letter (the other prefixes -- `^`, `(.+\.)?`, `(^|\.)` -- are pure
+metacharacters, so case never applied to them); that token is matched case-insensitively too
+(#2199) -- a source pattern spelling it `(WWW\.)?` folds exactly like the lowercase form.
 Two constructs stay deliberately case-sensitive because they analyse **pattern text**, not
 domains: the module-level `_REGEX_*` shape-detection constants in `pfb_dnsbl_regex_rules.py`
 (match regex syntax punctuation), and the plain-domain label charset `_DNSBL_LABEL_CHARS`

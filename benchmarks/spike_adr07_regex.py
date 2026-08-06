@@ -184,7 +184,7 @@ def reduce_pattern(pat: str) -> tuple[str, str] | None:
         if body.startswith(pre):
             lit = body[len(pre) :]
             # allow an optional (www\.)? prefix, fold to the exact base domain
-            if lit.startswith(r"(www\.)?"):
+            if lit[: len(r"(www\.)?")].lower() == r"(www\.)?":
                 lit = lit[len(r"(www\.)?") :]
             dom = lit.replace("\\.", ".").lower()
             if _DOMAIN_LITERAL.match(lit):
