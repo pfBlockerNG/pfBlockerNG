@@ -411,6 +411,30 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  It 'refuses a MAX_PUSH_ATTEMPTS that cannot produce a single attempt'
+    # A bound of 0 (or a non-numeric value) makes the loop body unreachable, so
+    # the script would fall straight through to the give-up branch and report a
+    # push rejection for a push it never attempted.
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export MAX_PUSH_ATTEMPTS=0
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::MAX_PUSH_ATTEMPTS must be a positive integer'
+    The stderr should not include 'push rejected'
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'refuses a non-numeric MAX_PUSH_ATTEMPTS'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export MAX_PUSH_ATTEMPTS=many
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::MAX_PUSH_ATTEMPTS must be a positive integer'
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
   # --- a hard push failure is not remote contention -------------------------
 
   It 'a push that fails for an authentication-shaped reason makes exactly one attempt and does not retry'

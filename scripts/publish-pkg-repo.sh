@@ -47,6 +47,15 @@ set -eu
 : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
 : "${BASE_URL:?BASE_URL is required}"
 MAX_PUSH_ATTEMPTS="${MAX_PUSH_ATTEMPTS:-5}"
+# A bound below 1 (or a non-numeric one) makes the retry loop body unreachable, so the
+# script would report a push rejection for a push it never attempted.
+case "$MAX_PUSH_ATTEMPTS" in
+    '' | *[!0-9]*) MAX_PUSH_ATTEMPTS=0 ;;
+esac
+[ "$MAX_PUSH_ATTEMPTS" -ge 1 ] || {
+    echo "::error::MAX_PUSH_ATTEMPTS must be a positive integer" >&2
+    exit 1
+}
 
 export PFB_SRC
 
