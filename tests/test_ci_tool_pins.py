@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 SHELLCHECK_PIN = "v0.11.0"
+SHELLSPEC_PIN = "0.28.1"
 
 
 def _workflow() -> str:
@@ -56,6 +57,37 @@ def test_ci_shellcheck_pin_matches_the_documented_local_version() -> None:
     assert documented, "CONTRIBUTING.md must document the ShellCheck version contributors install locally"
     assert set(documented) == {SHELLCHECK_PIN.lstrip("v")}, (
         f"CONTRIBUTING.md documents ShellCheck {documented}, CI pins {SHELLCHECK_PIN}"
+    )
+
+
+def test_shellspec_ci_install_is_pinned_to_a_verified_release_asset() -> None:
+    """The POSIX gate must run the shellspec whose bytes we pinned. A
+    `/archive/refs/tags/` tarball is generated on demand from the tag, so it is not a
+    stable artifact: a re-tag upstream changes what runs the suite and nothing notices
+    (#2194). Same shape as the ShellCheck pin — release asset, fetched to a file, then
+    `sha256sum -c` before anything is extracted."""
+    install_step = (
+        _job(_workflow(), "shell-tests", "php-syntax")
+        .split("      - name: Install shellspec\n", 1)[1]
+        .split("\n      - name:", 1)[0]
+    )
+
+    assert f"SHELLSPEC_VERSION: {SHELLSPEC_PIN}" in install_step, (
+        f"the shellspec install must pin {SHELLSPEC_PIN}; step was:\n{install_step}"
+    )
+    assert re.search(r"SHELLSPEC_SHA256: [0-9a-f]{64}\b", install_step), (
+        f"the pinned download must carry a SHA-256 to verify against; step was:\n{install_step}"
+    )
+    assert "sha256sum -c" in install_step, (
+        f"the downloaded tarball must be checked against SHELLSPEC_SHA256; step was:\n{install_step}"
+    )
+    assert "/releases/download/" in install_step and "/archive/refs/tags/" not in install_step, (
+        f"pin the uploaded release asset, not the on-demand tag archive; step was:\n{install_step}"
+    )
+    # A pipe into tar unpacks the bytes before (or instead of) checking them — the
+    # verification has to gate the extraction, so the download must land in a file.
+    assert not re.search(r"\|\s*tar\b", install_step), (
+        f"fetch to a file and verify it before extracting, never pipe the download into tar; step was:\n{install_step}"
     )
 
 
