@@ -23,7 +23,7 @@ name: Repo install (live pfSense VM)
 # TRIGGERS: workflow_dispatch (always runs) + a nightly `schedule`. The scheduled run
 # is GATED — it only proceeds when `devel` actually moved since the previous nightly
 # (no point rebuilding the branch .pkg + booting VMs to re-test unchanged code; the
-# real version push, repo-publish, runs only on release tags). Not an every-PR gate (a
+# real version push, publish-pkg-repo, runs only on a published Release). Not an every-PR gate (a
 # live VM under KVM is ~15 min/leg). Secrets + required config are smoke-single.yml's
 # (SMOKE_IMAGE_* / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY, plus the Plus-leg SMOKE_PLUS_*
 # identity secrets); `secrets: inherit` forwards them.

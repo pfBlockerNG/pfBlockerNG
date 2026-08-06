@@ -315,23 +315,23 @@ class VarverValidationTests(_TempDirTestCase):
 
     @_requires_engine
     def test_varver_meta_rejected(self) -> None:
-        self._assert_varver_rejected("meta")
+        self._assert_varver_rejected("meta", "collides with pkg(8) catalog plumbing")
 
     @_requires_engine
     def test_varver_data_pkg_rejected(self) -> None:
-        self._assert_varver_rejected("data.pkg")
+        self._assert_varver_rejected("data.pkg", "collides with pkg(8) catalog plumbing")
 
     @_requires_engine
     def test_varver_packagesite_pkg_rejected(self) -> None:
-        self._assert_varver_rejected("packagesite.pkg")
+        self._assert_varver_rejected("packagesite.pkg", "collides with pkg(8) catalog plumbing")
 
     @_requires_engine
     def test_varver_leading_hyphen_rejected(self) -> None:
-        self._assert_varver_rejected("-2.8")
+        self._assert_varver_rejected("-2.8", "must be non-empty")
 
     @_requires_engine
     def test_varver_trailing_hyphen_rejected(self) -> None:
-        self._assert_varver_rejected("ce-")
+        self._assert_varver_rejected("ce-", "must be non-empty")
 
     @_requires_engine
     def test_varver_nul_byte_rejected(self) -> None:
@@ -343,21 +343,27 @@ class VarverValidationTests(_TempDirTestCase):
 
     @_requires_engine
     def test_varver_too_long_rejected(self) -> None:
-        # Message-specific (issue #2146 R2 gate finding): a bare assertRaises
-        # here passes even if _MAX_VARVER_LENGTH were widened past 300, because
-        # a 300-char varver still raises CatalogueAssemblyError downstream —
-        # from _catalogue_dir's "catalogue directory does not exist" check, not
-        # from THIS length guard — so a widened cap would go unnoticed. Pinning
-        # the guard's own message text is what makes this test fail if the cap
-        # stops firing for a 300-char varver specifically.
+        # Message-specific: a bare assertRaises here passes even if
+        # _MAX_VARVER_LENGTH were widened past 300, because a 300-char varver
+        # still raises CatalogueAssemblyError downstream — from _catalogue_dir's
+        # "catalogue directory does not exist" check, not from THIS length
+        # guard — so a widened cap would go unnoticed. Pinning the guard's own
+        # message text is what makes this test fail if the cap stops firing for
+        # a 300-char varver specifically.
         with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
             ca.regenerate_catalogue(self.tmp / "out", "stable", "a" * 300, engine=_ENGINE)
         self.assertIn("exceeds", str(ctx.exception))
         self.assertIn("255 characters", str(ctx.exception))
 
-    def _assert_varver_rejected(self, varver: str) -> None:
-        with self.assertRaises(ca.CatalogueAssemblyError):
+    def _assert_varver_rejected(self, varver: str, expected_message: str | None = None) -> None:
+        """A bare assertRaises here is vacuous for a varver whose value happens to
+        make site_root/channel/varver a non-existent path anyway (_catalogue_dir's
+        own "does not exist" check raises the SAME exception type) — pass
+        ``expected_message`` to pin the SPECIFIC guard this row means to exercise."""
+        with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
             ca.regenerate_catalogue(self.tmp / "out", "stable", varver, engine=_ENGINE)
+        if expected_message is not None:
+            self.assertIn(expected_message, str(ctx.exception))
 
 
 # --------------------------------------------------------------------------- #

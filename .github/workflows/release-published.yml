@@ -4,10 +4,11 @@ name: Release published (downstream)
 #
 # The dispatch workflow deliberately stops at a complete DRAFT (issue #1855): the release notes
 # and the final title are authored onto that draft by a human or by Claude, who then
-# publishes it. pfBlockerNG/pkg's publish.yml enumerates this repo's PUBLISHED Releases
-# and downloads their assets, so it genuinely cannot run before that moment — hence this
-# workflow, hanging off the real `release: published` event. If it did not exist,
-# publishing a release would silently stop refreshing the catalog.
+# publishes it. This workflow verifies the published Release's .pkg assets and publishes them
+# into pfBlockerNG/pkg's self-hosted catalogue itself (see the publish-pkg-repo job below), so
+# it genuinely cannot run before the Release is actually published — hence hanging off the real
+# `release: published` event. If it did not exist, publishing a release would silently stop
+# refreshing the catalog.
 #
 # The FreeBSD-ports PORTVERSION bump is NOT here: it runs at the END of the release run
 # (the terminal sync-ports-fork job), so that when a run finishes the only
@@ -186,6 +187,8 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
         run: |
           set -eu
+          [ -n "$RELEASE_ID" ] || { echo "::error::release_id is empty — the resolve job produced none for this Release"; exit 1; }
+          [ -n "$RELEASE_TAG" ] || { echo "::error::release_tag is empty — the resolve job produced none for this Release"; exit 1; }
           mkdir -p "${RUNNER_TEMP}/assets"
           META=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
           PKG_ASSETS=$(printf '%s' "$META" | jq -c '[.assets[] | select(.name | endswith(".pkg"))]')

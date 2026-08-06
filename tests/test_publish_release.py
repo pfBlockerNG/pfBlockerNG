@@ -37,6 +37,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import catalogue_assembly as ca
 import publish_catalogues as pc
 import publish_release as pr
 from _srcrepo import SourceRepoError, resolve_src_root
@@ -633,6 +634,77 @@ class TargetResolutionTests(_TempDirTestCase):
             )
         self.assertIn("same varver", str(ctx.exception))
 
+    @_requires_engine
+    def test_canonical_asset_without_record_rejected(self) -> None:
+        """A canonical VerifiedAsset with no record (never produced by verify_asset
+        itself, but a convention nothing at the type level enforces — see
+        publish_catalogues._canonical_record's own docstring) must raise the SAME
+        named RunVerificationError that accessor raises, not a bare TypeError from
+        an un-narrowed ``asset.record["matrix_row"]`` subscript."""
+        asset = pc.VerifiedAsset(
+            asset_class="canonical",
+            declared_name="recordless.pkg",
+            canonical_name="recordless.pkg",
+            work_path=Path("recordless.pkg"),
+            sha256="0" * 64,
+            manifest={},
+            record=None,
+        )
+        run_result = pc.RunResult(
+            intake=pc.parse_intake(_REPO, "1", "v4.0.0.b1", '["edge"]', "10:1"),
+            canonical_assets=(asset,),
+            dependency_assets=(),
+            build_route_rows=(ROW_CE,),
+        )
+        with self.assertRaises(pc.RunVerificationError) as ctx:
+            pr._build_targets(_ENGINE, run_result)
+        self.assertIn("expected a canonical asset with a record", str(ctx.exception))
+
+
+class DestinationConflictTests(_TempDirTestCase):
+    @_requires_engine
+    def test_same_name_version_different_bytes_rejected(self) -> None:
+        """Issue #2146's contract: same name/version with different bytes, source,
+        or provenance fails closed instead of silently overwriting the published
+        artifact. Re-publishing the identical tag+version with a different
+        source_sha yields the SAME canonical filename but different .pkg bytes."""
+        assets_dir_1 = self.new_assets_dir()
+        _populate_assets_dir(
+            assets_dir_1,
+            rows=(ROW_CE,),
+            source_tag="v4.0.0.b1",
+            include_dependency=False,
+        )
+        first = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir_1,
+            rows=(ROW_CE,),
+            tag="v4.0.0.b1",
+        )
+        self.assertEqual(first.touched, (("edge", "ce-2.8"),))
+        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        published = catalogue_dir / "pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg"
+        original_bytes = published.read_bytes()
+
+        assets_dir_2 = self.new_assets_dir()
+        assets_dir_2.mkdir(parents=True)
+        divergent_record = _record(channel="edge", row=ROW_CE, source_tag="v4.0.0.b1", source_sha="c" * 40)
+        declared = _canonical_declared_name(divergent_record)
+        _path, digest = _wrap_canonical_pkg(assets_dir_2, divergent_record, local_name=declared)
+        (assets_dir_2 / pr._DIGESTS_FILENAME).write_text(json.dumps({declared: digest}), encoding="utf-8")
+
+        with self.assertRaises(pr.DestinationConflictError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets_dir_2,
+                rows=(ROW_CE,),
+                tag="v4.0.0.b1",
+            )
+        message = str(ctx.exception)
+        self.assertIn(str(published), message)
+        self.assertIn("pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg", message)
+        self.assertEqual(published.read_bytes(), original_bytes)  # never overwritten
+
 
 # --------------------------------------------------------------------------- #
 # Basic publish flow — coverage matrix: varvers, dependency scoping, channels.
@@ -742,6 +814,67 @@ class OutcomeTests(_TempDirTestCase):
         )
 
     @_requires_engine
+    def test_incomplete_descriptor_regenerated_on_identical_rerun(self) -> None:
+        """A rerun with byte-identical assets must still regenerate the catalog
+        descriptor if a prior run's write-back fault left it incomplete —
+        catalogue_assembly.regenerate_catalogue's own docstring names this fault
+        window. `changed=False` from the .pkg comparison alone must not report a
+        NOOP over a destination missing packagesite.pkg/data.pkg/meta.conf."""
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        first = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            tag="v4.0.0.b1",
+        )
+        self.assertTrue(first.touched)
+        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        (catalogue_dir / "packagesite.pkg").unlink()
+
+        second_assets_dir = self.new_assets_dir()
+        _populate_assets_dir(second_assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        second = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=second_assets_dir,
+            rows=(ROW_CE,),
+            tag="v4.0.0.b1",
+        )
+        self.assertEqual(second.touched, (("edge", "ce-2.8"),))
+        self.assertFalse(second.noop)
+        self.assertTrue((catalogue_dir / "packagesite.pkg").is_file())
+
+    @_requires_engine
+    def test_incomplete_descriptor_with_divergent_bytes_still_fails_closed(self) -> None:
+        """The B1 fail-closed check runs BEFORE the descriptor-completeness repair:
+        a missing packagesite.pkg never waives the different-bytes rejection."""
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            tag="v4.0.0.b1",
+        )
+        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        (catalogue_dir / "packagesite.pkg").unlink()
+
+        divergent_assets_dir = self.new_assets_dir()
+        divergent_assets_dir.mkdir(parents=True)
+        divergent_record = _record(channel="edge", row=ROW_CE, source_tag="v4.0.0.b1", source_sha="d" * 40)
+        declared = _canonical_declared_name(divergent_record)
+        _path, digest = _wrap_canonical_pkg(divergent_assets_dir, divergent_record, local_name=declared)
+        (divergent_assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps({declared: digest}), encoding="utf-8")
+
+        with self.assertRaises(pr.DestinationConflictError):
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=divergent_assets_dir,
+                rows=(ROW_CE,),
+                tag="v4.0.0.b1",
+            )
+
+    @_requires_engine
     def test_new_version_added_alongside_retained_older(self) -> None:
         assets_dir_1 = self.new_assets_dir()
         _populate_assets_dir(
@@ -792,8 +925,6 @@ class OutcomeTests(_TempDirTestCase):
 
 
 def ca_default_keep() -> int:
-    import catalogue_assembly as ca
-
     return ca.DEFAULT_RETENTION_KEEP
 
 

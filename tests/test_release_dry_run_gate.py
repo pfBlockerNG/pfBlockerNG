@@ -13,9 +13,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 
-# Current jobs that create or publish release artifacts. repo-publish left this
-# workflow (issue #1855 rework): it consumes the PUBLISHED Release's assets, so it
-# fires from release-published.yml on the real `release: published` event. The ports
+# Current jobs that create or publish release artifacts. The pkg catalogue publish
+# is not among them: it consumes the PUBLISHED Release's assets, so it lives in
+# release-published.yml (`publish-pkg-repo`) on the real `release: published` event. The ports
 # bump stayed -- when a release run finishes, the only things left are "write the
 # changelog" and "publish".
 MUTATION_JOBS = {
