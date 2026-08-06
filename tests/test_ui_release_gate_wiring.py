@@ -953,9 +953,8 @@ def _run_healthcheck(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh_stub = bin_dir / "gh"
-    gh_stub.write_text(
-        f'#!/bin/sh\necho \'{{"isDraft":{str(is_draft).lower()},"name":"Test Release","body":"body text","assets":{assets_json}}}\'\n'
-    )
+    response = f'{{"isDraft":{str(is_draft).lower()},"name":"Test Release","body":"body text","assets":{assets_json}}}'
+    gh_stub.write_text(f"#!/bin/sh\necho '{response}'\n")
     gh_stub.chmod(0o755)
     env = {
         "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",

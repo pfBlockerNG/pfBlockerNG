@@ -157,39 +157,51 @@ def test_concrete_primary_routes_and_destination_fanout(
 
 
 def test_family_scoped_previous_bases_and_explicit_empty_range() -> None:
-    assert select_previous_release_tag(
-        "v4.0.0.a1",
-        "edge",
-        (
-            _candidate("v3.2.17", ancestor_of_current=True),
-            _candidate("v3.2.19", ancestor_of_current=False),
-        ),
-    ) == "v3.2.17"
+    assert (
+        select_previous_release_tag(
+            "v4.0.0.a1",
+            "edge",
+            (
+                _candidate("v3.2.17", ancestor_of_current=True),
+                _candidate("v3.2.19", ancestor_of_current=False),
+            ),
+        )
+        == "v3.2.17"
+    )
 
-    assert select_previous_release_tag(
-        "v4.0.0",
-        "stable",
-        (
-            _candidate("v3.2.18", ancestor_of_current=True),
-            _candidate("v3.2.19", ancestor_of_current=False),
-        ),
-    ) == "v3.2.18"
+    assert (
+        select_previous_release_tag(
+            "v4.0.0",
+            "stable",
+            (
+                _candidate("v3.2.18", ancestor_of_current=True),
+                _candidate("v3.2.19", ancestor_of_current=False),
+            ),
+        )
+        == "v3.2.18"
+    )
 
-    assert select_previous_release_tag(
-        "v4.0.1.a2",
-        "testing",
-        (
-            _candidate("v4.0.0"),
-            _candidate("v4.0.1.a1"),
-            _candidate("v3.2.15", on_source_line=True, ancestor_of_current=False),
-        ),
-    ) == "v4.0.1.a1"
+    assert (
+        select_previous_release_tag(
+            "v4.0.1.a2",
+            "testing",
+            (
+                _candidate("v4.0.0"),
+                _candidate("v4.0.1.a1"),
+                _candidate("v3.2.15", on_source_line=True, ancestor_of_current=False),
+            ),
+        )
+        == "v4.0.1.a1"
+    )
 
-    assert select_previous_release_tag(
-        "v5.0.0.a1",
-        "edge",
-        (_candidate("v4.0.2", on_source_line=True, ancestor_of_current=False),),
-    ) is None
+    assert (
+        select_previous_release_tag(
+            "v5.0.0.a1",
+            "edge",
+            (_candidate("v4.0.2", on_source_line=True, ancestor_of_current=False),),
+        )
+        is None
+    )
     assert (
         select_previous_release_tag(
             "v4.0.1.a1",
@@ -248,7 +260,7 @@ def test_concrete_safety_fixtures_stop_before_publication() -> None:
     workflow = _text(WORKFLOW)
     changelog = _text(CHANGELOG)
     fixtures = {
-        "stale_draft": ('IS_DRAFT=$(printf', "stale draft"),
+        "stale_draft": ("IS_DRAFT=$(printf", "stale draft"),
         "missing_asset": ("missing release-row asset", "missing asset"),
         "fabricated_link": ("fabricated issue or PR link", "fabricated issue or PR link"),
         "withheld_confirmation": ("withheld confirmation", "withheld confirmation"),
