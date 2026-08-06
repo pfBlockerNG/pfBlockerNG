@@ -48,7 +48,19 @@ scripts/local-smoke.sh --no-two-vm
 
 # The ADR-14 Web-UI tiers (ui_render / ui_e2e / ui_browser):
 scripts/local-smoke.sh --marker ui_render
+
+# A different pkg channel (stable|testing|edge|nightly; default edge):
+scripts/local-smoke.sh --channel testing
 ```
+
+`--channel` decides which port the `.pkg` is built from, and the port NAMES the package
+(`pfSense-pkg-pfBlockerNG-<channel>`), so it decides which artifact the suite installs. The
+default is the channel the `devel` branch's `4.0.0.a*` line belongs to — the one
+`build-pkg-linux.yml` moves to in issue #2166 — because a run on any other channel
+verifies a differently-named package than CI ships (issue #2206). Nothing pins the two
+mechanically yet; pass `--channel` explicitly if you are verifying a specific artifact. An unknown channel is refused before a
+box is leased, because `build-pkg-portable.py` would otherwise reject it on the box after the
+lease and the ports clone.
 
 A UI-tier marker auto-scopes the run to `tests/smoke/ui` with the 300s per-test ceiling
 (matching `ui-tests.yml`); `ui_browser` additionally installs the headless Chromium binary on

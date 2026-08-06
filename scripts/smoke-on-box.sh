@@ -5,12 +5,16 @@
 # Single-writer per lease; no other smoke runs share this box concurrently.
 #
 # USAGE (always via select-box.sh -- "... sh /root/pfBlockerNG/scripts/smoke-on-box.sh <flags>"):
-#   smoke-on-box.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR] [--no-two-vm]
+#   smoke-on-box.sh [--ref REF] [--abi ABI] [--channel C] [--marker M] [--filter EXPR]
+#                   [--no-two-vm]
 #                   [--shard I] [--shard-total N]
 #
 # FLAGS:
 #   --ref REF        git ref to check out (default: current HEAD)
 #   --abi ABI        build ABI string (default: FreeBSD:15:amd64)
+#   --channel C      pkg channel to build: stable|testing|edge|nightly (default: edge).
+#                    The channel selects the port, and the port names the package, so this
+#                    decides WHICH artifact the suite installs (issue #2206).
 #   --marker M       pytest -m marker (default: smoke)
 #   --filter EXPR    pytest -k filter expr (default: none)
 #   --no-two-vm      skip civm image pull and set NO_TWO_VM=1
@@ -27,6 +31,11 @@
 #   SMOKE_GHCR_TOKEN  optional; used for `oras login ghcr.io` before image pull
 #   SMOKE_PFSENSE_REF pfSense image ref (default ghcr.io/pfblockerng/pfsense-ce:2.8)
 #   CIVM_REF          civm image ref (default ghcr.io/pfblockerng/civm:v1)
+#
+# Test-only (env):
+#   PFB_ONBOX_REPO_ROOT  override the repo path (default /root/pfBlockerNG). Used by
+#                        tests/shell/smoke_on_box_channel_spec.sh to point the script at a
+#                        fixture repo; never set on a box.
 #
 # RESPONSIBILITIES (in order):
 #   1. Re-exec at requested REF (git fetch + checkout + exec with sentinel).
@@ -46,13 +55,17 @@ set -eu
 # ── Defaults ──────────────────────────────────────────────────────────────── #
 _REF=""        # resolved below (HEAD) if not given
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
+_CHANNEL="edge"          # the devel branch's release line; overridden by --channel
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
 _SHARD=0       # 0-based shard index, forwarded to run-smoke.sh (issue #797)
 _SHARD_TOTAL=1 # N=1 = no sharding (default)
 
-REPO_ROOT="/root/pfBlockerNG"
+# Testability seam (mirrors local-smoke.sh's PFB_SELECT_BOX): the box always has the repo at
+# the fixed path, but tests/shell/smoke_on_box_channel_spec.sh points this at a fixture repo
+# so the arg-parse + re-exec hop can be exercised without a box.
+REPO_ROOT="${PFB_ONBOX_REPO_ROOT:-/root/pfBlockerNG}"
 
 # ── Scrub inherited GIT_* context (via shared lib — ADR-47 chokepoint) ─── #
 # Inherited from the pre-commit hook or the orchestrator's env; scrub once
@@ -74,6 +87,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
+        --channel)  shift; _CHANNEL="$1"; shift ;;
         --marker)   shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
@@ -107,7 +121,7 @@ if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
 
     # Re-exec the now-checked-out version with properly quoted args.
     # Build via set -- so each arg is a distinct word (no word-split on _FILTER spaces).
-    set -- --ref "$_REF" --abi "$_ABI" --marker "$_MARKER"
+    set -- --ref "$_REF" --abi "$_ABI" --channel "$_CHANNEL" --marker "$_MARKER"
     [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
     [ "$_NO_TWO_VM" -eq 1 ] && set -- "$@" --no-two-vm
     [ "$_SHARD" != "0" ] && set -- "$@" --shard "$_SHARD"
@@ -224,9 +238,10 @@ export SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
 pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 
 # ── Step 5: build .pkg ─────────────────────────────────────────────────────── #
-printf 'smoke-on-box: building .pkg (abi=%s)...\n' "$_ABI" >&2
+printf 'smoke-on-box: building .pkg (abi=%s channel=%s)...\n' "$_ABI" "$_CHANNEL" >&2
 SMOKE_PKG="$(sh scripts/build-leg.sh \
     --ports-dir  "$PORTS_DIR" \
+    --channel    "$_CHANNEL" \
     --abi        "$_ABI" \
     --php        "$_php_ver" \
     --py-flavor  "$_py_flavor" \

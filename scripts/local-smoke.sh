@@ -19,6 +19,11 @@
 #   PFB_REF     git ref (commit/branch) to test (default: current HEAD)
 #   --ref REF   same; flag takes precedence over PFB_REF
 #   --abi ABI   build ABI (default: FreeBSD:15:amd64)
+#   --channel C pkg channel to BUILD: stable|testing|edge|nightly (default: edge, the
+#               channel the devel branch's 4.0.0.a* line belongs to, and the one
+#               build-pkg-linux.yml moves to in issue #2166). The channel picks the port,
+#               and the port names the package, so a run on the wrong channel verifies a
+#               differently-named artifact than CI ships (issue #2206).
 #   --marker M  pytest -m marker (default: smoke); see also --filter
 #   --filter EXPR  pytest -k filter expression (optional)
 #   --no-two-vm skip civm image pull and LAN-client tests
@@ -72,6 +77,11 @@ export PFB_BOXES
 # ── Parse flags ───────────────────────────────────────────────────────────── #
 _REF="${PFB_REF:-}"
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
+# A local run must build the same-named package CI does, or a green local smoke proves
+# nothing about CI's artifact. NOT mechanically pinned to build-pkg-linux.yml: that workflow
+# still asks for the retired `devel` until issue #2166 lands, so this tracks the channel the
+# devel branch's 4.0.0.a* line belongs to. Revisit if the branch changes release line.
+_CHANNEL="edge"
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
@@ -81,6 +91,7 @@ while [ "$#" -gt 0 ]; do
     case "$1" in
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
+        --channel)  shift; _CHANNEL="$1"; shift ;;
         --marker|-m) shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;        shift ;;
@@ -94,6 +105,17 @@ if [ "$#" -gt 0 ]; then
     printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
     exit 2
 fi
+
+# ── Validate --channel against the builder's own vocabulary ────────────────── #
+# build-pkg-portable.py rejects anything else at argparse, on the box, after a lease and a
+# ports clone. Refusing here costs nothing and keeps the value a single literal word.
+case "$_CHANNEL" in
+    stable|testing|edge|nightly) ;;
+    *)
+        printf 'local-smoke: --channel must be stable|testing|edge|nightly: %s\n' "$_CHANNEL" >&2
+        exit 2
+        ;;
+esac
 
 # ── Validate --shards (positive integer; loud exit 2 on 0/negative/garbage) ── #
 case "$_SHARDS" in
@@ -149,7 +171,7 @@ _ABI_Q="$(_sq "$_ABI")"
 _MARKER_Q="$(_sq "$_MARKER")"
 
 # Build the smoke-on-box.sh flags string (structured, no word-split risk after encoding).
-_ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --marker '$_MARKER_Q'"
+_ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --channel '$_CHANNEL' --marker '$_MARKER_Q'"
 if [ -n "$_FILTER" ]; then
     _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"
 fi
