@@ -4396,7 +4396,12 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
 # reduce_pattern). A reducible ``/re/`` decides IDENTICALLY to a domain/wildcard
 # rule, so it folds to a domain Rule at zero per-query cost. ``D`` is a domain
 # literal: labels of [a-z0-9-] joined by ESCAPED dots (``\.``), no other metachar.
-_DNSBL_RX_DOMAIN_LITERAL = re.compile(r"^[a-z0-9_-]+(?:\\\.[a-z0-9_-]+)+$")  # underscore per #723
+# Case-insensitive (#2099): the runtime compiles every admitted regex with
+# IGNORECASE (#2079/#2097), so a mixed-case literal reduces exactly like its
+# lowercase twin -- the fold lowercases the extracted literal below so the
+# domain key stays canonical (matching how normalise() lowercases a plain
+# domain before validating it).
+_DNSBL_RX_DOMAIN_LITERAL = re.compile(r"^[A-Za-z0-9_-]+(?:\\\.[A-Za-z0-9_-]+)+$")  # underscore per #723
 # Prefixes that mean "domain + all subdomains" (-> wildcard zone after fold):
 _DNSBL_RX_WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
 # Prefix that means "exact domain only" (-> exact data after fold):
@@ -4421,7 +4426,7 @@ def _dnsbl_reduce_regex(inner: str) -> tuple[bool, str] | None:
         if body.startswith(pre):
             lit = body[len(pre) :]
             if _DNSBL_RX_DOMAIN_LITERAL.match(lit):
-                return True, lit.replace("\\.", ".")
+                return True, lit.replace("\\.", ".").lower()
             return None
     for pre in _DNSBL_RX_EXACT_PREFIXES:
         if body.startswith(pre):
@@ -4429,7 +4434,7 @@ def _dnsbl_reduce_regex(inner: str) -> tuple[bool, str] | None:
             if lit.startswith(_DNSBL_RX_WWW_OPT):
                 lit = lit[len(_DNSBL_RX_WWW_OPT) :]
             if _DNSBL_RX_DOMAIN_LITERAL.match(lit):
-                return False, lit.replace("\\.", ".")
+                return False, lit.replace("\\.", ".").lower()
             return None
     return None
 

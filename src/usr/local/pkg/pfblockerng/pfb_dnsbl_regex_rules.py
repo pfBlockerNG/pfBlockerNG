@@ -195,7 +195,12 @@ def _regex_group_end(pattern: str, index: int) -> int:
 
 @lru_cache(maxsize=512)
 def _regex_atoms_overlap(first: str, second: str) -> bool:
-    """True when both atoms can match the same character, i.e. the pair is ambiguous."""
+    """True when both atoms can match the same character, i.e. the pair is ambiguous.
+
+    Compiled IGNORECASE (#2099): the DNSBL matcher compiles every admitted pattern
+    case-insensitively (#2079/#2097), so this probe must judge overlap under the
+    same semantics the runtime actually executes, not case-sensitive text overlap.
+    """
     if first == second:
         return True
     try:
@@ -203,8 +208,8 @@ def _regex_atoms_overlap(first: str, second: str) -> bool:
         # every stderr line into an admin-facing validation error.
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            left = re.compile(first)
-            right = re.compile(second)
+            left = re.compile(first, re.IGNORECASE)
+            right = re.compile(second, re.IGNORECASE)
     except re.error:
         return False
     return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)

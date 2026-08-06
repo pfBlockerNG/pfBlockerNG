@@ -189,7 +189,7 @@ def _valid_domain(host: str) -> str | None:
 # Regex reduction grammar (mirrors benchmarks/spike_adr07_regex.reduce_pattern).
 # A reducible /re/ decides IDENTICALLY to a domain/wildcard rule (ADR.md SS2).
 # --------------------------------------------------------------------------- #
-_DOMAIN_LITERAL = re.compile(r"^[a-z0-9_-]+(?:\\\.[a-z0-9_-]+)+$")  # underscore per #723
+_DOMAIN_LITERAL = re.compile(r"^[A-Za-z0-9_-]+(?:\\\.[A-Za-z0-9_-]+)+$")  # underscore #723; case-fold #2099
 _WILDCARD_PREFIXES = (r"^(.+\.)?", r"(^|\.)", r"^(?:.+\.)?")
 _EXACT_PREFIXES = (r"^",)
 
@@ -206,7 +206,7 @@ def reduce_regex(inner: str) -> tuple[bool, str] | None:
         if body.startswith(pre):
             lit = body[len(pre) :]
             if _DOMAIN_LITERAL.match(lit):
-                return True, lit.replace("\\.", ".")
+                return True, lit.replace("\\.", ".").lower()
             return None
     for pre in _EXACT_PREFIXES:
         if body.startswith(pre):
@@ -214,7 +214,7 @@ def reduce_regex(inner: str) -> tuple[bool, str] | None:
             if lit.startswith(r"(www\.)?"):
                 lit = lit[len(r"(www\.)?") :]
             if _DOMAIN_LITERAL.match(lit):
-                return False, lit.replace("\\.", ".")
+                return False, lit.replace("\\.", ".").lower()
             return None
     return None
 
