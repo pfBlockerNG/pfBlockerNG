@@ -99,11 +99,31 @@ def test_shellspec_ci_install_is_pinned_to_a_verified_release_asset() -> None:
 def test_contributing_documents_the_shellspec_version_ci_pins() -> None:
     """A contributor whose local shellspec differs from the verified CI one gets a verdict
     CI will not reproduce, so the documented install names the pinned version (#2198)."""
-    documented = re.findall(r"shellspec.{0,200}?\b(\d+\.\d+\.\d+)\b", _contributing(), re.DOTALL | re.IGNORECASE)
+    # Anchored on the install instruction itself. Scanning a window after any mention of
+    # shellspec would take its version from whatever unrelated `X.Y.Z` a later doc edit
+    # happens to put nearby — the file names shellspec ~20 times.
+    documented = re.findall(r"Install shellspec\D{0,40}?\b(\d+\.\d+\.\d+)\b", _contributing())
 
     assert documented, "CONTRIBUTING.md must document the shellspec version contributors install locally"
     assert set(documented) == {SHELLSPEC_PIN}, (
         f"CONTRIBUTING.md documents shellspec {documented}, CI pins {SHELLSPEC_PIN}"
+    )
+
+
+def test_no_doc_offers_an_unpinned_shellspec_installer() -> None:
+    """CONTRIBUTING.md's pinned instructions are only worth anything if they are the ones a
+    contributor finds: tests/shell/README.md carried a second, unpinned install (`brew` +
+    the upstream `curl | sh`) that CONTRIBUTING.md itself links to (#2198)."""
+    skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
+    offenders = sorted(
+        str(path.relative_to(ROOT))
+        for path in ROOT.rglob("*.md")
+        if not skip & set(path.parts) and "git.io/shellspec" in path.read_text(encoding="utf-8")
+    )
+
+    assert offenders == [], (
+        f"these docs still hand out an unpinned shellspec installer instead of pointing at"
+        f" CONTRIBUTING.md's pinned instructions: {offenders}"
     )
 
 
@@ -115,6 +135,9 @@ def test_kcov_ci_build_is_pinned_to_an_immutable_commit() -> None:
         "\n      - name:", 1
     )[0]
 
+    # Equality with KCOV_PIN alone would still hold if both sides drifted back to `v43`,
+    # while every fresh clone would then fail the runtime comparison.
+    assert re.fullmatch(r"[0-9a-f]{40}", KCOV_PIN), f"KCOV_PIN must be a commit id, not a moving ref; was {KCOV_PIN}"
     assert f"KCOV_COMMIT: {KCOV_PIN}" in shell_tests_job, (
         f"the kcov build must pin the commit v43 resolves to; job was:\n{shell_tests_job}"
     )
