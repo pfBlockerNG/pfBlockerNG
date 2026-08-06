@@ -1,13 +1,75 @@
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+SHELLCHECK_PIN = "v0.11.0"
+
+
+def _workflow() -> str:
+    return (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+
+
+def _job(workflow: str, name: str, next_name: str) -> str:
+    return workflow.split(f"\n  {name}:\n", 1)[1].split(f"\n  {next_name}:\n", 1)[0]
+
 
 def test_ruff_ci_install_is_pinned() -> None:
-    workflow = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
-    ruff_job = workflow.split("\n  ruff:\n", 1)[1].split("\n  shellcheck:\n", 1)[0]
+    workflow = _workflow()
+    ruff_job = _job(workflow, "ruff", "shellcheck")
     install_step = ruff_job.split("      - name: Install Ruff\n", 1)[1].split("\n      - name:", 1)[0].strip()
     ruff_installs = [line.strip() for line in ruff_job.splitlines() if "pip install" in line and "ruff" in line]
 
     assert install_step == "run: pip install ruff==0.16.0"
     assert ruff_installs == ["run: pip install ruff==0.16.0"]
+
+
+def test_shellcheck_ci_install_is_pinned_to_a_verified_release_tarball() -> None:
+    """The lint verdict must come from a named ShellCheck, not from whatever the runner
+    image ships: ubuntu-24.04 preinstalls 0.9.0, so an apt install is a silent no-op."""
+    shellcheck_job = _job(_workflow(), "shellcheck", "shell-tests")
+    install_step = shellcheck_job.split("      - name: Install ShellCheck\n", 1)[1].split("\n      - name:", 1)[0]
+
+    assert f"SHELLCHECK_VERSION: {SHELLCHECK_PIN}" in install_step, (
+        f"the ShellCheck install must pin {SHELLCHECK_PIN}; step was:\n{install_step}"
+    )
+    assert re.search(r"SHELLCHECK_SHA256: [0-9a-f]{64}\b", install_step), (
+        f"the pinned download must carry a SHA-256 to verify against; step was:\n{install_step}"
+    )
+    assert "sha256sum -c" in install_step, (
+        f"the downloaded tarball must be checked against SHELLCHECK_SHA256; step was:\n{install_step}"
+    )
+    assert "apt-get install" not in install_step and "apt install" not in install_step, (
+        f"apt would re-pin the gate to the runner image's ShellCheck; step was:\n{install_step}"
+    )
+
+
+def test_ci_shellcheck_pin_matches_the_documented_local_version() -> None:
+    """CI and a clean local run must agree — 0.11.0 accepts constructs 0.9.0 rejects
+    (`A && B || C` / SC2015, issue #2185), so a drift here reds CI after a green local run."""
+    documented = re.findall(
+        r"ShellCheck.{0,200}?\bv(\d+\.\d+\.\d+)\b",
+        (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"),
+        re.DOTALL,
+    )
+
+    assert documented, "CONTRIBUTING.md must document the ShellCheck version contributors install locally"
+    assert set(documented) == {SHELLCHECK_PIN.lstrip("v")}, (
+        f"CONTRIBUTING.md documents ShellCheck {documented}, CI pins {SHELLCHECK_PIN}"
+    )
+
+
+def test_shellspec_job_requires_jq_and_dash_instead_of_installing_them() -> None:
+    """ubuntu-24.04 ships both and neither changes a verdict by version, but the suite
+    pins dash as the test shell — its absence must fail the job, not fall back silently."""
+    shell_tests_job = _job(_workflow(), "shell-tests", "php-syntax")
+
+    assert not re.search(r"apt-get install[^\n]*\bdash\b", shell_tests_job), (
+        "dash must be required and asserted present, not installed over whatever the image ships"
+    )
+    assert not re.search(r"apt-get install[^\n]*\bjq\b", shell_tests_job), (
+        "jq must be required and asserted present, not installed over whatever the image ships"
+    )
+    assert "command -v jq" in shell_tests_job and "command -v dash" in shell_tests_job, (
+        "the job must assert jq and dash are present before the suites that need them run"
+    )
