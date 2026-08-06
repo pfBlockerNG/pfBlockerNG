@@ -62,6 +62,7 @@ import pytest
 # (module-level "unused") fixture import; the matching F811 ("redefinition" by each case param)
 # is suppressed for this file in pyproject. Both are the standard pytest re-export idiom.
 from .conftest import SmokeVM
+from .pkg_identity import branch_channel
 from .test_repo_install import (  # noqa: F401
     DECOY_REPO_DIR,
     DECOY_REPO_NAME,
@@ -86,6 +87,11 @@ from .test_repo_install import (  # noqa: F401
 )
 
 pytestmark = pytest.mark.repo
+
+# The channel the branch build reports through pfb_channel_from_pkgname() — read off the
+# artifact, never spelled here: the ports tree renames channels (issue #2166) and a literal
+# would keep passing this file's own reading while failing on the VM.
+BRANCH_CHANNEL = branch_channel(os.environ.get("SMOKE_PKG"))
 
 # The per-channel repo a "Read latest" maps to (ADR §2 + 2026-06-15 amendment): stable/devel
 # share ``pfblockerng``; nightly is the only separate repo. Phase 1 exercises the shared repo
@@ -420,8 +426,8 @@ def test_file_notice_is_idempotent_per_version(repo_vm: SmokeVM) -> None:
     """
     version_a = "9.9.9_1"
     version_b = "9.9.9_2"
-    msg_a = f"pfBlockerNG {version_a} available (devel)"
-    msg_b = f"pfBlockerNG {version_b} available (devel)"
+    msg_a = f"pfBlockerNG {version_a} available ({BRANCH_CHANNEL})"
+    msg_b = f"pfBlockerNG {version_b} available ({BRANCH_CHANNEL})"
     try:
         # GIVEN: a clean before-state — no last-notified, no matching notice for A.
         close_all_notices(repo_vm)
@@ -849,7 +855,7 @@ def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_pat
         cache = read_software_cache(repo_vm)
         assert cache.get("installed") == low, f"cache installed {cache.get('installed')!r} != {low!r}"
         assert cache.get("latest") == low, f"cache latest {cache.get('latest')!r} != {low!r} (should equal installed)"
-        assert cache.get("channel") == "devel", f"cache channel {cache.get('channel')!r} != 'devel'"
+        assert cache.get("channel") == BRANCH_CHANNEL, f"cache channel {cache.get('channel')!r} != {BRANCH_CHANNEL!r}"
         assert count_matching_notices(repo_vm, high) == 0, "a notice fired while installed == latest (no update)"
 
         # WHEN: publish the HIGHER build into the SAME repo; the check sees a newer latest.
@@ -924,7 +930,7 @@ def test_software_check_setting_gates_background_check(repo_vm: SmokeVM, tmp_pat
     base_version = read_compact_version(src)
     low = f"{base_version}_1"
     high = f"{base_version}_9"
-    msg = "available (devel)"
+    msg = f"available ({BRANCH_CHANNEL})"
 
     try:
         # GIVEN: our-repo install + a newer build published into the same repo.

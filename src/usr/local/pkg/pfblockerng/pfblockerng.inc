@@ -4550,11 +4550,18 @@ function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
 /*
  * Channel a build is on, from its installed package NAME:
  *   pfSense-pkg-pfBlockerNG         -> 'stable'
- *   pfSense-pkg-pfBlockerNG-devel   -> 'devel'
+ *   pfSense-pkg-pfBlockerNG-testing -> 'testing'
+ *   pfSense-pkg-pfBlockerNG-edge    -> 'edge'
+ *   pfSense-pkg-pfBlockerNG-devel   -> 'devel'   (retired port; installed boxes remain)
  *   pfSense-pkg-pfBlockerNG-NIGHTLY -> 'nightly' (ADR-18)
  * Anything unrecognised/empty -> NULL. The installed name is authoritative for "what
  * channel am I on" (ADR-19 §2 channel detection). Suffix match is case-insensitive so
  * the NIGHTLY/devel spellings are tolerant.
+ *
+ * issue #2166: the ports tree replaced the -devel recipe with -testing/-edge/-nightly, so
+ * a build from the current CI channel reports one of those names. -devel stays mapped:
+ * boxes installed before the rename still carry it, and dropping it here would read them
+ * as an unknown channel — i.e. not our build.
  */
 function pfb_channel_from_pkgname(?string $name): ?string {
 	if (!is_string($name) || $name === '') {
@@ -4568,6 +4575,10 @@ function pfb_channel_from_pkgname(?string $name): ?string {
 	switch ($suffix) {
 		case '':
 			return 'stable';
+		case '-testing':
+			return 'testing';
+		case '-edge':
+			return 'edge';
 		case '-devel':
 			return 'devel';
 		case '-nightly':
@@ -4579,13 +4590,16 @@ function pfb_channel_from_pkgname(?string $name): ?string {
 
 /*
  * The pkg repo "read latest" maps to, for a given channel (2026-06-14 + 2026-06-15
- * amendments): stable AND devel share ONE repo 'pfblockerng' (the channel selects the
- * package, not a per-channel repo); 'nightly' is the sole separately-channelled build,
- * repo 'pfblockerng-nightly'. An unrecognised channel -> NULL (no repo to read from).
+ * amendments): stable AND the pre-release channels share ONE repo 'pfblockerng' (the
+ * channel selects the package, not a per-channel repo); 'nightly' is the sole
+ * separately-channelled build, repo 'pfblockerng-nightly'. An unrecognised channel ->
+ * NULL (no repo to read from). Per-channel catalogues are #2148's cutover, not this.
  */
 function pfb_pkg_repo_name_for_channel(?string $channel): ?string {
 	switch ($channel) {
 		case 'stable':
+		case 'testing':
+		case 'edge':
 		case 'devel':
 			return 'pfblockerng';
 		case 'nightly':

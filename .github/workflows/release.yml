@@ -493,7 +493,8 @@ jobs:
 
       - name: Detect pkg channel from tag
         id: channel
-        # The channel drives which port we build (devel vs stable). Classified by
+        # The channel drives which port we build (stable, testing, or edge — the ports
+        # tree carries one recipe per channel). Classified by
         # scripts/release-version.sh: vX.Y.Z.aN|.bN|.rN -> prerelease, vX.Y.Z -> stable.
         #
         # It also decides, from the SAME classification, whether the live smoke/UI

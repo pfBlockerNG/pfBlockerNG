@@ -34,6 +34,10 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		return [
 			'stable: bare release name'   => ['pfSense-pkg-pfBlockerNG', 'stable'],
 			'devel: -devel suffix'        => ['pfSense-pkg-pfBlockerNG-devel', 'devel'],
+			'testing: -testing suffix'    => ['pfSense-pkg-pfBlockerNG-testing', 'testing'],
+			'edge: -edge suffix'          => ['pfSense-pkg-pfBlockerNG-edge', 'edge'],
+			'edge: case-insensitive'      => ['PFSENSE-PKG-PFBLOCKERNG-EDGE', 'edge'],
+			'testing: case-insensitive'   => ['PFSENSE-PKG-PFBLOCKERNG-TESTING', 'testing'],
 			'nightly: -NIGHTLY suffix'    => ['pfSense-pkg-pfBlockerNG-NIGHTLY', 'nightly'],
 			'nightly: case-insensitive'   => ['pfSense-pkg-pfBlockerNG-nightly', 'nightly'],
 			'devel: case-insensitive'     => ['PFSENSE-PKG-PFBLOCKERNG-DEVEL', 'devel'],
@@ -61,6 +65,8 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		return [
 			'stable -> shared pfblockerng'  => ['stable', 'pfblockerng'],
 			'devel -> shared pfblockerng'   => ['devel', 'pfblockerng'],
+			'testing -> shared pfblockerng' => ['testing', 'pfblockerng'],
+			'edge -> shared pfblockerng'    => ['edge', 'pfblockerng'],
 			'nightly -> pfblockerng-nightly' => ['nightly', 'pfblockerng-nightly'],
 			'unknown channel -> null'        => ['beta', null],
 			'null channel -> null'           => [null, null],

@@ -298,8 +298,9 @@ On a FreeBSD machine with the ports tree available:
 cd /usr/ports/net/pfSense-pkg-pfBlockerNG
 make package
 
-# Devel
-cd /usr/ports/net/pfSense-pkg-pfBlockerNG-devel
+# Pre-release channel (edge is the line the devel branch builds;
+# testing and nightly have their own recipes)
+cd /usr/ports/net/pfSense-pkg-pfBlockerNG-edge
 make package
 ```
 
@@ -682,8 +683,10 @@ To update the ports tree manually instead:
 ```sh
 # In our fork clone (pfBlockerNG/FreeBSD-ports, branch pfblockerng/use-github),
 # edit the matching port Makefile:
-# net/pfSense-pkg-pfBlockerNG/Makefile        (stable)
-# net/pfSense-pkg-pfBlockerNG-devel/Makefile  (devel)
+# net/pfSense-pkg-pfBlockerNG/Makefile          (stable)
+# net/pfSense-pkg-pfBlockerNG-testing/Makefile  (testing)
+# net/pfSense-pkg-pfBlockerNG-edge/Makefile     (edge)
+# net/pfSense-pkg-pfBlockerNG-nightly/Makefile  (nightly)
 
 # Update GH_TAGNAME to the new tag, then bump PORTREVISION if the
 # PORTVERSION is unchanged, or update PORTVERSION to match the new tag.

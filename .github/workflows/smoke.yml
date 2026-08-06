@@ -275,7 +275,7 @@ jobs:
         include: ${{ fromJson(needs.prepare.outputs.leg_matrix) }}
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
-      channel: devel
+      channel: edge
       # ABI/dep target matching this leg's image (CE=FreeBSD:15, Plus=FreeBSD:16
       # in the current matrix) — pkg add refuses a cross-major-ABI .pkg.
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
