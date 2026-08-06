@@ -376,7 +376,7 @@ jobs:
             BOOTS=$(printf '%s\n' "$ENTRIES" | jq -c --slurpfile pub "facts/${CHANNEL}-published.json" '
               ([ .[] | select((.status // "active") != "beta")
                      | select($pub[0][.pfsense_version] == true) ]
-               | max_by(.pfsense_version | split(".") | map(tonumber))) as $stable
+               | max_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber))) as $stable
               | ([ $stable // empty ]
                  + [ .[] | select((.status // "active") == "beta")
                          | select($pub[0][.pfsense_version] == true) ])')
@@ -576,7 +576,7 @@ jobs:
               fi
               SIB=$(jq -c --arg c "$CHANNEL" '
                 [ .versions[] | select(.channel == $c) | select((.arch // "amd64") == "amd64") ]
-                | max_by(.pfsense_version | split(".") | map(tonumber)) // empty' matrix_current.json)
+                | max_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)) // empty' matrix_current.json)
               if [ -z "$SIB" ] || [ "$SIB" = "null" ]; then
                 echo "::warning::no ${CHANNEL} sibling entry to derive ${FAMILY} from — skipping"
                 continue

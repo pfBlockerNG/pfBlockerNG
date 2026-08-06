@@ -167,7 +167,7 @@ jobs:
                 | select($filter == "" or .pfsense_version == $filter)
               ]
               | group_by(.channel)
-              | map(max_by(.pfsense_version | split(".") | map(tonumber)))
+              | map(max_by(.pfsense_version | split("-")[0] | split(".") | map(tonumber)))
               | map({
                   variant:          (.channel | ascii_downcase),
                   label:            .channel,

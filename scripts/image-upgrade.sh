@@ -578,6 +578,7 @@ OLD_VER=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r')
 log "current version on box: ${OLD_VER:-unknown}"
 
 # --- optional: upgrade baked deps (pkg update -f + conditional pkg upgrade) -
+PKG_WAS_UPGRADED=0
 if [ "$UPGRADE_PKGS" -eq 1 ]; then
     log "refreshing package catalogue (pkg update -f)"
     # pkg update may print output; connection stays up (not a reboot command).
@@ -591,6 +592,7 @@ if [ "$UPGRADE_PKGS" -eq 1 ]; then
     _pkg_dry=$(ssh_guest 'pkg upgrade -n' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade-dryrun.log" || true)
     if printf '%s' "$_pkg_dry" | grep -q 'Your packages are up to date'; then
         log "packages already up to date — skipping pkg upgrade + reboot"
+        PKG_WAS_UPGRADED=0
     else
         log "package upgrades pending — running pkg upgrade -y"
         ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade.log" || true
@@ -600,6 +602,7 @@ if [ "$UPGRADE_PKGS" -eq 1 ]; then
         log "waiting for SSH after pkg-upgrade reboot..."
         wait_guest_ssh 300
         log "box is back after pkg-upgrade reboot"
+        PKG_WAS_UPGRADED=1
     fi
 fi
 
@@ -661,8 +664,10 @@ log "checking for an available OS upgrade (pfSense-upgrade -c)"
 UPGRADE_CHECK=$(pfb_call_site_check "$LOCAL_DIR/upgrade-check.log")
 printf '%s\n' "$UPGRADE_CHECK" | sed 's/^/    /'
 if printf '%s' "$UPGRADE_CHECK" | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
+    if [ "$UPGRADE_PKGS" -eq 0 ] || [ "$PKG_WAS_UPGRADED" -eq 0 ]; then
     log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
     exit 0
+    fi
 fi
 
 # --- run the pfSense upgrade -----------------------------------------------
@@ -691,8 +696,14 @@ if [ -z "$NEW_VER" ]; then
     # upgrade — fail-closed.
     if printf '%s\n%s' "$UPGRADE_CHECK" "$(cat "$LOCAL_DIR/upgrade.log" 2>/dev/null)" \
         | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
-        log "no OS upgrade applied — box is current at '${OLD_VER}'; nothing to publish."
-        exit 0
+        if [ "$UPGRADE_PKGS" -eq 1 ] && [ "$PKG_WAS_UPGRADED" -eq 1 ]; then
+            NEW_VER="$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)"
+            NEW_VER="${NEW_VER:-$OLD_VER}"
+            log "no OS upgrade applied — package refresh updated the image at '${NEW_VER}', continuing publish."
+        else
+            log "no OS upgrade applied — box is current at '${OLD_VER}'; nothing to publish."
+            exit 0
+        fi
     fi
     die "version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'; see $LOCAL_DIR/upgrade.log)"
 fi
