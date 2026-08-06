@@ -4012,6 +4012,52 @@ function pfb_stage_publish(string $target, callable $extract): bool {
 	return TRUE;
 }
 
+/**
+ * Publish a directory extraction atomically. $extract writes into an empty staging
+ * directory beside $target and returns its exit code; $target is replaced only once
+ * that code reports success, so a failed extraction leaves the directory already in
+ * service intact (issue #2172).
+ *
+ * @param callable(string):int $extract
+ */
+function pfb_stage_publish_dir(string $target, callable $extract): bool {
+	$staged = @tempnam(dirname($target), '.pfbstagedir_');
+	if ($staged === FALSE) {
+		return FALSE;
+	}
+	// tempnam() hands back a FILE; the extractor needs a directory at that path.
+	// 0755, not tempnam's 0600: a published category has unprivileged readers.
+	if (!@unlink($staged) || !@mkdir($staged, 0755) || !@chmod($staged, 0755)) {
+		is_dir($staged) ? rmdir_recursive($staged) : unlink_if_exists($staged);
+		return FALSE;
+	}
+	if (!pfb_download_extraction_succeeded((int) $extract($staged))) {
+		rmdir_recursive($staged);
+		return FALSE;
+	}
+	// rename() cannot replace a non-empty directory, so the previous publication moves
+	// aside first and is restored if the swap does not complete.
+	$backup = NULL;
+	if (is_dir($target)) {
+		$backup = @tempnam(dirname($target), '.pfbstagebak_');
+		if ($backup === FALSE || !@unlink($backup) || !@rename($target, $backup)) {
+			rmdir_recursive($staged);
+			return FALSE;
+		}
+	}
+	if (!@rename($staged, $target)) {
+		if ($backup !== NULL) {
+			@rename($backup, $target);
+		}
+		rmdir_recursive($staged);
+		return FALSE;
+	}
+	if ($backup !== NULL) {
+		rmdir_recursive($backup);
+	}
+	return TRUE;
+}
+
 function pfb_download_retval_success(?int $retval): bool {
 	return $retval === 0;
 }
@@ -13349,9 +13395,6 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				$filename = basename("{$file_esc}", '.tar.gz');
 
 				if (!empty(pfb_filter($filename, PFB_FILTER_WORD, 'pfb_download category'))) {
-					rmdir_recursive("{$pfb['dbdir']}/{$filename}/");
-					safe_mkdir("{$pfb['dbdir']}/{$filename}/");
-
 					// ADR-46: disk-writing extraction of a THIRD-PARTY archive (member
 					// names feed on-disk filenames) -- reject hostile member names first
 					// (a NULL member list = unlistable archive rejects too, fail-closed).
@@ -13364,26 +13407,34 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 
 					// Extract Blacklist categories from sub-folders into a single folder structure
 					$cmd = "--include='*domains' -s',.*/\\(.*\\)/\\(.*\\)/domains,{$filename}_\\1_\\2,' -s',.*/\\(.*\\)/domains,{$filename}_\\1,'";
-					$filename_esc = escapeshellarg("{$pfb['dbdir']}/{$filename}/");
-					exec("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C {$filename_esc} >/dev/null 2>&1", $output, $retval);
+					// issue #2172: the extraction runs in a staging directory and is swapped
+					// into place only once tar reports success, so a failed extraction leaves
+					// the category contents already in service untouched.
+					$retval = pfb_download_initial_retval();
+					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
+					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
+						exec("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1", $output, $retval);
+						if (!pfb_download_extraction_succeeded($retval)) {
+							return $retval;
+						}
 
-					// Rename any Category files with dashes
-					$verifydir = "{$pfb['dbdir']}/{$filename}";
-					if (is_dir("{$verifydir}")) {
-						$list = glob("{$verifydir}/{$filename}*");
+						// Rename any Category files with dashes
+						$list = glob("{$staged}/{$filename}*");
 						if (is_array($list) && !empty($list)) {
 							foreach ($list as $verify) {
-								if (strpos($verify, '-') !== FALSE) {
-									rename($verify, str_replace('-', '_', $verify));
+								if (strpos(basename($verify), '-') !== FALSE) {
+									rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
 								}
 							}
 						}
+						return $retval;
+					})) {
+						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})", 2);
+						return PfbDownloadResult::failure();
 					}
 
 					// Create update file indicator for update process
-					if (pfb_download_extraction_succeeded($retval)) {
-						touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
-					}
+					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
 				}
 				else {
 					pfb_logger("\n Invalid filename [{$filename}]", 1);
