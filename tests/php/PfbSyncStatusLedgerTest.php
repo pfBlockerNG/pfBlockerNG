@@ -382,6 +382,16 @@ final class PfbSyncStatusLedgerTest extends TestCase
 
 	public function testOpenBlocksUntilARealConcurrentProcessReleasesTheLedgerLock(): void
 	{
+		$this->assertOpenerBlocksWhileTheLedgerLockIsHeld(0);
+	}
+
+	/**
+	 * @param int $openerStartDelayUs microseconds the opener waits, after proving the lock is
+	 *                                contended, before it calls into the ledger -- the window in
+	 *                                which the opener is running but has not reached the lock yet.
+	 */
+	private function assertOpenerBlocksWhileTheLedgerLockIsHeld(int $openerStartDelayUs): void
+	{
 		if (!function_exists('pcntl_fork') || !function_exists('pcntl_async_signals')
 			|| !function_exists('pcntl_signal') || !function_exists('posix_kill') || !defined('SIGUSR1')) {
 			$this->markTestSkipped('pcntl not available -- cannot spawn a real concurrent process for this test.');
@@ -458,6 +468,12 @@ final class PfbSyncStatusLedgerTest extends TestCase
 					exit(1);
 				}
 				fwrite($eventChild, "CONTENDED\n");
+				// Signal delivery cuts usleep() short, so hold the window against a
+				// deadline -- the opener stays runnable and answers every probe.
+				$startAt = microtime(TRUE) + ($openerStartDelayUs / 1000000);
+				while (microtime(TRUE) < $startAt) {
+					usleep(1000);
+				}
 				pfb_sync_status_open('ip', 'pfB_Example_v4', 'download', 'HTTP 404', $this->dir, self::clockAt(1000));
 				fwrite($eventChild, "RETURNED\n");
 				fclose($eventChild);
@@ -468,7 +484,13 @@ final class PfbSyncStatusLedgerTest extends TestCase
 			$this->assertSame("CONTENDED\n", $this->readEvent($eventParent, 'concurrent opener contention'));
 			$blocked = FALSE;
 			$notBlockedSignals = [];
-			for ($attempt = 0; $attempt < 32; $attempt++) {
+			// The wait ends on the observed BLOCKED state. A budget counted in signal
+			// round trips is not a wait: an opener that is merely slow to reach the lock
+			// answers NOT_BLOCKED as fast as the CPU allows and exhausts it in milliseconds
+			// (#2183). The cap below is wall-clock and generous -- its only job is reaping
+			// a stuck run, and the pause between probes leaves the opener CPU to advance.
+			$salvageDeadline = microtime(TRUE) + 30.0;
+			while (microtime(TRUE) < $salvageDeadline) {
 				if (!@posix_kill($openerPid, SIGUSR1)) {
 					$this->fail('salvage cap expired / stuck or environment: awaiting BLOCKED signal before release; opener exited');
 				}
@@ -480,11 +502,16 @@ final class PfbSyncStatusLedgerTest extends TestCase
 				if (!str_starts_with($signalEvent, 'NOT_BLOCKED ')) {
 					$this->fail('unexpected opener signal event: expected BLOCKED or NOT_BLOCKED, got ' . $signalEvent);
 				}
-				$notBlockedSignals[] = $signalEvent;
+				$notBlockedSignals[$signalEvent] = ($notBlockedSignals[$signalEvent] ?? 0) + 1;
+				usleep(1000);
+			}
+			$observed = [];
+			foreach ($notBlockedSignals as $signalEvent => $count) {
+				$observed[] = $signalEvent . ' (x' . $count . ')';
 			}
 			$this->assertTrue($blocked,
-				'salvage cap expired / stuck or environment: awaiting BLOCKED opener state after signal retries; '
-				. 'observed=' . implode(';', $notBlockedSignals));
+				'salvage cap expired / stuck or environment: awaiting BLOCKED opener state until the salvage cap; '
+				. 'observed=' . implode(';', $observed));
 			fwrite($controlParent, "RELEASE\n");
 			$this->assertSame("RELEASING\n", $this->readEvent($eventParent, 'ledger lock holder release while still locked'));
 			$this->assertSame("RETURNED\n", $this->readEvent($eventParent, 'concurrent opener return after unlock'));
@@ -518,6 +545,18 @@ final class PfbSyncStatusLedgerTest extends TestCase
 				}
 			}
 		}
+	}
+
+	// -----------------------------------------------------------------------
+	// issue #2183 — the blocked-state observation must survive an opener that is
+	// slow to reach the lock: it waits for the opener to BE blocked. A budget
+	// counted in signal round trips is not that wait — it is spent in milliseconds
+	// while the opener is still on its way, and reports the opener as NOT_BLOCKED.
+	// -----------------------------------------------------------------------
+
+	public function testOpenerIsObservedBlockedEvenWhenItIsSlowToReachTheLedgerLock(): void
+	{
+		$this->assertOpenerBlocksWhileTheLedgerLockIsHeld(250000);
 	}
 
 	// -----------------------------------------------------------------------
