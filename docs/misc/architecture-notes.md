@@ -42,6 +42,25 @@ matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS kill-gat
 `benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
 runnable via the manual-only CI `benchmarks` job. See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
 
+### DNSBL regex case-insensitivity invariant (#2079, #2097, #2098, #2099)
+
+Domain names are case-insensitive, so **everything that evaluates a domain-matching regex
+must be too** — by lowercasing for plain comparison, by `re.IGNORECASE` for a compiled
+pattern, never by folding a pattern's own text. Every regex that matches a query name carries
+`IGNORECASE` (feed/user regex load, the save-time validator, and the catastrophic-shape gate's
+atom-overlap probe); the domain-literal reduction grammar (prod `pfb_unbound.py`, the
+reference oracle `tests/test_adr07_decision_spec.py`, and the benchmark spike
+`benchmarks/spike_adr07_regex.py` — kept in lockstep) admits either case and lowercases the
+folded key at fold time, so a mixed-case literal reduces identically to its lowercase twin.
+Two constructs stay deliberately case-sensitive because they analyse **pattern text**, not
+domains: the module-level `_REGEX_*` shape-detection constants in `pfb_dnsbl_regex_rules.py`
+(match regex syntax punctuation), and the plain-domain label charset `_DNSBL_LABEL_CHARS`
+(runs strictly after `normalise()`'s own lowercasing, so widening it would be redundant). A
+regex can never be safely case-folded when a case-sensitive metacharacter class (`\s`/`\S`,
+`\w`/`\W`, `\d`/`\D`, …) would change meaning under the fold — the domain-literal grammar's
+charset structurally excludes backslash outside its own escaped-dot separator token, so this
+never applies to an extracted literal in practice.
+
 ### ADR-62 — per-line parse authority (retires PHP's feed-level ABP classification)
 
 The DNSBL download loop used to maintain **feed-level** ABP state: a one-shot header sniff
