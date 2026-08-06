@@ -332,11 +332,12 @@ is a **derived index** — there is no stateful store to maintain. The
 **separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo** holds the served
 tree and GitHub Pages publishes it straight from that repo's `main`; it carries no workflow
 of its own. **This** repo does the publishing (see **Triggers** below): the exact `.pkg`
-assets of the published Release are verified, dropped into the catalogue directory of every
-channel the release's destination tuple names, and committed. Each catalogue is then
-**regenerated** from the files present in that directory (`meta.conf`/`packagesite.pkg`/`data.pkg`
-per `<channel>/<varver>`) — so the tree itself is the state, and a rollback is installing a
-retained older version rather than re-deploying a site.
+assets of the published Release are verified and dropped into the catalogue directory of
+every channel the release's destination tuple names; each of those catalogues is then
+**regenerated** from the files present in that directory
+(`meta.conf`/`packagesite.pkg`/`data.pkg` per `<channel>/<varver>`); and only then is the
+result committed, in one commit, to `pkg`. So the tree itself is the state, and a rollback
+is installing a retained older version rather than re-deploying a site.
 
 - **Per-`<varver>` tree, arch-less.** One catalog under `<channel>/<varver>/` (channels
   `stable`, `testing`, `edge` and `nightly`) per edition + pfSense major.minor present in
