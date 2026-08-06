@@ -205,7 +205,7 @@ jobs:
       matrix: ${{ fromJSON(needs.prepare.outputs.build_matrix) }}
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
-      channel: devel
+      channel: edge
       # Build the leg's .pkg for its own pfSense base, with the ABI/php/python
       # values coming from the leg's version-matrix entry.
       abi: FreeBSD:${{ matrix.freebsd_major }}:amd64

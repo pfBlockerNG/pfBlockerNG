@@ -275,7 +275,7 @@ jobs:
     needs: [resolve-version, publish-image]
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
-      channel: devel
+      channel: edge
       # Pass the CE-version-derived target EXPLICITLY (issue #22) — never rely on
       # the builder's defaults, which match the min CE only.
       abi: FreeBSD:${{ needs.resolve-version.outputs.freebsd_major }}:amd64

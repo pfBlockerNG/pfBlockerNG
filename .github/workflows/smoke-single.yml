@@ -243,7 +243,7 @@ jobs:
     if: ${{ inputs.pkg_artifact == '' }}
     uses: ./.github/workflows/build-pkg-linux.yml
     with:
-      channel: devel
+      channel: edge
       # Build a .pkg whose ABI + dep names match THIS leg's image. A bare dispatch
       # keeps the workflow's min-CE defaults; the fan-out passes per-leg values from
       # the ci-metadata version matrix so each leg gets an ABI/flavor-matched .pkg

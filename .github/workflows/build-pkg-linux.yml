@@ -35,7 +35,7 @@ on:
       channel:
         description: "pfBlockerNG channel/port (devel|stable)"
         required: false
-        default: "devel"
+        default: "edge"
       abi:
         description: "Target ABI — FreeBSD:<freebsd_major>:<arch> for the target pfSense base, per the ci-metadata version matrix"
         required: false
@@ -73,7 +73,7 @@ on:
       channel:
         required: false
         type: string
-        default: "devel"
+        default: "edge"
       abi:
         required: false
         type: string
