@@ -290,7 +290,7 @@ class ChannelValidationTests(_TempDirTestCase):
 class VarverValidationTests(_TempDirTestCase):
     @_requires_engine
     def test_varver_empty_rejected(self) -> None:
-        self._assert_varver_rejected("")
+        self._assert_varver_rejected("", "must be non-empty")
 
     @_requires_engine
     def test_varver_extra_segment_rejected(self) -> None:
@@ -307,11 +307,11 @@ class VarverValidationTests(_TempDirTestCase):
 
     @_requires_engine
     def test_varver_traversal_prefix_rejected(self) -> None:
-        self._assert_varver_rejected("../ce-2.8")
+        self._assert_varver_rejected("../ce-2.8", "ONE segment")
 
     @_requires_engine
     def test_varver_leading_slash_rejected(self) -> None:
-        self._assert_varver_rejected("/ce-2.8")
+        self._assert_varver_rejected("/ce-2.8", "ONE segment")
 
     @_requires_engine
     def test_varver_meta_rejected(self) -> None:
@@ -335,11 +335,11 @@ class VarverValidationTests(_TempDirTestCase):
 
     @_requires_engine
     def test_varver_nul_byte_rejected(self) -> None:
-        self._assert_varver_rejected("ce\x002.8")
+        self._assert_varver_rejected("ce\x002.8", "must be non-empty")
 
     @_requires_engine
     def test_varver_newline_rejected(self) -> None:
-        self._assert_varver_rejected("ce\n2.8")
+        self._assert_varver_rejected("ce\n2.8", "must be non-empty")
 
     @_requires_engine
     def test_varver_too_long_rejected(self) -> None:
@@ -355,15 +355,17 @@ class VarverValidationTests(_TempDirTestCase):
         self.assertIn("exceeds", str(ctx.exception))
         self.assertIn("255 characters", str(ctx.exception))
 
-    def _assert_varver_rejected(self, varver: str, expected_message: str | None = None) -> None:
+    def _assert_varver_rejected(self, varver: str, expected_message: str) -> None:
         """A bare assertRaises here is vacuous for a varver whose value happens to
         make site_root/channel/varver a non-existent path anyway (_catalogue_dir's
         own "does not exist" check raises the SAME exception type) — pass
-        ``expected_message`` to pin the SPECIFIC guard this row means to exercise."""
+        ``expected_message`` pins the SPECIFIC guard this row means to exercise and is
+        mandatory for that reason: an omitted one silently degrades the row to the
+        vacuous form."""
         with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
             ca.regenerate_catalogue(self.tmp / "out", "stable", varver, engine=_ENGINE)
-        if expected_message is not None:
-            self.assertIn(expected_message, str(ctx.exception))
+        self.assertIn("invalid varver", str(ctx.exception))
+        self.assertIn(expected_message, str(ctx.exception))
 
 
 # --------------------------------------------------------------------------- #
