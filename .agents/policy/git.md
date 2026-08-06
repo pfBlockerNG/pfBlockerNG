@@ -114,14 +114,22 @@ collision. Examples: `ADR_10_Zero_Downtime_DNSBL` → `adr/10-zero-downtime-dnsb
 invocation`, `pfblockerng: fix IPv6 subnet match`). No trailing period; body optional for
 non-obvious changes.
 
-**Attribution:** both environments keep the human owner visible and earn a GitHub
+**Attribution:** every environment keeps the human owner visible and earns a GitHub
 **Verified** badge. On a box with the **user's own signing key**, the user
-authors/commits/signs as themselves. Credit the active AI client with a
-`Co-authored-by:` trailer only when its provider adapter defines a verified,
-GitHub-recognized identity; otherwise disclose it in the PR audit/footer and never
-fabricate or borrow another provider's identity. Claude's adapter uses
-`Claude <noreply@anthropic.com>`; Codex's current mapping in `AGENTS.md` has no
-verified coauthor identity. In **agent/managed-remote** environments, the active
+authors/commits/signs as themselves. Credit an AI client with a `Co-authored-by:`
+trailer only when its provider adapter defines a verified, GitHub-recognized
+identity; otherwise disclose it in the PR audit/footer and never fabricate or
+borrow another provider's identity. Claude's adapter uses
+`Claude <noreply@anthropic.com>`; Codex's mapping in `AGENTS.md` has no verified
+coauthor identity, and Copilot's is whatever `coauthor.copilot.*` names locally.
+**Every client whose marker is present gets its own trailer** — an agent launched
+from inside another agent's session inherits the outer marker while setting its
+own, and both worked on the commit. Each identity comes only from that client's
+own `coauthor.<client>.*` keys; the legacy `coauthor.*` key holds Claude's (and a
+human session's) identity and is read only when no client marker is present at
+all, so an unconfigured Codex or Copilot commit is never credited to Claude.
+Client markers: `CLAUDECODE=1`, `CODEX_THREAD_ID`, `COPILOT_CLI` (plus
+`COPILOT_AGENT_PROMPT` for Copilot's cloud agent). In **agent/managed-remote** environments, the active
 agent is committer+signer, the human is author (`--author=`), and the
 `prepare-commit-msg` hook injects the owner's `Co-authored-by:` trailer automatically.
 Full two-model spec + badge preconditions: below.

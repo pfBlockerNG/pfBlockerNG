@@ -35,42 +35,26 @@ def test_token_savior_hooks_preserve_upstream_opt_in_defaults() -> None:
             assert variable not in serialized, f"{path} overrides opt-in {variable}"
 
 
-def test_copilot_session_start_carries_the_modes_and_the_session_marker() -> None:
-    # Copilot's own schema: repo hooks live in .github/hooks/*.json, events are
-    # camelCase, and only sessionStart output is processed for additionalContext.
-    config = json.loads((ROOT / ".github/hooks/pfblockerng.json").read_text(encoding="utf-8"))
-    assert config["version"] == 1
+def test_copilot_client_detection_needs_nothing_installed() -> None:
+    # Copilot CLI exports COPILOT_CLI into every shell it spawns, so detection is
+    # one variable like the other two clients. Nothing may reappear under
+    # ~/.copilot or .github/hooks: a global hook running repo-relative scripts is
+    # how the first attempt at this grew an arbitrary-code-execution surface.
+    assert not (ROOT / ".github/hooks").exists(), "repo-level Copilot hooks are not wired"
+    for name in ("copilot-session-marker.sh", "copilot-session-hook.sh", "install-copilot-hooks.sh"):
+        assert not (ROOT / "scripts/agent" / name).exists(), f"{name} was superseded by COPILOT_CLI"
 
-    # The ACTION matters, not just the script name: a sessionEnd wired to `start`
-    # would leave every session recorded forever.
-    for event, action in (("sessionStart", "start"), ("sessionEnd", "end")):
-        commands = [entry["bash"] for entry in config["hooks"][event] if "bash" in entry]
-        assert any(command.endswith(f'copilot-session-hook.sh" {action}') for command in commands), (
-            f"copilot {event} does not dispatch `{action}`"
-        )
+    for hook in (".githooks/prepare-commit-msg", ".githooks/pre-push"):
+        body = (ROOT / hook).read_text(encoding="utf-8")
+        assert "COPILOT_CLI" in body, f"{hook} lost Copilot detection"
+        assert "COPILOT_AGENT_PROMPT" in body, f"{hook} lost cloud-agent detection"
 
-    # subagentStart carries its own capsule, exactly as the other two vendors pin
-    # SessionStart AND SubagentStart.
-    commands = [entry["bash"] for entry in config["hooks"]["subagentStart"] if "bash" in entry]
-    assert any(command.endswith('copilot-session-hook.sh" subagent') for command in commands)
-
-    # Both capsules live in the dispatcher, because the same script backs the
-    # user-level install (repo-level hooks did not fire in CLI 1.0.78).
-    dispatcher = (ROOT / "scripts/agent/copilot-session-hook.sh").read_text(encoding="utf-8")
-    capsules = [line for line in dispatcher.splitlines() if line.startswith('{"additionalContext"')]
-    assert len(capsules) == 2, "expected a session capsule and a subagent capsule"
-    for capsule in capsules:
-        missing = [mode for mode in MODES if mode not in capsule]
-        assert not missing, f"copilot capsule missing {missing}"
-
-    marker_script = ROOT / "scripts/agent/copilot-session-marker.sh"
-    assert marker_script.exists()
-    body = marker_script.read_text(encoding="utf-8")
-    assert "pfb-copilot-session" in body
-    assert "--git-common-dir" in body, "the marker must be shared across worktrees"
-
-    installer = (ROOT / "scripts/agent/install-copilot-hooks.sh").read_text(encoding="utf-8")
-    assert "copilot-session-hook.sh" in installer
+    # Every client present is credited from its OWN key, and the legacy key —
+    # which holds Claude's identity here — is gated on no client being present.
+    trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
+    assert "for pfb_provider in claude codex copilot" in trailer, "attribution is no longer per-client"
+    assert "coauthor.${pfb_provider}.email" in trailer, "identities no longer come from per-client keys"
+    assert "any_client" in trailer, "the legacy coauthor key is no longer gated on a client marker"
 
 
 def test_copilot_instructions_route_at_the_canonical_bootstrap() -> None:

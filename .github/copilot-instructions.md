@@ -17,17 +17,15 @@ appliance, POSIX sh only.
 - Skills are discovered from `.agents/skills/` (canonical) and the `.claude/skills/`
   symlinks onto it — no Copilot-specific copy exists or should be created. The vendored
   `mattpocock-skills` plugin installs from `plugins/mattpocock-skills/.github/plugin/`.
-- Session lifecycle hooks run from `~/.copilot/hooks/pfblockerng.json`, installed once with
-  `sh scripts/agent/install-copilot-hooks.sh`: they inject the mode capsules and write the
-  session record the git hooks read. Repo-level `.github/hooks/pfblockerng.json` holds the
-  same wiring for the day the CLI honours it — as of 1.0.78 it does not.
+- The mode capsules ride this file: Copilot's repo-level `.github/hooks/*.json` did not fire
+  on CLI 1.0.78, so nothing is installed outside the repo.
 - Custom agents live in `.github/agents/*.agent.md`, tiered per `.agents/model-tiers.conf`.
-- Copilot exports no environment marker to spawned shells, so `.githooks/pre-push` and
-  `.githooks/prepare-commit-msg` detect sessions through those records. Never delete one
-  mid-session, and never work around a guard it trips.
-- Copilot has no verified co-author identity here: the human owner stays author, committer,
-  and signer, and Copilot authorship is disclosed in the PR body, never as a
-  `Co-authored-by:` trailer for Copilot itself.
+- `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect the session through
+  `COPILOT_CLI`, which the CLI exports into every shell it spawns. Never unset it to dodge a
+  guard it trips.
+- The human owner stays author, committer, and signer. A `Co-authored-by:` trailer for
+  Copilot is emitted only from a locally configured `coauthor.copilot.*` identity; with none
+  configured, disclose authorship in the PR body instead.
 - **Copilot code review stays disabled** (owner directive, `.agents/policy/landing.md`).
   That directive is about the review bot and does not restrict Copilot as an agent client.
 

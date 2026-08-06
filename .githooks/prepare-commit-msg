@@ -25,27 +25,12 @@
 
 set -u
 
-# Copilot exports no environment marker to the shells it spawns, so its sessions
-# are detected from the per-session records the repo's sessionStart hook writes
-# into the COMMON git dir (shared by every worktree), one file per live CLI pid.
-# ANY live record arms the guard, so ending one of several concurrent sessions
-# cannot disarm it; a record whose pid is gone is ignored, so a session that died
-# without its sessionEnd hook cannot turn the owner's own later commit into a
-# blocked "agent" commit. The cloud agent needs no record: it sets
-# COPILOT_AGENT_PROMPT itself.
+# Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
+# 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
+# agent sets COPILOT_AGENT_PROMPT. Same shape as CLAUDECODE and CODEX_THREAD_ID —
+# nothing is installed, and no process tree is inspected.
 copilot_session() {
-	[ -n "${COPILOT_AGENT_PROMPT:-}" ] && return 0
-	pfb_sessions=$(git rev-parse --git-common-dir 2>/dev/null)/pfb-copilot-sessions
-	[ -d "$pfb_sessions" ] || return 1
-	for pfb_record in "$pfb_sessions"/*; do
-		[ -e "$pfb_record" ] || continue
-		pfb_pid=${pfb_record##*/}
-		# `kill -0 0` signals this process group and always succeeds, so 0 is
-		# rejected with the malformed names rather than trusted as a session.
-		case "$pfb_pid" in '' | 0 | *[!0-9]*) continue ;; esac
-		kill -0 "$pfb_pid" 2>/dev/null && return 0
-	done
-	return 1
+	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
 }
 
 # Agent worktree guard (issue #1262): abort a Claude Code, Codex, or Copilot
@@ -87,54 +72,71 @@ ident_email() {
 committer_ident=$(git var GIT_COMMITTER_IDENT 2>/dev/null) || exit 0
 committer_email=$(ident_email "$committer_ident")
 
-# Resolve the coauthor's email, most specific source first. CODEX_THREAD_ID
-# takes precedence if an unusual nested environment exposes both markers. The
-# Copilot marker is a FILE shared by every session on this clone, so it decides
-# only when neither in-process environment marker is set — otherwise a Copilot
-# session running in parallel would misattribute a Claude or Codex commit.
-provider=''
-[ "${CLAUDECODE:-}" = "1" ] && provider=claude
-[ -n "${CODEX_THREAD_ID:-}" ] && provider=codex
-[ -n "$provider" ] || ! copilot_session || provider=copilot
-case "$provider" in
-	copilot) email=$(git config --get coauthor.copilot.email 2>/dev/null || true) ;;
-	codex) email=$(git config --get coauthor.codex.email 2>/dev/null || true) ;;
-	claude)
-		email=$(git config --get coauthor.claude.email 2>/dev/null || true)
+# Credit EVERY client whose marker is present, not just one: an agent launched
+# from inside another agent's session inherits the outer marker while setting its
+# own, and both of them worked on the commit. Each client is credited only from
+# its OWN configured identity — no identity is ever invented for a client, and
+# the legacy `coauthor.*` key stays Claude's (and the human's) alone, so a clone
+# configured to credit Claude cannot misattribute Codex or Copilot work.
+credited=0
+any_client=0
+
+append_trailer() {
+	pfb_email=$1
+	pfb_name=$2
+	[ -n "$pfb_email" ] || return 0
+	# The human IS the committer (already credited) → nothing to add.
+	[ "$pfb_email" != "$committer_email" ] || return 0
+	# Already credited in this message? (case-insensitive, literal email)
+	if grep -i 'co-authored-by:' "$msg_file" 2>/dev/null | grep -qiF "<$pfb_email>"; then
+		credited=1
+		return 0
+	fi
+	# Resolve a display name (cosmetic — GitHub matches the co-author by email).
+	[ -n "$pfb_name" ] || pfb_name=$(git log -1 --author="$pfb_email" --format='%an' 2>/dev/null || true)
+	[ -n "$pfb_name" ] || pfb_name=${pfb_email%@*}
+	# Append as a real trailer (interpret-trailers handles the blank-line block);
+	# fall back to a plain append if interpret-trailers is unavailable.
+	git interpret-trailers --in-place \
+		--trailer "Co-Authored-By: $pfb_name <$pfb_email>" "$msg_file" 2>/dev/null \
+		|| printf '\nCo-Authored-By: %s <%s>\n' "$pfb_name" "$pfb_email" >>"$msg_file"
+	credited=1
+}
+
+for pfb_provider in claude codex copilot; do
+	case "$pfb_provider" in
+		claude) [ "${CLAUDECODE:-}" = "1" ] || continue ;;
+		codex) [ -n "${CODEX_THREAD_ID:-}" ] || continue ;;
+		copilot) copilot_session || continue ;;
+	esac
+	any_client=1
+	email=$(git config --get "coauthor.${pfb_provider}.email" 2>/dev/null || true)
+	name=$(git config --get "coauthor.${pfb_provider}.name" 2>/dev/null || true)
+	if [ "$pfb_provider" = claude ]; then
+		# The legacy key predates the per-provider ones and holds Claude's identity.
 		[ -n "$email" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
-		;;
-	*) email=$(git config --get coauthor.email 2>/dev/null || true) ;;
-esac
-[ -n "$email" ] || email=${CLAUDE_CODE_USER_EMAIL:-}
-if [ -z "$email" ]; then
-	author_email=$(ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)")
-	[ -n "$author_email" ] && [ "$author_email" != "$committer_email" ] && email=$author_email
-fi
-
-# Nothing to credit, or the human IS the committer (already credited) → no-op.
-[ -n "$email" ] || exit 0
-[ "$email" != "$committer_email" ] || exit 0
-
-# Already credited in this message? → no-op (case-insensitive, literal email).
-if grep -i 'co-authored-by:' "$msg_file" 2>/dev/null | grep -qiF "<$email>"; then
-	exit 0
-fi
-
-# Resolve a display name (cosmetic — GitHub matches the co-author by email).
-case "$provider" in
-	copilot) name=$(git config --get coauthor.copilot.name 2>/dev/null || true) ;;
-	codex) name=$(git config --get coauthor.codex.name 2>/dev/null || true) ;;
-	claude)
-		name=$(git config --get coauthor.claude.name 2>/dev/null || true)
 		[ -n "$name" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
-		;;
-	*) name=$(git config --get coauthor.name 2>/dev/null || true) ;;
-esac
-[ -n "$name" ] || name=$(git log -1 --author="$email" --format='%an' 2>/dev/null || true)
-[ -n "$name" ] || name=${email%@*}
+	fi
+	append_trailer "$email" "$name"
+done
 
-# Append as a real trailer (interpret-trailers handles the blank-line block);
-# fall back to a plain append if interpret-trailers is unavailable.
-git interpret-trailers --in-place \
-	--trailer "Co-Authored-By: $name <$email>" "$msg_file" 2>/dev/null \
-	|| printf '\nCo-Authored-By: %s <%s>\n' "$name" "$email" >>"$msg_file"
+# No client credited: a human session (the legacy key), the managed-remote owner,
+# or an author who differs from the committer. The legacy key holds Claude's
+# identity here, so it is read ONLY when no client marker was present at all —
+# otherwise a Codex or Copilot commit with no configured identity of its own
+# would be credited to Claude.
+if [ "$credited" = "0" ]; then
+	email=''
+	[ "$any_client" = "1" ] || email=$(git config --get coauthor.email 2>/dev/null || true)
+	[ -n "$email" ] || email=${CLAUDE_CODE_USER_EMAIL:-}
+	if [ -z "$email" ]; then
+		author_email=$(ident_email "$(git var GIT_AUTHOR_IDENT 2>/dev/null || true)")
+		[ -n "$author_email" ] && [ "$author_email" != "$committer_email" ] && email=$author_email
+	fi
+	[ -n "$email" ] || exit 0
+	name=''
+	[ "$any_client" = "1" ] || name=$(git config --get coauthor.name 2>/dev/null || true)
+	append_trailer "$email" "$name"
+fi
+
+exit 0

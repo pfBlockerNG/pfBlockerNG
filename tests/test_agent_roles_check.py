@@ -139,6 +139,14 @@ def test_valid_fixture_is_clean(tmp_path: Path) -> None:
     assert count == len(_ROWS)
 
 
+def test_copilot_agent_unterminated_front_matter_rejected(tmp_path: Path) -> None:
+    # An unclosed `---` block is malformed, not "flat fields to EOF": parsing it
+    # leniently would let a truncated agent file satisfy the model/mutation
+    # checks with values that Copilot itself never reads.
+    make_tree(tmp_path, builder_agent_md="---\nname: x\nmodel: copilot-small\n\nbody\n")
+    _assert_flags(_problems(tmp_path), "missing YAML front matter")
+
+
 def test_live_repository_registry_is_consistent() -> None:
     count, problems = car.validate(_REPO_ROOT)
     assert problems == []
