@@ -393,6 +393,9 @@ jobs:
         # change what gets built: the moving reference is never consulted. `git clone
         # --branch` takes a ref only, hence the init + fetch-by-SHA + checkout shape —
         # GitHub serves any reachable commit over smart HTTP (#2202).
+        # kcov's CMakeLists derives its version from `git describe --tags` when a .git is
+        # present; a commit-only shallow fetch has no tags, so that aborts configure. The
+        # checkout is dropped to its working tree, which takes the ChangeLog path instead.
         id: build-kcov
         if: steps.cache-kcov.outputs.cache-hit != 'true'
         continue-on-error: true
@@ -403,6 +406,7 @@ jobs:
           git -C kcov remote add origin https://github.com/SimonKagstrom/kcov
           git -C kcov fetch --depth 1 origin "$KCOV_COMMIT"
           git -C kcov checkout -q FETCH_HEAD
+          rm -rf kcov/.git
           cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
           cmake --build kcov/build --parallel "$(nproc)"
           cmake --install kcov/build

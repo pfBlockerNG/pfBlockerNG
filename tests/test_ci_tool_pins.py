@@ -148,6 +148,14 @@ def test_kcov_ci_build_is_pinned_to_an_immutable_commit() -> None:
     assert not re.search(r"--branch\b|\bv43\b", build_step.replace("# ", "", 1).split("run: |", 1)[1]), (
         f"no command in the step may reach upstream through the moving tag; step was:\n{build_step}"
     )
+    # kcov's CMakeLists takes its version from `git describe --tags` whenever a .git is
+    # present, and a commit-only shallow fetch carries no tags: it aborts configure with
+    # "No names found, cannot describe anything". Dropping .git takes the ChangeLog path
+    # instead. The build is continue-on-error, so this failure is silent apart from
+    # coverage quietly disappearing — hence a test rather than a red job.
+    assert "rm -rf kcov/.git" in build_step and build_step.index("rm -rf kcov/.git") < build_step.index(
+        "cmake -S kcov"
+    ), f"kcov's .git must be dropped before configure, or `git describe` aborts the build; step was:\n{build_step}"
     # Anchored on the build invocation, not a bare `cmake` — the apt-get line installs a
     # package by that name, and matching it would pass no matter where the checkout sits.
     assert build_step.index("checkout -q FETCH_HEAD") < build_step.index("cmake -S kcov"), (
