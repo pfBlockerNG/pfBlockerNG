@@ -1,5 +1,5 @@
 #shellcheck shell=sh
-# publish_pkg_repo_spec.sh — scripts/publish-pkg-repo.sh (issue #2146 R2).
+# publish_pkg_repo_spec.sh — scripts/publish-pkg-repo.sh.
 #
 # publish_release.py and gen_landing.py are stubbed (a fake PFB_SRC checkout, see
 # setup()): git mutation is the ONLY thing this script owns, and it is exactly what
@@ -9,13 +9,13 @@
 # catalogue directory (docs/edge/ce-2.8), mirroring what the release job's checkout
 # looks like before this script runs.
 #
-# CONTAINMENT (gate finding A2): the fault-injection case is the load-bearing one —
+# CONTAINMENT: the fault-injection case is the load-bearing one —
 # the stub simulates catalogue_assembly.py's own documented failure mode (a
 # mid-regeneration write-back fault: wipe the catalog descriptor files, leave an
 # orphaned .pkg, THEN exit non-zero) and this spec asserts the damaged working tree
 # never reaches a commit, and the bare origin never moves.
 
-Describe 'publish-pkg-repo.sh (issue #2146 R2)'
+Describe 'publish-pkg-repo.sh'
   script="${PFB_ROOT}/scripts/publish-pkg-repo.sh"
 
   setup() {
@@ -32,9 +32,9 @@ Describe 'publish-pkg-repo.sh (issue #2146 R2)'
     echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf"
     echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg"
     echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg"
-    # An unrelated tracked file, outside docs/ entirely — G1's own fixture
-    # dirties this (never a member of any (channel, varver) target) to prove
-    # the explicit pathspec, not `git add -A`, is what actually runs.
+    # An unrelated tracked file, outside docs/ entirely: one example dirties it
+    # (never a member of any (channel, varver) target) to prove the explicit
+    # pathspec, not `git add -A`, is what actually runs.
     echo seed > "${base}/pkg-repo/README.txt"
     ( cd "${base}/pkg-repo" && git_fixture checkout -q -b main \
         && git_fixture add docs README.txt && git_fixture commit -q -m seed \
@@ -166,9 +166,8 @@ PY
     git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "UNRESOLVABLE-main"
   }
 
-  # --- landing_matrix ABI expression pins (issue #2146 R1's retired
-  # test_landing_matrix_abi.sh, re-covered here now that the transform lives
-  # in this script rather than pkg/.github/workflows/publish.yml) ------------
+  # --- landing_matrix ABI expression pins: the transform lives in this script,
+  # so the properties pfBlockerNG/pkg's own retired test pinned live here now ---
 
   It 'never interpolates the retired arch matrix field'
     When run sh -c "! grep -Fq '\\(.arch)' '${script}'"
@@ -214,7 +213,7 @@ PY
   End
 
   It 'stages the channel-level autoindex gen_landing.py regenerates for every existing directory'
-    # A2: gen_landing.py's all_dirs() walks the WHOLE docs/ tree on every run,
+    # gen_landing.py's all_dirs() walks the WHOLE docs/ tree on every run,
     # regenerating a per-directory autoindex at every level — not just the
     # (channel, varver) directory this run touched. docs/edge/index.html sits
     # one level ABOVE docs/edge/ce-2.8 (the touched target), so it is never
@@ -235,7 +234,7 @@ PY
   End
 
   It 'never sweeps a stray untracked file or an unrelated dirty tracked file into the commit'
-    # G1: proves the explicit pathspec, not `git add -A`/`.`, is what runs —
+    # Proves the explicit pathspec, not `git add -A`/`.`, is what runs —
     # debris.txt is untracked, README.txt is tracked but outside every
     # (channel, varver) target and outside the landing page's own output.
     export FAKE_MODE=success
@@ -305,7 +304,7 @@ PY
   End
 
   It 'commits nothing when a reported touched target leaves the tree unchanged'
-    # G3: publish_release.py reports "updated edge/ce-2.8" but writes nothing
+    # publish_release.py reports "updated edge/ce-2.8" but writes nothing
     # under docs/ — the tree itself never changed, so `git diff --cached
     # --quiet` after staging must find nothing to commit. Pre-seeds
     # docs/index.html with byte-identical content to what the (also stubbed)
@@ -345,7 +344,7 @@ PY
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
-  # --- A2: a damaged working tree must never reach a commit ----------------
+  # --- a damaged working tree must never reach a commit --------------------
 
   It 'never commits or pushes a mid-regeneration fault, even though the working tree is left damaged'
     export FAKE_MODE=fail

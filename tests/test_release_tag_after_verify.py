@@ -414,11 +414,20 @@ def test_the_draft_job_never_runs_without_the_tag() -> None:
 
 
 def test_only_the_pkg_repo_dispatch_waits_for_the_published_release() -> None:
-    """The pkg repo enumerates PUBLISHED Releases and downloads their assets, so it
-    genuinely cannot run before the publish. The ports bump has no such dependency --
-    it needs the tag and the version, both of which exist by the end of the run."""
+    """The pkg catalogue publish consumes the PUBLISHED Release's assets, so it
+    genuinely cannot run before the publish -- it lives in release-published.yml, never
+    here. The ports bump has no such dependency: it needs the tag and the version, both
+    of which exist by the end of the run.
+
+    Asserting the job NAME is absent is not enough on its own -- the job lives in another
+    file, so the name could never appear here by accident. What must stay absent is the
+    publish itself, under any job name: nothing in the release run may invoke the
+    publisher or its wrapper."""
     jobs = _jobs()
-    assert "publish-pkg-repo" not in jobs, "the pkg-repo dispatch must not run before the release is published"
+    release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    assert "publish-pkg-repo" not in jobs, "the pkg catalogue publish must not run before the release is published"
+    for marker in ("publish-pkg-repo.sh", "publish_release.py"):
+        assert marker not in release_text, f"{marker} must not run inside the release workflow"
     assert "sync-ports-fork" in jobs, "the ports bump belongs at the end of the release run"
 
 
