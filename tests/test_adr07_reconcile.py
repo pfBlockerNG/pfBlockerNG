@@ -289,6 +289,19 @@ class TestRegexReduction:
         # was no ``tally`` parameter at all, so this drop counted NOWHERE.
         assert tally == {("", ""): {"shape": 0, "wire_cap": 2}}
 
+    def test_unqueryable_folded_key_is_dropped_mixed_case(self) -> None:
+        # Same wire-cap drop as above, through the mixed-case fold path: the
+        # over-cap check runs on the ALREADY-LOWERCASED key, so a mixed-case
+        # over-cap literal is dropped exactly like its lowercase twin -- the
+        # fold's own .lower() doesn't change the label length the cap checks.
+        long_label = "A" * 64
+        tally: P.RejectTally = {}
+        res = _reconcile([f"/^(.+\\.)?{long_label}\\.com$/"], tally=tally)
+        assert res.block_domains == []
+        assert res.block_regex_irreducible == []
+        assert res.reduced == 0
+        assert tally == {("", ""): {"shape": 0, "wire_cap": 1}}
+
     def test_reduction_matches_oracle_and_spike(self) -> None:
         spike = _spike()
         for inner in (
