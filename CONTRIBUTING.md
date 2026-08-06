@@ -255,9 +255,11 @@ layer beneath the live-VM smoke. See
 
 [ShellCheck](https://www.shellcheck.net/) is available as a VS Code extension
 (see IDE setup above) and is also enforced in CI at `--severity=info`.
-Configuration is in `.shellcheckrc`. Install **v0.11.0** locally (`brew install
-shellcheck`) — CI pins that same release, and older ShellCheck reports findings
-0.11.0 does not, so a version gap reds CI after a clean local run. Functional shell tests (shellspec) live in
+Configuration is in `.shellcheckrc`. CI pins **v0.11.0**; install that same
+release locally (Homebrew and most distributions carry it, but check what your
+package manager actually gives you — `shellcheck --version`). Older ShellCheck
+reports findings 0.11.0 does not, so a version gap reds CI after a clean local
+run. Functional shell tests (shellspec) live in
 `tests/shell/` — see [Shell tests (shellspec)](#shell-tests-shellspec) above.
 
 ### Markdown

@@ -70,6 +70,13 @@ def test_shellspec_job_requires_jq_and_dash_instead_of_installing_them() -> None
     assert not re.search(r"apt-get install[^\n]*\bjq\b", shell_tests_job), (
         "jq must be required and asserted present, not installed over whatever the image ships"
     )
-    assert "command -v jq" in shell_tests_job and "command -v dash" in shell_tests_job, (
-        "the job must assert jq and dash are present before the suites that need them run"
-    )
+    # Scoped to the step that owns the guard, and matched on the guard's shape: a bare
+    # substring search is satisfied by any incidental `command -v <tool>` — the shellspec
+    # step resolves dash that way, and so does this step's own diagnostic line.
+    require_step = shell_tests_job.split("      - name: Require jq and dash\n", 1)[1].split("\n      - name:", 1)[0]
+
+    for tool in ("jq", "dash"):
+        assert re.search(rf"^\s*command -v {tool} [^\n]*\|\|", require_step, re.MULTILINE), (
+            f"{tool} must be asserted present, with a branch that fails the job when it is not;"
+            f" step was:\n{require_step}"
+        )
