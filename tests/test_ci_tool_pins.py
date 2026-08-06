@@ -5,10 +5,15 @@ ROOT = Path(__file__).resolve().parents[1]
 
 SHELLCHECK_PIN = "v0.11.0"
 SHELLSPEC_PIN = "0.28.1"
+KCOV_PIN = "a39874f938ce13f7a65f253120d1ec946b349ffe"  # the commit tag v43 pointed at
 
 
 def _workflow() -> str:
     return (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+
+
+def _contributing() -> str:
+    return (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
 
 def _job(workflow: str, name: str, next_name: str) -> str:
@@ -89,6 +94,49 @@ def test_shellspec_ci_install_is_pinned_to_a_verified_release_asset() -> None:
     assert not re.search(r"\|\s*tar\b", install_step), (
         f"fetch to a file and verify it before extracting, never pipe the download into tar; step was:\n{install_step}"
     )
+
+
+def test_contributing_documents_the_shellspec_version_ci_pins() -> None:
+    """A contributor whose local shellspec differs from the verified CI one gets a verdict
+    CI will not reproduce, so the documented install names the pinned version (#2198)."""
+    documented = re.findall(r"shellspec.{0,200}?\b(\d+\.\d+\.\d+)\b", _contributing(), re.DOTALL | re.IGNORECASE)
+
+    assert documented, "CONTRIBUTING.md must document the shellspec version contributors install locally"
+    assert set(documented) == {SHELLSPEC_PIN}, (
+        f"CONTRIBUTING.md documents shellspec {documented}, CI pins {SHELLSPEC_PIN}"
+    )
+
+
+def test_kcov_ci_build_is_pinned_to_an_immutable_commit() -> None:
+    """`--branch v43` resolves through a tag, which upstream can move: the coverage tool
+    that gets built — and cached under the key below — would change silently (#2198)."""
+    shell_tests_job = _job(_workflow(), "shell-tests", "php-syntax")
+    build_step = shell_tests_job.split("      - name: Build kcov from source (cache miss)\n", 1)[1].split(
+        "\n      - name:", 1
+    )[0]
+
+    assert f"KCOV_COMMIT: {KCOV_PIN}" in shell_tests_job, (
+        f"the kcov build must pin the commit v43 resolves to; job was:\n{shell_tests_job}"
+    )
+    # A clone by tag is fine as long as what it produced is checked against the pin before
+    # anything is built from it — the guard is the branch that fails, not the clone.
+    assert re.search(r"^\s*\[ \"\$cloned\" = \"\$KCOV_COMMIT\" \] \|\|", build_step, re.MULTILINE), (
+        f"the cloned tree must be asserted to be the pinned commit, with a branch that fails"
+        f" the step when it is not; step was:\n{build_step}"
+    )
+    # Anchored on the build invocation, not a bare `cmake` — the apt-get line installs a
+    # package by that name, and matching it would pass no matter where the check sits.
+    assert build_step.index("rev-parse HEAD") < build_step.index("cmake -S kcov"), (
+        f"verify the clone before building from it; step was:\n{build_step}"
+    )
+
+    keys = re.findall(r"^\s+key: (kcov-.+)$", shell_tests_job, re.MULTILINE)
+
+    assert len(keys) == 2, f"expected a restore key and a save key for the kcov cache; found {keys}"
+    for key in keys:
+        assert "env.KCOV_COMMIT" in key, (
+            f"a re-pinned kcov must roll the cache over, so the key carries the pin, not a tag name; key was: {key}"
+        )
 
 
 def test_shellspec_job_requires_jq_and_dash_instead_of_installing_them() -> None:

@@ -162,9 +162,18 @@ shellspec            # from the repo root; reads ./.shellspec
 shellspec --kcov     # with coverage (informational; needs kcov)
 ```
 
-Install with `brew install shellspec` (macOS) or the official installer
-(`curl -fsSL https://git.io/shellspec | sh`). The pre-commit hook and CI run it
-automatically when `shellspec` is present (coverage is informational, no floor).
+Install shellspec **0.28.1** — the version CI pins and verifies by checksum, so a
+clean local run and CI agree. Either take the release asset:
+
+```sh
+curl -fsSLo shellspec-dist.tar.gz \
+  https://github.com/shellspec/shellspec/releases/download/0.28.1/shellspec-dist.tar.gz
+tar -xzf shellspec-dist.tar.gz -C "$HOME"   # then put "$HOME/shellspec" on PATH
+```
+
+or use `brew install shellspec` (macOS) and check `shellspec --version`. The
+pre-commit hook and CI run it automatically when `shellspec` is present (coverage
+is informational, no floor).
 See [`tests/shell/README.md`](tests/shell/README.md) for the harness contracts
 (the `iprange` PATH shim, the AWS fixture, and the `PFB_SOURCED` source-for-test
 pattern).
