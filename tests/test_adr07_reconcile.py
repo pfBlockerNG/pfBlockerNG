@@ -313,13 +313,10 @@ class TestRegexReduction:
                 assert wildcard == (cls == "zone"), inner
 
     def test_regex_reduction_case_folds_literal_to_lowercase(self) -> None:
-        # Issue #2099: the domain-literal grammar was lowercase-only, so a
-        # mixed-case regex like /^Example\.com$/ never reduced to a domain rule
-        # -- even though it matches identically (IGNORECASE) to its lowercase
-        # twin at runtime -- and stayed a full per-query compiled regex (a
-        # missed optimisation, not a wrong match, per the issue). Reducing it
-        # must fold to the CANONICAL LOWERCASE key, mirroring how the plain-
-        # domain path (normalise()) already lowercases before validating.
+        # A mixed-case literal reduces exactly like its lowercase twin (the
+        # runtime matches IGNORECASE either way), so it must fold to the
+        # CANONICAL LOWERCASE key -- mirroring how the plain-domain path
+        # (normalise()) already lowercases before validating.
         spike = _spike()
         cases = (
             (r"^Example\.com$", (False, "example.com")),

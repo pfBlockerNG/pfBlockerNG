@@ -163,13 +163,10 @@ class TestCatastrophicShapeHeuristic:
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
     def test_adjacent_quantifier_run_overlap_is_case_insensitive(self) -> None:
-        # Issue #2099: the DNSBL matcher compiles every admitted regex with
-        # re.IGNORECASE (#2079/#2097), but _regex_atoms_overlap -- which decides
-        # whether adjacent quantified atoms chain into one catastrophic run --
-        # compiled its probe WITHOUT it. [A-Z] and [a-z] share no character
-        # case-SENSITIVELY, so the gate judged this run non-overlapping and safe;
-        # under the runtime's actual case-insensitive semantics any letter matches
-        # both, so it is exactly as catastrophic as the same-case run above.
+        # The DNSBL matcher compiles every admitted regex with re.IGNORECASE, so
+        # atom-overlap analysis must judge overlap under the same semantics: any
+        # letter matches BOTH [A-Z] and [a-z] once case-folded, so this run is
+        # exactly as catastrophic as the same-case run above.
         for pat in (
             r"^[A-Z]+[a-z]+[A-Z]+@example\.com$",
             r"^[a-z]+[A-Z]+[a-z]+@example\.com$",
