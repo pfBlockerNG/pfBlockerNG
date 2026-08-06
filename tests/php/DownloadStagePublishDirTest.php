@@ -33,10 +33,20 @@ final class DownloadStagePublishDirTest extends TestCase
 
 	private function removeTree(string $path): void
 	{
-		foreach (glob("{$path}/*") ?: [] as $child) {
+		foreach ($this->entries($path) as $name) {
+			$child = "{$path}/{$name}";
 			is_dir($child) && !is_link($child) ? $this->removeTree($child) : @unlink($child);
 		}
 		@rmdir($path);
+	}
+
+	/**
+	 * Staging and backup directories are dot-named, and glob() never returns dot
+	 * entries -- a litter assertion spelled with glob() cannot fail on leftovers.
+	 */
+	private function entries(string $path): array
+	{
+		return array_values(array_diff(scandir($path) ?: array(), array('.', '..')));
 	}
 
 	public function testSuccessfulExtractionPublishesTheStagedDirectory(): void
@@ -84,7 +94,7 @@ final class DownloadStagePublishDirTest extends TestCase
 			return 1;
 		});
 
-		$this->assertSame([], glob("{$this->dir}/*"));
+		$this->assertSame([], $this->entries($this->dir));
 	}
 
 	public function testSuccessfulPublicationLeavesNoStagingDirectoryBehind(): void
@@ -100,8 +110,33 @@ final class DownloadStagePublishDirTest extends TestCase
 
 		// Only the published category survives: no staging or backup directory is
 		// left in the database directory, and the replaced contents are gone.
-		$this->assertSame([$target], glob("{$this->dir}/*"));
+		$this->assertSame(['category'], $this->entries($this->dir));
 		$this->assertFileDoesNotExist("{$target}/cat_ads");
+	}
+
+	/**
+	 * The previous category moves aside so the staged one can take its name; if that
+	 * second step does not complete, the category that was in service comes back.
+	 * Driven by an extraction that reports success while leaving no staging directory
+	 * to publish, which is the one way the swap fails without the backup step failing
+	 * first.
+	 */
+	public function testAFailedSwapRestoresThePreviousCategoryContents(): void
+	{
+		$target = "{$this->dir}/category";
+		$this->assertTrue(mkdir($target, 0755));
+		$this->assertNotFalse(file_put_contents("{$target}/cat_ads", "last-good\n"));
+
+		$this->assertFalse(pfb_stage_publish_dir($target, static function (string $staged): int {
+			file_put_contents("{$staged}/cat_ads", "fresh\n");
+			@unlink("{$staged}/cat_ads");
+			@rmdir($staged);
+			return 0;
+		}));
+
+		$this->assertSame("last-good\n", file_get_contents("{$target}/cat_ads"));
+		$this->assertSame(['category'], $this->entries($this->dir),
+			'the moved-aside category must not be left behind under its backup name');
 	}
 
 	/** Staging beside the target is what makes the publication a same-filesystem rename. */
@@ -134,7 +169,7 @@ final class DownloadStagePublishDirTest extends TestCase
 
 		$this->assertDirectoryDoesNotExist($seen, 'the staging directory must be renamed into place');
 		$this->assertDirectoryExists($target);
-		$this->assertSame([], glob("{$target}/*"));
+		$this->assertSame([], $this->entries($target));
 	}
 
 	/** A category published at tempnam's 0600 would hide the feed from its readers. */
