@@ -28,8 +28,14 @@ from __future__ import annotations
 import re
 import subprocess
 import sys
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
+
+# Executed directly by the git hooks and CI, and loaded by path from the tests,
+# so the sibling module is not importable without this.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from git_paths import diff_header_name  # noqa: E402
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"RESULTS[-/]"), "delegation handoff artifact (RESULTS/ or RESULTS-Pn)"),
@@ -87,8 +93,8 @@ def find_violations(diff_text: str) -> list[Violation]:
             # Header only before a section's first @@ -- inside a hunk an added
             # "++..." line renders identically and must be scanned, not misread
             # as one. Strip git's disambiguation tab from a space-bearing path.
-            name = raw[4:]
-            path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
+            name = diff_header_name(raw)
+            path = name[2:] if name.startswith("b/") else None
             continue
         if raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)

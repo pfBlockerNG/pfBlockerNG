@@ -775,12 +775,14 @@ jobs:
         run: |
           set -eu
           git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
-          # core.quotePath=false: git's default wraps any non-ASCII path in quotes
-          # and octal-escapes it, and check_coverage_pairing.py classifies by
+          # -z emits raw NUL-separated paths. quotePath=false alone covers only
+          # non-ASCII bytes (issue #2137); git C-quotes a literal " \ tab or
+          # newline unconditionally, and check_coverage_pairing.py classifies by
           # startswith("src/") — so a quoted path matches no rule and an unpaired
-          # src/ change passes silently (issue #2137).
-          git -c core.quotePath=false diff --name-only "origin/$BASE...HEAD" > changed.txt
-          echo "Changed files vs origin/$BASE:"; cat changed.txt
+          # src/ change passes silently (issue #2212).
+          git -c core.quotePath=false diff --name-only -z "origin/$BASE...HEAD" > changed.txt
+          # tr for the log only: changed.txt keeps its NUL separators for the gate.
+          echo "Changed files vs origin/$BASE:"; tr '\0' '\n' < changed.txt
 
       - name: Enforce src<->tests and www<->ui coverage pairing
         # ubuntu-latest ships python3. --warn-only downgrades a violation to a

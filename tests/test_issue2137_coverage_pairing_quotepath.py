@@ -136,8 +136,12 @@ def test_the_changed_file_list_holds_the_real_path(tmp_path: Path) -> None:
     """
     repo = _scratch_repo(tmp_path, NON_ASCII_SRC)
     _run_gate(repo)
-    listed = (repo / "changed.txt").read_text(encoding="utf-8").strip()
-    assert listed == NON_ASCII_SRC, f"changed.txt holds {listed!r}, not the real path"
+    # NUL-separated since issue #2212 moved the compute step to `-z`; a newline
+    # is data inside a path there, never a separator.
+    body = (repo / "changed.txt").read_text(encoding="utf-8")
+    entries = [p for p in body.split("\0") if p] if "\0" in body else body.splitlines()
+    assert entries == [NON_ASCII_SRC], f"changed.txt holds {entries!r}, not the real path"
+    listed = entries[0]
     assert not listed.startswith('"'), "path is quoted: core.quotePath is not disabled"
     assert "\\303" not in listed, "path is octal-escaped: core.quotePath is not disabled"
 

@@ -503,16 +503,19 @@ def main(argv: list[str] | None = None) -> int:
     root = args.root.resolve()
     try:
         if not args.all:
+            # -z: NUL-separated raw paths. quotePath=off covers only non-ASCII
+            # bytes; git C-quotes a literal " \ tab or newline whatever that is
+            # set to, and a quoted path matches no budget (issue #2212).
             diff_args = (
-                ["diff", "--cached", "--name-only"] if args.staged else ["diff", "--name-only", f"{args.diff}...HEAD"]
+                ["diff", "--cached", "--name-only", "-z"]
+                if args.staged
+                else ["diff", "--name-only", "-z", f"{args.diff}...HEAD"]
             )
-            changed = _git(root, "-c", "core.quotePath=off", *diff_args).split("\n")
+            changed = _git(root, "-c", "core.quotePath=off", *diff_args).split("\0")
             if not touches_context_surface([c for c in changed if c]):
                 print("context-budget: no context surface in the diff — skipped")
                 return 0
-        # quotePath=off: a non-ASCII filename would otherwise come back
-        # C-quoted ("…") and silently match no budget.
-        tracked = _git(root, "-c", "core.quotePath=off", "ls-files").split("\n")
+        tracked = _git(root, "-c", "core.quotePath=off", "ls-files", "-z").split("\0")
         tracked = [t for t in tracked if t]
         if args.staged:
             # Validate the INDEX snapshot, not the working tree: staged and

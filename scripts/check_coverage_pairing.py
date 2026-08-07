@@ -62,6 +62,13 @@ file contents, and is intentionally NOT part of ``.githooks/pre-commit``.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
+
+# Executed directly by CI and the tests, so the sibling module is not importable
+# without this.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from git_paths import split_nul_or_lines  # noqa: E402
 
 _FIX_HINT = (
     "add the paired test, or — if none is warranted — apply the `no-test-needed` label, "
@@ -191,7 +198,12 @@ def main(argv: list[str] | None = None) -> int:
     paths = [a for a in args if a != "--warn-only"]
 
     if not paths:
-        paths = list(sys.stdin)
+        # NUL-separated when the producer used `git ... -z` (the CI job does, so
+        # a path git would otherwise C-quote still classifies — issue #2212);
+        # newline-separated otherwise, for a hand-typed list. Stripping is safe
+        # per entry either way: git emits no surrounding whitespace, and a
+        # trailing newline must not become an empty path.
+        paths = split_nul_or_lines(sys.stdin.read())
     paths = [p.strip() for p in paths if p.strip()]
 
     if warn_only and body_file is not None:
