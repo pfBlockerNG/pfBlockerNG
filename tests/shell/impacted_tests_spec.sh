@@ -69,21 +69,37 @@ tests/smoke/ui/test_render.py"
     Before 'make_repo'
     After 'cleanup_repo'
 
-    Parameters
-      'plain'
-      'has\backslash'
-      "$(printf 'has\ttab')"
-      "$(printf 'has\001control')"
-      'café'
+    Describe 'each escape class git quotes'
+      Parameters
+        'plain'
+        'has\backslash'
+        "$(printf 'has\ttab')"
+        "$(printf 'has\001control')"
+        'café'
+      End
+
+      It "selects a changed test module named 'test_$1.py'"
+        printf 'def test_x():\n    pass\n' > "$repo/tests/smoke/test_$1.py"
+        gitc add -A
+        gitc commit -q -m hostile
+        When run sh -c "cd '$repo' && sh '$SCRIPT' base tests/smoke"
+        The status should equal 0
+        The output should equal "test_$1"
+      End
     End
 
-    It "selects a changed test module named 'test_$1.py'"
-      printf 'def test_x():\n    pass\n' > "$repo/tests/smoke/test_$1.py"
+    # A literal newline cannot be expressed as a -k stem at all, so the module must
+    # NOT be quietly dropped from a narrowed expression: emitting nothing routes the
+    # caller to its full-marker path, which runs everything. The sibling module is
+    # what makes this failable -- without it the expression would be empty anyway.
+    It 'emits nothing when a changed path holds a newline, so the caller runs it all'
+      printf 'def test_x():\n    pass\n' > "$repo/tests/smoke/test_$(printf 'has\nnewline').py"
+      printf 'def test_y():\n    pass\n' > "$repo/tests/smoke/test_sibling.py"
       gitc add -A
       gitc commit -q -m hostile
       When run sh -c "cd '$repo' && sh '$SCRIPT' base tests/smoke"
       The status should equal 0
-      The output should equal "test_$1"
+      The output should equal ''
     End
   End
 End

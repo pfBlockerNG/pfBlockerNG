@@ -35,6 +35,17 @@ usage() {
 # no pipefail), turning a bad --diff ref into an empty file list instead of an error.
 git_paths() {
 	git -C "$worktree" "$@" > "$paths_tmp" || return 1
+	# A literal newline in a path cannot survive a line-based list: split on NUL it
+	# tears into fragments, so the tail gates a path that does not exist while the
+	# real file loses its `scripts/` prefix and is never shellchecked. -z output
+	# holds a newline byte ONLY in that case, so refuse it here and let the caller
+	# exit rather than act on a fabricated path. (No in-band sentinel: every byte
+	# but NUL and `/` is legal in a path, so a substituted marker would collide --
+	# a name containing \1 is exactly such a case.)
+	if tr -cd '\n' < "$paths_tmp" | grep -q ''; then
+		printf 'run-gates.sh: a changed path contains a newline; cannot map it to gates\n' >&2
+		return 1
+	fi
 	tr '\0' '\n' < "$paths_tmp"
 }
 
@@ -133,7 +144,9 @@ main() {
 
 	# Created with builtins only (no mktemp -- not POSIX, and this script's minimal-PATH
 	# contract is pinned by agent_run_gates_spec.sh). `set -C` makes the redirect fail
-	# rather than follow a planted file or symlink at the predictable name. `true >`,
+	# rather than follow a planted file or symlink at the predictable name; the writes
+	# in git_paths() are unguarded, so the residual swap window is bounded by /tmp's
+	# sticky bit, not by this check. `true >`,
 	# never `: >`: a redirection error on the SPECIAL builtin `:` exits the shell
 	# outright instead of yielding to `||` (issues #1172, #1850).
 	paths_tmp="${TMPDIR:-/tmp}/pfb-run-gates-paths.$$"
