@@ -101,14 +101,10 @@ jobs:
         # changed a Dockerfile without bumping the series — fail here rather than mutate
         # the toolchain of merged workflows.
         #
-        # This asks the registry API directly instead of using `docker manifest inspect`,
-        # because that command exits 1 for EVERY failure and GHCR answers "manifest
-        # unknown" both for an image that does not exist and for one we are not
-        # authorised to read. A guard that cannot tell those apart treats a transient
-        # registry or credential failure as "tag is free" and overwrites a published tag
-        # — it fails OPEN, which is the one thing this guard must never do. An HTTP
-        # status can tell them apart: 404 is absent, 200 is a clash, and ANYTHING else
-        # means we could not determine it and must stop.
+        # The registry API is used rather than `docker manifest inspect`: that exits 1 for
+        # every failure alike, and GHCR answers "manifest unknown" both for an absent image
+        # and for one we may not read, so a credential or network failure would read as
+        # "free" and overwrite. An HTTP status separates them; anything but 404/200 stops.
         if: steps.publish.outputs.enabled == 'true'
         env:
           TAG: ${{ steps.version.outputs.tag }}
@@ -118,11 +114,20 @@ jobs:
           accept="$accept, application/vnd.oci.image.manifest.v1+json"
           accept="$accept, application/vnd.docker.distribution.manifest.list.v2+json"
           accept="$accept, application/vnd.docker.distribution.manifest.v2+json"
-          bearer="$(printf '%s' "$GHCR_TOKEN" | base64 | tr -d '\n')"
           namespace="${IMAGE_REPO#ghcr.io/}"
 
           clash=''
           for image in ci-runner ci-runner-vm; do
+            # Exchange the job token for a registry pull token (the OCI auth flow) rather
+            # than presenting base64(token) as a bearer: the latter is accepted for some
+            # reads but is not an authenticated session, so an EXISTING private image
+            # answers 403 instead of 200 and the clash is reported as "undeterminable".
+            bearer="$(curl -sS -u "x:${GHCR_TOKEN}" \
+              "https://ghcr.io/token?service=ghcr.io&scope=repository:${namespace}/${image}:pull" \
+              | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+            [ -n "$bearer" ] || {
+              echo "could not obtain a registry token for ${image}; refusing to push"; exit 1; }
+
             status="$(curl -sS -o /dev/null -w '%{http_code}' \
               -H "Authorization: Bearer ${bearer}" -H "Accept: ${accept}" \
               "https://ghcr.io/v2/${namespace}/${image}/manifests/${TAG}")" || status='000'

@@ -70,16 +70,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # divergences); iprange is the FireHOL set-subtraction tool ADR-53 P3 exercises; zstd is
 # actions/cache's compressor; sudo keeps the workflow steps that call it working
 # unchanged. libcurl4/libelf1/libdw1 are kcov's runtime libs, the rest are the shared
-# objects the relocated CPython links against. `patch` is not optional despite looking
-# it: scripts/build-webassets.sh applies the CodeMirror patches with `patch -f -F 0`, and
-# the webassets drift guard re-runs that script. gnupg is deliberately ABSENT — apt
-# verifies the sury archive with gpgv (its own dependency) against the keyring installed
-# below as a plain file, and pulling gnupg in would add a 64-package closure for nothing.
+# objects the relocated CPython links against. Three are load-bearing in non-obvious ways:
+# `patch` runs in scripts/build-webassets.sh, `file` backs the ADR-45 MIME detection that
+# pfb_download() shells out to, and `netbase` supplies /etc/services, without which
+# getservbyname() returns false and the is_port() parity tests fail. gnupg is deliberately
+# absent: apt verifies the sury archive with its own gpgv against a keyring file.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl git iprange jq less libbz2-1.0 libcurl4 libdw1 \
+      ca-certificates curl file git iprange jq less libbz2-1.0 libcurl4 libdw1 \
       libelf1 libexpat1 libffi8 libgdbm-compat4t64 libgdbm6t64 liblzma5 libncursesw6 \
-      libreadline8t64 libsqlite3-0 libssl3t64 patch procps rsync sudo tar unzip \
+      libreadline8t64 libsqlite3-0 libssl3t64 netbase patch procps rsync sudo tar unzip \
       uuid-runtime xz-utils zlib1g zstd \
  && rm -rf /var/lib/apt/lists/*
 
@@ -100,8 +100,8 @@ RUN curl -fsSLo /tmp/sury.gpg https://packages.sury.org/php/apt.gpg \
       > /etc/apt/sources.list.d/sury-php.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      php8.3-cli php8.3-curl php8.3-intl php8.3-mbstring php8.3-pcov php8.3-xml php8.3-zip \
-      php8.5-cli php8.5-curl php8.5-intl php8.5-mbstring php8.5-pcov php8.5-xml php8.5-zip \
+      php8.3-cli php8.3-curl php8.3-intl php8.3-mbstring php8.3-pcov php8.3-sqlite3 php8.3-xml php8.3-zip \
+      php8.5-cli php8.5-curl php8.5-intl php8.5-mbstring php8.5-pcov php8.5-sqlite3 php8.5-xml php8.5-zip \
  && rm -rf /var/lib/apt/lists/*
 
 # Each matrix PHP is selectable through the `php` alternative; a job picks its leg's
@@ -194,6 +194,10 @@ RUN git config --system --add safe.directory '*'
 
 # Fail the BUILD, not the first red job, when a copied toolchain cannot actually run:
 # the relocated CPython needs its shared libs present, and each PHP its extensions.
+# Every line here must be able to FAIL. Nothing is piped into `head`: a shell reports a
+# pipeline's LAST exit status and there is no `pipefail` in POSIX sh, so `tool --version |
+# head -n1` succeeds even when the tool is missing entirely. iprange is checked by giving
+# it real input rather than `--version`, which it exits 1 on by design.
 RUN set -eu; \
     python3 -c 'import bz2, ctypes, lzma, readline, sqlite3, ssl, uuid, zlib'; \
     python3 --version; \
@@ -205,8 +209,12 @@ RUN set -eu; \
       "$php" -m | grep -qx mbstring; \
       "$php" -m | grep -qx pcov; \
     done; \
-    composer --version; node --version; npm --version; gh --version | head -n1; \
+    composer --version; node --version; npm --version; gh --version; \
     shellcheck --version; shellspec --version; kcov --version; \
-    jq --version; dash -c 'exit 0'; iprange --version 2>&1 | head -n1
+    jq --version; dash -c 'exit 0'; \
+    echo '10.0.0.0/8' | iprange >/dev/null; \
+    file --version; \
+    php -r 'new SQLite3(":memory:");'; \
+    php -r 'getservbyname("domain", "udp") === 53 or exit(1);'
 
 CMD ["/bin/bash"]

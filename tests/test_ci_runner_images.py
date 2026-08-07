@@ -104,6 +104,20 @@ def _stage_bases(dockerfile: str) -> list[str]:
     return resolved
 
 
+def _requirement_pins(requirements: str) -> set[str]:
+    """The ``name==version`` pins a pip requirements file actually installs.
+
+    Comments are stripped rather than searched: a substring test against the raw text
+    would also match a commented-out pin, which pip never installs.
+    """
+    pins = set()
+    for line in requirements.splitlines():
+        pin = line.split("#", 1)[0].strip()
+        if re.fullmatch(r"[A-Za-z0-9._-]+==[\w.]+", pin):
+            pins.add(pin)
+    return pins
+
+
 def _matrix_versions() -> tuple[list[str], list[str]]:
     """(python_versions, php_versions) from the live supported-version matrix."""
     proc = subprocess.run(
@@ -120,11 +134,8 @@ def _matrix_versions() -> tuple[list[str], list[str]]:
     return json.loads(python_blob), json.loads(php_blob)
 
 
-# NOTE: there is deliberately no module-level skip for a missing git/jq. Only the two
-# matrix tests shell out to the reader, and _matrix_versions() already skips itself when
-# that reader cannot run. Skipping the whole module on a host without jq would hide the
-# digest, checksum, pin and publishing guards — every regression this file exists to
-# catch — behind an unrelated missing tool.
+# No module-level skip for a missing git/jq: only the two matrix tests need the reader,
+# and _matrix_versions() skips itself when it cannot run.
 
 
 def test_base_image_is_a_digest_pinned_numbered_debian_13_slim() -> None:
@@ -155,14 +166,13 @@ def test_every_downloaded_tool_is_checksum_verified() -> None:
     only immutable once its bytes are checked."""
     for dockerfile in (BASE_DOCKERFILE, VM_DOCKERFILE):
         for block in _expanded_blocks(_read(dockerfile)):
-            # Plain http:// is never acceptable for a fetched tool: without TLS the bytes
-            # are attacker-controllable in transit even when a checksum follows, because
-            # the same channel could serve the checksum.
-            assert not re.search(r"\bhttp://\S+", block), (
+            # Plain http:// for a FETCH is never acceptable: without TLS the bytes are
+            # attacker-controllable in transit. Scoped to the fetch verbs so a URL merely
+            # mentioned in a comment or string does not trip it.
+            assert not re.search(r"\b(curl|wget|ADD)\b[^;|]*\bhttp://", block), (
                 f"{dockerfile.name}: tool fetched over plain http://:\n{block[:400]}"
             )
-            # ADD <url> is a download too, and it CANNOT be checksum-verified in the same
-            # instruction — so it is banned outright rather than exempted.
+            # ADD <url> cannot be checksum-verified in the same instruction, so it is banned.
             assert not (block.startswith("ADD ") and "://" in block), (
                 f"{dockerfile.name}: ADD-from-URL cannot be verified; use RUN curl + sha256sum:\n{block[:400]}"
             )
@@ -187,10 +197,9 @@ def test_the_sury_php_repository_key_is_pinned_by_checksum() -> None:
     digest = re.search(r"\b([0-9a-f]{64})\b", key_block)
     assert digest, f"the sury signing key must be pinned by SHA-256; block was:\n{key_block[:400]}"
 
-    # The hash must actually be FED to sha256sum, not merely present in the block: a
-    # leftover constant next to a dropped verification is exactly the regression the
-    # pinned-key guard exists to prevent.
-    assert re.search(rf"echo\s+\"?{digest.group(1)}\s+\S+\"?\s*\|\s*sha256sum -c", key_block), (
+    # The hash must be FED to sha256sum, not merely present: a leftover constant beside a
+    # dropped verification would otherwise pass.
+    assert re.search(rf"echo\s+\"?{digest.group(1)}\s+\S+\"?\s*\|\s*sha256sum (?:-c|--check)", key_block), (
         f"the pinned key digest must be piped into `sha256sum -c`; block was:\n{key_block[:400]}"
     )
 
@@ -293,27 +302,52 @@ def test_every_baked_python_package_is_pinned_exactly() -> None:
         )
 
 
+def test_image_self_checks_cannot_be_masked_by_a_pipeline() -> None:
+    """A shell reports a pipeline's LAST exit status and POSIX sh has no `pipefail`, so
+    `tool --version | head -n1` succeeds even when the tool is absent. A self-check built
+    that way is unfailable — the whole point of these checks is that they fail."""
+    for dockerfile in (BASE_DOCKERFILE, VM_DOCKERFILE):
+        checks = [b for b in _expanded_blocks(_read(dockerfile)) if "--version" in b or "-v;" in b]
+        for block in checks:
+            if not block.startswith("RUN set -eu"):
+                continue
+            masked = re.findall(r"[\w./-]+ +--?[Vv](?:ersion)?[^;|]*\| *(head|tail|sed|cut|awk)", block)
+            assert not masked, (
+                f"{dockerfile.name}: self-check pipes a version probe into {masked}, "
+                f"which swallows the probe's exit status:\n{block[:400]}"
+            )
+
+
 def test_the_base_image_carries_the_github_cli() -> None:
     """Twelve workflows shell out to `gh`. It is preinstalled on the GitHub-hosted runner
     images and absent from a container, so migrating those jobs (#2215) without it would
     fail every one of them at the first `gh api` call."""
     text = _read(BASE_DOCKERFILE)
-    assert re.search(r"GH_VERSION=\d+\.\d+\.\d+", text), "the GitHub CLI must be pinned"
-    assert "install -m 0755" in text and "/usr/local/bin/gh" in text, (
-        "the GitHub CLI must land on PATH as /usr/local/bin/gh"
+    declared = re.search(r"ARG GH_VERSION=(\d+\.\d+\.\d+)", text)
+    assert declared, "the GitHub CLI version must be declared as an ARG"
+
+    # Bind the declared version to the artifact actually downloaded. Asserting only that
+    # the ARG exists would still pass on a Dockerfile that fetches /latest/ and ignores it.
+    install = next(b for b in _expanded_blocks(text) if "cli/cli/releases/download" in b)
+    assert f"v{declared.group(1)}/gh_{declared.group(1)}_linux_amd64.tar.gz" in install, (
+        f"the download must use the declared GH_VERSION; block was:\n{install[:400]}"
     )
+    assert "sha256sum -c" in install, "the gh download must be checksum-verified"
+    assert "/usr/local/bin/gh" in install, "gh must land on PATH as /usr/local/bin/gh"
 
 
 def test_baked_python_toolchain_covers_the_benchmarks_job() -> None:
     """ci-requirements.txt claims to carry every package the non-VM jobs install. The
     manual `benchmarks` job installs benchmarks/requirements.txt, so those pins are part
     of that claim — and must not drift from their source file."""
-    baked = _read(DOCKER_DIR / "ci-requirements.txt")
-    for requirement in _read(ROOT / "benchmarks/requirements.txt").splitlines():
-        pin = requirement.split("#", 1)[0].strip()
-        if not pin:
-            continue
-        assert pin in baked, f"the image must bake the benchmarks pin {pin!r}"
+    # Compare parsed pins, not substrings: `pin in text` also matches a COMMENTED-OUT pin
+    # or one embedded in prose, so the guard would pass on a package that is not installed.
+    baked = _requirement_pins(_read(DOCKER_DIR / "ci-requirements.txt"))
+    wanted = _requirement_pins(_read(ROOT / "benchmarks/requirements.txt"))
+
+    assert wanted, "benchmarks/requirements.txt has no pins to check against"
+    missing = wanted - baked
+    assert not missing, f"the image must bake the benchmarks pins {sorted(missing)}"
 
 
 def test_the_vm_image_chromium_check_actually_launches_the_browser() -> None:
@@ -354,9 +388,8 @@ def test_image_version_is_an_integer_series() -> None:
 
 
 def test_publish_workflow_pushes_exactly_the_two_images_it_builds() -> None:
-    """Naming an image somewhere in the file proves nothing: the earlier version of this
-    test passed even if a `docker push` was deleted, because the image name survived in
-    the build step. Assert the actual commands."""
+    """An image name can survive in the build step with its `docker push` deleted, so
+    naming proves nothing — assert the commands themselves."""
     workflow = _read(PUBLISH_WORKFLOW)
     assert "packages: write" in workflow, "pushing to GHCR needs packages: write"
 
@@ -376,9 +409,19 @@ def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
     """The image tag is what every workflow pins to. Re-pushing it under a changed
     Dockerfile would swap the toolchain of already-merged workflows with no diff — the
     push must fail and demand a VERSION bump instead."""
-    guard = _step(_read(PUBLISH_WORKFLOW), "Refuse to overwrite a published tag")
+    step = _step(_read(PUBLISH_WORKFLOW), "Refuse to overwrite a published tag")
+    # Strip comment lines: the rationale comment names the very things being asserted, so
+    # matching the whole step passed even when the body was reverted to the fail-open
+    # `docker manifest inspect` implementation this guard exists to keep out.
+    guard = "\n".join(ln for ln in step.splitlines() if not ln.lstrip().startswith("#"))
 
-    assert "manifest inspect" in guard, "the guard must probe the registry for the tag"
+    assert "docker manifest inspect" not in guard, (
+        "docker manifest inspect exits 1 for BOTH a missing tag and an auth/network "
+        "failure, so it cannot tell 'free' from 'unknown' and fails OPEN"
+    )
+    assert "%{http_code}" in guard, "the guard must branch on an HTTP status, not an exit code"
+    for status in ("404", "200"):
+        assert status in guard, f"the guard must handle HTTP {status} explicitly"
     # Both images, not just the first: a clash on either is a clash.
     assert "for image in ci-runner ci-runner-vm" in guard, f"the guard must probe BOTH images; step was:\n{guard}"
     assert "exit 1" in guard, f"a detected clash must fail the job; step was:\n{guard}"
@@ -389,8 +432,7 @@ def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
 
 def test_publish_workflow_publishes_only_from_devel_and_main() -> None:
     """A pull-request or feature-branch publish would hand every other open PR a
-    toolchain built from that branch. The earlier version of this test accepted ANY `if:`,
-    including one that permitted exactly that."""
+    toolchain built from that branch, so the gate is asserted exactly, not just present."""
     workflow = _read(PUBLISH_WORKFLOW)
     decision = _step(workflow, "Decide whether this run publishes")
 
