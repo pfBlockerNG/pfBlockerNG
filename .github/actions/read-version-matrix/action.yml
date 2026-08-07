@@ -88,7 +88,7 @@ runs:
           VARIANT_ARG="--variant $VARIANT_INPUT"
         fi
         # shellcheck disable=SC2086
-        sh "${{ github.workspace }}/scripts/read-version-matrix.sh" \
+        sh "$GITHUB_WORKSPACE/scripts/read-version-matrix.sh" \
           --ref "$MATRIX_REF" \
           --file "$MATRIX_FILE" \
           $VARIANT_ARG \

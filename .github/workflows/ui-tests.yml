@@ -233,7 +233,7 @@ jobs:
     name: Resolve the (tier x version) matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -367,7 +367,7 @@ jobs:
     continue-on-error: ${{ matrix.release_blocking == 'false' }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      image: ghcr.io/pfblockerng/ci-runner-vm:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -601,7 +601,7 @@ jobs:
       - name: Run the UI tier (pytest -m ${{ steps.tier.outputs.marker }})
         env:
           # Point the fixture at the ALREADY-PULLED qcow2 so the boot needs no network.
-          SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
+          SMOKE_IMAGE_DIR: $GITHUB_WORKSPACE/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
@@ -624,7 +624,7 @@ jobs:
           SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
           SMOKE_ADMIN_USER: ${{ vars.SMOKE_ADMIN_USER }}
           # Screenshot artifact layout: <root>/<version>/<name>.png (browser tier).
-          SMOKE_UI_SCREENSHOT_DIR: ${{ github.workspace }}/test-results/ui-screenshots
+          SMOKE_UI_SCREENSHOT_DIR: $GITHUB_WORKSPACE/test-results/ui-screenshots
           SMOKE_UI_VERSION: ${{ matrix.version }}
           # The functional DNSBL flow injects the sinkhole VIP; match the baked image.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
@@ -718,7 +718,7 @@ jobs:
     name: All UI legs passed (AND gate)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

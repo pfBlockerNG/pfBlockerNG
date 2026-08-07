@@ -40,6 +40,7 @@ on:
       - '**/CLAUDE.md'
 
 permissions:
+  packages: read
   contents: read
 
 jobs:
@@ -47,7 +48,7 @@ jobs:
     name: Context byte budgets + routing headers
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

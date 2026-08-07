@@ -114,6 +114,7 @@ on:
         value: ${{ inputs.artifact_name }}
 
 permissions:
+  packages: read
   contents: read
 
 jobs:
@@ -121,7 +122,7 @@ jobs:
     name: build pfBlockerNG .pkg (portable, Linux)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -161,7 +162,7 @@ jobs:
           PHP_VERSION:  ${{ inputs.php_version }}
           EXTRA_PKGS:   ${{ inputs.extra_pkgs }}
           DEP_ARTIFACT_NAME: ${{ inputs.dep_artifact_name }}
-          PFB_RUN_ROOT: ${{ github.workspace }}/out
+          PFB_RUN_ROOT: $GITHUB_WORKSPACE/out
         run: |
           set -eu
           # issue #1806: the ABI's cpu segment (e.g. "amd64") is INERT for a

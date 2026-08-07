@@ -39,6 +39,7 @@ on:
 # Least-privilege default; the refresh job elevates to write the automation
 # branch and open the PR. It never writes devel/main.
 permissions:
+  packages: read
   contents: read
 
 # One refresh at a time — a slow scheduled run must not race a manual dispatch.
@@ -51,7 +52,7 @@ jobs:
     name: Refresh dnsbl_tld and open PR on change
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -60,6 +61,7 @@ jobs:
       HOME: /tmp
     timeout-minutes: 10
     permissions:
+      packages: read
       contents: write        # push the automation branch (NOT devel)
       pull-requests: write    # open/label the PR
       actions: write          # dispatch the CI gate onto the branch head

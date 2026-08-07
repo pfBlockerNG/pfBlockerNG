@@ -101,7 +101,7 @@ jobs:
     name: Resolve FreeBSD/PHP for CE ${{ inputs.pfsense_ce_version }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -162,7 +162,7 @@ jobs:
     needs: resolve-version
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      image: ghcr.io/pfblockerng/ci-runner-vm:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -228,7 +228,7 @@ jobs:
         # the secret), waits for the new version, powers off, compresses, and
         # pushes the new tag. The source tag is left untouched (snapshot kept).
         env:
-          SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
+          SMOKE_SSH_KEY: $GITHUB_WORKSPACE/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
@@ -285,7 +285,7 @@ jobs:
     needs: [publish-image, build-pkg]
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      image: ghcr.io/pfblockerng/ci-runner-vm:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

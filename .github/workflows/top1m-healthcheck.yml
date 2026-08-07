@@ -24,6 +24,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  packages: read
   contents: read
 
 jobs:
@@ -32,7 +33,7 @@ jobs:
     name: Discover Top1M providers
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -74,7 +75,7 @@ jobs:
     needs: discover
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -120,7 +121,7 @@ jobs:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -128,6 +129,7 @@ jobs:
     env:
       HOME: /tmp
     permissions:
+      packages: read
       issues: write
     env:
       GH_TOKEN: ${{ github.token }}
@@ -195,7 +197,7 @@ jobs:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -203,6 +205,7 @@ jobs:
     env:
       HOME: /tmp
     permissions:
+      packages: read
       issues: write
       contents: read
     env:

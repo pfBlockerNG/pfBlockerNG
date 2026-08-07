@@ -34,6 +34,7 @@ on:
         required: true
 
 permissions:
+  packages: read
   contents: write   # commit the refreshed table to devel
   actions: write    # download the smoke run's artifacts (cross-run) + dispatch CI onto devel (#902)
 
@@ -47,7 +48,7 @@ jobs:
     name: Rebuild + commit module-durations.txt
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

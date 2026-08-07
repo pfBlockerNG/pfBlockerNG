@@ -109,7 +109,7 @@ jobs:
     name: Pin the release commit
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -121,6 +121,7 @@ jobs:
     # re-checks case-sensitively before anything is pushed.
     if: ${{ github.event.inputs.dry_run == 'false' }}
     permissions:
+      packages: read
       # write ONLY for the opt-in `retag` deletion below — the single place this whole
       # pipeline removes anything from GitHub. GitHub scopes permissions per JOB, not
       # per step, so this cannot be narrowed further without splitting the job; the
@@ -480,7 +481,7 @@ jobs:
     name: Read version matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -596,7 +597,7 @@ jobs:
     name: Resolve build stamp (created + commit)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -656,7 +657,7 @@ jobs:
     name: Create + push the release tag (verified build only)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -666,6 +667,7 @@ jobs:
     needs: [prepare-release, read-matrix, build-pkgs-portable, ui-suite, smoke-suite]
     if: ${{ !cancelled() && github.event.inputs.dry_run == 'false' && needs.prepare-release.result == 'success' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && (needs.read-matrix.outputs.run_suites == 'false' || (needs.ui-suite.result == 'success' && needs.smoke-suite.result == 'success')) }}
     permissions:
+      packages: read
       contents: write
 
     steps:
@@ -732,7 +734,7 @@ jobs:
     name: Create draft GitHub Release
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -746,6 +748,7 @@ jobs:
     needs: [prepare-release, read-matrix, build-pkgs-portable, tag-release]
     if: ${{ !cancelled() && github.event.inputs.dry_run == 'false' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && needs.tag-release.result == 'success' }}
     permissions:
+      packages: read
       contents: write
 
     # These outputs are the handoff consumed by draft-healthcheck and
@@ -848,7 +851,7 @@ jobs:
           CHANNEL:     ${{ steps.meta.outputs.channel }}
           SOURCE:      ${{ steps.meta.outputs.source }}
           PINNED_SHA:   ${{ needs.prepare-release.outputs.sha }}
-          REPOSITORY:  ${{ github.workspace }}
+          REPOSITORY:  $GITHUB_WORKSPACE
         run: |
           set -eu
           git fetch origin '+refs/heads/release/*:refs/remotes/origin/release/*' --tags --force
@@ -1065,7 +1068,7 @@ jobs:
     name: "build .pkg — ${{ matrix.variant }} ${{ matrix.pfsense_version }}"
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1197,7 +1200,7 @@ jobs:
           EXTRA_PKGS:   ${{ toJson(matrix.extra_pkgs) }}
           # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
           # rename step below finds this leg's .pkg without any path remapping.
-          PFB_RUN_ROOT: ${{ github.workspace }}/out
+          PFB_RUN_ROOT: $GITHUB_WORKSPACE/out
         run: |
           set -eu
           export LEG
@@ -1310,7 +1313,7 @@ jobs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1323,6 +1326,7 @@ jobs:
     # red leg but does not prevent attach-pkgs from completing with a warning.
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.dry_run == 'false' }}
     permissions:
+      packages: read
       contents: write
 
     steps:
@@ -1391,7 +1395,7 @@ jobs:
     name: Health-check the drafted Release
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1423,6 +1427,7 @@ jobs:
       draft_url:         ${{ steps.verify.outputs.draft_url }}
       assets:            ${{ steps.verify.outputs.assets }}
     permissions:
+      packages: read
       # write for VISIBILITY, not to mutate: this job only READS the draft, but a DRAFT
       # Release is invisible to a `contents: read` GITHUB_TOKEN. PROBED 2026-07-29 (run
       # 30442759084, two jobs differing only in this scope): `GET /releases/tags/<tag>`
@@ -1533,7 +1538,7 @@ jobs:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1543,6 +1548,7 @@ jobs:
     needs: [prepare-release, release, attach-pkgs, draft-healthcheck]
     if: ${{ !cancelled() && needs.draft-healthcheck.result == 'success' && needs.release.outputs.dry_run == 'false' }}
     permissions:
+      packages: read
       contents: read
 
     steps:

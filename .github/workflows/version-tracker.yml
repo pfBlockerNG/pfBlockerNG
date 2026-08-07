@@ -57,6 +57,7 @@ on:
 # dispatch downstream workflows; the reconcile job's permissions are declared
 # on the job itself.
 permissions:
+  packages: read
   contents: read
 
 jobs:
@@ -65,7 +66,7 @@ jobs:
     name: Read supported-version matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -124,7 +125,7 @@ jobs:
     name: React to matrix entries
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -135,6 +136,7 @@ jobs:
     # 'actions: write' is required to dispatch downstream workflows via
     # `gh workflow run`.  It is NOT used to push or commit to any branch.
     permissions:
+      packages: read
       actions: write
     steps:
       - uses: actions/checkout@v6
@@ -269,7 +271,7 @@ jobs:
     name: Daily image reconcile (box as source of truth)
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      image: ghcr.io/pfblockerng/ci-runner-vm:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
