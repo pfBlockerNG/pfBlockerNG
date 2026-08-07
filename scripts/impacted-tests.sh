@@ -34,7 +34,11 @@ else
 	# Three-dot: files changed on HEAD since the merge-base with BASE_REF.
 	# Tolerate a missing/unfetched base ref — an empty diff routes the caller to
 	# the safe full-marker path rather than erroring the run.
-	changed="$(git diff --name-only "${base}...HEAD" 2>/dev/null || true)"
+	# -z + tr: the newline form C-quotes a path holding a quote, backslash, control
+	# byte or non-ASCII byte, and the quoted form matches neither the "$dir"/test_*.py
+	# prefix nor the .py suffix — that module would drop out of the derived -k
+	# expression and simply never run (issue #2228).
+	changed="$(git diff --name-only -z "${base}...HEAD" 2>/dev/null | tr '\0' '\n' || true)"
 fi
 
 # Build the OR expression in a subshell fed by the pipe; the trailing printf runs

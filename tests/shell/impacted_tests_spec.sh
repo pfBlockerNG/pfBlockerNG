@@ -44,4 +44,46 @@ tests/smoke/ui/test_render.py"
       The output should equal 'test_render'
     End
   End
+
+  # The PFB_IMPACTED_CHANGED_FILES seam above bypasses git entirely, so these
+  # examples cover the git-reading branch. git C-quotes a path holding a quote,
+  # backslash, control byte or non-ASCII byte, and the quoted form matches neither
+  # the "$dir"/test_*.py prefix nor the .py suffix -- the module drops out of the
+  # derived -k expression and simply never runs (issue #2228). The 'plain' row is
+  # the control.
+  Describe 'changed-file list read from git'
+    gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
+
+    make_repo() {
+      scrub_git_env
+      repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/impactedhostile.XXXXXX")"
+      git_fixture -C "$repo" init -q
+      gitc config commit.gpgsign false
+      mkdir -p "$repo/tests/smoke"
+      printf 'base\n' > "$repo/README.md"
+      gitc add README.md
+      gitc commit -q -m base
+      gitc branch -f base HEAD
+    }
+    cleanup_repo() { rm -rf "$repo"; }
+    Before 'make_repo'
+    After 'cleanup_repo'
+
+    Parameters
+      'plain'
+      'has\backslash'
+      "$(printf 'has\ttab')"
+      "$(printf 'has\001control')"
+      'café'
+    End
+
+    It "selects a changed test module named 'test_$1.py'"
+      printf 'def test_x():\n    pass\n' > "$repo/tests/smoke/test_$1.py"
+      gitc add -A
+      gitc commit -q -m hostile
+      When run sh -c "cd '$repo' && sh '$SCRIPT' base tests/smoke"
+      The status should equal 0
+      The output should equal "test_$1"
+    End
+  End
 End
