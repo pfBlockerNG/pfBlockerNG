@@ -182,18 +182,47 @@ fi
 
 # The bootstrap string:
 #   1. cd to the repo on the box
-#   2. fetch the requested ref and check out its FETCHED TIP (FETCH_HEAD) — NOT a
+#   2. narrow the working tree to the paths a smoke leg reads (src/ builds the .pkg,
+#      scripts/ is the harness, tests/smoke/ is the suite). 38 MB of tracked files
+#      against 13 MB for what a leg actually uses; .ADRs/, tests/php/ and plugins/ are
+#      the bulk of the difference and none of them is read here.
+#   3. fetch the requested ref and check out its FETCHED TIP (FETCH_HEAD) — NOT a
 #      bare `git checkout <ref>`, which lands the box's possibly-stale LOCAL branch
 #      (a clone whose local devel predates an upstream commit would miss files added
 #      since, e.g. scripts/smoke-on-box.sh itself → "cannot open" + no run).
-#   3. exec smoke-on-box.sh (which re-fetches + re-execs at that ref's version)
+#   4. fetch the ci-metadata orphan ref. read-version-matrix.sh reads
+#      origin/ci-metadata, which is a REF and not a path, so the sparse checkout above
+#      does not bring it and every matrix-derived value would fall back silently.
+#   5. exec the leg INSIDE ci-runner-vm. The boxes carry Docker and nothing else — qemu,
+#      oras, dig and the Playwright browser live in the image now.
+#
+# The docker flags are each load-bearing:
+#   --device /dev/kvm  qemu falls back to TCG without it and the suite times out rather
+#                      than failing cleanly. The device passes host → LXC → container.
+#   --sysctl ...       the non-root mock DNS binds :53. This replaces an in-script
+#                      `sysctl -w`, which a container cannot perform against the host.
+#   the bind mounts    repo, shared image store, ports tree and guest key all live on the
+#                      box; without them every run re-clones and re-pulls.
 # Ref-stable: the one-liner is the only part that has to work across refs;
 # smoke-on-box.sh handles everything else.
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
 _bootstrap="cd /root/pfBlockerNG \
+ && git sparse-checkout init --cone \
+ && git sparse-checkout set src scripts tests/smoke \
  && git fetch --quiet origin '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
- && exec sh scripts/smoke-on-box.sh $_ob_flags"
+ && git fetch --quiet --no-tags origin ci-metadata:refs/remotes/origin/ci-metadata \
+ && exec docker run --rm \
+      --device /dev/kvm \
+      --sysctl net.ipv4.ip_unprivileged_port_start=53 \
+      -v /root/pfBlockerNG:/root/pfBlockerNG \
+      -v /root/images:/root/images \
+      -v /root/FreeBSD-ports:/root/FreeBSD-ports \
+      -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
+      -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR \
+      -w /root/pfBlockerNG \
+      ghcr.io/pfblockerng/ci-runner-vm:1 \
+      sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
     "$_REF" "$_MARKER" "${_FILTER:+ filter=$_FILTER}" >&2
