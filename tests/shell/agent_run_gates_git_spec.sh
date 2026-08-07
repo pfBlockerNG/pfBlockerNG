@@ -29,12 +29,13 @@ Describe 'run-gates.sh over a C-quoted path'
   After 'cleanup'
 
   Describe 'aggregate gates'
+    # No newline row here: such a path makes git_paths refuse the entire run, which
+    # the 'refuses the run' example below pins directly.
     Parameters
       'plain'
       'has"quote'
       'has\backslash'
       "$(printf 'has\ttab')"
-      "$(printf 'has\nnewline')"
       "$(printf 'has\001control')"
       'café'
     End
@@ -74,6 +75,33 @@ Describe 'run-gates.sh over a C-quoted path'
       The output should include 'sh -n scripts/plain.sh'
       The output should include 'shellcheck scripts/plain.sh'
       The output should not include 'unsafe filename in diff'
+    End
+
+    # A literal newline is the one byte a line-based path list cannot carry: split
+    # naively it yields fragments that gate a path which does not exist while the
+    # real file goes unlinted. Refusing is the only honest answer -- no in-band
+    # sentinel can stand in for it, since every byte but NUL and `/` is a legal
+    # path byte (the control-byte row above is exactly such a name).
+    It 'refuses the run when a changed path holds a newline'
+      printf '#!/bin/sh\necho hi\n' > "$repo/scripts/$(printf 'has\nnewline').sh"
+      gitc add -A
+      gitc commit -q -m hostile
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
+      The status should equal 2
+      The stderr should include 'contains a newline'
+      The output should not include 'sh -n newline.sh'
+      The output should not include 'shellcheck newline.sh'
+    End
+
+    # --plan always exits 0, so the guard's exit path needs its own example.
+    It 'fails the run for an unsafe filename outside --plan'
+      printf '#!/bin/sh\necho hi\n' > "$repo/scripts/has\"quote.sh"
+      gitc add -A
+      gitc commit -q -m hostile
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --allow-missing
+      The status should equal 1
+      The output should include 'unsafe filename in diff'
+      The output should include 'GATES: FAIL'
     End
   End
 End

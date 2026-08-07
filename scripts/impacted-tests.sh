@@ -37,8 +37,19 @@ else
 	# -z + tr: the newline form C-quotes a path holding a quote, backslash, control
 	# byte or non-ASCII byte, and the quoted form matches neither the "$dir"/test_*.py
 	# prefix nor the .py suffix — that module would drop out of the derived -k
-	# expression and simply never run (issue #2228).
+	# expression and simply never run (issue #2228). A missing/unfetched base ref
+	# still yields an empty list (git's failure is silenced, and tr then exits 0),
+	# routing the caller to its safe full-marker path.
 	changed="$(git diff --name-only -z "${base}...HEAD" 2>/dev/null | tr '\0' '\n' || true)"
+	# A path holding a literal newline tears into fragments matching neither the dir
+	# prefix nor the .py suffix, so that module would vanish from the expression
+	# while its siblings still narrowed the run. Detect it on the RAW NUL-separated
+	# stream, which carries a newline byte only in that case (no in-band sentinel is
+	# possible -- every byte but NUL and `/` is legal in a path), and emit nothing:
+	# empty routes the caller to its full-marker path, which runs everything.
+	if git diff --name-only -z "${base}...HEAD" 2>/dev/null | tr -cd '\n' | grep -q ''; then
+		changed=''
+	fi
 fi
 
 # Build the OR expression in a subshell fed by the pipe; the trailing printf runs
