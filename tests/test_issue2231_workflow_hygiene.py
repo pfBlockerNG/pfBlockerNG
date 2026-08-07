@@ -2,9 +2,12 @@
 
 Deliberately stdlib-only: the CI pytest leg runs inside ci-runner, which bakes
 no PyYAML, and the test.yml drift gate (test_benchmarks_ci_deps.py) bans any
-`pip install` there. Duplicate-key/schema/expression validation is actionlint's
-job (the `actionlint` job in test.yml; adoption tracked in #2232) — these gates
-cover only what actionlint cannot:
+`pip install` there. For WORKFLOW files, duplicate-key/schema/expression
+validation is actionlint's job (the `actionlint` job in test.yml; #2232).
+actionlint speaks only the workflow schema, so `.github/actions/*/action.yml`
+has no duplicate-key gate — tolerable because a malformed action manifest
+fails its referencing job LOUDLY at use, unlike a workflow file, which GitHub
+disables silently. These gates cover what actionlint cannot:
 
 1. No bare ``$GITHUB_*``/``$RUNNER_*`` in ``env:`` map values: GitHub Actions
    substitutes only ``${{ }}`` expressions there, never shell variables — such
@@ -49,23 +52,31 @@ _BLOCK_SCALAR = re.compile(r"^(\s*)(- )?[\w.-]+:\s*[|>][+-]?\d*\s*(?:#.*)?$")
 def _env_map_offences(text: str, where: str) -> list[str]:
     """Line scanner: report env-map entries whose value carries a bare runner
     variable. Tracks block scalars so ``run:`` bodies (plain text to YAML) are
-    never scanned, and tracks the current ``env:`` block by indentation."""
+    never scanned — EXCEPT a scalar that is itself an env entry's value, whose
+    body is exactly the unexpanded string the job receives — and tracks the
+    current ``env:`` block by indentation."""
     offences: list[str] = []
     scalar_indent: int | None = None  # inside a block scalar deeper than this
+    scalar_env_key: str | None = None  # ...which is an env VALUE under this key
     env_indent: int | None = None  # inside an env: map opened at this indent
     for line_no, line in enumerate(text.splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#"):
+        if not line.strip() or (scalar_indent is None and line.lstrip().startswith("#")):
             continue
         indent = len(line) - len(line.lstrip())
         if scalar_indent is not None:
             if indent > scalar_indent:
+                if scalar_env_key is not None and _BARE_RUNNER_VAR.search(line):
+                    offences.append(f"{where}:{line_no}: env {scalar_env_key}: {line.strip()!r}")
                 continue
             scalar_indent = None
+            scalar_env_key = None
         if env_indent is not None and indent <= env_indent:
             env_indent = None
         scalar = _BLOCK_SCALAR.match(line)
         if scalar:
             scalar_indent = indent + (2 if scalar.group(2) else 0)
+            if env_indent is not None:
+                scalar_env_key = line.strip().split(":", 1)[0]
             continue
         env_open = _ENV_KEY.match(line)
         if env_open:
@@ -106,12 +117,16 @@ def test_env_map_scanner_catches_a_planted_offence() -> None:
         "          a folded step name must not swallow its sibling keys\n"
         "        env:\n"
         "          AFTER_FOLD: $RUNNER_TEMP/x\n"
+        "          MULTILINE: >-\n"
+        "            an env VALUE spelled as a block scalar is still\n"
+        "            unexpanded $GITHUB_WORKSPACE text\n"
     )
     offences = _env_map_offences(fixture, "fixture.yml")
     assert [o.split(" env ")[1] for o in offences] == [
         "BAD: '$GITHUB_WORKSPACE/out'",
         "WORSE: '${RUNNER_TEMP}/assets'",
         "AFTER_FOLD: '$RUNNER_TEMP/x'",
+        "MULTILINE: 'unexpanded $GITHUB_WORKSPACE text'",
     ], offences
 
 

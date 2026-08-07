@@ -322,7 +322,8 @@ jobs:
       HOME: /tmp
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout
+        uses: actions/checkout@v6
         with:
           persist-credentials: false # lint-only job; no git writes
 
@@ -936,7 +937,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:3
@@ -970,6 +971,10 @@ jobs:
           fi
           if [ "${{ needs.shellcheck.result }}" != "success" ]; then
             echo "ShellCheck failed or was cancelled."
+            exit 1
+          fi
+          if [ "${{ needs.actionlint.result }}" != "success" ]; then
+            echo "actionlint (workflow files) failed or was cancelled."
             exit 1
           fi
           if [ "${{ needs.shell-tests.result }}" != "success" ]; then
