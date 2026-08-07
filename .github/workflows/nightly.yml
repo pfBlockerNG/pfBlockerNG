@@ -21,6 +21,7 @@ on:
     - cron: "0 9 * * *"
 
 permissions:
+  packages: read
   contents: write
 
 concurrency:
@@ -38,7 +39,7 @@ jobs:
     name: Pin inputs and allocate version
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -234,7 +235,7 @@ jobs:
     if: needs.prepare.outputs.outcome == 'build'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -270,12 +271,12 @@ jobs:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
-          RUN_ROOT: ${{ github.workspace }}/out
+          RUN_ROOT: $GITHUB_WORKSPACE/out
           RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
           PORTS_REPO: ${{ env.PORTS_REPO }}
           PORTS_REF: ${{ env.PORTS_REF }}
-          TRUSTED_DIR: ${{ github.workspace }}/trusted
-          SOURCE_DIR: ${{ github.workspace }}/source
+          TRUSTED_DIR: $GITHUB_WORKSPACE/trusted
+          SOURCE_DIR: $GITHUB_WORKSPACE/source
         run: |
           set -eu
           mkdir -p result
@@ -347,7 +348,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -403,7 +404,7 @@ jobs:
           TOOLS_SHA: ${{ needs.prepare.outputs.tools_sha }}
           MATRIX_SHA: ${{ needs.prepare.outputs.matrix_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
-          TRUSTED_DIR: ${{ github.workspace }}/trusted
+          TRUSTED_DIR: $GITHUB_WORKSPACE/trusted
         run: |
           set -eu
           python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" handoff \

@@ -22,6 +22,7 @@ on:
         type: string
 
 permissions:
+  packages: read
   contents: read
 
 jobs:
@@ -29,7 +30,7 @@ jobs:
     name: Publish the pkg catalogue
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -165,8 +166,8 @@ jobs:
 
       - name: Publish the pkg catalogue
         env:
-          PFB_SRC: ${{ github.workspace }}
-          PKG_REPO: ${{ github.workspace }}/pkg-repo
+          PFB_SRC: $GITHUB_WORKSPACE
+          PKG_REPO: $GITHUB_WORKSPACE/pkg-repo
           SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}

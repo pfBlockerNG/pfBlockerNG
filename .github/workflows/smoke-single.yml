@@ -296,7 +296,7 @@ jobs:
     continue-on-error: ${{ inputs.nonblocking }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      image: ghcr.io/pfblockerng/ci-runner-vm:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -627,7 +627,7 @@ jobs:
           SHARD_TOTAL: ${{ inputs.shard_total }}
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
-          SMOKE_IMAGE_DIR: ${{ github.workspace }}/image
+          SMOKE_IMAGE_DIR: $GITHUB_WORKSPACE/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
           # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
@@ -641,7 +641,7 @@ jobs:
           # civm client VM (ADR-04): the pre-pulled image dir + its data-NIC MAC
           # (the static-lease key). conftest's client_vm fixture boots it after
           # pfSense and auto-allocates the shared LAN socket port.
-          SMOKE_CLIENT_IMAGE_DIR: ${{ github.workspace }}/client-image
+          SMOKE_CLIENT_IMAGE_DIR: $GITHUB_WORKSPACE/client-image
           SMOKE_CLIENT_MAC_ADDRESS: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}

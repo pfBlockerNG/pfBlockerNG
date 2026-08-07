@@ -98,6 +98,7 @@ on:
 # Least-privilege default; the refresh job elevates for its publish + the
 # activation PR (review: CWE-276).
 permissions:
+  packages: read
   contents: read
 
 jobs:
@@ -109,7 +110,7 @@ jobs:
     name: Resolve refresh matrix (CE + Plus)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:1
+      image: ghcr.io/pfblockerng/ci-runner:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -215,7 +216,7 @@ jobs:
     if: ${{ needs.plan.outputs.count != '0' }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      image: ghcr.io/pfblockerng/ci-runner-vm:2
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -302,7 +303,7 @@ jobs:
         id: upgrade
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
+          SMOKE_SSH_KEY: $GITHUB_WORKSPACE/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
@@ -468,7 +469,7 @@ jobs:
         continue-on-error: true
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_SSH_KEY: ${{ github.workspace }}/smoke_key
+          SMOKE_SSH_KEY: $GITHUB_WORKSPACE/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
