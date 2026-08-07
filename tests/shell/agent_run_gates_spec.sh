@@ -147,7 +147,7 @@ Describe 'run-gates.sh Composer vendor guard'
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
     chmod +x "$stubdir/python3" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
-    for tool in cat dirname grep sh sort tr; do
+    for tool in cat dirname grep rm sh sort tr; do
       ln -s "$(command -v "$tool")" "$stubdir/$tool"
     done
     PATH="$stubdir:$PATH"

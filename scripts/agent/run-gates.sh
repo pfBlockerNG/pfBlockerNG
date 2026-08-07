@@ -45,15 +45,25 @@ usage() {
 # temp-file capture would need, so the cheapest honest check is to ask git the
 # same question twice and let the first answer decide (issue #2212).
 git_list() {
-	# First run decides: its stderr is left visible so a failure says why.
-	git -C "$worktree" "$@" >/dev/null || return 2
+	# ONE git call, captured to a file so its own exit status is read directly.
+	# A pipeline reports tr's status, and tr exits 0 on empty input, so any
+	# checked-then-piped arrangement swallows a git failure and turns it into
+	# "no files changed" -- a vacuous GATES: PASS (issue #2212). Two calls, one
+	# checked and one piped, has the same hole one call over: the second can
+	# fail alone.
+	_gl_out="${TMPDIR:-/tmp}/run-gates.$$.list"
+	git -C "$worktree" "$@" >"$_gl_out" || {
+		rm -f "$_gl_out"
+		return 2
+	}
 	# A newline INSIDE a pathname would otherwise become a record separator here,
 	# splitting one changed path into two -- and the tail can name a real,
 	# unchanged file, which then gets linted and passes while the changed file is
 	# never seen. That forged green is worse than the skip this all started from,
 	# so the newline is folded to \001 first: the record stays whole and carries a
 	# byte no gate mapping matches, and the refusal below catches it.
-	git -C "$worktree" "$@" | tr '\n' '\001' | tr '\0' '\n'
+	tr '\n' '\001' <"$_gl_out" | tr '\0' '\n'
+	rm -f "$_gl_out"
 }
 
 gates_for() {

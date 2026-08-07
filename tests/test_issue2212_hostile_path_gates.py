@@ -25,6 +25,7 @@ rule so a seventh site cannot be added quietly.
 from __future__ import annotations
 
 import importlib.util
+import os
 import re
 import subprocess
 import sys
@@ -374,6 +375,92 @@ def test_a_newline_in_a_path_cannot_forge_a_different_one(tmp_path: Path) -> Non
     assert "php -l src/existing.php" not in result.stdout, (
         f"a newline path forged a gate for an unchanged file; plan was {result.stdout!r}"
     )
+
+
+def test_impacted_tests_cannot_be_forged_by_a_newline_path(tmp_path: Path) -> None:
+    """The marker mapping must not select a test the diff never touched.
+
+    Same forgery as the run-gates case, one consumer over: a path holding a
+    newline splits, and the tail can name a real test module — which would then
+    be the only one selected, narrowing the run to something the change never
+    touched while looking like a normal impacted-tests result.
+    """
+    repo = _repo(tmp_path)
+    tests_dir = repo / "tests" / "smoke"
+    tests_dir.mkdir(parents=True)
+    (tests_dir / "test_real.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "real test", cwd=repo)
+    _git("branch", "devel", cwd=repo)
+
+    forged = repo / "ignored\ntests" / "smoke"
+    forged.mkdir(parents=True)
+    (forged / "test_real.py").write_text("x = 1\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "forge", cwd=repo)
+
+    result = subprocess.run(
+        ["sh", str(SCRIPTS / "impacted-tests.sh"), "devel", "tests/smoke"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+    )
+    assert "test_real" not in result.stdout, (
+        f"a newline path forged a -k selection for an untouched test: {result.stdout!r}"
+    )
+
+
+def test_run_gates_fails_closed_when_a_later_git_call_fails(tmp_path: Path) -> None:
+    """A git failure aborts the run wherever in the sequence it lands.
+
+    A corrupted repository fails every call alike, so it cannot catch a helper
+    that checks one invocation and then runs another unchecked — the status of
+    a shell pipeline is ``tr``'s, and ``tr`` exits 0 on empty input. This stub
+    fails only the SECOND path-list invocation, which is the case a persistent
+    fault cannot express.
+    """
+    repo = _repo(tmp_path)
+    _git("branch", "devel", cwd=repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.php").write_text("<?php echo 1;\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "add", cwd=repo)
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    state = tmp_path / "count"
+    (bindir / "git").write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        '\t*"--name-only"*|*"ls-files"*)\n'
+        f'\t\tn=$(cat "{state}" 2>/dev/null || echo 0); n=$((n + 1)); printf %s "$n" > "{state}"\n'
+        '\t\t[ "$n" = 2 ] && { echo "fatal: simulated mid-run git failure" >&2; exit 128; }\n'
+        "\t\t;;\n"
+        "esac\n"
+        'exec /usr/bin/git "$@"\n',
+        encoding="utf-8",
+    )
+    (bindir / "git").chmod(0o755)
+
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
+    result = subprocess.run(
+        [
+            "sh",
+            str(ROOT / "scripts" / "agent" / "run-gates.sh"),
+            "--worktree",
+            str(repo),
+            "--diff",
+            "devel",
+            "--allow-missing",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode != 0, (
+        f"a mid-run git failure produced a clean run (rc={result.returncode}); stdout={result.stdout!r}"
+    )
+    assert "GATES: PASS" not in result.stdout, f"a mid-run git failure reported success: {result.stdout!r}"
 
 
 def test_run_gates_fails_closed_when_git_itself_fails(tmp_path: Path) -> None:
