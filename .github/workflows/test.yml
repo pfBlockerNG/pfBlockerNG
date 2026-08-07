@@ -134,6 +134,16 @@ jobs:
         # same interpreter twice and report two green legs for one version.
         run: echo "/opt/python/${{ matrix.python-version }}/bin" >> "$GITHUB_PATH"
 
+      - name: Install PyYAML (interim — issue #2232 bakes it into the image)
+        # tests/test_issue2231_workflow_hygiene.py parses the workflow files for
+        # real. Its retired predecessor used pytest.importorskip("yaml"), so in
+        # CI (no PyYAML in ci-runner:3) that entire gate module silently
+        # SKIPPED — the gates only ever ran on dev machines. A pinned install
+        # here keeps the successor gates genuinely executing until the next
+        # image series bakes PyYAML via ci-requirements.txt (#2232; bumping
+        # ci-requirements.txt alone would trip the immutable-tag guard).
+        run: pip install PyYAML==6.0.3
+
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest
