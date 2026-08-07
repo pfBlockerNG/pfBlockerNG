@@ -41,7 +41,7 @@ import tomllib
 from pathlib import Path
 from typing import NamedTuple
 
-from _git_paths import nul_paths
+from _git_paths import nul_listing
 
 _ROLES_DOC = ".agents/policy/agent-roles.md"
 _TIERS_CONF = ".agents/model-tiers.conf"
@@ -451,14 +451,7 @@ def validate(root: Path) -> tuple[int, list[str]]:
 def _changed_paths(root: Path, git_args: list[str]) -> list[str]:
     # -z: the newline form C-quotes any path holding a quote, backslash, control
     # byte or non-ASCII byte, and a quoted path matches no role surface.
-    out = subprocess.run(
-        ["git", "-C", str(root), "diff", "--name-only", "-z", "--no-color", *git_args],
-        capture_output=True,
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    )
-    return nul_paths(out.stdout)
+    return nul_listing(root, "diff", "--name-only", "-z", "--no-color", *git_args)
 
 
 def touches_role_surface(paths: list[str]) -> bool:

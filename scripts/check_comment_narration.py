@@ -31,7 +31,7 @@ import sys
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
-from _git_paths import diff_header_name
+from _git_paths import diff_header_name, unified_diff
 
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"RESULTS[-/]"), "delegation handoff artifact (RESULTS/ or RESULTS-Pn)"),
@@ -111,41 +111,12 @@ def find_violations(diff_text: str) -> list[Violation]:
     return violations
 
 
-def _git_diff(args: list[str]) -> str:
-    # core.quotePath defaults to true (octal-quotes non-ASCII paths),
-    # diff.mnemonicPrefix/noprefix rewrite the +++ prefix, and an external diff
-    # driver (diff.external / GIT_EXTERNAL_DIFF) replaces the unified output
-    # entirely — any of them silently defeats the b/ parse. Pin them all so
-    # user git config/environment cannot bypass the gate.
-    out = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.quotePath=false",
-            "diff",
-            "--unified=0",
-            "--no-color",
-            "--no-ext-diff",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            *args,
-        ],
-        capture_output=True,
-        # A non-UTF-8 byte anywhere in the diff must not crash the whole run
-        # with an UnicodeDecodeError -- decode lossily instead of raising.
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    )
-    return out.stdout
-
-
 def main(argv: list[str]) -> int:
     try:
         if argv == ["--staged"]:
-            diff = _git_diff(["--cached"])
+            diff = unified_diff(["--cached"])
         elif len(argv) == 2 and argv[0] == "--diff":
-            diff = _git_diff([f"{argv[1]}...HEAD"])
+            diff = unified_diff([f"{argv[1]}...HEAD"])
         else:
             print("usage: check_comment_narration.py --staged | --diff <base>", file=sys.stderr)
             return 2

@@ -77,7 +77,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from _git_paths import diff_header_name
+from _git_paths import diff_header_name, unified_diff
 
 # Each alternative is a full-value token shape (anchored once, at the
 # alternation, by the two call sites below). Unambiguous shapes (ABI/php/py/
@@ -458,34 +458,6 @@ def find_violations(paths: list[Path]) -> list[tuple[Path, int, str]]:
     return violations
 
 
-def _git_diff(args: list[str]) -> str:
-    # Same flag set (and same rationale) as check_comment_narration._git_diff:
-    # pin quotePath/prefixes/ext-diff so config/env cannot defeat the +++ b/ parse.
-    out = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.quotePath=false",
-            "diff",
-            "--unified=0",
-            "--no-color",
-            "--no-ext-diff",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            *args,
-        ],
-        capture_output=True,
-        text=True,
-        # errors='replace': a non-UTF-8 byte ANYWHERE in the diff (even in a
-        # file outside the scan roots) must not crash the whole run with an
-        # UnicodeDecodeError -- decode lossily, same as the full scan's read.
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    )
-    return out.stdout
-
-
 def _added_lines_by_path(diff_text: str) -> dict[str, set[int]]:
     """Map each changed path to the set of its added (new-file) line numbers.
 
@@ -544,7 +516,7 @@ def _diff_mode(argv: list[str]) -> int:
         print("usage: check_version_literals.py --staged | --diff <base>", file=sys.stderr)
         return 2
     try:
-        diff_text = _git_diff(diff_args)
+        diff_text = unified_diff(diff_args)
     except subprocess.CalledProcessError as exc:
         print(f"git diff failed: {exc.stderr.strip()}", file=sys.stderr)
         return 2

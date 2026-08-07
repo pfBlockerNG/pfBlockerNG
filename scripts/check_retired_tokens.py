@@ -85,7 +85,7 @@ import re
 import subprocess
 import sys
 
-from _git_paths import diff_header_name
+from _git_paths import diff_header_name, unified_diff
 
 # Tracked-tree roots a retiring commit is expected to have fixed everywhere.
 _SCAN_ROOTS = ("src", "scripts", ".github/workflows")
@@ -189,31 +189,6 @@ def find_retired_tokens(removed: dict[str, list[str]], added: dict[str, list[str
     return sorted(retired)
 
 
-def _git_diff(args: list[str]) -> str:
-    # Same flag set as check_version_literals._git_diff: pin quotePath/prefixes/
-    # ext-diff so config/env cannot defeat the +++ b/ parse.
-    out = subprocess.run(
-        [
-            "git",
-            "-c",
-            "core.quotePath=false",
-            "diff",
-            "--unified=0",
-            "--no-color",
-            "--no-ext-diff",
-            "--src-prefix=a/",
-            "--dst-prefix=b/",
-            *args,
-        ],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        check=True,
-    )
-    return out.stdout
-
-
 def _grep_token(token: str, cached: bool) -> list[str]:
     """Fixed-string search the post-change tree for ``token``; exit 1 = clean, not an error."""
     cmd = ["git", "grep", "-Fn"]
@@ -287,7 +262,7 @@ def _run_claude_hook() -> None:
         normalized = re.sub(r"\s+", " ", payload.replace('"', "").replace("\\", ""))
         if "git commit" not in normalized:
             return
-        diff_text = _git_diff(["--cached"])
+        diff_text = unified_diff(["--cached"])
         findings = analyze_diff(diff_text, allowlist=set(), cached=True)
         if not findings:
             return
@@ -328,7 +303,7 @@ def main(argv: list[str]) -> int:
         return _usage()
     diff_args = ["--cached"] if mode == "staged" else [f"{base}...HEAD"]
     try:
-        diff_text = _git_diff(diff_args)
+        diff_text = unified_diff(diff_args)
     except subprocess.CalledProcessError as exc:
         print(f"git diff failed: {exc.stderr.strip()}", file=sys.stderr)
         return 2

@@ -10,9 +10,17 @@ reports a clean pass (issue #2212).
 ``git ... -z`` emits raw NUL-separated paths and is the fix wherever it exists
 (``--name-only``, ``ls-files``). A unified diff's ``---``/``+++`` header has no
 ``-z`` form, so those parsers decode the header here instead.
+
+This module is the single place the diff-scoped gates talk to git about paths:
+one invocation, one decode. Three gates previously carried byte-identical copies
+of the diff command and its header parse, which is why one quoting defect
+reproduced across every one of them.
 """
 
 from __future__ import annotations
+
+import subprocess
+from pathlib import Path
 
 # git emits these named escapes plus 3-digit octal for any other escaped byte.
 _C_ESCAPES = {
@@ -76,3 +84,50 @@ def diff_header_name(field: str) -> str:
 def nul_paths(listing: str) -> list[str]:
     """Split a ``git ... -z`` listing into paths, dropping the empty tail."""
     return [path for path in listing.split("\0") if path]
+
+
+def _run(args: list[str]) -> str:
+    out = subprocess.run(
+        args,
+        capture_output=True,
+        # A non-UTF-8 byte anywhere in the output must not crash the whole run
+        # with a UnicodeDecodeError -- decode lossily instead of raising.
+        encoding="utf-8",
+        errors="replace",
+        check=True,
+    )
+    return out.stdout
+
+
+def unified_diff(args: list[str]) -> str:
+    """A unified diff, pinned against everything that could defeat a header parse.
+
+    ``core.quotePath`` escapes non-ASCII bytes, ``diff.mnemonicPrefix``/
+    ``noprefix`` rewrite the ``a/``/``b/`` prefixes, and an external driver
+    (``diff.external`` / ``GIT_EXTERNAL_DIFF``) replaces the unified output
+    outright — each silently defeats a gate built on ``+++ b/<path>``, so user
+    config and environment cannot bypass one through this.
+    """
+    return _run(
+        [
+            "git",
+            "-c",
+            "core.quotePath=false",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            *args,
+        ]
+    )
+
+
+def nul_listing(root: Path, *args: str) -> list[str]:
+    """Real paths from a ``git ... -z`` listing run in ``root``.
+
+    The caller supplies ``-z`` with the rest of the subcommand, so the flag sits
+    where git wants it (``ls-files -z``, ``diff --name-only -z <rev>``).
+    """
+    return nul_paths(_run(["git", "-C", str(root), *args]))

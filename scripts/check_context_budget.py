@@ -57,7 +57,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from _git_paths import nul_paths
+from _git_paths import nul_listing
 
 BOOTSTRAP_BUDGET = 10_240
 ADAPTER_BUDGET = 8_192
@@ -514,12 +514,12 @@ def main(argv: list[str] | None = None) -> int:
                 if args.staged
                 else ["diff", "--name-only", "-z", f"{args.diff}...HEAD"]
             )
-            if not touches_context_surface(nul_paths(_git(root, *diff_args))):
+            if not touches_context_surface(nul_listing(root, *diff_args)):
                 print("context-budget: no context surface in the diff — skipped")
                 return 0
         # -z: git C-quotes any path holding a quote, backslash, control byte or
         # (by default) a non-ASCII byte, and a quoted path matches no budget.
-        tracked = nul_paths(_git(root, "ls-files", "-z"))
+        tracked = nul_listing(root, "ls-files", "-z")
         if args.staged:
             # Validate the INDEX snapshot, not the working tree: staged and
             # worktree content can diverge, and the commit ships the index.

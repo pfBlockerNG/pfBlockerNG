@@ -227,7 +227,7 @@ def test_retired_tokens_maps_a_hostile_path_to_its_real_name(
     rel = f"scripts/{HOSTILE_STEMS[klass]}.sh"
     repo = _scratch_repo(tmp_path, {rel: "#!/bin/sh\necho retired_probe\n"})
     monkeypatch.chdir(repo)
-    _, added = crt._parse_diff(crt._git_diff(["devel...HEAD"]))
+    _, added = crt._parse_diff(crt.unified_diff(["devel...HEAD"]))
     assert rel in added, f"{klass}: parsed paths {sorted(added)} do not include {rel!r}"
 
 
