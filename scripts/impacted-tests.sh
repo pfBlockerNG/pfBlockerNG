@@ -8,8 +8,9 @@
 # the module name — so a dispatcher gets "only the tests I created/touched" for
 # free, with no coverage map to maintain.
 #
-# Empty output = no changed test modules under TEST_DIR. The caller then runs the
-# whole marker (a SAFE over-approximation — never under-runs), and the dispatcher
+# Empty output = no changed test modules under TEST_DIR, OR a changed path holding
+# a literal newline, which cannot be named in a `-k` expression at all. The caller then
+# runs the whole marker (a SAFE over-approximation — never under-runs), and the dispatcher
 # can pass an explicit `-k` to narrow to the tests covering changed NON-test code
 # (which a live-VM suite can't map automatically — the code runs on the guest,
 # out of any runner-side coverage).
