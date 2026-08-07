@@ -9,7 +9,9 @@
 #                     any uncommitted (staged+unstaged+untracked, .gitignore-filtered)
 #                     changes vs HEAD (default origin/devel)
 #   --plan           print the gate commands that WOULD run, one per line, and exit
-#   --allow-missing  a missing tool reports SKIP without failing the run (default: fails)
+#   --allow-missing  a missing tool reports SKIP without failing the run (default: fails).
+#                    The Composer vendor checker is exempt: a missing interpreter there
+#                    FAILS regardless, so the PHP gates can never silently skip.
 #
 # Exits 2 without running anything when a changed path holds a literal newline: such a
 # path cannot be carried by a line-based file list, and gating a torn fragment would lint
@@ -157,7 +159,8 @@ main() {
 	( set -C; true > "$paths_tmp" ) || exit 2
 	trap 'rm -f "$paths_tmp"' EXIT
 	# dash runs no EXIT trap on an untrapped signal, so reap explicitly there too.
-	trap 'rm -f "$paths_tmp"; trap - EXIT; exit 130' INT TERM
+	trap 'rm -f "$paths_tmp"; trap - EXIT; exit 130' INT
+	trap 'rm -f "$paths_tmp"; trap - EXIT; exit 143' TERM
 
 	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
 	# pre-commit hook) -- per-file gates against ghost paths would always fail.
