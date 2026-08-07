@@ -138,7 +138,8 @@ jobs:
           docker run --rm "${IMAGE_REPO}/ci-runner:${TAG}" sh -c '
             python3 --version; php8.3 -v | head -n1; php8.5 -v | head -n1
             node --version; composer --version
-            shellcheck --version | sed -n 3p; echo "shellspec $(shellspec --version)"
+            shellcheck --version | sed -n "s/^version: /shellcheck /p"
+            echo "shellspec $(shellspec --version)"
             kcov --version'
           docker run --rm "${IMAGE_REPO}/ci-runner-vm:${TAG}" sh -c '
             qemu-system-x86_64 --version | head -n1; oras version | head -n2'
