@@ -176,15 +176,31 @@ EOF
     The output should eq 'DISTINCT'
   End
 
-  It 'always carries a real hash in the digest filename'
-    # The hash is what makes the name collision-resistant. If sha256sum were missing the
-    # pipe would yield an empty string and the suffix would vanish, silently restoring the
-    # collision the readable part alone cannot prevent.
+  It 'refuses to name a digest file when sha256sum is unavailable'
+    # Hide sha256sum from PATH: without it the pipe yields an empty suffix and every ref
+    # shares one name again. Asserting the shape of the NAME cannot catch that -- the guard
+    # has to be exercised by removing the tool it guards against.
     When call sh -c '
       . "$1"; shift
-      pfb_oras_digest_file ghcr.io/x/pfsense-ce:2.8 "$1"
+      PATH=/nonexistent-dir pfb_oras_digest_file ghcr.io/x/pfsense-ce:2.8 "$1"
+      echo "rc=$?"
     ' sh "$LIB" "$IMGDIR"
-    The output should match pattern '*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+    The output should include 'rc=1'
+    The stderr should be present
+  End
+
+  It 'refuses to derive a ref hash when sha256sum is unavailable'
+    # BOTH the digest filename and the lock filename derive a hash. Routing them through
+    # one guarded helper is what stops the lock path degrading to an empty suffix.
+    When call sh -c '
+      . "$1"; shift
+      PATH=/nonexistent-dir pfb_oras_ref_hash ghcr.io/x/pfsense-ce:2.8
+      echo "rc=$?"
+    ' sh "$LIB" "$IMGDIR"
+    # EXACT match: without the guard the helper exits 127 (command not found), and
+    # `include 'rc=1'` matches 'rc=127' as a substring -- the test would never fail.
+    The output should eq 'rc=1'
+    The stderr should be present
   End
 
   It 'pulls when the ref digest actually moved'

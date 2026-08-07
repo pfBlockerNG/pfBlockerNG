@@ -19,6 +19,18 @@
 # for several refs (pfsense-ce and pfsense-plus, chosen per leg by SMOKE_PFSENSE_REF), so a
 # single .digest made every alternating leg re-pull an image that was already on disk.
 
+# Short, collision-resistant hash of a ref. Every hash in this file goes through here:
+# sha256sum failing inside a command substitution is invisible (the pipeline's status is
+# not the caller's, and `set -eu` does not surface it), so an absent tool would yield an
+# empty suffix and every ref would share one name.
+pfb_oras_ref_hash() {
+    command -v sha256sum >/dev/null 2>&1 || {
+        printf 'oras-refresh: sha256sum is required to name per-ref files\n' >&2
+        return 1
+    }
+    printf '%s' "$1" | sha256sum | cut -c1-16
+}
+
 # Filesystem-safe, COLLISION-RESISTANT token for a ref, so each ref owns its digest file.
 # A plain character substitution is not enough: ':' and '/' both fold to '-', so
 # ghcr.io/x/a:1 and ghcr.io/x/a-1 would share a file and one would suppress the other's
@@ -27,12 +39,8 @@ pfb_oras_digest_file() {
     # A missing sha256sum would fail INSIDE the pipe below, which neither `set -e` nor a
     # non-zero exit surfaces: the hash would silently be empty and every ref would share
     # one name again. Refuse rather than degrade.
-    command -v sha256sum >/dev/null 2>&1 || {
-        printf 'oras-refresh: sha256sum is required to name digest files\n' >&2
-        return 1
-    }
     _od_safe="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')"
-    _od_hash="$(printf '%s' "$1" | sha256sum | cut -c1-16)"
+    _od_hash="$(pfb_oras_ref_hash "$1")" || return 1
     printf '%s/.digest-%s-%s\n' "$2" "$_od_safe" "$_od_hash"
 }
 
@@ -48,7 +56,8 @@ pfb_oras_refresh() {
     if command -v flock >/dev/null 2>&1; then
         # Named OUT of the .digest-* namespace: a lock is not a digest, and anything
         # enumerating the store's digest files must not see it.
-        _orl_lock="${_orl_dir}/.lock-$(printf '%s' "$1" | sha256sum | cut -c1-16)"
+        _orl_hash="$(pfb_oras_ref_hash "$1")" || return 1
+        _orl_lock="${_orl_dir}/.lock-${_orl_hash}"
         ( flock 9 || exit 1; pfb_oras_refresh_unlocked "$@" ) 9>"$_orl_lock"
         return $?
     fi
@@ -63,7 +72,7 @@ pfb_oras_refresh_unlocked() {
 
     mkdir -p "$_or_dir"
 
-    _or_digest_file="$(pfb_oras_digest_file "$_or_ref" "$_or_dir")"
+    _or_digest_file="$(pfb_oras_digest_file "$_or_ref" "$_or_dir")" || return 1
 
     # Remote digest (best-effort; a lookup failure must not delete or replace anything).
     _or_remote=''
