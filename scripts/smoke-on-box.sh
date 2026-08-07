@@ -33,12 +33,11 @@
 #   CIVM_REF          civm image ref (default ghcr.io/pfblockerng/civm:v1)
 #
 # Test-only (env):
-#   PFB_ONBOX_REPO_ROOT  override the repo path (default /root/pfBlockerNG). Used by
-#                        tests/shell/smoke_on_box_channel_spec.sh to point the script at a
-#                        fixture repo; never set on a box.
+#   PFB_ONBOX_REPO_ROOT  override the repo path (default /root/pfBlockerNG). Points the
+#                        script at a fixture repo; never set on a box.
 #
 # RESPONSIBILITIES (in order):
-#   1. Re-exec at requested REF (git fetch + checkout + exec with sentinel).
+#   1. (the caller resolved the ref before invoking this script)
 #   2. Ensure /root/FreeBSD-ports is current on pfblockerng/use-github.
 #   3. Refresh /root/images/{pfsense,civm} via oras (digest-compare; pull when absent).
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
@@ -100,39 +99,14 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-# ── Step 1: ref-checkout + re-exec ────────────────────────────────────────── #
-# The bootstrap (run by select-box.sh) may be at any ref; we git checkout the
-# requested ref FIRST, then re-exec this script at that ref's version.
-# Guard: PFB_ONBOX_REEXEC=1 skips re-exec (we are already at the right ref).
-if [ "${PFB_ONBOX_REEXEC:-}" != "1" ]; then
-    cd "$REPO_ROOT"
-    if [ -z "$_REF" ]; then
-        # No explicit ref — stay on whatever HEAD the bootstrap checked out.
-        _REF="$(git rev-parse HEAD)"
-        printf 'smoke-on-box: no --ref; staying on current HEAD %s\n' "$_REF" >&2
-    else
-        # Normalize a remote-qualified ref (origin/devel → devel): git fetch origin
-        # wants the REMOTE ref name, not the origin/-prefixed tracking name.
-        _REF="${_REF#origin/}"
-        printf 'smoke-on-box: fetching + checking out ref %s\n' "$_REF" >&2
-        # Check out the FETCHED TIP, not a bare `git checkout <ref>` — the latter
-        # lands the box's possibly-stale LOCAL branch (git fetch only moves the
-        # remote-tracking ref), which can predate files added upstream.
-        git fetch --quiet origin "$_REF"
-        git checkout --quiet --force FETCH_HEAD
-    fi
+# ── Step 1: the ref is already resolved ────────────────────────────────────── #
+# The caller (local-smoke.sh's bootstrap, via select-box.sh) fetches the requested ref and
+# checks out its FETCHED TIP before invoking this script, so there is nothing to resolve
+# here. This script used to re-fetch and re-exec itself at the same ref, which duplicated
+# the caller's work and put the choice of WHICH code runs inside the container.
+[ -n "$_REF" ] || _REF="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
+printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
 
-    # Re-exec the now-checked-out version with properly quoted args.
-    # Build via set -- so each arg is a distinct word (no word-split on _FILTER spaces).
-    set -- --ref "$_REF" --abi "$_ABI" --channel "$_CHANNEL" --marker "$_MARKER"
-    [ -n "$_FILTER" ] && set -- "$@" --filter "$_FILTER"
-    [ "$_NO_TWO_VM" -eq 1 ] && set -- "$@" --no-two-vm
-    [ "$_SHARD" != "0" ] && set -- "$@" --shard "$_SHARD"
-    [ "$_SHARD_TOTAL" != "1" ] && set -- "$@" --shard-total "$_SHARD_TOTAL"
-    PFB_ONBOX_REEXEC=1 exec sh "$REPO_ROOT/scripts/smoke-on-box.sh" "$@"
-fi
-
-# ── From here: running at the correct ref (PFB_ONBOX_REEXEC=1) ─────────────── #
 cd "$REPO_ROOT"
 
 # ── Derive build params from the ABI ─────────────────────────────────────── #
@@ -187,12 +161,15 @@ else
 fi
 
 # ── Step 4: host prep (this box only — single-writer per lease) ─────────────── #
-# Lower the unprivileged-port floor so the non-root mock DNS can bind :53.
+# The unprivileged-port floor (so the non-root mock DNS can bind :53) is set by the
+# caller's `docker run --sysctl net.ipv4.ip_unprivileged_port_start=53`: the sysctl is
+# namespaced, and a container cannot set it on the host. Fail loudly rather than let the
+# mock DNS fail to bind halfway through a run.
 _floor="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)"
 if [ "$_floor" -gt 53 ]; then
-    printf 'smoke-on-box: lowering ip_unprivileged_port_start to 53 (was %s)\n' "$_floor" >&2
-    sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null 2>&1 \
-        || sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null
+    printf 'smoke-on-box: ip_unprivileged_port_start is %s; the caller must pass\n' "$_floor" >&2
+    printf 'smoke-on-box:   --sysctl net.ipv4.ip_unprivileged_port_start=53\n' >&2
+    exit 1
 fi
 export SMOKE_STUB_DNS_ADDR="${SMOKE_STUB_DNS_ADDR:-127.0.0.1}"
 export SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
