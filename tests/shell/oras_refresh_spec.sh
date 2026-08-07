@@ -99,9 +99,23 @@ EOF
       STUB_REMOTE_DIGEST=sha256:new pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
       STUB_REMOTE_DIGEST=sha256:x ORAS_PULL_FAIL=1 \
         pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense 2>/dev/null || true
-      find "$1" -mindepth 1 -type d | wc -l | tr -d " "
+      find "$(dirname "$1")" -mindepth 1 -type d -name ".staging.*" | wc -l | tr -d " "
     ' sh "$LIB" "$IMGDIR"
     The output should eq '0'
+    The stderr should be present
+  End
+
+  It 'pulls when the digest matches but the artifact is gone'
+    # Regression guard: keying purely on the digest skips the pull for an image that is not
+    # actually on disk, and the boot then dies on a missing base image.
+    When call sh -c '
+      . "$1"; shift
+      STUB_REMOTE_DIGEST=sha256:ce pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      rm -f "$1"/*.qcow2
+      STUB_REMOTE_DIGEST=sha256:ce pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      test -f "$1/pfSense-CE_2.8.qcow2" && echo RESTORED
+    ' sh "$LIB" "$IMGDIR"
+    The output should include 'RESTORED'
     The stderr should be present
   End
 
@@ -131,6 +145,18 @@ EOF
     ' sh "$LIB" "$IMGDIR"
     The output should eq '2'
     The stderr should be present
+  End
+
+  It 'does not let two different refs collide onto one digest file'
+    # `:` and `/` both mapping to `-` makes ghcr.io/x/a:1 and ghcr.io/x/a-1 indistinguishable,
+    # which silently suppresses a needed pull for the second ref.
+    When call sh -c '
+      . "$1"; shift
+      a="$(pfb_oras_digest_file ghcr.io/x/a:1 "$1")"
+      b="$(pfb_oras_digest_file ghcr.io/x/a-1 "$1")"
+      [ "$a" = "$b" ] && echo COLLISION || echo DISTINCT
+    ' sh "$LIB" "$IMGDIR"
+    The output should eq 'DISTINCT'
   End
 
   It 'pulls when the ref digest actually moved'

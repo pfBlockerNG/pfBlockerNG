@@ -19,13 +19,37 @@
 # for several refs (pfsense-ce and pfsense-plus, chosen per leg by SMOKE_PFSENSE_REF), so a
 # single .digest made every alternating leg re-pull an image that was already on disk.
 
-# Filesystem-safe token for a ref, so each ref owns its digest file.
+# Filesystem-safe, COLLISION-RESISTANT token for a ref, so each ref owns its digest file.
+# A plain character substitution is not enough: ':' and '/' both fold to '-', so
+# ghcr.io/x/a:1 and ghcr.io/x/a-1 would share a file and one would suppress the other's
+# pull. The readable part stays for debuggability; the hash of the FULL ref decides identity.
 pfb_oras_digest_file() {
-    printf '%s/.digest-%s\n' "$2" "$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')"
+    _od_safe="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')"
+    _od_hash="$(printf '%s' "$1" | sha256sum | cut -c1-16)"
+    printf '%s/.digest-%s-%s\n' "$2" "$_od_safe" "$_od_hash"
 }
 
 # pfb_oras_refresh <ref> <published-dir> <label>
+#
+# Serialised per ref. Staging + rename already keeps the BYTES safe under concurrency, but
+# two boxes racing the same ref across an upstream digest change can still interleave so
+# that the recorded digest describes the other box's bytes; the store then believes it is
+# current when it is not, and stops self-healing on a tag revert.
 pfb_oras_refresh() {
+    _orl_dir="$2"
+    mkdir -p "$_orl_dir"
+    if command -v flock >/dev/null 2>&1; then
+        # Named OUT of the .digest-* namespace: a lock is not a digest, and anything
+        # enumerating the store's digest files must not see it.
+        _orl_lock="${_orl_dir}/.lock-$(printf '%s' "$1" | sha256sum | cut -c1-16)"
+        ( flock 9 || exit 1; pfb_oras_refresh_unlocked "$@" ) 9>"$_orl_lock"
+        return $?
+    fi
+    printf 'oras-refresh: flock unavailable; refreshing %s unserialised\n' "$1" >&2
+    pfb_oras_refresh_unlocked "$@"
+}
+
+pfb_oras_refresh_unlocked() {
     _or_ref="$1"
     _or_dir="$2"
     _or_tag="$3"
@@ -45,7 +69,16 @@ pfb_oras_refresh() {
 
     # Anything already published for THIS ref? The digest file is written only after a
     # successful publish, so its presence plus a matching digest means the image is there.
-    if [ -n "$_or_remote" ] && [ "$_or_remote" = "$_or_local" ]; then
+    # A recorded digest is not proof the image is still there: someone may have cleaned the
+    # store, or a previous publish may have been partially undone. Require an artifact too,
+    # or a stale digest file silently suppresses the pull and the boot dies on a missing
+    # base image.
+    _or_have_artifact=0
+    for _or_q in "${_or_dir}"/*.qcow2; do
+        [ -e "$_or_q" ] && { _or_have_artifact=1; break; }
+    done
+
+    if [ "$_or_have_artifact" -eq 1 ] && [ -n "$_or_remote" ] && [ "$_or_remote" = "$_or_local" ]; then
         printf 'oras-refresh: %s up-to-date at %s\n' "$_or_tag" "$_or_dir" >&2
         return 0
     fi
