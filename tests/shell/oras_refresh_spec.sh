@@ -50,7 +50,7 @@ EOF
     chmod +x "${BIN}/oras"
 
     STUB_PULL_LOG="${WORK}/pulls.log"
-    : > "$STUB_PULL_LOG"
+    printf "" > "$STUB_PULL_LOG"
     STUB_ARTIFACT_NAME="pfSense-CE_2.8.qcow2"
     PATH="${BIN}:${PATH}"
     export PATH STUB_PULL_LOG STUB_ARTIFACT_NAME STUB_REMOTE_DIGEST ORAS_PULL_FAIL
