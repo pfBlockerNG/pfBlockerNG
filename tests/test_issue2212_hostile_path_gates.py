@@ -410,6 +410,48 @@ def test_impacted_tests_cannot_be_forged_by_a_newline_path(tmp_path: Path) -> No
     )
 
 
+def test_run_gates_fails_closed_when_the_conversion_fails(tmp_path: Path) -> None:
+    """The path-list conversion failing aborts the run too, not just git.
+
+    Third instance of one class: a shell function returns its LAST command's
+    status, so whatever runs after the work decides the verdict. Checking git
+    and then letting `tr` decide, or checking `tr` and then letting the cleanup
+    `rm` decide, both end the same way — an empty list read as "no files
+    changed" and a clean GATES: PASS.
+    """
+    repo = _repo(tmp_path)
+    _git("branch", "devel", cwd=repo)
+    (repo / "src").mkdir()
+    (repo / "src" / "a.php").write_text("<?php echo 1;\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "add", cwd=repo)
+
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (bindir / "tr").write_text("#!/bin/sh\nexit 3\n", encoding="utf-8")
+    (bindir / "tr").chmod(0o755)
+
+    env = dict(os.environ, PATH=f"{bindir}:{os.environ['PATH']}")
+    result = subprocess.run(
+        [
+            "sh",
+            str(ROOT / "scripts" / "agent" / "run-gates.sh"),
+            "--worktree",
+            str(repo),
+            "--diff",
+            "devel",
+            "--allow-missing",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert result.returncode != 0, (
+        f"a failed path-list conversion produced a clean run (rc={result.returncode}); stdout={result.stdout!r}"
+    )
+    assert "GATES: PASS" not in result.stdout, f"a failed conversion reported success: {result.stdout!r}"
+
+
 def test_run_gates_fails_closed_when_a_later_git_call_fails(tmp_path: Path) -> None:
     """A git failure aborts the run wherever in the sequence it lands.
 

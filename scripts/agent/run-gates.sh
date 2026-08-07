@@ -19,6 +19,11 @@
 # mandate #4).
 
 worktree='' base='origin/devel' plan=0 allow_missing=0
+
+# git_list() writes one temp file per RUN (the name is $$-derived, so it is the
+# same path for all four calls). Sweep it on the way out, including on a signal
+# between its creation and its own rm -- otherwise a killed run leaves litter.
+trap 'rm -f "${TMPDIR:-/tmp}/run-gates.$$.list"' EXIT INT TERM
 overall=0
 
 usage() {
@@ -46,11 +51,12 @@ usage() {
 # same question twice and let the first answer decide (issue #2212).
 git_list() {
 	# ONE git call, captured to a file so its own exit status is read directly.
-	# A pipeline reports tr's status, and tr exits 0 on empty input, so any
-	# checked-then-piped arrangement swallows a git failure and turns it into
-	# "no files changed" -- a vacuous GATES: PASS (issue #2212). Two calls, one
-	# checked and one piped, has the same hole one call over: the second can
-	# fail alone.
+	# Every arrangement that lets some LATER command decide the status masks a
+	# failure as "no files changed" and yields a vacuous GATES: PASS (issue
+	# #2212): a pipeline reports tr's status, and tr exits 0 on empty input;
+	# checking one git call and piping a second leaves the second unchecked; a
+	# trailing cleanup command reports its own success. Each step below is
+	# therefore checked where it happens.
 	_gl_out="${TMPDIR:-/tmp}/run-gates.$$.list"
 	git -C "$worktree" "$@" >"$_gl_out" || {
 		rm -f "$_gl_out"
@@ -63,7 +69,13 @@ git_list() {
 	# so the newline is folded to \001 first: the record stays whole and carries a
 	# byte no gate mapping matches, and the refusal below catches it.
 	tr '\n' '\001' <"$_gl_out" | tr '\0' '\n'
+	# The status is taken BEFORE the cleanup, then returned explicitly. A shell
+	# function returns its last command's status, so a trailing `rm -f` would
+	# decide the verdict and a failed conversion would read as "no files
+	# changed" -- the same masking, one statement further on.
+	_gl_status=$?
 	rm -f "$_gl_out"
+	return "$_gl_status"
 }
 
 gates_for() {
