@@ -20,12 +20,12 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_step as _step
 from tests.test_ci_tool_pins import KCOV_PIN, SHELLCHECK_PIN, SHELLSPEC_PIN
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -120,10 +120,11 @@ def _matrix_versions() -> tuple[list[str], list[str]]:
     return json.loads(python_blob), json.loads(php_blob)
 
 
-pytestmark = pytest.mark.skipif(
-    shutil.which("git") is None or shutil.which("jq") is None,
-    reason="read-version-matrix.sh requires git + jq",
-)
+# NOTE: there is deliberately no module-level skip for a missing git/jq. Only the two
+# matrix tests shell out to the reader, and _matrix_versions() already skips itself when
+# that reader cannot run. Skipping the whole module on a host without jq would hide the
+# digest, checksum, pin and publishing guards — every regression this file exists to
+# catch — behind an unrelated missing tool.
 
 
 def test_base_image_is_a_digest_pinned_numbered_debian_13_slim() -> None:
@@ -154,12 +155,24 @@ def test_every_downloaded_tool_is_checksum_verified() -> None:
     only immutable once its bytes are checked."""
     for dockerfile in (BASE_DOCKERFILE, VM_DOCKERFILE):
         for block in _expanded_blocks(_read(dockerfile)):
+            # Plain http:// is never acceptable for a fetched tool: without TLS the bytes
+            # are attacker-controllable in transit even when a checksum follows, because
+            # the same channel could serve the checksum.
+            assert not re.search(r"\bhttp://\S+", block), (
+                f"{dockerfile.name}: tool fetched over plain http://:\n{block[:400]}"
+            )
+            # ADD <url> is a download too, and it CANNOT be checksum-verified in the same
+            # instruction — so it is banned outright rather than exempted.
+            assert not (block.startswith("ADD ") and "://" in block), (
+                f"{dockerfile.name}: ADD-from-URL cannot be verified; use RUN curl + sha256sum:\n{block[:400]}"
+            )
             if not block.startswith("RUN ") or "https://" not in block:
                 continue
             if re.search(r"git .*fetch .*[0-9a-f]{40}", block):
                 continue  # a commit id IS the checksum: git cannot serve other bytes for it
-            if "packages.sury.org" in block and "apt-get install" in block:
-                continue  # apt verifies the archive signature against the key pinned below
+            # No exception for the sury block: it downloads the signing key over https and
+            # must verify it like any other download. An exemption there would let a future
+            # edit drop the checksum while leaving an unused hash behind.
             assert "sha256sum -c" in block or "sha256sum --check" in block, (
                 f"{dockerfile.name}: download is not checksum-verified:\n{block[:400]}"
             )
@@ -171,8 +184,14 @@ def test_the_sury_php_repository_key_is_pinned_by_checksum() -> None:
     text = _read(BASE_DOCKERFILE)
     assert "packages.sury.org" in text, "PHP 8.3/8.5 need the sury archive on Debian 13"
     key_block = next(b for b in _expanded_blocks(text) if "sury" in b and "apt.gpg" in b)
-    assert re.search(r"[0-9a-f]{64}", key_block), (
-        f"the sury signing key must be pinned by SHA-256; block was:\n{key_block[:400]}"
+    digest = re.search(r"\b([0-9a-f]{64})\b", key_block)
+    assert digest, f"the sury signing key must be pinned by SHA-256; block was:\n{key_block[:400]}"
+
+    # The hash must actually be FED to sha256sum, not merely present in the block: a
+    # leftover constant next to a dropped verification is exactly the regression the
+    # pinned-key guard exists to prevent.
+    assert re.search(rf"echo\s+\"?{digest.group(1)}\s+\S+\"?\s*\|\s*sha256sum -c", key_block), (
+        f"the pinned key digest must be piped into `sha256sum -c`; block was:\n{key_block[:400]}"
     )
 
 
@@ -274,6 +293,42 @@ def test_every_baked_python_package_is_pinned_exactly() -> None:
         )
 
 
+def test_the_base_image_carries_the_github_cli() -> None:
+    """Twelve workflows shell out to `gh`. It is preinstalled on the GitHub-hosted runner
+    images and absent from a container, so migrating those jobs (#2215) without it would
+    fail every one of them at the first `gh api` call."""
+    text = _read(BASE_DOCKERFILE)
+    assert re.search(r"GH_VERSION=\d+\.\d+\.\d+", text), "the GitHub CLI must be pinned"
+    assert "install -m 0755" in text and "/usr/local/bin/gh" in text, (
+        "the GitHub CLI must land on PATH as /usr/local/bin/gh"
+    )
+
+
+def test_baked_python_toolchain_covers_the_benchmarks_job() -> None:
+    """ci-requirements.txt claims to carry every package the non-VM jobs install. The
+    manual `benchmarks` job installs benchmarks/requirements.txt, so those pins are part
+    of that claim — and must not drift from their source file."""
+    baked = _read(DOCKER_DIR / "ci-requirements.txt")
+    for requirement in _read(ROOT / "benchmarks/requirements.txt").splitlines():
+        pin = requirement.split("#", 1)[0].strip()
+        if not pin:
+            continue
+        assert pin in baked, f"the image must bake the benchmarks pin {pin!r}"
+
+
+def test_the_vm_image_chromium_check_actually_launches_the_browser() -> None:
+    """`chromium.executable_path` is a plain string getter — it returns a path whether or
+    not a browser is installed there, so a self-check built on it passes on an image with
+    no Chromium at all. The check must launch and render."""
+    checker = _read(DOCKER_DIR / "check-chromium.py")
+    assert "chromium.launch" in checker, "the check must launch Chromium, not just path it"
+    assert "set_content" in checker and "text_content" in checker, (
+        "the check must render and read back, so a browser that starts and dies fails it"
+    )
+    assert "is_file()" in checker, "the check must confirm the executable exists on disk"
+    assert "check-chromium.py" in _read(VM_DOCKERFILE), "the VM image build must actually run the Chromium check"
+
+
 def test_baked_pins_match_their_own_sources_of_truth() -> None:
     """ruff and dnspython are pinned elsewhere in the repo for a reason (a lint-verdict
     pin and an import-time test dependency); the image must not fork either."""
@@ -298,37 +353,66 @@ def test_image_version_is_an_integer_series() -> None:
     )
 
 
-def test_publish_workflow_builds_and_pushes_both_images() -> None:
+def test_publish_workflow_pushes_exactly_the_two_images_it_builds() -> None:
+    """Naming an image somewhere in the file proves nothing: the earlier version of this
+    test passed even if a `docker push` was deleted, because the image name survived in
+    the build step. Assert the actual commands."""
     workflow = _read(PUBLISH_WORKFLOW)
-    for image in ("ci-runner", "ci-runner-vm"):
-        assert image in workflow, f"the publish workflow never mentions {image}"
     assert "packages: write" in workflow, "pushing to GHCR needs packages: write"
+
+    for image in ("ci-runner", "ci-runner-vm"):
+        assert re.search(rf'docker push "\$\{{IMAGE_REPO\}}/{image}:\$\{{TAG\}}"', workflow), (
+            f"the workflow must push {image} at the pinned tag"
+        )
+        assert re.search(rf'--tag "\$\{{IMAGE_REPO\}}/{image}:\$\{{TAG\}}"', workflow), (
+            f"the workflow must build {image} at the pinned tag"
+        )
+
+    pushes = re.findall(r"docker push \S+", workflow)
+    assert len(pushes) == 2, f"expected exactly two pushes (one per image), found: {pushes}"
 
 
 def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
     """The image tag is what every workflow pins to. Re-pushing it under a changed
     Dockerfile would swap the toolchain of already-merged workflows with no diff — the
     push must fail and demand a VERSION bump instead."""
-    workflow = _read(PUBLISH_WORKFLOW)
-    assert "manifest fetch" in workflow or "manifest inspect" in workflow, (
-        "the publish workflow must probe the registry for the tag before pushing"
-    )
-    assert re.search(r"bump.*VERSION", workflow, re.IGNORECASE), (
-        "the overwrite guard must tell the reader to bump .github/docker/VERSION"
+    guard = _step(_read(PUBLISH_WORKFLOW), "Refuse to overwrite a published tag")
+
+    assert "manifest inspect" in guard, "the guard must probe the registry for the tag"
+    # Both images, not just the first: a clash on either is a clash.
+    assert "for image in ci-runner ci-runner-vm" in guard, f"the guard must probe BOTH images; step was:\n{guard}"
+    assert "exit 1" in guard, f"a detected clash must fail the job; step was:\n{guard}"
+    assert re.search(r"bump .*VERSION", guard, re.IGNORECASE), (
+        "the guard must tell the reader to bump .github/docker/VERSION"
     )
 
 
-def test_publish_workflow_only_pushes_from_the_release_branches() -> None:
-    """A branch push that published the shared tag would hand every open PR a toolchain
-    built from that branch's Dockerfile."""
+def test_publish_workflow_publishes_only_from_devel_and_main() -> None:
+    """A pull-request or feature-branch publish would hand every other open PR a
+    toolchain built from that branch. The earlier version of this test accepted ANY `if:`,
+    including one that permitted exactly that."""
     workflow = _read(PUBLISH_WORKFLOW)
-    push_steps = [
-        block
-        for block in workflow.split("      - name: ")
-        if "docker push" in block or "buildx build" in block and "--push" in block
-    ]
-    assert push_steps, "no push step found in the publish workflow"
-    for step in push_steps:
-        assert "github.ref" in step or "if:" in step, (
-            f"the push step must be gated on the branch; step was:\n{step[:400]}"
+    decision = _step(workflow, "Decide whether this run publishes")
+
+    assert '"${{ github.event_name }}" != "pull_request"' in decision, (
+        f"a pull_request run must never publish; step was:\n{decision}"
+    )
+    branches = re.findall(r'"\$\{\{ github\.ref \}\}" = "refs/heads/(\w+)"', decision)
+    assert sorted(branches) == ["devel", "main"], f"publishing must be limited to devel and main, found {branches}"
+
+    # Every step that can mutate the registry hangs off that one decision, so there is a
+    # single place where the branch policy lives.
+    for step_name in ("Log in to GHCR", "Refuse to overwrite a published tag", "Push both images"):
+        step = _step(workflow, step_name)
+        assert "if: steps.publish.outputs.enabled == 'true'" in step, (
+            f"{step_name!r} must be gated on the publish decision; step was:\n{step}"
         )
+
+
+def test_publish_workflow_checks_for_a_clash_before_it_pushes() -> None:
+    """Order is the whole guarantee: a probe that ran AFTER the push would report the tag
+    this very run just wrote."""
+    workflow = _read(PUBLISH_WORKFLOW)
+    assert workflow.index("- name: Refuse to overwrite a published tag") < workflow.index("- name: Push both images"), (
+        "the overwrite guard must run before the push step"
+    )

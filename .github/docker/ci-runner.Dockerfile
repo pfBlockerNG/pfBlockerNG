@@ -51,7 +51,8 @@ RUN apt-get update \
  && rm -rf /tmp/kcov/.git \
  && cmake -S /tmp/kcov -B /tmp/kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/opt/kcov \
  && cmake --build /tmp/kcov/build --parallel "$(nproc)" \
- && cmake --install /tmp/kcov/build
+ && cmake --install /tmp/kcov/build \
+ && strip /opt/kcov/bin/kcov /opt/kcov/bin/kcov-system-daemon
 
 # ── the runner image ─────────────────────────────────────────────────────────────────
 FROM ${DEBIAN_IMAGE}
@@ -69,12 +70,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # divergences); iprange is the FireHOL set-subtraction tool ADR-53 P3 exercises; zstd is
 # actions/cache's compressor; sudo keeps the workflow steps that call it working
 # unchanged. libcurl4/libelf1/libdw1 are kcov's runtime libs, the rest are the shared
-# objects the relocated CPython links against.
+# objects the relocated CPython links against. `patch` is not optional despite looking
+# it: scripts/build-webassets.sh applies the CodeMirror patches with `patch -f -F 0`, and
+# the webassets drift guard re-runs that script. gnupg is deliberately ABSENT — apt
+# verifies the sury archive with gpgv (its own dependency) against the keyring installed
+# below as a plain file, and pulling gnupg in would add a 64-package closure for nothing.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl file git gnupg iprange jq less libbz2-1.0 libcurl4 libdw1 \
+      ca-certificates curl git iprange jq less libbz2-1.0 libcurl4 libdw1 \
       libelf1 libexpat1 libffi8 libgdbm-compat4t64 libgdbm6t64 liblzma5 libncursesw6 \
-      libreadline8t64 libsqlite3-0 libssl3t64 make patch procps rsync sudo tar unzip \
+      libreadline8t64 libsqlite3-0 libssl3t64 patch procps rsync sudo tar unzip \
       uuid-runtime xz-utils zlib1g zstd \
  && rm -rf /var/lib/apt/lists/*
 
@@ -86,9 +91,9 @@ RUN apt-get update \
 # Extensions match what shivammathur/setup-php was asked for: curl, intl, mbstring
 # (ctype/filter/json live in php*-common), plus xml + zip for composer/PHPUnit and pcov
 # for the informational coverage run.
-ARG SURY_KEY_SHA256=b486fd5488185c4c46467960fa69c53d5085fec492cf76b9eaf3db33561c9d7c
+ARG SURY_ARCHIVE_DIGEST=b486fd5488185c4c46467960fa69c53d5085fec492cf76b9eaf3db33561c9d7c
 RUN curl -fsSLo /tmp/sury.gpg https://packages.sury.org/php/apt.gpg \
- && echo "${SURY_KEY_SHA256}  /tmp/sury.gpg" | sha256sum -c - \
+ && echo "${SURY_ARCHIVE_DIGEST}  /tmp/sury.gpg" | sha256sum -c - \
  && install -D -m 0644 /tmp/sury.gpg /etc/apt/keyrings/sury-php.gpg \
  && rm -f /tmp/sury.gpg \
  && echo 'deb [signed-by=/etc/apt/keyrings/sury-php.gpg] https://packages.sury.org/php/ trixie main' \
@@ -157,6 +162,19 @@ RUN curl -fsSLo /tmp/shellcheck.tar.xz \
  && install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck \
  && rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-${SHELLCHECK_VERSION}"
 
+# The GitHub CLI. Twelve workflows drive `gh api` / `gh pr` / `gh run` (the refresh jobs,
+# the version tracker, the nightly alerting, the release flow); it is preinstalled on the
+# GitHub-hosted runner images and would simply be MISSING inside a container, so the
+# migration in #2215 depends on it being here. Pinned release asset, verified like the rest.
+ARG GH_VERSION=2.97.0
+ARG GH_SHA256=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+RUN curl -fsSLo /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+ && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_amd64/bin/gh" \
+ && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
+ && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
+
 ARG SHELLSPEC_VERSION=0.28.1
 ARG SHELLSPEC_SHA256=350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
 RUN curl -fsSLo /tmp/shellspec-dist.tar.gz \
@@ -187,7 +205,7 @@ RUN set -eu; \
       "$php" -m | grep -qx mbstring; \
       "$php" -m | grep -qx pcov; \
     done; \
-    composer --version; node --version; npm --version; \
+    composer --version; node --version; npm --version; gh --version | head -n1; \
     shellcheck --version; shellspec --version; kcov --version; \
     jq --version; dash -c 'exit 0'; iprange --version 2>&1 | head -n1
 
