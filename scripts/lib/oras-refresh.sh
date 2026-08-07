@@ -65,18 +65,24 @@ pfb_oras_refresh_unlocked() {
                          | grep -o '"digest":"[^"]*"' | cut -d'"' -f4)" \
         || _or_remote=''
 
-    _or_local="$(cat "$_or_digest_file" 2>/dev/null)" || _or_local=''
-
     # Anything already published for THIS ref? The digest file is written only after a
     # successful publish, so its presence plus a matching digest means the image is there.
-    # A recorded digest is not proof the image is still there: someone may have cleaned the
-    # store, or a previous publish may have been partially undone. Require an artifact too,
-    # or a stale digest file silently suppresses the pull and the boot dies on a missing
-    # base image.
+    # A recorded digest is not proof THIS ref's image is still there: the store holds several
+    # refs' images in one directory, so "some .qcow2 exists" is satisfied by a sibling and
+    # hides this ref's missing file — the boot then dies on a missing base image. The state
+    # file therefore records the artifacts this ref published (line 1 digest, then one
+    # filename per line) and every one of them must still be present.
+    _or_local="$(sed -n 1p "$_or_digest_file" 2>/dev/null)" || _or_local=''
     _or_have_artifact=0
-    for _or_q in "${_or_dir}"/*.qcow2; do
-        [ -e "$_or_q" ] && { _or_have_artifact=1; break; }
-    done
+    if [ -s "$_or_digest_file" ] && [ "$(sed -n '2,$p' "$_or_digest_file" 2>/dev/null | wc -l)" -gt 0 ]; then
+        _or_have_artifact=1
+        while IFS= read -r _or_name; do
+            [ -n "$_or_name" ] || continue
+            [ -e "${_or_dir}/${_or_name}" ] || _or_have_artifact=0
+        done <<EOF
+$(sed -n '2,$p' "$_or_digest_file" 2>/dev/null)
+EOF
+    fi
 
     if [ "$_or_have_artifact" -eq 1 ] && [ -n "$_or_remote" ] && [ "$_or_remote" = "$_or_local" ]; then
         printf 'oras-refresh: %s up-to-date at %s\n' "$_or_tag" "$_or_dir" >&2
@@ -110,8 +116,10 @@ pfb_oras_refresh_unlocked() {
 
     # Publish each staged artifact by rename. Readers with the old file open keep their
     # inode; new opens get the new bytes. Never a truncate-in-place.
+    _or_published=''
     for _or_f in "$_or_stage"/*; do
         [ -e "$_or_f" ] || continue
+        _or_published="$_or_published $(basename "$_or_f")"
         mv -f "$_or_f" "${_or_dir}/$(basename "$_or_f")" || {
             rm -rf "$_or_stage"
             return 1
@@ -119,8 +127,16 @@ pfb_oras_refresh_unlocked() {
     done
     rm -rf "$_or_stage"
 
-    # Only now is the ref genuinely published, so only now record its digest.
-    [ -n "$_or_remote" ] && printf '%s\n' "$_or_remote" > "$_or_digest_file"
+    # Only now is the ref genuinely published, so only now record its state: the digest,
+    # then the artifacts this ref owns, so a later run can tell ITS image from a sibling's.
+    if [ -n "$_or_remote" ]; then
+        { printf '%s\n' "$_or_remote"
+          for _or_p in "$_or_dir"/*.qcow2; do
+              [ -e "$_or_p" ] || continue
+              case " $_or_published " in *" $(basename "$_or_p") "*) basename "$_or_p" ;; esac
+          done
+        } > "$_or_digest_file"
+    fi
 
     return 0
 }

@@ -119,6 +119,23 @@ EOF
     The stderr should be present
   End
 
+  It 'pulls a ref whose own artifact is gone even when a sibling ref image is present'
+    # The store holds several refs' images in ONE directory, so "some .qcow2 exists" is
+    # satisfied by a sibling ref and hides this ref's missing image.
+    When call sh -c '
+      . "$1"; shift
+      STUB_REMOTE_DIGEST=sha256:ce pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" CE
+      STUB_ARTIFACT_NAME=pfSense-Plus_26.03.qcow2 STUB_REMOTE_DIGEST=sha256:plus \
+        pfb_oras_refresh ghcr.io/x/pfsense-plus:26.03 "$1" Plus
+      rm -f "$1/pfSense-Plus_26.03.qcow2"
+      STUB_ARTIFACT_NAME=pfSense-Plus_26.03.qcow2 STUB_REMOTE_DIGEST=sha256:plus \
+        pfb_oras_refresh ghcr.io/x/pfsense-plus:26.03 "$1" Plus
+      test -f "$1/pfSense-Plus_26.03.qcow2" && echo RESTORED || echo MISSING
+    ' sh "$LIB" "$IMGDIR"
+    The output should include 'RESTORED'
+    The stderr should be present
+  End
+
   # ── per-ref digests ───────────────────────────────────────────────────────── #
 
   It 'does not re-pull a ref whose own digest is unchanged'
