@@ -11,6 +11,10 @@
 #   --plan           print the gate commands that WOULD run, one per line, and exit
 #   --allow-missing  a missing tool reports SKIP without failing the run (default: fails)
 #
+# Exits 2 without running anything when a changed path holds a literal newline: such a
+# path cannot be carried by a line-based file list, and gating a torn fragment would lint
+# a path that does not exist while leaving the real file unchecked.
+#
 # Per-gate lines `GATE PASS|FAIL|SKIP: <cmd>`; a FAILING gate additionally prints its own
 # captured stdout+stderr immediately before its `GATE FAIL` line (a passing gate stays
 # fully suppressed); final line `GATES: PASS|FAIL`. Exit 0 only when nothing failed (and
