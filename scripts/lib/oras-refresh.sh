@@ -24,6 +24,13 @@
 # ghcr.io/x/a:1 and ghcr.io/x/a-1 would share a file and one would suppress the other's
 # pull. The readable part stays for debuggability; the hash of the FULL ref decides identity.
 pfb_oras_digest_file() {
+    # A missing sha256sum would fail INSIDE the pipe below, which neither `set -e` nor a
+    # non-zero exit surfaces: the hash would silently be empty and every ref would share
+    # one name again. Refuse rather than degrade.
+    command -v sha256sum >/dev/null 2>&1 || {
+        printf 'oras-refresh: sha256sum is required to name digest files\n' >&2
+        return 1
+    }
     _od_safe="$(printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '-')"
     _od_hash="$(printf '%s' "$1" | sha256sum | cut -c1-16)"
     printf '%s/.digest-%s-%s\n' "$2" "$_od_safe" "$_od_hash"
