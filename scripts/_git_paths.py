@@ -45,8 +45,14 @@ def unquote_git_path(field: str) -> str:
             out.append(_C_ESCAPES[raw[i + 1]])
             i += 2
         elif 0x30 <= raw[i + 1] <= 0x37:
-            out.append(int(raw[i + 1 : i + 4], 8) & 0xFF)
-            i += 4
+            # git always emits exactly three octal digits; scanning for however
+            # many are actually there keeps the decode total on forged input
+            # rather than raising mid-run.
+            end = i + 1
+            while end < len(raw) and end < i + 4 and 0x30 <= raw[end] <= 0x37:
+                end += 1
+            out.append(int(raw[i + 1 : end], 8) & 0xFF)
+            i = end
         else:
             out.append(raw[i + 1])
             i += 2

@@ -476,7 +476,11 @@ def run_checks(root: Path, tracked: list[str]) -> list[str]:
 
 
 def _git(root: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(root), *args], capture_output=True, text=True, check=True)
+    # encoding pinned, not locale-derived: a -z listing carries raw path bytes,
+    # and under LANG=C a non-ASCII one would raise instead of being classified.
+    proc = subprocess.run(
+        ["git", "-C", str(root), *args], capture_output=True, encoding="utf-8", errors="replace", check=True
+    )
     return proc.stdout
 
 

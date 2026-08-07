@@ -54,6 +54,10 @@ HOSTILE_STEMS = {
     "backslash": "has\\backslash",
     "tab": "has\ttab",
     "newline": "has\nnewline",
+    # A control byte outside git's named-escape set (\a\b\f\n\r\t\v) is escaped
+    # in OCTAL, and that stays true under core.quotePath=false — this row is the
+    # only one that reaches the octal decode path.
+    "control-byte": "has\x01control",
     "non-ascii": "café",
 }
 QUOTED_CLASSES = [name for name in HOSTILE_STEMS if name != "plain"]
@@ -156,8 +160,10 @@ def test_a_bash_shebang_is_rejected_whatever_the_path(tmp_path: Path, klass: str
     """The shebang gate reads every tracked file, including a C-quoted one."""
     rel = f"scripts/{HOSTILE_STEMS[klass]}.sh"
     repo = _scratch_repo(tmp_path, {rel: "#!/bin/bash\necho hi\n"})
+    # bash -e is the shell GitHub gives a `run:` block with no `shell:` keyword;
+    # running the step under anything else would not exercise its real wiring.
     result = subprocess.run(
-        ["sh", "-c", _step_body("Forbid bash shebangs")],
+        ["bash", "-e", "-c", _step_body("Forbid bash shebangs")],
         cwd=repo,
         capture_output=True,
         env={"PATH": "/usr/bin:/bin", "HOME": str(repo)},

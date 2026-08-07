@@ -10,7 +10,7 @@ job in ``.github/workflows/test.yml`` (see the ``coverage-pairing`` job) — nev
 in ``.githooks/pre-commit``, because pre-commit only ever sees ONE commit's
 staged files, not the whole PR's diff against its base; the pairing question
 ("did this PR's *src* change ship *any* test?") is only answerable with the full
-PR diff, which is what the CI job computes via ``git diff --name-only
+PR diff, which is what the CI job computes via ``git diff --name-only -z
 origin/<base>...HEAD`` and pipes into this script over stdin.
 
 THE TWO RULES
@@ -166,10 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
     Positional args are changed paths (used by tests); with none, changed paths
-    are read newline-separated from stdin — how the CI job pipes
-    ``git diff --name-only`` output in. Both entry points are normalized the
-    same way (surrounding whitespace stripped, blank entries dropped), so a
-    padded positional arg and a trailing-newline stdin line classify identically.
+    are read from stdin — NUL-separated as the CI job pipes ``git diff
+    --name-only -z`` output in, newline-separated otherwise. Every entry point is
+    normalized the same way (surrounding whitespace stripped, blank entries
+    dropped), so a padded positional arg and a trailing-newline stdin line
+    classify identically.
 
     ``--pr-body-file <path>`` (passed by the CI job iff the ``no-test-needed``
     label is set, alongside ``--warn-only``): the file holds the PR body; when

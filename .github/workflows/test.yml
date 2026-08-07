@@ -234,6 +234,10 @@ jobs:
         # Vendored third-party plugin trees are exempt (upstream content, never
         # runs on the box; same fence as .githooks/pre-commit).
         run: |
+          # pipefail: a step with no `shell:` keyword runs under `bash -e {0}`
+          # (no pipefail), so a failing `git ls-files` would become an empty
+          # listing and pass this gate silently.
+          set -o pipefail
           # -z + xargs -0, never a newline-separated listing: git C-quotes a path
           # holding a quote, backslash, control byte or non-ASCII byte, and
           # `head` on a quoted name reads nothing — the file's shebang would go
