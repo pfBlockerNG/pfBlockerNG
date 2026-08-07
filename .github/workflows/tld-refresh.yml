@@ -57,14 +57,13 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
       options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     permissions:
       packages: read
       contents: write        # push the automation branch (NOT devel)
       pull-requests: write    # open/label the PR
       actions: write          # dispatch the CI gates onto the branch head (#902)
     env:
+      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       BRANCH: tld-refresh/auto
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}

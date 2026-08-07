@@ -360,6 +360,9 @@ def _run_exit5_mapper(
         "PYTEST_FILTER": pytest_filter,
         "SCOPE": scope,
         "MARKER": "ui_render",
+        # The runner always provides GITHUB_WORKSPACE; the step's run body
+        # derives its image/screenshot paths from it under set -eu (issue #2231).
+        "GITHUB_WORKSPACE": str(tmp_path),
     }
     return subprocess.run(  # noqa: S603
         ["sh", "-c", script],

@@ -38,6 +38,9 @@ Describe 'oras-refresh library (shared image store, issue #2218)'
 case "$1" in
   resolve) printf '%s\n' "${STUB_REMOTE_DIGEST}" ;;
   pull)
+    # Where the transfer lands (real oras pulls into cwd) — the staging-location
+    # example asserts on this.
+    printf '%s\n' "$PWD" >> "${STUB_CWD_LOG}"
     printf 'PARTIAL' > "${STUB_ARTIFACT_NAME}"
     if [ -n "${ORAS_PULL_FAIL:-}" ]; then exit 7; fi
     printf '%s' "${STUB_REMOTE_DIGEST}" > "${STUB_ARTIFACT_NAME}"
@@ -50,10 +53,12 @@ EOF
     chmod +x "${BIN}/oras"
 
     STUB_PULL_LOG="${WORK}/pulls.log"
+    STUB_CWD_LOG="${WORK}/cwds.log"
     printf "" > "$STUB_PULL_LOG"
+    printf "" > "$STUB_CWD_LOG"
     STUB_ARTIFACT_NAME="pfSense-CE_2.8.qcow2"
     PATH="${BIN}:${PATH}"
-    export PATH STUB_PULL_LOG STUB_ARTIFACT_NAME STUB_REMOTE_DIGEST ORAS_PULL_FAIL
+    export PATH STUB_PULL_LOG STUB_CWD_LOG STUB_ARTIFACT_NAME STUB_REMOTE_DIGEST ORAS_PULL_FAIL
   }
 
   cleanup() { rm -rf "$WORK"; }
@@ -88,6 +93,21 @@ EOF
       cat "$1/pfSense-CE_2.8.qcow2"
     ' sh "$LIB" "$IMGDIR"
     The output should include 'sha256:new'
+    The stderr should be present
+  End
+
+  It 'stages inside the published store so the publish rename never crosses filesystems'
+    # `mv` across devices degrades to a progressive copy onto the FINAL filename —
+    # the truncate-in-place hazard this library exists to prevent, resurfacing
+    # whenever the store directory is its own mountpoint (issue #2231). Staging
+    # INSIDE the store makes the rename same-filesystem by construction; the dot
+    # name keeps it out of the *.qcow2 glob and the digest bookkeeping.
+    When call sh -c '
+      . "$1"; shift
+      STUB_REMOTE_DIGEST=sha256:new pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      cat "$STUB_CWD_LOG"
+    ' sh "$LIB" "$IMGDIR"
+    The output should include '/images/pfsense/.staging.'
     The stderr should be present
   End
 

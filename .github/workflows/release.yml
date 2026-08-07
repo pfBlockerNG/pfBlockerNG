@@ -851,9 +851,11 @@ jobs:
           CHANNEL:     ${{ steps.meta.outputs.channel }}
           SOURCE:      ${{ steps.meta.outputs.source }}
           PINNED_SHA:   ${{ needs.prepare-release.outputs.sha }}
-          REPOSITORY:  $GITHUB_WORKSPACE
         run: |
           set -eu
+          # Run-body assignment, not an env: map value — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          REPOSITORY="$GITHUB_WORKSPACE"
           git fetch origin '+refs/heads/release/*:refs/remotes/origin/release/*' --tags --force
           PYTHONPATH="${GITHUB_WORKSPACE}/pfblockerng-src" \
             python3 - "$TAG" "$CHANNEL" "$SOURCE" "$PINNED_SHA" "$REPOSITORY" "$GITHUB_OUTPUT" <<'PY'
@@ -1198,11 +1200,12 @@ jobs:
           VARIANT:      ${{ matrix.variant }}
           PFSENSE_VERSION: ${{ matrix.pfsense_version }}
           EXTRA_PKGS:   ${{ toJson(matrix.extra_pkgs) }}
-          # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
-          # rename step below finds this leg's .pkg without any path remapping.
-          PFB_RUN_ROOT: $GITHUB_WORKSPACE/out
         run: |
           set -eu
+          # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
+          # rename step below finds this leg's .pkg without any path remapping.
+          # Run-body export, not an env: map value (issue #2231).
+          export PFB_RUN_ROOT="$GITHUB_WORKSPACE/out"
           export LEG
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID

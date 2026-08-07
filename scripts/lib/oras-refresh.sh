@@ -107,10 +107,13 @@ EOF
 
     printf 'oras-refresh: pulling %s (%s) -> %s\n' "$_or_tag" "$_or_ref" "$_or_dir" >&2
 
-    # Stage OUTSIDE the published directory so a partial transfer is never visible there,
-    # and so a listing of the store never shows scratch. Same filesystem as the store when
-    # TMPDIR allows, otherwise the publish below falls back to a copy+rename.
-    _or_stage="$(mktemp -d "${_or_dir%/*}/.staging.XXXXXX")" || return 1
+    # Stage INSIDE the published directory (dot-named: invisible to the *.qcow2
+    # globs and the digest bookkeeping) so the publish below is a SAME-FILESYSTEM
+    # rename by construction. Staging in the parent is not equivalent: if the
+    # store is its own mountpoint, `mv` degrades to a progressive copy onto the
+    # FINAL filename — the truncate-in-place hazard this library exists to
+    # prevent (issue #2231).
+    _or_stage="$(mktemp -d "${_or_dir}/.staging.XXXXXX")" || return 1
 
     if pfb_oras_login 2>/dev/null; then :; fi
 

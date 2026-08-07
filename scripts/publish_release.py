@@ -204,6 +204,22 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
 def _asset_map(target: _Target) -> dict[str, Path]:
     mapping = {target.canonical.canonical_name: target.canonical.work_path}
     for dep in target.dependencies:
+        existing = mapping.get(dep.canonical_name)
+        if existing is not None:
+            # A tagged run declares its dependency assets per row, so the SAME
+            # artifact legitimately arrives under several declared names — those
+            # deduplicate byte-identically. DIFFERENT bytes under one canonical
+            # name must fail closed here: keying the map silently last-wins
+            # otherwise, publishing one build and dropping the other with no
+            # conflict check at all (issue #2231).
+            if _files_identical(existing, dep.work_path):
+                continue
+            raise DestinationConflictError(
+                f"{dep.canonical_name}: two verified assets share this canonical name "
+                f"with different bytes — "
+                f"existing sha256={hashlib.sha256(existing.read_bytes()).hexdigest()}, "
+                f"incoming sha256={hashlib.sha256(dep.work_path.read_bytes()).hexdigest()}"
+            )
         mapping[dep.canonical_name] = dep.work_path
     return mapping
 
