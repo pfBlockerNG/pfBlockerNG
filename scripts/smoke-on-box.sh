@@ -35,6 +35,8 @@
 # Test-only (env):
 #   PFB_ONBOX_REPO_ROOT  override the repo path (default /root/pfBlockerNG). Points the
 #                        script at a fixture repo; never set on a box.
+#   PFB_ONBOX_PORTS_DIR  override the ports checkout (default /root/FreeBSD-ports); same
+#                        purpose, never set on a box.
 #
 # RESPONSIBILITIES (in order):
 #   1. (the caller resolved the ref before invoking this script)
@@ -78,7 +80,9 @@ pfb_scrub_git_env
 # Shared-image-store-safe refresh (issue #2218): staging + rename publish, per-ref digests.
 # shellcheck source=scripts/lib/oras-refresh.sh
 . "${REPO_ROOT}/scripts/lib/oras-refresh.sh"
-PORTS_DIR="/root/FreeBSD-ports"
+# Seam (test-only, mirroring PFB_ONBOX_REPO_ROOT): lets the spec reach the port-floor
+# precondition without writing to /root. Never set on a box.
+PORTS_DIR="${PFB_ONBOX_PORTS_DIR:-/root/FreeBSD-ports}"
 IMAGES_DIR="/root/images"
 
 PFSENSE_REF="${SMOKE_PFSENSE_REF:-ghcr.io/pfblockerng/pfsense-ce:2.8}"
@@ -106,6 +110,20 @@ done
 # the caller's work and put the choice of WHICH code runs inside the container.
 [ -n "$_REF" ] || _REF="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
+
+# Checked FIRST: this is a property of how we were INVOKED, so failing here costs
+# nothing, while discovering it after the ports refresh and the image pull wastes minutes
+# and reports as a mock-DNS failure rather than a missing docker flag.
+# The unprivileged-port floor (so the non-root mock DNS can bind :53) is set by the
+# caller's `docker run --sysctl net.ipv4.ip_unprivileged_port_start=53`: the sysctl is
+# namespaced, and a container cannot set it on the host. Fail loudly rather than let the
+# mock DNS fail to bind halfway through a run.
+_floor="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+if [ "$_floor" -gt 53 ]; then
+    printf 'smoke-on-box: ip_unprivileged_port_start is %s; the caller must pass\n' "$_floor" >&2
+    printf 'smoke-on-box:   --sysctl net.ipv4.ip_unprivileged_port_start=53\n' >&2
+    exit 1
+fi
 
 cd "$REPO_ROOT"
 
@@ -161,16 +179,6 @@ else
 fi
 
 # ── Step 4: host prep (this box only — single-writer per lease) ─────────────── #
-# The unprivileged-port floor (so the non-root mock DNS can bind :53) is set by the
-# caller's `docker run --sysctl net.ipv4.ip_unprivileged_port_start=53`: the sysctl is
-# namespaced, and a container cannot set it on the host. Fail loudly rather than let the
-# mock DNS fail to bind halfway through a run.
-_floor="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)"
-if [ "$_floor" -gt 53 ]; then
-    printf 'smoke-on-box: ip_unprivileged_port_start is %s; the caller must pass\n' "$_floor" >&2
-    printf 'smoke-on-box:   --sysctl net.ipv4.ip_unprivileged_port_start=53\n' >&2
-    exit 1
-fi
 export SMOKE_STUB_DNS_ADDR="${SMOKE_STUB_DNS_ADDR:-127.0.0.1}"
 export SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
 
