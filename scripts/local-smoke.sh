@@ -21,7 +21,7 @@
 #   --abi ABI   build ABI (default: FreeBSD:15:amd64)
 #   --channel C pkg channel to BUILD: stable|testing|edge|nightly (default: edge, the
 #               channel the devel branch's 4.0.0.a* line belongs to, and the one
-#               build-pkg-linux.yml moves to in issue #2166). The channel picks the port,
+#               build-pkg-linux.yml builds, issue #2166). The channel picks the port,
 #               and the port names the package, so a run on the wrong channel verifies a
 #               differently-named artifact than CI ships (issue #2206).
 #   --marker M  pytest -m marker (default: smoke); see also --filter
@@ -78,9 +78,10 @@ export PFB_BOXES
 _REF="${PFB_REF:-}"
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
 # A local run must build the same-named package CI does, or a green local smoke proves
-# nothing about CI's artifact. NOT mechanically pinned to build-pkg-linux.yml: that workflow
-# still asks for the retired `devel` until issue #2166 lands, so this tracks the channel the
-# devel branch's 4.0.0.a* line belongs to. Revisit if the branch changes release line.
+# nothing about CI's artifact. NOT mechanically pinned to build-pkg-linux.yml: the guard test
+# (tests/test_issue2166_workflow_channel_inputs.py) scans the workflows and tests/smoke, never
+# this default, so the two are kept in step by hand. Both build the channel the devel branch's
+# 4.0.0.a* line belongs to. Revisit if the branch changes release line.
 _CHANNEL="edge"
 _MARKER="smoke"
 _FILTER=""
