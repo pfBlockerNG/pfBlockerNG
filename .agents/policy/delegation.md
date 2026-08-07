@@ -144,15 +144,12 @@ the gate report's wording, never to which checks run.
    file types **plus cross-language consumers** — a suite that parses an artifact the diff
    changes runs regardless of its language).
 2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's
-   claim. Run `scripts/agent/verify-red-proof.sh --worktree <path> --test-cmd '<cmd>'
-   --src <path>... --hash <test>=<red-time-sha>... [--base-ref <pre-fix-commit>]` — it
-   reverts the src paths to `--base-ref` (default `HEAD~1`; tests stay), requires the test
-   to FAIL, restores, requires PASS, and enforces the freeze (`git hash-object` of each
-   committed reproduction test equals the handoff's red-time hash — a test edited between
-   red and green, or with no red-time hash, proves nothing). A step that lands more than
-   one commit (a follow-up doc/ADR reconciliation, a review fix) passes the true pre-fix
-   commit explicitly via `--base-ref` — `HEAD~1` then names the wrong baseline. Record its
-   verdict lines.
+   claim. Revert the production paths to the pre-fix commit (tests stay), require the
+   pinning test to FAIL, restore, require PASS, and enforce the freeze (`git hash-object`
+   of each committed reproduction test equals the handoff's red-time hash — a test edited
+   between red and green, or with no red-time hash, proves nothing). The pre-fix commit is
+   `HEAD~1` only when the step landed exactly one commit; a follow-up doc/ADR
+   reconciliation or a review fix moves it. Record the runs.
 3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
    item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
    see a hardcoded value, a stubbed branch, or a silently dropped plan item. A mechanism in
@@ -208,8 +205,7 @@ skips only a redundant third derivation on top of it.
 
 The mechanical procedures the skills used to restate in prose live once, tested, in
 `scripts/agent/`: `wait-reviewer.sh` (reviewer-wait state machine), `wait-checks.sh`
-(CI wait), `verify-red-proof.sh` (red→green re-execution + freeze hash),
-`run-gates.sh` (canonical-gates runner), `work-branch.sh` (branch sanitiser +
+(CI wait), `run-gates.sh` (canonical-gates runner), `work-branch.sh` (branch sanitiser +
 worktree cutter). Shared contract in `scripts/agent/agent_env.sh`; behaviour pinned
 by `tests/shell/agent_*_spec.sh`.
 

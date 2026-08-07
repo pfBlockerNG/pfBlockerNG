@@ -240,7 +240,6 @@ in `read-version-matrix.sh`.
 | [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` (run once after cloning). |
 | [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`.ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
-| [`claude-stop-guard.py`](claude-stop-guard.py) | Claude Code Stop-hook: blocks a done/fixed/implemented claim made after editing `src/`/`tests/` with no gate command run since (issue #925). Not yet registered in `.claude/settings.json`. |
 
 `install-from-repo.sh` syncs the files then runs the selected static recipe's real
 install hook — for example

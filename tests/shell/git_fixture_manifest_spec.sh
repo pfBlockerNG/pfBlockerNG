@@ -4,7 +4,6 @@
 Describe 'git fixture sweep manifest'
   GUARD="${PFB_ROOT}/scripts/git-env-scrub-guard.sh"
   SWEPT_SPECS='agent_run_gates_spec.sh
-agent_verify_red_proof_spec.sh
 agent_work_branch_spec.sh
 composer_cloud_install_spec.sh
 git_no_docs_spec.sh

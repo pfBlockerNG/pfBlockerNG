@@ -78,7 +78,6 @@ check_fixture_manifest() {
         fi
     done <<'EOF'
 agent_run_gates_spec.sh:4
-agent_verify_red_proof_spec.sh:12
 agent_work_branch_spec.sh:5
 composer_cloud_install_spec.sh:4
 git_no_docs_spec.sh:5
