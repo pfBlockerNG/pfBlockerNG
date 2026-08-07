@@ -148,7 +148,7 @@ jobs:
           #    retired — the reconcile loop decides what runs).
           # aarch64 entries never boot: there is no ARM smoke image (scripts/README.md).
           if [ -n "${DIRECT_LEG:-}" ]; then
-            # Validation is load-bearing: leg fields reach ${{ matrix.* }}
+            # Validation is load-bearing: leg fields reach the matrix.*
             # interpolation in the refresh job's run bodies, so every value is
             # charset-constrained and force_flag is an enum (review F4).
             INCLUDE="$(printf '%s' "$DIRECT_LEG" | jq -c '

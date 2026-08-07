@@ -134,16 +134,6 @@ jobs:
         # same interpreter twice and report two green legs for one version.
         run: echo "/opt/python/${{ matrix.python-version }}/bin" >> "$GITHUB_PATH"
 
-      - name: Install PyYAML (interim — issue #2232 bakes it into the image)
-        # tests/test_issue2231_workflow_hygiene.py parses the workflow files for
-        # real. Its retired predecessor used pytest.importorskip("yaml"), so in
-        # CI (no PyYAML in ci-runner:3) that entire gate module silently
-        # SKIPPED — the gates only ever ran on dev machines. A pinned install
-        # here keeps the successor gates genuinely executing until the next
-        # image series bakes PyYAML via ci-requirements.txt (#2232; bumping
-        # ci-requirements.txt alone would trip the immutable-tag guard).
-        run: pip install PyYAML==6.0.3
-
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest
@@ -315,6 +305,65 @@ jobs:
         run: |
           git fetch --no-tags --depth=1 origin ci-metadata:refs/remotes/origin/ci-metadata
           python3 scripts/check_version_literals.py --verify-matrix
+
+  actionlint:
+    name: actionlint (workflow files)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:3
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
+      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
+      # has no passwd entry in the image.
+      options: --init --user 1001:1001
+    env:
+      HOME: /tmp
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false # lint-only job; no git writes
+
+      - name: Install actionlint (pinned; interim download until #2232 bakes it into ci-runner)
+        # GitHub silently disables a workflow whose YAML its parser rejects (a
+        # duplicate mapping key disabled five scheduled workflows — issue #2231);
+        # PyYAML-based checks could never see that class. actionlint's own parser
+        # rejects what GitHub rejects, plus expression/schema errors.
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/actionlint.tar.gz" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  $RUNNER_TEMP/actionlint.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/actionlint.tar.gz" -C "$RUNNER_TEMP" actionlint
+
+      - name: Lint the workflow files
+        # -shellcheck= : the embedded shellcheck-on-run-bodies pass is disabled —
+        # this repo's own ShellCheck gates carry that concern with their tuned
+        # scopes, and enabling it here would demand a repo-wide workflow sweep
+        # first (revisit with #2232).
+        # Explicit file arguments, never auto-discovery: with no args actionlint
+        # looks for a git project and, finding none, reports nothing and exits 0
+        # — a silently green gate.
+        run: |
+          set -eu
+          AL="$RUNNER_TEMP/actionlint"
+          # Red canary: the gate must be able to fail on the exact class that
+          # motivated it (a duplicate job-level key) before it grades the tree.
+          printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    env:\n      A: "1"\n    env:\n      A: "2"\n    steps:\n      - run: "true"\n' \
+            > "$RUNNER_TEMP/canary-dup.yml"
+          if "$AL" -shellcheck= "$RUNNER_TEMP/canary-dup.yml" >/dev/null 2>&1; then
+            echo "::error::actionlint red canary did not fail on a duplicate key"
+            exit 1
+          fi
+          # find, not a bare *.yml glob: covers a future .yaml spelling too, and
+          # never hands actionlint an unexpanded literal pattern.
+          find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 \
+            | xargs -0 "$AL" -shellcheck= -color
 
   shell-tests:
     name: shellspec (POSIX sh)
