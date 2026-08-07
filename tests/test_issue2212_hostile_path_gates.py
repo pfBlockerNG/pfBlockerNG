@@ -25,6 +25,7 @@ rule so a seventh site cannot be added quietly.
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -203,32 +204,93 @@ def test_name_only_z_returns_raw_paths(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------
 
 
+def _executable_lines(path: Path) -> list[tuple[int, str]]:
+    """Lines of ``path`` that are code, with comments and docstrings dropped.
+
+    Prose mentioning a command must not be mistaken for one. Python docstrings
+    are tracked with a triple-quote toggle rather than parsed: the scanners
+    below only need to know whether a line is code, and a real parse cannot
+    distinguish an invocation from a string constant anyway, since the flag
+    itself is a string literal in the call.
+    """
+    lines: list[tuple[int, str]] = []
+    fence: str | None = None
+    # errors="replace": a binary under a scan root must not abort the sweep, and
+    # a mangled byte cannot hide the ASCII flag being looked for.
+    for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+        stripped = line.strip()
+        if path.suffix == ".py":
+            for quote in ('"""', "'''"):
+                if fence is None and stripped.startswith(quote):
+                    # A one-line docstring opens and closes on the same line.
+                    fence = None if stripped.endswith(quote) and len(stripped) > len(quote) else quote
+                    break
+                if fence == quote and quote in stripped:
+                    fence = None
+                    break
+            else:
+                if fence is not None:
+                    continue
+                lines.append((number, line))
+                continue
+            continue
+        if stripped.startswith("#"):
+            continue
+        lines.append((number, line))
+    return lines
+
+
+def _scan_roots() -> list[Path]:
+    """Every file that could invoke git, found by walking — never a fixed list.
+
+    A hand-maintained tuple is what let the first pass at #2212 miss three
+    sites: it can only catch a regression in a file someone already thought of.
+    """
+    roots = [ROOT / ".github", ROOT / ".githooks", ROOT / "scripts"]
+    found: list[Path] = []
+    for root in roots:
+        found += [
+            p
+            for p in sorted(root.rglob("*"))
+            # Compiled bytecode carries the source's strings and would report a
+            # fixed site as still broken; it is a build artifact, not a site.
+            if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+        ]
+    return found
+
+
 def test_every_name_only_consumer_uses_the_nul_transport() -> None:
     """A changed-file list is read NUL-separated, everywhere, with no exceptions.
 
-    Pins the class rather than the four sites known today: a new consumer that
-    reads a newline-separated list fails here instead of silently re-opening the
-    hole.
+    Pins the class, not the sites known today: the tree is walked, so a NEW
+    consumer that reads a newline-separated list fails here instead of quietly
+    re-opening the hole.
     """
     offenders: list[str] = []
-    for path in [WORKFLOW, PRE_COMMIT, SCRIPTS / "check_context_budget.py"]:
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            if "--name-only" not in line or line.lstrip().startswith("#"):
+    for path in _scan_roots():
+        for number, line in _executable_lines(path):
+            if "--name-only" not in line:
                 continue
-            if "-z" not in line.split("--name-only")[0] and "-z" not in line.split("--name-only")[1]:
+            if "--no-index" in line:
+                continue  # not a changed-file list; the helper's own example
+            # A standalone -z token: quoted in a Python arg list, bare in shell.
+            if not re.search(r"(?<![\w-])-z(?![\w-])", line):
                 offenders.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
     assert not offenders, "changed-file lists read without -z:\n  " + "\n  ".join(offenders)
 
 
 def test_every_unified_diff_parser_unquotes_its_header_path() -> None:
-    """The three `+++ b/` parsers all route the header path through the helper."""
-    missing = [
-        name
-        for name in (
-            "check_comment_narration.py",
-            "check_retired_tokens.py",
-            "check_version_literals.py",
-        )
-        if "diff_header_name" not in (SCRIPTS / name).read_text(encoding="utf-8")
-    ]
+    """Anything parsing a `+++ b/` header routes it through the helper.
+
+    Walked, not listed, for the same reason as the scanner above.
+    """
+    missing: list[str] = []
+    for path in _scan_roots():
+        if path.suffix != ".py" or path.name == "git_paths.py":
+            continue
+        body = path.read_text(encoding="utf-8", errors="replace")
+        if '"+++ ' not in body and "'+++ " not in body:
+            continue
+        if "diff_header_name" not in body:
+            missing.append(str(path.relative_to(ROOT)))
     assert not missing, f"unified-diff parsers not unquoting their header path: {missing}"

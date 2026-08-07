@@ -447,14 +447,20 @@ def validate(root: Path) -> tuple[int, list[str]]:
 
 
 def _changed_paths(root: Path, git_args: list[str]) -> list[str]:
+    # -z + quotePath=false: git C-quotes a path holding a literal " \ tab or
+    # newline, and touches_role_surface() classifies by prefix — a quoted path
+    # matches nothing and the role-drift check is skipped (issue #2212).
+    # Kept on one line: the guard test that holds every consumer to -z reads
+    # line by line, so splitting the flags across lines reads as a violation.
+    argv = ["git", "-C", str(root), "-c", "core.quotePath=false", "diff", "--name-only", "-z", "--no-color"]
     out = subprocess.run(
-        ["git", "-C", str(root), "diff", "--name-only", "--no-color", *git_args],
+        [*argv, *git_args],
         capture_output=True,
         encoding="utf-8",
         errors="replace",
         check=True,
     )
-    return [line for line in out.stdout.splitlines() if line]
+    return [line for line in out.stdout.split("\0") if line]
 
 
 def touches_role_surface(paths: list[str]) -> bool:

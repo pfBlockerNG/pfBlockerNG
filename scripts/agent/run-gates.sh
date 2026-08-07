@@ -121,14 +121,19 @@ main() {
 
 	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
 	# pre-commit hook) -- per-file gates against ghost paths would always fail.
-	committed=$(git -C "$worktree" diff --name-only --diff-filter=ACMR "$base...HEAD") || exit 2
+	# -z + quotePath=false, then tr: git C-quotes a path holding a literal " \ or
+	# tab, and gates_for() matches by extension — a quoted path ends `.inc"` and
+	# maps to NO gate at all (issue #2212). A path containing a NEWLINE still
+	# splits here, as in .githooks/pre-commit; CI runs the same gates
+	# unconditionally and is the backstop for that residual case.
+	committed=$(git -C "$worktree" -c core.quotePath=false diff --name-only -z --diff-filter=ACMR "$base...HEAD" | tr '\0' '\n') || exit 2
 	# issue #1293: union with uncommitted changes, else gates see nothing pre-commit.
 	# staged/unstaged unioned SEPARATELY, not via one `diff HEAD` -- `diff <commit>`
 	# reads the WORKING TREE, so a staged-then-worktree-reverted file is invisible.
-	staged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR --cached) || exit 2
-	unstaged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR) || exit 2
+	staged=$(git -C "$worktree" -c core.quotePath=false diff --name-only -z --diff-filter=ACMR --cached | tr '\0' '\n') || exit 2
+	unstaged=$(git -C "$worktree" -c core.quotePath=false diff --name-only -z --diff-filter=ACMR | tr '\0' '\n') || exit 2
 	# neither diff form surfaces a brand-new file never `git add`ed.
-	untracked=$(git -C "$worktree" ls-files --others --exclude-standard) || exit 2
+	untracked=$(git -C "$worktree" -c core.quotePath=false ls-files --others --exclude-standard -z | tr '\0' '\n') || exit 2
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
