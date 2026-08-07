@@ -775,7 +775,11 @@ jobs:
         run: |
           set -eu
           git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
-          git diff --name-only "origin/$BASE...HEAD" > changed.txt
+          # core.quotePath=false: git's default wraps any non-ASCII path in quotes
+          # and octal-escapes it, and check_coverage_pairing.py classifies by
+          # startswith("src/") — so a quoted path matches no rule and an unpaired
+          # src/ change passes silently (issue #2137).
+          git -c core.quotePath=false diff --name-only "origin/$BASE...HEAD" > changed.txt
           echo "Changed files vs origin/$BASE:"; cat changed.txt
 
       - name: Enforce src<->tests and www<->ui coverage pairing
