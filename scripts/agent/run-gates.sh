@@ -26,6 +26,18 @@ usage() {
 	exit 2
 }
 
+# Emit one real path per line from a `git ... -z` listing. The newline form C-quotes
+# any path holding a quote, backslash, control byte or non-ASCII byte, and the quoted
+# form matches no extension in gates_for() -- that file would select no gate at all
+# and the run would report a clean pass (issue #2228). A shell variable cannot hold a
+# NUL, so the listing lands in a temp file first: that keeps the caller's `|| exit 2`
+# watching GIT's status rather than tr's, which a pipeline would swallow (POSIX sh has
+# no pipefail), turning a bad --diff ref into an empty file list instead of an error.
+git_paths() {
+	git -C "$worktree" "$@" > "$paths_tmp" || return 1
+	tr '\0' '\n' < "$paths_tmp"
+}
+
 # Map a touched-file list (stdin, one path per line) to gate commands (stdout, one per
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
 gates_for() {
@@ -119,16 +131,27 @@ main() {
 	require_tool git
 	[ -n "$worktree" ] || worktree=$(git rev-parse --show-toplevel) || exit 2
 
+	# Created with builtins only (no mktemp -- not POSIX, and this script's minimal-PATH
+	# contract is pinned by agent_run_gates_spec.sh). `set -C` makes the redirect fail
+	# rather than follow a planted file or symlink at the predictable name. `true >`,
+	# never `: >`: a redirection error on the SPECIAL builtin `:` exits the shell
+	# outright instead of yielding to `||` (issues #1172, #1850).
+	paths_tmp="${TMPDIR:-/tmp}/pfb-run-gates-paths.$$"
+	( set -C; true > "$paths_tmp" ) || exit 2
+	trap 'rm -f "$paths_tmp"' EXIT
+	# dash runs no EXIT trap on an untrapped signal, so reap explicitly there too.
+	trap 'rm -f "$paths_tmp"; trap - EXIT; exit 130' INT TERM
+
 	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
 	# pre-commit hook) -- per-file gates against ghost paths would always fail.
-	committed=$(git -C "$worktree" diff --name-only --diff-filter=ACMR "$base...HEAD") || exit 2
+	committed=$(git_paths diff --name-only -z --diff-filter=ACMR "$base...HEAD") || exit 2
 	# issue #1293: union with uncommitted changes, else gates see nothing pre-commit.
 	# staged/unstaged unioned SEPARATELY, not via one `diff HEAD` -- `diff <commit>`
 	# reads the WORKING TREE, so a staged-then-worktree-reverted file is invisible.
-	staged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR --cached) || exit 2
-	unstaged=$(git -C "$worktree" diff --name-only --diff-filter=ACMR) || exit 2
+	staged=$(git_paths diff --name-only -z --diff-filter=ACMR --cached) || exit 2
+	unstaged=$(git_paths diff --name-only -z --diff-filter=ACMR) || exit 2
 	# neither diff form surfaces a brand-new file never `git add`ed.
-	untracked=$(git -C "$worktree" ls-files --others --exclude-standard) || exit 2
+	untracked=$(git_paths ls-files -z --others --exclude-standard) || exit 2
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.

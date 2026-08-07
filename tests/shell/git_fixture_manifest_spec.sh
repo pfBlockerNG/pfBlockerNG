@@ -3,13 +3,15 @@
 
 Describe 'git fixture sweep manifest'
   GUARD="${PFB_ROOT}/scripts/git-env-scrub-guard.sh"
-  SWEPT_SPECS='agent_run_gates_spec.sh
+  SWEPT_SPECS='agent_run_gates_git_spec.sh
+agent_run_gates_spec.sh
 agent_work_branch_spec.sh
 composer_cloud_install_spec.sh
 git_no_docs_spec.sh
 githooks_pre_push_lease_spec.sh
 githooks_pre_push_tag_scheme_spec.sh
 githooks_prepare_commit_msg_guard_spec.sh
+impacted_tests_spec.sh
 pfblockerng_truncate_survival_spec.sh
 precommit_composer_vendor_spec.sh
 read_version_matrix_test_spec.sh

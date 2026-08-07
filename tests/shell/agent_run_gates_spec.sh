@@ -147,7 +147,11 @@ Describe 'run-gates.sh Composer vendor guard'
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
     chmod +x "$stubdir/python3" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
-    for tool in cat dirname grep sh sort; do
+    # The minimal-PATH contract for the script's own machinery: POSIX utilities only,
+    # never an optional toolchain. `tr` and `rm` joined it with the NUL-separated path
+    # listing and its temp file (issue #2228) -- that file is created with builtins
+    # rather than mktemp, but reaping it needs `rm`.
+    for tool in cat dirname grep rm sh sort tr; do
       ln -s "$(command -v "$tool")" "$stubdir/$tool"
     done
     PATH="$stubdir:$PATH"
