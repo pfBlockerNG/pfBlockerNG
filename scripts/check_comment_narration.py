@@ -31,6 +31,8 @@ import sys
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
+from _git_paths import diff_header_name
+
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"RESULTS[-/]"), "delegation handoff artifact (RESULTS/ or RESULTS-Pn)"),
     # Capitalised only: ADR narration always writes "Phase N"; ordinary prose
@@ -86,9 +88,9 @@ def find_violations(diff_text: str) -> list[Violation]:
         if not in_hunk and raw.startswith("+++ "):
             # Header only before a section's first @@ -- inside a hunk an added
             # "++..." line renders identically and must be scanned, not misread
-            # as one. Strip git's disambiguation tab from a space-bearing path.
-            name = raw[4:]
-            path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
+            # as one.
+            name = diff_header_name(raw[4:])
+            path = name[2:] if name.startswith("b/") else None
             continue
         if raw.startswith("@@"):
             m = re.match(r"@@ -\S+ \+(\d+)", raw)

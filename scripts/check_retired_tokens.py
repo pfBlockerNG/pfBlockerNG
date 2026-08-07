@@ -85,6 +85,8 @@ import re
 import subprocess
 import sys
 
+from _git_paths import diff_header_name
+
 # Tracked-tree roots a retiring commit is expected to have fixed everywhere.
 _SCAN_ROOTS = ("src", "scripts", ".github/workflows")
 
@@ -145,14 +147,14 @@ def _parse_diff(diff_text: str) -> tuple[dict[str, list[str]], dict[str, list[st
             continue
         if not in_hunk:
             if raw.startswith("--- "):
-                name = raw[4:]
+                name = diff_header_name(raw[4:])
                 if name.startswith("a/"):
-                    a_path = name[2:].split("\t", 1)[0]
+                    a_path = name[2:]
             elif raw.startswith("+++ "):
-                name = raw[4:]
+                name = diff_header_name(raw[4:])
                 if name.startswith("b/"):
-                    path = name[2:].split("\t", 1)[0]
-                elif name.split("\t", 1)[0] == "/dev/null":
+                    path = name[2:]
+                elif name == "/dev/null":
                     path = a_path
             continue
         if path is None or not _in_scan_roots(path):

@@ -191,7 +191,13 @@ def main(argv: list[str] | None = None) -> int:
     paths = [a for a in args if a != "--warn-only"]
 
     if not paths:
-        paths = list(sys.stdin)
+        # NUL-separated is the CI job's transport (`git diff --name-only -z`):
+        # the newline form C-quotes a path holding a quote, backslash, control
+        # byte or non-ASCII byte, and a quoted path matches no rule at all
+        # (issues #2137, #2212). A newline-separated stream still works, so the
+        # positional/`echo`-piped entry points keep classifying identically.
+        stdin = sys.stdin.read()
+        paths = stdin.split("\0") if "\0" in stdin else stdin.splitlines()
     paths = [p.strip() for p in paths if p.strip()]
 
     if warn_only and body_file is not None:

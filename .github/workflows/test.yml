@@ -234,15 +234,20 @@ jobs:
         # Vendored third-party plugin trees are exempt (upstream content, never
         # runs on the box; same fence as .githooks/pre-commit).
         run: |
-          find_bash_shebangs() {
-            while IFS= read -r f; do
-              case $(head -n1 "$f" 2>/dev/null) in '#!'*bash*) echo "$f" ;; esac
-            done
-          }
-          bad=$(git ls-files | grep -v \
-            -e '^\.claude/skills/git-guardrails-claude-code/' \
-            -e '^\.agents/skills/git-guardrails-claude-code/' \
-            -e '^plugins/' | find_bash_shebangs)
+          # -z + xargs -0, never a newline-separated listing: git C-quotes a path
+          # holding a quote, backslash, control byte or non-ASCII byte, and
+          # `head` on a quoted name reads nothing — the file's shebang would go
+          # unchecked (issue #2212). The exemption fence moved inside the loop
+          # for the same reason: a `grep` over the listing cannot see NULs.
+          bad=$(git ls-files -z | xargs -0 sh -c '
+            for f; do
+              case $f in
+                .claude/skills/git-guardrails-claude-code/*) continue ;;
+                .agents/skills/git-guardrails-claude-code/*) continue ;;
+                plugins/*) continue ;;
+              esac
+              case $(head -n1 "$f" 2>/dev/null) in "#!"*bash*) echo "$f" ;; esac
+            done' _)
           if [ -n "$bad" ]; then
             echo "bash shebang not allowed (use #!/bin/sh):"; echo "$bad"; exit 1
           fi
@@ -758,12 +763,13 @@ jobs:
         run: |
           set -eu
           git fetch --no-tags origin "$BASE:refs/remotes/origin/$BASE"
-          # core.quotePath=false: git's default wraps any non-ASCII path in quotes
-          # and octal-escapes it, and check_coverage_pairing.py classifies by
+          # -z: git wraps a path in quotes and C-escapes it when it holds a
+          # non-ASCII byte (issue #2137) or a quote/backslash/control byte
+          # (issue #2212), and check_coverage_pairing.py classifies by
           # startswith("src/") — so a quoted path matches no rule and an unpaired
-          # src/ change passes silently (issue #2137).
-          git -c core.quotePath=false diff --name-only "origin/$BASE...HEAD" > changed.txt
-          echo "Changed files vs origin/$BASE:"; cat changed.txt
+          # src/ change passes silently. NUL separators carry the real bytes.
+          git diff --name-only -z "origin/$BASE...HEAD" > changed.txt
+          echo "Changed files vs origin/$BASE:"; tr '\0' '\n' < changed.txt
 
       - name: Enforce src<->tests and www<->ui coverage pairing
         # ubuntu-latest ships python3. --warn-only downgrades a violation to a
