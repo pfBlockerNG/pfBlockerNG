@@ -176,6 +176,17 @@ EOF
     The output should eq 'DISTINCT'
   End
 
+  It 'always carries a real hash in the digest filename'
+    # The hash is what makes the name collision-resistant. If sha256sum were missing the
+    # pipe would yield an empty string and the suffix would vanish, silently restoring the
+    # collision the readable part alone cannot prevent.
+    When call sh -c '
+      . "$1"; shift
+      pfb_oras_digest_file ghcr.io/x/pfsense-ce:2.8 "$1"
+    ' sh "$LIB" "$IMGDIR"
+    The output should match pattern '*-[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]'
+  End
+
   It 'pulls when the ref digest actually moved'
     When call sh -c '
       . "$1"; shift
