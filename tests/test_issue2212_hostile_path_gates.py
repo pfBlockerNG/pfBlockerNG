@@ -206,8 +206,11 @@ def test_version_literals_reads_a_hostile_path(tmp_path: Path, klass: str) -> No
     repo = _scratch_repo(tmp_path, {rel: '#!/bin/sh\nabi="FreeBSD:14"\necho "$abi"\n'})
     result = _run_checker("check_version_literals.py", repo, "--diff", "devel")
     assert result.returncode == 1, (
-        f"{klass}: version literal in {rel!r} passed the gate (rc={result.returncode}); stdout={result.stdout!r}"
+        f"{klass}: version literal in {rel!r} passed the gate (rc={result.returncode}); stderr={result.stderr!r}"
     )
+    # rc 1 alone would also cover an uncaught crash; the report line is what
+    # proves the gate reached a verdict about this file.
+    assert "Hardcoded pfSense/FreeBSD version literal" in result.stderr, result.stderr
 
 
 @pytest.mark.parametrize("klass", list(HOSTILE_STEMS))

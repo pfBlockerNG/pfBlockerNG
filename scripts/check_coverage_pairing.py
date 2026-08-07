@@ -198,7 +198,9 @@ def main(argv: list[str] | None = None) -> int:
         # (issues #2137, #2212). A newline-separated stream still works, so the
         # positional/`echo`-piped entry points keep classifying identically.
         stdin = sys.stdin.read()
-        paths = stdin.split("\0") if "\0" in stdin else stdin.splitlines()
+        # split("\n"), not splitlines(): the latter also breaks on \f, \x85 and
+        # the Unicode line separators, which are ordinary path bytes here.
+        paths = stdin.split("\0") if "\0" in stdin else stdin.split("\n")
     paths = [p.strip() for p in paths if p.strip()]
 
     if warn_only and body_file is not None:
