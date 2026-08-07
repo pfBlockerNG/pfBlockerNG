@@ -10,9 +10,10 @@ pfBlockerNG end-to-end. **Run it locally first** (no workflow spent):
 
 **The live-VM smoke ALWAYS runs locally — never claim it "needs CI" or "cannot run on this
 host".** `scripts/local-smoke.sh` leases a box from the **`PFB_BOXES`** pool (ADR-47) and runs
-the whole leg — images, build, pytest — **on that box** over ssh, so the dev machine needs
-nothing but `ssh` (macOS included). The pool is **`root@10.0.0.31` … `root@10.0.0.38`** (eight
-boxes); export it verbatim from
+the whole leg — images, build, pytest — **on that box** over ssh, inside
+`ghcr.io/pfblockerng/ci-runner-vm` (issue #2223), so the dev machine needs nothing but `ssh`
+(macOS included) and the box needs nothing but `docker` and `git`. The pool is
+**`root@10.0.0.31` … `root@10.0.0.34`** (four boxes); export it verbatim from
 [`docs/misc/local-smoke-debian.md`](../../docs/misc/local-smoke-debian.md). Never take the
 addresses from `tests/shell/select_box_spec.sh` — those (`10.0.0.23`, `10.0.0.24`) are fake
 boxes for lease-token assertions, and a run aimed at them dies with `No route to host`. A red→green proof for

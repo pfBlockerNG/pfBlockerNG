@@ -110,6 +110,11 @@ done
 # the caller's work and put the choice of WHICH code runs inside the container.
 [ -n "$_REF" ] || _REF="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
+# Echo the whole resolved configuration, not just the ref: a flag that silently
+# failed to parse otherwise shows up only as a leg that quietly ran the default.
+printf 'smoke-on-box: config abi=%s channel=%s marker=%s filter=%s shard=%s/%s two-vm=%s\n' \
+    "$_ABI" "$_CHANNEL" "$_MARKER" "${_FILTER:-<none>}" "$_SHARD" "$_SHARD_TOTAL" \
+    "$([ "$_NO_TWO_VM" -eq 1 ] && echo no || echo yes)" >&2
 
 # Checked FIRST: this is a property of how we were INVOKED, so failing here costs
 # nothing, while discovering it after the ports refresh and the image pull wastes minutes
