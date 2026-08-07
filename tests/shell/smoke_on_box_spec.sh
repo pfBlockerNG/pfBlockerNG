@@ -46,9 +46,17 @@ STUBEOF
     git_fixture -C "$FAKE_ROOT" -c user.name=t -c user.email=t@example.com \
         commit --quiet --allow-empty -m seed >/dev/null 2>&1
 
+    # Pin the port floor ABOVE 53 so the gate fires on every host. Reading the ambient
+    # /proc value would make these examples host-dependent: on a host that already has the
+    # floor lowered (this script's own container does exactly that) the run sails past the
+    # gate into the real host prep, whose `pkill -9 -f qemu-system-x86_64` would kill a
+    # concurrent leg's VMs on a shared box.
+    printf '1024\n' > "${WORK}/port-floor"
+    PFB_ONBOX_PORT_FLOOR_FILE="${WORK}/port-floor"
+
     PFB_ONBOX_REPO_ROOT="$FAKE_ROOT"
     PFB_ONBOX_PORTS_DIR="${WORK}/ports"
-    export WORK FAKE_ROOT PFB_ONBOX_REPO_ROOT PFB_ONBOX_PORTS_DIR
+    export WORK FAKE_ROOT PFB_ONBOX_REPO_ROOT PFB_ONBOX_PORTS_DIR PFB_ONBOX_PORT_FLOOR_FILE
   }
 
   teardown() { rm -rf "$WORK"; }
@@ -69,6 +77,17 @@ STUBEOF
     The status should equal 1
     The stderr should include 'ip_unprivileged_port_start'
     The stderr should include '--sysctl'
+  End
+
+  It 'reads the floor from the seam, not from the ambient host'
+    # Proves the seam is load-bearing WITHOUT letting a run past the gate: the message
+    # echoes the floor it actually read, so a distinctive value can only appear if the seam
+    # was honoured. Drop the seam and the script reads /proc, reporting the host's value
+    # (1024 on any default host) instead of this one.
+    printf '4321\n' > "${WORK}/port-floor"
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include '4321'
   End
 
   It 'names the flag the caller has to pass, not just the symptom'
