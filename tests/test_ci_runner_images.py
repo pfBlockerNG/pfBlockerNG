@@ -405,6 +405,70 @@ def test_publish_workflow_pushes_exactly_the_two_images_it_builds() -> None:
     assert len(pushes) == 2, f"expected exactly two pushes (one per image), found: {pushes}"
 
 
+def _guard_script() -> str:
+    """The overwrite guard's `run:` body, dedented so it can be executed."""
+    step = _step(_read(PUBLISH_WORKFLOW), "Refuse to overwrite a published tag")
+    body = step.split("run: |\n", 1)[1]
+    lines = body.splitlines()
+    indent = len(lines[0]) - len(lines[0].lstrip())
+    out = []
+    for line in lines:
+        if line.strip() and not line.startswith(" " * indent):
+            break  # dedented past the block: the next YAML key
+        out.append(line[indent:])
+    return "\n".join(out)
+
+
+def _run_guard(tmp_path: Path, manifest_status: str, *, curl_fails: bool = False) -> int:
+    """Execute the guard with a stubbed curl answering `manifest_status`."""
+    stub = tmp_path / "bin"
+    stub.mkdir(exist_ok=True)
+    (stub / "curl").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do case "$a" in *"/token?"*) printf \'{"token":"stub"}\'; exit 0;; esac; done\n'
+        f"{'exit 7' if curl_fails else ''}\n"
+        f"printf '%s' '{manifest_status}'\n"
+    )
+    (stub / "curl").chmod(0o755)
+
+    proc = subprocess.run(
+        ["sh", "-c", _guard_script()],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{stub}:/usr/bin:/bin",
+            "IMAGE_REPO": "ghcr.io/pfblockerng",
+            "TAG": "1",
+            "GHCR_TOKEN": "stub-token",
+        },
+        check=False,
+    )
+    return proc.returncode
+
+
+def test_the_overwrite_guard_permits_a_push_only_when_the_tag_is_absent(tmp_path: Path) -> None:
+    """EXECUTED, not grepped. A text assertion cannot tell this guard from a fail-open
+    rewrite: two different fail-open bodies were shown to satisfy the previous version of
+    this test. Only running it against known HTTP answers pins the behaviour."""
+    assert _run_guard(tmp_path, "404") == 0, "HTTP 404 means the tag is free; the push must proceed"
+
+
+def test_the_overwrite_guard_blocks_on_anything_that_is_not_a_clean_absence(tmp_path: Path) -> None:
+    """200 is a clash. 403/401 mean we could not read the tag (wrong scope, revoked
+    credential); 000 means the request itself failed. None of those prove the tag is free,
+    and pushing on them is exactly the fail-open mode this guard exists to prevent."""
+    assert _run_guard(tmp_path, "200") != 0, "HTTP 200 is a published tag; the push must be refused"
+
+    for status in ("401", "403", "500", "502"):
+        assert _run_guard(tmp_path, status) != 0, (
+            f"HTTP {status} does not prove the tag is free; the guard must refuse to push"
+        )
+
+    assert _run_guard(tmp_path, "000", curl_fails=True) != 0, (
+        "a failed request must refuse the push, not treat the tag as free"
+    )
+
+
 def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
     """The image tag is what every workflow pins to. Re-pushing it under a changed
     Dockerfile would swap the toolchain of already-merged workflows with no diff — the
