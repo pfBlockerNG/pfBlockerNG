@@ -43,6 +43,14 @@ jobs:
       (github.event.workflow_run.event == 'schedule' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     permissions:
       issues: write
     env:
@@ -119,6 +127,14 @@ jobs:
       (github.event.workflow_run.event == 'schedule' &&
        github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     permissions:
       issues: write
     env:

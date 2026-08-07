@@ -31,6 +31,14 @@ jobs:
   discover:
     name: Discover Top1M providers
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     outputs:
       matrix: ${{ steps.extract.outputs.matrix }}
     steps:
@@ -65,6 +73,14 @@ jobs:
     name: Check (${{ matrix.name }})
     needs: discover
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     strategy:
       fail-fast: false
       matrix:
@@ -103,6 +119,14 @@ jobs:
     concurrency:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     permissions:
       issues: write
     env:
@@ -170,6 +194,14 @@ jobs:
     concurrency:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     permissions:
       issues: write
       contents: read

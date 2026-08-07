@@ -469,7 +469,12 @@ def browser_context(webui: WebUI, smoke_vm: SmokeVM) -> Iterator[BrowserContext]
 
     https = webui.base_url.startswith("https://")
     with sync_api.sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        # Chromium refuses to start as root unless sandboxing is disabled, and the CI
+        # container runs as root (the self-hosted runner's uid differs from the
+        # GitHub-hosted one, so pinning a --user would break one fleet or the other).
+        # A non-root local run keeps the sandbox.
+        launch_args = ["--no-sandbox"] if os.geteuid() == 0 else []
+        browser = playwright.chromium.launch(headless=True, args=launch_args)
         context = browser.new_context(ignore_https_errors=https)
         # Inject the authenticated session cookie so the browser reuses the
         # Phase-1 login. Scope it to the VM host so it rides every request.

@@ -22,10 +22,22 @@ def _pinned_benchmark_packages() -> set[str]:
     return names
 
 
-def test_benchmarks_job_installs_from_requirements_file() -> None:
+def test_benchmarks_pins_govern_ci_via_the_runner_image() -> None:
+    """The job no longer installs anything: it runs inside ci-runner, which bakes these
+    pins. The property is unchanged -- benchmarks/requirements.txt must govern what CI
+    resolves -- but its mechanism moved from a `pip install -r` step into the image, so
+    the guard follows it rather than being dropped."""
+    baked = (ROOT / ".github/docker/ci-requirements.txt").read_text()
+    for name in _pinned_benchmark_packages():
+        assert name in baked.lower(), (
+            f"the runner image must bake the benchmarks pin {name!r}, or the job resolves "
+            f"whatever PyPI serves and benchmarks/requirements.txt stops governing CI"
+        )
+
     workflow = (ROOT / ".github/workflows/test.yml").read_text()
-    assert "pip install -r benchmarks/requirements.txt" in workflow, (
-        "benchmarks job must install via benchmarks/requirements.txt so its pins govern CI"
+    assert "pip install" not in workflow, (
+        "a pip install in the workflow would resolve alongside the baked toolchain and "
+        "silently re-introduce the drift the image removes"
     )
 
 

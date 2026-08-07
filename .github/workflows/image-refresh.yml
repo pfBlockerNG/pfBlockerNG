@@ -108,6 +108,14 @@ jobs:
   plan:
     name: Resolve refresh matrix (CE + Plus)
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     timeout-minutes: 5
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -205,7 +213,18 @@ jobs:
     name: Upgrade pfSense ${{ matrix.label }} Smoke Image
     needs: plan
     if: ${{ needs.plan.outputs.count != '0' }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
+      # to container -- or qemu silently falls back to TCG and the leg times out instead
+      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
+      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
+      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      options: --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 120
     permissions:
       contents: write        # push tracker/* activation-PR branches (NEVER ci-metadata itself)
@@ -226,20 +245,7 @@ jobs:
         # the kvm group by default. Same fix as build-image.yml / smoke-single.yml.
         run: |
           set -eu
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-
-      - name: Install host tools (qemu, dig, curl, rsync)
-        run: |
-          set -eu
-          sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils curl openssh-client rsync
-
-      - name: Install oras
-        uses: oras-project/setup-oras@v2
 
       - name: Write guest SSH key (mode 600)
         env:

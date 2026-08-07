@@ -364,15 +364,10 @@ def test_the_vm_image_chromium_check_actually_launches_the_browser() -> None:
 
 
 def test_baked_pins_match_their_own_sources_of_truth() -> None:
-    """ruff and dnspython are pinned elsewhere in the repo for a reason (a lint-verdict
-    pin and an import-time test dependency); the image must not fork either."""
+    """dnspython is pinned by tests/smoke/requirements.txt as an import-time test
+    dependency (issue #861); the image must not fork it. ruff no longer has a second home:
+    the workflow installs nothing, so ci-requirements.txt IS the source of truth."""
     baked = _read(DOCKER_DIR / "ci-requirements.txt")
-
-    ruff_in_workflow = re.search(r"pip install ruff==(\S+)", _read(ROOT / ".github/workflows/test.yml"))
-    assert ruff_in_workflow, "test.yml no longer pins ruff"
-    assert f"ruff=={ruff_in_workflow.group(1)}" in baked, (
-        f"the image must bake ruff=={ruff_in_workflow.group(1)}, the version test.yml gates on"
-    )
 
     dnspython = re.search(r"^dnspython==(\S+)$", _read(ROOT / "tests/smoke/requirements.txt"), re.MULTILINE)
     assert dnspython, "tests/smoke/requirements.txt no longer pins dnspython"

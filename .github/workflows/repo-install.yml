@@ -46,6 +46,14 @@ jobs:
   gate:
     name: Gate (skip nightly if devel unchanged)
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
@@ -101,6 +109,14 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     outputs:
       ci_matrix: ${{ steps.read.outputs.ci_matrix }}
       leg_count: ${{ steps.count.outputs.leg_count }}
@@ -184,6 +200,14 @@ jobs:
   all-repo-install-passed:
     name: All repo-install legs passed (AND gate)
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     needs: [gate, prepare, repo-install]
     if: always()   # run even if repo-install failed/skipped/cancelled
     steps:

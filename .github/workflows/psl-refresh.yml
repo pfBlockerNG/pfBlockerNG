@@ -50,6 +50,14 @@ jobs:
   refresh:
     name: Refresh dnsbl_tld and open PR on change
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     timeout-minutes: 10
     permissions:
       contents: write        # push the automation branch (NOT devel)

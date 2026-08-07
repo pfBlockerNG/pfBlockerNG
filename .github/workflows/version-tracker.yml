@@ -64,6 +64,14 @@ jobs:
   read-matrix:
     name: Read supported-version matrix
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     outputs:
       build_matrix: ${{ steps.read.outputs.build_matrix }}
       ci_matrix: ${{ steps.read.outputs.ci_matrix }}
@@ -115,6 +123,14 @@ jobs:
   react:
     name: React to matrix entries
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     needs: read-matrix
     # 'actions: write' is required to dispatch downstream workflows via
     # `gh workflow run`.  It is NOT used to push or commit to any branch.
@@ -251,7 +267,18 @@ jobs:
   # 'tracker-probe-disabled', or remove this job entirely.
   reconcile:
     name: Daily image reconcile (box as source of truth)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
+      # to container -- or qemu silently falls back to TCG and the leg times out instead
+      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
+      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
+      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      options: --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     # No `needs:` — the job resolves its own matrix (issue #1839), so an
     # unrelated read-matrix failure must not skip the reconcile.
     if: github.event.inputs.skip_probe != 'true'
@@ -298,16 +325,6 @@ jobs:
             echo "probe_disabled=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install oras
-        if: steps.probe_gate.outputs.probe_disabled != 'true'
-        continue-on-error: true
-        uses: oras-project/setup-oras@v2
-
-      # ── Gather: boot the newest image(s) per channel, read the truth ────────
-      # Boot set per channel: the newest non-beta amd64 entry, plus every
-      # beta-status amd64 entry whose tag is already published (their own branch
-      # carries Beta 2 / RC / final). A merged-but-unbuilt beta entry is not
-      # bootable and is handled by the planner's publish_new rule instead.
       - name: Gather box facts (boot newest images)
         id: facts
         if: steps.probe_gate.outputs.probe_disabled != 'true'
@@ -328,12 +345,6 @@ jobs:
           fi
 
           # VM dependencies (daily by design — issue #1823).
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          sudo apt-get update -q
-          sudo apt-get install -y -q qemu-system-x86 qemu-utils openssh-client
           install -m 600 /dev/null smoke_key
           printf '%s\n' "$SMOKE_SSH_PRIV_KEY" > smoke_key
           printf '%s' "$SMOKE_GHCR_TOKEN" | oras login ghcr.io \

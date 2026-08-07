@@ -50,6 +50,14 @@ jobs:
   refresh:
     name: Refresh TLD lists and open PR on change
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     permissions:
       contents: write        # push the automation branch (NOT devel)
       pull-requests: write    # open/label the PR
@@ -79,14 +87,6 @@ jobs:
       # The refresh stages a .php file, so pre-commit enters its PHP block: php -l,
       # PHPStan and PHPCS out of vendor/bin (issue #1793). They run on the OLDEST
       # supported PHP — the floor a diagnostic has to clear — never the runner default.
-      - name: Set up PHP ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
-          tools: composer
-
-      # Ungated so every run exercises the install: a lock or platform break then
-      # surfaces weekly instead of only on a drift week.
       - name: Install Composer dependencies for the pre-commit PHP gates
         run: composer install --no-interaction --prefer-dist --no-progress
 
