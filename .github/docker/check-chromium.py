@@ -7,8 +7,8 @@ So it passes on an image with no browser at all, which is precisely the regressi
 VM image's one unique deliverable needs guarded.
 
 Launching the browser and rendering a page cannot pass without a working Chromium build
-and its shared libraries. --no-sandbox is required because the image build runs as root
-in a container without user namespaces; the smoke jobs pass the same flag.
+and its shared libraries. --no-sandbox is required because this runs as root in a
+container without user namespaces; Chromium refuses to start as root otherwise.
 """
 
 from pathlib import Path
