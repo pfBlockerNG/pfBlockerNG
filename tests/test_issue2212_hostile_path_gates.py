@@ -335,6 +335,43 @@ def test_run_gates_refuses_a_hostile_path_instead_of_skipping_it(tmp_path: Path)
     )
 
 
+def test_run_gates_fails_closed_when_git_itself_fails(tmp_path: Path) -> None:
+    """A git failure aborts the run; it never reports GATES: PASS on no files.
+
+    The changed-file lists pipe git into ``tr``, and a shell pipeline reports
+    TR's status — which is 0 on empty input — so a naive ``|| exit 2`` would
+    check the wrong command and let a broken repository look clean. dash has no
+    ``pipefail`` to lean on, so git's own status has to be taken separately.
+
+    A corrupted index is the cheap reproduction: ``git diff --cached`` and
+    ``git ls-files`` both need it and fail, while ``git diff <base>...HEAD``
+    does not, so the run still has a plausible-looking file list to proceed on.
+    """
+    repo = _repo(tmp_path)
+    _git("branch", "devel", cwd=repo)
+    (repo / "extra.txt").write_text("y\n", encoding="utf-8")
+    _git("add", "extra.txt", cwd=repo)
+    (repo / ".git" / "index").write_bytes(b"garbage")
+
+    result = subprocess.run(
+        [
+            "sh",
+            str(ROOT / "scripts" / "agent" / "run-gates.sh"),
+            "--worktree",
+            str(repo),
+            "--diff",
+            "devel",
+            "--allow-missing",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0, (
+        f"a corrupted index produced a clean run (rc={result.returncode}); stdout={result.stdout!r}"
+    )
+    assert "GATES: PASS" not in result.stdout, f"a corrupted index reported success: {result.stdout!r}"
+
+
 def test_every_unified_diff_parser_unquotes_its_header_path() -> None:
     """Anything parsing a `+++ b/` header routes it through the helper.
 
