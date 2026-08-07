@@ -237,6 +237,7 @@ def _wrap_dependency_pkg(
     version: str = "3.4.0",
     abi: str = "FreeBSD:15:*",
     local_name: str,
+    payload: dict[str, bytes] | None = None,
 ) -> tuple[Path, str]:
     manifest = {
         "name": name,
@@ -245,8 +246,12 @@ def _wrap_dependency_pkg(
         "origin": f"textproc/{name}",
     }
     compact = json.dumps(manifest, separators=(",", ":")).encode()
+    members = [("+COMPACT_MANIFEST", compact, 0o644, 0)]
+    # Extra members vary the archive BYTES under an identical manifest identity —
+    # how two builds of the same name-version end up byte-distinct.
+    members.extend((member, data, 0o644, 0) for member, data in (payload or {}).items())
     path = directory / local_name
-    _write_tar_pkg(path, [("+COMPACT_MANIFEST", compact, 0o644, 0)])
+    _write_tar_pkg(path, members)
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
@@ -633,6 +638,74 @@ class TargetResolutionTests(_TempDirTestCase):
                 tag="v4.0.0.b1",
             )
         self.assertIn("same varver", str(ctx.exception))
+
+    @_requires_engine
+    def test_two_dependency_assets_same_canonical_name_different_bytes_rejected(self) -> None:
+        """A tagged run declares its dependency assets per row, so two rows can both
+        carry name-version X. The same artifact renamed twice is legitimate — but
+        DIFFERENT bytes under one canonical name must fail closed: the per-target
+        asset map keys by canonical name, and collapsing the pair last-wins would
+        silently publish only the later asset with no conflict check at all
+        (issue #2231)."""
+        assets_dir = self.new_assets_dir()
+        digests = _populate_assets_dir(
+            assets_dir, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
+        )
+        for row, filler in ((ROW_PLUS_03, b"built-by-leg-one"), (ROW_PLUS_07, b"built-by-leg-two")):
+            declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
+            _path, digest = _wrap_dependency_pkg(
+                assets_dir,
+                name="py311-twin",
+                version="1.0.0",
+                abi="FreeBSD:16:*",
+                local_name=declared,
+                payload={"filler.bin": filler},
+            )
+            digests[declared] = digest
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+
+        with self.assertRaises(pr.DestinationConflictError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets_dir,
+                rows=(ROW_PLUS_03, ROW_PLUS_07),
+                tag="v4.0.0.b1",
+            )
+        self.assertIn("different bytes", str(ctx.exception))
+
+    @_requires_engine
+    def test_same_dependency_renamed_per_row_with_identical_bytes_publishes(self) -> None:
+        """The legitimate twin of the rejection above: ONE artifact attached under two
+        per-row declared names (byte-identical) deduplicates and publishes into every
+        matching varver — never a conflict."""
+        assets_dir = self.new_assets_dir()
+        digests = _populate_assets_dir(
+            assets_dir, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
+        )
+        for row in (ROW_PLUS_03, ROW_PLUS_07):
+            declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
+            _path, digest = _wrap_dependency_pkg(
+                assets_dir,
+                name="py311-twin",
+                version="1.0.0",
+                abi="FreeBSD:16:*",
+                local_name=declared,
+            )
+            digests[declared] = digest
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+
+        report = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_PLUS_03, ROW_PLUS_07),
+            tag="v4.0.0.b1",
+        )
+        self.assertFalse(report.noop)
+        for varver in ("plus-26.03", "plus-26.07"):
+            self.assertTrue(
+                (self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").is_file(),
+                f"dependency missing from {varver}",
+            )
 
     @_requires_engine
     def test_canonical_asset_without_record_rejected(self) -> None:

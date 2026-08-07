@@ -311,7 +311,6 @@ jobs:
         id: upgrade
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_SSH_KEY: $GITHUB_WORKSPACE/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
@@ -323,6 +322,9 @@ jobs:
           BRANCH: ${{ matrix.branch }}
         run: |
           set -eu
+          # Run-body export, not an env: map value — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
@@ -477,7 +479,6 @@ jobs:
         continue-on-error: true
         env:
           SMOKE_IMAGE: ${{ steps.ref.outputs.image }}
-          SMOKE_SSH_KEY: $GITHUB_WORKSPACE/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
           SMOKE_PLUS_MAC: ${{ secrets.SMOKE_PLUS_MAC }}
@@ -485,6 +486,8 @@ jobs:
           VARIANT: ${{ matrix.variant }}
         run: |
           set -eu
+          # Run-body export, not an env: map value (issue #2231).
+          export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
           LOCAL_DATA_NAME="${{ inputs.sanity_local_data_name }}"
           LOCAL_DATA_IP="${{ inputs.sanity_local_data_ip }}"
           IMAGE="${SMOKE_IMAGE}"

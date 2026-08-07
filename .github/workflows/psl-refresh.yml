@@ -57,8 +57,6 @@ jobs:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
       options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     timeout-minutes: 10
     permissions:
       packages: read
@@ -66,6 +64,7 @@ jobs:
       pull-requests: write    # open/label the PR
       actions: write          # dispatch the CI gate onto the branch head
     env:
+      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       BRANCH: psl-refresh/auto
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}

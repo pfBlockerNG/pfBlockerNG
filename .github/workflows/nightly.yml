@@ -271,14 +271,16 @@ jobs:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
-          RUN_ROOT: $GITHUB_WORKSPACE/out
           RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
           PORTS_REPO: ${{ env.PORTS_REPO }}
           PORTS_REF: ${{ env.PORTS_REF }}
-          TRUSTED_DIR: $GITHUB_WORKSPACE/trusted
-          SOURCE_DIR: $GITHUB_WORKSPACE/source
         run: |
           set -eu
+          # In the run body, not the env: map — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export RUN_ROOT="$GITHUB_WORKSPACE/out"
+          export TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
+          export SOURCE_DIR="$GITHUB_WORKSPACE/source"
           mkdir -p result
           printf '%s\n' "$MATRIX_ROW" > row.json
           printf '%s' "$ALLOCATION_JSON" | jq '.allocation' > allocation.json
@@ -404,9 +406,10 @@ jobs:
           TOOLS_SHA: ${{ needs.prepare.outputs.tools_sha }}
           MATRIX_SHA: ${{ needs.prepare.outputs.matrix_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
-          TRUSTED_DIR: $GITHUB_WORKSPACE/trusted
         run: |
           set -eu
+          # Run-body export, not an env: map value (issue #2231).
+          TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
           python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" handoff \
             --state plan/state.json \
             --allocation plan/allocation.json \

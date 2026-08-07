@@ -221,7 +221,7 @@ _bootstrap="cd /root/pfBlockerNG \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
       -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR \
       -w /root/pfBlockerNG \
-      ghcr.io/pfblockerng/ci-runner-vm:1 \
+      ghcr.io/pfblockerng/ci-runner-vm:3 \
       sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \

@@ -228,11 +228,13 @@ jobs:
         # the secret), waits for the new version, powers off, compresses, and
         # pushes the new tag. The source tag is left untouched (snapshot kept).
         env:
-          SMOKE_SSH_KEY: $GITHUB_WORKSPACE/smoke_key
           SMOKE_GHCR_USER: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_USER || github.actor }}
           SMOKE_GHCR_TOKEN: ${{ secrets.SMOKE_GHCR_USER != '' && secrets.SMOKE_GHCR_TOKEN != '' && secrets.SMOKE_GHCR_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           set -eu
+          # Run-body export, not an env: map value — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
           sh scripts/image-upgrade.sh \
             --image "${{ steps.ref.outputs.image }}" \
             --from "${{ inputs.from_version }}" \

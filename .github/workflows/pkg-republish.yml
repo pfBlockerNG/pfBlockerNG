@@ -166,14 +166,20 @@ jobs:
 
       - name: Publish the pkg catalogue
         env:
-          PFB_SRC: $GITHUB_WORKSPACE
-          PKG_REPO: $GITHUB_WORKSPACE/pkg-repo
           SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}
           DESTINATIONS: ${{ steps.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
-          ASSETS_DIR: $RUNNER_TEMP/assets
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
           BASE_URL: https://pfblockerng.github.io/pkg
-        run: sh scripts/publish-pkg-repo.sh
+        # Path env vars are exported HERE, not in the env: map above — GitHub
+        # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
+        # there reaches the job as a literal dollar-string (issue #2231). The
+        # run body is where a shell expands the container-translated value.
+        run: |
+          set -eu
+          export PFB_SRC="$GITHUB_WORKSPACE"
+          export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
+          export ASSETS_DIR="$RUNNER_TEMP/assets"
+          sh scripts/publish-pkg-repo.sh

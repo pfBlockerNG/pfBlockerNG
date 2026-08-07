@@ -607,7 +607,6 @@ jobs:
       - name: Run the UI tier (pytest -m ${{ steps.tier.outputs.marker }})
         env:
           # Point the fixture at the ALREADY-PULLED qcow2 so the boot needs no network.
-          SMOKE_IMAGE_DIR: $GITHUB_WORKSPACE/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
@@ -630,7 +629,6 @@ jobs:
           SMOKE_ADMIN_PASSWORD: ${{ secrets.SMOKE_ADMIN_PASSWORD }}
           SMOKE_ADMIN_USER: ${{ vars.SMOKE_ADMIN_USER }}
           # Screenshot artifact layout: <root>/<version>/<name>.png (browser tier).
-          SMOKE_UI_SCREENSHOT_DIR: $GITHUB_WORKSPACE/test-results/ui-screenshots
           SMOKE_UI_VERSION: ${{ matrix.version }}
           # The functional DNSBL flow injects the sinkhole VIP; match the baked image.
           SMOKE_DNSBL_VIP4: ${{ secrets.SMOKE_DNSBL_VIP4 || vars.SMOKE_DNSBL_VIP4 }}
@@ -645,6 +643,10 @@ jobs:
           MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
+          # Run-body exports, not env: map values — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
+          export SMOKE_UI_SCREENSHOT_DIR="$GITHUB_WORKSPACE/test-results/ui-screenshots"
           # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
           # RUN_ID minted here (CI is the degenerate lease: runner IS the box).
           RUN_ID="$(sh scripts/select-box.sh --print-id)"

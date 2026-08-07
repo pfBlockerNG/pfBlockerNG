@@ -556,9 +556,11 @@ jobs:
           PHP_VERSION:  ${{ inputs.php_version }}
           PY_FLAVOR:    ${{ inputs.py_flavor }}
           ABI:          ${{ inputs.abi }}
-          PFB_RUN_ROOT: $RUNNER_TEMP/pfb-runs
         run: |
           set -eu
+          # Run-body exports, not env: map values — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export PFB_RUN_ROOT="$RUNNER_TEMP/pfb-runs"
           # AMENDMENT 7: slug a nightly-specific LEG for the run-id so CI artifacts
           # land in a distinct nightly-tagged dir (no collision with the smoke .pkg).
           LEG="nightly-$(printf '%s' "$ABI" | tr '[:upper:]' '[:lower:]' | tr ':' '-')"
@@ -633,7 +635,6 @@ jobs:
           SHARD_TOTAL: ${{ inputs.shard_total }}
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
-          SMOKE_IMAGE_DIR: $GITHUB_WORKSPACE/image
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
           # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
           # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
@@ -647,7 +648,6 @@ jobs:
           # civm client VM (ADR-04): the pre-pulled image dir + its data-NIC MAC
           # (the static-lease key). conftest's client_vm fixture boots it after
           # pfSense and auto-allocates the shared LAN socket port.
-          SMOKE_CLIENT_IMAGE_DIR: $GITHUB_WORKSPACE/client-image
           SMOKE_CLIENT_MAC_ADDRESS: ${{ secrets.SMOKE_CLIENT_MAC_ADDRESS }}
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
@@ -695,6 +695,10 @@ jobs:
           # WITHOUT pipefail (only an explicit `shell: bash` implies `-o pipefail`) —
           # this `set -o pipefail` is what actually turns it on.
           set -euo pipefail
+          # Run-body exports, not env: map values — GitHub Actions never
+          # shell-expands env-map values (issue #2231).
+          export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
+          export SMOKE_CLIENT_IMAGE_DIR="$GITHUB_WORKSPACE/client-image"
           # pfSense's System DNS is 10.0.2.2 (libslirp's host alias); libslirp NATs
           # guest->10.0.2.2:53 to the runner's 127.0.0.1:53 (the mock), the SAME host-alias
           # path the mock-feed HTTP server already rides. So the ONLY runner-side prep is

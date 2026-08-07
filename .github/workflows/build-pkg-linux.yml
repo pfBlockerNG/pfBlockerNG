@@ -162,9 +162,10 @@ jobs:
           PHP_VERSION:  ${{ inputs.php_version }}
           EXTRA_PKGS:   ${{ inputs.extra_pkgs }}
           DEP_ARTIFACT_NAME: ${{ inputs.dep_artifact_name }}
-          PFB_RUN_ROOT: $GITHUB_WORKSPACE/out
         run: |
           set -eu
+          # Run-body export, not an env: map value (issue #2231).
+          export PFB_RUN_ROOT="$GITHUB_WORKSPACE/out"
           # issue #1806: the ABI's cpu segment (e.g. "amd64") is INERT for a
           # NO_ARCH port — build-pkg-portable.py wildcards the stamp regardless
           # of what's given, so callers that only care about the FreeBSD major
