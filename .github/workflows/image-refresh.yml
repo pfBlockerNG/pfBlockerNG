@@ -241,12 +241,20 @@ jobs:
           persist-credentials: true   # the activation step pushes tracker/* branches (issue #1837)
           fetch-depth: 0              # reach the ci-metadata orphan ref
 
-      - name: Enable KVM access for the runner user
-        # GH-hosted ubuntu-latest ships /dev/kvm; the `runner` user is not in
-        # the kvm group by default. Same fix as build-image.yml / smoke-single.yml.
+      - name: Assert KVM acceleration is available
+        # The container gets /dev/kvm via `--device`; the old udev rule that made it
+        # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
+        # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
           ls -l /dev/kvm
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || {
+            echo '::error::/dev/kvm is not readable+writable -- qemu would fall back to TCG'
+            exit 1; }
+          qemu-system-x86_64 -accel help | grep -qw kvm || {
+            echo '::error::this qemu has no KVM accelerator'; exit 1; }
+          echo 'KVM acceleration: available'
 
       - name: Write guest SSH key (mode 600)
         env:

@@ -128,6 +128,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Select Python ${{ matrix.python-version }}
+        # The image bakes one directory per matrix Python. Without this the leg runs
+        # whatever `python3` defaults to, so a second matrix entry would silently test the
+        # same interpreter twice and report two green legs for one version.
+        run: echo "/opt/python/${{ matrix.python-version }}/bin" >> "$GITHUB_PATH"
+
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest

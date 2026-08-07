@@ -411,14 +411,20 @@ jobs:
           echo "marker=${MARKER}" >> "$GITHUB_OUTPUT"
           echo "tier ${TIER} -> marker ${MARKER}"
 
-      - name: Enable KVM access for the runner user
-        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
-        # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev
-        # rule making /dev/kvm world-RW fixes it in the same login session.
-        # Identical fix to smoke-single.yml.
+      - name: Assert KVM acceleration is available
+        # The container gets /dev/kvm via `--device`; the old udev rule that made it
+        # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
+        # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
           ls -l /dev/kvm
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || {
+            echo '::error::/dev/kvm is not readable+writable -- qemu would fall back to TCG'
+            exit 1; }
+          qemu-system-x86_64 -accel help | grep -qw kvm || {
+            echo '::error::this qemu has no KVM accelerator'; exit 1; }
+          echo 'KVM acceleration: available'
 
       - name: Resolve the pfSense image ref (image_ref input overrides the SMOKE_IMAGE_* vars)
         id: ref

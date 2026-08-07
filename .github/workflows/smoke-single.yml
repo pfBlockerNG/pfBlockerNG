@@ -319,14 +319,20 @@ jobs:
           ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
-      - name: Enable KVM access for the runner user
-        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner`
-        # user is not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev
-        # rule making /dev/kvm world-RW fixes it in the same login session (no
-        # group-membership re-login needed). Same fix as the other KVM jobs.
+      - name: Assert KVM acceleration is available
+        # The container gets /dev/kvm via `--device`; the old udev rule that made it
+        # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
+        # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
           ls -l /dev/kvm
+          [ -r /dev/kvm ] && [ -w /dev/kvm ] || {
+            echo '::error::/dev/kvm is not readable+writable -- qemu would fall back to TCG'
+            exit 1; }
+          qemu-system-x86_64 -accel help | grep -qw kvm || {
+            echo '::error::this qemu has no KVM accelerator'; exit 1; }
+          echo 'KVM acceleration: available'
 
       - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the variant topology)
         # The repo-smoke variant cases derive every ABI / PHP / Python / catalog from the
@@ -550,7 +556,7 @@ jobs:
           PHP_VERSION:  ${{ inputs.php_version }}
           PY_FLAVOR:    ${{ inputs.py_flavor }}
           ABI:          ${{ inputs.abi }}
-          PFB_RUN_ROOT: ${{ runner.temp }}/pfb-runs
+          PFB_RUN_ROOT: $RUNNER_TEMP/pfb-runs
         run: |
           set -eu
           # AMENDMENT 7: slug a nightly-specific LEG for the run-id so CI artifacts
