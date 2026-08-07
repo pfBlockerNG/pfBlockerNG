@@ -76,6 +76,9 @@ pfb_scrub_git_env
 # Marker → (paths, timeout, browser?) mapping for the ADR-14 UI tiers.
 # shellcheck source=scripts/lib/smoke-tier.sh
 . "${REPO_ROOT}/scripts/lib/smoke-tier.sh"
+# Shared-image-store-safe refresh (issue #2218): staging + rename publish, per-ref digests.
+# shellcheck source=scripts/lib/oras-refresh.sh
+. "${REPO_ROOT}/scripts/lib/oras-refresh.sh"
 PORTS_DIR="/root/FreeBSD-ports"
 IMAGES_DIR="/root/images"
 
@@ -161,7 +164,7 @@ sh scripts/sparse-clone-ports.sh \
 
 # ── Step 3: oras images (refresh when stale; pull when absent) ─────────────── #
 _oras_login_done=0
-_oras_login() {
+pfb_oras_login() {
     if [ "$_oras_login_done" -eq 0 ] && [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
         printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
             oras login ghcr.io --username pfBlockerNG --password-stdin >/dev/null 2>&1 \
@@ -170,48 +173,9 @@ _oras_login() {
     fi
 }
 
-# _oras_refresh <ref> <dir> <tag>
-# Pull image if absent or if GHCR digest changed.
-_oras_refresh() {
-    _or_ref="$1"
-    _or_dir="$2"
-    _or_tag="$3"
-
-    mkdir -p "$_or_dir"
-
-    # Remote digest (best-effort; skip refresh on auth failure).
-    _or_remote=""
-    _or_remote="$(oras resolve "$_or_ref" 2>/dev/null)" \
-        || _or_remote="$(oras manifest fetch "$_or_ref" --descriptor 2>/dev/null \
-                         | grep -o '"digest":"[^"]*"' | cut -d'"' -f4)" \
-        || _or_remote=""
-
-    _or_local="$(cat "${_or_dir}/.digest" 2>/dev/null)" || _or_local=""
-
-    # Count qcow2s in dir.
-    _or_qcnt=0
-    for _or_q in "${_or_dir}"/*.qcow2; do
-        [ -e "$_or_q" ] && _or_qcnt=$((_or_qcnt + 1))
-    done
-
-    if [ "$_or_qcnt" -eq 0 ] || \
-       { [ -n "$_or_remote" ] && [ "$_or_remote" != "$_or_local" ]; }; then
-        printf 'smoke-on-box: pulling %s image (%s) -> %s\n' "$_or_tag" "$_or_ref" "$_or_dir" >&2
-        _oras_login
-        if [ -n "$_or_remote" ]; then
-            ( cd "$_or_dir" && oras pull "${_or_ref%@*}@${_or_remote}" ) >&2
-            printf '%s\n' "$_or_remote" > "${_or_dir}/.digest"
-        else
-            ( cd "$_or_dir" && oras pull "$_or_ref" ) >&2
-        fi
-    else
-        printf 'smoke-on-box: %s image up-to-date at %s\n' "$_or_tag" "$_or_dir" >&2
-    fi
-}
-
-_oras_refresh "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "pfSense"
+pfb_oras_refresh "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "pfSense"
 if [ "$_NO_TWO_VM" -eq 0 ]; then
-    _oras_refresh "$CIVM_REF" "${IMAGES_DIR}/civm" "civm"
+    pfb_oras_refresh "$CIVM_REF" "${IMAGES_DIR}/civm" "civm"
 fi
 
 export SMOKE_IMAGE_DIR="${IMAGES_DIR}/pfsense"
