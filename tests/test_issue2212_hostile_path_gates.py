@@ -303,8 +303,12 @@ def test_run_gates_refuses_a_hostile_path_instead_of_skipping_it(tmp_path: Path)
         f"a quoted path produced no refusal; plan was {refused.stdout!r}"
     )
 
-    # The non-ASCII class must still map to real gates — quotePath=false is what
-    # carries it, and a regression there would look identical to a clean skip.
+    # The non-ASCII class must not vanish either. Which way it resolves is
+    # environment-dependent — run-gates' unsafe-filename filter is
+    # `[^A-Za-z0-9._/-]`, and whether an accented byte trips it varies with the
+    # locale and grep the run happens to use (it refuses on CI, gates here) — so
+    # asserting one outcome would pin the environment, not the contract. What
+    # #2212 is about is that neither outcome may be SILENCE.
     accented = _repo(tmp_path / "accented")
     _git("branch", "devel", cwd=accented)
     _commit_file(accented, "src/usr/local/www/café.php", "<?php echo 1;\n")
@@ -313,8 +317,21 @@ def test_run_gates_refuses_a_hostile_path_instead_of_skipping_it(tmp_path: Path)
         capture_output=True,
         text=True,
     )
-    assert "php -l src/usr/local/www/café.php" in planned.stdout, (
-        f"a non-ASCII path mapped to no gate; plan was {planned.stdout!r}"
+    surfaced = "src/usr/local/www/café.php" in planned.stdout or "unsafe filename in diff" in planned.stdout
+    assert surfaced, f"a non-ASCII path was silently skipped; plan was {planned.stdout!r}"
+
+    # An ordinary path is the control: it must map to its gates, so a plan that
+    # refuses or skips everything cannot make the two rows above pass.
+    plain = _repo(tmp_path / "plain")
+    _git("branch", "devel", cwd=plain)
+    _commit_file(plain, "src/usr/local/www/plain.php", "<?php echo 1;\n")
+    control = subprocess.run(
+        ["sh", str(script), "--worktree", str(plain), "--diff", "devel", "--plan", "--allow-missing"],
+        capture_output=True,
+        text=True,
+    )
+    assert "php -l src/usr/local/www/plain.php" in control.stdout, (
+        f"the ASCII control mapped to no gate; plan was {control.stdout!r}"
     )
 
 
