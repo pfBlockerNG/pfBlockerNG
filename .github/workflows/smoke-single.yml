@@ -294,7 +294,18 @@ jobs:
     # continue-on-error on smoke.yml's `uses:` fan-out job. Default false: every
     # other caller (PR gate, nightly, bare dispatch) keeps the hard veto.
     continue-on-error: ${{ inputs.nonblocking }}
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64]
+    container:
+      image: ghcr.io/pfblockerng/ci-runner-vm:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
+      # to container -- or qemu silently falls back to TCG and the leg times out instead
+      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
+      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
+      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      options: --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
 
     steps:
@@ -315,21 +326,7 @@ jobs:
         # group-membership re-login needed). Same fix as the other KVM jobs.
         run: |
           set -eu
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
-
-      - name: Install host tools (qemu, oras, dnsutils, python, zstd)
-        run: |
-          set -eu
-          sudo apt-get update
-          # zstd: the ADR-17 `repo` flow re-versions the branch .pkg (a zstd tar) on
-          # the runner to forge a lower+higher build for the pkg-upgrade transition
-          # test; the re-version helper decodes/encodes the .pkg via the zstd binary.
-          # Harmless for the default `smoke` marker (the helper just isn't called).
-          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client python3 python3-pip python3-venv zstd
 
       - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the variant topology)
         # The repo-smoke variant cases derive every ABI / PHP / Python / catalog from the
@@ -378,15 +375,6 @@ jobs:
           # ADR-47 P5: image ref composed by the shared script (writes ref= to $GITHUB_OUTPUT).
           sh scripts/resolve-legs.sh image-ref
 
-      - name: Install oras
-        uses: oras-project/setup-oras@v2
-
-      # Key the image cache on the RESOLVED MANIFEST DIGEST, not the ref string.
-      # SMOKE_IMAGE_REF is a MOVING (floating) tag (e.g. :2.8); a re-push to the
-      # same tag changes the content (digest) but not the ref string. Keying on
-      # the digest makes a new image invalidate the cache automatically — a fresh
-      # pull, no manual cache bust. Needs a GHCR login (private repo) first; the
-      # login persists to the pull step below (same job).
       - name: Resolve image digest (cache key)
         id: digest
         env:
@@ -707,7 +695,8 @@ jobs:
           # lowering the privileged-port floor so the non-root mock (in pytest) can bind
           # :53 — the runner's /etc/resolv.conf is left untouched (host DNS keeps working
           # throughout; nothing to restore, and immune to how the runner does resolution).
-          sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
+          # The port floor is set by the job's container `--sysctl`; it is namespaced,
+          # so the container carries its own and no runner-side prep is needed.
           # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
           # RUN_ID minted here (CI is the degenerate lease: runner IS the box,
           # --print-id emits the id without acquiring a real lease).

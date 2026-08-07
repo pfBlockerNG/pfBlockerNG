@@ -206,8 +206,15 @@ def test_php_staging_jobs_pin_php_from_the_version_matrix() -> None:
     """
     offenders: list[str] = []
     for path in _workflow_files():
-        for job, _, job_lines in _hook_php_jobs(path.read_text(encoding="utf-8")):
-            if _first_line_matching(job_lines, _SETUP_PHP_RE) is None:
+        text = path.read_text(encoding="utf-8")
+        for job, _, job_lines in _hook_php_jobs(text):
+            # Either mechanism satisfies the property. setup-php pins the version directly.
+            # The runner image pins it too, one level up: it bakes exactly the matrix PHPs
+            # (tests/test_ci_runner_images.py asserts that against supported-versions.json)
+            # and defaults `php` to the lowest of them, so a job inside the image cannot
+            # reach an unsupported PHP either.
+            in_image = any("ghcr.io/pfblockerng/ci-runner" in line for line in job_lines)
+            if _first_line_matching(job_lines, _SETUP_PHP_RE) is None and not in_image:
                 offenders.append(f"{path.name}: job `{job}` runs the hook PHP gates on the runner's ambient PHP")
                 continue
             pinned = [

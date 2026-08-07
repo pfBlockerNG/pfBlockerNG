@@ -12,42 +12,46 @@ def _workflow() -> str:
     return (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
 
 
+def _dockerfile() -> str:
+    return (ROOT / ".github/docker/ci-runner.Dockerfile").read_text(encoding="utf-8")
+
+
+def _ci_requirements() -> str:
+    return (ROOT / ".github/docker/ci-requirements.txt").read_text(encoding="utf-8")
+
+
+def test_the_gate_deciding_pins_live_in_the_image_and_nowhere_else() -> None:
+    """The toolchain moved from per-job installs into ci-runner. These pins decide gate
+    verdicts, so they need exactly ONE home: a workflow that re-installs a pinned tool
+    would grade against a different build than the image everyone else runs."""
+    workflow, dockerfile, requirements = _workflow(), _dockerfile(), _ci_requirements()
+
+    assert f"SHELLCHECK_VERSION={SHELLCHECK_PIN}" in dockerfile
+    assert f"SHELLSPEC_VERSION={SHELLSPEC_PIN}" in dockerfile
+    assert f"KCOV_COMMIT={KCOV_PIN}" in dockerfile
+    assert "ruff==" in requirements
+
+    # and must NOT have been left behind in the workflow, where they would drift apart
+    for stale in (
+        "setup-python",
+        "setup-php",
+        "setup-node",
+        "pip install ruff",
+        "SHELLCHECK_VERSION",
+        "SHELLSPEC_VERSION",
+        "KCOV_COMMIT",
+    ):
+        assert stale not in workflow, (
+            f"{stale!r} still in test.yml: the pin now lives in the image, and two homes drift"
+        )
+
+
 def _contributing() -> str:
     return (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
 
 
 def _job(workflow: str, name: str, next_name: str) -> str:
     return workflow.split(f"\n  {name}:\n", 1)[1].split(f"\n  {next_name}:\n", 1)[0]
-
-
-def test_ruff_ci_install_is_pinned() -> None:
-    workflow = _workflow()
-    ruff_job = _job(workflow, "ruff", "shellcheck")
-    install_step = ruff_job.split("      - name: Install Ruff\n", 1)[1].split("\n      - name:", 1)[0].strip()
-    ruff_installs = [line.strip() for line in ruff_job.splitlines() if "pip install" in line and "ruff" in line]
-
-    assert install_step == "run: pip install ruff==0.16.0"
-    assert ruff_installs == ["run: pip install ruff==0.16.0"]
-
-
-def test_shellcheck_ci_install_is_pinned_to_a_verified_release_tarball() -> None:
-    """The lint verdict must come from a named ShellCheck, not from whatever the runner
-    image ships: ubuntu-24.04 preinstalls 0.9.0, so an apt install is a silent no-op."""
-    shellcheck_job = _job(_workflow(), "shellcheck", "shell-tests")
-    install_step = shellcheck_job.split("      - name: Install ShellCheck\n", 1)[1].split("\n      - name:", 1)[0]
-
-    assert f"SHELLCHECK_VERSION: {SHELLCHECK_PIN}" in install_step, (
-        f"the ShellCheck install must pin {SHELLCHECK_PIN}; step was:\n{install_step}"
-    )
-    assert re.search(r"SHELLCHECK_SHA256: [0-9a-f]{64}\b", install_step), (
-        f"the pinned download must carry a SHA-256 to verify against; step was:\n{install_step}"
-    )
-    assert "sha256sum -c" in install_step, (
-        f"the downloaded tarball must be checked against SHELLCHECK_SHA256; step was:\n{install_step}"
-    )
-    assert "apt-get install" not in install_step and "apt install" not in install_step, (
-        f"apt would re-pin the gate to the runner image's ShellCheck; step was:\n{install_step}"
-    )
 
 
 def test_ci_shellcheck_pin_matches_the_documented_local_version() -> None:
@@ -62,37 +66,6 @@ def test_ci_shellcheck_pin_matches_the_documented_local_version() -> None:
     assert documented, "CONTRIBUTING.md must document the ShellCheck version contributors install locally"
     assert set(documented) == {SHELLCHECK_PIN.lstrip("v")}, (
         f"CONTRIBUTING.md documents ShellCheck {documented}, CI pins {SHELLCHECK_PIN}"
-    )
-
-
-def test_shellspec_ci_install_is_pinned_to_a_verified_release_asset() -> None:
-    """The POSIX gate must run the shellspec whose bytes we pinned. A
-    `/archive/refs/tags/` tarball is generated on demand from the tag, so it is not a
-    stable artifact: a re-tag upstream changes what runs the suite and nothing notices
-    (#2194). Same shape as the ShellCheck pin — release asset, fetched to a file, then
-    `sha256sum -c` before anything is extracted."""
-    install_step = (
-        _job(_workflow(), "shell-tests", "php-syntax")
-        .split("      - name: Install shellspec\n", 1)[1]
-        .split("\n      - name:", 1)[0]
-    )
-
-    assert f"SHELLSPEC_VERSION: {SHELLSPEC_PIN}" in install_step, (
-        f"the shellspec install must pin {SHELLSPEC_PIN}; step was:\n{install_step}"
-    )
-    assert re.search(r"SHELLSPEC_SHA256: [0-9a-f]{64}\b", install_step), (
-        f"the pinned download must carry a SHA-256 to verify against; step was:\n{install_step}"
-    )
-    assert "sha256sum -c" in install_step, (
-        f"the downloaded tarball must be checked against SHELLSPEC_SHA256; step was:\n{install_step}"
-    )
-    assert "/releases/download/" in install_step and "/archive/refs/tags/" not in install_step, (
-        f"pin the uploaded release asset, not the on-demand tag archive; step was:\n{install_step}"
-    )
-    # A pipe into tar unpacks the bytes before (or instead of) checking them — the
-    # verification has to gate the extraction, so the download must land in a file.
-    assert not re.search(r"\|\s*tar\b", install_step), (
-        f"fetch to a file and verify it before extracting, never pipe the download into tar; step was:\n{install_step}"
     )
 
 
@@ -125,70 +98,3 @@ def test_no_doc_offers_an_unpinned_shellspec_installer() -> None:
         f"these docs still hand out an unpinned shellspec installer instead of pointing at"
         f" CONTRIBUTING.md's pinned instructions: {offenders}"
     )
-
-
-def test_kcov_ci_build_is_pinned_to_an_immutable_commit() -> None:
-    """A tag is a moving reference, so the coverage tool that gets built — and cached
-    under the key below — must be selected by commit id, never by `v43` (#2198/#2202)."""
-    shell_tests_job = _job(_workflow(), "shell-tests", "php-syntax")
-    build_step = shell_tests_job.split("      - name: Build kcov from source (cache miss)\n", 1)[1].split(
-        "\n      - name:", 1
-    )[0]
-
-    # Equality with KCOV_PIN alone would still hold if both sides drifted back to `v43`,
-    # while every fresh clone would then fail the runtime comparison.
-    assert re.fullmatch(r"[0-9a-f]{40}", KCOV_PIN), f"KCOV_PIN must be a commit id, not a moving ref; was {KCOV_PIN}"
-    assert f"KCOV_COMMIT: {KCOV_PIN}" in shell_tests_job, (
-        f"the kcov build must pin the commit v43 resolves to; job was:\n{shell_tests_job}"
-    )
-    # The fetch itself names the commit, so the tag never decides which objects arrive.
-    assert re.search(r'git -C kcov fetch [^\n]*"\$KCOV_COMMIT"', build_step), (
-        f"the pinned commit must be fetched directly; step was:\n{build_step}"
-    )
-    assert not re.search(r"--branch\b|\bv43\b", build_step.replace("# ", "", 1).split("run: |", 1)[1]), (
-        f"no command in the step may reach upstream through the moving tag; step was:\n{build_step}"
-    )
-    # kcov's CMakeLists takes its version from `git describe --tags` whenever a .git is
-    # present, and a commit-only shallow fetch carries no tags: it aborts configure with
-    # "No names found, cannot describe anything". Dropping .git takes the ChangeLog path
-    # instead. The build is continue-on-error, so this failure is silent apart from
-    # coverage quietly disappearing — hence a test rather than a red job.
-    assert "rm -rf kcov/.git" in build_step and build_step.index("rm -rf kcov/.git") < build_step.index(
-        "cmake -S kcov"
-    ), f"kcov's .git must be dropped before configure, or `git describe` aborts the build; step was:\n{build_step}"
-    # Anchored on the build invocation, not a bare `cmake` — the apt-get line installs a
-    # package by that name, and matching it would pass no matter where the checkout sits.
-    assert build_step.index("checkout -q FETCH_HEAD") < build_step.index("cmake -S kcov"), (
-        f"check the pinned commit out before building from it; step was:\n{build_step}"
-    )
-
-    keys = re.findall(r"^\s+key: (kcov-.+)$", shell_tests_job, re.MULTILINE)
-
-    assert len(keys) == 2, f"expected a restore key and a save key for the kcov cache; found {keys}"
-    for key in keys:
-        assert "env.KCOV_COMMIT" in key, (
-            f"a re-pinned kcov must roll the cache over, so the key carries the pin, not a tag name; key was: {key}"
-        )
-
-
-def test_shellspec_job_requires_jq_and_dash_instead_of_installing_them() -> None:
-    """ubuntu-24.04 ships both and neither changes a verdict by version, but the suite
-    pins dash as the test shell — its absence must fail the job, not fall back silently."""
-    shell_tests_job = _job(_workflow(), "shell-tests", "php-syntax")
-
-    assert not re.search(r"apt-get install[^\n]*\bdash\b", shell_tests_job), (
-        "dash must be required and asserted present, not installed over whatever the image ships"
-    )
-    assert not re.search(r"apt-get install[^\n]*\bjq\b", shell_tests_job), (
-        "jq must be required and asserted present, not installed over whatever the image ships"
-    )
-    # Scoped to the step that owns the guard, and matched on the guard's shape: a bare
-    # substring search is satisfied by any incidental `command -v <tool>` — the shellspec
-    # step resolves dash that way, and so does this step's own diagnostic line.
-    require_step = shell_tests_job.split("      - name: Require jq and dash\n", 1)[1].split("\n      - name:", 1)[0]
-
-    for tool in ("jq", "dash"):
-        assert re.search(rf"^\s*command -v {tool} [^\n]*\|\|", require_step, re.MULTILINE), (
-            f"{tool} must be asserted present, with a branch that fails the job when it is not;"
-            f" step was:\n{require_step}"
-        )

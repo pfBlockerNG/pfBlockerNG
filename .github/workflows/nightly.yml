@@ -37,6 +37,14 @@ jobs:
   prepare:
     name: Pin inputs and allocate version
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     outputs:
       outcome: ${{ steps.plan.outputs.outcome }}
       allocation: ${{ steps.plan.outputs.allocation }}
@@ -225,6 +233,14 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.outcome == 'build'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     strategy:
       fail-fast: false
       matrix:
@@ -245,14 +261,6 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
           path: source
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Ensure zstd encoder
-        run: command -v zstd >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y zstd; }
 
       - name: Build and verify package
         env:
@@ -338,6 +346,14 @@ jobs:
     needs: [prepare, build]
     if: always()
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:1
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user 1001:1001
+    env:
+      HOME: /tmp
     steps:
       - name: Exit cleanly for identical input
         if: needs.prepare.outputs.outcome == 'unchanged'

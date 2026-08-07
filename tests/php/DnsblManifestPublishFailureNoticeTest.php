@@ -57,6 +57,14 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 
 	protected function tearDown(): void
 	{
+		// setUp() can skip BEFORE assigning the properties below, and PHPUnit still runs
+		// tearDown() after a skipped setUp. Reading an uninitialised typed property is a
+		// fatal Error, and because these fixtures share $GLOBALS it does not stop at this
+		// class: it leaves the globals dirty and every later test that reads them errors
+		// too. Bail out when setUp did not get far enough to create anything.
+		if (!isset($this->tmp)) {
+			return;
+		}
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
