@@ -74,7 +74,7 @@ def _repo(tmp_path: Path) -> Path:
     what git emits and turn a real failure into a false pass.
     """
     repo = tmp_path / "repo"
-    repo.mkdir()
+    repo.mkdir(parents=True)
     # `git init -b` needs git >= 2.28; this must work on older git too.
     _git("init", cwd=repo)
     _git("config", "user.email", "test@example.invalid", cwd=repo)
@@ -274,9 +274,48 @@ def test_every_name_only_consumer_uses_the_nul_transport() -> None:
             if "--no-index" in line:
                 continue  # not a changed-file list; the helper's own example
             # A standalone -z token: quoted in a Python arg list, bare in shell.
-            if not re.search(r"(?<![\w-])-z(?![\w-])", line):
-                offenders.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
+            if re.search(r"(?<![\w-])-z(?![\w-])", line):
+                continue
+            offenders.append(f"{path.relative_to(ROOT)}:{number}: {line.strip()}")
     assert not offenders, "changed-file lists read without -z:\n  " + "\n  ".join(offenders)
+
+
+def test_run_gates_refuses_a_hostile_path_instead_of_skipping_it(tmp_path: Path) -> None:
+    """run-gates.sh fails loudly on a path it cannot gate, never silently.
+
+    It is named authoritative by AGENTS.md alongside the hooks and CI, and it
+    opts out of the NUL transport (piping through ``tr`` would hide git's exit
+    status behind ``|| exit 2``). What replaces it must therefore be checked by
+    running it: a quoted path has to reach the unsafe-filename guard and fail
+    the run, and a non-ASCII path has to map to its gates as normal.
+    """
+    script = ROOT / "scripts" / "agent" / "run-gates.sh"
+
+    hostile = _repo(tmp_path / "hostile")
+    _git("branch", "devel", cwd=hostile)
+    _commit_file(hostile, 'src/usr/local/www/has"quote.php', "<?php echo 1;\n")
+    refused = subprocess.run(
+        ["sh", str(script), "--worktree", str(hostile), "--diff", "devel", "--plan", "--allow-missing"],
+        capture_output=True,
+        text=True,
+    )
+    assert "unsafe filename in diff" in refused.stdout, (
+        f"a quoted path produced no refusal; plan was {refused.stdout!r}"
+    )
+
+    # The non-ASCII class must still map to real gates — quotePath=false is what
+    # carries it, and a regression there would look identical to a clean skip.
+    accented = _repo(tmp_path / "accented")
+    _git("branch", "devel", cwd=accented)
+    _commit_file(accented, "src/usr/local/www/café.php", "<?php echo 1;\n")
+    planned = subprocess.run(
+        ["sh", str(script), "--worktree", str(accented), "--diff", "devel", "--plan", "--allow-missing"],
+        capture_output=True,
+        text=True,
+    )
+    assert "php -l src/usr/local/www/café.php" in planned.stdout, (
+        f"a non-ASCII path mapped to no gate; plan was {planned.stdout!r}"
+    )
 
 
 def test_every_unified_diff_parser_unquotes_its_header_path() -> None:
