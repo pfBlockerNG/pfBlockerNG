@@ -77,9 +77,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # absent: apt verifies the sury archive with its own gpgv against a keyring file.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      ca-certificates curl file git iprange jq less libbz2-1.0 libcurl4 libdw1 \
+      bzip2 ca-certificates curl file git iprange jq less libbz2-1.0 libcurl4 libdw1 \
       libelf1 libexpat1 libffi8 libgdbm-compat4t64 libgdbm6t64 liblzma5 libncursesw6 \
-      libreadline8t64 libsqlite3-0 libssl3t64 netbase patch procps rsync sudo tar unzip \
+      libreadline8t64 libsqlite3-0 libssl3t64 netbase patch procps rsync sqlite3 sudo tar unzip \
       uuid-runtime xz-utils zlib1g zstd \
  && rm -rf /var/lib/apt/lists/*
 
@@ -213,6 +213,8 @@ RUN set -eu; \
     shellcheck --version; shellspec --version; kcov --version; \
     jq --version; dash -c 'exit 0'; \
     echo '10.0.0.0/8' | iprange >/dev/null; \
+    printf 'x' | bzip2 -c | bzip2 -dc >/dev/null; \
+    printf 'SELECT 1;' | sqlite3 :memory: >/dev/null; \
     file --version; \
     php -r 'new SQLite3(":memory:");'; \
     php -r 'getservbyname("domain", "udp") === 53 or exit(1);'
