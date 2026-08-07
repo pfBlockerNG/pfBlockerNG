@@ -77,6 +77,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _git_paths import diff_header_name
+
 # Each alternative is a full-value token shape (anchored once, at the
 # alternation, by the two call sites below). Unambiguous shapes (ABI/php/py/
 # varver) are version-AGNOSTIC -- any restated literal is a drift hazard
@@ -511,8 +513,8 @@ def _added_lines_by_path(diff_text: str) -> dict[str, set[int]]:
             continue
         if not in_hunk:
             if raw.startswith("+++ "):
-                name = raw[4:]
-                path = name[2:].split("\t", 1)[0] if name.startswith("b/") else None
+                name = diff_header_name(raw[4:])
+                path = name[2:] if name.startswith("b/") else None
             continue  # header block: '---'/'index'/etc. never carry added content
         if raw.startswith("+"):
             if path is not None:

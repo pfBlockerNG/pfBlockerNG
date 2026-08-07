@@ -57,6 +57,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from _git_paths import nul_paths
+
 BOOTSTRAP_BUDGET = 10_240
 ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
@@ -504,16 +506,16 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if not args.all:
             diff_args = (
-                ["diff", "--cached", "--name-only"] if args.staged else ["diff", "--name-only", f"{args.diff}...HEAD"]
+                ["diff", "--cached", "--name-only", "-z"]
+                if args.staged
+                else ["diff", "--name-only", "-z", f"{args.diff}...HEAD"]
             )
-            changed = _git(root, "-c", "core.quotePath=off", *diff_args).split("\n")
-            if not touches_context_surface([c for c in changed if c]):
+            if not touches_context_surface(nul_paths(_git(root, *diff_args))):
                 print("context-budget: no context surface in the diff — skipped")
                 return 0
-        # quotePath=off: a non-ASCII filename would otherwise come back
-        # C-quoted ("…") and silently match no budget.
-        tracked = _git(root, "-c", "core.quotePath=off", "ls-files").split("\n")
-        tracked = [t for t in tracked if t]
+        # -z: git C-quotes any path holding a quote, backslash, control byte or
+        # (by default) a non-ASCII byte, and a quoted path matches no budget.
+        tracked = nul_paths(_git(root, "ls-files", "-z"))
         if args.staged:
             # Validate the INDEX snapshot, not the working tree: staged and
             # worktree content can diverge, and the commit ships the index.

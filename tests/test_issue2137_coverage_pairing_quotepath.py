@@ -136,15 +136,20 @@ def test_the_changed_file_list_holds_the_real_path(tmp_path: Path) -> None:
     """
     repo = _scratch_repo(tmp_path, NON_ASCII_SRC)
     _run_gate(repo)
-    listed = (repo / "changed.txt").read_text(encoding="utf-8").strip()
+    listed = (repo / "changed.txt").read_text(encoding="utf-8").strip("\0\n")
     assert listed == NON_ASCII_SRC, f"changed.txt holds {listed!r}, not the real path"
-    assert not listed.startswith('"'), "path is quoted: core.quotePath is not disabled"
-    assert "\\303" not in listed, "path is octal-escaped: core.quotePath is not disabled"
+    assert not listed.startswith('"'), "path is quoted: the listing is not NUL-separated"
+    assert "\\303" not in listed, "path is octal-escaped: the listing is not NUL-separated"
 
 
-def test_the_workflow_disables_quotepath_on_its_own_command() -> None:
-    """The fix lives on the command, so a rewrite that drops the flag fails here."""
+def test_the_workflow_emits_a_nul_separated_listing() -> None:
+    """The fix lives on the command, so a rewrite that drops -z fails here.
+
+    ``-z`` supersedes the original ``core.quotePath=false`` pin: that flag only
+    stopped HIGH-BIT bytes being escaped, leaving a quote/backslash/control byte
+    in a path quoted anyway (issue #2212).
+    """
     command = _compute_command()
-    assert re.search(r"\bgit\s+-c\s+core\.quotePath=false\b", command), (
-        f"changed-file computation must disable core.quotePath: {command!r}"
+    assert re.search(r"\bgit\s+diff\s+--name-only\s+-z\b", command), (
+        f"changed-file computation must emit NUL-separated paths: {command!r}"
     )
