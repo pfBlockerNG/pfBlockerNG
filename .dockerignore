@@ -1,0 +1,10 @@
+# Build context for .github/docker/*.Dockerfile is the repository root (the images copy
+# .github/docker/ci-requirements.txt and tests/smoke/requirements.txt). Neither needs the
+# history, the agent worktrees, or any local virtualenv — sending them would make every
+# image build upload hundreds of megabytes it then ignores.
+.git
+.claude/worktrees
+.venv
+node_modules
+**/node_modules
+**/__pycache__
