@@ -29,6 +29,7 @@ Describe 'smoke-on-box.sh --channel'
     # The real libs the script sources before it parses anything.
     cp "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "${FAKE_ROOT}/scripts/lib/"
     cp "${PFB_ROOT}/scripts/lib/smoke-tier.sh"    "${FAKE_ROOT}/scripts/lib/"
+    cp "${PFB_ROOT}/scripts/lib/oras-refresh.sh"  "${FAKE_ROOT}/scripts/lib/"
 
     # The re-exec target: record argv, run nothing.
     cat > "${FAKE_ROOT}/scripts/smoke-on-box.sh" <<'RECEOF'
