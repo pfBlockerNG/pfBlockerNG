@@ -305,7 +305,7 @@ jobs:
       # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
       # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
       # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
-      options: --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
+      options: --init --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
 
     steps:

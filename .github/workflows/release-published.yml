@@ -39,7 +39,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      options: --user 1001:1001
+      options: --init --user 1001:1001
     env:
       HOME: /tmp
     outputs:
@@ -144,7 +144,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      options: --user 1001:1001
+      options: --init --user 1001:1001
     env:
       HOME: /tmp
     needs: [resolve]
