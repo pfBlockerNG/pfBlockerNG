@@ -141,18 +141,25 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 	# is canonical for a migrated skill, .claude/skills/<name> either the same
 	# content (pre-migration) or a symlink onto it — exempt both prefixes so
 	# this stays correct regardless of migration state.
-	git ls-files \
-		| grep -v -e '^\.claude/skills/git-guardrails-claude-code/' \
-			-e '^\.agents/skills/git-guardrails-claude-code/' \
-			-e '^plugins/' \
-		| while IFS= read -r f; do
-		case $(head -n1 "$f" 2>/dev/null) in
-		'#!'*bash*)
-			printf '[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n' "$f" >&2
-			exit 1
-			;;
-		esac
-	done || failed 'shebang policy'
+	# -z + xargs -0, never a newline listing: git C-quotes a path holding a
+	# quote, backslash, control byte or non-ASCII byte, and `head` on a quoted
+	# name reads nothing — that file's shebang would go unchecked (issue #2212).
+	# The exemption fence sits inside the loop for the same reason: a `grep`
+	# over the listing cannot see NULs.
+	git ls-files -z | xargs -0 sh -c '
+		for f; do
+			case $f in
+			.claude/skills/git-guardrails-claude-code/*) continue ;;
+			.agents/skills/git-guardrails-claude-code/*) continue ;;
+			plugins/*) continue ;;
+			esac
+			case $(head -n1 "$f" 2>/dev/null) in
+			"#!"*bash*)
+				printf "[pre-commit] bash shebang not allowed (use #!/bin/sh): %s\n" "$f" >&2
+				exit 1
+				;;
+			esac
+		done' _ || failed 'shebang policy'
 
 	# sh -n parse gate (src + scripts + tests + .claude/hooks; cheap, tool-free).
 	step 'shell (sh -n)'
