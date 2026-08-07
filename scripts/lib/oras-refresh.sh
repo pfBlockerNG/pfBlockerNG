@@ -34,7 +34,7 @@ pfb_oras_ref_hash() {
 # Filesystem-safe, COLLISION-RESISTANT token for a ref, so each ref owns its digest file.
 # A plain character substitution is not enough: ':' and '/' both fold to '-', so
 # ghcr.io/x/a:1 and ghcr.io/x/a-1 would share a file and one would suppress the other's
-# pull. The readable part stays for debuggability; the hash of the FULL ref decides identity.
+# pull. The readable part stays for debuggability; pfb_oras_ref_hash decides identity.
 pfb_oras_digest_file() {
     # A missing sha256sum would fail INSIDE the pipe below, which neither `set -e` nor a
     # non-zero exit surfaces: the hash would silently be empty and every ref would share

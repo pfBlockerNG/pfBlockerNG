@@ -185,8 +185,10 @@ EOF
       PATH=/nonexistent-dir pfb_oras_digest_file ghcr.io/x/pfsense-ce:2.8 "$1"
       echo "rc=$?"
     ' sh "$LIB" "$IMGDIR"
+    # rc alone cannot discriminate: without the guard the inner failure is 127 and this
+    # function's own `|| return 1` normalises it back to 1. Assert the guard's message.
     The output should include 'rc=1'
-    The stderr should be present
+    The stderr should include 'sha256sum is required'
   End
 
   It 'refuses to derive a ref hash when sha256sum is unavailable'
@@ -201,6 +203,30 @@ EOF
     # `include 'rc=1'` matches 'rc=127' as a substring -- the test would never fail.
     The output should eq 'rc=1'
     The stderr should be present
+  End
+
+  It 'refuses to take the per-ref lock when sha256sum is unavailable'
+    # The lock name derives its own hash. Hiding sha256sum via a bare empty PATH would also
+    # hide flock and fall through to the unserialised branch, never reaching the lock path.
+    # This PATH keeps every tool the lock path needs EXCEPT sha256sum.
+    When call sh -c '
+      . "$1"; shift
+      mkdir -p "$2/onlybin"
+      for t in flock mktemp tr cut sed rm mv basename wc cat; do
+        p="$(command -v $t 2>/dev/null)" && ln -sf "$p" "$2/onlybin/$t"
+      done
+      # A `VAR=val func` prefix PERSISTS after a shell function returns in POSIX sh, so
+      # PATH must be restored explicitly or the assertion below runs without its tools.
+      _saved_path="$PATH"
+      PATH="$2/onlybin"; pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense 2>/dev/null
+      PATH="$_saved_path"
+      # The DISCRIMINATING signal: the guarded path returns before opening the lock file.
+      # An unguarded lock path derives an empty hash and creates ".lock-" regardless, then
+      # fails later in the digest helper -- which an rc or stderr assertion cannot tell
+      # apart, because both paths end in the same message and the same status.
+      find "$1" -name ".lock-*" | wc -l | tr -d " "
+    ' sh "$LIB" "$IMGDIR" "$WORK"
+    The output should eq '0'
   End
 
   It 'pulls when the ref digest actually moved'
