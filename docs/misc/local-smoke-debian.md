@@ -15,7 +15,9 @@ GitHub Actions. These are the things that cost real time to (re)learn; the CI wo
 ### On each LXC box (pre-provisioned once)
 
 - `/dev/kvm` present and writable (hardware virtualisation). Everything needs KVM.
-- `qemu-system-x86_64`, `qemu-img`, `ssh`, `oras`, `python3` (3.11+), `python3-venv`, `git`.
+- `docker` and `git`. **Nothing else**: qemu, oras, dig and the Playwright browser now
+  live in `ghcr.io/pfblockerng/ci-runner-vm`, which the leg runs inside (issue #2223).
+  The box needs credentials for that private image (`/root/.docker/config.json`).
 - The guest SSH key (baked into the smoke images) at `/root/smoke-ssh-key`.
 - A pfSense CE qcow2 under `/root/images/pfsense/` (auto-pulled by `smoke-on-box.sh` if absent
   or stale vs the GHCR digest; set `SMOKE_GHCR_TOKEN` to authenticate the pull).
@@ -26,13 +28,13 @@ GitHub Actions. These are the things that cost real time to (re)learn; the CI wo
 The orchestrator leases a box and runs EVERYTHING on it — images, build, pytest:
 
 `PFB_BOXES` is the pool of ssh targets to lease from. **The current pool is `10.0.0.31`
-through `10.0.0.38` (eight boxes, ssh as `root`)** — copy the line below verbatim. Do not infer
+through `10.0.0.34` (four boxes, ssh as `root`)** — copy the line below verbatim. Do not infer
 the pool from anywhere else in the tree: `tests/shell/select_box_spec.sh` uses `10.0.0.23` and
 `10.0.0.24` as *fake* boxes for lease-token assertions, and a run pointed at those fails with
 `No route to host` and reads like the harness is broken.
 
 ```sh
-export PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34 root@10.0.0.35 root@10.0.0.36 root@10.0.0.37 root@10.0.0.38"
+export PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34"
 
 # Full smoke (marker=smoke, current HEAD):
 scripts/local-smoke.sh
@@ -105,10 +107,17 @@ tests collected) would fail that shard spuriously. `N` should stay at or under t
 
 1. `local-smoke.sh` leases one box from `PFB_BOXES` via `select-box.sh -- <bootstrap>`.
 2. On the box, `smoke-on-box.sh` (invoked by the bootstrap) runs in order:
-   - `git fetch` + `git checkout <REF>` (ref-stable bootstrap; re-execs itself at the new ref).
+   - `git sparse-checkout` (only `src`, `scripts`, `tests/smoke` — 13 MB of the 38 MB tree),
+     then `git fetch` + `git checkout FETCH_HEAD`. The ref is resolved HERE; the container
+     runs an already-resolved tree and never fetches.
    - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.
-   - `oras` digest-compare → pull pfSense + civm images to `/root/images/{pfsense,civm}` if stale.
-   - `sysctl net.ipv4.ip_unprivileged_port_start=53` + `pkill -9 -f qemu-system-x86_64`.
+   - `docker run` the leg inside `ci-runner-vm`, with `--device /dev/kvm` and
+     `--sysctl net.ipv4.ip_unprivileged_port_start=53`. Inside it, `oras` digest-compares
+     → pulls pfSense + civm images into `/root/images/{pfsense,civm}` (a shared store
+     bind-mounted from the host) if stale.
+   - `pkill -9 -f qemu-system-x86_64`. The port floor is set by the caller's `--sysctl`
+     flag, not in-script: `smoke-on-box.sh` now treats it as a precondition and refuses
+     to run when it is above 53, naming the flag that is missing.
    - `build-leg.sh` → `SMOKE_PKG`.
    - `run-smoke.sh --paths <P> --marker <M> --timeout <T> [--filter <K>]` — `<P>`/`<T>` derive
      from the marker (`scripts/lib/smoke-tier.sh`): a UI tier → `tests/smoke/ui` + 300s, else

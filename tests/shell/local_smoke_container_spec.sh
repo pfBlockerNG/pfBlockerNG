@@ -63,6 +63,13 @@ EOF
     cat "$CALLS_DIR"/* 2>/dev/null
   }
 
+  # Everything after the image reference is what runs INSIDE the container. Isolating it
+  # is what makes the ordering assertion robust: a reintroduced fetch cannot hide behind a
+  # different spelling if we assert over the whole in-container substring.
+  container_cmd() {
+    bootstrap "$@" | sed 's/.*ci-runner-vm:[0-9]*//'
+  }
+
   # ── the container invocation ─────────────────────────────────────────────── #
 
   It 'runs the leg inside the VM runner image'
@@ -127,11 +134,14 @@ EOF
     The output should include "--filter 'a and not b'"
   End
 
-  It 'does not re-fetch the ref inside the container'
-    # The bootstrap already checks out the requested ref on the box; the container runs an
-    # already-resolved tree. A second fetch inside would make the container decide which
-    # code runs and force the repo mount to be writable.
-    When call bootstrap --ref dummy
-    The output should not include 'PFB_ONBOX_REEXEC'
+  It 'resolves the ref on the box, before the container command begins'
+    # Checking for the absence of the retired PFB_ONBOX_REEXEC name proves nothing: a
+    # reintroduced `git fetch` inside the container would not mention it. Assert the
+    # ORDER instead -- every git operation belongs to the box-side prefix, so nothing
+    # after the image name may fetch or check out.
+    When call container_cmd --ref dummy
+    # No git operation of ANY spelling may appear in the in-container command.
+    The output should not include 'git'
+    The output should include 'scripts/smoke-on-box.sh'
   End
 End
