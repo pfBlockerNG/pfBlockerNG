@@ -33,7 +33,7 @@ jobs:
     name: Discover Top1M providers
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:2
+      image: ghcr.io/pfblockerng/ci-runner:3
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -75,7 +75,7 @@ jobs:
     needs: discover
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:2
+      image: ghcr.io/pfblockerng/ci-runner:3
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -121,7 +121,7 @@ jobs:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:2
+      image: ghcr.io/pfblockerng/ci-runner:3
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -197,7 +197,7 @@ jobs:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:2
+      image: ghcr.io/pfblockerng/ci-runner:3
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
