@@ -104,9 +104,10 @@ EOF
     # name keeps it out of the *.qcow2 glob and the digest bookkeeping.
     When call sh -c '
       . "$1"; shift
-      STUB_REMOTE_DIGEST=sha256:new pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      STUB_REMOTE_DIGEST=sha256:new pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense || exit 1
       cat "$STUB_CWD_LOG"
     ' sh "$LIB" "$IMGDIR"
+    The status should eq 0
     The output should include '/images/pfsense/.staging.'
     The stderr should be present
   End

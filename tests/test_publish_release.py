@@ -651,6 +651,7 @@ class TargetResolutionTests(_TempDirTestCase):
         digests = _populate_assets_dir(
             assets_dir, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
         )
+        twin_digests: list[str] = []
         for row, filler in ((ROW_PLUS_03, b"built-by-leg-one"), (ROW_PLUS_07, b"built-by-leg-two")):
             declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
             _path, digest = _wrap_dependency_pkg(
@@ -662,6 +663,7 @@ class TargetResolutionTests(_TempDirTestCase):
                 payload={"filler.bin": filler},
             )
             digests[declared] = digest
+            twin_digests.append(digest)
         (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
 
         with self.assertRaises(pr.DestinationConflictError) as ctx:
@@ -672,6 +674,9 @@ class TargetResolutionTests(_TempDirTestCase):
                 tag="v4.0.0.b1",
             )
         self.assertIn("different bytes", str(ctx.exception))
+        # The operator-facing message names both builds — pin both digests.
+        for digest in twin_digests:
+            self.assertIn(f"sha256={digest}", str(ctx.exception))
 
     @_requires_engine
     def test_same_dependency_renamed_per_row_with_identical_bytes_publishes(self) -> None:

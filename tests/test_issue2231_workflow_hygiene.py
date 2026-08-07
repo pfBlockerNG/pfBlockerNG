@@ -1,23 +1,15 @@
 """Workflow-file hygiene gates (issue #2231).
 
-Successor to the retired ``test_workflow_container_migration.py`` (removed with
-this change), carrying the two invariants that file could never see plus the one
-surface it never scanned:
-
-1. GitHub's workflow parser REJECTS a YAML mapping with a duplicate key and
-   silently disables the workflow — it shows in the Actions UI under its file
-   path instead of its name, and its triggers (including ``schedule:``) never
-   fire. PyYAML's default loader keeps one duplicate and hides the breakage, so
-   every repo-side check stayed green while five scheduled workflows were dead.
-2. GitHub Actions never shell-expands ``env:`` map VALUES — only ``${{ }}``
-   expressions are substituted there. A bare ``$GITHUB_*``/``$RUNNER_*`` in an
-   env-map value reaches the job as a literal dollar-string; paths derived from
-   those variables belong in ``run:`` bodies, where a shell actually expands
-   them (and where the container-translated value is the correct one).
-3. ``scripts/local-smoke.sh`` must run the same ci-runner image series the
-   workflows pin (``.github/docker/VERSION``): the local-smoke container spec
-   strips the tag before asserting and the workflow-side gates scan only
-   ``.github/workflows/``, so the bootstrap's tag had no drift gate at all.
+1. No duplicate mapping keys: GitHub's workflow parser rejects the file and
+   silently disables the workflow (path shown instead of name, triggers —
+   including ``schedule:`` — never fire); PyYAML's default loader keeps one
+   duplicate, so only a duplicate-rejecting load can see this.
+2. No bare ``$GITHUB_*``/``$RUNNER_*`` in ``env:`` map values: GitHub Actions
+   substitutes only ``${{ }}`` expressions there, never shell variables — such
+   a value reaches the job as a literal dollar-string. Paths derived from
+   runner variables belong in ``run:`` bodies.
+3. ``scripts/local-smoke.sh`` runs the same ci-runner image series the
+   workflows pin (``.github/docker/VERSION``) — no other gate scans that file.
 """
 
 from __future__ import annotations
@@ -32,8 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _workflow_files() -> list[Path]:
-    files = sorted((ROOT / ".github/workflows").glob("*.yml"))
-    files += sorted((ROOT / ".github/actions").glob("*/action.yml"))
+    workflows = ROOT / ".github/workflows"
+    files = sorted([*workflows.glob("*.yml"), *workflows.glob("*.yaml")])
+    actions = ROOT / ".github/actions"
+    files += sorted([*actions.glob("*/action.yml"), *actions.glob("*/action.yaml")])
     assert files, "no workflow files found — wrong ROOT?"
     return files
 
