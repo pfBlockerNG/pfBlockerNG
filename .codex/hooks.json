@@ -43,7 +43,7 @@
           },
           {
             "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/check_retired_tokens.py\" 7f671b73835f8e8c39cdb244489cdcbc471ecdc8a4cc361a5d8de4680284b97a && exec python3 \"$root/scripts/check_retired_tokens.py\" --claude-hook",
+            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/check_retired_tokens.py\" eed470d0bf0d1f4b228a69ce44e285e7153082d26cf0b71f38e1701aa72ae6f9 && exec python3 \"$root/scripts/check_retired_tokens.py\" --claude-hook",
             "timeout": 30,
             "statusMessage": "Checking retired tokens"
           }
