@@ -95,6 +95,21 @@ STUBEOF
     The status should equal 1
   End
 
+  It 'parses every flag, not just the ones used before the precondition'
+    # The precondition exits before --abi/--channel/--marker/--filter/--shard are USED, so
+    # without the config echo their parsing is unobservable and a broken flag reads as a
+    # leg that quietly ran the default.
+    When run sh "$SCRIPT" --ref r --abi FreeBSD:16:amd64 --channel testing --marker ui \
+        --filter 'a and b' --shard 2 --shard-total 5 --no-two-vm
+    The stderr should include 'abi=FreeBSD:16:amd64'
+    The stderr should include 'channel=testing'
+    The stderr should include 'marker=ui'
+    The stderr should include 'filter=a and b'
+    The stderr should include 'shard=2/5'
+    The stderr should include 'two-vm=no'
+    The status should equal 1
+  End
+
   It 'rejects an unknown flag instead of silently ignoring it'
     # A typo in the docker command would otherwise be dropped on the floor and the leg
     # would run with defaults, producing a green result for the wrong configuration.

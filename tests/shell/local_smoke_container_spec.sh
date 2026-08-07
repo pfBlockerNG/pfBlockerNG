@@ -67,7 +67,10 @@ EOF
   # is what makes the ordering assertion robust: a reintroduced fetch cannot hide behind a
   # different spelling if we assert over the whole in-container substring.
   container_cmd() {
-    bootstrap "$@" | sed 's/.*ci-runner-vm:[0-9]*//'
+    # index() finds the FIRST occurrence. `sed 's/.*ci-runner-vm:[0-9]*//'` is greedy and
+    # strips through the LAST one, so a second mention of the image would hide everything
+    # before it -- including a reintroduced fetch.
+    bootstrap "$@" | awk '{ i = index($0, "ci-runner-vm:"); if (i) print substr($0, i) }'
   }
 
   # ── the container invocation ─────────────────────────────────────────────── #
