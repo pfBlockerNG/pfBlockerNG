@@ -238,7 +238,7 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
           DESTINATIONS: ${{ needs.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
-          ASSETS_DIR: ${{ runner.temp }}/assets
+          ASSETS_DIR: $RUNNER_TEMP/assets
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
           BASE_URL: https://pfblockerng.github.io/pkg
         run: sh scripts/publish-pkg-repo.sh
