@@ -49,7 +49,6 @@ symlink; a provider-specific runtime change stays in that provider's adapter.
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
-| `PreToolUse` retired-token notice | `.codex/hooks.json` | Reuses `check_retired_tokens.py --claude-hook` for the same supported `Bash` event surface. |
 | Session and delegate activation | `.codex/hooks.json` | Runs branch synchronization and injects ponytail + caveman plus the Token Savior recall preference on startup/resume/clear/compact and every sub-agent start. |
 | Token Savior MCP and capture hook | `.codex/config.toml` plus `.codex/hooks.json` | Uses the same pinned upstream Token Savior launcher and capture wrapper as Claude, with the client label set to `codex`; Bash compaction and rewriting retain upstream's opt-in defaults. |
 | Ponytail and Caveman | Plugin + repository hooks | Ponytail ships as the local Codex plugin; repository hooks guarantee both modes for root sessions and sub-agents. |

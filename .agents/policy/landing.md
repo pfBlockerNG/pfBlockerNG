@@ -269,7 +269,7 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   every scan root), never from the finding's wording or the one file it names; paste
   the enumeration into the audit/reply so the tick is auditable. When a change
   *retires* a literal token, a zero-hit tree grep for it is part of done (the #1047
-  class; mechanical backstop `scripts/check_retired_tokens.py`, #1059).
+  class).
 - **A fix that changes behaviour carries its own test** (fail-before/pass-after per
   repo test policy, including `www/` coverage per `testing.md`). Pure comment/lint
   nits need none.

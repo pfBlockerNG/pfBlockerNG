@@ -44,7 +44,6 @@ def _load(name: str) -> ModuleType:
 
 car = _load("check_agent_roles")
 ccb = _load("check_context_budget")
-crt = _load("check_retired_tokens")
 
 # One filename stem per escape class git applies, plus an ASCII control. The
 # non-ASCII stem is the class the earlier fix closed — it must stay closed.
@@ -211,24 +210,6 @@ def test_version_literals_reads_a_hostile_path(tmp_path: Path, klass: str) -> No
     # rc 1 alone would also cover an uncaught crash; the report line is what
     # proves the gate reached a verdict about this file.
     assert "Hardcoded pfSense/FreeBSD version literal" in result.stderr, result.stderr
-
-
-@pytest.mark.parametrize("klass", list(HOSTILE_STEMS))
-def test_retired_tokens_maps_a_hostile_path_to_its_real_name(
-    tmp_path: Path, klass: str, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The diff parser keys added lines by the real path, not the quoted header.
-
-    A path that never enters the per-path maps contributes no removed lines, so
-    its retirement is invisible to the straggler search. Driven through the
-    tool's OWN diff command so the assertion covers its transport, not a
-    hand-rolled one.
-    """
-    rel = f"scripts/{HOSTILE_STEMS[klass]}.sh"
-    repo = _scratch_repo(tmp_path, {rel: "#!/bin/sh\necho retired_probe\n"})
-    monkeypatch.chdir(repo)
-    _, added = crt._parse_diff(crt.unified_diff(["devel...HEAD"]))
-    assert rel in added, f"{klass}: parsed paths {sorted(added)} do not include {rel!r}"
 
 
 # ── --name-only listings ─────────────────────────────────────────────────────

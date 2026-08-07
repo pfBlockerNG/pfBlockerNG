@@ -625,10 +625,10 @@ def test_indirect_registered_script_at_other_event_fails_closed(tmp_path: Path) 
     assert len(violations) == 1 and "cannot validate" in violations[0], violations
 
 
-def test_indirect_registered_retired_tokens_compound_command_clean(tmp_path: Path) -> None:
-    command = 'cd "${CLAUDE_PROJECT_DIR:-.}" && python3 scripts/check_retired_tokens.py --claude-hook || true'
-    root = _indirect_root(tmp_path, command, event="PreToolUse")
-    _write(root, "scripts/check_retired_tokens.py", "REPORT_KEY = 'additionalContext'\n")
+def test_indirect_registered_producer_compound_command_clean(tmp_path: Path) -> None:
+    command = 'cd "${CLAUDE_PROJECT_DIR:-.}" && sh scripts/ts-hook.sh capture || true'
+    root = _indirect_root(tmp_path, command, event="PostToolUse")
+    _write(root, "scripts/ts-hook.sh", "REPORT_KEY = 'additionalContext'\n")
     assert ccb.check_indirect_producers(root) == []
 
 

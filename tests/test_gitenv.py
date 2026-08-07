@@ -30,7 +30,6 @@ _GIT_HELPER_MODULES = (
     "tests.test_agent_roles_check",
     "tests.test_comment_narration_check",
     "tests.test_release_tag_after_verify",
-    "tests.test_retired_token_check",
     "tests.test_version_literal_check",
 )
 

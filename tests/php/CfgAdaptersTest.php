@@ -168,7 +168,7 @@ final class CfgAdaptersTest extends TestCase
 
 	// Scenario B (PfbLenient) retired by issue #1887 — the enum merged into PfbToggle,
 	// whose Scenario A now covers the shared toggle vocabulary and fallback.
-	// pfb_cfg_lenient_read()/write() are gone; the retired-token grep guards their return.
+	// pfb_cfg_lenient_read()/write() are gone; a tree grep is what guards their return.
 
 	// -----------------------------------------------------------------------
 	// Scenario C — PfbIdnMode

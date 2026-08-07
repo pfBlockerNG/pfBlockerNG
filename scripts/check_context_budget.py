@@ -92,7 +92,6 @@ SETTINGS = ".claude/settings.json"
 # that emits a runtime additionalContext diagnostic — a known, first-party delegatee.
 DYNAMIC_CAPSULE_PRODUCERS = {
     ("SessionStart", ".claude/hooks/session-branch-sync.sh"),
-    ("PreToolUse", "scripts/check_retired_tokens.py"),
     ("PostToolUse", "scripts/ts-hook.sh"),
 }
 

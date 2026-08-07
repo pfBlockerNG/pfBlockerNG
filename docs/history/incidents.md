@@ -55,8 +55,10 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
   re-enumerate a finding's class from the source, tree-wide
   (`.agents/policy/landing.md`, Applying fixes).
 - **PR #1005 / #1008 / #1047** — a token retirement removed all 29 occurrences in one file
-  and left 9 in another → a retirement's zero-hit tree grep is part of done; mechanical
-  backstop `scripts/check_retired_tokens.py` (#1059) (`landing.md`; `coding.md` linting).
+  and left 9 in another → a retirement's zero-hit tree grep is part of done, by hand
+  (`landing.md`). The `check_retired_tokens.py` backstop built for it (#1059) never left
+  warn-only and was removed on 2026-08-07 (owner call: the heuristic never earned promotion
+  to blocking, and its standing findings went unactioned).
 - **#941** — two real re-review bugs existed only in a session transcript until the
   post-merge audit → a downgraded-but-real finding still lands as a tracking issue before
   the merge (`landing.md`).
@@ -84,8 +86,8 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
   one-line regression breadcrumb (`coding.md`, Comments).
 - **#1000** — diff-scoped `--staged`/`--diff` checker modes for ad-hoc and CI-PR invocation
   (`coding.md`, linting).
-- **#1059** — the retired-token guard designed as the #1047-class mechanical backstop
-  (`coding.md`, linting).
+- **#1059** — the retired-token guard built as the #1047-class mechanical backstop;
+  removed 2026-08-07 without ever being promoted past warn-only.
 - **ADR-29 rebase incident** — a stale base re-ran already-fixed bugs into a phantom
   regression → rebase onto the latest base before every push/dispatch (`git.md`).
 - **#930** — section writes bypassed normalisation → section writes are normalised too

@@ -177,7 +177,6 @@ hook_commands = [
 for relative in (
     ".claude/hooks/session-branch-sync.sh",
     "scripts/claude-bash-guard.sh",
-    "scripts/check_retired_tokens.py",
     "scripts/ts-hook.sh",
 ):
     digest = hashlib.sha256((root / relative).read_bytes()).hexdigest()
