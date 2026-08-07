@@ -51,6 +51,7 @@ RUN curl -fsSLo /tmp/oras.tar.gz \
 # install finds it already present.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 COPY tests/smoke/requirements.txt /opt/smoke-requirements.txt
+COPY .github/docker/check-chromium.py /tmp/check-chromium.py
 # `--with-deps` shells out to apt itself, so the package lists have to be present in THIS
 # layer — every earlier layer drops them to keep the image small.
 RUN apt-get update \
@@ -67,5 +68,5 @@ RUN set -eu; \
     ssh -V; \
     dig -v; \
     python3 -c 'import dns.resolver, playwright, pytest, requests'; \
-    python3 -c 'from playwright.sync_api import sync_playwright; \
-sync_playwright().__enter__().chromium.executable_path'
+    python3 /tmp/check-chromium.py; \
+    rm -f /tmp/check-chromium.py
