@@ -1,0 +1,152 @@
+---
+# CI runner images (issue #2214) — builds and publishes the two container images every
+# other workflow runs its jobs inside:
+#
+#   ghcr.io/pfblockerng/ci-runner:<VERSION>      non-VM jobs (Python, PHP, Node, linters)
+#   ghcr.io/pfblockerng/ci-runner-vm:<VERSION>   VM jobs (the above + qemu, oras, Chromium)
+#
+# The published tag is IMMUTABLE by construction: this workflow refuses to push a tag the
+# registry already carries, so a Dockerfile change must bump .github/docker/VERSION.
+# Without that, editing a Dockerfile would silently swap the toolchain under every
+# already-merged workflow that pins the tag — a gate verdict change with no diff.
+#
+# A pull request builds both images (including their in-Dockerfile self-checks) but never
+# pushes: publishing the shared tag from a branch would hand every other open PR a
+# toolchain built from this one.
+
+name: CI runner images
+
+on:
+  push:
+    branches: [devel, main]
+    paths:
+      - .github/docker/**
+      - .github/workflows/ci-images.yml
+      - tests/smoke/requirements.txt
+  pull_request:
+    paths:
+      - .github/docker/**
+      - .github/workflows/ci-images.yml
+      - tests/smoke/requirements.txt
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: ci-images-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # GHCR namespaces are lowercase; github.repository_owner is not, and expressions have
+  # no lowercase function. The literal is asserted against the workflows that consume it
+  # by tests/test_ci_runner_images.py.
+  IMAGE_REPO: ghcr.io/pfblockerng
+
+jobs:
+  build:
+    name: Build and publish the CI runner images
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Read the image tag series
+        id: version
+        run: |
+          version="$(tr -d '[:space:]' < .github/docker/VERSION)"
+          case "$version" in
+            ''|*[!0-9]*) echo ".github/docker/VERSION must be a bare integer, got '$version'"; exit 1 ;;
+          esac
+          echo "tag=$version" >> "$GITHUB_OUTPUT"
+          echo "Building ci-runner / ci-runner-vm tag $version"
+
+      - name: Decide whether this run publishes
+        # Only devel/main (and a manual dispatch on them) publish. A pull_request build is
+        # a verification build: it proves the Dockerfiles still build and their self-checks
+        # still pass, and stops there.
+        id: publish
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ] && \
+             { [ "${{ github.ref }}" = "refs/heads/devel" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; }; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "verification build only (event=${{ github.event_name }} ref=${{ github.ref }}); nothing will be pushed"
+          fi
+
+      - name: Log in to GHCR
+        if: steps.publish.outputs.enabled == 'true'
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Refuse to overwrite a published tag
+        # The tag is what every other workflow pins to. If it already exists, this commit
+        # changed a Dockerfile without bumping the series — fail here rather than mutate
+        # the toolchain of merged workflows.
+        if: steps.publish.outputs.enabled == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          clash=''
+          for image in ci-runner ci-runner-vm; do
+            if docker manifest inspect "${IMAGE_REPO}/${image}:${TAG}" >/dev/null 2>&1; then
+              clash="$clash ${image}:${TAG}"
+            fi
+          done
+          if [ -n "$clash" ]; then
+            echo "already published:$clash"
+            echo "published tags are immutable — bump .github/docker/VERSION and re-run"
+            exit 1
+          fi
+
+      - name: Build ci-runner
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          docker build \
+            --file .github/docker/ci-runner.Dockerfile \
+            --tag "${IMAGE_REPO}/ci-runner:${TAG}" \
+            .
+
+      - name: Build ci-runner-vm
+        # BASE_IMAGE points at the image built in the step above (present in the local
+        # daemon, not yet pushed), so the VM image is built from the exact bytes that get
+        # published as its base — never a stale registry copy of the same tag.
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          docker build \
+            --file .github/docker/ci-runner-vm.Dockerfile \
+            --build-arg "BASE_IMAGE=${IMAGE_REPO}/ci-runner:${TAG}" \
+            --tag "${IMAGE_REPO}/ci-runner-vm:${TAG}" \
+            .
+
+      - name: Report the baked toolchain
+        # The Dockerfiles already fail their own build when a tool cannot run; this step
+        # puts the resulting versions in the run log so a toolchain change is visible in
+        # the job output, not only in the diff.
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          docker run --rm "${IMAGE_REPO}/ci-runner:${TAG}" sh -c '
+            python3 --version; php8.3 -v | head -n1; php8.5 -v | head -n1
+            node --version; composer --version
+            shellcheck --version | sed -n 3p; echo "shellspec $(shellspec --version)"
+            kcov --version'
+          docker run --rm "${IMAGE_REPO}/ci-runner-vm:${TAG}" sh -c '
+            qemu-system-x86_64 --version | head -n1; oras version | head -n2'
+
+      - name: Push both images
+        if: steps.publish.outputs.enabled == 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          docker push "${IMAGE_REPO}/ci-runner:${TAG}"
+          docker push "${IMAGE_REPO}/ci-runner-vm:${TAG}"

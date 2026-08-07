@@ -1,0 +1,25 @@
+# Python toolchain baked into the CI runner image (.github/docker/ci-runner.Dockerfile).
+#
+# One line per package the non-VM workflow jobs install today. ruff and dnspython carry
+# the repo's OWN pins (test.yml / tests/smoke/requirements.txt) and
+# tests/test_ci_runner_images.py fails if either drifts from its source of truth. The
+# rest were floating `pip install <name>` calls whose verdict tracked whatever PyPI
+# served that morning; they are frozen here at the versions CI resolved when the image
+# was introduced, so a gate now moves in a reviewable diff.
+
+# Lint + format gate (pin restated from test.yml's ruff job).
+ruff==0.16.0
+
+# Type gate for tests/ (config in pyproject.toml).
+mypy==2.3.0
+
+# The pytest matrix leg and its informational branch-coverage run.
+pytest==9.1.1
+pytest-cov==7.1.0
+
+# Import-time deps that decide whether tests RUN or importorskip-skip:
+# dnspython is the shard-splitter's end-to-end correctness gate (issue #861) and is
+# pinned to the same version tests/smoke/requirements.txt installs; charset-normalizer
+# lets the issue #1797 feed-encoding converter test execute.
+dnspython==2.8.0
+charset-normalizer==3.4.9
