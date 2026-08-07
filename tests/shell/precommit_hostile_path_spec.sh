@@ -63,6 +63,7 @@ Describe '.githooks/pre-commit with a C-quoted path'
       'has"quote'
       'has\backslash'
       "$(printf 'has\ttab')"
+      "$(printf 'has\nnewline')"
       "$(printf 'has\001control')"
       'café'
     End
