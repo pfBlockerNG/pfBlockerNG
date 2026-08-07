@@ -64,8 +64,8 @@ _SHARD=0       # 0-based shard index, forwarded to run-smoke.sh (issue #797)
 _SHARD_TOTAL=1 # N=1 = no sharding (default)
 
 # Testability seam (mirrors local-smoke.sh's PFB_SELECT_BOX): the box always has the repo at
-# the fixed path, but tests/shell/smoke_on_box_channel_spec.sh points this at a fixture repo
-# so the arg-parse + re-exec hop can be exercised without a box.
+# the fixed path, but tests/shell/smoke_on_box_spec.sh points this at a fixture repo so the
+# arg-parse can be exercised without a box.
 REPO_ROOT="${PFB_ONBOX_REPO_ROOT:-/root/pfBlockerNG}"
 
 # ── Scrub inherited GIT_* context (via shared lib — ADR-47 chokepoint) ─── #
@@ -123,7 +123,13 @@ printf 'smoke-on-box: config abi=%s channel=%s marker=%s filter=%s shard=%s/%s t
 # caller's `docker run --sysctl net.ipv4.ip_unprivileged_port_start=53`: the sysctl is
 # namespaced, and a container cannot set it on the host. Fail loudly rather than let the
 # mock DNS fail to bind halfway through a run.
-_floor="$(cat /proc/sys/net/ipv4/ip_unprivileged_port_start 2>/dev/null || echo 1024)"
+# Seam: the spec pins this at a fixture file so the gate fires deterministically. Without
+# it the examples depend on the AMBIENT floor, and on a host that already has it lowered --
+# which is exactly what this script's own container is -- the run would sail past the gate
+# and reach the real host prep, whose `pkill -9 -f qemu-system-x86_64` would kill a
+# concurrent leg's VMs on a shared box.
+_floor_file="${PFB_ONBOX_PORT_FLOOR_FILE:-/proc/sys/net/ipv4/ip_unprivileged_port_start}"
+_floor="$(cat "$_floor_file" 2>/dev/null || echo 1024)"
 if [ "$_floor" -gt 53 ]; then
     printf 'smoke-on-box: ip_unprivileged_port_start is %s; the caller must pass\n' "$_floor" >&2
     printf 'smoke-on-box:   --sysctl net.ipv4.ip_unprivileged_port_start=53\n' >&2
