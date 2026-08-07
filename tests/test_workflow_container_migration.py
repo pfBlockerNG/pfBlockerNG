@@ -96,6 +96,24 @@ def test_vm_jobs_target_the_self_hosted_fleet_with_kvm() -> None:
     assert not offenders, "\n  ".join(offenders)
 
 
+def test_every_container_runs_an_init_process() -> None:
+    """Without an init, PID 1 is the container's sleep command, which never reaps. A test
+    that kills a process group then asserts the descendants are gone sees unreaped zombies
+    and reports them as still present -- reproduced exactly against GitHub's container
+    model (PID 1 = `tail -f /dev/null`, steps via `docker exec`): 2 failed without --init,
+    9 passed with it."""
+    offenders: list[str] = []
+    for path in _workflows():
+        doc = yaml.safe_load(path.read_text(encoding="utf-8"))
+        for name, job in _real_jobs(doc).items():
+            container = job.get("container")
+            if not (isinstance(container, dict) and "ci-runner" in str(container.get("image", ""))):
+                continue
+            if "--init" not in container.get("options", ""):
+                offenders.append(f"{path.name}::{name} runs without --init; orphans are never reaped")
+    assert not offenders, "\n  ".join(offenders)
+
+
 def test_no_workflow_still_provisions_a_baked_tool() -> None:
     offenders: list[str] = []
     for path in _workflows():
