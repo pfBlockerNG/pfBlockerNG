@@ -34,11 +34,11 @@ else
 	# Three-dot: files changed on HEAD since the merge-base with BASE_REF.
 	# Tolerate a missing/unfetched base ref — an empty diff routes the caller to
 	# the safe full-marker path rather than erroring the run.
-	# -z + quotePath=false, then tr: a path git C-quotes (literal " \ tab) would
-	# otherwise reach the marker mapping below wrapped in quotes and match no
-	# rule (issue #2212). An embedded newline still splits, as elsewhere in the
-	# POSIX-sh consumers; the safe full-marker path is the backstop.
-	changed="$(git -c core.quotePath=false diff --name-only -z "${base}...HEAD" 2>/dev/null | tr '\0' '\n' || true)"
+	# -z: a path git C-quotes (literal " \ tab) would otherwise reach the marker
+	# mapping below wrapped in quotes and match no rule (issue #2212). The
+	# newline is folded to \001 first so a newline inside a pathname cannot
+	# become a record separator and forge a second path that does match.
+	changed="$(git diff --name-only -z "${base}...HEAD" 2>/dev/null | tr '\n' '\001' | tr '\0' '\n' || true)"
 fi
 
 # Build the OR expression in a subshell fed by the pipe; the trailing printf runs

@@ -47,7 +47,13 @@ usage() {
 git_list() {
 	# First run decides: its stderr is left visible so a failure says why.
 	git -C "$worktree" "$@" >/dev/null || return 2
-	git -C "$worktree" "$@" | tr '\0' '\n'
+	# A newline INSIDE a pathname would otherwise become a record separator here,
+	# splitting one changed path into two -- and the tail can name a real,
+	# unchanged file, which then gets linted and passes while the changed file is
+	# never seen. That forged green is worse than the skip this all started from,
+	# so the newline is folded to \001 first: the record stays whole and carries a
+	# byte no gate mapping matches, and the refusal below catches it.
+	git -C "$worktree" "$@" | tr '\n' '\001' | tr '\0' '\n'
 }
 
 gates_for() {

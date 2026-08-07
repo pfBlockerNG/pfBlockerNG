@@ -49,15 +49,17 @@ skip() { skipped="${skipped} $1"; }
 # --- Stage classification: run a language's gates ONLY when this commit stages a
 #     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
 #     deletion stages nothing to lint.) Nothing staged -> nothing to do. ---
-#     -z + tr: git C-quotes a path holding a literal " \ or tab, and the quoted
-#     form ends `.inc"` rather than `.inc`, so the suffix tests below match
-#     nothing and the file's gates are skipped (issue #2212). A path containing
-#     a NEWLINE still splits here — representing one needs a NUL-aware consumer,
-#     which POSIX sh has no clean read for; CI's own Ruff/PHPCS/PHPStan jobs run
-#     unconditionally and remain the backstop for that residual case.
-staged_all=$(git -c core.quotePath=false diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n')
+#     -z: git C-quotes a path holding a literal " \ or tab, and the quoted form
+#     ends `.inc"` rather than `.inc`, so the suffix tests below match nothing
+#     and the file's gates are skipped (issue #2212). The newline is folded to
+#     \001 BEFORE the NULs become newlines: otherwise a newline inside a pathname
+#     becomes a record separator, one changed path arrives as two, and the tail
+#     can name a real unchanged file whose gates then run and pass while the
+#     changed file is never seen. \001 matches no suffix test, so such a path
+#     falls through to CI's unconditional Ruff/PHPCS/PHPStan jobs instead.
+staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\n' '\001' | tr '\0' '\n')
 [ -n "$staged_all" ] || exit 0
-staged=$(git -c core.quotePath=false diff --cached --name-only -z --diff-filter=ACMR | tr '\0' '\n')
+staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\n' '\001' | tr '\0' '\n')
 staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
 staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1

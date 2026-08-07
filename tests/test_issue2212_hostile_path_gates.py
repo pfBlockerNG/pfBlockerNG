@@ -335,6 +335,47 @@ def test_run_gates_refuses_a_hostile_path_instead_of_skipping_it(tmp_path: Path)
     )
 
 
+def test_a_newline_in_a_path_cannot_forge_a_different_one(tmp_path: Path) -> None:
+    """A path holding a newline must never be split into other paths.
+
+    ``tr '\\0' '\\n'`` makes a newline inside a pathname indistinguishable from
+    the record separator, so ``ignored\\nsrc/existing.php`` arrives as two
+    records. The second names a real, UNCHANGED file: the gate then lints that
+    file, passes, and never looks at the changed one. That is a manufactured
+    green, strictly worse than the skip issue #2212 started from.
+    """
+    repo = _repo(tmp_path)
+    (repo / "src").mkdir()
+    (repo / "src" / "existing.php").write_text("<?php echo 1;\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "existing", cwd=repo)
+    _git("branch", "devel", cwd=repo)
+
+    forged = repo / "ignored\nsrc"
+    forged.mkdir()
+    (forged / "existing.php").write_text("<?php bad\n", encoding="utf-8")
+    _git("add", "-A", cwd=repo)
+    _git("commit", "-m", "forge", cwd=repo)
+
+    result = subprocess.run(
+        [
+            "sh",
+            str(ROOT / "scripts" / "agent" / "run-gates.sh"),
+            "--worktree",
+            str(repo),
+            "--diff",
+            "devel",
+            "--plan",
+            "--allow-missing",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert "php -l src/existing.php" not in result.stdout, (
+        f"a newline path forged a gate for an unchanged file; plan was {result.stdout!r}"
+    )
+
+
 def test_run_gates_fails_closed_when_git_itself_fails(tmp_path: Path) -> None:
     """A git failure aborts the run; it never reports GATES: PASS on no files.
 
