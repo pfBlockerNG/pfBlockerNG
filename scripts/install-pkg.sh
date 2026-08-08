@@ -82,6 +82,39 @@ ssh_t() {
     ssh ${SSH_OPTS} "$SSH_TARGET" /bin/sh -c "$_sq"
 }
 
+
+# issue #2237: a first-boot pfSense runs its own pkg(8) activity, and `pkg add`
+# then dies on "Cannot get an exclusive lock on a database" (observed on the
+# containerized runner fleet, run 31229687348). Retry ONLY that signature,
+# bounded per the waits policy: hard attempt cap, loud DISTINCT give-up. Any
+# other pkg-add failure (e.g. "Missing dependency") stays immediate — see the
+# header: those mean a bad image/dep set, and retrying would just mask them.
+# Seams (spec-only): PFB_INSTALL_PKG_RETRY_MAX / PFB_INSTALL_PKG_RETRY_DELAY.
+PKG_LOCK_RETRY_MAX="${PFB_INSTALL_PKG_RETRY_MAX:-12}"
+PKG_LOCK_RETRY_DELAY="${PFB_INSTALL_PKG_RETRY_DELAY:-5}"
+
+pkg_add_lock_retry() {
+    _pkg_remote=$1
+    _try=1
+    while true; do
+        _rc=0
+        _out=$(ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${_pkg_remote}'" 2>&1) || _rc=$?
+        if [ -n "$_out" ]; then printf '%s\n' "$_out"; fi
+        if [ "$_rc" -eq 0 ]; then return 0; fi
+        case "$_out" in
+            *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
+            *) return "$_rc" ;;
+        esac
+        if [ "$_try" -ge "$PKG_LOCK_RETRY_MAX" ]; then
+            echo "install-pkg: guest pkg database still locked after ${PKG_LOCK_RETRY_MAX} attempts — giving up (issue #2237)" >&2
+            return "$_rc"
+        fi
+        echo "install-pkg: guest pkg database locked (boot-time pkg activity); retry ${_try}/${PKG_LOCK_RETRY_MAX} in ${PKG_LOCK_RETRY_DELAY}s" >&2
+        _try=$((_try + 1))
+        sleep "$PKG_LOCK_RETRY_DELAY"
+    done
+}
+
 REMOTE="/tmp/$(basename "$PKGFILE")"
 
 # issue #1806 D2: install any SMOKE_DEP_PKGS FIRST, in the given order. `set -eu`
@@ -95,7 +128,7 @@ for _dep in ${SMOKE_DEP_PKGS:-}; do
     # shellcheck disable=SC2086
     scp ${SCP_OPTS} "$_dep" "${SSH_TARGET}:${_dep_remote}"
     echo "==> pkg add ${_dep_remote} (dep, from SMOKE_DEP_PKGS)"
-    ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${_dep_remote}'"
+    pkg_add_lock_retry "$_dep_remote"
 done
 
 echo "==> Copying $(basename "$PKGFILE") to ${SSH_TARGET}:${REMOTE}"
@@ -107,7 +140,7 @@ scp ${SCP_OPTS} "$PKGFILE" "${SSH_TARGET}:${REMOTE}"
 # pfBlockerNG's RUN_DEPENDS (convention), so this runs offline and then executes
 # the package's POST-INSTALL hooks. A "Missing dependency" error here = bad image.
 echo "==> pkg add ${REMOTE} (deps pre-baked; offline)"
-ssh_t "env ASSUME_ALWAYS_YES=yes pkg add '${REMOTE}'"
+pkg_add_lock_retry "$REMOTE"
 
 # POST-INSTALL restarts Unbound asynchronously; wait for it before the caller
 # queries the resolver (see feedback: poll the real readiness signal).

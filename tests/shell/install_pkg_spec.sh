@@ -45,6 +45,22 @@ printf '%s\n' "$_a" >> "$SSH_LOG"
 case "$_a" in
     *unbound-control*) exit 0 ;;
 esac
+# Lock mode (issue #2237): while $WORK/lock.remaining holds N > 0, each pkg add
+# decrements it and fails with the REAL guest lock signature (observed verbatim
+# in run 31229687348) -- the transient/persistent lock cases drive this.
+case "$_a" in
+    *"pkg add"*)
+        if [ -f "${WORK}/lock.remaining" ]; then
+            _n=$(cat "${WORK}/lock.remaining")
+            if [ "$_n" -gt 0 ]; then
+                echo $((_n - 1)) > "${WORK}/lock.remaining"
+                echo "pkg: Package database is busy while closing!" >&2
+                echo "pkg: Cannot get an exclusive lock on a database, it is locked by another process" >&2
+                exit 1
+            fi
+        fi
+        ;;
+esac
 case "$_a" in
     *"${FAIL_PKG_ADD_MATCH:-__pfb_never_match__}"*) exit 1 ;;
 esac
@@ -113,6 +129,46 @@ SCPEOF
     The contents of file "$SCP_LOG" should include "$DEP1"
     The contents of file "$SCP_LOG" should not include "$DEP2"
     The contents of file "$SCP_LOG" should not include "$PKGFILE"
+    The result of function pkg_add_count should equal 1
+  End
+
+  # ── issue #2237: the guest pkg database can be locked by first-boot pkg activity ── #
+
+  It 'retries through a transient guest pkg-database lock and installs'
+    # The defect: one boot-time lock collision failed the whole deploy (run
+    # 31229687348). Two locked attempts then a free database must succeed.
+    echo 2 > "${WORK}/lock.remaining"
+    PFB_INSTALL_PKG_RETRY_DELAY=0
+    export PFB_INSTALL_PKG_RETRY_DELAY
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    # 2 locked attempts + the succeeding one, all for the same branch pkg.
+    The result of function pkg_add_count should equal 3
+    The stderr should include 'retry 1/'
+    The stderr should include 'retry 2/'
+  End
+
+  It 'gives up loudly after the bounded retry cap when the lock never clears'
+    echo 99 > "${WORK}/lock.remaining"
+    PFB_INSTALL_PKG_RETRY_DELAY=0
+    PFB_INSTALL_PKG_RETRY_MAX=3
+    export PFB_INSTALL_PKG_RETRY_DELAY PFB_INSTALL_PKG_RETRY_MAX
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    The result of function pkg_add_count should equal 3
+    # The give-up is DISTINCT from an ordinary pkg-add failure and names the cap.
+    The stderr should include 'still locked after 3 attempts'
+    The stderr should include 'issue #2237'
+    The stdout should include 'Cannot get an exclusive lock'
+  End
+
+  It 'never retries a non-lock pkg-add failure'
+    FAIL_PKG_ADD_MATCH="$(basename "$PKGFILE")"
+    PFB_INSTALL_PKG_RETRY_DELAY=0
+    export FAIL_PKG_ADD_MATCH PFB_INSTALL_PKG_RETRY_DELAY
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    # A missing-dependency-style failure is not a lock: exactly one attempt.
     The result of function pkg_add_count should equal 1
   End
 End
