@@ -58,7 +58,9 @@ non-trivial, multi-step `src/`/`tests/`/CI work.
   mode line only for a non-default level (e.g. `ultra`).
 - **The small tier follows every directive of the canonical policy (AGENTS.md + its routed files).** The implementer is cheaper, not exempt.
 - **Run at effort xhigh or better** — the session default in `.claude/settings.json`
-  (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on inheritance).
+  (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on
+  inheritance). Exception: adversarial reviewers always run at `medium`
+  ([`landing.md`](landing.md)).
 
 ## The delegation contract (brief → handoff → gate)
 

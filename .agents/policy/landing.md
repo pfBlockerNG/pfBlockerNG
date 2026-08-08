@@ -26,11 +26,13 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   `copilot_code_review` rule/auto-request setting (a ruleset may bundle it with branch
   protection — strip only the rule). One arriving anyway is triaged on merit like any
   unsolicited review, but never gate-counted; never restate it as a ban publicly.
-- **Review effort floors:** `xhigh` for the `full` profile, `high` for the `verify`
-  profile — never below the profile's floor, never `max`.
-- **Delta-scoped re-reviews.** A feedback-fix re-review covers exactly the fix commits
-  (base = the pre-fix head SHA), never the whole PR again, and runs on the small tier;
-  a bare SHA base means delta scope, a branch name the remote base ref.
+- **Review effort:** `medium`, always — every adversarial review and re-review.
+- **Whole-PR diff, incremental focus.** Every review runs against the diff of the
+  entire PR. Before reviewing, the reviewer looks for a previous adversarial-review
+  audit comment on the PR; one found → focus specifically on the changes between the
+  head SHA that review recorded and the current head, validated in the context of the
+  full PR diff. Every review's audit comment records the head SHA it reviewed — the
+  pointer the next re-review keys on. Re-reviews run on the small tier.
 - **Convergence rule.** The fix→re-review loop continues only while the latest round
   returned a `blocking` finding; an all-nitpick or clean round closes it (hard cap and
   CI-retry limits per workflow.md "Retry and fix-loop limits").
@@ -117,23 +119,17 @@ Mechanics that hold for every pass:
   verdict for EVERY changed file (findings / considered-and-fine /
   not-examined-because). A review whose per-file coverage misses a changed file is
   incomplete — re-run it.
-- **Profiles, chosen mechanically.** `verify` — a lighter claims-verification pass at
-  effort `high` — is allowed IFF the diff is objectively data/pin/config-only: run
-  `git diff <base>...HEAD -- ':!*.md' | grep '^+' | grep -vE '^\+\+\+|^\+\s*(#|//)'`
-  and confirm ZERO added lines contain control flow or definitions
-  (`if`/`for`/`while`/`case`/`function`/`def`/`=>`/`&&`/`||`/pipes/subshells); paste
-  the (empty) grep into the audit comment as classifier evidence. ANY hit, any doubt,
-  or any `src/` behaviour surface → `full` at `xhigh`. The verify pass re-checks the
-  classification itself and returns a blocking "profile escalation required" finding
-  on a miss — mandatory: re-run with `full`, never argue. In the verify pass every
-  spec claim is probed, not read (pinned refs exist with the claimed lineage, changed
-  values match cited sources, files byte-identical to base outside claimed hunks,
-  config/ignore entries hit their targets, replaced literals leave no stale copies
-  tree-wide), and only the suites the spec names as pinning touched contracts run.
+- **Previous-review lookup, first step of every pass.** List the PR's top-level
+  comments and find the latest adversarial-review audit comment. None → review the
+  full PR diff fresh. One found → same full-PR diff, focus on
+  `git diff <recorded-SHA>...HEAD` (the previous round's verdicts stand for files
+  that diff leaves untouched). Either way, the audit comment records the current
+  head SHA for the next round.
 - **Model by size/complexity** (tiers per `.agents/model-tiers.conf`): the small tier
-  by default and for every delta re-review; the **top tier** for a large/complex PR —
+  by default and for every re-review; the **top tier** for a large/complex PR —
   more than 300 changed lines, more than 6 files, or any behaviour change in `src/`
-  parsing/guard/scheduling logic — where whole-PR cross-referencing pays. Record the
+  parsing/guard/scheduling logic — where whole-PR cross-referencing pays; the full-PR
+  diff scope is what lets the higher-complexity model earn its keep. Record the
   chosen model + the size metric that drove it in the audit comment. **Top tier
   unavailable on such a PR:** mid reviews it alone, same contract — now that the mid tier
   is Opus 5, a complex review routes there rather than to the retired small+mid duo
@@ -278,9 +274,10 @@ still gets its reply, pointing at the shared resolution. Then per finding:
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch — batched
   into one push, not many rapid commits.
 - **Review-fix commits are new unreviewed code** (audited defect chains have entered
-  through them): any non-trivial APPLY gets a delta-scoped re-review (base = the
-  pre-fix head SHA, small tier) before the merge gate, looping under the convergence
-  rule; the closing round's nits are triaged inline with no further round.
+  through them): any non-trivial APPLY gets a re-review (small tier; full PR diff,
+  focused on the changes since the previous review's recorded head SHA) before the
+  merge gate, looping under the convergence rule; the closing round's nits are
+  triaged inline with no further round.
   **Exempt:** a round whose every APPLY implements its reviewer's own concrete
   suggestion, tests adjusted, differing only in formatting or in what CI catches
   (SKIPs/DEFERs do not block it) — a reviewer cannot answer its own instruction
@@ -307,9 +304,10 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   path, privilege, hand-crafted yes/no, impact scope, black-box reproduction), and a
   link back to the review comment; link the issue in the thread reply. Optionally
   also fix it in its own branch + PR — the issue is the required artifact.
-- **One audit comment on the PR** summarising the adversarial review (model, profile,
-  effort, the size metric and classifier evidence that drove them) and noting
-  CodeRabbit's review if one arrived, plus the per-finding resolution.
+- **One audit comment on the PR** summarising the adversarial review (model, effort
+  `medium`, the size metric that drove the model choice, and the **head SHA
+  reviewed** — the pointer the next re-review keys on) and noting CodeRabbit's
+  review if one arrived, plus the per-finding resolution.
 
 ### The merge gate (all paths)
 
@@ -391,7 +389,7 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
   trigger class (background polls, scheduled check-ins, subscriptions), then sweep
   once for stale waits from earlier items (waits.md).
 - **Report:** PR, rebase needed or not, CI verdict (advisory bots not waited on),
-  reviews received (models, profiles, skips), merge result, cleanup. An abort at any
+  reviews received (models, skips), merge result, cleanup. An abort at any
   step says why and what is needed to proceed.
 
 ## Per-client mapping

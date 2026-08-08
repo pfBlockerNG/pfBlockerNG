@@ -167,10 +167,11 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 
 ### reviewer
 
-- **Purpose & routing:** adversarial, execution-grounded review of a complete PR (or a
-  delta-scoped feedback fix). Route: every code PR; delta re-reviews after fix rounds.
-- **Inputs & task packet:** the PR number, base (a pre-fix SHA for delta re-reviews),
-  a worktree, and the intent/acceptance spec.
+- **Purpose & routing:** adversarial, execution-grounded review of the whole PR diff;
+  re-reviews focus on changes since the last recorded head SHA. Route: every code PR;
+  re-reviews after fix rounds.
+- **Inputs & task packet:** PR number, latest audit comment (head SHA = re-review
+  focus base), worktree, intent/acceptance spec.
 - **Outputs & evidence:** schema-forced findings — severity, location, evidence,
   reproduction — returned as review output; never an edited tree.
 - **Permissions & mutation:** read-only; may run discriminating probes and hostile
@@ -179,8 +180,8 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Context & skills:** the full diff plus surrounding code; the policy annexes the diff
   touches. Floor: `testing.md`, `landing.md`; the touched `lang-*.md` and the domain rows
   of the diff.
-- **Stop & escalation:** the fix→re-review loop converges — it continues only while the
-  latest round has a blocking finding; hard cap 3 rounds, then a human decides.
+- **Stop & escalation:** the fix→re-review loop continues only while the latest
+  round has a blocking finding; hard cap 3 rounds, then a human decides.
 - **Independence:** required — a fresh context, never the author of the change.
 - **Tier intent:** small by default; top for a large/complex PR (whole-PR
   cross-referencing is the point); mid alone when top is unavailable on such a PR.
