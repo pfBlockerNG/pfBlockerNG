@@ -40,7 +40,7 @@ contracts, plus established private cross-module seams in the same spirit as
 (``publish_catalogues._canonical_record``/``_normalize_route_matrix``/
 ``_validate_asset_name``, ``publish_release._Target``/``_asset_map``/``_drop_assets``/
 ``_catalogue_descriptor_complete``, ``nightly_provenance._validate_allocation``/
-``_validate_artifacts``/``_validate_dep_artifacts``) — never copies their logic.
+``_validate_artifacts``/``_validate_dep_artifacts``/``_DIGEST``) — never copies their logic.
 
 stdlib-only, Python 3.11. The engine is loaded via ``publish_catalogues.load_engine()``
 — explicit ``src_root`` or the ``PFB_SRC`` environment variable, same as
@@ -163,6 +163,20 @@ def _validate_handoff(handoff: object, *, engine: pc.Engine, source_run_id: str)
         raise PublishNightlyError("handoff allocation.source_sha does not match the top-level source_sha")
     if allocation.ports_sha != ports_sha:
         raise PublishNightlyError("handoff allocation.ports_sha does not match the top-level ports_sha")
+
+    # Re-run the input-digest cross-check nightly_provenance.build_handoff itself
+    # performs at handoff-creation time: nothing else in this handoff's shape ties
+    # matrix_digest to allocation.input_digest, so without this a forged
+    # matrix_digest would sail through untouched.
+    matrix_digest = handoff["matrix_digest"]
+    if not isinstance(matrix_digest, str) or not np._DIGEST.fullmatch(matrix_digest):
+        raise PublishNightlyError("handoff matrix_digest must be lowercase 64-character hex")
+    expected_input_digest = np.combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
+    if allocation.input_digest != expected_input_digest:
+        raise PublishNightlyError(
+            "handoff allocation.input_digest does not match source_sha/ports_sha/matrix_digest "
+            "(tampered or corrupt handoff)"
+        )
 
     builds_raw = handoff["builds"]
     if not isinstance(builds_raw, list) or not builds_raw:
@@ -360,7 +374,10 @@ def _reject_stale(site_root: Path, varver: str, engine: pc.Engine, incoming_vers
             continue
         if path.name == incoming_name:
             present = True
-        key = pfb_pkg.pkg_version_sort_key(manifest["version"])
+        version = manifest.get("version")
+        if not isinstance(version, str) or not version:
+            raise PublishNightlyError(f"corrupt published canonical package manifest (missing 'version'): {path}")
+        key = pfb_pkg.pkg_version_sort_key(version)
         if newest_key is None or key > newest_key:
             newest_key = key
     if not present and newest_key is not None and pfb_pkg.pkg_version_sort_key(incoming_version) < newest_key:

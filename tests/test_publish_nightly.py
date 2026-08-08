@@ -470,6 +470,37 @@ class StaleTests(_TempDirTestCase):
         after = {p.name: p.read_bytes() for p in catalogue_dir.iterdir()}
         self.assertEqual(after, before)
 
+    @_requires_engine
+    def test_published_manifest_missing_version_rejected_cleanly(self) -> None:
+        """N3b: a catalogue-resident canonical .pkg whose manifest somehow lacks
+        'version' (a corrupt or foreign write -- this publisher's own write
+        path always carries one) must reject with a clean PublishNightlyError
+        naming the corrupt file, not a raw KeyError out of
+        manifest["version"]. The fixture writes the tar directly (bypassing
+        _wrap_canonical_pkg, which always injects version) since that is the
+        only way to construct this shape."""
+        handoff, results_dir, _alloc = self.base_handoff()
+        _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+
+        catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        corrupt_name = "pfSense-pkg-pfBlockerNG-99.99.9999.pkg"
+        corrupt_path = catalogue_dir / corrupt_name
+        manifest = {"name": _ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY, "abi": "FreeBSD:15:*"}
+        _write_tar_pkg(
+            corrupt_path,
+            [("+COMPACT_MANIFEST", json.dumps(manifest, separators=(",", ":")).encode(), 0o644, 0)],
+        )
+
+        newer_alloc = _allocation(build_date=date(2026, 8, 20))
+        results_dir_2 = self.new_results_dir()
+        handoff_2 = _build_handoff(
+            newer_alloc, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir_2
+        )
+
+        with self.assertRaises(pn.PublishNightlyError) as ctx:
+            _run(handoff=handoff_2, results_dir=results_dir_2, pkg_repo=self.pkg_repo)
+        self.assertIn(str(corrupt_path), str(ctx.exception))
+
 
 # --------------------------------------------------------------------------- #
 # T5 — retention: keep+1 canonical generations published sequentially, oldest
@@ -639,6 +670,34 @@ class HandoffIntegrityTests(_TempDirTestCase):
             _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
         self.assertIn("ports_sha", str(ctx.exception))
 
+    @_requires_engine
+    def test_tampered_matrix_digest_input_digest_mismatch_rejected(self) -> None:
+        """N2: re-run nightly_provenance.build_handoff's OWN input-digest
+        cross-check at publish time too -- a handoff whose matrix_digest was
+        swapped for a different (still well-formed) value no longer matches
+        allocation.input_digest, which build_handoff computed from the
+        ORIGINAL matrix_digest at handoff-creation time. Without this
+        re-check, a forged matrix_digest sails through untouched: nothing else
+        in the handoff shape depends on it."""
+        handoff, results_dir, _alloc = self.base_handoff()
+        mutated = _mutate(handoff)
+        self.assertNotEqual(mutated["matrix_digest"], "d" * 64)
+        mutated["matrix_digest"] = "d" * 64
+        with self.assertRaises(pn.PublishNightlyError) as ctx:
+            _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
+        self.assertIn("input_digest", str(ctx.exception))
+
+    @_requires_engine
+    def test_matrix_digest_malformed_shape_rejected(self) -> None:
+        """N2: matrix_digest shape (lowercase 64-character hex) is validated
+        BEFORE it is ever fed to combined_nightly_input_digest."""
+        handoff, results_dir, _alloc = self.base_handoff()
+        mutated = _mutate(handoff)
+        mutated["matrix_digest"] = "not-hex"
+        with self.assertRaises(pn.PublishNightlyError) as ctx:
+            _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
+        self.assertIn("matrix_digest", str(ctx.exception))
+
 
 # --------------------------------------------------------------------------- #
 # T7 — routing rejections.
@@ -703,6 +762,40 @@ class RoutingTests(_TempDirTestCase):
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             pn._route_targets(_ENGINE, [ROW_CE15], [leg_a, leg_b])
         self.assertIn("more than one built asset", str(ctx.exception))
+
+    @_requires_engine
+    def test_dep_abi_mismatch_rejected_via_route_targets(self) -> None:
+        """N3a: a leg's dependency manifest ABI that does NOT belong to that
+        leg's own FreeBSD major (a forged handoff -- a genuine
+        nightly_provenance.build_handoff run would never construct this
+        shape, since _validate_dep_artifacts pins every dep to the leg's own
+        wildcard ABI) is rejected by _route_targets's own ABI cross-check,
+        exercised directly via hand-built _Leg/VerifiedAsset objects, same
+        idiom as test_two_legs_same_major_rejected_via_route_targets above."""
+        allocation = _allocation()
+        record = np.make_build_record(allocation=allocation, matrix_row=ROW_CE15, source_date_epoch=_EPOCH)
+        canonical = pc.VerifiedAsset(
+            asset_class="canonical",
+            declared_name="a.pkg",
+            canonical_name="a.pkg",
+            work_path=Path("a.pkg"),
+            sha256="0" * 64,
+            manifest={},
+            record=record,
+        )
+        mismatched_dep = pc.VerifiedAsset(
+            asset_class="dependency",
+            declared_name="dep.pkg",
+            canonical_name="dep.pkg",
+            work_path=Path("dep.pkg"),
+            sha256="1" * 64,
+            manifest={"abi": "FreeBSD:16:*"},
+        )
+        leg = pn._Leg(major="15", matrix_row=ROW_CE15, canonical=canonical, dependencies=(mismatched_dep,))
+
+        with self.assertRaises(pn.PublishNightlyError) as ctx:
+            pn._route_targets(_ENGINE, [ROW_CE15], [leg])
+        self.assertIn("dependency ABI does not match FreeBSD major", str(ctx.exception))
 
 
 # --------------------------------------------------------------------------- #
