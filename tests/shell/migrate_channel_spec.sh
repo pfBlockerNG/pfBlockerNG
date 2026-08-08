@@ -112,7 +112,7 @@ install)
         [ -n "${_p}" ] || continue
         [ "${_p}" = "${PFB_STUB_SKIP_PAYLOAD:-}" ] && continue
         mkdir -p "${_root}$(dirname "${_p}")"
-        : > "${_root}${_p}"
+        true > "${_root}${_p}"
     done < "${_d}/payload"
     if [ "${PFB_STUB_DROP_CONFIG:-0}" = "1" ]; then
         printf '<pfsense></pfsense>\n' > "${_root}/cf/conf/config.xml"
@@ -143,9 +143,9 @@ STUB
 _make_box() {
     _mb_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/migrate_ch.XXXXXX")"
     mkdir -p "${_mb_dir}/usr/local/etc/pkg/repos" "${_mb_dir}/cf/conf" "${_mb_dir}/stub"
-    : > "${_mb_dir}/stub/installed"
-    : > "${_mb_dir}/stub/catalog"
-    : > "${_mb_dir}/stub/payload"
+    true > "${_mb_dir}/stub/installed"
+    true > "${_mb_dir}/stub/catalog"
+    true > "${_mb_dir}/stub/payload"
     _write_pkg_stub "${_mb_dir}/stub/pkg"
     printf '<pfsense><installedpackages><pfblockerng><enable>on</enable></pfblockerng></installedpackages></pfsense>\n' \
         > "${_mb_dir}/cf/conf/config.xml"
@@ -164,8 +164,8 @@ _unset_box() {
           PFB_STUB_SKIP_PAYLOAD PFB_STUB_DROP_CONFIG
 }
 
-_subscribe()   { : > "${BOX}/usr/local/etc/pkg/repos/pfblockerng-$1.conf"; }
-_legacy_conf() { : > "${BOX}/usr/local/etc/pkg/repos/pfblockerng.conf"; }
+_subscribe()   { true > "${BOX}/usr/local/etc/pkg/repos/pfblockerng-$1.conf"; }
+_legacy_conf() { true > "${BOX}/usr/local/etc/pkg/repos/pfblockerng.conf"; }
 _install()     { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "${PFB_STUB_DIR}/installed"; }
 _publish()     { printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "${PFB_STUB_DIR}/catalog"; }
 _manifest()    { printf '%s\n' "$@" >> "${PFB_STUB_DIR}/payload"; }

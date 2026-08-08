@@ -28,6 +28,7 @@ and the access note for Phase 5, NOT silently dropped.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import uuid
@@ -37,7 +38,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from .. import helpers
+from .. import helpers, pkg_identity
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .test_category import _snapshot_node
 from .test_category_edit import CFG_DNSBL, CFG_IPV4, _del_rowid, _free_rowid
@@ -2708,6 +2709,51 @@ def test_software_page_renders_when_override_forces_on(
         # The tab is injected everywhere on an enabled build — the positive of the tab-absent test.
         general = webui.get(_GENERAL_PAGE)
         assert _SOFTWARE_TAB_HREF in general.text, "the Software tab must be PRESENT when the gate is forced on"
+
+
+def test_software_panel_channel_falls_back_to_the_package_name_off_repo(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The rendered channel survives an install whose repo names no channel (issue #2148).
+
+    All four channel catalogues publish the ONE canonical ``pfSense-pkg-pfBlockerNG``, so the
+    page derives the channel from the repo the package came from (``pkg query %R`` ->
+    ``pfblockerng-<ch>``) and falls back to the package NAME only when that repo names no
+    channel. The Tier-A deploy is exactly that case: an offline ``pkg add -f`` sideload leaves
+    ``%R`` empty, which is what makes it able to prove the fallback branch at all.
+
+    Scenario:
+      Given the sideload deploy, whose installed ``%R`` is NOT one of the channel repos
+          (asserted as the before-state — the fallback is only under test while that holds),
+      And the hidden override forcing the provenance gate on,
+      When the Software page is GET,
+      Then the ``pfb-software-panel`` marker renders the channel the BUILT ARTIFACT reports
+          (`pkg_identity.branch_channel`, never a hard-coded name — issue #2166), not the
+          literal repo string and not the ``unknown`` placeholder.
+
+    Fail-before/pass-after: a repo-only derivation with no name fallback renders ``unknown``
+    here, and a derivation that leaked the repo through renders the empty repo string.
+    """
+    expected_channel = pkg_identity.branch_channel(os.environ.get("SMOKE_PKG"))
+    pkgname = pkg_identity.branch_pkg_name(os.environ.get("SMOKE_PKG"))
+
+    repo_probe = smoke_vm.ssh("/usr/local/sbin/pkg", "query", "%R", pkgname)
+    installed_repo = repo_probe.stdout.strip()
+    assert not installed_repo.startswith("pfblockerng-"), (
+        f"before-state broken: this deploy reports channel repo {installed_repo!r}, so it "
+        "exercises the repo branch, not the name fallback this case is written for"
+    )
+
+    with software_panel_forced(smoke_vm, "on"):
+        body = webui.get(_SOFTWARE_PAGE).text
+
+    panel = re.search(rf'<span id="{_SOFTWARE_PANEL_MARKER}">([^<]*)</span>', body)
+    assert panel is not None, f"the {_SOFTWARE_PANEL_MARKER} span is absent from the Software page body"
+    rendered = panel.group(1).strip()
+    assert rendered == expected_channel, (
+        f"Software panel rendered channel {rendered!r}, expected {expected_channel!r} "
+        f"(installed {pkgname!r} from repo {installed_repo!r})"
+    )
 
 
 def test_software_actions_link_to_package_manager(
