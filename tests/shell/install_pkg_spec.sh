@@ -162,6 +162,37 @@ SCPEOF
     The stdout should include 'Cannot get an exclusive lock'
   End
 
+  It 'rejects a non-integer retry cap before touching the guest'
+    # A bad cap would make the -ge comparison silently false and the retry
+    # loop unbounded — refuse it up front, before any scp/ssh runs.
+    PFB_INSTALL_PKG_RETRY_MAX=abc
+    export PFB_INSTALL_PKG_RETRY_MAX
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    The stderr should include 'PFB_INSTALL_PKG_RETRY_MAX must be a positive integer'
+    The contents of file "$SCP_LOG" should equal ''
+  End
+
+  It 'rejects a non-integer retry delay before touching the guest'
+    PFB_INSTALL_PKG_RETRY_DELAY=1.5
+    export PFB_INSTALL_PKG_RETRY_DELAY
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    The stderr should include 'PFB_INSTALL_PKG_RETRY_DELAY must be a non-negative integer'
+    The contents of file "$SCP_LOG" should equal ''
+  End
+
+  It 'honours the minimum cap of one attempt'
+    echo 99 > "${WORK}/lock.remaining"
+    PFB_INSTALL_PKG_RETRY_DELAY=0
+    PFB_INSTALL_PKG_RETRY_MAX=1
+    export PFB_INSTALL_PKG_RETRY_DELAY PFB_INSTALL_PKG_RETRY_MAX
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    The result of function pkg_add_count should equal 1
+    The stderr should include 'still locked after 1 attempts'
+  End
+
   It 'never retries a non-lock pkg-add failure'
     FAIL_PKG_ADD_MATCH="$(basename "$PKGFILE")"
     PFB_INSTALL_PKG_RETRY_DELAY=0

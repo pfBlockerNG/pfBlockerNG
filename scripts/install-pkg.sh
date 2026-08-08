@@ -92,6 +92,20 @@ ssh_t() {
 # Seams (spec-only): PFB_INSTALL_PKG_RETRY_MAX / PFB_INSTALL_PKG_RETRY_DELAY.
 PKG_LOCK_RETRY_MAX="${PFB_INSTALL_PKG_RETRY_MAX:-12}"
 PKG_LOCK_RETRY_DELAY="${PFB_INSTALL_PKG_RETRY_DELAY:-5}"
+# A non-integer cap makes the -ge comparison silently FALSE and the loop
+# unbounded — the same trap publish-pkg-repo.sh guards its MAX_PUSH_ATTEMPTS
+# against. Reject bad values before any ssh/sleep runs; 0 delay is valid.
+case "$PKG_LOCK_RETRY_MAX" in '' | *[!0-9]*) PKG_LOCK_RETRY_MAX=0 ;; esac
+[ "$PKG_LOCK_RETRY_MAX" -ge 1 ] || {
+    echo "install-pkg: PFB_INSTALL_PKG_RETRY_MAX must be a positive integer" >&2
+    exit 1
+}
+case "$PKG_LOCK_RETRY_DELAY" in
+    *[!0-9]*)
+        echo "install-pkg: PFB_INSTALL_PKG_RETRY_DELAY must be a non-negative integer" >&2
+        exit 1
+        ;;
+esac
 
 pkg_add_lock_retry() {
     _pkg_remote=$1
