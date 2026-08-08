@@ -327,13 +327,62 @@ jobs:
           PKG_NAME="$(basename "$PKG")"
           PKG_SHA="$(sha256sum "$PKG" | cut -d' ' -f1)"
           cp "$PKG" "result/$PKG_NAME"
+
+          # issue #1806 B1 / issue #2146 S1: this leg's extra_pkgs dependency
+          # ports (RUN_DEPENDS pfSense CE's own repo doesn't carry, e.g.
+          # textproc/py-charset-normalizer) -- SAME build tool release.yml's
+          # tagged dep-build loop uses, from the SAME ports checkout
+          # build-leg.sh just prepared above (never a second clone). UNLIKE
+          # release.yml, Nightly never renames these: nightly assets keep
+          # their canonical <name>-<version>.pkg filename (publish_catalogues.py
+          # _verify_dependency_asset requires a nightly intake's declared name
+          # to equal the package's own manifest identity).
+          DEP_PKG_DIR="${RUN_ROOT}/${RUN_ID}/deppkgs"
+          DEP_ARTIFACTS_JSON="[]"
+          EXTRA_PKGS="$(jq -c '.extra_pkgs // []' row.json)"
+          ORIGIN_COUNT="$(printf '%s' "$EXTRA_PKGS" | jq 'length // 0')"
+          if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            mkdir -p "$DEP_PKG_DIR"
+            I=0
+            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
+              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
+              # sparse-clone-ports.sh's checkout only includes the
+              # pfBlockerNG port's OWN RUN_DEPENDS -- extra_pkgs is a
+              # matrix-level concept it doesn't know about, so this origin's
+              # dir was never materialized. Add it explicitly (idempotent;
+              # cone mode already set by sparse-clone-ports.sh).
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+              python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" \
+                --ports "$PORTS_DIR" \
+                --port "$ORIGIN" \
+                --py-flavor "$PY_FLAVOR" \
+                --freebsd-major "$FREEBSD_MAJOR" \
+                --out-dir "$DEP_PKG_DIR"
+              I=$((I + 1))
+            done
+            for DEP_PKG in "$DEP_PKG_DIR"/*.pkg; do
+              [ -f "$DEP_PKG" ] || continue
+              DEP_NAME="$(basename "$DEP_PKG")"
+              DEP_SHA="$(sha256sum "$DEP_PKG" | cut -d' ' -f1)"
+              cp "$DEP_PKG" "result/$DEP_NAME"
+              DEP_ARTIFACTS_JSON="$(
+                printf '%s' "$DEP_ARTIFACTS_JSON" | jq \
+                  --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
+                  --arg name "$DEP_NAME" \
+                  --arg sha256 "$DEP_SHA" \
+                  '. + [{abi: $abi, name: $name, sha256: $sha256}]'
+              )"
+            done
+          fi
+
           jq -n \
             --argjson matrix_row "$MATRIX_ROW" \
             --slurpfile record build-record.json \
             --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
             --arg name "$PKG_NAME" \
             --arg sha256 "$PKG_SHA" \
-            '{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}}' \
+            --argjson dep_artifacts "$DEP_ARTIFACTS_JSON" \
+            '{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}, dep_artifacts: $dep_artifacts}' \
             > result/result.json
 
       - name: Upload verified build

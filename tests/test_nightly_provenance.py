@@ -206,3 +206,83 @@ def test_complete_rejects_malformed_artifacts_json(tmp_path: Path) -> None:
 def test_malformed_durable_state_fails_closed(state: dict[str, object]) -> None:
     with pytest.raises((TypeError, ValueError, np.ProvenanceError)):
         np.validate_state(state)
+
+
+# --- dep_artifacts (issue #2146 S1) -----------------------------------------
+# One BUILD leg's dependency .pkgs (issue #1806 extra_pkgs, Nightly-side): a
+# leg may ship zero or more, all sharing the leg's OWN wildcard ABI. Unlike
+# canonical `artifact` (`_validate_artifacts`, unique ABI across the whole
+# handoff), uniqueness here is per (abi, name) WITHIN one leg only.
+
+
+def _dep(
+    *,
+    abi: str = "FreeBSD:15:*",
+    name: str = "py311-charset-normalizer-3.4.0.pkg",
+    sha: str = sha256(b"dep").hexdigest(),
+) -> dict[str, str]:
+    return {"abi": abi, "name": name, "sha256": sha}
+
+
+def test_validate_dep_artifacts_accepts_empty_list() -> None:
+    assert np._validate_dep_artifacts([], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg") == []
+
+
+def test_validate_dep_artifacts_sorts_by_name() -> None:
+    deps = [_dep(name="b.pkg"), _dep(name="a.pkg")]
+    result = np._validate_dep_artifacts(deps, leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+    assert [item["name"] for item in result] == ["a.pkg", "b.pkg"]
+
+
+@pytest.mark.parametrize("abi", ["FreeBSD:16:*", "FreeBSD:15:amd64"])
+def test_validate_dep_artifacts_rejects_abi_not_equal_to_leg(abi: str) -> None:
+    with pytest.raises(np.ProvenanceError, match="abi"):
+        np._validate_dep_artifacts([_dep(abi=abi)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+
+
+def test_validate_dep_artifacts_rejects_duplicate_name_within_leg() -> None:
+    deps = [_dep(), _dep()]
+    with pytest.raises(np.ProvenanceError, match="unique"):
+        np._validate_dep_artifacts(deps, leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+
+
+def test_validate_dep_artifacts_rejects_name_equal_to_canonical() -> None:
+    with pytest.raises(np.ProvenanceError, match="canonical"):
+        np._validate_dep_artifacts([_dep(name="canonical.pkg")], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+
+
+@pytest.mark.parametrize("name", ["../evil.pkg", "a/b.pkg", "a\\b.pkg", "evil\n.pkg", "no-suffix", ""])
+def test_validate_dep_artifacts_rejects_hostile_names(name: str) -> None:
+    with pytest.raises(np.ProvenanceError, match="name"):
+        np._validate_dep_artifacts([_dep(name=name)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+
+
+@pytest.mark.parametrize("sha", [sha256(b"dep").hexdigest().upper(), sha256(b"dep").hexdigest()[:-1], "z" * 64])
+def test_validate_dep_artifacts_rejects_malformed_sha256(sha: str) -> None:
+    with pytest.raises(np.ProvenanceError, match="sha256"):
+        np._validate_dep_artifacts([_dep(sha=sha)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
+
+
+def test_validate_dep_artifacts_rejects_non_list() -> None:
+    with pytest.raises(np.ProvenanceError, match="list"):
+        np._validate_dep_artifacts(
+            {"abi": "FreeBSD:15:*", "name": "x.pkg", "sha256": sha256(b"x").hexdigest()},
+            leg_abi="FreeBSD:15:*",
+            canonical_name="canonical.pkg",
+        )
+
+
+def test_complete_never_receives_dep_artifacts_only_canonical() -> None:
+    """R12: durable state is fed ONLY canonical per-leg artifacts (nightly.yml's
+    ``jq '[.builds[].artifact]'`` step) -- dep_artifacts never reaches
+    np.complete or persisted state, regardless of how many dep .pkgs a leg
+    built."""
+    first = _candidate(np.empty_state())
+    canonical = _artifact(first.allocation)
+    state = np.complete(np.empty_state(), first, [canonical], run_id="100")
+
+    records = state["records"]
+    assert isinstance(records, list) and len(records) == 1
+    artifacts = records[0]["artifacts"]
+    assert artifacts == [canonical]
+    assert all(set(item) == {"abi", "name", "sha256"} for item in artifacts)

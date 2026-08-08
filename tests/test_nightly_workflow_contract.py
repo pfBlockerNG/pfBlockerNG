@@ -79,3 +79,45 @@ def test_nightly_failure_alert_watches_snapshot_workflow() -> None:
     text = ALERT_WORKFLOW.read_text(encoding="utf-8")
 
     assert '- "Nightly snapshot"' in text
+
+
+def test_build_step_builds_and_hands_off_dependency_packages() -> None:
+    """issue #2146 S1: the BUILD leg also builds this leg's extra_pkgs dep
+    .pkgs (issue #1806), with NO tagged-style rename, and folds them into
+    result.json's dep_artifacts."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    start = text.index("      - name: Build and verify package")
+    end = text.index("\n      - name: Upload verified build", start)
+    step = text[start:end]
+
+    # W1: build-dep-pkg-portable.py invoked with the full flag set.
+    assert "build-dep-pkg-portable.py" in step
+    assert "--ports" in step
+    assert "--port" in step
+    assert "--py-flavor" in step
+    assert "--freebsd-major" in step
+    assert "--out-dir" in step
+
+    # W2: loop driven by the matrix row's extra_pkgs, sparse-checkout add per origin.
+    assert ".extra_pkgs" in step
+    assert 'git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"' in step
+
+    # W3: no rename -- nightly dep .pkgs keep their canonical filename.
+    assert "-${VARIANT}-${PFSENSE_VERSION}.pkg" not in step
+    assert "RENAMED_DEP" not in step
+
+    # W4: result.json construction includes dep_artifacts.
+    assert "dep_artifacts" in step
+    assert "DEP_ARTIFACTS_JSON" in step
+
+
+def test_handoff_step_artifact_extraction_stays_canonical_only() -> None:
+    """W5: the handoff step's durable-state artifact extraction remains
+    canonical-only -- dep_artifacts must never reach `complete`/state.json."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    start = text.index("      - name: Create verified publisher handoff")
+    end = text.index("\n      - name: Upload verified publisher handoff", start)
+    step = text[start:end]
+
+    assert "jq '[.builds[].artifact]' nightly-handoff.json > artifacts.json" in step
+    assert "dep_artifacts" not in step
