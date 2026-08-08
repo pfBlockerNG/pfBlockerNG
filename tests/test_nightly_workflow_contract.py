@@ -1,10 +1,30 @@
 """Static contract for the branch-independent Nightly workflow."""
 
+import itertools
 import re
 from pathlib import Path
 
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly.yml"
 ALERT_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly-failure-alert.yml"
+
+
+def _extract_indented_block(text: str, anchor: str) -> str:
+    """Return the ``anchor:`` line plus every following line indented deeper than
+    it (blank lines pass through), stopping at the first line back at or above
+    the anchor's own indent.
+
+    Replaces a fixed-width slice: a hardcoded character count silently
+    truncates (or reads past the block into an unrelated sibling key) the
+    moment the block's rendered length drifts from the guess.
+    """
+    lines = text.splitlines()
+    anchor_index = next(i for i, line in enumerate(lines) if line.strip() == anchor)
+    anchor_indent = len(lines[anchor_index]) - len(lines[anchor_index].lstrip(" "))
+    body = itertools.takewhile(
+        lambda line: not line.strip() or (len(line) - len(line.lstrip(" "))) > anchor_indent,
+        lines[anchor_index + 1 :],
+    )
+    return "\n".join([lines[anchor_index], *body])
 
 
 def _extract_job(text: str, job_name: str) -> str:
@@ -163,8 +183,7 @@ def test_publish_pkg_repo_job_permissions_are_read_only() -> None:
     minted App token (create-github-app-token), never GITHUB_TOKEN."""
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
-    perms_start = job.index("permissions:")
-    perms_block = job[perms_start : perms_start + 120]
+    perms_block = _extract_indented_block(job, "permissions:")
     assert "packages: read" in perms_block
     assert "contents: read" in perms_block
     assert "contents: write" not in perms_block
@@ -243,10 +262,15 @@ def test_publish_pkg_repo_job_invokes_the_trusted_wrapper_with_nightly_kind() ->
 def test_publish_pkg_repo_job_documents_the_rerun_staleness_property() -> None:
     """W9: a "re-run failed jobs" attempt (new run_attempt against the SAME
     run_id) is REJECTED by publish_nightly.py's own handoff run_id equality
-    check -- documented in-workflow so that recovery path isn't mistaken for
-    safe; the whole workflow must be re-run instead."""
+    check -- documented in-workflow. A whole-workflow re-run does NOT recover a
+    failed publish either (the handoff job already persisted the allocation to
+    nightly-state.json before this job ran, so an identical-input re-run is a
+    green no-op that skips build+publish) -- the interim recovery is deleting
+    the stranded nightly-state.json record, and the real fix is issue #2245."""
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
     assert "re-run" in job.lower() or "rerun" in job.lower()
     assert "run_id" in job.lower()
     assert "reject" in job.lower()
+    assert "nightly-state.json" in job
+    assert "#2245" in job

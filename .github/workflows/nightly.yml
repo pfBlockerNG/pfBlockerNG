@@ -626,7 +626,17 @@ jobs:
           # github.run_id but mints a NEW github.run_attempt — publish_nightly.py
           # rejects that mismatch against the handoff's own recorded run_id
           # outright (stale-callback doctrine, issue #2146 S2's publish_nightly.py
-          # _validate_handoff). Re-run the WHOLE workflow instead of just this job.
+          # _validate_handoff).
+          #
+          # Re-running the WHOLE workflow does NOT recover a failed publish either:
+          # the handoff job already persisted this run's allocation to
+          # nightly-state.json (nightly-state branch) BEFORE this job ran, so an
+          # identical-input re-run just reallocates outcome=unchanged and skips
+          # build+publish entirely — the snapshot stays RECORDED but UNPUBLISHED.
+          # Interim recovery: delete the stranded record for this run from
+          # nightly-state.json on the nightly-state branch, then re-run the whole
+          # workflow (reallocates, rebuilds, publishes into a clean destination).
+          # The proper republish valve is tracked as issue #2245.
           export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
           export BASE_URL=https://pfblockerng.github.io/pkg
           sh trusted/scripts/publish-pkg-repo.sh

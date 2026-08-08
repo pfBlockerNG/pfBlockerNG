@@ -122,8 +122,12 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     # same idiom as `touched=$(...) || true` further down.
     publish_rc=0
     case "$PUBLISH_KIND" in
+        tagged) publisher_script="publish_release.py" ;;
+        nightly) publisher_script="publish_nightly.py" ;;
+    esac
+    case "$PUBLISH_KIND" in
         tagged)
-            python3 "${PFB_SRC}/scripts/publish_release.py" \
+            python3 "${PFB_SRC}/scripts/${publisher_script}" \
                 --source-repository "$SOURCE_REPOSITORY" \
                 --release-id "$RELEASE_ID" \
                 --release-tag "$RELEASE_TAG" \
@@ -134,7 +138,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 --route-matrix "$ROUTE_MATRIX" >"$out_file" 2>&1 || publish_rc=$?
             ;;
         nightly)
-            python3 "${PFB_SRC}/scripts/publish_nightly.py" \
+            python3 "${PFB_SRC}/scripts/${publisher_script}" \
                 --handoff "$HANDOFF_FILE" \
                 --results-dir "$RESULTS_DIR" \
                 --pkg-repo "$PKG_REPO" \
@@ -142,7 +146,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             ;;
     esac
     if [ "$publish_rc" -ne 0 ]; then
-        echo "::error::publish_${PUBLISH_KIND}.py failed — aborting before any git mutation" >&2
+        echo "::error::${publisher_script} failed — aborting before any git mutation" >&2
         cat "$out_file" >&2
         exit 1
     fi
@@ -172,7 +176,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     # never a freshly re-read live matrix, which could have moved since).
     case "$PUBLISH_KIND" in
         tagged) landing_input="$ROUTE_MATRIX" ;;
-        nightly) landing_input="$(jq -c '.route_matrix' "$HANDOFF_FILE")" ;;
+        nightly) landing_input="$(jq -ec '.route_matrix' "$HANDOFF_FILE")" ;;
     esac
     landing_matrix_file=$(mktemp)
     printf '%s' "$landing_input" | jq -c \
