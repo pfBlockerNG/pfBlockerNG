@@ -61,6 +61,23 @@
       "upgrade": {
         "available": false
       }
+    },
+    {
+      "pfsense_version": "2.9",
+      "channel": "CE",
+      "freebsd_version": "15.0-RELEASE",
+      "freebsd_major": "15",
+      "php_version": "8.3",
+      "py_flavor": "py311",
+      "variant": "CE",
+      "status": "beta",
+      "ci": false,
+      "extra_pkgs": [
+        "textproc/py-charset-normalizer"
+      ],
+      "upgrade": {
+        "available": false
+      }
     }
   ]
 }
