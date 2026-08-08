@@ -2840,10 +2840,19 @@ def test_software_actions_link_to_package_manager(
 
         # (B) Seed a newer cached 'latest' → update available → the Update href becomes the actionable
         #     reinstallpkg link (the ON branch of the availability gate). 99.0.0 > any real installed
-        #     version, so pfb_update_available() is TRUE regardless of the branch build.
+        #     version, so pfb_update_available() is TRUE regardless of the branch build. The seed
+        #     carries the installed package's own name because the page only trusts a cache that
+        #     describes the install it is looking at (issue #2148); a nameless cache is not one.
         try:
             smoke_vm.ssh("/bin/rm", "-f", software_cache)
-            _seed_vm_file(smoke_vm, software_cache, '{"latest": "99.0.0", "last_checked": 1}')
+            seed = json.dumps(
+                {
+                    "pkgname": pkg_identity.branch_pkg_name(os.environ.get("SMOKE_PKG")),
+                    "latest": "99.0.0",
+                    "last_checked": 1,
+                }
+            )
+            _seed_vm_file(smoke_vm, software_cache, seed)
             up_tag2 = _update_anchor(webui.get(_SOFTWARE_PAGE).text)
             assert _has_pkgmgr_href(up_tag2, "reinstallpkg"), (
                 f"Update link must target pkg_mgr_install.php?mode=reinstallpkg when an update exists: {up_tag2!r}"

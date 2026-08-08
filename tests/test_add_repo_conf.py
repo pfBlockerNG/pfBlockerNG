@@ -124,7 +124,13 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28, base_url: str = _PA
 
 
 def _run_add_repo(
-    root: str, *, nightly: bool = False, extra_args: tuple[str, ...] = (), catalogue_empty: bool = False
+    root: str,
+    *,
+    nightly: bool = False,
+    extra_args: tuple[str, ...] = (),
+    catalogue_empty: bool = False,
+    update_fails: bool = False,
+    detection_fails: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
@@ -137,26 +143,38 @@ def _run_add_repo(
     resolves the conf from ``root/etc/product_label`` (CE here — no "Plus") and
     ``root/etc/version`` (2.8.1).
 
-    ``catalogue_empty`` makes `rquery` yield nothing — a channel with no build
-    published for this box's variant. That is the failure path which must leave the
-    box's repository configuration exactly as it found it (issue #2148).
+    The three keyword flags each select one of the bootstrap's failure gates, all of
+    which must leave the box's repository configuration exactly as they found it
+    (issue #2148):
+
+    ``catalogue_empty``  `rquery` yields nothing — the channel has no build for this
+                         box's variant.
+    ``update_fails``     `pkg update` exits non-zero — any enabled repository failed
+                         to refresh, including the one being switched away from.
+    ``detection_fails``  ``/etc/version`` is blank, so the generator hook cannot
+                         resolve a varver and never writes the conf's marker line.
     """
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir, exist_ok=True)
 
     fake_pkg = os.path.join(bin_dir, "pkg")
     rquery_reply = "" if catalogue_empty else "  printf 'pfSense-pkg-pfBlockerNG 4.0.0\\n'\n"
+    update_reply = "  exit 1\n" if update_fails else "  exit 0\n"
     with open(fake_pkg, "w") as fh:
         fh.write(
-            f'#!/bin/sh\n# fake pkg stub for tests\nif [ "$1" = "rquery" ]; then\n{rquery_reply}  exit 0\nfi\nexit 0\n'
+            "#!/bin/sh\n# fake pkg stub for tests\n"
+            f'if [ "$1" = "rquery" ]; then\n{rquery_reply}  exit 0\nfi\n'
+            f'if [ "$1" = "update" ]; then\n{update_reply}fi\n'
+            "exit 0\n"
         )
     os.chmod(fake_pkg, 0o755)
 
-    # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no "Plus" → CE).
+    # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no "Plus" → CE). A blank
+    # version is how the hook's variant detection is made to fail.
     etc_dir = os.path.join(root, "etc")
     os.makedirs(etc_dir, exist_ok=True)
     with open(os.path.join(etc_dir, "version"), "w") as fh:
-        fh.write("2.8.1\n")
+        fh.write("" if detection_fails else "2.8.1\n")
     with open(os.path.join(etc_dir, "product_label"), "w") as fh:
         fh.write("pfSense\n")
 
@@ -787,22 +805,81 @@ def test_add_repo_unpublished_channel_leaves_the_previous_subscription_intact() 
         )
 
 
-def test_add_repo_failed_reswitch_keeps_a_conf_it_did_not_create() -> None:
-    """The failure cleanup removes only what THIS run staged.
+def test_add_repo_failed_reswitch_restores_the_conf_it_did_not_create() -> None:
+    """The failure cleanup restores what THIS run truncated, not merely leaves a file.
 
-    Re-running the bootstrap for the channel the box is already on, against a
-    catalogue that has gone empty, must not delete that existing subscription —
-    removing it would be the very destruction the deferred retirement prevents.
+    Staging overwrites the conf in place, so re-running the bootstrap for the channel
+    the box is already on destroys the working conf before it can fail. "The file still
+    exists" is not enough — a one-line staging stub subscribes to nothing, which is the
+    same stranded box the deferred retirement exists to prevent. The previous body has
+    to come back byte-for-byte.
+
+    Variant detection is what fails here, deliberately. It is the only gate that fires
+    while the conf is still the stub: an empty catalogue fails later, by which point the
+    hook has already regenerated the same body the box started with, so that path cannot
+    tell a restore from a no-op.
     """
     with tempfile.TemporaryDirectory() as root:
         _run_add_repo(root, extra_args=("--channel", "edge"))
         edge_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["edge"]
         assert edge_conf.exists(), "before-state: the box must be subscribed to edge"
+        edge_before = edge_conf.read_text()
+        assert "pfblockerng-edge: {" in edge_before, "before-state: the conf must carry a real repo stanza"
 
-        proc = _run_add_repo(root, extra_args=("--channel", "edge"), catalogue_empty=True)
+        proc = _run_add_repo(root, extra_args=("--channel", "edge"), detection_fails=True)
 
-        assert proc.returncode != 0, "an empty catalogue must still fail loudly"
-        assert edge_conf.exists(), "a conf the run did not create must survive its failure"
+        assert proc.returncode != 0, "an unresolvable conf must fail loudly"
+        assert edge_conf.read_text() == edge_before, (
+            f"the pre-existing conf must come back byte-identical, not as a stub:\n{edge_conf.read_text()}"
+        )
+        assert not list(_repos_dir(root).glob("*.pfb-prev.*")), "the restore must leave no backup file behind"
+
+
+def test_add_repo_failed_detection_leaves_the_previous_subscription_intact() -> None:
+    """The OTHER failure gate: the generator hook could not resolve a varver.
+
+    A blank ``/etc/version`` leaves the staged conf without its marker line, and the
+    bootstrap fails there — earlier than the catalogue verify, and before any
+    retirement. The box must still come out of it subscribed exactly as it went in.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_add_repo(root, extra_args=("--channel", "nightly"))
+        nightly_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["nightly"]
+        stable_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["stable"]
+        nightly_before = nightly_conf.read_text()
+
+        proc = _run_add_repo(root, extra_args=("--channel", "stable"), detection_fails=True)
+
+        assert proc.returncode != 0, "a hook that cannot resolve the conf must fail loudly"
+        assert not stable_conf.exists(), (
+            f"the unresolved conf this run staged must be removed:\n{proc.stdout}\n{proc.stderr}"
+        )
+        assert nightly_conf.read_text() == nightly_before, "the previous subscription must be untouched"
+
+
+def test_add_repo_failed_pkg_update_leaves_exactly_one_project_conf() -> None:
+    """``pkg update`` failing must not strand the box on TWO project repositories.
+
+    ``pkg update`` exits non-zero when ANY enabled repository fails to refresh —
+    including the channel the box is switching away from, whose catalogue going
+    unpublished is precisely why someone switches. Retirement happens after this point,
+    so an unhandled failure here would leave both confs enabled at the same priority,
+    which the script itself documents as unsupported: ``pkg`` does not order across
+    equal-priority repositories, so the build the box receives becomes undetermined.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_add_repo(root, extra_args=("--channel", "testing"))
+        testing_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["testing"]
+        testing_before = testing_conf.read_text()
+
+        proc = _run_add_repo(root, extra_args=("--channel", "edge"), update_fails=True)
+
+        assert proc.returncode != 0, "a failed pkg update must fail loudly"
+        present = {p.name for p in _repos_dir(root).glob("pfblockerng*.conf")}
+        assert present == {_CHANNEL_CONF_NAMES["testing"]}, (
+            f"expected the box to still be on testing alone, found {sorted(present)}:\n{proc.stdout}\n{proc.stderr}"
+        )
+        assert testing_conf.read_text() == testing_before, "the surviving subscription must be unchanged"
 
 
 def test_add_repo_channel_nightly_live_bootstrap_matches_flag_nightly() -> None:

@@ -18,7 +18,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_channel_from_pkgname')]
 #[CoversFunction('pfb_channel_from_repo_name')]
 #[CoversFunction('pfb_channel_for_install')]
-#[CoversFunction('pfb_software_cache_matches_repo')]
+#[CoversFunction('pfb_software_cache_matches_install')]
 #[CoversFunction('pfb_software_is_our_build')]
 #[CoversFunction('pfb_update_available')]
 #[CoversFunction('pfb_software_check_enabled')]
@@ -124,32 +124,46 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	/*
-	 * ---- pfb_software_cache_matches_repo() — is this cache still ours? (issue #2148) ----
-	 * Two consumers ask it: the cron orchestrator, deciding whether cached
-	 * latest/last_notified may be REUSED, and the Software page, deciding whether cached
-	 * latest/last-checked/status may be DISPLAYED. They must answer identically — the
-	 * orchestrator's rescope lands only on the next tick, so a page using a looser rule
-	 * would pair the new channel's label with the previous catalogue's version in between.
-	 * A cache with NO repo key predates the scope and is adopted, not discarded: that is
+	 * ---- pfb_software_cache_matches_install() — is this cache still ours? (#2148) ----
+	 * Two consumers ask it, and must ask the WHOLE of it: the cron orchestrator, deciding
+	 * whether cached latest/last_notified may be REUSED, and the Software page, deciding
+	 * whether cached latest/last-checked/status may be DISPLAYED. They must answer
+	 * identically — the orchestrator's rescope lands only on the next tick, so a page
+	 * asking a looser question pairs the current install's label with the previous one's
+	 * version and verdict in between.
+	 *
+	 * Both halves matter because either can change alone: a channel switch keeps the
+	 * canonical NAME and changes the repo, while an identity swap inside the legacy
+	 * shared catalogue (canonical <-> -devel) keeps the REPO and changes the name.
+	 *
+	 * A cache with no repo key predates the scope and is adopted, not discarded: that is
 	 * every existing box exactly once, and discarding it re-notifies an announced version.
 	 */
-	public static function cacheMatchesRepoProvider(): array
+	public static function cacheMatchesInstallProvider(): array
 	{
+		$canonical = 'pfSense-pkg-pfBlockerNG';
+		$devel = 'pfSense-pkg-pfBlockerNG-devel';
 		return [
-			'same catalogue'                  => [['repo' => 'pfblockerng-edge'], 'pfblockerng-edge', TRUE],
-			'different catalogue'             => [['repo' => 'pfblockerng-stable'], 'pfblockerng-edge', FALSE],
-			'legacy repo vs a channel repo'   => [['repo' => 'pfblockerng'], 'pfblockerng-stable', FALSE],
-			'pre-#2148 cache: no repo key'    => [['pkgname' => 'pfSense-pkg-pfBlockerNG'], 'pfblockerng', TRUE],
-			'empty cache: nothing recorded'   => [[], 'pfblockerng-edge', TRUE],
-			'recorded empty vs a real repo'   => [['repo' => ''], 'pfblockerng-edge', FALSE],
-			'recorded empty vs empty (sideload)' => [['repo' => ''], '', TRUE],
+			// Repo half.
+			'same install'                => [['pkgname' => $canonical, 'repo' => 'pfblockerng-edge'], $canonical, 'pfblockerng-edge', TRUE],
+			'channel switch'              => [['pkgname' => $canonical, 'repo' => 'pfblockerng-stable'], $canonical, 'pfblockerng-edge', FALSE],
+			'legacy repo vs channel repo' => [['pkgname' => $canonical, 'repo' => 'pfblockerng'], $canonical, 'pfblockerng-stable', FALSE],
+			'recorded empty vs a repo'    => [['pkgname' => $canonical, 'repo' => ''], $canonical, 'pfblockerng-edge', FALSE],
+			'sideload: both empty'        => [['pkgname' => $canonical, 'repo' => ''], $canonical, '', TRUE],
+			// Name half — the in-repo identity swap the legacy shared catalogue allows.
+			'identity swap, same repo'    => [['pkgname' => $devel, 'repo' => 'pfblockerng'], $canonical, 'pfblockerng', FALSE],
+			'identity swap, no repo key'  => [['pkgname' => $devel], $canonical, 'pfblockerng', FALSE],
+			// Pre-#2148 caches carry a name but no repo: adopted on the repo half.
+			'pre-#2148 cache'             => [['pkgname' => $canonical], $canonical, 'pfblockerng', TRUE],
+			// A cache that names no install describes none.
+			'empty cache'                 => [[], $canonical, 'pfblockerng-edge', FALSE],
 		];
 	}
 
-	#[DataProvider('cacheMatchesRepoProvider')]
-	public function testCacheMatchesRepo(array $cache, string $repo, bool $expected): void
+	#[DataProvider('cacheMatchesInstallProvider')]
+	public function testCacheMatchesInstall(array $cache, string $pkgname, string $repo, bool $expected): void
 	{
-		$this->assertSame($expected, pfb_software_cache_matches_repo($cache, $repo));
+		$this->assertSame($expected, pfb_software_cache_matches_install($cache, $pkgname, $repo));
 	}
 
 	/*

@@ -136,6 +136,7 @@ version)
     # `pkg version -t <a> <b>` -> '>' | '=' | '<'. The script uses it to pick the build
     # `install` will resolve, so the two must agree — both go through `sort -V` here.
     [ "$1" = "-t" ] || exit 64
+    [ "${PFB_STUB_BREAK_VERSION:-0}" = "1" ] && exit 64
     if [ "$2" = "$3" ]; then
         printf '=\n'
     elif [ "$(printf '%s\n%s\n' "$2" "$3" | sort -V | tail -n 1)" = "$2" ]; then
@@ -177,7 +178,7 @@ _make_box() {
 _unset_box() {
     unset PFBLOCKERNG_ROOT PKG_BIN PFB_STUB_DIR BOX \
           PFB_STUB_FAIL_INSTALL PFB_STUB_FAIL_DELETE PFB_STUB_INSTALL_REPO \
-          PFB_STUB_SKIP_PAYLOAD PFB_STUB_DROP_CONFIG
+          PFB_STUB_SKIP_PAYLOAD PFB_STUB_DROP_CONFIG PFB_STUB_BREAK_VERSION
 }
 
 _subscribe()   { true > "${BOX}/usr/local/etc/pkg/repos/pfblockerng-$1.conf"; }
@@ -558,6 +559,20 @@ Describe 'migrate-channel.sh — a catalogue offering several builds'
       The value "$(_installed_version pfSense-pkg-pfBlockerNG)" should equal "4.1.0.a1"
       The value "$(_installed_repo pfSense-pkg-pfBlockerNG)" should equal "pfblockerng-edge"
       The stdout should include "Done"
+    End
+
+    It 'names the comparator when it cannot answer, instead of dying on the symptom'
+      # A degraded `pkg version -t` would silently reduce the loop to "keep the first
+      # line" — the exact behaviour this replaced — and the migration would then fail
+      # its own post-install version check with no hint as to why.
+      PFB_STUB_BREAK_VERSION=1
+      export PFB_STUB_BREAK_VERSION
+      When run sh "${SCRIPT}" --channel edge
+      The status should equal 4
+      The stdout should include "Installed: pfSense-pkg-pfBlockerNG-devel"
+      The stderr should include "gave no usable answer comparing"
+      The value "$(_pkg_calls)" should not include "install"
+      The value "$(_installed_names)" should equal "pfSense-pkg-pfBlockerNG-devel"
     End
 End
 

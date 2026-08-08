@@ -233,10 +233,21 @@ printf '==> Installed: %s-%s (from repo %s)\n' \
 # highest with `pkg version -t`, which is the comparator `pkg` itself resolves by.
 TARGET_VERSION=""
 for _offered in $("${PKG_BIN}" rquery -r "${TARGET_REPO}" '%v' "${CANONICAL_PKG}" 2>/dev/null || true); do
-	if [ -z "${TARGET_VERSION}" ] ||
-		[ "$("${PKG_BIN}" version -t "${_offered}" "${TARGET_VERSION}" 2>/dev/null)" = ">" ]; then
+	if [ -z "${TARGET_VERSION}" ]; then
 		TARGET_VERSION="${_offered}"
+		continue
 	fi
+	# A comparator that answers nothing would silently degrade this loop back to "keep
+	# the first line", and the step-6 version check would then fail a migration that
+	# actually succeeded. Name the real cause instead of dying on the symptom.
+	_order="$("${PKG_BIN}" version -t "${_offered}" "${TARGET_VERSION}" 2>/dev/null || true)"
+	case "${_order}" in
+	'>') TARGET_VERSION="${_offered}" ;;
+	'<' | '=') ;;
+	*)
+		die 4 "\`${PKG_BIN} version -t\` gave no usable answer comparing '${_offered}' and '${TARGET_VERSION}' — cannot tell which build ${TARGET_REPO} would install"
+		;;
+	esac
 done
 [ -n "${TARGET_VERSION}" ] ||
 	die 4 "repo '${TARGET_REPO}' does not offer ${CANONICAL_PKG} — run \`pkg update -f\`, and check the ${CHANNEL} catalogue has a build for this pfSense edition/version"
