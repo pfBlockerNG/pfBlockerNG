@@ -29,10 +29,11 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
 - **Review effort:** `medium`, always — every adversarial review and re-review.
 - **Whole-PR diff, incremental focus.** Every review runs against the diff of the
   entire PR. Before reviewing, the reviewer looks for a previous adversarial-review
-  audit comment on the PR; one found → focus specifically on the changes between the
-  head SHA that review recorded and the current head, validated in the context of the
-  full PR diff. Every review's audit comment records the head SHA it reviewed — the
-  pointer the next re-review keys on. Re-reviews run on the small tier.
+  audit comment on the PR; one found → focus on the changes between its recorded
+  head SHA and the current head, validated in the context of the full PR diff —
+  skip cleanly-reviewed ground, follow up every recorded defect. Every review's
+  audit comment records the head SHA it reviewed — the pointer the next re-review
+  keys on. Re-reviews run on the small tier.
 - **Convergence rule.** The fix→re-review loop continues only while the latest round
   returned a `blocking` finding; an all-nitpick or clean round closes it (hard cap and
   CI-retry limits per workflow.md "Retry and fix-loop limits").
@@ -122,9 +123,13 @@ Mechanics that hold for every pass:
 - **Previous-review lookup, first step of every pass.** List the PR's top-level
   comments and find the latest adversarial-review audit comment. None → review the
   full PR diff fresh. One found → same full-PR diff, focus on
-  `git diff <recorded-SHA>...HEAD` (the previous round's verdicts stand for files
-  that diff leaves untouched). Either way, the audit comment records the current
-  head SHA for the next round.
+  `git diff <recorded-SHA>...HEAD`, using its pointers two ways: (a) ground covered
+  with a clean verdict is not re-reviewed unless the new commits touch it; (b) every
+  defect it recorded is re-checked — commits landed since → verify it was actually
+  addressed; if not, hunt the committer's rationale (thread replies, verdicts,
+  commit messages); an unaddressed defect with no rationale is re-raised as
+  blocking. Either way, the audit comment records the current head SHA for the next
+  round.
 - **Model by size/complexity** (tiers per `.agents/model-tiers.conf`): the small tier
   by default and for every re-review; the **top tier** for a large/complex PR —
   more than 300 changed lines, more than 6 files, or any behaviour change in `src/`
