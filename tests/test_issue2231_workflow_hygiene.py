@@ -14,8 +14,9 @@ disables silently. These gates cover what actionlint cannot:
    a value reaches the job as a literal dollar-string (schema-legal, so
    actionlint accepts it). Paths derived from runner variables belong in
    ``run:`` bodies.
-2. ``scripts/local-smoke.sh`` runs the same ci-runner image series the
-   workflows pin (``.github/docker/VERSION``) — no other gate scans that file.
+2. Every workflow ``image:`` pin rides the series ``.github/docker/VERSION``
+   names — a stale pin runs a whole job family on an old toolchain silently.
+3. ``scripts/local-smoke.sh`` runs that same series — no other gate scans it.
 """
 
 from __future__ import annotations
@@ -131,7 +132,7 @@ def test_env_map_scanner_catches_a_planted_offence() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 2. local-smoke.sh runs the pinned image series.
+# 2. Workflows and local-smoke.sh run the pinned image series.
 # --------------------------------------------------------------------------- #
 
 
