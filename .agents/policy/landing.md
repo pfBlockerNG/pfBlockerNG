@@ -7,8 +7,8 @@ merge gate, CI waits, post-merge. Load when: landing a PR or applying review fin
 
 Composes with [`workflow.md`](workflow.md) — its "Review" section defines the
 independent adversarial review principle and "Retry and fix-loop limits" bounds every
-loop here; this document carries only the landing mechanics. Every wait armed here
-follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
+loop here. Every wait armed here follows [`waits.md`](waits.md) (no orphaned waits +
+the bounded-wait ladder).
 
 ## Fixed floors (never weaken)
 
@@ -18,8 +18,8 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   completed cleanly — the sequencing is load-bearing, not stylistic.
 - **Rebase-only merges.** Never a merge commit, never squash; history across
   `main` ← `devel` stays strictly linear.
-- **Advisory bots never gate.** CodeRabbit's state (pending, pass, skipped, quota) and
-  a Snyk quota/infra `error` never block a CI wait or a merge. The one exception: a
+- **Advisory bots never gate.** CodeRabbit's state and a Snyk quota/infra `error`
+  never block a CI wait or a merge. The one exception: a
   terminal Snyk `failure` carrying a **real finding** is a security finding to resolve
   through the review gate before merging.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable a
@@ -34,13 +34,13 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   reviewed; a later round's leg reviewer finds the latest audit comment **of its own
   leg** and focuses on the changes since that SHA, validated in the context of the
   full PR diff — skip cleanly-reviewed ground, follow up every recorded defect.
-  Re-review rounds run every leg on the small tier.
+  Re-review rounds run on the small tier, only the legs the fix could affect.
 - **Convergence rule.** The fix→re-review loop continues only while the latest round
   returned a `blocking` finding; an all-nitpick or clean round closes it (hard cap and
   CI-retry limits per workflow.md "Retry and fix-loop limits").
 - **Bounded waits.** Every background wait is self-terminating (hard iteration cap +
   wall-clock deadline inside the loop) and swept the instant the task reaches a
-  terminal state — success, failure, or abort alike.
+  terminal state.
 - **Worktree isolation.** All rebase/push work happens in a dedicated worktree the
   session created, never the primary checkout, never a foreign worktree.
 - **User-directed merge.** Invoking the landing flow IS the user's standing
@@ -53,14 +53,14 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   (number, head ref, base ref, state, draft flag, mergeability, URL). None → stop and
   ask. Resolve `OWNER/REPO` once.
 - **Scope check:** the flow is for code-bearing PRs. Dev-only classes (documentation,
-  ADR text, skills, agent config) land straight on `devel` with no PR — the flow does
-  not apply; say so and stop.
+  ADR text, skills, agent config) land straight on `devel` with no PR — say so and
+  stop.
 - **Transport check (once):** confirm the GitHub CLI is present and authenticated.
   Absent → use the client's GitHub MCP tools with wakeup-paced bounded checks
   ([`waits.md`](waits.md) §4 "Managed environments"); neither transport → stop and report.
 - **Refusal cases (re-checked immediately before merging):** never merge a PR that is
   not OPEN, is a draft (ask the user to mark it ready), or is CONFLICTING (conflict
-  resolution is separate work — report, do not guess). A mergeability of UNKNOWN means
+  resolution is separate work). A mergeability of UNKNOWN means
   GitHub is still computing — re-read after a few seconds.
 
 ## Review step
@@ -199,8 +199,7 @@ never append `[bot]` yourself):
 ### Finding intake — enumerate everything
 
 Reconcile the branch first: fetch and **fast-forward** the local head to the remote
-head before editing (reviewers/bots may have pushed commits); if tests were added,
-run the suite once for a baseline.
+head before editing; if tests were added, run the suite once for a baseline.
 
 CodeRabbit spreads findings across three places — pull all three, save the large
 bodies to files, and enumerate every finding before fixing anything:
@@ -213,7 +212,7 @@ bodies to files, and enumerate every finding before fixing anything:
 
 **Snyk** surfaces as a commit **status/check** on the head SHA, never review
 comments: read its detail from the status description + target URL. Only a terminal
-`failure` verdict (it ran and flagged something) carries findings; an `error`
+`failure` verdict carries findings; an `error`
 ("Code test limit reached") is a skipped scan — never a clean security pass.
 
 **Every enumerated finding is mandatory to handle** — inline, nitpick, and
@@ -281,7 +280,11 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   through them): any non-trivial APPLY gets a re-review round (all legs, small tier;
   each focused on the changes since its own leg's recorded head SHA) before the
   merge gate, looping under the convergence rule; the closing round's nits are
-  triaged inline with no further round.
+  triaged inline with no further round. A round re-runs only the legs whose verdict
+  the fix could possibly change — e.g. a test-output reformat or a flakiness fix in
+  test code (not production code) cannot alter implementation correctness, so the
+  correctness+hostile leg sits that round out (record the skipped legs + reason in
+  the audit trail).
   **Exempt:** a round whose every APPLY implements its reviewer's own concrete
   suggestion, tests adjusted, differing only in formatting or in what CI catches
   (SKIPs/DEFERs do not block it) — a reviewer cannot answer its own instruction
@@ -337,7 +340,7 @@ Proceed to the merge ONLY when the review step finished cleanly:
   merge.
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline
   comments on the PR (paginated, no login filter) — reviewers you never armed a wait
-  for (Copilot, another bot, a human) can post seconds before the merge — and triage
+  for can post seconds before the merge — and triage
   anything not yet handled. A summary-only review with no findings is noted in the
   audit trail.
 - Unresolved, contested, or user-decision findings → stop and report; do not merge.
@@ -367,7 +370,7 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 
 - **Early-verdict reuse:** a CI wait armed at review start that already returned
   `PASS` may replace this wait IFF the SHA it watched still equals the PR head AND
-  the rebase was a no-op. Any push, rebase, or SHA mismatch invalidates it.
+  the rebase was a no-op.
 - **PASS** → still do the Snyk post-hoc read (merge gate) before merging.
 - **FAIL** → a real check failed: do not merge; report the failing checks and run
   URLs and stop.
@@ -395,8 +398,8 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
   trigger class (background polls, scheduled check-ins, subscriptions), then sweep
   once for stale waits from earlier items (waits.md).
 - **Report:** PR, rebase needed or not, CI verdict (advisory bots not waited on),
-  reviews received (models, skips), merge result, cleanup. An abort at any
-  step says why and what is needed to proceed.
+  reviews received (models, skips), merge result, cleanup. An abort says why and
+  what is needed to proceed.
 
 ## Per-client mapping
 
