@@ -19,13 +19,16 @@ use PHPUnit\Framework\TestCase;
  * notice fired?) and the AFTER-state so green proves the side-effect was CAUSED by the
  * input, not pre-existing.
  *
- * The IO is doubled by passing $io = ['installed_name','installed','provenance_ok','latest']
- * to the orchestrator (its documented unit-test seam). 'provenance_ok' (bool) replaces the
- * old 'installed_repo' key: the orchestrator now delegates repo-string discrimination to
- * pfb_software_provenance_ok() (the page-displayability predicate); per-repo branch coverage
- * for pfb_software_is_our_build() lives in SoftwareUpdateDecisionTest. file_notice /
- * is_subsystem_dirty / get_dnsavailable are doubled in pfsense_doubles.php, driven via
- * $GLOBALS (pfb_test_file_notices / pfb_test_pkg_locked / pfb_test_dns_available).
+ * The IO is doubled by passing $io = ['installed_name','installed','installed_repo',
+ * 'provenance_ok','latest'] to the orchestrator (its documented unit-test seam).
+ * 'provenance_ok' (bool) replaces the old repo-string gate: the orchestrator delegates
+ * repo-string discrimination to pfb_software_provenance_ok() (the page-displayability
+ * predicate); per-repo branch coverage for pfb_software_is_our_build() lives in
+ * SoftwareUpdateDecisionTest. 'installed_repo' is the `pkg query %R` origin the four-channel
+ * cutover (#2148) made authoritative for BOTH which catalogue latest is read from and which
+ * channel the cache reports. file_notice / is_subsystem_dirty / get_dnsavailable are doubled
+ * in pfsense_doubles.php, driven via $GLOBALS (pfb_test_file_notices / pfb_test_pkg_locked /
+ * pfb_test_dns_available).
  */
 #[CoversFunction('pfb_software_update_check')]
 #[CoversFunction('pfb_software_cache_file')]
@@ -265,6 +268,162 @@ final class SoftwareUpdateCheckTest extends TestCase
 		pfb_software_update_check(false, $openIo);
 		$this->assertNotNull($this->readCache(), 'gate open: cache must be written');
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'gate open: notice must fire');
+	}
+
+	/*
+	 * ---- issue #2148: the INSTALLED REPOSITORY is authoritative ----
+	 *
+	 * Four-channel cutover: all four catalogues publish the ONE canonical identity
+	 * 'pfSense-pkg-pfBlockerNG', so the package NAME can no longer say which channel a box
+	 * is on. The orchestrator reads latest from the repo the package was INSTALLED from
+	 * (`pkg query %R`, injected here as $io['installed_repo']) — under single-repository
+	 * subscription that is the only repo it can upgrade within — and labels the cache
+	 * repo-first, name-fallback: pfb_channel_from_repo_name() ?? pfb_channel_from_pkgname().
+	 */
+
+	/**
+	 * Given a CANONICAL install ('pfSense-pkg-pfBlockerNG', no channel in the name) whose
+	 * recorded origin is the EDGE catalogue,
+	 * When the check runs,
+	 * Then latest is read from that catalogue and the cache + notice report channel 'edge'.
+	 * Before #2148 these exact inputs reported 'stable' (name-derived) and read the shared
+	 * 'pfblockerng' repo — an edge subscriber was offered stable's versions.
+	 */
+	public function testCanonicalNameOnEdgeCatalogueReportsEdgeChannel(): void
+	{
+		// Given: clean before-state.
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When.
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-edge',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		// Then: the installed catalogue is the one read, and it names the channel.
+		$this->assertSame('pfblockerng-edge', $cache['repo'], 'latest must be read from the INSTALLED repo, not a channel->repo mapping');
+		$this->assertSame('edge', $cache['channel'], 'channel must follow the installed repo, not the channel-less package name');
+		$this->assertSame($this->readCache(), $cache, 'the on-disk cache carries the same repo/channel');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertStringContainsString('3.2.0_9 available (edge)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/**
+	 * The name-FALLBACK half of the same rule. Given a legacy '-devel' install whose origin
+	 * is the LEGACY SHARED repo 'pfblockerng' (which carries two package identities, so the
+	 * repo cannot name a channel),
+	 * When the check runs,
+	 * Then latest is read from that shared repo and the channel falls back to the package
+	 * name — 'devel', unchanged. Pairs with the edge case above so repo-first is proven a
+	 * real branch rather than a blanket repo-only rule that would break legacy boxes.
+	 */
+	public function testLegacySharedRepoFallsBackToPackageNameChannel(): void
+	{
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		$this->assertSame('pfblockerng', $cache['repo'], 'the legacy shared repo is still the repo read');
+		$this->assertSame('devel', $cache['channel'], 'the legacy shared repo names no channel -> fall back to the package name');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertStringContainsString('3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/**
+	 * Transition proof for a NIGHTLY subscriber that moved onto the stable catalogue while
+	 * keeping the canonical identity.
+	 *
+	 * BEFORE: origin 'pfblockerng-nightly' -> cache channel 'nightly', repo read = nightly.
+	 * AFTER:  same package name, origin now 'pfblockerng-stable' -> channel 'stable', repo
+	 *         read = the stable catalogue.
+	 * Green proves the repo string (not the package name, which never changed) drives both.
+	 */
+	public function testChannelAndRepoFollowARepositorySwitch(): void
+	{
+		$this->setCheck('on');
+
+		// BEFORE: subscribed to the nightly catalogue.
+		$before = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-nightly',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+		$this->assertSame('nightly', $before['channel'], 'before: nightly catalogue names the channel');
+		$this->assertSame('pfblockerng-nightly', $before['repo'], 'before: nightly catalogue is the repo read');
+
+		// AFTER: the very same package name, now recorded against the stable catalogue.
+		$after = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-stable',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+		$this->assertSame('stable', $after['channel'], 'after: the repo switch moved the reported channel');
+		$this->assertSame('pfblockerng-stable', $after['repo'], 'after: latest is read from the new catalogue');
+	}
+
+	/**
+	 * The cache-reuse scope must follow the REPO too, not just the package name (#2148).
+	 *
+	 * Pre-cutover the cached latest/last_notified were reused whenever the installed NAME
+	 * matched — safe while each channel had its own name. Now all four catalogues publish
+	 * the SAME canonical identity, so a catalogue switch keeps the name identical and the
+	 * name-only scope would carry the OLD catalogue's version across.
+	 *
+	 * Given a cache written for the canonical package on the EDGE catalogue (latest
+	 *       3.2.0_99, already notified),
+	 * When the box is now recorded against the STABLE catalogue and the live read is
+	 *      unavailable (pkg locked, no injected latest),
+	 * Then the edge latest is NOT served as stable's, and the de-dupe state is reset so the
+	 *      first genuine stable notice is not swallowed.
+	 */
+	public function testCatalogueSwitchUnderOneNameDoesNotReuseStaleCache(): void
+	{
+		// Given: a prior tick on the edge catalogue announced 3.2.0_99.
+		$this->setCheck('on');
+		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'repo'          => 'pfblockerng-edge',
+			'channel'       => 'edge',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_99',
+			'last_checked'  => 100,
+			'last_notified' => '3.2.0_99',
+		]);
+		$before = $this->readCache();
+		$this->assertSame('3.2.0_99', $before['latest'], 'before: the edge catalogue latest is cached');
+		$this->assertSame('pfSense-pkg-pfBlockerNG', $before['pkgname'], 'before: cached under the canonical name the new catalogue also uses');
+
+		// When: same canonical name, now on the stable catalogue, live read unavailable.
+		$GLOBALS['pfb_test_pkg_locked'] = true;
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-stable',
+			'provenance_ok'  => TRUE,
+			// no 'latest' -> the guarded live read returns '' (pkg locked).
+		]);
+
+		// Then: nothing from the edge catalogue leaks into the stable cache.
+		$this->assertSame('stable', $cache['channel'], 'after: cache rekeyed to the stable catalogue');
+		$this->assertSame('', (string) ($cache['latest'] ?? ''), "after: edge's latest must NOT be served as stable's");
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: de-dupe state reset for the new catalogue');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice (no known latest yet)');
 	}
 
 	/*

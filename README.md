@@ -67,51 +67,79 @@ under the **Apache License 2.0**.
 > main installation page: current versions, ready-to-copy commands, and older
 > releases, per pfSense edition.
 
-Run the bootstrap **on the firewall** over SSH (as root), then install the
-package for the channel you want:
+Run the bootstrap **on the firewall** over SSH (as root), picking the channel you
+want, then install the package:
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh
-pkg install pfSense-pkg-pfBlockerNG-devel    # or: pfSense-pkg-pfBlockerNG (stable)
+fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --channel stable
+pkg install pfSense-pkg-pfBlockerNG
 ```
 
-The bootstrap detects your pfSense edition, version, and architecture,
-configures the matching package catalog, and keeps it correct automatically
-across pfSense OS upgrades. The repository takes precedence over the Netgate
-catalog, so the webConfigurator's **Install**/**Update** buttons pick up its
-builds too.
+The bootstrap detects your pfSense edition and version, configures the matching
+package catalog, and keeps it correct automatically across pfSense OS upgrades.
+The repository takes precedence over the Netgate catalog, so the
+webConfigurator's **Install**/**Update** buttons pick up its builds too.
 
-Three channels are available — the packages conflict, so install **one**:
+Four channels are available. They all publish the **same** package name —
+`pfSense-pkg-pfBlockerNG` — from separate catalogs, so a firewall subscribes to
+**exactly one** channel and the bootstrap removes any other pfBlockerNG
+repository it finds:
 
-| Channel | Package | For |
-|---------|---------|-----|
-| **Stable** | `pfSense-pkg-pfBlockerNG` | Production use |
-| **Development** | `pfSense-pkg-pfBlockerNG-devel` | Latest features, early testing |
-| **Nightly** | `pfSense-pkg-pfBlockerNG-nightly` | Bleeding edge (see [Nightly channel](#nightly-channel)) |
+| Channel | `--channel` | For |
+|---------|-------------|-----|
+| **Stable** | `stable` | Production use |
+| **Testing** | `testing` | Prereleases validating the next stable |
+| **Edge** | `edge` | Prereleases opening the next release family |
+| **Nightly** | `nightly` | Bleeding edge, rebuilt from the development tip |
 
-Choose **stable** unless you specifically want to track development builds.
+Choose **stable** unless you specifically want to track prerelease builds.
 
-Stable and development are also available from pfSense's built-in Package
-Manager (**System ▸ Package Manager ▸ Available Packages**), built and shipped
-by Netgate — see [Other installation methods](#other-installation-methods).
+pfBlockerNG is also available from pfSense's built-in Package Manager
+(**System ▸ Package Manager ▸ Available Packages**), built and shipped by
+Netgate — see [Other installation methods](#other-installation-methods).
 
 Once installed, the interface lives in the webConfigurator under
 **Firewall ▸ pfBlockerNG**.
+
+### Switching channels
+
+Switching is **two** commands, and the second one is not optional. Adding a
+repository does not move an installed package: `pkg` keeps it pinned to the
+repository it came from and offers no upgrade across repositories, so a
+firewall that only gains a new conf silently keeps running its old build.
+
+```sh
+fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --channel edge
+fetch -qo - https://pfblockerng.github.io/pkg/migrate-channel.sh | sh -s -- --channel edge
+```
+
+`add-repo.sh` moves the subscription; `migrate-channel.sh` moves the installed
+package onto it, replaces a legacy suffixed install
+(`pfSense-pkg-pfBlockerNG-devel`, `-nightly`) with the canonical package, and
+verifies the result — identity, source repository, version, installed files, and
+your pfBlockerNG configuration — before reporting success. It refuses to touch
+anything it cannot verify, and going **back** to a slower channel works the same
+way (that direction is a downgrade, which is exactly the operation it performs).
+
+> [!CAUTION]
+> Back up the pfSense configuration (**Diagnostics ▸ Backup & Restore**) before
+> moving to an older version. Older package artifacts remain available, but may
+> not understand state written by a newer package; configuration or enforcement
+> may fail. Recover by restoring that pre-move backup.
 
 ## Version upgrades
 
 The **Software** tab shows your channel and installed version against the
 repository's latest, and can check for and install updates for you. Upgrades
-always stay **within the same channel** (stable to stable, devel to devel,
-nightly to nightly); to switch channels, reinstall as in
-[Installation](#installation). A daily background check also
+stay **within the channel you are subscribed to**; to move to a different one,
+see [Switching channels](#switching-channels). A daily background check also
 raises a pfSense notification — once per new version — when a newer build is
 available; a checkbox on the tab turns it off.
 
 Upgrading from the command line works too:
 
 ```sh
-pkg upgrade pfSense-pkg-pfBlockerNG-devel        # or the installed package name
+pkg upgrade pfSense-pkg-pfBlockerNG
 ```
 
 > [!NOTE]
@@ -186,31 +214,25 @@ search for `pfBlockerNG`, and install **pfBlockerNG** (stable) or
 **pfBlockerNG-devel** (development). These builds are published by Netgate and
 generally lag this repository's releases.
 
-### Nightly channel
+### Migrating a legacy install
 
-To track the development tip rebuilt every night, opt into the separate
-`nightly` channel:
-
-```sh
-fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --nightly
-pkg install pfSense-pkg-pfBlockerNG-nightly
-```
-
-The nightly package **replaces** a stable or `-devel` install (they conflict).
-Recent nightly builds remain in the catalog for diagnostics and reproducibility.
+Installs made before the four-channel catalogs carry a suffixed package name —
+`pfSense-pkg-pfBlockerNG-devel` or `pfSense-pkg-pfBlockerNG-nightly`. Those
+names are no longer published, so they receive no further updates. Move one onto
+a channel with the two commands in
+[Switching channels](#switching-channels): `migrate-channel.sh` removes the
+legacy package, installs the canonical `pfSense-pkg-pfBlockerNG` from the
+channel you named, and verifies your configuration survived.
 
 ### Retained package versions
 
-The catalog keeps several recent versions of the stable and devel packages.
-[repository landing page](https://pfblockerng.github.io/pkg) lists the
-retained versions per pfSense edition, with their commit and date.
-
-> [!CAUTION]
-> Package downgrade is unsupported. Older package artifacts remain available,
-> but may not understand state written by a newer package; configuration or
-> enforcement may fail. Back up the pfSense
-> configuration before upgrading. Recover by restoring that pre-upgrade backup
-> or reinstalling the current package and continuing forward.
+Each channel catalog keeps several recent versions, and a faster channel also
+keeps everything its slower channels still carry — so an older build stays
+available in the catalog you are already subscribed to. The
+[repository landing page](https://pfblockerng.github.io/pkg) lists the retained
+versions per pfSense edition, with their commit and date. Moving to one of them
+is a channel-style downgrade; see the caution under
+[Switching channels](#switching-channels).
 
 ### Building from the FreeBSD ports tree
 

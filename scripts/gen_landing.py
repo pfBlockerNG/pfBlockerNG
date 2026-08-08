@@ -373,6 +373,19 @@ def _bootstrap_install(base: str, channel: str) -> str:
     )
 
 
+def _channel_switch_commands(base: str) -> str:
+    """The copyable two-step channel switch: move the subscription, then move the
+    installed package. Adding the target repository alone is a documented silent
+    no-op (`pkg` never leaves a package's origin repository), so both lines ship
+    together (issue #2148)."""
+    return (
+        f"fetch -qo - {base}/add-repo.sh \\\n"
+        f"  | sh -s -- --base-url {base} --channel <ch>\n"
+        f"fetch -qo - {base}/migrate-channel.sh \\\n"
+        "  | sh -s -- --channel <ch>"
+    )
+
+
 # Per-channel card copy: title, optional badge, and the audience/cadence prose. Fixed
 # content decisions for the four-channel model, issue #2147 step A (the landing page):
 # Stable = final tagged releases; Testing = nonzero-patch prereleases validating the
@@ -429,11 +442,12 @@ def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Call
     )
 
 
-def _trust_section_html() -> str:
+def _trust_section_html(base: str) -> str:
     """The trust/provenance section: what 'installing from this repo' actually means
-    under the four-channel model (issue #2147). Static prose — no catalogue-signing
-    claim anywhere; the NONE-signed trust anchor is HTTPS/TLS to the Pages host
-    (mirrors add-repo.sh's own conf comment).
+    under the four-channel model (issue #2147). No catalogue-signing claim anywhere;
+    the NONE-signed trust anchor is HTTPS/TLS to the Pages host (mirrors add-repo.sh's
+    own conf comment). *base* is woven into the channel-switching subsection, whose
+    two client scripts are both served from it (issue #2148).
     """
     return (
         "<h2>Trust &amp; channel model</h2>"
@@ -480,9 +494,18 @@ def _trust_section_html() -> str:
         "commit that produced it; repository priority decides which build <code>pkg</code> selects when "
         "both are enabled.</p>"
         "<h3>Channel switching</h3>"
-        '<p class="blurb">There is no in-UI channel switcher here by design &mdash; channel selection is '
-        "repository configuration (documented above); client tooling for it is tracked separately "
-        "(issue #2148).</p>"
+        '<p class="blurb">Switching channels is two steps, and the second one is not optional. '
+        f"<code>{_esc(base)}/add-repo.sh</code> run with <code>--channel &lt;ch&gt;</code> moves the "
+        "<em>subscription</em>: it writes that channel's conf and retires every other project conf. "
+        "It does not move the <em>installed package</em> &mdash; <code>pkg</code> keeps an installed "
+        "package pinned to its origin repository and offers no upgrade across repositories, so a box "
+        "that only gains a conf silently keeps running its old build. "
+        f"<code>{_esc(base)}/migrate-channel.sh</code> run with the same "
+        "<code>--channel &lt;ch&gt;</code> performs the repository-qualified operation that actually "
+        "moves it, replaces a legacy suffixed identity "
+        "(<code>-devel</code>, <code>-nightly</code>) with the canonical package, and verifies the "
+        "result before reporting success. There is no in-UI channel switcher by design.</p>"
+        f"{_copyable(_esc(_channel_switch_commands(base)))}"
     )
 
 
@@ -924,7 +947,7 @@ def render_page(
         f"package (<code>{CANONICAL_EMITTED_IDENTITY}</code>) from its own repository &mdash; see "
         "Trust &amp; channel model below for how the four relate.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
-        f"{_trust_section_html()}"
+        f"{_trust_section_html(base)}"
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
         f"{eol_block}"
         "<h2>Repository files</h2>"
@@ -1068,6 +1091,23 @@ def write_add_repo(site: str, addrepo: str) -> None:
     os.chmod(out_path, 0o755)
 
 
+def write_migrate_channel(site: str, addrepo: str) -> None:
+    """Publish ``migrate-channel.sh`` verbatim to *site*/migrate-channel.sh.
+
+    Resolved as a sibling of *addrepo* in the repository ``scripts/`` directory. Unlike
+    ``add-repo.sh`` it has nothing to embed — it depends on no sibling file — so the
+    published copy is byte-identical to the tested repository copy, which is what keeps
+    the served script from drifting away from its shellspec (issue #2148).
+    """
+    scripts_dir = os.path.dirname(os.path.abspath(addrepo))
+    with open(os.path.join(scripts_dir, "migrate-channel.sh")) as fh:
+        text = fh.read()
+    out_path = os.path.join(site, "migrate-channel.sh")
+    with open(out_path, "w") as fh:
+        fh.write(text)
+    os.chmod(out_path, 0o755)
+
+
 def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
     # add-repo.sh selects the channel EXPLICITLY via --channel <ch> (issue #2147) — every
     # one of the four channels now has its own repo/conf (pfblockerng-<channel>), unlike
@@ -1116,8 +1156,10 @@ def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = N
         subdirs, files = _dir_entries(site, rel)
         with open(os.path.join(site, rel, "index.html"), "w") as fh:
             fh.write(render_autoindex(rel, subdirs, files))
-    # Publish a self-contained add-repo.sh with the hook embedded for `fetch | sh`.
+    # Publish a self-contained add-repo.sh with the hook embedded for `fetch | sh`,
+    # and its sibling migrate-channel.sh — both halves of a channel switch (issue #2148).
     write_add_repo(site, addrepo)
+    write_migrate_channel(site, addrepo)
     return len(pkgs)
 
 

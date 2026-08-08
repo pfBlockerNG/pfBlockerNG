@@ -1044,7 +1044,8 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert f"sh -s -- --base-url {base} --channel testing\npkg install {_CANON}</pre>" in page
     assert f"sh -s -- --base-url {base} --channel edge\npkg install {_CANON}</pre>" in page
     assert f"sh -s -- --base-url {base} --channel nightly\npkg install {_CANON}</pre>" in page
-    assert page.count(f"fetch -qo - {base}/add-repo.sh") == 4  # one bootstrap per card
+    # One bootstrap per card, plus the channel-switch snippet's first step (issue #2148).
+    assert page.count(f"fetch -qo - {base}/add-repo.sh") == 5
     # The manual conf came from the injected conf function — one per channel.
     for ch in gl.CH_ORDER:
         assert f"{ch}-conf-snippet" in page
@@ -1097,9 +1098,10 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     assert f"\npkg install {_CANON}</pre>" in page
     assert f"{btn}<pre>stable-conf-snippet</pre>" in page
 
-    # Exactly the eight command snippets are copyable (a unified command + a manual conf in each
-    # of the four channel cards) — inline <code> is not.
-    assert page.count('<button class="copy"') == 8
+    # Exactly the nine command snippets are copyable — a unified command + a manual conf in
+    # each of the four channel cards, plus the two-step channel switch (issue #2148). Inline
+    # <code> is not copyable.
+    assert page.count('<button class="copy"') == 9
 
     # The styling + the behaviour that make the button work are shipped inline (static page).
     assert ".copy{" in page and ".snip{position:relative}" in page
@@ -1211,6 +1213,33 @@ def test_render_page_trust_section_present_and_accurate() -> None:
     assert "additionally retains any canonical package one of its slower channels still retains" in page
     assert "Netgate" in page
     assert "commit" in page.lower() and "created" in page.lower()
+
+
+def test_render_page_channel_switching_documents_the_migration_tooling() -> None:
+    """Channel switching is a TWO-step client operation, and the page must say so.
+
+    Before issue #2148 landed, the section deferred: "client tooling for it is tracked
+    separately (issue #2148)". That deferral is now false — `add-repo.sh --channel <ch>`
+    moves the subscription and `migrate-channel.sh --channel <ch>` moves the installed
+    package onto it. Adding the repository alone is the documented silent no-op (`pkg`
+    keeps an installed package pinned to its origin repository), so a page that names
+    only the first step would actively mislead.
+    """
+    page = gl.render_page("https://x/pkg", [], _stub_conf)
+
+    assert "Channel switching" in page
+    # The deferral is retired — reintroducing it fails here.
+    assert "tracked separately" not in page
+    # Both steps, in order, both fetchable from this site.
+    switch_step_1 = "https://x/pkg/add-repo.sh"
+    switch_step_2 = "https://x/pkg/migrate-channel.sh"
+    assert switch_step_1 in page
+    assert switch_step_2 in page
+    assert page.rindex(switch_step_1) < page.rindex(switch_step_2)
+    # The mandatory flag, rendered escaped in the prose and literal in the snippet.
+    assert "--channel &lt;ch&gt;" in page
+    # The reason the second step exists at all — adding a conf moves nothing.
+    assert "origin repository" in page
 
 
 def test_render_autoindex_lists_dirs_files_and_parent() -> None:
@@ -1890,6 +1919,34 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
     assert "Generated at boot by pfblockerng_repo_generate" in conf_text, (
         f"conf missing the 'Generated at boot' marker:\n{conf_text}"
     )
+
+
+def test_write_site_publishes_migrate_channel_beside_the_bootstrap(tmp_path: Path, monkeypatch: Any) -> None:
+    """The migration script is served from the Pages root, exactly like add-repo.sh.
+
+    A user switching channels reaches the site, not a git checkout, so both halves of
+    the operation must be fetchable from the same base URL. Unlike add-repo.sh,
+    migrate-channel.sh has no sibling file to embed — it is published verbatim, and a
+    byte-for-byte comparison is what stops the published copy drifting from the tested
+    repository copy.
+    """
+    import subprocess
+
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+
+    gl.write_site(str(site), f"file://{site}", str(_ADD_REPO_REAL))
+
+    published = site / "migrate-channel.sh"
+    assert published.exists(), "write_site must publish site/migrate-channel.sh"
+    assert os.access(str(published), os.X_OK), "the published migration script must be executable"
+    published_text = published.read_text()
+    assert published_text == (_SCRIPTS_DIR / "migrate-channel.sh").read_text(), (
+        "the published migrate-channel.sh must be byte-identical to the repository copy"
+    )
+    sh_n = subprocess.run(["sh", "-n"], input=published_text, text=True, capture_output=True)
+    assert sh_n.returncode == 0, f"sh -n failed on published migrate-channel.sh:\n{sh_n.stderr}"
 
 
 # ── write_site / CLI interface — call-compatible with publish-pkg-repo.sh ─────
