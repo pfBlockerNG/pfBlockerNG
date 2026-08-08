@@ -823,6 +823,14 @@ def test_add_repo_failed_reswitch_restores_the_conf_it_did_not_create() -> None:
         _run_add_repo(root, extra_args=("--channel", "edge"))
         edge_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["edge"]
         assert edge_conf.exists(), "before-state: the box must be subscribed to edge"
+        # Re-subscribe once SUCCESSFULLY. This is the run that takes a backup — the
+        # conf now pre-exists — so it is the only one that can show the backup being
+        # cleaned up afterwards. The failing run below cannot: its restore consumes
+        # the backup on the way past, whether or not the success path would have.
+        _run_add_repo(root, extra_args=("--channel", "edge"))
+        assert not list(_repos_dir(root).glob("*.pfb-prev.*")), (
+            "a successful bootstrap must leave no conf backup behind"
+        )
         edge_before = edge_conf.read_text()
         assert "pfblockerng-edge: {" in edge_before, "before-state: the conf must carry a real repo stanza"
 
