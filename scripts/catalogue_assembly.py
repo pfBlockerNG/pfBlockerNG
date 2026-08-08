@@ -60,6 +60,19 @@ _MAX_VARVER_LENGTH = 255
 # `retention_keep_count` a lookup — no caller reshaping.
 DEFAULT_RETENTION_KEEP = 5
 
+# Containment order (slower -> faster): stable subset-of testing subset-of edge (issue #2147's
+# four-channel model). Nightly is untagged and independent of the tagged channels — no
+# containment either direction, so it protects nothing and is protected by nothing. Keys MUST
+# equal _KNOWN_CHANNELS; the assertion right below is the import-time pin, and
+# SlowerChannelsConsistencyTests in tests/test_catalogue_assembly.py is the test-time one.
+_SLOWER_CHANNELS: dict[str, tuple[str, ...]] = {
+    "stable": (),
+    "testing": ("stable",),
+    "edge": ("stable", "testing"),
+    "nightly": (),
+}
+assert set(_SLOWER_CHANNELS) == _KNOWN_CHANNELS, "_SLOWER_CHANNELS must cover every _KNOWN_CHANNELS entry"
+
 
 def _validate_channel(channel: str) -> None:
     if channel not in _KNOWN_CHANNELS:
@@ -170,6 +183,44 @@ def retention_keep_count(channel: str, varver: str) -> int:
     return DEFAULT_RETENTION_KEEP
 
 
+def _protected_versions(site_root: Path, channel: str, varver: str, *, engine: Engine) -> frozenset[str]:
+    """Canonical package versions one of ``channel``'s slower channels
+    (``_SLOWER_CHANNELS[channel]``) still carries for this SAME ``varver`` — the set
+    ``prune_retained`` must never evict from ``channel``, or a faster channel could
+    rotate a version out of its own retention window while a slower channel still
+    serves it, breaking the strict-containment contract (edge superset-of testing
+    superset-of stable).
+
+    Presence-based only: a slower-channel directory that does not exist (or does not
+    yet carry this varver) contributes nothing — no error. Scoped exactly like
+    ``prune_retained``'s own pool scan: catalog descriptor files
+    (``build_repo_portable._CATALOG_PKG_FILES``) and non-canonical (dependency)
+    packages are skipped, never read as a canonical manifest, so neither can grant
+    protection by coincidence.
+
+    Bytes are never compared here: a canonical package sharing the SAME name+version
+    across destinations is already guaranteed byte-identical at publish time
+    (``verify_multi_destination_identity`` / ``publish_release.DestinationConflictError``
+    reject any divergence before this ever runs), so matching by version string alone
+    is sufficient — this function has no reason to re-verify that post-condition.
+    """
+    pfb_pkg = engine.pfb_pkg
+    brp = engine.build_repo_portable
+    versions: set[str] = set()
+    for slower_channel in _SLOWER_CHANNELS[channel]:
+        slower_dir = site_root / slower_channel / varver
+        if not slower_dir.is_dir():
+            continue
+        for path in slower_dir.glob("*.pkg"):
+            if not path.is_file() or path.name in brp._CATALOG_PKG_FILES:
+                continue
+            manifest = pfb_pkg.read_compact_manifest(path)
+            if manifest.get("name") != pfb_pkg.CANONICAL_EMITTED_IDENTITY:
+                continue
+            versions.add(manifest["version"])
+    return frozenset(versions)
+
+
 def prune_retained(
     site_root: str | Path,
     channel: str,
@@ -180,7 +231,18 @@ def prune_retained(
 ) -> tuple[Path, ...]:
     """Delete every CANONICAL ``.pkg`` in ``site_root/channel/varver`` beyond the
     newest ``keep_count_for(channel, varver)`` generations, newest-first by
-    ``engine.pfb_pkg.pkg_version_sort_key``. Returns the deleted paths.
+    ``engine.pfb_pkg.pkg_version_sort_key`` — EXCEPT a generation ``_protected_versions``
+    reports as still retained by one of ``channel``'s slower channels for this same
+    ``varver`` (containment-aware retention). Returns the deleted paths.
+
+    Without the exception: edge receives the union of every tagged stream (edge
+    prereleases + testing prereleases + stable finals), so it rotates through its
+    ``keep_count_for`` slots strictly faster than testing/stable and could silently
+    evict a canonical version one of them still serves — quietly breaking this
+    project's strict-containment contract (edge superset-of testing superset-of stable,
+    documented in ``gen_landing.py``'s trust section and
+    ``docs/misc/architecture-notes.md``). See ``_protected_versions`` for the
+    byte-identity assumption this relies on instead of re-verifying.
 
     Scoped to the canonical package only (manifest ``name`` ==
     ``pfb_pkg.CANONICAL_EMITTED_IDENTITY``): a dependency ``.pkg`` sitting in the
@@ -190,24 +252,28 @@ def prune_retained(
     BEFORE ``regenerate_catalogue`` so an evicted generation never reaches the
     rebuilt catalog; never mutates ``.pkg`` bytes, only removes whole files.
     """
-    catalogue_dir = _catalogue_dir(Path(site_root), channel, varver, engine)
+    site_root = Path(site_root)
+    catalogue_dir = _catalogue_dir(site_root, channel, varver, engine)
     keep = keep_count_for(channel, varver)
     if type(keep) is not int or keep < 1:
         raise CatalogueAssemblyError(f"retention keep-count for {channel}/{varver} must be a positive integer")
 
     pfb_pkg = engine.pfb_pkg
     brp = engine.build_repo_portable
-    canonical: list[tuple[object, Path]] = []
+    canonical: list[tuple[object, Path, str]] = []
     for path in sorted(catalogue_dir.glob("*.pkg")):
         if not path.is_file() or path.name in brp._CATALOG_PKG_FILES:
             continue
         manifest = pfb_pkg.read_compact_manifest(path)
         if manifest.get("name") != pfb_pkg.CANONICAL_EMITTED_IDENTITY:
             continue
-        canonical.append((pfb_pkg.pkg_version_sort_key(manifest["version"]), path))
+        canonical.append((pfb_pkg.pkg_version_sort_key(manifest["version"]), path, manifest["version"]))
 
     canonical.sort(key=lambda item: item[0], reverse=True)
-    evicted = tuple(path for _, path in canonical[keep:])
+    beyond_keep = canonical[keep:]
+    # Skip the slower-channel scan entirely when nothing would be evicted anyway.
+    protected = _protected_versions(site_root, channel, varver, engine=engine) if beyond_keep else frozenset()
+    evicted = tuple(path for _, path, version in beyond_keep if version not in protected)
     for path in evicted:
         path.unlink()
     return evicted

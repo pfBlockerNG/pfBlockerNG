@@ -470,7 +470,9 @@ def _trust_section_html() -> str:
         "catalogues remains valid only because the bytes and provenance are identical.</p>"
         "<h3>Retention</h3>"
         '<p class="blurb">Each <code>&lt;channel&gt;/&lt;varver&gt;/</code> catalogue retains the newest '
-        "5 canonical packages; dependency packages are not pruned.</p>"
+        "5 canonical packages; a faster channel additionally retains any canonical package one of "
+        "its slower channels still retains, so containment (Edge &supe; Testing &supe; Stable) "
+        "survives retention, not only fan-out. Dependency packages are not pruned.</p>"
         "<h3>Netgate identity</h3>"
         '<p class="blurb">The canonical package shares its name with the pfBlockerNG package Netgate '
         "ships in its own <code>pfSense</code> repo &mdash; provenance differs. Every build published "

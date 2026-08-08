@@ -1088,7 +1088,13 @@ Full design: ADR-39.
   rollback material on a faster channel. A box therefore subscribes to exactly one project
   channel repo rather than several (issue #2251); Nightly is untagged and independent. Per
   `<channel>/<varver>/`, retention keeps the newest
-  `DEFAULT_RETENTION_KEEP = 5` canonical packages (dependency `.pkg`s are never pruned).
+  `DEFAULT_RETENTION_KEEP = 5` canonical packages, PLUS (containment-aware retention, PR #2253
+  review) any canonical version one of that channel's slower channels (`_SLOWER_CHANNELS` —
+  stable has none, testing's is stable, edge's is stable+testing, nightly has none) still
+  retains for the same varver: without that exception, Edge receives the union of every
+  tagged stream and would rotate through its 5 slots faster than Stable/Testing, silently
+  evicting a version they still serve and breaking the containment guarantee above. Dependency
+  `.pkg`s are never pruned.
   Deployment is atomic per run: `publish-pkg-repo.sh` stages ONLY the touched
   `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
   publisher failure, so a partial or failed run cannot erase another channel
