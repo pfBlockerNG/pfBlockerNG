@@ -55,10 +55,18 @@ env:
   IMAGE_REPO: ghcr.io/pfblockerng
 
 jobs:
-  build:
-    name: Build and publish the CI runner images
+  # ── preflight ────────────────────────────────────────────────────────────────────
+  # Reads the series, decides whether this run publishes, and runs the overwrite guard
+  # ONCE. It has to be its own job now that the build fans out per architecture: running
+  # the guard on each arch would let two runners both find the tag free, and the workflow
+  # concurrency group is what keeps the check and the eventual push one critical section.
+  preflight:
+    name: Resolve the tag series and guard it
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.publish.outputs.enabled }}
 
     steps:
       - name: Checkout
@@ -77,29 +85,45 @@ jobs:
           echo "Building ci-runner / ci-runner-vm tag $version"
 
       - name: Decide whether this run publishes
-        # Only devel/main (and a manual dispatch on them) publish. A pull_request build is
-        # a verification build: it proves the Dockerfiles still build and their self-checks
-        # still pass, and stops there.
+        # Only devel/main publish on a push, and a pull_request build NEVER publishes: a
+        # verification build proves the Dockerfiles still build and their self-checks
+        # still pass, on every architecture, and stops there. Publishing the shared tag
+        # from a branch would hand every other open PR a toolchain built from this one.
+        #
+        # A manual dispatch may publish from ANY ref, which is what makes a VERSION bump
+        # landable (#2256). The new series has to EXIST before the PR that repoints every
+        # workflow to it can go green, and the two-commit dance that used to bridge that
+        # gap stopped being legal when test_workflows_pin_the_current_ci_runner_series
+        # started requiring the refs and VERSION to agree in one commit. This is narrower
+        # than it looks: a dispatch is a deliberate act by someone with write access, it
+        # cannot be provoked by a pull request, and the overwrite guard below still makes
+        # it impossible to MUTATE a series anything already pins — a dispatch can only
+        # ever create one the registry does not carry yet.
         id: publish
         run: |
-          if [ "${{ github.event_name }}" != "pull_request" ] && \
-             { [ "${{ github.ref }}" = "refs/heads/devel" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; }; then
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            publish=false
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            publish=true
+          elif [ "${{ github.ref }}" = "refs/heads/devel" ] || [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            publish=true
           else
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            publish=false
+          fi
+          echo "enabled=$publish" >> "$GITHUB_OUTPUT"
+          if [ "$publish" = "false" ]; then
             echo "verification build only (event=${{ github.event_name }} ref=${{ github.ref }}); nothing will be pushed"
           fi
-
-      - name: Log in to GHCR
-        if: steps.publish.outputs.enabled == 'true'
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
 
       - name: Refuse to overwrite a published tag
         # The tag is what every other workflow pins to. If it already exists, this commit
         # changed a Dockerfile without bumping the series — fail here rather than mutate
         # the toolchain of merged workflows.
+        #
+        # The per-architecture tags are guarded too, not just the final manifest list.
+        # They are an implementation detail of assembling it, but they are still published
+        # artifacts under the same immutable series, and a half-finished previous run is
+        # exactly the case where one exists without the other.
         #
         # The registry API is used rather than `docker manifest inspect`: that exits 1 for
         # every failure alike, and GHCR answers "manifest unknown" both for an absent image
@@ -128,18 +152,20 @@ jobs:
             [ -n "$bearer" ] || {
               echo "could not obtain a registry token for ${image}; refusing to push"; exit 1; }
 
-            status="$(curl -sS -o /dev/null -w '%{http_code}' \
-              -H "Authorization: Bearer ${bearer}" -H "Accept: ${accept}" \
-              "https://ghcr.io/v2/${namespace}/${image}/manifests/${TAG}")" || status='000'
-            case "$status" in
-              404) echo "${image}:${TAG} is free" ;;
-              200) clash="$clash ${image}:${TAG}" ;;
-              *)
-                echo "cannot determine whether ${image}:${TAG} is published (HTTP ${status})"
-                echo "refusing to push rather than risk overwriting a published tag"
-                exit 1
-                ;;
-            esac
+            for ref in "${TAG}" "${TAG}-amd64" "${TAG}-arm64"; do
+              status="$(curl -sS -o /dev/null -w '%{http_code}' \
+                -H "Authorization: Bearer ${bearer}" -H "Accept: ${accept}" \
+                "https://ghcr.io/v2/${namespace}/${image}/manifests/${ref}")" || status='000'
+              case "$status" in
+                404) echo "${image}:${ref} is free" ;;
+                200) clash="$clash ${image}:${ref}" ;;
+                *)
+                  echo "cannot determine whether ${image}:${ref} is published (HTTP ${status})"
+                  echo "refusing to push rather than risk overwriting a published tag"
+                  exit 1
+                  ;;
+              esac
+            done
           done
 
           if [ -n "$clash" ]; then
@@ -151,13 +177,53 @@ jobs:
             exit 1
           fi
 
-      - name: Build ci-runner
+  # ── build ────────────────────────────────────────────────────────────────────────
+  # One job per architecture, each on a runner of THAT architecture. Everything is built
+  # for its own arch here — kcov in particular is compiled from source separately in each
+  # job, so the arm64 image carries an aarch64 kcov and the amd64 image an x86-64 one.
+  #
+  # The runner has to MATCH because of what that compile costs otherwise: building the
+  # arm64 image on an amd64 runner would run that same aarch64 compile under QEMU and
+  # turn a routine image refresh into a tens-of-minutes job. Natively both jobs finish in
+  # under three minutes. It also keeps the in-image self-checks meaningful: each arch's
+  # toolchain is executed on the hardware it targets, which a cross-build could not do.
+  build:
+    name: Build the CI runner images (${{ matrix.arch }})
+    needs: preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Log in to GHCR
+        if: needs.preflight.outputs.publish == 'true'
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build ci-runner
+        # No --platform: the runner IS this architecture, so the default target is the
+        # right one and BuildKit resolves the multi-arch base digests to their matching
+        # manifests. TARGETARCH inside the Dockerfile follows from that.
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
         run: |
           docker build \
             --file .github/docker/ci-runner.Dockerfile \
-            --tag "${IMAGE_REPO}/ci-runner:${TAG}" \
+            --tag "${IMAGE_REPO}/ci-runner:${TAG}-${ARCH}" \
             .
 
       - name: Build ci-runner-vm
@@ -165,35 +231,92 @@ jobs:
         # daemon, not yet pushed), so the VM image is built from the exact bytes that get
         # published as its base — never a stale registry copy of the same tag.
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
         run: |
           docker build \
             --file .github/docker/ci-runner-vm.Dockerfile \
-            --build-arg "BASE_IMAGE=${IMAGE_REPO}/ci-runner:${TAG}" \
-            --tag "${IMAGE_REPO}/ci-runner-vm:${TAG}" \
+            --build-arg "BASE_IMAGE=${IMAGE_REPO}/ci-runner:${TAG}-${ARCH}" \
+            --tag "${IMAGE_REPO}/ci-runner-vm:${TAG}-${ARCH}" \
             .
 
       - name: Report the baked toolchain
         # The Dockerfiles already fail their own build when a tool cannot run; this step
         # puts the resulting versions in the run log so a toolchain change is visible in
-        # the job output, not only in the diff.
+        # the job output, not only in the diff. Running natively per arch also proves the
+        # per-architecture binaries this image now selects are the executable ones.
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          docker run --rm "${IMAGE_REPO}/ci-runner:${TAG}" sh -c '
+          docker run --rm "${IMAGE_REPO}/ci-runner:${TAG}-${ARCH}" sh -c '
+            uname -m
             python3 --version; php8.3 -v | head -n1; php8.5 -v | head -n1
             node --version; composer --version
             shellcheck --version | sed -n "s/^version: /shellcheck /p"
             echo "shellspec $(shellspec --version)"
             echo "actionlint $(actionlint -version | head -n1)"
+            gh --version | head -n1
             kcov --version'
-          docker run --rm "${IMAGE_REPO}/ci-runner-vm:${TAG}" sh -c '
+          docker run --rm "${IMAGE_REPO}/ci-runner-vm:${TAG}-${ARCH}" sh -c '
             qemu-system-x86_64 --version | head -n1; oras version | head -n2'
 
-      - name: Push both images
-        if: steps.publish.outputs.enabled == 'true'
+      - name: Push this architecture
+        if: needs.preflight.outputs.publish == 'true'
         env:
-          TAG: ${{ steps.version.outputs.tag }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          docker push "${IMAGE_REPO}/ci-runner:${TAG}"
-          docker push "${IMAGE_REPO}/ci-runner-vm:${TAG}"
+          docker push "${IMAGE_REPO}/ci-runner:${TAG}-${ARCH}"
+          docker push "${IMAGE_REPO}/ci-runner-vm:${TAG}-${ARCH}"
+
+  # ── publish ──────────────────────────────────────────────────────────────────────
+  # Compose the per-architecture tags into the multi-arch manifest list every other
+  # workflow pins. `imagetools create` assembles an index from images ALREADY in the
+  # registry — it re-pushes no layers and rebuilds nothing, so the bytes each build job
+  # verified are exactly the bytes the final tag resolves to.
+  publish:
+    name: Publish the multi-arch manifests
+    needs: [preflight, build]
+    if: needs.preflight.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Create the manifest lists
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          for image in ci-runner ci-runner-vm; do
+            docker buildx imagetools create \
+              --tag "${IMAGE_REPO}/${image}:${TAG}" \
+              "${IMAGE_REPO}/${image}:${TAG}-amd64" \
+              "${IMAGE_REPO}/${image}:${TAG}-arm64"
+          done
+
+      - name: Verify both architectures are in the published index
+        # The whole point of the restructure: a tag that resolves for only one
+        # architecture would fail at `docker run` on the other, long after this workflow
+        # reported success.
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          for image in ci-runner ci-runner-vm; do
+            arches="$(docker buildx imagetools inspect --raw "${IMAGE_REPO}/${image}:${TAG}" \
+              | sed -n 's/.*"architecture"[[:space:]]*:[[:space:]]*"\([a-z0-9]*\)".*/\1/p' \
+              | sort -u | tr '\n' ' ')"
+            echo "${image}:${TAG} -> [${arches}]"
+            case " $arches " in
+              *" amd64 "*) ;;
+              *) echo "amd64 missing from ${image}:${TAG}"; exit 1 ;;
+            esac
+            case " $arches " in
+              *" arm64 "*) ;;
+              *) echo "arm64 missing from ${image}:${TAG}"; exit 1 ;;
+            esac
+          done

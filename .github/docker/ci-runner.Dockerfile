@@ -57,6 +57,14 @@ RUN apt-get update \
 # ── the runner image ─────────────────────────────────────────────────────────────────
 FROM ${DEBIAN_IMAGE}
 
+# Set by BuildKit from the target platform (amd64 / arm64), and declared here so it is in
+# scope for the prebuilt-binary downloads further down — those are the only steps that
+# cannot be architecture-agnostic (#2256). Everything above resolves per-arch on its own:
+# the base digests are OCI indexes, apt and pip select by architecture, and kcov is
+# compiled from source. Declaring it here also means a platform change invalidates the
+# cache for exactly those layers.
+ARG TARGETARCH
+
 LABEL org.opencontainers.image.source=https://github.com/pfBlockerNG/pfBlockerNG
 LABEL org.opencontainers.image.description="pfBlockerNG CI toolchain (non-VM workflows)"
 
@@ -153,40 +161,67 @@ RUN python3 -m pip install --no-cache-dir -r /opt/ci-requirements.txt
 # Pinned release ASSETS verified by SHA-256, exactly as the workflow steps did: apt would
 # re-pin the lint verdict to whatever the base image ships (#2185), and a source archive
 # is generated on demand from the tag, so its bytes are not stable (#2194).
+#
+# PER-ARCHITECTURE (#2256). Upstream ships one tarball per architecture, so one hash can
+# only ever verify one of them — each arch carries its own pin, and an arch this file has
+# no pin for fails the build instead of silently installing an unverified or wrong-arch
+# binary. ShellCheck names its arches x86_64/aarch64 while Docker's TARGETARCH says
+# amd64/arm64, hence the mapping rather than a direct interpolation.
 ARG SHELLCHECK_VERSION=v0.11.0
-ARG SHELLCHECK_SHA256=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-RUN curl -fsSLo /tmp/shellcheck.tar.xz \
-      "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz" \
- && echo "${SHELLCHECK_SHA256}  /tmp/shellcheck.tar.xz" | sha256sum -c - \
- && tar -xJf /tmp/shellcheck.tar.xz -C /tmp "shellcheck-${SHELLCHECK_VERSION}/shellcheck" \
- && install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck \
- && rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-${SHELLCHECK_VERSION}"
+ARG SHELLCHECK_SHA256_AMD64=8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+ARG SHELLCHECK_SHA256_ARM64=12b331c1d2db6b9eb13cfca64306b1b157a86eb69db83023e261eaa7e7c14588
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) sc_arch=x86_64;  sc_sha="${SHELLCHECK_SHA256_AMD64}" ;; \
+      arm64) sc_arch=aarch64; sc_sha="${SHELLCHECK_SHA256_ARM64}" ;; \
+      *) echo "ShellCheck: no pinned asset for TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/shellcheck.tar.xz \
+      "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.${sc_arch}.tar.xz"; \
+    echo "${sc_sha}  /tmp/shellcheck.tar.xz" | sha256sum -c -; \
+    tar -xJf /tmp/shellcheck.tar.xz -C /tmp "shellcheck-${SHELLCHECK_VERSION}/shellcheck"; \
+    install -m 0755 "/tmp/shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck; \
+    rm -rf /tmp/shellcheck.tar.xz "/tmp/shellcheck-${SHELLCHECK_VERSION}"
 
 # The GitHub CLI. Twelve workflows drive `gh api` / `gh pr` / `gh run` (the refresh jobs,
 # the version tracker, the nightly alerting, the release flow); it is preinstalled on the
 # GitHub-hosted runner images and would simply be MISSING inside a container, so the
 # migration in #2215 depends on it being here. Pinned release asset, verified like the rest.
 ARG GH_VERSION=2.97.0
-ARG GH_SHA256=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
-RUN curl -fsSLo /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
- && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_amd64/bin/gh" \
- && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
- && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
+ARG GH_SHA256_AMD64=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+ARG GH_SHA256_ARM64=73ea440ecad9c9e284429997ee6f93577bc6f7bc6fba357ef62c53ad8fb641a5
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) gh_sha="${GH_SHA256_AMD64}" ;; \
+      arm64) gh_sha="${GH_SHA256_ARM64}" ;; \
+      *) echo "gh: no pinned asset for TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    echo "${gh_sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh"; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${TARGETARCH}"
 
 # actionlint validates the workflow files themselves (the `actionlint` job in
 # test.yml): GitHub silently disables a workflow whose YAML its parser rejects —
 # a duplicate mapping key killed five scheduled workflows before any gate saw it
 # (issue #2231). Baked here (#2232) so the job stops re-downloading it per run.
 ARG ACTIONLINT_VERSION=1.7.12
-ARG ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
-RUN curl -fsSLo /tmp/actionlint.tar.gz \
-      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
- && echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint \
- && install -m 0755 /tmp/actionlint /usr/local/bin/actionlint \
- && rm -f /tmp/actionlint.tar.gz /tmp/actionlint
+ARG ACTIONLINT_SHA256_AMD64=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+ARG ACTIONLINT_SHA256_ARM64=325e971b6ba9bfa504672e29be93c24981eeb1c07576d730e9f7c8805afff0c6
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) al_sha="${ACTIONLINT_SHA256_AMD64}" ;; \
+      arm64) al_sha="${ACTIONLINT_SHA256_ARM64}" ;; \
+      *) echo "actionlint: no pinned asset for TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/actionlint.tar.gz \
+      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    echo "${al_sha}  /tmp/actionlint.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint; \
+    install -m 0755 /tmp/actionlint /usr/local/bin/actionlint; \
+    rm -f /tmp/actionlint.tar.gz /tmp/actionlint
 
 ARG SHELLSPEC_VERSION=0.28.1
 ARG SHELLSPEC_SHA256=350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992

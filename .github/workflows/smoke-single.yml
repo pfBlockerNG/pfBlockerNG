@@ -296,7 +296,7 @@ jobs:
     continue-on-error: ${{ inputs.nonblocking }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:4
+      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:5
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
