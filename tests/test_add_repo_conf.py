@@ -355,7 +355,7 @@ def test_no_abi_placeholder_in_any_generator_output(generator: str, channel_args
         conf = _print_conf_sh(_BUILD_REPO, cat)
     else:
         if channel_args:
-            pytest.skip("build-repo-portable.py --print-conf only emits the release conf")
+            pytest.skip("build-repo-portable.py has no --nightly alias (channels use --channel)")
         conf = _print_conf_portable(cat)
 
     assert "${ABI}" not in conf, f"{generator} {channel_args}: found ${{ABI}} in conf:\n{conf}"

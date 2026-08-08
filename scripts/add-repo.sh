@@ -137,9 +137,11 @@ USAGE
 }
 
 # ── Arg parsing ────────────────────────────────────────────────────────────────
-# The channel is a FLAG, not a positional: default is the release repo; --nightly
-# selects the separate nightly repo. (There is no stable/devel switch — both live in
-# the one release repo; you pick the package at `pkg install` time.)
+# The channel is a FLAG, not a positional: default is the legacy release repo;
+# --channel <stable|testing|edge|nightly> selects a four-channel repo (issue #2147)
+# and --nightly stays the alias for --channel nightly. (The legacy release repo has
+# no stable/devel switch — both live in it; you pick the package at `pkg install`
+# time.)
 while [ $# -gt 0 ]; do
     case "$1" in
         --nightly)      CHANNEL="nightly"; shift ;;
@@ -164,7 +166,7 @@ while [ $# -gt 0 ]; do
 done
 
 # ── Per-channel identity ───────────────────────────────────────────────────────
-# release (default) -> repo `pfblockerng`,          conf pfblockerng.conf,          Pages root
+# release (default) -> repo `pfblockerng`,          conf pfblockerng.conf,          `release/` subtree (legacy)
 #                      carries BOTH pfSense-pkg-pfBlockerNG (stable) and ...-devel
 # nightly           -> repo `pfblockerng-nightly`,  conf pfblockerng-nightly.conf,  `nightly/` subtree
 # stable            -> repo `pfblockerng-stable`,   conf pfblockerng-stable.conf,   `stable/` subtree
