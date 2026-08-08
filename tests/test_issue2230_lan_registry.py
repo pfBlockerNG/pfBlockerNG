@@ -1,11 +1,10 @@
 """Self-hosted fleet pulls route through the LAN zot registry (issue #2230).
 
 Deliberately stdlib-only, mirroring tests/test_issue2231_workflow_hygiene.py: the
-CI pytest leg runs inside ci-runner, which bakes no PyYAML. Workflow-schema
-validation is actionlint's job (the `actionlint` job in test.yml; #2232); this
-is a stray-ref guard actionlint cannot express — a self-hosted `container.image`
-naming a literal `ghcr.io/...` ref is schema-legal but bypasses the LAN registry
-routing, silently reverting every pull on that job to the public path.
+CI pytest leg runs inside ci-runner, which bakes no PyYAML. This is a stray-ref
+guard actionlint cannot express — a self-hosted container image naming a literal
+`ghcr.io/...` ref is schema-legal but bypasses the LAN registry routing,
+silently reverting every pull on that job to the public path.
 
 Only `runs-on:` blocks naming `self-hosted` AND carrying a `container.image` are
 in scope: GitHub-hosted jobs cannot reach the LAN registry (10.0.0.111) at all,
@@ -24,7 +23,31 @@ _EXPECTED_IMAGE_PREFIX = "${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/"
 _JOBS_KEY = re.compile(r"^jobs:\s*$", re.MULTILINE)
 _JOB_HEADER = re.compile(r"^  ([A-Za-z0-9_.-]+):\s*(?:#.*)?$")
 _SELF_HOSTED = re.compile(r"runs-on:.*self-hosted")
-_IMAGE_LINE = re.compile(r"^\s*image:\s*(\S.*?)\s*$", re.MULTILINE)
+# `container:` either as a map (image: on a deeper-indented line below) or as
+# the `container: <ref>` string shorthand — both are schema-legal.
+_CONTAINER_LINE = re.compile(r"^(\s*)container:\s*(\S.*?)?\s*$")
+_IMAGE_KEY = re.compile(r"^\s*image:\s*(\S.*?)\s*$")
+
+
+def _container_image(block: str) -> str | None:
+    """The job's `container` image ref only — `services.*.image` and any other
+    `image:` key outside the `container:` mapping are out of scope."""
+    lines = block.splitlines()
+    for i, line in enumerate(lines):
+        container = _CONTAINER_LINE.match(line)
+        if not container:
+            continue
+        if container.group(2):
+            return container.group(2)
+        indent = len(container.group(1))
+        for sub in lines[i + 1 :]:
+            if sub.strip() and (len(sub) - len(sub.lstrip())) <= indent:
+                break
+            image = _IMAGE_KEY.match(sub)
+            if image:
+                return image.group(1)
+        return None
+    return None
 
 
 def _workflow_files() -> list[Path]:
@@ -75,10 +98,10 @@ def _flag_stray_refs(blocks: dict[str, str]) -> list[str]:
     for name, block in blocks.items():
         if not _SELF_HOSTED.search(block):
             continue
-        image_match = _IMAGE_LINE.search(block)
-        if image_match is None:
+        image = _container_image(block)
+        if image is None:
             continue
-        if not image_match.group(1).startswith(_EXPECTED_IMAGE_PREFIX):
+        if not image.startswith(_EXPECTED_IMAGE_PREFIX):
             flagged.append(name)
     return flagged
 
@@ -96,7 +119,7 @@ def test_self_hosted_container_jobs_pull_through_the_lan_registry() -> None:
         for name in blocks:
             if not _SELF_HOSTED.search(blocks[name]):
                 continue
-            if _IMAGE_LINE.search(blocks[name]) is None:
+            if _container_image(blocks[name]) is None:
                 continue
             checked += 1
         for name in _flag_stray_refs(blocks):
@@ -112,9 +135,9 @@ def test_self_hosted_container_jobs_pull_through_the_lan_registry() -> None:
 
 
 def test_scanner_catches_a_planted_stray_ref() -> None:
-    """Vacuity guard for the scanner itself: a self-hosted job with a literal
-    ref is flagged, the LAN-registry expression form is not, and a
-    GitHub-hosted job with a literal ref is never even considered."""
+    """The scanner flags a self-hosted job with a literal container ref (map or
+    string shorthand), passes the LAN-registry expression form, and ignores
+    GitHub-hosted jobs, jobs without a container, and `services.*.image`."""
     fixture = (
         "jobs:\n"
         "  ok:\n"
@@ -129,11 +152,21 @@ def test_scanner_catches_a_planted_stray_ref() -> None:
         "    runs-on: ubuntu-latest\n"
         "    container:\n"
         "      image: ghcr.io/pfblockerng/ci-runner:4\n"
+        "  stray-shorthand:\n"
+        "    runs-on: [self-hosted, Linux, X64]\n"
+        "    container: ghcr.io/pfblockerng/ci-runner-vm:4\n"
+        "  services-only:\n"
+        "    runs-on: [self-hosted, Linux, X64]\n"
+        "    services:\n"
+        "      redis:\n"
+        "        image: ghcr.io/pfblockerng/ci-runner:4\n"
         "  no-container:\n"
         "    runs-on: [self-hosted, Linux, X64]\n"
         "    steps:\n"
         "      - run: echo hi\n"
     )
     blocks = dict(_job_blocks(fixture))
-    assert set(blocks) == {"ok", "stray", "hosted", "no-container"}, blocks
-    assert _flag_stray_refs(blocks) == ["stray"], _flag_stray_refs(blocks)
+    expected = {"ok", "stray", "hosted", "stray-shorthand", "services-only", "no-container"}
+    assert set(blocks) == expected, blocks
+    assert _flag_stray_refs(blocks) == ["stray", "stray-shorthand"], _flag_stray_refs(blocks)
+    assert _container_image(blocks["services-only"]) is None, "services.*.image must stay out of scope"
