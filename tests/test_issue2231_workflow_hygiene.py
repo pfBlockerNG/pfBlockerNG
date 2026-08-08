@@ -182,32 +182,30 @@ def test_local_smoke_pins_the_current_ci_runner_series() -> None:
 # --------------------------------------------------------------------------- #
 
 
-# `-shellcheck=V` and `-shellcheck V` both bind a value; an empty one (`=`, `''`,
-# `""`) disables the pass. `\` + newline is followed first, so a flag and its
-# value split across a continuation read as one invocation.
+# Any value at all, not just an empty one: actionlint skips the pass in silence
+# for every `-shellcheck` value it cannot resolve to a binary — `-shellcheck=`,
+# `-shellcheck ''`, a typo'd path, and `-shellcheck -color` (Go's flag package
+# binds `-color` as the value) all exit 0 with run bodies ungraded. The job
+# resolves shellcheck from PATH and the canary below proves it resolved, so the
+# flag has no legitimate use here; keeping it out also keeps the canary's argv
+# equivalent to the tree-grading argv.
 _SHELLCHECK_FLAG = re.compile(r"--?shellcheck\b")
-_SHELLCHECK_VALUE = re.compile(r"--?shellcheck(?:=(\S*)|\s+(\S+))")
 
 
 def _shellcheck_pass_disablers(text: str) -> list[str]:
-    """Every `-shellcheck` flag in ``text`` that binds an empty value, i.e.
-    switches actionlint's embedded pass off. Raises on a spelling this scanner
-    cannot read rather than reporting a vacuous pass."""
-    joined = re.sub(r"\\\n\s*", " ", text)
-    values = _SHELLCHECK_VALUE.findall(joined)
-    assert len(values) == len(_SHELLCHECK_FLAG.findall(joined)), (
-        "a -shellcheck flag is spelled in a form this scanner cannot read — update it, never let it pass vacuously"
-    )
-    return [f"-shellcheck={eq or space}" for eq, space in values if (eq or space) in ("", "''", '""')]
+    """Every `-shellcheck` flag handed to actionlint in ``text``. A `\\` + newline
+    is folded first, so a flag split from its invocation across a continuation is
+    still seen."""
+    return _SHELLCHECK_FLAG.findall(re.sub(r"\\\n\s*", " ", text))
 
 
 def test_actionlint_job_keeps_the_embedded_shellcheck_pass() -> None:
     """`run:` bodies are shell that no other gate reads — the ShellCheck job
     scans `src scripts .claude/hooks`, never `.github/workflows` (issue #2241).
-    An empty `-shellcheck` value disables that pass, so a quoting or
-    word-splitting bug in a workflow body would reach `devel` ungated. The job's
-    own second canary catches the runtime half (a missing binary makes actionlint
-    skip the pass in silence); this catches the source half."""
+    A `-shellcheck` value actionlint cannot resolve turns the pass off silently,
+    so a quoting or word-splitting bug in a workflow body would reach `devel`
+    ungated. The job's own canary catches the runtime half (a binary missing from
+    the image); this catches the source half."""
     text = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
     assert '"$AL"' in text, "the actionlint job no longer invokes $AL — update this gate"
     assert "canary-sc.yml" in text, (
@@ -216,22 +214,21 @@ def test_actionlint_job_keeps_the_embedded_shellcheck_pass() -> None:
     )
     disablers = _shellcheck_pass_disablers(text)
     assert not disablers, (
-        "the actionlint job must not disable the embedded shellcheck pass over run: bodies:\n  "
-        + "\n  ".join(disablers)
+        "the actionlint job must not pass -shellcheck: every value actionlint cannot resolve "
+        f"disables the embedded pass over run: bodies, silently. Found: {disablers}"
     )
 
 
 def test_shellcheck_disabler_scanner_catches_every_spelling() -> None:
-    """Vacuity guard: the three spellings that actually disable the pass are all
-    reported, an explicit binary path is not, and an unreadable spelling raises."""
-    assert _shellcheck_pass_disablers('xargs -0 "$AL" -shellcheck= -color') == ["-shellcheck="]
-    assert _shellcheck_pass_disablers("\"$AL\" -shellcheck '' f.yml") == ["-shellcheck=''"]
-    assert _shellcheck_pass_disablers('"$AL" \\\n  -shellcheck=  -color') == ["-shellcheck="]
-    assert _shellcheck_pass_disablers('"$AL" -shellcheck=/usr/local/bin/shellcheck f.yml') == []
+    """Vacuity guard: every spelling that disables the pass is reported —
+    including the two that bind a value the flag's own line makes look harmless
+    (an explicit path, and `-color` swallowed as the value)."""
+    assert _shellcheck_pass_disablers('xargs -0 "$AL" -shellcheck= -color') == ["-shellcheck"]
+    assert _shellcheck_pass_disablers("\"$AL\" -shellcheck '' f.yml") == ["-shellcheck"]
+    assert _shellcheck_pass_disablers('"$AL" \\\n  -shellcheck=  -color') == ["-shellcheck"]
+    assert _shellcheck_pass_disablers('xargs -0 "$AL" -shellcheck -color') == ["-shellcheck"]
+    assert _shellcheck_pass_disablers('"$AL" -shellcheck=/usr/local/bin/shellcheck f.yml') == ["-shellcheck"]
+    assert _shellcheck_pass_disablers('"$AL" --shellcheck=/usr/bin/shellcheckk f.yml') == ["--shellcheck"]
     assert _shellcheck_pass_disablers('"$AL" -color f.yml') == []
-    try:
-        _shellcheck_pass_disablers('"$AL" -shellcheck')
-    except AssertionError:
-        pass
-    else:  # pragma: no cover - only reached if the scanner stops guarding itself
-        raise AssertionError("a valueless -shellcheck spelling must raise, not pass vacuously")
+    # The job's own comments say "shellcheck" a lot; only the FLAG may trip it.
+    assert _shellcheck_pass_disablers("# actionlint runs shellcheck --norc; see .shellcheckrc") == []
