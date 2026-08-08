@@ -4648,22 +4648,28 @@ function pfb_channel_for_install(?string $repo, ?string $pkgname): ?string {
 }
 
 /*
- * Does a software-update cache describe an install from $repo? (issue #2148)
+ * Does a software-update cache describe the install currently on this box? (issue #2148)
  *
- * All four catalogues publish the ONE canonical identity, so the package NAME cannot tell
- * two catalogues apart — the recorded repo can. Both consumers of the cache ask this same
- * question: the cron orchestrator, deciding whether the cached latest/last_notified may be
- * reused, and the Software page, deciding whether the cached latest/last-checked/status may
- * be DISPLAYED. They must agree, because the orchestrator's reset lands only on the next
- * tick: between a channel migration and that tick the page would otherwise show the new
- * channel beside the previous catalogue's version and an "Update available" verdict for a
- * channel the box is no longer on.
+ * An install is identified by BOTH halves, because either can change alone:
+ *   - the REPO, since all four catalogues publish the one canonical identity, so the name
+ *     cannot tell two catalogues apart — a channel switch changes only this;
+ *   - the NAME, since the legacy shared 'pfblockerng' catalogue carries both
+ *     pfSense-pkg-pfBlockerNG and ...-devel — an in-repo identity swap changes only this.
+ *
+ * Both consumers of the cache ask this one question, and must ask the WHOLE of it: the
+ * cron orchestrator, deciding whether cached latest/last_notified may be reused, and the
+ * Software page, deciding whether cached latest/last-checked/status may be DISPLAYED. The
+ * orchestrator's reset lands only on the next tick, so a page asking a looser question
+ * shows the new install's label beside the previous one's version and verdict until then.
  *
  * A cache with NO 'repo' key predates #2148. That is not a catalogue change — it is every
- * existing box, once — so it is adopted rather than discarded; discarding it would
+ * existing box, once — so that half is adopted rather than discarded; discarding it would
  * re-announce an already-notified version and blank the last-known latest.
  */
-function pfb_software_cache_matches_repo(array $cache, string $repo): bool {
+function pfb_software_cache_matches_install(array $cache, string $pkgname, string $repo): bool {
+	if ((string) ($cache['pkgname'] ?? '') !== $pkgname) {
+		return FALSE;
+	}
 	return !array_key_exists('repo', $cache) || (string) $cache['repo'] === $repo;
 }
 
@@ -4998,14 +5004,11 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	} else {
 		$latest = pfb_pkg_latest($pkgname, $repo);
 	}
-	// Only reuse cached latest/last_notified when the cache belongs to the SAME install —
-	// same package name AND same repository (pfb_software_cache_matches_repo(), the same
-	// predicate the Software page gates its displayed values on). issue #2148: all four
-	// catalogues publish the one canonical identity, so a catalogue switch leaves the NAME
-	// unchanged and a name-only scope would serve the old catalogue's version as the new
-	// one's, with its last_notified swallowing the first genuine notice for the new one.
-	$cache_matches_install = (($cache['pkgname'] ?? '') === $pkgname)
-		&& pfb_software_cache_matches_repo($cache, $repo);
+	// Only reuse cached latest/last_notified when the cache belongs to the SAME install.
+	// pfb_software_cache_matches_install() is the whole question — name AND repo — and the
+	// Software page gates its DISPLAYED values on the identical call, so the two can never
+	// disagree about which cache is current.
+	$cache_matches_install = pfb_software_cache_matches_install($cache, $pkgname, $repo);
 	if ($latest === '' && $cache_matches_install) {
 		$latest = (string) ($cache['latest'] ?? '');
 	}

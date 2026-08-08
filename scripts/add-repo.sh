@@ -306,20 +306,36 @@ chmod 755 "${ON_BOX_HOOK}"
 #    the same "never delete what cannot be replaced" rule the sibling
 #    migrate-channel.sh is built around. Retirement is step 6, after the verify.
 mkdir -p "${REPOS_DIR}"
-CONF_PREEXISTED=0
-[ -f "${CONF_PATH}" ] && CONF_PREEXISTED=1
+# Staging TRUNCATES the conf, so "it existed" is not enough to undo it — a re-subscribe
+# to the channel the box is already on would be left holding the one-line stub, i.e. a
+# conf that subscribes to nothing. Keep the previous body aside instead.
+CONF_BACKUP=""
+if [ -f "${CONF_PATH}" ]; then
+    CONF_BACKUP="${CONF_PATH}.pfb-prev.$$"
+    cp "${CONF_PATH}" "${CONF_BACKUP}"
+fi
 printf '==> Staging %s conf at %s (hook will resolve it)\n' "${CHANNEL}" "${CONF_PATH}"
 printf '# pfBlockerNG %s repo conf — pending boot-time generation (ADR-39).\n' "${CHANNEL}" > "${CONF_PATH}"
 
-# Undo a conf THIS run created, so a failed bootstrap leaves the box's repository
-# configuration exactly as it found it. A conf that already existed is left alone —
-# removing it would be the destruction this ordering exists to prevent.
+# Undo everything THIS run did to the repository configuration, so a failed bootstrap
+# leaves the box exactly as it found it: a conf this run created is removed, and a conf
+# it truncated is restored byte-for-byte. Either way the box keeps a working
+# subscription — losing one is the destruction this ordering exists to prevent.
 abort_unstaged() {
-    if [ "${CONF_PREEXISTED}" -eq 0 ]; then
+    if [ -n "${CONF_BACKUP}" ]; then
+        mv -f "${CONF_BACKUP}" "${CONF_PATH}"
+        printf '  Restored the previous %s conf; your subscription is unchanged.\n' "${CHANNEL}" >&2
+    else
         rm -f "${CONF_PATH}"
         printf '  Removed the conf this run staged; your previous subscription is untouched.\n' >&2
     fi
     exit 1
+}
+
+# On success the backup is redundant — drop it so no stray file is left in the repos dir.
+drop_conf_backup() {
+    [ -n "${CONF_BACKUP}" ] && rm -f "${CONF_BACKUP}"
+    CONF_BACKUP=""
 }
 
 # 3. Run the hook once now to resolve the conf for THIS box (it also runs every
@@ -354,8 +370,18 @@ sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}" >&2
 #    channel repo carries the one canonical package; only the legacy release repo
 #    carries two (stable may not be published yet) — finding EITHER proves that
 #    repo loaded. Exit non-zero (fail loud) only if NONE present.
+# `pkg update` exits non-zero when ANY enabled repository fails to refresh — including
+# the channel this run is switching AWAY from, whose catalogue may be exactly what went
+# unpublished. Under `set -e` that would abort here: after the conf was staged, before
+# retirement, leaving the box subscribed to TWO project repositories at equal priority.
+# Route it through the same cleanup as every other failure instead.
 printf '==> pkg update (refreshing catalogs, including the pfBlockerNG repo)\n'
-env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f >/dev/null
+env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f >/dev/null || {
+    printf 'add-repo: %s update -f failed — catalogs were not refreshed.\n' "${PKG_BIN}" >&2
+    printf '  A repository is unreachable or serving an unreadable catalog.\n' >&2
+    printf '  Inspect with: %s -d update   (traces the catalog fetch)\n' "${PKG_BIN}" >&2
+    abort_unstaged
+}
 
 printf '==> Verifying pfBlockerNG package(s) are visible from repo '\''%s'\''\n' "${REPO_NAME}"
 found_any=0
@@ -389,5 +415,6 @@ printf '%s\n' "${PROJECT_CONFS}" | while IFS= read -r _other_conf; do
         "${REPOS_DIR}/${_other_conf}"
     rm -f "${REPOS_DIR}/${_other_conf}"
 done
+drop_conf_backup
 
 printf '==> Done — conf at %s\n' "${CONF_PATH}"

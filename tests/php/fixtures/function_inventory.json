@@ -9402,7 +9402,7 @@
         "returnType": "string",
         "params": []
     },
-    "pfb_software_cache_matches_repo": {
+    "pfb_software_cache_matches_install": {
         "returnsRef": false,
         "returnType": "bool",
         "params": [
@@ -9411,6 +9411,13 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            },
+            {
+                "name": "pkgname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             },
             {

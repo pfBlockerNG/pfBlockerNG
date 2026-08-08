@@ -125,14 +125,15 @@ pfb_print_pending_changes_box();
 // from the cron-maintained cache (empty/unknown renders a clean "Not checked yet" — never a
 // warning — so the page passes ui_render on the first GET, before any check has run).
 //
-// issue #2148: the cache is trusted only while it describes an install from the repository
-// the box is on NOW. pfb_software_update_check() rescopes it on a catalogue change, but that
-// lands on the next tick — so between a channel migration and that tick this page would
-// otherwise pair the new channel's label with the PREVIOUS catalogue's version and an
-// "Update available"/"Up to date" verdict for a channel the box has left. Same predicate as
-// the orchestrator's, so the two can never disagree about which cache is current.
+// issue #2148: the cache is trusted only while it describes the install the box carries
+// NOW — the same package name from the same repository. pfb_software_update_check()
+// rescopes it on a change, but that lands on the next tick, so between a channel migration
+// (or an in-repo identity swap on the legacy shared catalogue) and that tick this page
+// would otherwise pair the current install's label with the PREVIOUS one's version and an
+// "Update available"/"Up to date" verdict it has no business showing. Identical call to the
+// orchestrator's, so the two can never disagree about which cache is current.
 $cache		= pfb_software_read_cache();
-$cache_current	= pfb_software_cache_matches_repo($cache, $pfb_sw_repo);
+$cache_current	= pfb_software_cache_matches_install($cache, $pfb_sw_pkgname, $pfb_sw_repo);
 $cached_latest	= $cache_current ? (string) ($cache['latest'] ?? '') : '';
 $installed_ver	= pfb_pkg_installed_version($pfb_sw_pkgname);
 $disp_channel	= $pfb_sw_channel ?: gettext('unknown');
