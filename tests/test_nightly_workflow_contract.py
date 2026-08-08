@@ -1,9 +1,27 @@
 """Static contract for the branch-independent Nightly workflow."""
 
+import re
 from pathlib import Path
 
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly.yml"
 ALERT_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly-failure-alert.yml"
+
+
+def _extract_job(text: str, job_name: str) -> str:
+    """Return the body of a top-level ``  <job_name>:`` job block, bounded to the
+    next sibling job at the same (2-space) indentation, or end-of-file.
+
+    Mirrors ``tests/_workflow_steps.extract_step``'s sibling-boundary idea, one
+    indentation level up (job keys, not `- name:` step items).
+    """
+    marker = re.compile(rf"^  {re.escape(job_name)}:\n", re.MULTILINE)
+    match = marker.search(text)
+    assert match is not None, f"job {job_name!r} not found in workflow"
+    start = match.end()
+    sibling = re.compile(r"^  [A-Za-z0-9_-]+:\n", re.MULTILINE)
+    next_match = sibling.search(text, start)
+    end = next_match.start() if next_match else len(text)
+    return text[start:end]
 
 
 def test_nightly_workflow_exists_and_is_branch_independent() -> None:
@@ -121,3 +139,114 @@ def test_handoff_step_artifact_extraction_stays_canonical_only() -> None:
 
     assert "jq '[.builds[].artifact]' nightly-handoff.json > artifacts.json" in step
     assert "dep_artifacts" not in step
+
+
+# --------------------------------------------------------------------------- #
+# issue #2146 S3 — the publish-pkg-repo job: the only production catalogue
+# mutation, gated on prepare's outcome AND the handoff job's own success.
+# --------------------------------------------------------------------------- #
+
+
+def test_publish_pkg_repo_job_gates_on_prepare_and_handoff() -> None:
+    """W1/W2: needs + if exact -- the only production catalogue mutation runs
+    strictly after the verified handoff, and only on an actual build outcome."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+
+    assert 'name: "Publish the pkg catalogue"' in job
+    assert "needs: [prepare, handoff]" in job
+    assert "if: needs.prepare.outputs.outcome == 'build' && needs.handoff.result == 'success'" in job
+
+
+def test_publish_pkg_repo_job_permissions_are_read_only() -> None:
+    """W3: job-level permissions never carry contents: write -- the push rides the
+    minted App token (create-github-app-token), never GITHUB_TOKEN."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    perms_start = job.index("permissions:")
+    perms_block = job[perms_start : perms_start + 120]
+    assert "packages: read" in perms_block
+    assert "contents: read" in perms_block
+    assert "contents: write" not in perms_block
+
+
+def test_publish_pkg_repo_job_checks_out_pinned_trusted_tools() -> None:
+    """W4: trusted-tools checkout pinned to prepare's own tools_sha, path trusted --
+    same pinned-checkout idiom every other job in this workflow already uses, and
+    the security rationale release-published.yml's own pinned checkout documents
+    (this step is EXECUTED AS SHELL and, via publish_nightly.py, holds an App
+    token able to push to pfBlockerNG/pkg)."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    assert "ref: ${{ needs.prepare.outputs.tools_sha }}" in job
+    assert "path: trusted" in job
+    assert "SECURITY" in job
+
+
+def test_publish_pkg_repo_job_mints_scoped_app_token() -> None:
+    """W5: mirrors release-published.yml's own App-token step -- same secrets,
+    same narrowed permission-contents: write, scoped to pfBlockerNG/pkg."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    assert "actions/create-github-app-token@v3" in job
+    assert "app-id: ${{ secrets.PKG_GITHUB_APP_ID }}" in job
+    assert "private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}" in job
+    assert "owner: pfBlockerNG" in job
+    assert "repositories: pkg" in job
+    assert "permission-contents: write" in job
+
+
+def test_publish_pkg_repo_job_checks_out_pkg_repo_with_app_token() -> None:
+    """W6: pfBlockerNG/pkg checkout carries the minted token with
+    persist-credentials true (publish-pkg-repo.sh's push rides this checkout's
+    own credential helper)."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    assert "repository: pfBlockerNG/pkg" in job
+    assert "ref: main" in job
+    assert "token: ${{ steps.app-token.outputs.token }}" in job
+    assert "persist-credentials: true" in job
+    assert "path: pkg-repo" in job
+    assert "fetch-depth: 1" in job
+
+
+def test_publish_pkg_repo_job_downloads_both_handoff_and_result_artifacts() -> None:
+    """W7: both artifact downloads -- the single-file handoff and every
+    nightly-result-<major>/ leg, merge-multiple false (one directory per leg,
+    matching what the handoff job's own download step already requires)."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    assert "name: nightly-handoff-${{ github.run_id }}" in job
+    assert "path: handoff" in job
+    assert "pattern: nightly-result-*" in job
+    assert "path: results" in job
+    assert "merge-multiple: false" in job
+
+
+def test_publish_pkg_repo_job_invokes_the_trusted_wrapper_with_nightly_kind() -> None:
+    """W8: PUBLISH_KIND=nightly, SOURCE_RUN_ID = run_id:run_attempt (same
+    composition as the handoff job's own stale-callback identity), path env vars
+    exported in the RUN BODY not the env: map (issue #2231), and the wrapper is
+    invoked from the TRUSTED checkout, never the pkg-repo one."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    assert "PUBLISH_KIND=nightly" in job
+    assert 'SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"' in job
+    assert 'PFB_SRC="$GITHUB_WORKSPACE/trusted"' in job
+    assert 'PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"' in job
+    assert 'HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"' in job
+    assert 'RESULTS_DIR="$GITHUB_WORKSPACE/results"' in job
+    assert "BASE_URL=https://pfblockerng.github.io/pkg" in job
+    assert "sh trusted/scripts/publish-pkg-repo.sh" in job
+
+
+def test_publish_pkg_repo_job_documents_the_rerun_staleness_property() -> None:
+    """W9: a "re-run failed jobs" attempt (new run_attempt against the SAME
+    run_id) is REJECTED by publish_nightly.py's own handoff run_id equality
+    check -- documented in-workflow so that recovery path isn't mistaken for
+    safe; the whole workflow must be re-run instead."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    assert "re-run" in job.lower() or "rerun" in job.lower()
+    assert "run_id" in job.lower()
+    assert "reject" in job.lower()

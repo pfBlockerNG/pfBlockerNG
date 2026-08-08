@@ -534,3 +534,99 @@ jobs:
             echo "::error::persisted nightly-state.json does not match the local state document"
             exit 1
           fi
+
+  # ── Publish the pkg catalogue (ADR-17, issue #2146 S3) ──────────────────────
+  # The only production catalogue mutation in the whole Nightly flow. Runs after
+  # the handoff job's own verified handoff succeeds -- never races it, never on
+  # a skipped/failed/unchanged outcome. See scripts/publish-pkg-repo.sh
+  # (PUBLISH_KIND=nightly), the only thing here that touches git.
+  publish-pkg-repo:
+    name: "Publish the pkg catalogue"
+    needs: [prepare, handoff]
+    if: needs.prepare.outputs.outcome == 'build' && needs.handoff.result == 'success'
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:4
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --init --user 1001:1001
+    env:
+      HOME: /tmp
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout trusted workflow tools (the engine + orchestration scripts — TRUSTED ref)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: publish-pkg-repo.sh below is EXECUTED AS SHELL and, via
+          # publish_nightly.py, holds an App token able to push to
+          # pfBlockerNG/pkg. Same rule as release-published.yml's own
+          # publish-pkg-repo job: pin the revision the workflow's own `prepare`
+          # job already resolved (needs.prepare.outputs.tools_sha), never a
+          # floating ref that could move between this run's start and now.
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: trusted
+
+      - name: Generate GitHub App token (pkg)
+        id: app-token
+        # Mint a short-lived installation token from the PKG GitHub App, scoped to
+        # pfBlockerNG/pkg with Contents:write. The App installation already holds
+        # "Read and write access to actions, code, and copilot agent settings" —
+        # create-github-app-token NARROWS the minted token to only the permission(s)
+        # listed, so contents:write here (not actions:write) is the whole reason
+        # the token can push code. REQUIRES the App to be installed on pkg with
+        # Contents:write; if it is not, this step fails loudly.
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-contents: write
+
+      - name: Checkout pfBlockerNG/pkg
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/pkg
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true # publish-pkg-repo.sh pushes via this token
+          path: pkg-repo
+          fetch-depth: 1
+
+      - name: Download verified publisher handoff
+        uses: actions/download-artifact@v7
+        with:
+          name: nightly-handoff-${{ github.run_id }}
+          path: handoff
+
+      - name: Download every BUILD result
+        uses: actions/download-artifact@v7
+        with:
+          pattern: nightly-result-*
+          path: results
+          merge-multiple: false
+
+      - name: Publish the pkg catalogue
+        # Path env vars are exported in the run body, not an env: map — GitHub
+        # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
+        # there would reach the job as a literal dollar-string (issue #2231).
+        run: |
+          set -eu
+          export PFB_SRC="$GITHUB_WORKSPACE/trusted"
+          export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
+          export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
+          export RESULTS_DIR="$GITHUB_WORKSPACE/results"
+          export PUBLISH_KIND=nightly
+          # A "re-run failed jobs" click on just this job keeps the SAME
+          # github.run_id but mints a NEW github.run_attempt — publish_nightly.py
+          # rejects that mismatch against the handoff's own recorded run_id
+          # outright (stale-callback doctrine, issue #2146 S2's publish_nightly.py
+          # _validate_handoff). Re-run the WHOLE workflow instead of just this job.
+          export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
+          export BASE_URL=https://pfblockerng.github.io/pkg
+          sh trusted/scripts/publish-pkg-repo.sh

@@ -111,6 +111,18 @@ import os
 import sys
 
 site = sys.argv[1]
+argv = sys.argv[1:]
+# Records the exact --matrix file this run was fed, byte for byte, when
+# FAKE_LANDING_MATRIX_RECORD is set — publish-pkg-repo.sh's own job (not
+# gen_landing.py's) is choosing that file's SOURCE (tagged: $ROUTE_MATRIX;
+# nightly: the handoff's own route_matrix), so the nightly-mode spec examples
+# assert against this record rather than re-deriving the transform themselves.
+if "--matrix" in argv:
+    matrix_path = argv[argv.index("--matrix") + 1]
+    record_path = os.environ.get("FAKE_LANDING_MATRIX_RECORD")
+    if record_path:
+        with open(matrix_path, encoding="utf-8") as src, open(record_path, "w", encoding="utf-8") as dst:
+            dst.write(src.read())
 with open(os.path.join(site, "index.html"), "w") as fh:
     fh.write("landing stub\n")
 with open(os.path.join(site, "browse.html"), "w") as fh:
@@ -130,6 +142,68 @@ with open(os.path.join(site, "add-repo.sh"), "w") as fh:
 print("landing stub written")
 PY
     echo '#!/bin/sh' > "${base}/fake-src/scripts/add-repo.sh"
+
+    # --- fake publish_nightly.py — the Nightly-mode counterpart to the
+    # publish_release.py stub above. Same doubling rationale: real handoff/asset
+    # verification is publish_nightly.py's own unit suite
+    # (tests/test_publish_nightly.py); this script's OWN job — the git mutation
+    # and mode-routing around it — is what this spec exercises. Always reads the
+    # handoff JSON (mirrors the real module's own read+parse-first behaviour) so
+    # an invalid HANDOFF_FILE fails here, before any git mutation, exactly like a
+    # real verification failure would.
+    cat >"${base}/fake-src/scripts/publish_nightly.py" <<'PY'
+import json
+import os
+import sys
+
+
+def _arg(name, argv):
+    return argv[argv.index(name) + 1]
+
+
+def main():
+    argv = sys.argv[1:]
+    pkg_repo = _arg("--pkg-repo", argv)
+    handoff_path = _arg("--handoff", argv)
+    mode = os.environ.get("FAKE_MODE", "success")
+
+    # Records the exact argv this invocation received, for the spec's own
+    # assertions -- proves the wrapper forwards all four flags with the right
+    # values, not just that SOME python3 call happened.
+    record_path = os.environ.get("FAKE_INVOCATION_RECORD")
+    if record_path:
+        with open(record_path, "w") as fh:
+            fh.write("\n".join(argv))
+
+    try:
+        with open(handoff_path, encoding="utf-8") as fh:
+            json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"::error::simulated handoff read/parse failure: {exc}", file=sys.stderr)
+        return 1
+
+    if mode == "fail":
+        print("::error::simulated nightly publish fault", file=sys.stderr)
+        return 1
+
+    if mode == "noop":
+        print("NOOP: every destination already matches this run's verified assets")
+        return 0
+
+    for target in os.environ.get("FAKE_TOUCHED", "").split(","):
+        target = target.strip()
+        if not target:
+            continue
+        target_dir = os.path.join(pkg_repo, "docs", target)
+        os.makedirs(target_dir, exist_ok=True)
+        with open(os.path.join(target_dir, "marker.pkg"), "w") as fh:
+            fh.write(target)
+        print(f"updated {target}")
+    return 0
+
+
+sys.exit(main())
+PY
 
     common_env() {
         PFB_SRC="${base}/fake-src"
@@ -164,6 +238,23 @@ PY
     # failure would let an unreadable repository (deleted ref, broken .git, detached
     # HEAD after a failed checkout -B) pass as "HEAD did not move".
     git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "UNRESOLVABLE-main"
+  }
+
+  # --- PUBLISH_KIND=nightly fixture ------------------------------------------
+  # Layered on top of common_env (already exported by setup()): keeps the shared
+  # vars (PFB_SRC/PKG_REPO/SOURCE_RUN_ID/BASE_URL) and adds the nightly-only ones.
+  # Tagged-only vars are deliberately left exported by common_env in most nightly
+  # examples -- proving they are IGNORED, not merely absent (see the "does not
+  # leak a tagged trailer" example) -- except where a test explicitly unsets them.
+  nightly_env() {
+    PUBLISH_KIND=nightly
+    HANDOFF_FILE="${base}/nightly-handoff.json"
+    RESULTS_DIR="${base}/results"
+    export PUBLISH_KIND HANDOFF_FILE RESULTS_DIR
+    mkdir -p "$RESULTS_DIR"
+    cat > "$HANDOFF_FILE" <<'JSON'
+{"run_id":"10:1","allocation":{"pkg_version":"26.08.0001"},"route_matrix":[{"freebsd_major":"15","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]}
+JSON
   }
 
   # --- landing_matrix ABI expression pins: the transform lives in this script,
@@ -457,5 +548,159 @@ HOOK
     The stderr should not include 'push rejected'
     The output should not include 'sync attempt 2/'
     The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  # --- PUBLISH_KIND=nightly (issue #2146 S3) --------------------------------
+
+  It 'n1: nightly mode invokes publish_nightly.py with the four required flags and publishes on updated output'
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/nightly-invocation.txt")"
+    The variable invocation should include '--handoff'
+    The variable invocation should include "$HANDOFF_FILE"
+    The variable invocation should include '--results-dir'
+    The variable invocation should include "$RESULTS_DIR"
+    The variable invocation should include '--pkg-repo'
+    The variable invocation should include "${base}/pkg-repo"
+    The variable invocation should include '--source-run-id'
+    The variable invocation should include '10:1'
+  End
+
+  It 'n2a: nightly mode fails before any git call when HANDOFF_FILE is missing'
+    nightly_env
+    unset HANDOFF_FILE
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 2
+    The stderr should include 'HANDOFF_FILE is required'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n2b: nightly mode fails before any git call when RESULTS_DIR is missing'
+    nightly_env
+    unset RESULTS_DIR
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 2
+    The stderr should include 'RESULTS_DIR is required'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n2c: nightly mode fails before any git call when SOURCE_RUN_ID is missing'
+    nightly_env
+    unset SOURCE_RUN_ID
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 2
+    The stderr should include 'SOURCE_RUN_ID is required'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n3: nightly mode does not require any tagged-only env var'
+    nightly_env
+    unset SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS ASSETS_DIR ROUTE_MATRIX
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+  End
+
+  It 'n4a: nightly mode publisher failure aborts before any git mutation'
+    nightly_env
+    export FAKE_MODE=fail
+    When run script "$script"
+    The status should equal 1
+    The stderr should include 'simulated nightly publish fault'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n4b: nightly mode invalid handoff JSON fails via the publisher before any git mutation'
+    nightly_env
+    printf 'not json' > "$HANDOFF_FILE"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 1
+    The stderr should include 'simulated handoff read/parse failure'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n5: nightly mode NOOP output commits nothing'
+    nightly_env
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n6: nightly mode commit message carries the nightly version subject and trailers, ignoring tagged vars'
+    nightly_env
+    # Tagged vars (RELEASE_TAG=v4.0.0.b1 etc.) remain exported by common_env --
+    # proves PUBLISH_KIND=nightly ignores them rather than leaking a tagged
+    # trailer into the nightly commit message.
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: nightly 26.08.0001 -> ["nightly"]'
+    The variable msg should include 'pfBlockerNG-Nightly-Version: 26.08.0001'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+    The variable msg should not include 'pfBlockerNG-Release-Tag'
+    The variable msg should not include 'v4.0.0.b1'
+  End
+
+  It 'n7: rejects an invalid PUBLISH_KIND value before any git call'
+    export PUBLISH_KIND=bogus
+    When run script "$script"
+    The status should equal 1
+    The stderr should include "::error::PUBLISH_KIND must be 'tagged' or 'nightly', got 'bogus'"
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n8: PUBLISH_KIND unset still defaults to the tagged behaviour'
+    unset PUBLISH_KIND
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
+  End
+
+  It 'n9: nightly mode derives the landing matrix from the handoff route_matrix, not $ROUTE_MATRIX'
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_LANDING_MATRIX_RECORD="${base}/landing-matrix-seen.json"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    seen="$(cat "${base}/landing-matrix-seen.json")"
+    The variable seen should equal '[{"abi":"FreeBSD:15:*","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]'
   End
 End
