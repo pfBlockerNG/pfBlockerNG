@@ -82,7 +82,10 @@ Three things start together at the top of the review step:
    native reviewer surface (per-client mapping below). They are client-tracked:
    never arm a wait for them; act on their completions. The review is additive to
    CodeRabbit, never a fallback: it runs regardless, and stands alone when
-   CodeRabbit never reviews.
+   CodeRabbit never reviews. **Self-review exemption** (owner, 2026-08-08): for a
+   small, relatively contained change, a session at ≤ 50% context usage may run the
+   three lenses itself instead of spawning the legs — past 50% context it MUST
+   spawn. The audit comment(s) still record model, head SHA and the self-review.
 3. **The CodeRabbit acknowledgement window** (next section) — the one untracked
    external that gets a bounded poll.
 
@@ -150,18 +153,17 @@ self-exiting background task; result file's LAST line is the verdict). A PR alre
 older than 10 minutes with no CodeRabbit message → conclude NOACK immediately.
 
 - **ACK** (any CodeRabbit message) → **quota fast-path first**: if the ONLY content is
-  a rate-limit notice (no inline comments, no submitted review, no "actionable
-  comments" header) whose own "Next review available in" time is **> 5 minutes**,
-  drop CodeRabbit immediately — no finished-wait; surface the skip. A notice quoting ≤ 5 minutes, or any real review content beside it, →
-  wait for the finished review (a transient notice often precedes the real review).
+  a rate-limit notice (no review content) whose own "Next review available in" time
+  is **> 5 minutes**, drop CodeRabbit immediately — no finished-wait; surface the
+  skip. A notice quoting ≤ 5 minutes, or any real review content beside it, → wait
+  for the finished review.
 - **NOACK** → nudge **once** (`@coderabbitai review` as a top-level comment), then
   re-run the ack wait with a fresh 10-minute window anchored on *now* (`--since`).
   ACK → proceed as above; still silent → CodeRabbit is unavailable; the adversarial
   review carries the review step. Never a second nudge.
 
-Waiting on the finished review (`--until finished`; the same script is the single
-implementation of the state machine, handle matching case-insensitive and anchored —
-never append `[bot]` yourself):
+Waiting on the finished review (`--until finished`; handle matching case-insensitive
+and anchored — never append `[bot]` yourself):
 
 - **FINISHED** — terminal result posted, including a clean pass. Content beats a
   quota phrase: real review content beside a notice is FINISHED.
@@ -180,10 +182,9 @@ never append `[bot]` yourself):
   canonical fallback `@coderabbitai full review`), re-arm **finished-only** with
   `--since` now (never re-trigger on a repeat decline).
 - **PAUSE** (branch too active) — post `@coderabbitai resume` once, re-arm
-  finished-only. Avoid tripping the pause: batch fixes into ONE push while a review
-  is pending.
-- **TIMEOUT** — first check for a **silent pause** (walkthrough stuck at "review in
-  progress"/"processing new changes" with no terminal result): treat as PAUSE.
+  finished-only.
+- **TIMEOUT** — first check for a **silent pause** (walkthrough stuck with no
+  terminal result): treat as PAUSE.
   Otherwise report and ask: keep waiting or proceed.
 - CodeRabbit acked but never finished → proceed on the adversarial review, note the
   timeout (the nudge is no-ack only); a late review folds in before the merge gate.

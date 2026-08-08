@@ -31,24 +31,24 @@ and always handles **docs / config / settings / skills** directly. Delegation is
 non-trivial, multi-step `src/`/`tests/`/CI work. **Review-fix rounds are the canonical
 direct case** (owner, 2026-08-08): a small fix the session understands — or a reviewer's
 proposed solution it agrees with — is applied by the session itself, tests included,
-never spawned to a sub-agent.
+never spawned to a sub-agent. **Ticket pickup follows the same rule**: the
+session that analyzed a ticket implements it directly when the change
+is small-ish — max a handful of lines in one production file + a couple of tests + a
+few doc files; handing that to an implementer is waste. Hard constraint on ALL direct
+work: session context usage ≤ 50% — past 50% the session MUST delegate.
 
 - **The per-step verifier is always small tier** (owner directive 2026-07-14) — never the
   top-tier model that authored the brief; a different model reads with different blind
-  spots, and the step gate doesn't need the top tier. The top
-  model's cross-referencing is reserved for the **whole-PR review** (the adversarial
-  reviewer on a large/complex PR, [`landing.md`](landing.md)), where it sees every
-  step's diff at once.
+  spots. The top model's cross-referencing is reserved for the correctness+hostile
+  review leg ([`landing.md`](landing.md)).
 
 - **An implementer may re-delegate when a subtask genuinely splits** (parallel siblings, a
-  verifier per finding) — the platform enforces its own nesting-depth cap, so we add no depth
-  rule of our own. **Accountability never splits**: the spawning agent verifies nested work
+  verifier per finding) — the platform enforces its own nesting-depth cap. **Accountability never splits**: the spawning agent verifies nested work
   itself before it enters its handoff, every handoff/gate field stays the spawner's to fill,
   and a nested delegate's defect is the spawner's defect at the gate above. Delegating the
   whole brief downward unexamined is still a defect — split work, not responsibility.
 - **The planner's brief to the small-tier implementer follows the delegation contract below** — a vague or wrong
-  brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs
-  (a half-enumerated axis, a vacuous test spec, an unverified "fact" stated as truth).
+  brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs.
 - **New implementation-plan ADRs stop now** (wayfinder map #1383): big work is charted as a
   map of tickets with committed specs ([`workflow.md`](workflow.md)); unimplemented ADRs
   migrate to specs and tickets (#1389); implemented ADRs remain immutable historical
