@@ -15,7 +15,7 @@ the bounded-wait ladder).
 - **Landing means merged.** Commit, push, non-draft PR, reviews resolved, rebase-merge
   (dev-only: push to `devel`). A commit alone is not a landing.
 - **Review before merge.** The merge step never starts until the review step has
-  completed cleanly — the sequencing is load-bearing, not stylistic.
+  completed cleanly.
 - **Rebase-only merges.** Never a merge commit, never squash; history across
   `main` ← `devel` stays strictly linear.
 - **Advisory bots never gate.** CodeRabbit's state and a Snyk quota/infra `error`
@@ -71,8 +71,8 @@ Three things start together at the top of the review step:
 
 1. **The CI wait — arm it NOW.** CI runs on the pushed head regardless of review
    state: start the check-poll (`scripts/agent/wait-checks.sh --repo OWNER/REPO --pr N`,
-   a self-exiting background task, stdout to a result file whose LAST line is the
-   verdict) so a clean PR's checks are already
+   self-exiting, result file's LAST line is the verdict) so a clean PR's checks are
+   already
    green when the review gate closes. A fix push re-triggers CI — stop the stale wait
    and re-arm after the LAST fix push. The early verdict is valid only for the head
    SHA it watched. If the flow aborts anywhere, stop this wait as part of the trigger
@@ -85,7 +85,12 @@ Three things start together at the top of the review step:
    CodeRabbit never reviews. **Self-review exemption** (owner, 2026-08-08): for a
    small, relatively contained change, a session at ≤ 50% context usage may run the
    three lenses itself instead of spawning the legs — past 50% context it MUST
-   spawn. The audit comment(s) still record model, head SHA and the self-review.
+   spawn. The self-review stays adversarial and covers the same three-lens
+   criteria and evidence bar as the spawned legs — only the spawn is waived. Audit
+   comments still record model, head SHA and the self-review. The vendored
+   `mattpocock-skills:code-review` skill (Spec + Standards axes) may drive the
+   contract lens and adds a standards/smell pass; it never replaces the
+   executed-probe or mutation mandates.
 3. **The CodeRabbit acknowledgement window** (next section) — the one untracked
    external that gets a bounded poll.
 
@@ -118,14 +123,13 @@ Mechanics that hold for every pass:
 
 - **Executed evidence.** Every blocking correctness claim is grounded in an executed
   probe (command + output) where executable off-appliance. Probes are targeted —
-  never whole-suite runs for their own sake (CI and the delegation gate already run
-  them). Before returning, the reviewer tries to REFUTE its own blocking findings and
+  never whole-suite runs for their own sake.
+  Before returning, the reviewer tries to REFUTE its own blocking findings and
   drops or downgrades anything it cannot reproduce.
 - **Structured findings:** severity (`blocking` / `nitpick` / `outside-diff`),
   location, explanation, reproduction evidence, suggested fix — plus a per-file
   verdict for EVERY changed file (findings / considered-and-fine /
-  not-examined-because). A review whose per-file coverage misses a changed file is
-  incomplete — re-run it.
+  not-examined-because). Missing per-file coverage = incomplete — re-run.
 - **Previous-review lookup, first step of every leg's pass.** List the PR's top-level
   comments and find the latest audit comment **of the same leg**. None → review the
   full PR diff fresh. One found → same full-PR diff, focus on
@@ -148,8 +152,8 @@ Mechanics that hold for every pass:
 ### CodeRabbit availability (bounded, never blocking)
 
 Judge availability per-PR with a **10-minute acknowledgement window** anchored on the
-PR's creation time, polled via `scripts/agent/wait-reviewer.sh --until ack` (a
-self-exiting background task; result file's LAST line is the verdict). A PR already
+PR's creation time, polled via `scripts/agent/wait-reviewer.sh --until ack`
+(self-exiting; result file's LAST line is the verdict). A PR already
 older than 10 minutes with no CodeRabbit message → conclude NOACK immediately.
 
 - **ACK** (any CodeRabbit message) → **quota fast-path first**: if the ONLY content is
@@ -178,8 +182,8 @@ and anchored — never append `[bot]` yourself):
 - **NOTPRESENT** — zero engagement within the presence window (~5 min): the handle
   is not reviewing this PR; skip it without blocking (not a failure).
 - **DECLINE** (base isn't the default branch) — post one comment asking for a full
-  review (`@coderabbitai trigger full review and tell me when you are finished`;
-  canonical fallback `@coderabbitai full review`), re-arm **finished-only** with
+  review (`@coderabbitai trigger full review and tell me when you are finished`),
+  re-arm **finished-only** with
   `--since` now (never re-trigger on a repeat decline).
 - **PAUSE** (branch too active) — post `@coderabbitai resume` once, re-arm
   finished-only.
@@ -217,8 +221,7 @@ comments: read its detail from the status description + target URL. Only a termi
 ("Code test limit reached") is a skipped scan — never a clean security pass.
 
 **Every enumerated finding is mandatory to handle** — inline, nitpick, and
-outside-diff-range alike: each gets an explicit verdict and a reply; none is dropped
-for the bucket it landed in. "Outside diff range" is the bot's *category label*, not
+outside-diff-range alike: each gets an explicit verdict and a reply. "Outside diff range" is the bot's *category label*, not
 a scope verdict — an outside-diff-range finding often concerns code the PR did
 change; judge scope per finding via `git blame`, never by the bucket.
 
@@ -407,9 +410,8 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 Behavioral equivalence, not surface parity (workflow.md "Vendor mapping"):
 
 - **Claude:** each leg runs as a fresh read-only sub-agent implementing the contract
-  above (piloted on [#1429](https://github.com/pfBlockerNG/pfBlockerNG/issues/1429));
-  per-finding validation may fan out to fresh read-only validators; waits stopped via the
-  task tools. Footer: `🤖 Generated by [Claude Code](https://claude.com/claude-code),
+  above; per-finding validation may fan out to fresh read-only validators; waits
+  stopped via the task tools. Footer: `🤖 Generated by [Claude Code](https://claude.com/claude-code),
   posted via @<gh-login>'s account on their behalf.`
 - **Codex / Copilot:** native roles per `AGENTS.md` / `copilot-adapter.md`; Footer:
   `🤖 Generated by OpenAI Codex and posted on behalf of @<login>.` /
