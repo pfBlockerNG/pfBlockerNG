@@ -321,15 +321,17 @@ printf '# pfBlockerNG %s repo conf — pending boot-time generation (ADR-39).\n'
 # leaves the box exactly as it found it: a conf this run created is removed, and a conf
 # it truncated is restored byte-for-byte. Either way the box keeps a working
 # subscription — losing one is the destruction this ordering exists to prevent.
+# $1 = exit status (default 1; the signal trap passes 130).
 abort_unstaged() {
     if [ -n "${CONF_BACKUP}" ]; then
         mv -f "${CONF_BACKUP}" "${CONF_PATH}"
+        CONF_BACKUP=""
         printf '  Restored the previous %s conf; your subscription is unchanged.\n' "${CHANNEL}" >&2
     else
         rm -f "${CONF_PATH}"
         printf '  Removed the conf this run staged; your previous subscription is untouched.\n' >&2
     fi
-    exit 1
+    exit "${1:-1}"
 }
 
 # On success the backup is redundant — drop it so no stray file is left in the repos dir.
@@ -337,6 +339,13 @@ drop_conf_backup() {
     [ -n "${CONF_BACKUP}" ] && rm -f "${CONF_BACKUP}"
     CONF_BACKUP=""
 }
+
+# An interrupt lands in the same half-applied state a failure does, so it gets the same
+# treatment rather than just a tidy-up: the conf goes back to what it was. Both traps are
+# needed — EXIT sweeps the backup on every ordinary path, and the signal trap has to exit
+# itself or the script would carry on past the handler.
+trap 'drop_conf_backup' EXIT
+trap 'abort_unstaged 130' INT HUP TERM
 
 # 3. Run the hook once now to resolve the conf for THIS box (it also runs every
 #    boot via rc.d). Pass every channel path explicitly so a non-default
