@@ -351,6 +351,16 @@ jobs:
             echo "::error::actionlint red canary did not fail on a duplicate key"
             exit 1
           fi
+          # Second canary: actionlint SKIPS its embedded shellcheck pass in silence
+          # when the binary is unresolvable (exit 0, no diagnostic), so run-body
+          # coverage would go quiet if the image ever stopped shipping shellcheck.
+          # shellcheck disable=SC2016  # $CANARY is fixture text for actionlint to flag
+          printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo $CANARY\n' \
+            > "$RUNNER_TEMP/canary-sc.yml"
+          if "$AL" "$RUNNER_TEMP/canary-sc.yml" >/dev/null 2>&1; then
+            echo "::error::actionlint's embedded shellcheck pass is not running (shellcheck missing from the image?)"
+            exit 1
+          fi
           # find, not a bare *.yml glob: covers a future .yaml spelling too, and
           # never hands actionlint an unexpanded literal pattern.
           find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 \
