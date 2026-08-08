@@ -126,8 +126,7 @@ pfBlockerNG/
 
 ## Communication
 
-Session-start hooks activate ponytail (build lazy) + caveman (talk terse); capsules =
-mechanism. Two style exceptions get normal professional grammar: external/public-facing
+Two style exceptions get normal professional grammar: external/public-facing
 text (issues, PR bodies, commits) and documentation. Commits:
 `<scope>: <imperative summary>`. While working ADR/issue/PR, prefix replies with
 one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; 📝 authoring ·
