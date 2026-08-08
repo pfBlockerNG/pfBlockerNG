@@ -136,4 +136,75 @@ STUBEOF
     The status should not equal 0
     The stderr should be present
   End
+
+  # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
+  #
+  # The config echo (config abi=... pfsense_ref=... civm_ref=...) fires BEFORE the
+  # port-floor gate exits, so it is the seam these examples use to observe the
+  # rewrite without letting the run reach real host prep (pkill, venv, oras pulls).
+  # pfsense_ref/civm_ref are echoed AFTER their rewrite by construction (single
+  # choke point right after PFSENSE_REF/CIVM_REF resolve).
+
+  It 'rewrites the default ghcr.io pfsense/civm refs to the LAN registry when set'
+    PFB_LAN_REGISTRY=10.0.0.111
+    export PFB_LAN_REGISTRY
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=10.0.0.111/pfblockerng/pfsense-ce:2.8'
+    The stderr should include 'civm_ref=10.0.0.111/pfblockerng/civm:v1'
+  End
+
+  It 'rewrites a workflow-injected full ghcr.io ref the same way'
+    # Covers both script defaults (above) and a full ref a caller injects via
+    # SMOKE_PFSENSE_REF/CIVM_REF -- one choke point, same rewrite either way.
+    PFB_LAN_REGISTRY=10.0.0.111
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce:2.9
+    CIVM_REF=ghcr.io/pfblockerng/civm:v2
+    export PFB_LAN_REGISTRY SMOKE_PFSENSE_REF CIVM_REF
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=10.0.0.111/pfblockerng/pfsense-ce:2.9'
+    The stderr should include 'civm_ref=10.0.0.111/pfblockerng/civm:v2'
+  End
+
+  It 'leaves a ref that does not start with ghcr.io/ untouched even when the var is set'
+    PFB_LAN_REGISTRY=10.0.0.111
+    SMOKE_PFSENSE_REF=quay.io/pfblockerng/pfsense-ce:2.8
+    export PFB_LAN_REGISTRY SMOKE_PFSENSE_REF
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=quay.io/pfblockerng/pfsense-ce:2.8'
+  End
+
+  It 'leaves refs untouched when PFB_LAN_REGISTRY is unset (hosted-CI fallback)'
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=ghcr.io/pfblockerng/pfsense-ce:2.8'
+    The stderr should include 'civm_ref=ghcr.io/pfblockerng/civm:v1'
+  End
+
+  It 'keeps an @digest suffix intact when rewriting to the LAN registry'
+    PFB_LAN_REGISTRY=10.0.0.111
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:deadbeef
+    export PFB_LAN_REGISTRY SMOKE_PFSENSE_REF
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=10.0.0.111/pfblockerng/pfsense-ce:2.8@sha256:deadbeef'
+  End
+
+  It 'joins a port-bearing LAN registry with exactly one slash'
+    PFB_LAN_REGISTRY=10.0.0.111:80
+    export PFB_LAN_REGISTRY
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=10.0.0.111:80/pfblockerng/pfsense-ce:2.8'
+  End
+
+  It 'treats an empty-but-set PFB_LAN_REGISTRY as unset'
+    PFB_LAN_REGISTRY=
+    export PFB_LAN_REGISTRY
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 1
+    The stderr should include 'pfsense_ref=ghcr.io/pfblockerng/pfsense-ce:2.8'
+  End
 End

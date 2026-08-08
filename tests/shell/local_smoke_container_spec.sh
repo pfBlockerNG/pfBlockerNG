@@ -76,9 +76,13 @@ EOF
   # ── the container invocation ─────────────────────────────────────────────── #
 
   It 'runs the leg inside the VM runner image'
+    # The image ref itself (box-side-expanded against PFB_LAN_REGISTRY, issue #2247)
+    # is pinned by its own example below; this one only needs the runner image name,
+    # which no longer sits directly after a literal 'ghcr.io/' -- that prefix is now
+    # the variable-default half of a `${PFB_LAN_REGISTRY:-ghcr.io}` fragment.
     When call bootstrap --ref dummy
     The output should include 'docker run'
-    The output should include 'ghcr.io/pfblockerng/ci-runner-vm'
+    The output should include 'pfblockerng/ci-runner-vm:4'
   End
 
   It 'passes /dev/kvm into the container'
@@ -94,23 +98,39 @@ EOF
     The output should include '--sysctl net.ipv4.ip_unprivileged_port_start=53'
   End
 
-  It 'add-hosts ghcr.io to the LAN registry, expanded box-side (issue #2230)'
-    # The box fleet hijacks ghcr.io via /etc/hosts to the LAN zot mirror
-    # (10.0.0.111). PFB_LAN_REGISTRY lives in the BOX's /etc/environment, not
-    # the orchestrator's -- so this must survive as an UNEXPANDED ${...:+...}
-    # fragment in the bootstrap string handed to select-box.sh, and expand only
-    # once the remote shell runs it. Unset on the fake box here: `:+` on an
-    # unset var is zero words, so nothing to assert its expansion against --
-    # this pins the literal fragment survives the caller-side double quotes.
+  It 'expands the ci-runner-vm image ref against the LAN registry, box-side (issue #2247)'
+    # The box fleet routes to the LAN zot cache via PFB_LAN_REGISTRY, which lives in
+    # the BOX's /etc/environment, not the orchestrator's -- so this must survive as
+    # an UNEXPANDED ${...:-...} fragment in the bootstrap string handed to
+    # select-box.sh, and expand only once the remote shell runs it. Unset on the
+    # fake box here: `:-` on an unset var falls back to ghcr.io, so this pins the
+    # literal fragment survives the caller-side double quotes rather than asserting
+    # its (unreachable, from here) expansion.
     When call bootstrap --ref dummy
-    The output should include '${PFB_LAN_REGISTRY:+--add-host ghcr.io:$PFB_LAN_REGISTRY}'
+    The output should include '${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:4'
   End
 
-  It 'mounts the CA bundle so TLS against the LAN registry validates (issue #2230)'
-    # zot's cert SANs DNS:ghcr.io + IP:10.0.0.111; the container needs the
-    # system CA bundle to validate it, same as the box does.
+  It 'no longer add-hosts ghcr.io to the LAN registry (issue #2247)'
+    # Superseded by the parameterized image ref above: routing is now an explicit
+    # ref, not a /etc/hosts hijack -- the owner decision that dropped the private
+    # PKI landed by #2230 in favour of one mechanism, no TLS to a LAN-only cache.
     When call bootstrap --ref dummy
-    The output should include '-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro'
+    The output should not include '--add-host'
+  End
+
+  It 'no longer mounts a CA bundle into the container (issue #2247)'
+    # Superseded: the LAN registry now serves plain HTTP (owner decision 2026-08-08
+    # in issue #2247), so there is no TLS cert to validate and nothing to carry a
+    # fleet CA bundle in for.
+    When call bootstrap --ref dummy
+    The output should not include 'ca-certificates.crt'
+  End
+
+  It 'passes PFB_LAN_REGISTRY into the container (issue #2247)'
+    # smoke-on-box.sh and oras-refresh.sh, running INSIDE the container, need the
+    # var themselves to rewrite ghcr.io refs and route oras --plain-http.
+    When call bootstrap --ref dummy
+    The output should include '-e PFB_LAN_REGISTRY'
   End
 
   It 'mounts the repo, the shared image store, the ports tree and the guest key'

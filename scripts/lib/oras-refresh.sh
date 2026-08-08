@@ -75,9 +75,13 @@ pfb_oras_refresh_unlocked() {
     _or_digest_file="$(pfb_oras_digest_file "$_or_ref" "$_or_dir")" || return 1
 
     # Remote digest (best-effort; a lookup failure must not delete or replace anything).
+    # ${PFB_ORAS_FLAGS:-} is unquoted by design: empty expands to zero words (POSIX
+    # word splitting), '--plain-http' expands to one -- the LAN-registry caller
+    # (smoke-on-box.sh, issue #2247) sets it once, every oras call here picks it up.
     _or_remote=''
-    _or_remote="$(oras resolve "$_or_ref" 2>/dev/null)" \
-        || _or_remote="$(oras manifest fetch "$_or_ref" --descriptor 2>/dev/null \
+    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see above
+    _or_remote="$(oras resolve ${PFB_ORAS_FLAGS:-} "$_or_ref" 2>/dev/null)" \
+        || _or_remote="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_or_ref" --descriptor 2>/dev/null \
                          | grep -o '"digest":"[^"]*"' | cut -d'"' -f4)" \
         || _or_remote=''
 
@@ -118,14 +122,16 @@ EOF
     if pfb_oras_login 2>/dev/null; then :; fi
 
     if [ -n "$_or_remote" ]; then
-        ( cd "$_or_stage" && oras pull "${_or_ref%@*}@${_or_remote}" ) >&2 || {
+        # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see above
+        ( cd "$_or_stage" && oras pull ${PFB_ORAS_FLAGS:-} "${_or_ref%@*}@${_or_remote}" ) >&2 || {
             rm -rf "$_or_stage"
             printf 'oras-refresh: pull FAILED for %s; published store left untouched\n' \
                 "$_or_tag" >&2
             return 1
         }
     else
-        ( cd "$_or_stage" && oras pull "$_or_ref" ) >&2 || {
+        # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see above
+        ( cd "$_or_stage" && oras pull ${PFB_ORAS_FLAGS:-} "$_or_ref" ) >&2 || {
             rm -rf "$_or_stage"
             printf 'oras-refresh: pull FAILED for %s; published store left untouched\n' \
                 "$_or_tag" >&2
@@ -164,3 +170,36 @@ EOF
 if ! command -v pfb_oras_login >/dev/null 2>&1; then
     pfb_oras_login() { :; }
 fi
+
+# ── LAN registry override (issue #2247) ─────────────────────────────────────── #
+# The box fleet reaches a LAN-only zot cache (anonymous, read-only, plain HTTP --
+# no TLS, no login) instead of ghcr.io when PFB_LAN_REGISTRY is set in the box's
+# own environment (delivered via /etc/environment + PAM, or threaded in by
+# smoke-on-box.sh's caller). The ref rewrite, the --plain-http flag (PFB_ORAS_FLAGS
+# above) and the ghcr.io login skip (smoke-on-box.sh) all key off the ONE guard
+# below so they can never disagree about which mode is active.
+
+# pfb_lan_registry_active — true (0) when PFB_LAN_REGISTRY is set to a non-empty
+# value. `PFB_LAN_REGISTRY=` (empty but set) is treated the same as unset.
+pfb_lan_registry_active() {
+    [ -n "${PFB_LAN_REGISTRY:-}" ]
+}
+
+# pfb_rewrite_lan_registry <ref>
+#
+# Rewrites a LEADING `ghcr.io/` to `${PFB_LAN_REGISTRY}/`; anything else passes
+# through unchanged. Single choke point: covers both a script's own ghcr.io/...
+# default and a caller-injected full ghcr.io/... ref alike, since both take the
+# same prefix form. Only the prefix is touched, so a tag or `@sha256:...` digest
+# suffix survives intact. PFB_LAN_REGISTRY with a trailing slash is NOT supported
+# (would double the `/`); use a bare host[:port] value.
+pfb_rewrite_lan_registry() {
+    if ! pfb_lan_registry_active; then
+        printf '%s\n' "$1"
+        return 0
+    fi
+    case "$1" in
+        ghcr.io/*) printf '%s/%s\n' "$PFB_LAN_REGISTRY" "${1#ghcr.io/}" ;;
+        *)         printf '%s\n' "$1" ;;
+    esac
+}

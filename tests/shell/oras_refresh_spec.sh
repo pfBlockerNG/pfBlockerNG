@@ -35,8 +35,18 @@ Describe 'oras-refresh library (shared image store, issue #2218)'
     # interrupted-transfer case the published store must survive.
     cat > "${BIN}/oras" <<'EOF'
 #!/bin/sh
+# Record the FULL argv every invocation gets, so a spec can assert which flags
+# reached which subcommand (issue #2247: PFB_ORAS_FLAGS threading).
+printf '%s\n' "$*" >> "${STUB_ARGV_LOG}"
 case "$1" in
-  resolve) printf '%s\n' "${STUB_REMOTE_DIGEST}" ;;
+  resolve)
+    if [ -n "${STUB_RESOLVE_FAIL:-}" ]; then exit 1; fi
+    printf '%s\n' "${STUB_REMOTE_DIGEST}"
+    ;;
+  manifest)
+    # oras manifest fetch <ref> --descriptor -- only reached when resolve fails.
+    printf '{"digest":"%s"}\n' "${STUB_REMOTE_DIGEST}"
+    ;;
   pull)
     # Where the transfer lands (real oras pulls into cwd) — the staging-location
     # example asserts on this.
@@ -54,11 +64,14 @@ EOF
 
     STUB_PULL_LOG="${WORK}/pulls.log"
     STUB_CWD_LOG="${WORK}/cwds.log"
+    STUB_ARGV_LOG="${WORK}/argv.log"
     printf "" > "$STUB_PULL_LOG"
     printf "" > "$STUB_CWD_LOG"
+    printf "" > "$STUB_ARGV_LOG"
     STUB_ARTIFACT_NAME="pfSense-CE_2.8.qcow2"
     PATH="${BIN}:${PATH}"
-    export PATH STUB_PULL_LOG STUB_CWD_LOG STUB_ARTIFACT_NAME STUB_REMOTE_DIGEST ORAS_PULL_FAIL
+    export PATH STUB_PULL_LOG STUB_CWD_LOG STUB_ARGV_LOG STUB_ARTIFACT_NAME \
+        STUB_REMOTE_DIGEST ORAS_PULL_FAIL STUB_RESOLVE_FAIL
   }
 
   cleanup() { rm -rf "$WORK"; }
@@ -270,5 +283,85 @@ EOF
     The output should eq '1'
     The status should be success
     The stderr should be present
+  End
+
+  # ── LAN registry oras flag threading (issue #2247) ───────────────────────── #
+  #
+  # smoke-on-box.sh sets PFB_ORAS_FLAGS='--plain-http' when PFB_LAN_REGISTRY is set
+  # (LAN zot cache, anonymous, plain HTTP, no TLS). Every oras invocation this file
+  # makes must pick it up unquoted from the SAME variable, not a copy re-derived at
+  # each call site.
+
+  It 'threads PFB_ORAS_FLAGS into the resolve call'
+    When call sh -c '
+      . "$1"; shift
+      PFB_ORAS_FLAGS="--plain-http" STUB_REMOTE_DIGEST=sha256:new \
+        pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      grep "^resolve " "$STUB_ARGV_LOG"
+    ' sh "$LIB" "$IMGDIR"
+    The output should include 'resolve --plain-http ghcr.io/x/pfsense-ce:2.8'
+    The stderr should be present
+  End
+
+  It 'threads PFB_ORAS_FLAGS into the pull call'
+    When call sh -c '
+      . "$1"; shift
+      PFB_ORAS_FLAGS="--plain-http" STUB_REMOTE_DIGEST=sha256:new \
+        pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      grep "^pull " "$STUB_ARGV_LOG"
+    ' sh "$LIB" "$IMGDIR"
+    The output should include 'pull --plain-http'
+    The stderr should be present
+  End
+
+  It 'threads PFB_ORAS_FLAGS into the manifest-fetch fallback'
+    # Only reached when `oras resolve` itself fails.
+    When call sh -c '
+      . "$1"; shift
+      PFB_ORAS_FLAGS="--plain-http" STUB_REMOTE_DIGEST=sha256:new STUB_RESOLVE_FAIL=1 \
+        pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      grep "^manifest " "$STUB_ARGV_LOG"
+    ' sh "$LIB" "$IMGDIR"
+    The output should include 'manifest fetch --plain-http ghcr.io/x/pfsense-ce:2.8 --descriptor'
+    The stderr should be present
+  End
+
+  It 'does not add --plain-http to any oras call when PFB_ORAS_FLAGS is unset'
+    # Regression guard for the hosted-CI fallback: an unset flag must not sneak
+    # into the argv the ephemeral-runner leg (PFB_LAN_REGISTRY unset) sends.
+    When call sh -c '
+      . "$1"; shift
+      STUB_REMOTE_DIGEST=sha256:new pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      grep -c -- "--plain-http" "$STUB_ARGV_LOG" || true
+    ' sh "$LIB" "$IMGDIR"
+    The output should eq '0'
+    The stderr should be present
+  End
+
+  It 'pfb_lan_registry_active reports set vs unset vs empty-but-set'
+    When call sh -c '
+      . "$1"; shift
+      PFB_LAN_REGISTRY=10.0.0.111 pfb_lan_registry_active && echo set
+      unset PFB_LAN_REGISTRY
+      pfb_lan_registry_active || echo unset
+      PFB_LAN_REGISTRY= pfb_lan_registry_active || echo empty-unset
+    ' sh "$LIB"
+    The output should equal "$(printf 'set\nunset\nempty-unset')"
+  End
+
+  It 'pfb_rewrite_lan_registry rewrites only a leading ghcr.io/ prefix, tail intact'
+    When call sh -c '
+      . "$1"; shift
+      PFB_LAN_REGISTRY=10.0.0.111 pfb_rewrite_lan_registry ghcr.io/pfblockerng/pfsense-ce:2.8
+      PFB_LAN_REGISTRY=10.0.0.111 \
+        pfb_rewrite_lan_registry ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:deadbeef
+      PFB_LAN_REGISTRY=10.0.0.111 pfb_rewrite_lan_registry quay.io/pfblockerng/pfsense-ce:2.8
+      unset PFB_LAN_REGISTRY
+      pfb_rewrite_lan_registry ghcr.io/pfblockerng/pfsense-ce:2.8
+    ' sh "$LIB"
+    The line 1 of output should equal '10.0.0.111/pfblockerng/pfsense-ce:2.8'
+    The line 2 of output should equal '10.0.0.111/pfblockerng/pfsense-ce:2.8@sha256:deadbeef'
+    The line 3 of output should equal 'quay.io/pfblockerng/pfsense-ce:2.8'
+    The line 4 of output should equal 'ghcr.io/pfblockerng/pfsense-ce:2.8'
   End
 End
