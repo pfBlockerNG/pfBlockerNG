@@ -336,6 +336,32 @@ def test_the_base_image_carries_the_github_cli() -> None:
     assert "/usr/local/bin/gh" in install, "gh must land on PATH as /usr/local/bin/gh"
 
 
+def test_the_base_image_carries_actionlint() -> None:
+    """The test.yml actionlint job gates workflow-file validity (issue #2231's
+    duplicate-key class). Baking the binary retires that job's per-run download
+    (#2232) — and the image pin MUST stay locked to the version the workflow
+    names, so the job's swap to the baked binary cannot silently change the
+    lint verdict."""
+    text = _read(BASE_DOCKERFILE)
+    declared = re.search(r"ARG ACTIONLINT_VERSION=(\d+\.\d+\.\d+)", text)
+    assert declared, "the actionlint version must be declared as an ARG"
+
+    install = next(b for b in _expanded_blocks(text) if "rhysd/actionlint/releases/download" in b)
+    assert f"v{declared.group(1)}/actionlint_{declared.group(1)}_linux_amd64.tar.gz" in install, (
+        f"the download must use the declared ACTIONLINT_VERSION; block was:\n{install[:400]}"
+    )
+    assert "sha256sum -c" in install, "the actionlint download must be checksum-verified"
+    assert "/usr/local/bin/actionlint" in install, "actionlint must land on PATH"
+
+    workflow = _read(ROOT / ".github/workflows/test.yml")
+    wf_version = re.search(r"ACTIONLINT_VERSION: (\d+\.\d+\.\d+)", workflow)
+    if wf_version:  # the interim download step; PR-B removes it and this branch with it
+        assert wf_version.group(1) == declared.group(1), (
+            "test.yml's interim actionlint download and the baked binary must pin the "
+            f"same version; workflow={wf_version.group(1)} image={declared.group(1)}"
+        )
+
+
 def test_baked_python_toolchain_covers_the_benchmarks_job() -> None:
     """ci-requirements.txt claims to carry every package the non-VM jobs install. The
     manual `benchmarks` job installs benchmarks/requirements.txt, so those pins are part

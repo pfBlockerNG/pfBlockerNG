@@ -175,6 +175,19 @@ RUN curl -fsSLo /tmp/gh.tar.gz \
  && install -m 0755 "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" /usr/local/bin/gh \
  && rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_amd64"
 
+# actionlint validates the workflow files themselves (the `actionlint` job in
+# test.yml): GitHub silently disables a workflow whose YAML its parser rejects —
+# a duplicate mapping key killed five scheduled workflows before any gate saw it
+# (issue #2231). Baked here (#2232) so the job stops re-downloading it per run.
+ARG ACTIONLINT_VERSION=1.7.12
+ARG ACTIONLINT_SHA256=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+RUN curl -fsSLo /tmp/actionlint.tar.gz \
+      "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+ && echo "${ACTIONLINT_SHA256}  /tmp/actionlint.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/actionlint.tar.gz -C /tmp actionlint \
+ && install -m 0755 /tmp/actionlint /usr/local/bin/actionlint \
+ && rm -f /tmp/actionlint.tar.gz /tmp/actionlint
+
 ARG SHELLSPEC_VERSION=0.28.1
 ARG SHELLSPEC_SHA256=350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
 RUN curl -fsSLo /tmp/shellspec-dist.tar.gz \
@@ -210,7 +223,7 @@ RUN set -eu; \
       "$php" -m | grep -qx pcov; \
     done; \
     composer --version; node --version; npm --version; gh --version; \
-    shellcheck --version; shellspec --version; kcov --version; \
+    shellcheck --version; shellspec --version; kcov --version; actionlint -version; \
     jq --version; dash -c 'exit 0'; \
     echo '10.0.0.0/8' | iprange >/dev/null; \
     printf 'x' | bzip2 -c | bzip2 -dc >/dev/null; \
