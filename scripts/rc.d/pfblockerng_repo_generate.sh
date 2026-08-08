@@ -52,7 +52,17 @@
 name="pfblockerng_repo_generate"
 
 # On-box paths (installed by add-repo.sh). Override via env for tests.
+#
+# One path per channel repository (issue #2148). `release` is the legacy shared
+# repo that carried both the stable and the -devel package; the four channel
+# repos each own a <channel>/<varver>/ catalogue serving the ONE canonical
+# package. A box subscribes to exactly ONE of these — the orphan guard in
+# _regen_one() is what keeps regeneration from re-enabling a channel the user
+# switched away from.
 : "${PFB_RELEASE_CONF:=/usr/local/etc/pkg/repos/pfblockerng.conf}"
+: "${PFB_STABLE_CONF:=/usr/local/etc/pkg/repos/pfblockerng-stable.conf}"
+: "${PFB_TESTING_CONF:=/usr/local/etc/pkg/repos/pfblockerng-testing.conf}"
+: "${PFB_EDGE_CONF:=/usr/local/etc/pkg/repos/pfblockerng-edge.conf}"
 : "${PFB_NIGHTLY_CONF:=/usr/local/etc/pkg/repos/pfblockerng-nightly.conf}"
 : "${PFB_PRODUCT_LABEL:=/etc/product_label}"
 : "${PFB_VERSION_FILE:=/etc/version}"
@@ -129,9 +139,15 @@ _regen_one() {
     fi
 }
 
-# Regenerate each channel's conf independently (channel keyed by filename).
+# Regenerate each channel's conf independently (channel keyed by conf path). Only
+# the channel(s) the box actually subscribed to are touched — _regen_one()'s
+# orphan guard skips every absent conf, so a box on one channel stays on that one
+# channel across a reboot (single-repository subscription, issue #2148).
 pfblockerng_repo_generate_start() {
     _regen_one "${PFB_RELEASE_CONF}" 'release' 'pfblockerng'
+    _regen_one "${PFB_STABLE_CONF}"  'stable'  'pfblockerng-stable'
+    _regen_one "${PFB_TESTING_CONF}" 'testing' 'pfblockerng-testing'
+    _regen_one "${PFB_EDGE_CONF}"    'edge'    'pfblockerng-edge'
     _regen_one "${PFB_NIGHTLY_CONF}" 'nightly' 'pfblockerng-nightly'
     return 0
 }

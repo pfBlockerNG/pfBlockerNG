@@ -123,7 +123,9 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28, base_url: str = _PA
     return proc.stdout
 
 
-def _run_add_repo(root: str, *, nightly: bool = False, extra_args: tuple[str, ...] = ()) -> None:
+def _run_add_repo(
+    root: str, *, nightly: bool = False, extra_args: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[str]:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
     PKG_BIN is overridden to a stub that exits 0 (no output) for every
@@ -159,7 +161,7 @@ def _run_add_repo(root: str, *, nightly: bool = False, extra_args: tuple[str, ..
         "PKG_BIN": fake_pkg,
     }
     argv = ["sh", str(_ADD_REPO), *(["--nightly"] if nightly else []), *extra_args]
-    subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+    return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
 
 def _field(conf: str, key: str) -> str:
@@ -207,13 +209,23 @@ def test_release_conf_byte_identical_plus_26_03() -> None:
     assert add == portable, f"add-repo.sh vs portable mismatch (plus-26.03):\nadd:\n{add}\nportable:\n{portable}"
 
 
+def _hook_conf_env(repos: str) -> dict[str, str]:
+    """Every ``PFB_*_CONF`` override the hook reads, pointed inside ``repos``.
+
+    Passing ALL of them is mandatory for hermeticity: an override the test omits
+    falls back to its ``/usr/local/etc/pkg/repos/`` default, so the hook would
+    regenerate the REAL box's conf during a test run.
+    """
+    return {f"PFB_{channel.upper()}_CONF": os.path.join(repos, name) for channel, name in _CHANNEL_CONF_NAMES.items()}
+
+
 def _run_hook(root: str, *, edition_label: str, version: str, channel: str) -> str:
     """Run the generator hook off-box against a stubbed box; return the conf it wrote.
 
-    ``channel`` selects which conf the hook regenerates (release|nightly): we stage
-    only that one so the orphan guard leaves the other absent. The hook runs the
-    *_start path directly off-box (no /etc/rc.subr present). No `pkg` stub needed —
-    the hook is arch-less (issue #1806) and no longer calls `pkg` at all.
+    ``channel`` selects which conf the hook regenerates: we stage only that one so
+    the orphan guard leaves every other channel absent. The hook runs the *_start
+    path directly off-box (no /etc/rc.subr present). No `pkg` stub needed — the
+    hook is arch-less (issue #1806) and no longer calls `pkg` at all.
     """
     repos = os.path.join(root, "repos")
     os.makedirs(repos, exist_ok=True)
@@ -225,15 +237,13 @@ def _run_hook(root: str, *, edition_label: str, version: str, channel: str) -> s
     with open(ver, "w") as fh:
         fh.write(version + "\n")
 
-    conf_name = "pfblockerng.conf" if channel == "release" else "pfblockerng-nightly.conf"
-    conf_path = os.path.join(repos, conf_name)
+    conf_path = os.path.join(repos, _CHANNEL_CONF_NAMES[channel])
     with open(conf_path, "w") as fh:
         fh.write("# stub pending\n")
 
     env = {
         **os.environ,
-        "PFB_RELEASE_CONF": os.path.join(repos, "pfblockerng.conf"),
-        "PFB_NIGHTLY_CONF": os.path.join(repos, "pfblockerng-nightly.conf"),
+        **_hook_conf_env(repos),
         "PFB_PRODUCT_LABEL": label,
         "PFB_VERSION_FILE": ver,
     }
@@ -260,6 +270,40 @@ def test_hook_output_byte_identical_to_print_conf_nightly_plus() -> None:
     print_conf = _print_conf_sh(_ADD_REPO, _PLUS_2603, _PAGES_BASE, "--nightly")
     assert hook_conf == print_conf, (
         f"hook nightly vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
+    )
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_hook_regenerates_every_channel_byte_identical_to_print_conf(channel: str) -> None:
+    """The boot hook resolves EVERY channel's conf, byte-identical to --print-conf.
+
+    Boot regeneration is what keeps a subscription correct across a pfSense OS
+    upgrade (the varver moves). Before issue #2148 the hook knew only the legacy
+    release conf and nightly, so a box subscribed to stable/testing/edge would keep
+    a stale URL forever; every channel is now regenerated from the same body.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", channel=channel)
+    print_conf = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    assert hook_conf == print_conf, (
+        f"hook {channel} vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
+    )
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_hook_orphan_guard_holds_for_every_channel(channel: str) -> None:
+    """The hook never CREATES a conf: a channel the user did not subscribe to stays absent.
+
+    This guard is what makes boot regeneration compatible with single-repository
+    subscription — regenerating one channel must never re-enable a channel the user
+    switched away from.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_hook(root, edition_label="pfSense", version="2.8.1", channel=channel)
+        repos = Path(root) / "repos"
+        present = sorted(p.name for p in repos.iterdir())
+    assert present == [_CHANNEL_CONF_NAMES[channel]], (
+        f"staging only {channel!r} must leave exactly that conf behind, found: {present}"
     )
 
 
@@ -438,19 +482,20 @@ def test_conf_written_once_invariant() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Release / nightly non-clobber: two distinct conf files, channels independent
+# Single-repository subscription: one project conf on the box at a time
 # --------------------------------------------------------------------------- #
 
 
-def test_default_writes_release_conf_and_nightly_writes_its_own() -> None:
-    """The default writes ONLY the shared release conf; --nightly writes ONLY the nightly one.
+def test_default_writes_release_conf_then_nightly_replaces_it() -> None:
+    """The default writes ONLY the shared release conf; --nightly then REPLACES it.
 
     Scenario:
     Given a fresh root (no conf files),
     When  add-repo.sh runs with no argument,
     Then  only ``pfblockerng.conf`` exists (no nightly conf, no legacy split conf);
     When  add-repo.sh --nightly runs into the same root,
-    Then  ``pfblockerng-nightly.conf`` is added, and the release conf is byte-unchanged.
+    Then  ``pfblockerng-nightly.conf`` is the box's ONLY project conf — the release
+          conf is retired, because a box subscribes to one channel at a time.
     """
     with tempfile.TemporaryDirectory() as root:
         repos = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos"
@@ -471,10 +516,10 @@ def test_default_writes_release_conf_and_nightly_writes_its_own() -> None:
         assert _PAGES_BASE in release_bytes, "release conf must contain the Pages base URL"
         assert "${ABI}" not in release_bytes, "release conf must not contain ${ABI}"
 
-        # When: --nightly → adds its own conf, leaves the release conf byte-unchanged
+        # When: --nightly → takes over the subscription
         _run_add_repo(root, nightly=True)
         assert nightly.exists(), "--nightly must write pfblockerng-nightly.conf"
-        assert release.read_text() == release_bytes, "--nightly must not touch the release conf"
+        assert not release.exists(), "--nightly must retire the release subscription it replaced"
         assert not legacy_split.exists(), "no pfblockerng-devel.conf is ever created"
 
         # After-state: nightly conf has its own URL prefix
@@ -568,12 +613,9 @@ def test_print_conf_requires_catalog_path(argv: list[str], needle: str) -> None:
 # Four-channel expression (issue #2147 step B) — stable/testing/edge/nightly
 # --------------------------------------------------------------------------- #
 #
-# Live per-channel boot-time conf generation (stable/testing/edge) lands with
-# issue #2148; until then --print-conf renders all four channels, and only the
-# legacy default (release) + nightly channels bootstrap live. The rc.d hook
-# (pfblockerng_repo_generate.sh) is untouched — its 2-channel byte-identity
-# test above (test_hook_output_byte_identical_to_print_conf_*) is a DEFERRAL
-# row for #2148, not extended here.
+# Issue #2148 closed the deferral: all four channels now bootstrap live and the
+# rc.d hook regenerates every one of them, so the byte-identity contract above is
+# asserted against the hook per channel, not only for release + nightly.
 
 
 @pytest.mark.parametrize("channel", _CHANNELS)
@@ -635,58 +677,80 @@ def test_four_channel_no_abi_placeholder(generator: str, channel: str) -> None:
     assert "${ABI}" not in conf, f"{generator} {channel}: found ${{ABI}} in conf:\n{conf}"
 
 
-def test_add_repo_channel_conf_name_mapping_source_pin() -> None:
-    """add-repo.sh's CHANNEL case maps every channel to its conf filename.
-
-    Live per-channel boot-time write for stable/testing/edge is unreachable until
-    issue #2148 (see test_add_repo_live_bootstrap_rejects_unimplemented_channels
-    below) — pin the CONF_NAME mapping at the source until a live test can cover it.
-    """
-    src = _ADD_REPO.read_text()
-    for channel in (*_CHANNELS, "release"):
-        conf_name = _CHANNEL_CONF_NAMES[channel]
-        assert f'CONF_NAME="{conf_name}"' in src, f"missing CONF_NAME mapping for {channel!r} in add-repo.sh"
-
-
 # --------------------------------------------------------------------------- #
-# add-repo.sh live-bootstrap channel gate
+# add-repo.sh live bootstrap — every channel (issue #2148)
 # --------------------------------------------------------------------------- #
 
 
-def _add_repo_stub_root(root: str) -> dict[str, str]:
-    """Build a CE 2.8.1 box fixture + pkg stub under root; return the env to run with."""
-    bin_dir = os.path.join(root, "bin")
-    os.makedirs(bin_dir, exist_ok=True)
-    fake_pkg = os.path.join(bin_dir, "pkg")
-    with open(fake_pkg, "w") as fh:
-        fh.write("#!/bin/sh\n# fake pkg stub for tests\nexit 0\n")
-    os.chmod(fake_pkg, 0o755)
-    return {**os.environ, "PFBLOCKERNG_ROOT": root, "PKG_BIN": fake_pkg}
+def _repos_dir(root: str) -> Path:
+    return Path(root) / "usr" / "local" / "etc" / "pkg" / "repos"
 
 
-@pytest.mark.parametrize("channel", ["stable", "testing", "edge"])
-def test_add_repo_live_bootstrap_rejects_unimplemented_channels(channel: str) -> None:
-    """Live bootstrap for stable/testing/edge is not implemented — exits 2, names #2148.
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_add_repo_live_bootstrap_writes_the_channel_conf(channel: str) -> None:
+    """Every channel bootstraps live: the box ends up with that channel's resolved conf.
 
-    Scenario: given PFBLOCKERNG_ROOT + a stub PKG_BIN (a live box would use the real
-    ones), when add-repo.sh --channel <ch> runs with NO --print-conf, then it exits 2
-    with a message pointing at issue #2148 (the ticket that lands per-channel
-    boot-time conf generation) instead of attempting to bootstrap.
+    Scenario: given a CE 2.8.1 box fixture with no pfBlockerNG conf, when
+    ``add-repo.sh --channel <ch>`` runs (no ``--print-conf``), then the box carries
+    ``pfblockerng-<ch>.conf`` resolved by the boot hook — the stanza is keyed by the
+    channel's own repo name and the url's channel segment is that channel.
     """
     with tempfile.TemporaryDirectory() as root:
-        env = _add_repo_stub_root(root)
-        proc = subprocess.run(
-            ["sh", str(_ADD_REPO), "--channel", channel],
-            env=env,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert proc.returncode == 2, proc.stderr
-        assert "#2148" in proc.stderr, f"live-bootstrap rejection for {channel!r} must name #2148:\n{proc.stderr}"
+        conf_path = _repos_dir(root) / _CHANNEL_CONF_NAMES[channel]
+        assert not conf_path.exists(), "before-state: the channel conf must be absent"
 
-        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / _CHANNEL_CONF_NAMES[channel]
-        assert not conf_path.exists(), f"rejected channel {channel!r} must write nothing:\n{conf_path}"
+        _run_add_repo(root, extra_args=("--channel", channel))
+
+        assert conf_path.exists(), f"--channel {channel} must write {conf_path.name}"
+        conf = conf_path.read_text()
+        assert f"{_CHANNEL_REPO_NAMES[channel]}: {{" in conf, f"{channel}: wrong repo stanza:\n{conf}"
+        assert f'url: "{_PAGES_BASE}/{channel}/ce-2.8"' in conf, f"{channel}: wrong resolved url:\n{conf}"
+        assert "Generated at boot by pfblockerng_repo_generate" in conf, (
+            f"{channel}: the boot hook did not resolve the conf:\n{conf}"
+        )
+        assert "pending" not in conf, f"{channel}: the staging stub survived:\n{conf}"
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_add_repo_live_bootstrap_leaves_other_channels_absent(channel: str) -> None:
+    """A bootstrap creates exactly ONE project channel conf — never a sibling.
+
+    The orphan guard is what makes single-repository subscription reachable: the boot
+    hook regenerates only confs that exist, so a channel the user never bootstrapped
+    must not appear as a side effect of bootstrapping another one.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_add_repo(root, extra_args=("--channel", channel))
+
+        present = sorted(p.name for p in _repos_dir(root).iterdir()) if _repos_dir(root).is_dir() else []
+        assert present == [_CHANNEL_CONF_NAMES[channel]], (
+            f"--channel {channel} must leave exactly its own conf behind, found: {present}"
+        )
+
+
+@pytest.mark.parametrize("previous", ["release", "stable", "nightly"])
+def test_add_repo_live_bootstrap_replaces_a_previously_enabled_channel(previous: str) -> None:
+    """Single-repository subscription: bootstrapping a channel retires the other one.
+
+    Scenario: given a box already subscribed to ``previous``, when the user bootstraps
+    ``edge``, then the box is subscribed to edge ALONE — the previous channel's conf is
+    gone and the removal is reported, so the box never ends up with two project
+    repositories enabled at the same equal priority.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_add_repo(root, extra_args=() if previous == "release" else ("--channel", previous))
+        previous_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES[previous]
+        assert previous_conf.exists(), f"before-state: the box must be subscribed to {previous}"
+
+        proc = _run_add_repo(root, extra_args=("--channel", "edge"))
+
+        assert (_repos_dir(root) / _CHANNEL_CONF_NAMES["edge"]).exists(), "edge must be subscribed after the switch"
+        assert not previous_conf.exists(), (
+            f"{previous} must be unsubscribed by the switch — two project repos is not a supported configuration"
+        )
+        assert _CHANNEL_CONF_NAMES[previous] in (proc.stdout + proc.stderr), (
+            f"the switch must report retiring {previous}:\n{proc.stdout}\n{proc.stderr}"
+        )
 
 
 def test_add_repo_channel_nightly_live_bootstrap_matches_flag_nightly() -> None:
@@ -695,13 +759,29 @@ def test_add_repo_channel_nightly_live_bootstrap_matches_flag_nightly() -> None:
         _run_add_repo(root_flag, nightly=True)
         _run_add_repo(root_channel, extra_args=("--channel", "nightly"))
 
-        conf_flag = Path(root_flag) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-nightly.conf"
-        conf_channel = Path(root_channel) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-nightly.conf"
+        conf_flag = _repos_dir(root_flag) / "pfblockerng-nightly.conf"
+        conf_channel = _repos_dir(root_channel) / "pfblockerng-nightly.conf"
         assert conf_flag.exists(), "--nightly must write pfblockerng-nightly.conf"
         assert conf_channel.exists(), "--channel nightly must write pfblockerng-nightly.conf"
         assert conf_flag.read_text() == conf_channel.read_text(), (
             "--channel nightly must byte-match --nightly's live-bootstrap output"
         )
+
+
+def test_add_repo_help_advertises_the_canonical_identity_only() -> None:
+    """``--help`` steers users to the four channels and the ONE canonical package.
+
+    The legacy ``-devel`` install hint is retired: every channel serves
+    ``pfSense-pkg-pfBlockerNG``, so advertising a suffixed identity would send users
+    at a package no channel catalogue carries.
+    """
+    proc = subprocess.run(["sh", str(_ADD_REPO), "--help"], capture_output=True, text=True, check=True)
+    assert "pfSense-pkg-pfBlockerNG-devel" not in proc.stdout, (
+        f"--help must not advertise the retired -devel identity:\n{proc.stdout}"
+    )
+    assert "pkg install pfSense-pkg-pfBlockerNG" in proc.stdout, proc.stdout
+    for channel in _CHANNELS:
+        assert channel in proc.stdout, f"--help must name the {channel!r} channel:\n{proc.stdout}"
 
 
 # --------------------------------------------------------------------------- #
