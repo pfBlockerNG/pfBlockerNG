@@ -208,8 +208,8 @@ fi
 #                      `${...:+...}` is left UNEXPANDED here (escaped `\$`) so the
 #                      remote shell resolves it, not this caller; unset expands to
 #                      zero words, so the flag is silently absent (today's behavior).
-#   the CA mount       the LAN mirror's cert validates against the system bundle; the
-#                      container carries no CA store of its own to check it against.
+#   the CA mount       the LAN mirror's cert validates against the box's bundle; the
+#                      container's stock CA store lacks the fleet CA that signed it.
 # Ref-stable: the one-liner is the only part that has to work across refs;
 # smoke-on-box.sh handles everything else.
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh

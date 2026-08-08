@@ -137,18 +137,15 @@ def test_env_map_scanner_catches_a_planted_offence() -> None:
 
 
 def test_workflows_pin_the_current_ci_runner_series() -> None:
-    """Every container job must ride the series `.github/docker/VERSION` names —
-    the invariant lost with the retired migration test (PR #2233), resurrected
-    here where CI actually executes it. A stale pin runs a whole job family on
-    an old toolchain while the gates read as green (issue #2232).
+    """Every container job must ride the series `.github/docker/VERSION` names.
+    A stale pin runs a whole job family on an old toolchain while the gates
+    read as green.
 
     The series lives in the trailing `/pfblockerng/ci-runner(-vm)?:N` path
     segment regardless of what prefixes it: a bare `ghcr.io/...` ref (hosted
     jobs) or the `${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/...` expression
-    (self-hosted jobs, issue #2230) both name the same series the same way.
-    Matching only `ghcr\\.io/...` would silently stop scanning the six
-    self-hosted sites the day #2230 landed — the floor assertion below is the
-    tripwire for that regression."""
+    (self-hosted jobs) both name the same series the same way. The floor
+    assertion below trips if a regex change stops matching either form."""
     version = int((ROOT / ".github/docker/VERSION").read_text(encoding="utf-8").strip())
     offenders: list[str] = []
     refs_found = 0
@@ -158,12 +155,13 @@ def test_workflows_pin_the_current_ci_runner_series() -> None:
                 refs_found += 1
                 if int(tag) != version:
                     offenders.append(f"{path.relative_to(ROOT)}:{line_no}: series {tag} != {version}")
-    # Today's count (issue #2230): 64 total ci-runner(-vm) refs across workflows
-    # + actions. A regex that stops matching the expression-form sites would
-    # scan fewer refs and pass vacuously instead of failing loudly.
+    # The floor is the exact ref count across workflows + actions at last
+    # update. A regex that stops matching one ref form would scan fewer refs
+    # and pass vacuously instead of failing loudly.
     assert refs_found >= 64, (
         f"only found {refs_found} ci-runner(-vm) refs, expected at least 64 — "
-        "the series regex likely stopped matching some ref form"
+        "either the series regex stopped matching a ref form (fix the regex) or "
+        "refs were legitimately removed (recount and lower the floor)"
     )
     assert not offenders, "workflow image pins must match .github/docker/VERSION:\n  " + "\n  ".join(offenders)
 
