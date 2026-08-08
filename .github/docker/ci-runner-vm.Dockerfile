@@ -16,7 +16,7 @@
 # boots the guest with `-enable-kvm -cpu host` and the workflow asserts the device before
 # calling it — a FreeBSD guest under TCG is not merely slower, it times the suite out.
 
-ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:3
+ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:4
 FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.source=https://github.com/pfBlockerNG/pfBlockerNG
