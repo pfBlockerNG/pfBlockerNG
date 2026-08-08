@@ -995,6 +995,19 @@
             }
         ]
     },
+    "pfb_channel_from_repo_name": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "pfb_cidr_subtract_v6": {
         "returnsRef": false,
         "returnType": "array",
@@ -8502,19 +8515,6 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
-    },
-    "pfb_pkg_repo_name_for_channel": {
-        "returnsRef": false,
-        "returnType": "?string",
-        "params": [
-            {
-                "name": "channel",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": null
-            }
-        ]
     },
     "pfb_pkg_ver": {
         "returnsRef": false,

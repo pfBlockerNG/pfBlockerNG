@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  * before-state asserted at each tick so green proves the transition CAUSED the flip.
  */
 #[CoversFunction('pfb_channel_from_pkgname')]
-#[CoversFunction('pfb_pkg_repo_name_for_channel')]
+#[CoversFunction('pfb_channel_from_repo_name')]
 #[CoversFunction('pfb_software_is_our_build')]
 #[CoversFunction('pfb_update_available')]
 #[CoversFunction('pfb_software_check_enabled')]
@@ -55,44 +55,59 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	/*
-	 * ---- pfb_pkg_repo_name_for_channel() — channel -> our repo to read latest from ----
-	 * 2026-06-14 + 2026-06-15 amendments: stable AND devel share ONE repo 'pfblockerng'
-	 * (the channel selects the package, not a per-channel repo); 'nightly' is the sole
-	 * separately-channelled build, repo 'pfblockerng-nightly'. Unknown channel -> null.
+	 * ---- pfb_channel_from_repo_name() — installed repo -> channel (issue #2148) ----
+	 * Four-channel cutover: every channel catalogue publishes the ONE canonical identity
+	 * 'pfSense-pkg-pfBlockerNG', so the NAME can no longer say which channel a box is on —
+	 * the repository it was installed from (`pkg query %R`) is authoritative. Each of the
+	 * four per-channel repos maps to its channel; the LEGACY shared 'pfblockerng' repo maps
+	 * to null ON PURPOSE (it carries both the stable and -devel identities, so there the
+	 * name still discriminates and the caller must fall back to pfb_channel_from_pkgname()).
+	 * A foreign repo, '', null and a near-miss like 'pfblockerng-edgey' are all null: an
+	 * unknown catalogue must never be read as a channel.
 	 */
-	public static function repoForChannelProvider(): array
+	public static function channelFromRepoNameProvider(): array
 	{
 		return [
-			'stable -> shared pfblockerng'  => ['stable', 'pfblockerng'],
-			'devel -> shared pfblockerng'   => ['devel', 'pfblockerng'],
-			'testing -> shared pfblockerng' => ['testing', 'pfblockerng'],
-			'edge -> shared pfblockerng'    => ['edge', 'pfblockerng'],
-			'nightly -> pfblockerng-nightly' => ['nightly', 'pfblockerng-nightly'],
-			'unknown channel -> null'        => ['beta', null],
-			'null channel -> null'           => [null, null],
+			'stable catalogue'            => ['pfblockerng-stable', 'stable'],
+			'testing catalogue'           => ['pfblockerng-testing', 'testing'],
+			'edge catalogue'              => ['pfblockerng-edge', 'edge'],
+			'nightly catalogue'           => ['pfblockerng-nightly', 'nightly'],
+			'legacy shared repo -> null'  => ['pfblockerng', null],
+			'near-miss suffix -> null'    => ['pfblockerng-edgey', null],
+			'foreign prefix -> null'      => ['other-pfblockerng-edge', null],
+			'netgate repo -> null'        => ['pfSense', null],
+			'empty repo -> null'          => ['', null],
+			'null repo -> null'           => [null, null],
 		];
 	}
 
-	#[DataProvider('repoForChannelProvider')]
-	public function testRepoNameForChannel(?string $channel, ?string $expected): void
+	#[DataProvider('channelFromRepoNameProvider')]
+	public function testChannelFromRepoName(?string $repo, ?string $expected): void
 	{
-		$this->assertSame($expected, pfb_pkg_repo_name_for_channel($channel));
+		$this->assertSame($expected, pfb_channel_from_repo_name($repo));
 	}
 
 	/*
-	 * ---- pfb_software_is_our_build() — the provenance gate (2026-06-15) ----
-	 * TRUE only for a build installed FROM one of OUR repos ('pfblockerng' /
-	 * 'pfblockerng-nightly', the `pkg query %R` origin). A Netgate-installed add-on
-	 * (repo 'pfSense'), an empty/'unknown' origin, or anything else -> FALSE. Both sides
-	 * pinned: this single predicate gates the tab, the page guard, the priv match[] line,
-	 * AND the cron notice, so a false positive would leak the whole feature onto a stock
-	 * build and a false negative would hide it from our users.
+	 * ---- pfb_software_is_our_build() — the provenance gate (2026-06-15, widened #2148) ----
+	 * TRUE only for a build installed FROM one of OUR repos — the `pkg query %R` origin.
+	 * Issue #2148 made that FIVE repos: the legacy shared 'pfblockerng' (stable + the
+	 * retired -devel identity) plus the four per-channel catalogues
+	 * 'pfblockerng-stable|-testing|-edge|-nightly'. A box subscribed to any of the new
+	 * catalogues must keep the Software tab, the priv match[] line and the update notice;
+	 * before the widening they all read as NOT-our-build and silently lost the feature.
+	 * A Netgate-installed add-on (repo 'pfSense'), an empty/'unknown' origin, or anything
+	 * else -> FALSE. Both sides pinned: this single predicate gates the tab, the page
+	 * guard, the priv match[] line, AND the cron notice, so a false positive would leak
+	 * the whole feature onto a stock build and a false negative would hide it from ours.
 	 */
 	public static function provenanceProvider(): array
 	{
 		return [
 			// Ours -> present.
-			'ours: pfblockerng (stable+devel)'   => ['pfblockerng', true],
+			'ours: legacy pfblockerng (stable+devel)' => ['pfblockerng', true],
+			'ours: pfblockerng-stable'           => ['pfblockerng-stable', true],
+			'ours: pfblockerng-testing'          => ['pfblockerng-testing', true],
+			'ours: pfblockerng-edge'             => ['pfblockerng-edge', true],
 			'ours: pfblockerng-nightly'          => ['pfblockerng-nightly', true],
 			// Not ours -> absent.
 			'netgate: pfSense repo'              => ['pfSense', false],
@@ -100,6 +115,7 @@ final class SoftwareUpdateDecisionTest extends TestCase
 			'literal unknown'                    => ['unknown', false],
 			'null origin'                        => [null, false],
 			'foreign repo'                       => ['netgate-decoy', false],
+			'near-miss catalogue'                => ['pfblockerng-edgey', false],
 		];
 	}
 

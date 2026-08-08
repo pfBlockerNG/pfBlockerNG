@@ -4554,14 +4554,20 @@ function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
  *   pfSense-pkg-pfBlockerNG-edge    -> 'edge'
  *   pfSense-pkg-pfBlockerNG-devel   -> 'devel'   (retired port; installed boxes remain)
  *   pfSense-pkg-pfBlockerNG-NIGHTLY -> 'nightly' (ADR-18)
- * Anything unrecognised/empty -> NULL. The installed name is authoritative for "what
- * channel am I on" (ADR-19 §2 channel detection). Suffix match is case-insensitive so
- * the NIGHTLY/devel spellings are tolerant.
+ * Anything unrecognised/empty -> NULL. Suffix match is case-insensitive so the
+ * NIGHTLY/devel spellings are tolerant.
  *
  * issue #2166: the ports tree replaced the -devel recipe with -testing/-edge/-nightly, so
  * a build from the current CI channel reports one of those names. -devel stays mapped:
  * boxes installed before the rename still carry it, and dropping it here would read them
  * as an unknown channel — i.e. not our build.
+ *
+ * issue #2148 narrowed this function's ROLE (its mapping is unchanged). Channel is now
+ * catalogue placement — all four catalogues publish the canonical 'pfSense-pkg-pfBlockerNG'
+ * — so pfb_channel_from_repo_name() is the authoritative channel signal and this is the
+ * FALLBACK: the discriminator inside the legacy shared 'pfblockerng' repo, which carries
+ * both the canonical and the -devel identity. It also remains the prefix/identity filter
+ * inside pfb_pkg_installed_name().
  */
 function pfb_channel_from_pkgname(?string $name): ?string {
 	if (!is_string($name) || $name === '') {
@@ -4589,36 +4595,60 @@ function pfb_channel_from_pkgname(?string $name): ?string {
 }
 
 /*
- * The pkg repo "read latest" maps to, for a given channel (2026-06-14 + 2026-06-15
- * amendments): stable AND the pre-release channels share ONE repo 'pfblockerng' (the
- * channel selects the package, not a per-channel repo); 'nightly' is the sole
- * separately-channelled build, repo 'pfblockerng-nightly'. An unrecognised channel ->
- * NULL (no repo to read from). Per-channel catalogues are #2148's cutover, not this.
+ * Channel a build is on, from the pkg REPOSITORY it was installed from (`pkg query '%R'`):
+ *   pfblockerng-stable  -> 'stable'
+ *   pfblockerng-testing -> 'testing'
+ *   pfblockerng-edge    -> 'edge'
+ *   pfblockerng-nightly -> 'nightly'
+ * Anything else -> NULL.
+ *
+ * issue #2148 (four-channel cutover): every channel catalogue publishes the ONE canonical
+ * package identity 'pfSense-pkg-pfBlockerNG' — channel is catalogue placement, never a
+ * package-name suffix — so the installed NAME can no longer say which channel a box is on.
+ * A box subscribes to exactly one project repository at a time, so the recorded repo is both
+ * the only repo the package can upgrade within and the authoritative channel signal.
+ *
+ * The LEGACY shared repo 'pfblockerng' returns NULL deliberately: it carries BOTH
+ * pfSense-pkg-pfBlockerNG and pfSense-pkg-pfBlockerNG-devel, so there the NAME still
+ * discriminates and callers fall back to pfb_channel_from_pkgname(). Matching is EXACT
+ * (unlike the name mapper's case-insensitive suffixes): we author every one of these conf
+ * names ourselves, so a case variant is a repo we never created, not a spelling of ours.
  */
-function pfb_pkg_repo_name_for_channel(?string $channel): ?string {
-	switch ($channel) {
-		case 'stable':
-		case 'testing':
-		case 'edge':
-		case 'devel':
-			return 'pfblockerng';
-		case 'nightly':
-			return 'pfblockerng-nightly';
+function pfb_channel_from_repo_name(?string $repo): ?string {
+	if (!is_string($repo) || $repo === '') {
+		return null;
+	}
+	switch ($repo) {
+		case 'pfblockerng-stable':
+			return 'stable';
+		case 'pfblockerng-testing':
+			return 'testing';
+		case 'pfblockerng-edge':
+			return 'edge';
+		case 'pfblockerng-nightly':
+			return 'nightly';
 		default:
 			return null;
 	}
 }
 
 /*
- * Provenance gate (2026-06-15 amendment): TRUE only when the build was installed FROM
- * one of OUR repos — 'pfblockerng' (stable+devel) or 'pfblockerng-nightly'. The repo is
- * read from `pkg query '%R' <pkgname>`. A Netgate-installed add-on (repo 'pfSense'),
- * an empty/'unknown' origin, or anything else -> FALSE: the Software tab, the page, the
- * priv match[] line, AND the cron notice all gate on this so a stock build shows none of
- * them.
+ * Provenance gate (2026-06-15 amendment; widened by issue #2148): TRUE only when the build
+ * was installed FROM one of OUR repos — the legacy shared 'pfblockerng' (stable + the
+ * retired -devel identity) or one of the four per-channel catalogues
+ * 'pfblockerng-stable' / '-testing' / '-edge' / '-nightly'. The repo is read from
+ * `pkg query '%R' <pkgname>`. A Netgate-installed add-on (repo 'pfSense'), an empty/'unknown'
+ * origin, or anything else -> FALSE: the Software tab, the page, the priv match[] line, AND
+ * the cron notice all gate on this so a stock build shows none of them. Before #2148 only the
+ * first and last were listed, so a box moved onto a -stable/-testing/-edge catalogue read as
+ * not-our-build and silently lost the whole feature.
  */
 function pfb_software_is_our_build(?string $installed_repo): bool {
-	return in_array($installed_repo, array('pfblockerng', 'pfblockerng-nightly'), TRUE);
+	return in_array(
+		$installed_repo,
+		array('pfblockerng', 'pfblockerng-stable', 'pfblockerng-testing', 'pfblockerng-edge', 'pfblockerng-nightly'),
+		TRUE
+	);
 }
 
 /*
@@ -4674,7 +4704,9 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  * target — this is the binary pfSense itself and our add-repo.sh/build-repo.sh shell to.
  * The base /usr/sbin/pkg bootstrap stub does NOT report the repository origin ('%R') the
  * same way, so the provenance gate read FALSE on a genuine our-repo install when it was
- * used; the port binary returns the recorded repo name ('pfblockerng').
+ * used; the port binary returns the recorded repo name (issue #2148: the legacy shared
+ * 'pfblockerng' or one of the per-channel 'pfblockerng-<channel>' catalogues), which is
+ * now the authoritative channel signal AND the repo latest is read from.
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
@@ -4756,6 +4788,11 @@ function pfb_pkg_installed_version(string $pkgname): string {
 /*
  * The repo $pkgname was installed FROM via `pkg query '%R'` (the provenance signal the
  * 2026-06-15 gate keys on); '' when absent/failed. Fed to pfb_software_is_our_build().
+ *
+ * issue #2148 made this the single authoritative signal: under one-repository-at-a-time
+ * subscription the recorded repo is the ONLY repo the package can upgrade within, so it is
+ * also the repo pfb_software_update_check() reads latest from and (via
+ * pfb_channel_from_repo_name()) the channel it reports.
  */
 function pfb_pkg_installed_repo(string $pkgname): string {
 	if ($pkgname === '') {
@@ -4853,18 +4890,19 @@ function pfb_software_write_cache(array $cache): void {
  *
  * Order is deliberate:
  *   1. Resolve installed name + version. These can be injected for unit tests via
- *      $io ['installed_name','installed','latest']; absent keys fall through to the
- *      live pfb_pkg_*() shellout.
+ *      $io ['installed_name','installed','installed_repo','latest']; absent keys fall
+ *      through to the live pfb_pkg_*() shellout.
  *   2. PROVENANCE GATE FIRST: gate on pfb_software_provenance_ok() — the SAME predicate
  *      that decides whether the Software PAGE is displayable (our-repo install, honouring
  *      the hidden CI/support override) — so a build that cannot show the page never runs
  *      the background check or raises an update notice, even if "Check for new versions"
  *      remains enabled from a prior our-repo install. Injectable via $io['provenance_ok']
  *      for off-box tests.
- *   3. Read our-repo latest for the channel's repo (guarded inside pfb_pkg_latest()).
- *      An empty latest (pkg locked / no DNS / repo absent) preserves the cached latest so
- *      the page keeps showing the last-known value rather than regressing to ''.
- *   4. Refresh the cache (channel/installed/latest/last_checked) and, when
+ *   3. Read latest from the repo the package was INSTALLED from (guarded inside
+ *      pfb_pkg_latest()). An empty latest (pkg locked / no DNS / repo absent) preserves the
+ *      cached latest so the page keeps showing the last-known value rather than regressing
+ *      to ''.
+ *   4. Refresh the cache (pkgname/repo/channel/installed/latest/last_checked) and, when
  *      pfb_should_notify() says so, raise a DE-DUPED file_notice and persist
  *      last_notified = latest (so repeated ticks at the same latest do not renotify).
  *
@@ -4903,30 +4941,48 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 		return pfb_software_read_cache();
 	}
 
-	$channel = pfb_channel_from_pkgname($pkgname);
-	$repo    = pfb_pkg_repo_name_for_channel($channel);
+	// issue #2148: the INSTALLED REPOSITORY is authoritative — never a channel->repo mapping.
+	// All four catalogues publish the ONE canonical identity 'pfSense-pkg-pfBlockerNG', and a
+	// box subscribes to exactly one project repo at a time (all at priority 100, so pkg would
+	// not order across them anyway), which makes the recorded '%R' both the only repo this
+	// install can upgrade within and the channel it is on. Correct for legacy 'pfblockerng'
+	// installs too: that is exactly where their upgrades come from.
+	$repo = array_key_exists('installed_repo', $io)
+		? (string) $io['installed_repo']
+		: pfb_pkg_installed_repo($pkgname);
+	// Repo-first, name-fallback: the legacy shared 'pfblockerng' repo carries BOTH the
+	// canonical and the -devel identity, so it names no channel and the NAME still decides
+	// there. Everything the user SEES (this cache, the notice text, the Software page label)
+	// derives the channel this way.
+	$channel = pfb_channel_from_repo_name($repo) ?? pfb_channel_from_pkgname($pkgname);
 
 	$cache = pfb_software_read_cache();
 
-	// 3. Read our-repo latest; keep the cached value when the live read is unavailable.
+	// 3. Read latest from the installed repo; keep the cached value when the live read is
+	// unavailable.
 	if (array_key_exists('latest', $io)) {
 		$latest = (string) $io['latest'];
 	} else {
-		$latest = pfb_pkg_latest($pkgname, (string) $repo);
+		$latest = pfb_pkg_latest($pkgname, $repo);
 	}
-	// Only reuse cached latest/last_notified when the cache belongs to the SAME installed
-	// package — after a channel switch (stable<->devel<->nightly) a stale value must not
-	// drive a wrong notice or suppress the first valid one for the new package.
-	$cache_matches_pkg = (($cache['pkgname'] ?? '') === $pkgname);
-	if ($latest === '' && $cache_matches_pkg) {
+	// Only reuse cached latest/last_notified when the cache belongs to the SAME install —
+	// same package name AND same repository. issue #2148: all four catalogues publish the
+	// one canonical identity, so a catalogue switch leaves the NAME unchanged and a
+	// name-only scope would serve the old catalogue's version as the new one's (and its
+	// last_notified would swallow the first genuine notice for the new catalogue).
+	$cache_matches_install = (($cache['pkgname'] ?? '') === $pkgname)
+		&& (($cache['repo'] ?? '') === $repo);
+	if ($latest === '' && $cache_matches_install) {
 		$latest = (string) ($cache['latest'] ?? '');
 	}
 
-	$last_notified = $cache_matches_pkg ? (string) ($cache['last_notified'] ?? '') : '';
+	$last_notified = $cache_matches_install ? (string) ($cache['last_notified'] ?? '') : '';
 
 	// 4. Refresh the cache. last_notified is written from the scoped value so a cache left
-	// by a different package (channel switch) is reset rather than carried forward.
+	// by a different install (a different package name OR a different catalogue) is reset
+	// rather than carried forward.
 	$cache['pkgname']       = $pkgname;
+	$cache['repo']          = $repo;
 	$cache['channel']       = $channel;
 	$cache['installed']     = $installed;
 	$cache['latest']        = $latest;
@@ -4947,9 +5003,10 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
  *
  * Live wrapper over the pure pfb_software_is_our_build() (ADR-19 2026-06-15
  * amendment): reads the installed package's provenance from `pkg query '%R'`
- * and returns true ONLY when pfBlockerNG was installed from one of OUR repos
- * (`pfblockerng` / `pfblockerng-nightly`). A Netgate-ports install (repo
- * 'pfSense'/unknown/'') returns false.
+ * and returns true ONLY when pfBlockerNG was installed from one of OUR repos —
+ * the legacy shared `pfblockerng` or one of the four per-channel catalogues
+ * `pfblockerng-stable|-testing|-edge|-nightly` (issue #2148). A Netgate-ports
+ * install (repo 'pfSense'/unknown/'') returns false.
  *
  * The Software tab append, the pfblockerng_software.php top-of-file guard, and
  * the priv match line all gate on this single predicate so a Netgate-installed

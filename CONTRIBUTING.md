@@ -327,7 +327,7 @@ Full options: [`scripts/deploy.sh`](scripts/deploy.sh).
 
 ### How the `pkg` repository is published (GitHub Pages)
 
-The self-hosted repository (installed per the [README](README.md#option-2--this-forks-self-hosted-pkg-repository))
+The self-hosted repository (installed per the [README](README.md#installation))
 is a **derived index** — there is no stateful store to maintain. The
 **separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo** holds the served
 tree and GitHub Pages publishes it straight from that repo's `main`; it carries no workflow
@@ -351,11 +351,18 @@ is installing a retained older version rather than re-deploying a site.
   moves the box to a different varver.
 - **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
   catalog is served at the project's GitHub Pages URL, e.g.
-  **`https://pfblockerng.github.io/pkg/release/ce-2.8`**.
+  **`https://pfblockerng.github.io/pkg/stable/ce-2.8`**.
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the
   bootstrap (`scripts/add-repo.sh`) and the inline conf in the README reuse byte-for-byte.
+- **Client scripts.** The Pages root serves both halves of a channel switch, published by
+  `scripts/gen_landing.py` from their repository copies: `add-repo.sh` (subscription — writes
+  one channel conf, retires every other project conf, installs the boot-time regenerator hook)
+  and `migrate-channel.sh` (the installed package — repository-qualified replacement of a
+  legacy suffixed identity or a canonical build on the wrong repo, then verification). Both
+  take the same mandatory `--channel <stable|testing|edge|nightly>`. Adding a repository alone
+  never moves an installed package, so neither script substitutes for the other (issue #2148).
 - **Triggers.** `pfBlockerNG/pkg` carries no workflow of its own — it holds the served tree and
   GitHub Pages publishes it from `main`. This repo does the publishing: the `publish-pkg-repo`
   job in `release-published.yml` runs on the real `release: published` event, and

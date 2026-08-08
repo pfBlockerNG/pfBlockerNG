@@ -84,6 +84,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
+from typing import NamedTuple
 
 import pytest
 
@@ -419,26 +420,37 @@ def build_repo_via_portable(vm: SmokeVM, pkg_files: list[Path], tmp_path: Path) 
     return PORTABLE_REPO_ROOT
 
 
-def run_add_repo_sh(vm: SmokeVM, base_url: str, *, timeout: float = 300.0) -> subprocess.CompletedProcess[str]:
-    """Stage the SHIPPED ``scripts/add-repo.sh`` and run it (default release repo) against ``base_url``.
+def run_add_repo_sh(
+    vm: SmokeVM,
+    base_url: str,
+    *,
+    channel: str | None = None,
+    timeout: float = 300.0,
+) -> subprocess.CompletedProcess[str]:
+    """Stage the SHIPPED ``scripts/add-repo.sh`` and run it against ``base_url``.
 
     Drives the real client bootstrap on the box: it writes the production conf to
-    ``/usr/local/etc/pkg/repos/pfblockerng.conf`` (here pointed at a local
+    ``/usr/local/etc/pkg/repos/pfblockerng<-channel>.conf`` (here pointed at a local
     ``file://`` catalog via the script's own ``--base-url`` override — the github.io
-    default and a live HTTPS add-repo.sh run are a post-deploy note), runs ``pkg
-    update``, and VERIFIES the package is visible from OUR repo. A non-zero exit (its
-    verify step failing) raises with the captured output. ``base_url`` points at the
-    catalog ROOT; add-repo.sh installs+runs the generator hook, which resolves the
-    box's ``<channel>/<varver>`` subtree (arch-less, NO_ARCH — issue #1806), so the
-    catalog MUST live under ``<base_url>/<channel>/<varver>/``.
+    default and a live HTTPS add-repo.sh run are a post-deploy note), retires every
+    OTHER project conf, runs ``pkg update``, and VERIFIES the package is visible from
+    that repo. A non-zero exit (its verify step failing) raises with the captured
+    output. ``base_url`` points at the catalog ROOT; add-repo.sh installs+runs the
+    generator hook, which resolves the box's ``<channel>/<varver>`` subtree (arch-less,
+    NO_ARCH — issue #1806), so the catalog MUST live under
+    ``<base_url>/<channel>/<varver>/``.
+
+    ``channel`` selects one of the four channel repositories (issue #2148); omitted, the
+    script's own default — the legacy shared release repo ``pfblockerng`` — applies.
     """
+    channel_args = () if channel is None else ("--channel", channel)
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR, GUEST_ADD_REPO_RCD_DIR)
     _scp_to_guest(vm, ADD_REPO_SH, GUEST_ADD_REPO_SH)
     _scp_to_guest(vm, ADD_REPO_GENERATE_HOOK_SRC, f"{GUEST_ADD_REPO_RCD_DIR}/pfblockerng_repo_generate.sh")
-    result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, timeout=timeout)
+    result = vm.ssh("/bin/sh", GUEST_ADD_REPO_SH, "--base-url", base_url, *channel_args, timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
-            f"add-repo.sh --base-url {base_url} failed: rc={result.returncode}\n"
+            f"add-repo.sh --base-url {base_url} {' '.join(channel_args)} failed: rc={result.returncode}\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
@@ -644,20 +656,43 @@ def pkg_update(vm: SmokeVM, *, timeout: float = 240.0) -> None:
         )
 
 
-def pkg_installed_version(vm: SmokeVM, *, timeout: float = 60.0) -> str | None:
-    """The installed ``%v`` of the package, or ``None`` if absent (the before/after oracle)."""
-    result = vm.ssh("pkg", "query", "%v", PKG_NAME, timeout=timeout)
+def pkg_installed_version_of(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> str | None:
+    """The installed ``%v`` of ``name``, or ``None`` if absent (the before/after oracle).
+
+    Takes the package name because the four-channel cases (issue #2148) reason about
+    THREE identities on one box — the branch build, the canonical
+    ``pfSense-pkg-pfBlockerNG`` every channel publishes, and the legacy
+    ``pfSense-pkg-pfBlockerNG-devel`` a migration replaces.
+    """
+    result = vm.ssh("pkg", "query", "%v", name, timeout=timeout)
     if result.returncode == 0:
         return result.stdout.strip() or None
     if result.returncode == 1:
         return None
     raise RuntimeError(
-        f"pkg query {PKG_NAME} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"pkg query {name} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
 
+def pkg_repo_origin_of(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> str | None:
+    """The repo ``%R`` ``name`` was fetched from, or ``None`` if it is not installed."""
+    result = vm.ssh("pkg", "query", "%R", name, timeout=timeout)
+    if result.returncode == 0:
+        return result.stdout.strip() or None
+    if result.returncode == 1:
+        return None
+    raise RuntimeError(
+        f"pkg query %R {name} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def pkg_installed_version(vm: SmokeVM, *, timeout: float = 60.0) -> str | None:
+    """The installed ``%v`` of the branch package, or ``None`` if absent."""
+    return pkg_installed_version_of(vm, PKG_NAME, timeout=timeout)
+
+
 def pkg_repo_origin(vm: SmokeVM, *, timeout: float = 60.0) -> str:
-    """The repo ``%R`` the installed package was fetched from (the precedence oracle)."""
+    """The repo ``%R`` the installed branch package was fetched from (the precedence oracle)."""
     return _ssh_check(vm, "pkg", "query", "%R", PKG_NAME, timeout=timeout).stdout.strip()
 
 
@@ -2293,3 +2328,781 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
         # staged hook never survives into a later module sharing this guest.
         repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
         # REPO_CONF is cleaned by the repo_vm module fixture teardown.
+
+
+# =========================================================================== #
+# issue #2148 — the four-channel client contract                              #
+#                                                                              #
+# Four channels — stable, testing, edge, nightly — each own a pkg repository   #
+# `pfblockerng-<channel>` (conf `pfblockerng-<channel>.conf`) and ALL FOUR     #
+# publish the ONE canonical identity `pfSense-pkg-pfBlockerNG`: channel is     #
+# catalogue placement, never a package-name suffix. The legacy shared release  #
+# repo `pfblockerng` (conf `pfblockerng.conf`) is the only one that ever       #
+# carried a suffixed identity (`pfSense-pkg-pfBlockerNG-devel`).               #
+#                                                                              #
+# Two consequences the cases below pin on a real box:                          #
+#   * SINGLE-REPOSITORY SUBSCRIPTION — every project repo shares priority 100  #
+#     and `pkg` does not order across equal-priority repositories, so exactly  #
+#     ONE project conf may exist. `add-repo.sh --channel <ch>` retires the      #
+#     others.                                                                  #
+#   * The installed package NAME can no longer identify the channel, so the    #
+#     repository it came from (`pkg query '%R'`) is the only authority — and   #
+#     `pkg` never moves an installed package across repositories on its own,   #
+#     which is why `migrate-channel.sh` exists.                                #
+#                                                                              #
+# Marker: @pytest.mark.repo (inherited from pytestmark).                       #
+# Dispatch: gh workflow run smoke-single.yml -f pytest_marker=repo             #
+# =========================================================================== #
+
+# The four channels, in the order add-repo.sh and migrate-channel.sh enumerate them.
+CHANNELS = ("stable", "testing", "edge", "nightly")
+
+# The ONE identity every channel catalogue publishes, and the legacy suffixed identity a
+# box installed from the shared release repo still carries until it is migrated.
+CANONICAL_PKG_NAME = "pfSense-pkg-pfBlockerNG"
+LEGACY_DEVEL_PKG_NAME = f"{CANONICAL_PKG_NAME}-devel"
+
+# The on-box repo-conf directory — derived from REPO_CONF so the two can never drift.
+PKG_REPOS_DIR = REPO_CONF.rsplit("/", 1)[0]
+LEGACY_RELEASE_CONF_NAME = REPO_CONF.rsplit("/", 1)[1]
+
+# Every conf add-repo.sh may ever have written. Exactly ONE may be present on a box;
+# `test_project_conf_names_match_the_shipped_scripts` pins this tuple to the scripts.
+PROJECT_CONF_NAMES = (LEGACY_RELEASE_CONF_NAME, *(f"pfblockerng-{channel}.conf" for channel in CHANNELS))
+
+# Guest root for the four channel catalogues + the legacy release catalogue (isolated
+# from GUEST_SPIKE_DIR so the ADR-17 cases above are unaffected).
+CHANNEL_REPO_ROOT = "/tmp/pfb_channel_repo"
+
+# The user-run migration script under test, and where it is staged on the guest.
+MIGRATE_CHANNEL_SH = Path(__file__).resolve().parents[2] / "scripts" / "migrate-channel.sh"
+GUEST_MIGRATE_CHANNEL_SH = f"{GUEST_SPIKE_DIR}/migrate-channel.sh"
+
+# Distinct PORTREVISIONs per catalogue, so `pkg query %v` alone identifies WHICH
+# catalogue served a build (a `%R` assertion that happened to be right for the wrong
+# reason cannot hide behind an identical version). `edge` carries TWO: `_3` is its own
+# build and `_1` is the stable-era build it still contains — each channel catalogue
+# strictly contains its slower channels' files, which is what makes an in-repo
+# rollback on a faster channel possible without switching repositories.
+CHANNEL_REVISIONS = {"stable": "_1", "testing": "_2", "edge": "_3", "nightly": "_4"}
+EDGE_ROLLBACK_REVISION = CHANNEL_REVISIONS["stable"]
+# The legacy `-devel` build sits ABOVE every channel build, so nothing about a migration
+# off it can be explained by ordinary version ordering — only by the repository-qualified
+# replacement `migrate-channel.sh` performs.
+LEGACY_REVISION = "_9"
+# Which slower channels' builds each catalogue ALSO carries. Strict containment
+# (edge ⊇ testing ⊇ stable) is what the in-repo rollback case rides on; expressed as
+# data so no case has to branch on a channel name.
+CHANNEL_CONTAINED_BUILDS: dict[str, tuple[str, ...]] = {"edge": ("stable",)}
+
+
+def channel_repo_name(channel: str) -> str:
+    """The pkg repository name a channel's conf declares (the ``%R`` a install reports)."""
+    return f"pfblockerng-{channel}"
+
+
+def channel_conf_name(channel: str) -> str:
+    """The conf FILE name add-repo.sh writes for a channel."""
+    return f"pfblockerng-{channel}.conf"
+
+
+def previous_channel(channel: str) -> str:
+    """A deterministic OTHER channel to subscribe to first, so a switch has a before-state.
+
+    Each case seeds its own previous subscription rather than relying on whatever a
+    sibling test happened to leave behind — the cases below must pass in any order and
+    in isolation.
+    """
+    return CHANNELS[(CHANNELS.index(channel) + 1) % len(CHANNELS)]
+
+
+def rename_pkg(src_pkg: Path, new_name: str, out_dir: Path) -> Path:
+    """Move a built ``.pkg`` onto a different package IDENTITY, payload untouched.
+
+    The sibling of :func:`reversion_pkg`: it rewrites ``version``, this rewrites ``name``
+    (and the trailing segment of ``origin``, which is the port the name comes from) in
+    BOTH manifests — ``pkg`` reads ``+COMPACT_MANIFEST`` for the catalogue and
+    ``+MANIFEST`` on install, so a package renamed in only one registers under the other
+    name. Every other manifest field and every payload member is copied through verbatim.
+
+    This is what lets ONE branch build stand in for both identities the four-channel
+    cutover has to reconcile: the canonical ``pfSense-pkg-pfBlockerNG`` the channel
+    catalogues publish, and the legacy ``pfSense-pkg-pfBlockerNG-devel`` an unmigrated
+    box still carries. Returns the written ``<new_name>-<version>.pkg`` under ``out_dir``.
+    """
+    tar_bytes = _zstd_decompress(src_pkg.read_bytes())
+    repacked = io.BytesIO()
+    version = ""
+    with (
+        tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tin,
+        tarfile.open(fileobj=repacked, mode="w", format=tarfile.USTAR_FORMAT) as tout,
+    ):
+        for member in tin.getmembers():
+            extracted = tin.extractfile(member) if member.isfile() else None
+            data = extracted.read() if extracted is not None else b""
+            if member.name in _PKG_MANIFEST_MEMBERS:
+                obj = json.loads(data)
+                obj["name"] = new_name
+                origin = obj.get("origin")
+                if isinstance(origin, str) and "/" in origin:
+                    obj["origin"] = f"{origin.rsplit('/', 1)[0]}/{new_name}"
+                version = obj.get("version", version)
+                data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+                ti = tarfile.TarInfo(name=member.name)
+                ti.size = len(data)
+                ti.mode = 0o644
+                ti.uid = ti.gid = 0
+                ti.uname, ti.gname = "root", "wheel"
+                ti.mtime = 0
+                ti.type = tarfile.REGTYPE
+                tout.addfile(ti, io.BytesIO(data))
+            else:
+                tout.addfile(member, io.BytesIO(data) if member.isfile() else None)
+    if not version:
+        raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST/+MANIFEST with a version — not a libpkg .pkg?")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{new_name}-{version}.pkg"
+    out_path.write_bytes(_zstd_compress(repacked.getvalue()))
+    return out_path
+
+
+def _synthetic_pkg(path: Path, *, name: str, version: str, origin: str) -> Path:
+    """Write a minimal libpkg-shaped ``.pkg`` (both manifests + one payload member).
+
+    Hermetic input for the ``rename_pkg`` round-trip: real enough to exercise the
+    manifest rewrite without a multi-megabyte branch artifact or a booted guest.
+    """
+    manifest = {"name": name, "version": version, "origin": origin, "abi": "FreeBSD:15:*"}
+    body = json.dumps(manifest, separators=(",", ":")).encode() + b"\n"
+    payload = b"#!/bin/sh\necho pfb payload\n"
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w", format=tarfile.USTAR_FORMAT) as tf:
+        members = [(member, body) for member in _PKG_MANIFEST_MEMBERS]
+        members.append(("/usr/local/bin/pfb_probe", payload))
+        for member_name, data in members:
+            ti = tarfile.TarInfo(name=member_name)
+            ti.size = len(data)
+            ti.mode = 0o644
+            ti.uid = ti.gid = 0
+            ti.uname, ti.gname = "root", "wheel"
+            ti.mtime = 0
+            ti.type = tarfile.REGTYPE
+            tf.addfile(ti, io.BytesIO(data))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(_zstd_compress(buf.getvalue()))
+    return path
+
+
+def _pkg_manifests(pkg_path: Path) -> dict[str, dict]:
+    """Both manifest members of a ``.pkg``, parsed — the oracle for an identity rewrite."""
+    tar_bytes = _zstd_decompress(pkg_path.read_bytes())
+    out: dict[str, dict] = {}
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
+        for member in tf.getmembers():
+            if member.name in _PKG_MANIFEST_MEMBERS:
+                extracted = tf.extractfile(member)
+                assert extracted is not None, f"{member.name} is not a regular file in {pkg_path.name}"
+                out[member.name] = json.loads(extracted.read())
+    return out
+
+
+def _pkg_payload(pkg_path: Path) -> dict[str, bytes]:
+    """Every NON-manifest member of a ``.pkg``, by name — the payload-passthrough oracle."""
+    tar_bytes = _zstd_decompress(pkg_path.read_bytes())
+    out: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
+        for member in tf.getmembers():
+            if member.name in _PKG_MANIFEST_MEMBERS or not member.isfile():
+                continue
+            extracted = tf.extractfile(member)
+            assert extracted is not None, f"{member.name} is not readable in {pkg_path.name}"
+            out[member.name] = extracted.read()
+    return out
+
+
+def test_rename_pkg_rewrites_both_manifests_and_keeps_the_payload(tmp_path: Path) -> None:
+    """HERMETIC (no VM): ``rename_pkg`` moves a ``.pkg`` onto a different package IDENTITY.
+
+    The four-channel cases below need two identities forged from ONE branch build: the
+    canonical ``pfSense-pkg-pfBlockerNG`` every channel catalogue publishes, and the
+    legacy ``pfSense-pkg-pfBlockerNG-devel`` a box being migrated still carries. Both
+    manifests must move in lockstep — ``pkg`` reads ``+COMPACT_MANIFEST`` for the
+    catalogue and ``+MANIFEST`` on install, so rewriting only the first would publish a
+    catalogue entry named canonical that REGISTERS as ``-devel``, and every migration
+    assertion below would then be measuring the wrong thing.
+
+    Given a ``.pkg`` whose BOTH manifests name ``pfSense-pkg-pfBlockerNG-devel``,
+    When  ``rename_pkg`` retargets it at ``pfSense-pkg-pfBlockerNG``,
+    Then  the written file is ``<canonical>-<version>.pkg``, BOTH manifests carry the
+      canonical name and a canonical ``origin``, version/ABI are untouched, and every
+      payload member survives byte-identical.
+    """
+    src = _synthetic_pkg(
+        tmp_path / "src" / f"{LEGACY_DEVEL_PKG_NAME}-1.2.3_4.pkg",
+        name=LEGACY_DEVEL_PKG_NAME,
+        version="1.2.3_4",
+        origin=f"net/{LEGACY_DEVEL_PKG_NAME}",
+    )
+
+    # BEFORE: the source really does carry the legacy identity in BOTH manifests.
+    before = _pkg_manifests(src)
+    assert sorted(before) == sorted(_PKG_MANIFEST_MEMBERS), f"synthetic .pkg is missing a manifest: {sorted(before)}"
+    for member, obj in before.items():
+        assert obj["name"] == LEGACY_DEVEL_PKG_NAME, f"BEFORE: {member} names {obj['name']!r}"
+
+    out = rename_pkg(src, CANONICAL_PKG_NAME, tmp_path / "renamed")
+
+    # AFTER: the identity moved everywhere it is recorded, and nothing else moved.
+    assert out.name == f"{CANONICAL_PKG_NAME}-1.2.3_4.pkg", f"unexpected output filename {out.name!r}"
+    after = _pkg_manifests(out)
+    assert sorted(after) == sorted(_PKG_MANIFEST_MEMBERS), f"rename dropped a manifest: {sorted(after)}"
+    for member, obj in after.items():
+        assert obj["name"] == CANONICAL_PKG_NAME, f"AFTER: {member} still names {obj['name']!r}"
+        assert obj["origin"] == f"net/{CANONICAL_PKG_NAME}", f"AFTER: {member} origin is {obj['origin']!r}"
+        assert obj["version"] == "1.2.3_4", f"AFTER: {member} version drifted to {obj['version']!r}"
+        assert obj["abi"] == "FreeBSD:15:*", f"AFTER: {member} abi drifted to {obj['abi']!r}"
+    assert _pkg_payload(out) == _pkg_payload(src), (
+        "rename_pkg altered the payload — the forged build is no longer the branch build"
+    )
+
+
+def test_project_conf_names_match_the_shipped_scripts() -> None:
+    """HERMETIC (no VM): the conf set this module sweeps IS the set the scripts manage.
+
+    ``PROJECT_CONF_NAMES`` drives both the per-channel parametrization and every
+    "exactly one project conf" assertion below. Add a fifth channel to ``add-repo.sh``'s
+    ``PROJECT_CONFS`` (or ``migrate-channel.sh``'s) without adding it here and the live
+    cases keep passing while silently covering one channel less and leaving its conf
+    unswept — a coverage hole that looks exactly like green. Both scripts are pinned, so
+    the two enumerations also cannot drift apart from each other.
+    """
+    for script in (ADD_REPO_SH, MIGRATE_CHANNEL_SH):
+        block = re.search(r'(?ms)^PROJECT_CONFS="(.*?)"', script.read_text())
+        assert block is not None, f"{script.name}: no PROJECT_CONFS list to compare against"
+        declared = tuple(line.strip() for line in block.group(1).splitlines() if line.strip())
+        assert declared == PROJECT_CONF_NAMES, (
+            f"{script.name} manages {declared}, this module sweeps {PROJECT_CONF_NAMES}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# On-guest subscription state — read + reset explicitly, never inherited
+# --------------------------------------------------------------------------- #
+
+
+def _write_guest_file(vm: SmokeVM, remote_path: str, body: str, *, timeout: float = 60.0) -> None:
+    """Write ``body`` to ``remote_path`` on the guest (the module's ``tee`` idiom)."""
+    result = subprocess.run(
+        vm.ssh_argv("tee", remote_path),
+        input=body,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"writing {remote_path} failed: rc={result.returncode} {result.stderr!r}")
+
+
+def project_confs_present(vm: SmokeVM, *, timeout: float = 60.0) -> set[str]:
+    """Which project confs actually exist under the on-box repos dir.
+
+    Effective state read off the box (the CLAUDE.md rule), not inferred from what a
+    script printed: this is the oracle for single-repository subscription.
+    """
+    result = vm.ssh("/bin/ls", "-1", PKG_REPOS_DIR, timeout=timeout)
+    if result.returncode != 0:  # the dir does not exist yet => no project conf
+        return set()
+    return {line.strip() for line in result.stdout.splitlines()} & set(PROJECT_CONF_NAMES)
+
+
+def remove_project_confs(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Delete EVERY project conf from the box."""
+    vm.ssh("/bin/rm", "-f", *(f"{PKG_REPOS_DIR}/{name}" for name in PROJECT_CONF_NAMES), timeout=timeout)
+
+
+def installed_pfblockerng_names(vm: SmokeVM, *, timeout: float = 60.0) -> list[str]:
+    """Every installed pfBlockerNG IDENTITY, sorted — the box's identity oracle.
+
+    ``-g`` makes the trailing ``*`` a glob; without it ``pkg query`` treats the pattern
+    as an exact name and matches nothing. This is the same query ``migrate-channel.sh``
+    classifies the box with, so a case asserting on it asserts on what the script sees.
+    A query miss is "nothing installed" (rc=1), not an error.
+    """
+    result = vm.ssh("pkg", "query", "-g", "%n", f"{CANONICAL_PKG_NAME}*", timeout=timeout)
+    if result.returncode not in (0, 1):
+        raise RuntimeError(
+            f"pkg query -g %n failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return sorted(line.strip() for line in result.stdout.splitlines() if line.strip())
+
+
+def reset_channel_subscription(vm: SmokeVM) -> None:
+    """Return the box to "no project repo, no pfBlockerNG" — the explicit per-test reset.
+
+    Every case below builds its own before-state from here, so none of them depends on a
+    sibling having run first (or on the order pytest happens to pick for the
+    parametrized channels).
+    """
+    for name in (PKG_NAME, CANONICAL_PKG_NAME, LEGACY_DEVEL_PKG_NAME):
+        vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", name, timeout=300.0)
+    remove_project_confs(vm)
+
+
+def pkg_install_qualified(
+    vm: SmokeVM,
+    repo_name: str,
+    target: str,
+    *,
+    force: bool = False,
+    timeout: float = 600.0,
+) -> subprocess.CompletedProcess[str]:
+    """``pkg install [-f] -y -r <repo> <target>`` — a REPOSITORY-QUALIFIED install.
+
+    ``-r`` pins WHICH catalogue serves the package, which is the whole point once every
+    channel publishes the same identity at the same priority. ``force`` adds ``-f``, the
+    only way to move to an equal-or-OLDER build (``pkg upgrade`` refuses a downgrade);
+    ``target`` may be a bare name or an exact ``<name>-<version>``.
+    """
+    force_args = ("-f",) if force else ()
+    remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", *force_args, "-y", "-r", repo_name, target)
+    result = _pkg_retry(vm, *remote, timeout=timeout)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"pkg install -r {repo_name} {target} failed: rc={result.returncode}\n"
+            f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    return result
+
+
+def run_migrate_channel_sh(vm: SmokeVM, *args: str, timeout: float = 900.0) -> subprocess.CompletedProcess[str]:
+    """Stage the SHIPPED ``scripts/migrate-channel.sh`` and run it with ``args``.
+
+    Returns the completed process WITHOUT raising: the refusal case asserts on the exit
+    code (4 = target unavailable) and on stderr, so a raising helper would hide it.
+    """
+    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)
+    _scp_to_guest(vm, MIGRATE_CHANNEL_SH, GUEST_MIGRATE_CHANNEL_SH)
+    return vm.ssh("/bin/sh", GUEST_MIGRATE_CHANNEL_SH, *args, timeout=timeout)
+
+
+# --------------------------------------------------------------------------- #
+# Module fixture — the four channel catalogues + the legacy release catalogue
+# --------------------------------------------------------------------------- #
+
+
+class ChannelCatalogs(NamedTuple):
+    """What the four-channel cases need to know about the catalogues staged on the guest."""
+
+    root: str
+    """Guest catalogue root; ``<root>/<channel>/<varver>/`` is what the hook resolves."""
+    varver: str
+    """The box's own ``<varver>`` the catalogues are published under."""
+    versions: dict[str, str]
+    """channel -> the canonical version THAT channel serves (so ``%v`` identifies it)."""
+    legacy_version: str
+    """The ``-devel`` version the legacy release catalogue serves."""
+    edge_rollback_version: str
+    """The older canonical build ALSO carried by ``pfblockerng-edge`` (containment)."""
+
+    @property
+    def base_url(self) -> str:
+        """The ``--base-url`` add-repo.sh is driven with."""
+        return f"file://{self.root}"
+
+
+@pytest.fixture(scope="module")
+def channel_catalogs(repo_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory) -> Iterator[ChannelCatalogs]:
+    """Publish all four channel catalogues plus the legacy release catalogue on the guest.
+
+    ONE branch build stands in for every identity and every channel: ``rename_pkg`` forges
+    the canonical ``pfSense-pkg-pfBlockerNG`` and the legacy ``pfSense-pkg-pfBlockerNG-devel``
+    from it, and ``reversion_pkg`` gives each catalogue its OWN PORTREVISION, so
+    ``pkg query %v`` alone says which catalogue served a build.
+
+    ``pfblockerng-edge`` deliberately carries TWO canonical builds — its own ``_3`` and the
+    stable-era ``_1`` — because each channel catalogue strictly contains its slower
+    channels' files. That containment is what makes an in-repo rollback on a faster channel
+    possible, and it cannot be asserted against a single-version catalogue.
+
+    The legacy release catalogue carries ONLY the ``-devel`` identity: a box needing
+    migration is one that installed the suffixed package, and stocking the canonical one
+    beside it would let a migration "succeed" without ever crossing repositories.
+
+    Setup only — every case resets its own subscription state, so this fixture never
+    establishes an ordering between them.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+    src = Path(pkg)
+    forge_dir = tmp_path_factory.mktemp("channel_forge")
+    base_version = read_compact_version(src)
+    real_varver = _box_real_varver(repo_vm)
+    dep_pkgs = _smoke_dep_pkg_paths()
+
+    canonical_src = rename_pkg(src, CANONICAL_PKG_NAME, forge_dir / "canonical")
+    legacy_src = rename_pkg(src, LEGACY_DEVEL_PKG_NAME, forge_dir / "legacy")
+    versions = {channel: f"{base_version}{rev}" for channel, rev in CHANNEL_REVISIONS.items()}
+    builds = {
+        channel: reversion_pkg(canonical_src, version, forge_dir / f"build_{channel}")
+        for channel, version in versions.items()
+    }
+    legacy_version = f"{base_version}{LEGACY_REVISION}"
+    legacy_build = reversion_pkg(legacy_src, legacy_version, forge_dir / "build_legacy")
+    edge_rollback_version = f"{base_version}{EDGE_ROLLBACK_REVISION}"
+
+    try:
+        for channel in CHANNELS:
+            # Each catalogue carries its own build plus everything its slower channels
+            # still hold — the containment that makes an in-repo rollback possible.
+            staged = [builds[channel], *(builds[slower] for slower in CHANNEL_CONTAINED_BUILDS.get(channel, ()))]
+            build_repo_via_portable_named(
+                repo_vm,
+                [*staged, *dep_pkgs],
+                tmp_path_factory.mktemp(f"catalog_{channel}"),
+                catalog_name=f"{channel}/{real_varver}",
+                guest_root=CHANNEL_REPO_ROOT,
+            )
+        build_repo_via_portable_named(
+            repo_vm,
+            [legacy_build, *dep_pkgs],
+            tmp_path_factory.mktemp("catalog_release"),
+            catalog_name=f"release/{real_varver}",
+            guest_root=CHANNEL_REPO_ROOT,
+        )
+        yield ChannelCatalogs(
+            root=CHANNEL_REPO_ROOT,
+            varver=real_varver,
+            versions=versions,
+            legacy_version=legacy_version,
+            edge_rollback_version=edge_rollback_version,
+        )
+    finally:
+        reset_channel_subscription(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", CHANNEL_REPO_ROOT, timeout=60.0)
+        repo_vm.ssh("/bin/rm", "-f", GUEST_MIGRATE_CHANNEL_SH, timeout=60.0)
+        # add-repo.sh installs the generator hook at the PRODUCTION rc.d path; drop it so
+        # a staged hook never survives into a later module sharing this guest.
+        repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
+
+
+# --------------------------------------------------------------------------- #
+# The four-channel cases
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(900)  # two full add-repo.sh bootstraps (each a `pkg update -f`) > the 30s cap.
+@pytest.mark.parametrize("channel", CHANNELS)
+def test_add_repo_channel_leaves_exactly_one_project_conf(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    channel: str,
+) -> None:
+    """SINGLE-REPOSITORY SUBSCRIPTION: subscribing to a channel RETIRES every other one.
+
+    All five project repos share ``priority: 100`` and ``pkg`` does not order across
+    equal-priority repositories, so two enabled project confs make the build a box
+    receives depend on nothing the user can see. ``add-repo.sh --channel <ch>`` must
+    therefore leave exactly ONE conf behind — and say so, never silently.
+
+    Scenario: switching channels retires the previous subscription.
+      Background: the four channel catalogues + the legacy release catalogue, file://.
+
+    Given the box is subscribed to ANOTHER channel and additionally carries a stale
+      legacy ``pfblockerng.conf`` (as a pre-#2148 bootstrap or a restored config backup
+      leaves behind) — asserted as the BEFORE state, target conf absent,
+    When  ``add-repo.sh --base-url file://<root> --channel <ch>`` runs,
+    Then  ``<repos>/`` holds EXACTLY ``pfblockerng-<ch>.conf`` (both the previous
+      channel's conf and the legacy conf are gone), each retirement was REPORTED, the
+      surviving conf declares repo ``pfblockerng-<ch>`` at this box's ``<channel>/<varver>``
+      subtree, and ``pkg``'s own merged view (``pkg -vv``) shows that repo at priority 100
+      with no other project repo enabled.
+    """
+    previous = previous_channel(channel)
+    legacy_conf_path = f"{PKG_REPOS_DIR}/{LEGACY_RELEASE_CONF_NAME}"
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: subscribed to ANOTHER channel, plus a stale legacy conf beside it.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url, channel=previous)
+    _write_guest_file(
+        repo_vm,
+        legacy_conf_path,
+        _repo_block(OURS_REPO_NAME, f"{channel_catalogs.root}/release/{channel_catalogs.varver}", 100),
+    )
+    before = project_confs_present(repo_vm)
+    assert before == {channel_conf_name(previous), LEGACY_RELEASE_CONF_NAME}, (
+        f"BEFORE: expected the {previous} conf + the stale legacy conf, found {sorted(before)}"
+    )
+
+    # WHEN: subscribe to the target channel.
+    proc = run_add_repo_sh(repo_vm, channel_catalogs.base_url, channel=channel)
+
+    # THEN: exactly one project conf survives — this channel's.
+    after = project_confs_present(repo_vm)
+    assert after == {channel_conf_name(channel)}, (
+        f"AFTER --channel {channel}: expected only {channel_conf_name(channel)}, found {sorted(after)}"
+    )
+
+    # THEN: each retirement was reported (the script's "reported, never silent" rule).
+    for retired in (channel_conf_name(previous), LEGACY_RELEASE_CONF_NAME):
+        assert f"Retiring {PKG_REPOS_DIR}/{retired}" in proc.stdout, (
+            f"add-repo.sh removed {retired} without reporting it:\n{proc.stdout}"
+        )
+
+    # THEN: the surviving conf really is THIS channel's repository + subtree.
+    conf_body = _ssh_check(repo_vm, "/bin/cat", f"{PKG_REPOS_DIR}/{channel_conf_name(channel)}").stdout
+    assert f"{channel_repo_name(channel)}: {{" in conf_body, (
+        f"{channel_conf_name(channel)} does not declare repo {channel_repo_name(channel)!r}:\n{conf_body}"
+    )
+    assert f"/{channel}/{channel_catalogs.varver}" in conf_body, (
+        f"{channel_conf_name(channel)} does not point at the {channel}/{channel_catalogs.varver} subtree:\n{conf_body}"
+    )
+
+    # THEN (effective state, not just files): pkg's merged config has ONE project repo.
+    assert repo_priority(repo_vm, channel_repo_name(channel)) == 100, (
+        f"pkg does not see {channel_repo_name(channel)} at priority 100 (got "
+        f"{repo_priority(repo_vm, channel_repo_name(channel))})"
+    )
+    for other in (OURS_REPO_NAME, *(channel_repo_name(c) for c in CHANNELS if c != channel)):
+        assert repo_priority(repo_vm, other) == 0, (
+            f"pkg still has project repo {other!r} enabled after subscribing to {channel}"
+        )
+
+
+@pytest.mark.timeout(1800)  # legacy bootstrap + install + channel bootstrap + a real migration.
+def test_migrate_channel_replaces_the_legacy_identity_with_the_canonical_one(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+) -> None:
+    """CANONICAL REPLACEMENT: a box on the legacy ``-devel`` identity ends up on the
+    canonical one, installed FROM the target channel repository.
+
+    The four channel catalogues publish only ``pfSense-pkg-pfBlockerNG``, so a box
+    carrying ``pfSense-pkg-pfBlockerNG-devel`` has no upgrade path at all until that
+    identity is REPLACED — ``pkg`` will not rename a package, and adding a repository
+    does not move an installed one. ``migrate-channel.sh`` performs the replacement.
+
+    The legacy build here is a HIGHER PORTREVISION than the channel build it is replaced
+    by, so nothing about this transition can be explained by version ordering: it happens
+    only because the operation is repository-qualified.
+
+    Scenario: legacy suffixed identity -> canonical identity on the stable channel.
+      Background: the legacy release catalogue serves ``-devel``; ``pfblockerng-stable``
+        serves the canonical package.
+
+    Given the box installed ``pfSense-pkg-pfBlockerNG-devel`` from the legacy
+      ``pfblockerng`` repo and the canonical identity is ABSENT (BEFORE asserted),
+    When  ``add-repo.sh --channel stable`` subscribes the box (repositories only — the
+      installed identity must be UNCHANGED at that point, asserted), and then
+      ``migrate-channel.sh --channel stable`` runs,
+    Then  it exits 0, the box carries EXACTLY ``pfSense-pkg-pfBlockerNG``, its ``%R`` is
+      ``pfblockerng-stable``, its ``%v`` is the version that catalogue serves, the legacy
+      identity is GONE, and the script reported the completed migration.
+    """
+    channel = "stable"
+    target_repo = channel_repo_name(channel)
+    target_version = channel_catalogs.versions[channel]
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: a box on the LEGACY shared release repo, carrying the suffixed identity.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url)  # no --channel => the legacy release repo
+    pkg_install_qualified(repo_vm, OURS_REPO_NAME, LEGACY_DEVEL_PKG_NAME)
+    assert installed_pfblockerng_names(repo_vm) == [LEGACY_DEVEL_PKG_NAME], (
+        f"BEFORE: expected only the legacy identity, found {installed_pfblockerng_names(repo_vm)}"
+    )
+    assert pkg_repo_origin_of(repo_vm, LEGACY_DEVEL_PKG_NAME) == OURS_REPO_NAME, (
+        f"BEFORE: the legacy build came from {pkg_repo_origin_of(repo_vm, LEGACY_DEVEL_PKG_NAME)!r}, "
+        f"expected the legacy release repo {OURS_REPO_NAME!r}"
+    )
+    assert pkg_installed_version_of(repo_vm, LEGACY_DEVEL_PKG_NAME) == channel_catalogs.legacy_version, (
+        f"BEFORE: legacy build is at {pkg_installed_version_of(repo_vm, LEGACY_DEVEL_PKG_NAME)!r}, "
+        f"expected {channel_catalogs.legacy_version!r}"
+    )
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) is None, (
+        "BEFORE: the canonical identity is already installed — nothing left to prove"
+    )
+
+    # WHEN (1): subscribe to the target channel. This configures REPOSITORIES ONLY.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url, channel=channel)
+    assert project_confs_present(repo_vm) == {channel_conf_name(channel)}, (
+        f"subscribing to {channel} left {sorted(project_confs_present(repo_vm))} behind"
+    )
+    assert installed_pfblockerng_names(repo_vm) == [LEGACY_DEVEL_PKG_NAME], (
+        "add-repo.sh moved the INSTALLED package — configuring a repository is not a "
+        "migration, and pkg does not cross repositories on its own"
+    )
+
+    # WHEN (2): run the migration.
+    proc = run_migrate_channel_sh(repo_vm, "--channel", channel)
+    assert proc.returncode == 0, (
+        f"migrate-channel.sh --channel {channel} exited {proc.returncode}\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    # THEN: exactly the canonical identity, from the target channel's repository.
+    # (Payload completeness is the script's own step 6 — `pkg info -l` sweep — so a
+    # rc=0 already carries it; re-walking the file list here would only restate it.)
+    assert installed_pfblockerng_names(repo_vm) == [CANONICAL_PKG_NAME], (
+        f"AFTER: expected only {CANONICAL_PKG_NAME}, found {installed_pfblockerng_names(repo_vm)}"
+    )
+    assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == target_repo, (
+        f"AFTER: canonical build reports repo {pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)!r}, "
+        f"expected {target_repo!r} — the box is not on the {channel} channel"
+    )
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == target_version, (
+        f"AFTER: canonical build is at {pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)!r}, "
+        f"expected {target_version!r} — the version {target_repo} serves"
+    )
+    assert pkg_installed_version_of(repo_vm, LEGACY_DEVEL_PKG_NAME) is None, (
+        "AFTER: the legacy identity is STILL installed — it was not replaced, it was joined"
+    )
+    assert f"==> Done — {CANONICAL_PKG_NAME}-{target_version} installed from {target_repo}" in proc.stdout, (
+        f"migrate-channel.sh did not report the completed migration:\n{proc.stdout}"
+    )
+
+
+@pytest.mark.timeout(1800)  # bootstrap + install the newer build + a forced in-repo downgrade.
+def test_edge_rollback_stays_within_the_edge_repository(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+) -> None:
+    """IN-REPO ROLLBACK: a box on ``edge`` moves BACK to an older build WITHOUT switching
+    repositories, because ``pfblockerng-edge`` already contains it.
+
+    Each channel catalogue strictly contains its slower channels' files (edge ⊇ testing ⊇
+    stable), so "go back to the stable-era build" is a repository-qualified operation
+    inside the one repo the box is subscribed to — not a re-subscription. If it required
+    switching repos, single-repository subscription would be unworkable for anyone on a
+    faster channel, so this is the case that makes that design hold.
+
+    ``-f`` is required: ``pkg upgrade`` refuses to move DOWN, and the exact
+    ``<name>-<version>`` picks the older of the two builds the edge catalogue carries.
+
+    Scenario: rolling back on edge.
+      Background: ``pfblockerng-edge`` serves BOTH the edge build and the older
+        stable-era build of the canonical package.
+
+    Given the box subscribed to edge and running the NEWER edge build (BEFORE asserted:
+      ``%v`` is edge's version, ``%R`` is ``pfblockerng-edge``),
+    When  ``pkg install -f -y -r pfblockerng-edge pfSense-pkg-pfBlockerNG-<older>`` runs,
+    Then  ``%v`` is the OLDER version, ``%R`` is STILL ``pfblockerng-edge``, the box still
+      carries exactly the canonical identity, and its subscription is untouched —
+      ``pfblockerng-edge.conf`` is still the only project conf on the box.
+    """
+    channel = "edge"
+    target_repo = channel_repo_name(channel)
+    newer = channel_catalogs.versions[channel]
+    older = channel_catalogs.edge_rollback_version
+    assert newer != older, f"the rollback pair must differ (both {newer!r})"
+
+    reset_channel_subscription(repo_vm)
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url, channel=channel)
+
+    # GIVEN: the box on edge's OWN (newer) build, from the edge repository.
+    pkg_install_qualified(repo_vm, target_repo, CANONICAL_PKG_NAME)
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == newer, (
+        f"BEFORE: expected edge's build {newer!r}, got {pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)!r}"
+    )
+    assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == target_repo, (
+        f"BEFORE: installed from {pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)!r}, expected {target_repo!r}"
+    )
+    assert project_confs_present(repo_vm) == {channel_conf_name(channel)}, (
+        f"BEFORE: expected only {channel_conf_name(channel)}, found {sorted(project_confs_present(repo_vm))}"
+    )
+
+    # WHEN: roll back WITHIN the edge repository, repository-qualified and forced.
+    proc = pkg_install_qualified(repo_vm, target_repo, f"{CANONICAL_PKG_NAME}-{older}", force=True)
+
+    # THEN: the box moved DOWN a version and did NOT move repository.
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == older, (
+        f"AFTER: rollback did not move {newer!r} -> {older!r}; now at "
+        f"{pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)!r}"
+    )
+    assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == target_repo, (
+        f"AFTER: the rollback changed the repository to "
+        f"{pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)!r}, expected to stay on {target_repo!r}"
+    )
+    assert installed_pfblockerng_names(repo_vm) == [CANONICAL_PKG_NAME], (
+        f"AFTER: expected only {CANONICAL_PKG_NAME}, found {installed_pfblockerng_names(repo_vm)}"
+    )
+    assert project_confs_present(repo_vm) == {channel_conf_name(channel)}, (
+        f"AFTER: the rollback changed the subscription to {sorted(project_confs_present(repo_vm))}"
+    )
+    combined = proc.stdout + proc.stderr
+    assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve on the rollback:\n{combined}"
+
+
+@pytest.mark.timeout(1200)  # legacy bootstrap + install + a refused migration.
+def test_migrate_channel_refuses_an_unsubscribed_channel_before_mutating(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+) -> None:
+    """UNHAPPY PATH: migrating to a channel the box is not subscribed to fails BEFORE any
+    mutation — the installed identity is left exactly as it was.
+
+    ``migrate-channel.sh`` deletes the legacy package before installing the canonical one,
+    so an ordering bug (check the target repo AFTER the delete) would leave a box with NO
+    pfBlockerNG at all. The subscription check must therefore come first, and "first" is
+    only provable by asserting the installed state is byte-for-byte unchanged after the
+    refusal — an exit code alone cannot distinguish "refused" from "half-migrated".
+
+    Scenario: migrating without running add-repo.sh first.
+
+    Given the box carries ``pfSense-pkg-pfBlockerNG-devel`` from the legacy repo and
+      ``pfblockerng-nightly.conf`` does NOT exist (BEFORE asserted),
+    When  ``migrate-channel.sh --channel nightly`` runs,
+    Then  it exits 4, names the unconfigured channel and the add-repo.sh command that
+      fixes it, prints NOTHING about the box's state (it never got that far), and the
+      legacy identity is still installed at the same version from the same repository,
+      with the canonical identity still absent.
+    """
+    target = "nightly"
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: a box on the legacy repo, never subscribed to the target channel.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url)  # no --channel => the legacy release repo
+    pkg_install_qualified(repo_vm, OURS_REPO_NAME, LEGACY_DEVEL_PKG_NAME)
+    before_names = installed_pfblockerng_names(repo_vm)
+    before_version = pkg_installed_version_of(repo_vm, LEGACY_DEVEL_PKG_NAME)
+    before_origin = pkg_repo_origin_of(repo_vm, LEGACY_DEVEL_PKG_NAME)
+    assert before_names == [LEGACY_DEVEL_PKG_NAME], f"BEFORE: expected the legacy identity, found {before_names}"
+    assert before_version == channel_catalogs.legacy_version, (
+        f"BEFORE: legacy build is at {before_version!r}, expected {channel_catalogs.legacy_version!r}"
+    )
+    assert channel_conf_name(target) not in project_confs_present(repo_vm), (
+        f"BEFORE: the box is already subscribed to {target} — the refusal cannot be exercised"
+    )
+
+    # WHEN: ask to migrate onto the unconfigured channel.
+    proc = run_migrate_channel_sh(repo_vm, "--channel", target)
+
+    # THEN: refused with the "target unavailable" code, and told how to fix it.
+    assert proc.returncode == 4, (
+        f"expected exit 4 (target unavailable), got {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert f"not subscribed to the {target} channel" in proc.stderr, (
+        f"the refusal does not name the unconfigured channel:\n{proc.stderr}"
+    )
+    assert f"add-repo.sh --channel {target}" in proc.stderr, (
+        f"the refusal does not point at the command that fixes it:\n{proc.stderr}"
+    )
+
+    # THEN: it refused BEFORE classifying the box, let alone mutating it.
+    assert "==> Installed:" not in proc.stdout, (
+        f"the subscription check ran AFTER the box was classified:\n{proc.stdout}"
+    )
+    assert installed_pfblockerng_names(repo_vm) == before_names, (
+        f"the refused migration changed the installed identities: {before_names} -> "
+        f"{installed_pfblockerng_names(repo_vm)}"
+    )
+    assert pkg_installed_version_of(repo_vm, LEGACY_DEVEL_PKG_NAME) == before_version, (
+        f"the refused migration changed the installed version: {before_version!r} -> "
+        f"{pkg_installed_version_of(repo_vm, LEGACY_DEVEL_PKG_NAME)!r}"
+    )
+    assert pkg_repo_origin_of(repo_vm, LEGACY_DEVEL_PKG_NAME) == before_origin, (
+        f"the refused migration changed the installed repo: {before_origin!r} -> "
+        f"{pkg_repo_origin_of(repo_vm, LEGACY_DEVEL_PKG_NAME)!r}"
+    )
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) is None, (
+        "the refused migration installed the canonical package anyway"
+    )

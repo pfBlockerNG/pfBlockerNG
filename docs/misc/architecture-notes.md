@@ -1121,10 +1121,32 @@ Full design: ADR-39.
   at a time (issue #2251); `pkg update` + verify). All three `--print-conf`
   producers take `--channel <stable|testing|edge|nightly>` (repo `pfblockerng-<channel>`, conf
   `pfblockerng-<channel>.conf`, URL `<base>/<channel>/<varver>`, issue #2147). Live bootstrap
-  still covers only the legacy default (`pfblockerng.conf`, the old bundled release repo) and
-  nightly; `--channel stable|testing|edge` live bootstrap plus the rc.d hook's per-channel
-  regeneration land with issue #2148. The emitted conf is byte-identical across the producers
+  covers all four channels plus the legacy default (`pfblockerng.conf`, the old bundled release
+  repo), and enforces single-repository subscription by retiring every other project conf; the
+  rc.d hook regenerates each of the five confs that EXISTS, so a channel the box switched away
+  from stays gone across a pfSense OS upgrade (issue #2148). The emitted conf is byte-identical
+  across the producers
   (drift-pinned in `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
+- **Channel switching is two operations, not one:** `scripts/add-repo.sh --channel <ch>` moves
+  the SUBSCRIPTION; `scripts/migrate-channel.sh --channel <ch>` moves the INSTALLED PACKAGE.
+  Both are published at the Pages root by `scripts/gen_landing.py` (`write_add_repo` /
+  `write_migrate_channel`). The second is load-bearing, not tidiness: measured on CE 2.8.1 /
+  `pkg` 1.21.3, `pkg upgrade` never leaves the repository a package was installed from while
+  that repo is enabled and still offers it — neither `CONSERVATIVE_UPGRADE=false` nor a higher
+  `priority:` changes that — so a box that only gains a conf silently keeps its old build. And
+  every channel catalogue publishes the ONE canonical `pfSense-pkg-pfBlockerNG`, so a legacy
+  suffixed identity (`-devel`, `-nightly`/`-NIGHTLY`) has no upgrade path until it is replaced.
+  `migrate-channel.sh` fails BEFORE any mutation on a mismatched subscription, no/multiple/
+  unrecognised installed identity, or a target catalogue that does not offer the canonical
+  package; it then runs `pkg install -f -r <repo>` (canonical, wrong repo — also the reverse
+  move, since the target may be OLDER) or `pkg delete` + `pkg install -r <repo>` (legacy
+  identity), and verifies identity, `%R`, version, the `pkg info -l` payload, and the surviving
+  `installedpackages/pfblockerng` section before reporting success. Distinct exit codes per
+  failure class; pinned by `tests/shell/migrate_channel_spec.sh`.
+  On the box, channel provenance is read from the INSTALLED REPO, never the package name:
+  `pfb_channel_from_repo_name()` maps `pfblockerng-<ch>` → channel and
+  `pfb_software_is_our_build()` accepts all five project repos, so a stable/testing/edge
+  subscriber keeps the Software tab, the priv `match[]` line, and the update notice.
 - **Repo smoke flow:** `tests/smoke/test_repo_install.py` carries its **own marker `repo`** (a
   distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`), cross-repo
   precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and the catalog

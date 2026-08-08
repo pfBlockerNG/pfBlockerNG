@@ -61,8 +61,13 @@ if (!isAllowedPage('pkg_mgr_installed.php')) {
 }
 
 // Resolve the installed package + channel ONCE (used by display + the action shortcuts).
+// issue #2148: channel is CATALOGUE placement — all four catalogues publish the canonical
+// 'pfSense-pkg-pfBlockerNG', so the repo the package came from names the channel. The legacy
+// shared 'pfblockerng' repo carries two identities and names none, so fall back to the name
+// there. Same derivation as pfb_software_update_check(), so page and notice never disagree.
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
-$pfb_sw_channel	= pfb_channel_from_pkgname($pfb_sw_pkgname);
+$pfb_sw_repo	= pfb_pkg_installed_repo($pfb_sw_pkgname);
+$pfb_sw_channel	= pfb_channel_from_repo_name($pfb_sw_repo) ?? pfb_channel_from_pkgname($pfb_sw_pkgname);
 
 // The "Check for new versions" setting (default ENABLED — the registry default since
 // issue #1887). The accessor reads the gateway itself; no raw value handling here.
