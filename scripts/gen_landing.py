@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
 # gen_landing.py — generate the human-navigable landing page + per-directory
 # indexes for the self-hosted pkg repository (ADR-17). Run by pfBlockerNG/pkg's
-# publish.yml AFTER the per-ABI catalog trees are built under <site>/.
+# publish.yml AFTER the per-channel catalog trees are built under <site>/.
 #
 # It is the human-facing sibling of build-repo-portable.py: that tool emits the
 # machine catalog pkg(8) fetches; this one renders a styled index over it —
-# channel install cards (stable / devel / nightly), a Version x ABI table read
-# from each .pkg's own manifest, and a clean per-directory listing that shows the
-# package(s) but not the pkg(8) catalog plumbing (meta.conf/packagesite.pkg/...).
+# channel install cards (stable / testing / edge / nightly), a Version x ABI table
+# read from each .pkg's own manifest, and a clean per-directory listing that shows
+# the package(s) but not the pkg(8) catalog plumbing (meta.conf/packagesite.pkg/...).
+#
+# Four-channel catalogue model (issue #2147): every channel serves the ONE canonical
+# package (pfb_pkg.CANONICAL_EMITTED_IDENTITY) from its own <channel>/<varver>/
+# catalogue subtree. Channel is catalogue PLACEMENT, never a package-name suffix —
+# the legacy two-repo / suffixed-package model (release/nightly repos,
+# -devel/-nightly identities) is retired from this generator.
 #
 # Stdlib only + the `zstd` binary (to read a .pkg's +COMPACT_MANIFEST). Dev-only
 # tooling — not shipped in release archives (those contain only src/).
@@ -24,12 +30,14 @@ import subprocess
 from collections.abc import Callable, Iterable
 from datetime import datetime, timezone
 
-from pfb_pkg import pkg_version_sort_key, read_compact_manifest
+from pfb_pkg import CANONICAL_EMITTED_IDENTITY, pkg_version_sort_key, read_compact_manifest
 
-# Display order for the published-packages table (newest per channel). The channel of a
-# package is read from its name suffix (channel_of); each channel gets its own install
-# card (stable + devel share one repo — the cards differ only in the package name).
-CH_ORDER: list[str] = ["stable", "devel", "nightly"]
+# Display order for the published-packages table + the channel cards. Every channel
+# owns its own <channel>/<varver>/ catalogue subtree and serves the SAME canonical
+# package (issue #2147) — a package's channel is read from its catalogue PATH
+# (channel_of_path), never from its name.
+CH_ORDER: list[str] = ["stable", "testing", "edge", "nightly"]
+_CHANNELS: frozenset[str] = frozenset(CH_ORDER)
 # Embed markers in add-repo.sh that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
 _HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
@@ -48,13 +56,20 @@ CATALOG_META = ("packagesite.pkg", "data.pkg")
 _CONF_PLACEHOLDER_PATH = "<varver>"
 
 
-def channel_of(name: str) -> str:
-    """Map a package NAME to its channel by suffix (-nightly / -devel / stable)."""
-    if name.endswith("-nightly"):
-        return "nightly"
-    if name.endswith("-devel"):
-        return "devel"
-    return "stable"
+def channel_of_path(rel: str) -> str | None:
+    """Channel from a package's catalogue PLACEMENT: the first path segment under the
+    site root, validated against the four known channels (issue #2147). The retired
+    channel_of() read the package NAME's suffix instead; that model is gone — every
+    channel now serves the one canonical identity, so the catalogue directory a
+    package sits in IS its channel.
+
+    Returns None for an unrecognized top-level segment (a stray future dir, or the
+    retired legacy ``release/`` path) — the caller drops that package from every
+    channel-scoped view. It stays reachable via the raw directory autoindex, which
+    walks the tree directly and never consults this function.
+    """
+    seg = rel.replace(os.sep, "/").split("/", 1)[0]
+    return seg if seg in _CHANNELS else None
 
 
 def is_package_file(fname: str) -> bool:
@@ -63,15 +78,16 @@ def is_package_file(fname: str) -> bool:
 
 
 def is_pfblockerng_package(name: str) -> bool:
-    """True for one of OUR three channel packages, False for anything else.
+    """True for the ONE canonical pfBlockerNG package identity, False for anything else.
 
-    Dependency packages we publish alongside them (the CE-only
+    Every channel serves the same canonical package (issue #2147) — channel is
+    catalogue placement, not a name suffix; the legacy suffixed identities
+    (-devel/-nightly) no longer qualify even if found on disk (a retired-model
+    leftover). Dependency packages we publish alongside it (the CE-only
     ``py311-charset-normalizer``, issue #1806) share the catalog dirs but are not
-    pfBlockerNG builds. They carry neither channel suffix, so ``channel_of`` would call
-    them stable and the page would advertise the dependency's own version as the stable
-    pfBlockerNG release (issue #1863). They stay browsable; they are never a channel row.
+    pfBlockerNG builds — they stay browsable, never a channel row (issue #1863).
     """
-    return name in (_PKG_STABLE, _PKG_DEVEL, _PKG_NIGHTLY)
+    return name == CANONICAL_EMITTED_IDENTITY
 
 
 def human_size(n: int) -> str:
@@ -87,7 +103,7 @@ def ver_key(v: str) -> tuple[list[int], int, int]:
     """The newest-build sort key — see ``pfb_pkg.pkg_version_sort_key``.
 
     Must order the alpha/beta/rc prerelease stages correctly (not just fold them
-    away), since devel-channel rows compared here can be release-tag-shaped
+    away), since testing/edge-channel rows compared here can be release-tag-shaped
     (``4.0.0.alpha.1`` etc.) as well as nightly-dated or bare edition versions.
     """
     return pkg_version_sort_key(v)
@@ -103,7 +119,7 @@ def published_datetime(manifest: dict, mtime_epoch: float) -> str:
 
     Prefer the ``created`` build annotation — the source commit's committer epoch,
     baked into the .pkg at build time, so it reflects when the artifact's CODE was
-    created and survives every daily republish/re-download (devel is rebuilt and a
+    created and survives every daily republish/re-download (a nightly is rebuilt and a
     release asset re-downloaded each run, which would otherwise reset the mtime to
     'today'). Fall back to the .pkg's mtime only when the annotation is absent.
     """
@@ -167,7 +183,15 @@ def _or_dash(value: str) -> str:
 
 
 def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = None) -> list[dict]:
-    """Walk <site>/, returning one row per published package (channel/name/version/abi/size/rel)."""
+    """Walk <site>/, returning one row per published package (channel/name/version/abi/size/rel).
+
+    A package's channel is read from its catalogue placement — the top-level directory
+    under <site> (issue #2147) — never from its name. A package sitting under an
+    unrecognized top-level dir (a legacy release/nightly-suffixed tree, a stray future
+    dir) is not attributed to any channel and is dropped from this list entirely; it
+    stays reachable via the raw directory autoindex, which walks disk directly and
+    never calls this function.
+    """
     if read_manifest is None:
         read_manifest = read_compact_manifest
     pkgs: list[dict] = []
@@ -176,6 +200,10 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
             if not is_package_file(fname):
                 continue
             path = os.path.join(dirpath, fname)
+            rel = os.path.relpath(path, site)
+            channel = channel_of_path(rel)
+            if channel is None:
+                continue  # unrecognized top-level dir — not a channel; browsable only
             man = read_manifest(path)
             name, ver, abi = man.get("name", ""), man.get("version", ""), man.get("abi", "")
             if not is_pfblockerng_package(name):
@@ -183,7 +211,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
             deps = man.get("deps") or {}
             pkgs.append(
                 {
-                    "channel": channel_of(name),
+                    "channel": channel,
                     "name": name,
                     "version": ver,
                     "abi": abi,
@@ -194,7 +222,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     # for an ABI the matrix doesn't cover (the matrix value wins when joined).
                     "php": _dep_flavor(deps, ("php",)),
                     "py": _dep_flavor(deps, ("py", "python")),
-                    "rel": os.path.relpath(path, site),
+                    "rel": rel,
                 }
             )
     return pkgs
@@ -227,7 +255,7 @@ def _esc(s: object) -> str:
 
 
 _CSS = """
-:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--warn:#d29922;--red:#f85149;--code:#0b0f14}
+:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--warn:#d29922;--edge:#a371f7;--red:#f85149;--code:#0b0f14}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
   font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
@@ -260,7 +288,8 @@ table.autoindex td.num{white-space:nowrap}
 footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
 .empty{color:var(--mut);font-style:italic}
 .card.stable{border-color:var(--acc)}
-.card.devel{border-color:var(--warn)}
+.card.testing{border-color:var(--warn)}
+.card.edge{border-color:var(--edge)}
 .card.nightly{border-color:var(--red)}
 .card.nightly .badge{border-color:var(--red);color:var(--red)}
 .warn{color:var(--warn)}
@@ -273,11 +302,6 @@ footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid va
 .copy:hover{color:var(--fg);border-color:var(--acc)}
 .copy.copied{color:#3fb950;border-color:#3fb950}
 """
-
-# The release repo carries both packages (the channel picks the package, not the repo).
-_PKG_STABLE = "pfSense-pkg-pfBlockerNG"
-_PKG_DEVEL = "pfSense-pkg-pfBlockerNG-devel"
-_PKG_NIGHTLY = "pfSense-pkg-pfBlockerNG-nightly"
 
 # Minimal, dependency-free clipboard handler for the snippet copy buttons. Delegated
 # (one listener), reads the adjacent <pre> textContent (entities decoded), and falls
@@ -320,62 +344,130 @@ def _ver_or_empty(latest: dict[str, str], channel: str) -> str:
     return f"Latest <code>{_esc(lv)}</code>" if lv else '<span class="empty">not yet published</span>'
 
 
-def _manual_conf_details(conf_fn: Callable[[str], str], repo: str) -> str:
+def _manual_conf_details(conf_fn: Callable[[str], str], channel: str) -> str:
     """The collapsed 'Manual conf (advanced)' disclosure shared by every channel card.
 
-    ``repo`` is the repo add-repo.sh selects ('release' or 'nightly'), not the card's
-    package channel — stable and devel share the release repo, so both pass 'release'.
+    ``channel`` is the catalogue channel (stable/testing/edge/nightly, issue #2147) —
+    each owns its own repo/conf (``pfblockerng-<channel>``), unlike the legacy shared
+    release repo.
     """
     return (
         "<details><summary>Manual conf (advanced)</summary>"
         '<p class="blurb">The bootstrap auto-detects this; in a hand-written conf, replace '
         "<code>&lt;varver&gt;</code> (the edition-version: <code>ce-2.8</code>, <code>plus-26.03</code>, &hellip;) "
         "with your box's value.</p>"
-        f"{_copyable(_esc(conf_fn(repo)))}</details>"
+        f"{_copyable(_esc(conf_fn(channel)))}</details>"
     )
 
 
-def _bootstrap_install(base: str, pkg: str, *, nightly: bool = False) -> str:
-    """A channel's unified command: the bootstrap one-liner + its `pkg install`."""
-    flag = " --nightly" if nightly else ""
-    return f"fetch -qo - {base}/add-repo.sh \\\n  | sh -s -- --base-url {base}{flag}\npkg install {pkg}"
+def _bootstrap_install(base: str, channel: str) -> str:
+    """A channel's unified command: the bootstrap one-liner + its `pkg install`.
 
-
-def _stable_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    """The stable card: bootstrap the shared `pfblockerng` repo + install the stable package."""
+    All four channels install the SAME canonical package (issue #2147) — `--channel
+    <ch>` selects the catalogue, uniformly across every card (not a nightly-only flag).
+    """
     return (
-        '<div class="card stable"><h3>Stable</h3>'
-        f'<p class="ver">{_ver_or_empty(latest, "stable")}</p>'
-        '<p class="blurb">The stable release, served from the shared <code>pfblockerng</code> repo '
-        "(it also carries the devel package &mdash; the two conflict, install one):</p>"
-        f"{_copyable(_esc(_bootstrap_install(base, _PKG_STABLE)))}"
-        f"{_manual_conf_details(conf_fn, 'release')}</div>"
+        f"fetch -qo - {base}/add-repo.sh \\\n"
+        f"  | sh -s -- --base-url {base} --channel {channel}\n"
+        f"pkg install {CANONICAL_EMITTED_IDENTITY}"
     )
 
 
-def _devel_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    """The devel card: same shared repo as stable, different package."""
+# Per-channel card copy: title, optional badge, and the audience/cadence prose. Fixed
+# content decisions for the four-channel model, issue #2147 step A (the landing page):
+# Stable = final tagged releases; Testing = nonzero-patch prereleases validating the
+# next Stable; Edge = patch-zero prereleases opening the next release family; Nightly =
+# untagged pinned-SHA snapshots.
+_CARD_META: dict[str, dict[str, str]] = {
+    "stable": {
+        "title": "Stable",
+        "badge": "",
+        "blurb": ("Final tagged releases (<code>X.Y.Z</code>) from a maintained release line. Production use."),
+    },
+    "testing": {
+        "title": "Testing",
+        "badge": "",
+        "blurb": (
+            "Nonzero-patch prereleases (<code>X.Y.Z.aN</code>/<code>bN</code>/<code>rN</code>, "
+            "Z &ne; 0) validating the next Stable of the current line. For users verifying an "
+            "upcoming fix."
+        ),
+    },
+    "edge": {
+        "title": "Edge",
+        "badge": "",
+        "blurb": (
+            "Patch-zero prereleases (<code>X.Y.0.aN</code>/<code>bN</code>/<code>rN</code>) opening "
+            "the next release family. Earliest adopters."
+        ),
+    },
+    "nightly": {
+        "title": "Nightly",
+        "badge": '<span class="badge">not for daily use</span>',
+        "blurb": (
+            "Untagged snapshot builds (<code>YYYYMMDD[_N]</code>) from a pinned source SHA, "
+            'rebuilt only when inputs change. <span class="warn">Bleeding edge</span> &mdash; the '
+            "only guarantee is that CI passed. Bare date versions intentionally sort above semantic "
+            "versions: moving off Nightly is an explicit repository-qualified downgrade."
+        ),
+    },
+}
+
+
+def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
+    """One channel's install card: audience prose + the unified bootstrap/install command
+    + a collapsed manual-conf snippet. Every channel installs the ONE canonical package
+    (issue #2147) — channel is catalogue placement, never a name suffix."""
+    meta = _CARD_META[channel]
+    badge = f" {meta['badge']}" if meta["badge"] else ""
     return (
-        '<div class="card devel"><h3>Development</h3>'
-        f'<p class="ver">{_ver_or_empty(latest, "devel")}</p>'
-        '<p class="blurb">The development channel, served from the same shared <code>pfblockerng</code> '
-        "repo as stable (the two packages conflict &mdash; install one):</p>"
-        f"{_copyable(_esc(_bootstrap_install(base, _PKG_DEVEL)))}"
-        f"{_manual_conf_details(conf_fn, 'release')}</div>"
+        f'<div class="card {channel}"><h3>{meta["title"]}{badge}</h3>'
+        f'<p class="ver">{_ver_or_empty(latest, channel)}</p>'
+        f'<p class="blurb">{meta["blurb"]}</p>'
+        f"{_copyable(_esc(_bootstrap_install(base, channel)))}"
+        f"{_manual_conf_details(conf_fn, channel)}</div>"
     )
 
 
-def _nightly_card(base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    """The nightly card — deliberately set apart: its own repo + a stability caveat."""
+def _trust_section_html() -> str:
+    """The trust/provenance section: what 'installing from this repo' actually means
+    under the four-channel model (issue #2147). Static prose — no catalogue-signing
+    claim anywhere; the NONE-signed trust anchor is HTTPS/TLS to the Pages host
+    (mirrors add-repo.sh's own conf comment).
+    """
     return (
-        '<div class="card nightly"><h3>Nightly <span class="badge">not for daily use</span></h3>'
-        f'<p class="ver">{_ver_or_empty(latest, "nightly")}</p>'
-        '<p class="blurb">The <code>devel</code> tip rebuilt every night on its own separate '
-        '<code>pfblockerng-nightly</code> repo. <span class="warn">Bleeding edge</span> &mdash; the only '
-        "guarantee is that CI passed; unlike <code>devel</code> it carries no stability target. Use it to "
-        "track the very latest, not on a production firewall.</p>"
-        f"{_copyable(_esc(_bootstrap_install(base, _PKG_NIGHTLY, nightly=True)))}"
-        f"{_manual_conf_details(conf_fn, 'nightly')}</div>"
+        "<h2>Trust &amp; channel model</h2>"
+        "<h3>One tagged artifact, several catalogues</h3>"
+        '<p class="blurb">Stable, Testing, and Edge may intentionally serve the exact same canonical '
+        "package &mdash; same name, same version, same bytes &mdash; because a single tagged release "
+        "fans out to every channel it satisfies, until a later release family opens a new Edge (Edge "
+        "then moves ahead while Testing and Stable stay on the prior line). This is catalogue placement, "
+        "not separate builds, and not a repository-priority policy.</p>"
+        "<h3>Trust model</h3>"
+        '<p class="blurb">Every repository conf sets <code>signature_type: none</code> &mdash; there is '
+        "no catalogue-signing key. The trust anchor is HTTPS/TLS to this Pages host.</p>"
+        "<h3>Multiple-repository resolution</h3>"
+        '<p class="blurb">The four channel repos share one equal priority (<code>100</code>), above the '
+        "base Netgate <code>pfSense</code> repo (priority <code>0</code>). With more than one channel "
+        "repo enabled, <code>pkg</code> selects the highest compatible version across them &mdash; "
+        "identical name/version across catalogues is valid only because the bytes and provenance are "
+        "identical. Switching forward (to a higher version) is enabling the target channel's repo and "
+        "upgrading normally. Moving backward is an explicit repository-qualified downgrade/reinstall "
+        "&mdash; disabling the faster repo alone does not roll a box back. Removing a channel means "
+        "removing its conf.</p>"
+        "<h3>Retention</h3>"
+        '<p class="blurb">Each <code>&lt;channel&gt;/&lt;varver&gt;/</code> catalogue retains the newest '
+        "5 canonical packages; dependency packages are not pruned.</p>"
+        "<h3>Netgate identity</h3>"
+        '<p class="blurb">The canonical package shares its name with the pfBlockerNG package Netgate '
+        "ships in its own <code>pfSense</code> repo &mdash; provenance differs. Every build published "
+        "here carries <code>commit</code>/<code>created</code> annotations linking it to the source "
+        "commit that produced it; repository priority decides which build <code>pkg</code> selects when "
+        "both are enabled.</p>"
+        "<h3>Channel switching</h3>"
+        '<p class="blurb">There is no in-UI channel switcher here by design &mdash; channel selection is '
+        "repository configuration (documented above); client tooling for it is tracked separately "
+        "(issue #2148).</p>"
     )
 
 
@@ -553,7 +645,7 @@ def _versions_table_html(rows: list[dict], *, with_channel: bool) -> str:
     """One versions table for a single edition. Columns:
     pfSense [| Channel] | Version | ABI | PHP | Python | Published | Commit | Size.
 
-    The Channel column appears only where devel and stable can both occur (the
+    The Channel column appears only where several channels can occur in one table (the
     per-edition and older-releases tables); nightlies and EOL omit it (every row
     there is, by construction, the same channel)."""
     channel_th = "<th>Channel</th>" if with_channel else ""
@@ -640,15 +732,18 @@ def _older_nightlies_details(rows: list[dict]) -> str:
 
 
 def older_releases(pkgs: list[dict]) -> list[dict]:
-    """The retained stable/devel release builds OTHER than the newest per channel.
+    """The retained release-channel builds (every channel but nightly) OTHER than the
+    newest per channel.
 
-    The per-edition tables surface only the latest devel and stable versions (the
-    "install now" view); release retention (ADR-27) keeps several older releases in the
-    catalog, surfaced here for diagnostics and reproducibility. Sorted newest-first
-    within each channel, then by ABI. Empty when no older versions are retained.
+    The per-edition tables surface only the latest version of each channel (the
+    "install now" view); release retention (ADR-27, catalogue_assembly.DEFAULT_RETENTION_KEEP)
+    keeps several older releases in the catalog, surfaced here for diagnostics and
+    reproducibility. Nightly has its own retention/disclosure (older_nightlies) — its
+    dated versions aren't "releases". Sorted newest-first within each channel, then by
+    ABI. Empty when no older versions are retained.
     """
     latest = latest_versions(pkgs)
-    rows = [p for p in pkgs if p["channel"] in ("devel", "stable") and p["version"] != latest.get(p["channel"])]
+    rows = [p for p in pkgs if p["channel"] != "nightly" and p["version"] != latest.get(p["channel"])]
     rows.sort(key=lambda p: p["abi"])
     rows.sort(key=lambda p: (CH_ORDER.index(p["channel"]), ver_key(p["version"])), reverse=True)
     return rows
@@ -671,7 +766,7 @@ def _older_releases_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> d
 
 def _older_releases_details(rows: list[dict]) -> str:
     """One edition's retained older releases, folded into a collapsed disclosure; "" when
-    that edition has none. Includes Channel column (devel and stable can both appear)."""
+    that edition has none. Includes Channel column (stable/testing/edge can all appear)."""
     if not rows:
         return ""
     return (
@@ -684,8 +779,15 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     """The last-served .pkg for each EOL (route-only) pfSense version.
 
     A matrix entry is EOL iff ``role == "route-only"``. For each such entry, this function
-    finds the newest .pkg version (by ver_key) served for that varver's path prefix
-    (``release/<varver>/``), enriched with the matrix-provided pfSense version + PHP/Python.
+    finds the newest .pkg version (by ver_key) served for that varver, enriched with the
+    matrix-provided pfSense version + PHP/Python.
+
+    Four-channel model (issue #2147): a varver's pool spans EVERY channel that still
+    serves it — e.g. Stable and Testing can both retain a build for a now-EOL pfSense
+    line — so the newest served build wins across the whole combined pool, not just one
+    channel's slice. This also naturally dedupes: the EOL table is edition-keyed, not
+    channel-keyed, and was always meant to show one "last served" row per pfSense
+    version regardless of which channel(s) still carry it.
 
     Returns ``(edition_key, pfsense_version, row)`` triples — one per (EOL pfSense version,
     ABI) combination — in deterministic order: CE before Plus, older pfSense version before
@@ -695,16 +797,18 @@ def eol_versions(pkgs: list[dict], matrix: list[dict] | None) -> list[tuple[str,
     if not eol_entries:
         return []
 
-    # Group pkgs by path prefix release/<varver>/, so each EOL varver's pool is isolated.
+    # Group pkgs by varver (the second path segment: <channel>/<varver>/...), so each EOL
+    # varver's pool is isolated across every channel that still serves it. Arch-less
+    # (issue #1806: NO_ARCH packages, one varver directory serves every arch of its
+    # FreeBSD major). Always forward-slash; os.path.relpath normalises to the OS
+    # separator, so normalise here too. A path whose top segment isn't a known channel
+    # (the retired ``release/`` prefix, a stray dir) contributes nothing — it was never
+    # attributed to a channel in the first place (collect_packages already drops it).
     varver_pkgs: dict[str, list[dict]] = {}
     for p in pkgs:
-        # rel format: release/<varver>/name.pkg — arch-less (issue #1806: NO_ARCH
-        # packages, one varver directory serves every arch of its FreeBSD major).
-        # Always forward-slash; os.path.relpath normalises to the OS separator,
-        # so normalise here too.
         rel = p["rel"].replace(os.sep, "/")
         parts = rel.split("/")
-        if len(parts) >= 2 and parts[0] == "release":
+        if len(parts) >= 2 and parts[0] in _CHANNELS:
             vv = parts[1]
             varver_pkgs.setdefault(vv, []).append(p)
 
@@ -791,7 +895,7 @@ def render_page(
 ) -> str:
     """Render the root landing page."""
     latest = latest_versions(pkgs)
-    cards = "".join(card(base, latest, conf_fn) for card in (_stable_card, _devel_card, _nightly_card))
+    cards = "".join(_channel_card(ch, base, latest, conf_fn) for ch in CH_ORDER)
     eol_block = _eol_versions_html(pkgs, matrix)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -801,10 +905,11 @@ def render_page(
         "<header><h1>pfBlockerNG</h1>"
         "<p>Self-hosted FreeBSD <code>pkg</code> repository for pfSense&nbsp;CE &amp; pfSense&nbsp;Plus.</p></header>"
         "<p>Install pfBlockerNG straight from this repository: pick a channel below and run its "
-        "commands on your firewall (as <code>root</code>). <strong>Stable</strong> and "
-        "<strong>devel</strong> share one repo (the same bootstrap, a different package); "
-        "<strong>nightly</strong> is a separate, opt-in repo.</p>"
+        f"commands on your firewall (as <code>root</code>). Every channel installs the same canonical "
+        f"package (<code>{CANONICAL_EMITTED_IDENTITY}</code>) from its own repository &mdash; see "
+        "Trust &amp; channel model below for how the four relate.</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
+        f"{_trust_section_html()}"
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
         f"{eol_block}"
         "<h2>Repository files</h2>"
@@ -949,14 +1054,23 @@ def write_add_repo(site: str, addrepo: str) -> None:
 
 
 def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
-    # add-repo.sh selects the channel by FLAG: the release repo is the default (no arg),
-    # --nightly picks the nightly repo. Anything other than "nightly" => the release conf.
-    # --catalog-path is required by --print-conf; we pass a literal placeholder here
-    # because the landing page shows a generic snippet — the rc.d hook resolves the
-    # box's real varver at boot (see _CONF_PLACEHOLDER_PATH).
-    extra = ["--nightly"] if channel == "nightly" else []
+    # add-repo.sh selects the channel EXPLICITLY via --channel <ch> (issue #2147) — every
+    # one of the four channels now has its own repo/conf (pfblockerng-<channel>), unlike
+    # the legacy shared release repo. --catalog-path is required by --print-conf; we pass
+    # a literal placeholder here because the landing page shows a generic snippet — the
+    # rc.d hook resolves the box's real varver at boot (see _CONF_PLACEHOLDER_PATH).
     out = subprocess.run(
-        ["sh", addrepo, "--print-conf", "--base-url", base, "--catalog-path", _CONF_PLACEHOLDER_PATH, *extra],
+        [
+            "sh",
+            addrepo,
+            "--print-conf",
+            "--base-url",
+            base,
+            "--catalog-path",
+            _CONF_PLACEHOLDER_PATH,
+            "--channel",
+            channel,
+        ],
         capture_output=True,
         text=True,
         check=True,
