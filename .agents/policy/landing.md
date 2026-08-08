@@ -26,14 +26,15 @@ follows [`waits.md`](waits.md) (no orphaned waits + the bounded-wait ladder).
   `copilot_code_review` rule/auto-request setting (a ruleset may bundle it with branch
   protection — strip only the rule). One arriving anyway is triaged on merit like any
   unsolicited review, but never gate-counted; never restate it as a ban publicly.
-- **Review effort:** `medium`, always — every adversarial review and re-review.
-- **Whole-PR diff, incremental focus.** Every review runs against the diff of the
-  entire PR. Before reviewing, the reviewer looks for a previous adversarial-review
-  audit comment on the PR; one found → focus on the changes between its recorded
-  head SHA and the current head, validated in the context of the full PR diff —
-  skip cleanly-reviewed ground, follow up every recorded defect. Every review's
-  audit comment records the head SHA it reviewed — the pointer the next re-review
-  keys on. Re-reviews run on the small tier.
+- **Review effort:** `medium`, always — every leg, every round.
+- **Three leg reviewers, whole-PR diff, incremental focus.** The adversarial review
+  is three parallel read-only reviewers, one per lens (contract conformance ·
+  correctness + hostile inputs · test honesty). Round 1 reviews the diff of the
+  entire PR. Each leg posts its own audit comment recording the head SHA it
+  reviewed; a later round's leg reviewer finds the latest audit comment **of its own
+  leg** and focuses on the changes since that SHA, validated in the context of the
+  full PR diff — skip cleanly-reviewed ground, follow up every recorded defect.
+  Re-review rounds run every leg on the small tier.
 - **Convergence rule.** The fix→re-review loop continues only while the latest round
   returned a `blocking` finding; an all-nitpick or clean round closes it (hard cap and
   CI-retry limits per workflow.md "Retry and fix-loop limits").
@@ -76,11 +77,12 @@ Three things start together at the top of the review step:
    and re-arm after the LAST fix push. The early verdict is valid only for the head
    SHA it watched. If the flow aborts anywhere, stop this wait as part of the trigger
    sweep.
-2. **The adversarial review — ALWAYS, spawned first.** Every PR gets one independent
-   adversarial reviewer in a fresh read-only context via the client's native reviewer
-   surface (per-client mapping below). It is client-tracked: never arm a wait for it;
-   act on its completion. It is additive to CodeRabbit, never a fallback: it runs
-   regardless, and stands alone when CodeRabbit never reviews.
+2. **The adversarial review — ALWAYS, spawned first.** Every PR gets the three
+   independent leg reviewers, each in a fresh read-only context via the client's
+   native reviewer surface (per-client mapping below). They are client-tracked:
+   never arm a wait for them; act on their completions. The review is additive to
+   CodeRabbit, never a fallback: it runs regardless, and stands alone when
+   CodeRabbit never reviews.
 3. **The CodeRabbit acknowledgement window** (next section) — the one untracked
    external that gets a bounded poll.
 
@@ -89,12 +91,13 @@ triage below never changes with the source.
 
 ### The adversarial reviewer contract
 
-The reviewer is read-only (never edits, commits, or pushes; scratch fixtures under
-`/tmp`, never inside the checkout) and reviews the diff **against a spec** the
+Each leg reviewer is read-only (never edits, commits, or pushes; scratch fixtures
+under `/tmp`, never inside the checkout) and reviews the diff **against a spec** the
 orchestrator builds from the work item's intent — the issue/ADR link, its acceptance
 criteria / coverage matrix, and the PR body. A diff-only review cannot catch "asked
 for ALL X, delivered a subset, claimed completeness"; silently narrowed scope is a
-blocking finding. One reviewer covers all three lenses — none may be skipped:
+blocking finding. Three parallel leg reviewers split the lenses, one each — every
+lens runs, none skipped:
 
 1. **Contract conformance** — map every spec claim to where the diff satisfies it;
    flag unimplemented or narrowed items; enumerate sibling axes from grep (never
@@ -120,8 +123,8 @@ Mechanics that hold for every pass:
   verdict for EVERY changed file (findings / considered-and-fine /
   not-examined-because). A review whose per-file coverage misses a changed file is
   incomplete — re-run it.
-- **Previous-review lookup, first step of every pass.** List the PR's top-level
-  comments and find the latest adversarial-review audit comment. None → review the
+- **Previous-review lookup, first step of every leg's pass.** List the PR's top-level
+  comments and find the latest audit comment **of the same leg**. None → review the
   full PR diff fresh. One found → same full-PR diff, focus on
   `git diff <recorded-SHA>...HEAD`, using its pointers two ways: (a) ground covered
   with a clean verdict is not re-reviewed unless the new commits touch it; (b) every
@@ -130,16 +133,13 @@ Mechanics that hold for every pass:
   commit messages); an unaddressed defect with no rationale is re-raised as
   blocking. Either way, the audit comment records the current head SHA for the next
   round.
-- **Model by size/complexity** (tiers per `.agents/model-tiers.conf`): the small tier
-  by default and for every re-review; the **top tier** for a large/complex PR —
-  more than 300 changed lines, more than 6 files, or any behaviour change in `src/`
-  parsing/guard/scheduling logic — where whole-PR cross-referencing pays; the full-PR
-  diff scope is what lets the higher-complexity model earn its keep. Record the
-  chosen model + the size metric that drove it in the audit comment. **Top tier
-  unavailable on such a PR:** mid reviews it alone, same contract — now that the mid tier
-  is Opus 5, a complex review routes there rather than to the retired small+mid duo
-  (2026-08-01). Never a multi-agent fan-out except on explicit user request; never a
-  dated model ID.
+- **Model by leg**, never by diff size (tiers per `.agents/model-tiers.conf`;
+  owner-approved from the 100-PR findings audit, 2026-08-08): correctness + hostile
+  inputs → **top** (the cross-system/state/environment catches live here; mid takes
+  over iff top is unavailable); contract conformance → **mid**; test honesty →
+  **small**, with executed mutations mandatory — execution discipline, not model
+  size, drives that leg. Re-review rounds run every leg on the small tier. Record
+  model + leg in each audit comment; never a dated model ID.
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
 
 ### CodeRabbit availability (bounded, never blocking)
@@ -278,8 +278,8 @@ still gets its reply, pointing at the shared resolution. Then per finding:
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch — batched
   into one push, not many rapid commits.
 - **Review-fix commits are new unreviewed code** (audited defect chains have entered
-  through them): any non-trivial APPLY gets a re-review (small tier; full PR diff,
-  focused on the changes since the previous review's recorded head SHA) before the
+  through them): any non-trivial APPLY gets a re-review round (all legs, small tier;
+  each focused on the changes since its own leg's recorded head SHA) before the
   merge gate, looping under the convergence rule; the closing round's nits are
   triaged inline with no further round.
   **Exempt:** a round whose every APPLY implements its reviewer's own concrete
@@ -308,10 +308,10 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   path, privilege, hand-crafted yes/no, impact scope, black-box reproduction), and a
   link back to the review comment; link the issue in the thread reply. Optionally
   also fix it in its own branch + PR — the issue is the required artifact.
-- **One audit comment on the PR** summarising the adversarial review (model, effort,
-  the size metric that drove the model choice, and the **head SHA reviewed** — the
-  next re-review's pointer) and noting CodeRabbit's review if one arrived, plus the
-  per-finding resolution.
+- **One audit comment on the PR per leg** (leg name, model, effort, and the **head
+  SHA reviewed** — the pointer that leg's next re-review keys on), plus one
+  orchestrator comment noting CodeRabbit's review if one arrived and the
+  per-finding resolution across all legs.
 
 ### The merge gate (all paths)
 
@@ -330,9 +330,9 @@ Proceed to the merge ONLY when the review step finished cleanly:
   `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into
   the audit comment; refuse to merge while any item lacks an outcome.
 - **No external reviewer on a substantive PR** (CodeRabbit dropped, nobody else
-  reviewed): escalate instead of merging on the single adversarial pass — a focused
-  second single-agent pass over the final diff (top tier preferred, else small tier),
-  or pace the merge.
+  reviewed): escalate instead of merging on the adversarial legs alone — a focused
+  extra pass over the final diff (top tier preferred, else small tier), or pace the
+  merge.
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline
   comments on the PR (paginated, no login filter) — reviewers you never armed a wait
   for (Copilot, another bot, a human) can post seconds before the merge — and triage
@@ -400,7 +400,7 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 
 Behavioral equivalence, not surface parity (workflow.md "Vendor mapping"):
 
-- **Claude:** the review runs as a fresh read-only sub-agent implementing the contract
+- **Claude:** each leg runs as a fresh read-only sub-agent implementing the contract
   above (piloted on [#1429](https://github.com/pfBlockerNG/pfBlockerNG/issues/1429));
   per-finding validation may fan out to fresh read-only validators; waits stopped via the
   task tools. Footer: `🤖 Generated by [Claude Code](https://claude.com/claude-code),

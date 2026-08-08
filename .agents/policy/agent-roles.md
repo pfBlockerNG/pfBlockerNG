@@ -163,28 +163,28 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 - **Independence:** required — never the agent (or model) that authored the brief or
   the diff.
 - **Tier intent:** small, always (owner directive 2026-07-14): a different model reads
-  with different blind spots, and the step gate does not need the top tier.
+  with different blind spots, and the step gate needs no top tier.
 
 ### reviewer
 
-- **Purpose & routing:** adversarial, execution-grounded review of the whole PR diff;
-  re-reviews focus on changes since the last recorded head SHA. Route: every code PR;
-  re-reviews after fix rounds.
-- **Inputs & task packet:** PR number, latest audit comment (head SHA = re-review
+- **Purpose & routing:** three parallel leg reviewers (contract · correctness+hostile
+  · test honesty) over the whole PR diff; re-review legs focus on changes since their
+  own leg's recorded head SHA. Route: every code PR and fix round.
+- **Inputs & task packet:** PR number, leg, its latest audit comment (head SHA =
   focus base), worktree, intent/acceptance spec.
 - **Outputs & evidence:** schema-forced findings — severity, location, evidence,
-  reproduction — returned as review output; never an edited tree.
+  reproduction — as review output; never an edited tree.
 - **Permissions & mutation:** read-only; may run discriminating probes and hostile
-  inputs. Never edits, commits, or downgrades a real pre-existing defect — those route
+  inputs. Never edits, commits, or downgrades a pre-existing defect — those route
   to a tracked follow-up.
-- **Context & skills:** the full diff plus surrounding code; the policy annexes the diff
-  touches. Floor: `testing.md`, `landing.md`; the touched `lang-*.md` and the domain rows
-  of the diff.
+- **Context & skills:** the full diff + surrounding code; the policy annexes the diff
+  touches. Floor: `testing.md`, `landing.md`; the touched `lang-*.md` and the diff's
+  domain rows.
 - **Stop & escalation:** the fix→re-review loop continues only while the latest
   round has a blocking finding; hard cap 3 rounds, then a human decides.
 - **Independence:** required — a fresh context, never the author of the change.
-- **Tier intent:** small by default; top for a large/complex PR (whole-PR
-  cross-referencing is the point); mid alone when top is unavailable on such a PR.
+- **Tier intent:** per leg — correctness+hostile top (mid iff top unavailable),
+  contract mid, test honesty small; re-reviews all small.
 
 ### publisher
 
