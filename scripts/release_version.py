@@ -124,7 +124,7 @@ def derive_destinations_from_git(
     *,
     current_commit: str | None = None,
 ) -> tuple[Channel, ...]:
-    """Derive destinations from numeric release-family ordering and branch ancestry."""
+    """Validate the current tag against git state, then derive its unconditional destinations."""
     repo_path = str(repo)
     major, minor, patch, stage, _sequence = _tag_shape(tag)
     expected_branch = f"release/{major}.{minor}"
