@@ -1862,11 +1862,19 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
 
     root = tmp_path / "root"
 
-    # pkg stub: exits 0; answers 'pkg config abi' with a real ABI.
+    # pkg stub: answers 'pkg config abi' with a real ABI, and 'pkg rquery' with a package
+    # line so the bootstrap reaches its success path — a bootstrap whose catalogue verify
+    # fails removes the conf it staged (issue #2148), which is exactly what this test
+    # asserts got written.
     bin_dir = root / "bin"
     bin_dir.mkdir(parents=True)
     fake_pkg = bin_dir / "pkg"
-    fake_pkg.write_text("#!/bin/sh\ncase \"$*\" in\n  'config abi') printf 'FreeBSD:15:amd64' ;;\nesac\nexit 0\n")
+    fake_pkg.write_text(
+        "#!/bin/sh\n"
+        "case \"$1\" in\n  rquery) printf 'pfSense-pkg-pfBlockerNG 4.0.0\\n'; exit 0 ;;\nesac\n"
+        "case \"$*\" in\n  'config abi') printf 'FreeBSD:15:amd64' ;;\nesac\n"
+        "exit 0\n"
+    )
     fake_pkg.chmod(0o755)
 
     # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no 'Plus' -> CE).

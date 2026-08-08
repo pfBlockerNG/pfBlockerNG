@@ -136,12 +136,15 @@ for dirpath, _dirs, _files in os.walk(site):
         continue
     with open(os.path.join(dirpath, "index.html"), "w") as fh:
         fh.write(f"autoindex stub: {rel}\n")
-# write_site() also publishes a self-contained add-repo.sh into the site root.
+# write_site() also publishes BOTH client scripts into the site root.
 with open(os.path.join(site, "add-repo.sh"), "w") as fh:
     fh.write("#!/bin/sh\n# add-repo stub\n")
+with open(os.path.join(site, "migrate-channel.sh"), "w") as fh:
+    fh.write("#!/bin/sh\n# migrate-channel stub\n")
 print("landing stub written")
 PY
     echo '#!/bin/sh' > "${base}/fake-src/scripts/add-repo.sh"
+    echo '#!/bin/sh' > "${base}/fake-src/scripts/migrate-channel.sh"
 
     # --- fake publish_nightly.py — the Nightly-mode counterpart to the
     # publish_release.py stub above. Same doubling rationale: real handoff/asset
@@ -323,10 +326,12 @@ JSON
     The path "${base}/pkg-repo/docs/edge/index.html" should be exist
     committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
     The variable committed should include 'docs/edge/index.html'
-    # write_site() publishes add-repo.sh into the site root on the same walk;
-    # the bootstrap one-liner on the landing page fetches it from there, so an
-    # unstaged copy means the published site serves a 404 for it.
+    # write_site() publishes BOTH client scripts into the site root on the same
+    # walk; the landing page's bootstrap one-liner and its channel-switch snippet
+    # fetch them from there, so an unstaged copy means the published site serves a
+    # 404 into `sh` for the half it omits (issue #2148).
     The variable committed should include 'docs/add-repo.sh'
+    The variable committed should include 'docs/migrate-channel.sh'
   End
 
   It 'never sweeps a stray untracked file or an unrelated dirty tracked file into the commit'
@@ -419,6 +424,7 @@ JSON
     printf 'autoindex stub: edge\n' > "${base}/pkg-repo/docs/edge/index.html"
     printf 'autoindex stub: edge/ce-2.8\n' > "${base}/pkg-repo/docs/edge/ce-2.8/index.html"
     printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
     # docs/.nojekyll is truncate-and-recreated unconditionally whenever the
     # script has any touched target (regardless of whether the target itself
     # changed) — pre-seed it too, or its own first-ever creation would be a
@@ -426,6 +432,7 @@ JSON
     true > "${base}/pkg-repo/docs/.nojekyll"
     ( cd "${base}/pkg-repo" && git_fixture add docs/index.html docs/browse.html \
         docs/edge/index.html docs/edge/ce-2.8/index.html docs/.nojekyll docs/add-repo.sh \
+        docs/migrate-channel.sh \
         && git_fixture commit -q -m preseed-landing \
         && git_fixture push -q origin main )
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"

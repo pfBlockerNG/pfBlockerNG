@@ -30,7 +30,10 @@
 #   strictly contains its slower channels' files (edge ⊇ testing ⊇ stable), so one
 #   repository always suffices — including for an in-repo rollback on a faster
 #   channel. Subscribing therefore RETIRES every other pfBlockerNG channel conf on
-#   the box, reporting each removal.
+#   the box, reporting each removal — but only AFTER the new channel's catalogue is
+#   proven to serve this box, so a channel with no build for this edition/version
+#   can never strand a box by taking its working subscription with it. A run that
+#   fails leaves the repository configuration exactly as it found it.
 #
 #   Moving FORWARD is: re-run with the new `--channel`, then upgrade normally —
 #   ordinary `pkg` resolution applies only when the target version is higher
@@ -292,27 +295,34 @@ else
 fi
 chmod 755 "${ON_BOX_HOOK}"
 
-# 2. Enforce single-repository subscription: retire every OTHER project conf. The
-#    box ends up subscribed to exactly one channel, so `pkg` never has to choose
-#    between two equal-priority project repositories. Reported, never silent.
-mkdir -p "${REPOS_DIR}"
-printf '%s\n' "${PROJECT_CONFS}" | while IFS= read -r _other_conf; do
-    [ -n "${_other_conf}" ] || continue
-    [ "${_other_conf}" = "${CONF_NAME}" ] && continue
-    [ -f "${REPOS_DIR}/${_other_conf}" ] || continue
-    printf '==> Retiring %s — a box subscribes to ONE pfBlockerNG channel\n' \
-        "${REPOS_DIR}/${_other_conf}"
-    rm -f "${REPOS_DIR}/${_other_conf}"
-done
-
-# 3. Stub the conf so the hook regenerates it (the hook only rewrites confs that
+# 2. Stage the conf so the hook regenerates it (the hook only rewrites confs that
 #    already exist — an absent channel stays absent). The stub is overwritten in
-#    place by the hook in step 4; it is left intact only if detection fails, in
+#    place by the hook in step 3; it is left intact only if detection fails, in
 #    which case the marker check below fails loud.
+#
+#    Every OTHER project conf stays in place for now. Retiring it here — before the
+#    target catalogue is known to work — would destroy a working subscription on
+#    behalf of one that may not be published for this box's variant yet, which is
+#    the same "never delete what cannot be replaced" rule the sibling
+#    migrate-channel.sh is built around. Retirement is step 6, after the verify.
+mkdir -p "${REPOS_DIR}"
+CONF_PREEXISTED=0
+[ -f "${CONF_PATH}" ] && CONF_PREEXISTED=1
 printf '==> Staging %s conf at %s (hook will resolve it)\n' "${CHANNEL}" "${CONF_PATH}"
 printf '# pfBlockerNG %s repo conf — pending boot-time generation (ADR-39).\n' "${CHANNEL}" > "${CONF_PATH}"
 
-# 4. Run the hook once now to resolve the conf for THIS box (it also runs every
+# Undo a conf THIS run created, so a failed bootstrap leaves the box's repository
+# configuration exactly as it found it. A conf that already existed is left alone —
+# removing it would be the destruction this ordering exists to prevent.
+abort_unstaged() {
+    if [ "${CONF_PREEXISTED}" -eq 0 ]; then
+        rm -f "${CONF_PATH}"
+        printf '  Removed the conf this run staged; your previous subscription is untouched.\n' >&2
+    fi
+    exit 1
+}
+
+# 3. Run the hook once now to resolve the conf for THIS box (it also runs every
 #    boot via rc.d). Pass every channel path explicitly so a non-default
 #    PFBLOCKERNG_ROOT (tests) and --base-url (forks/staging) are honored — an
 #    omitted override would fall back to the real /usr/local path.
@@ -327,26 +337,26 @@ PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
 PFB_VERSION_FILE="${ROOT}/etc/version" \
     sh "${ON_BOX_HOOK}" onestart || true
 
-# 5. Verify the hook resolved the conf (the marker line is present). If detection
-#    failed the stub from step 3 survives (no marker) — fail loud.
+# 4. Verify the hook resolved the conf (the marker line is present). If detection
+#    failed the stub from step 2 survives (no marker) — fail loud.
 if ! grep -q "${CONF_MARKER}" "${CONF_PATH}" 2>/dev/null; then
     printf 'add-repo: the generator hook did not resolve %s (no marker line).\n' "${CONF_PATH}" >&2
     printf '  Variant detection may have failed. Inspect: sh %s onestart\n' "${ON_BOX_HOOK}" >&2
-    exit 1
+    abort_unstaged
 fi
 printf '==> Conf resolved:\n'
 sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}" >&2
 
-# 6. pkg update (refresh catalogs, including the pfBlockerNG repo).
+# 5. pkg update (refresh catalogs, including the pfBlockerNG repo), then VERIFY a
+#    pfBlockerNG package is visible FROM the pfBlockerNG repo (not merely that pkg
+#    update ran). `pkg rquery -r <repo>` queries that ONE repo's catalog, so a
+#    still-enabled previous channel cannot mask a missing package here. Every
+#    channel repo carries the one canonical package; only the legacy release repo
+#    carries two (stable may not be published yet) — finding EITHER proves that
+#    repo loaded. Exit non-zero (fail loud) only if NONE present.
 printf '==> pkg update (refreshing catalogs, including the pfBlockerNG repo)\n'
 env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f >/dev/null
 
-# 7. VERIFY a pfBlockerNG package is visible FROM the pfBlockerNG repo (not merely that pkg
-#    update ran). `pkg rquery -r <repo>` queries that ONE repo's catalog; a hit
-#    means the pfBlockerNG catalog loaded and carries the package. Every channel repo
-#    carries the one canonical package; only the legacy release repo carries two
-#    (stable may not be published yet) — finding EITHER proves that repo loaded.
-#    Exit non-zero (fail loud) only if NONE present.
 printf '==> Verifying pfBlockerNG package(s) are visible from repo '\''%s'\''\n' "${REPO_NAME}"
 found_any=0
 # Word-splitting the space-separated package list is intentional.
@@ -364,6 +374,20 @@ if [ "${found_any}" -eq 0 ]; then
     printf '  Checked conf: %s\n' "${CONF_PATH}" >&2
     printf '  The catalog may not be published yet for this box'\''s variant, or the URL is unreachable.\n' >&2
     printf '  Inspect with: %s -d update   (traces the catalog fetch)\n' "${PKG_BIN}" >&2
-    exit 1
+    abort_unstaged
 fi
+
+# 6. Only now enforce single-repository subscription: the target is proven usable, so
+#    retiring every OTHER project conf cannot strand the box. After this the box is
+#    subscribed to exactly one channel and `pkg` never has to choose between two
+#    equal-priority project repositories. Reported, never silent.
+printf '%s\n' "${PROJECT_CONFS}" | while IFS= read -r _other_conf; do
+    [ -n "${_other_conf}" ] || continue
+    [ "${_other_conf}" = "${CONF_NAME}" ] && continue
+    [ -f "${REPOS_DIR}/${_other_conf}" ] || continue
+    printf '==> Retiring %s — a box subscribes to ONE pfBlockerNG channel\n' \
+        "${REPOS_DIR}/${_other_conf}"
+    rm -f "${REPOS_DIR}/${_other_conf}"
+done
+
 printf '==> Done — conf at %s\n' "${CONF_PATH}"

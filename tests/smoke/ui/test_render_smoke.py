@@ -2738,6 +2738,10 @@ def test_software_panel_channel_falls_back_to_the_package_name_off_repo(
     pkgname = pkg_identity.branch_pkg_name(os.environ.get("SMOKE_PKG"))
 
     repo_probe = smoke_vm.ssh("/usr/local/sbin/pkg", "query", "%R", pkgname)
+    assert repo_probe.returncode == 0, (
+        f"could not read the installed repo for {pkgname!r} "
+        f"(rc={repo_probe.returncode}): {(repo_probe.stderr or repo_probe.stdout).strip()!r}"
+    )
     installed_repo = repo_probe.stdout.strip()
     assert not installed_repo.startswith("pfblockerng-"), (
         f"before-state broken: this deploy reports channel repo {installed_repo!r}, so it "
@@ -2745,7 +2749,10 @@ def test_software_panel_channel_falls_back_to_the_package_name_off_repo(
     )
 
     with software_panel_forced(smoke_vm, "on"):
-        body = webui.get(_SOFTWARE_PAGE).text
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"Software page render oracle failed: {result.detail}"
+        body = resp.text
 
     panel = re.search(rf'<span id="{_SOFTWARE_PANEL_MARKER}">([^<]*)</span>', body)
     assert panel is not None, f"the {_SOFTWARE_PANEL_MARKER} span is absent from the Software page body"
