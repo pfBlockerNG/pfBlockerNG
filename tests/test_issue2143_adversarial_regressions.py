@@ -67,7 +67,7 @@ def test_pre_tag_source_sha_remains_allowed(tmp_path: Path) -> None:
     )
 
 
-def test_wrong_branch_does_not_count_without_a_separate_valid_later_tag() -> None:
+def test_other_tags_ordered_or_branch_mapped_never_change_current_tag_destinations() -> None:
     tags = ["v4.0.0", "v4.1.0.a1"]
     wrong = {"v4.0.0": "release/4.0", "v4.1.0.a1": "release/4.2"}
     valid = {**wrong, "v4.1.0.a1": "release/4.1"}
@@ -75,7 +75,10 @@ def test_wrong_branch_does_not_count_without_a_separate_valid_later_tag() -> Non
         "testing",
         "edge",
     )
-    assert derive_destinations("v4.0.1.a1", branch="release/4.0", ordered_tags=tags, tag_branches=valid) == ("testing",)
+    assert derive_destinations("v4.0.1.a1", branch="release/4.0", ordered_tags=tags, tag_branches=valid) == (
+        "testing",
+        "edge",
+    )
 
 
 def test_sync_ports_uses_only_exact_channel_recipe_paths() -> None:

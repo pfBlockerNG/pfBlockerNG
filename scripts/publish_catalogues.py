@@ -210,12 +210,16 @@ _MAX_DESTINATIONS_ELEMENTS = len(_CHANNEL_ORDER) + 1
 
 # The closed set of ordered destination tuples a tagged run may carry. Authority:
 # release_version.py's derive_destinations (source repo; read for context, never
-# imported here) — for any release tag it returns exactly one of these five tuples.
-# ("stable",) alone and ("stable","edge") are NOT among its outputs: a final
-# (stable-channel) tag always fans to at least testing, and never skips testing to
-# reach edge directly. issue #2146's acceptance criteria require an unlisted
-# destination to abort, so this is the single, closed source of truth — never widen
-# it to "any ordered subset" elsewhere.
+# imported here) — since its unconditional fan-out (issue #2251), it always returns
+# exactly one of three tuples: ("edge",), ("testing","edge"), or
+# ("stable","testing","edge"). ("testing",) and ("stable","testing") remain in this
+# allow-list only for defense-in-depth against already-published runs from before
+# that change; derive_destinations can no longer produce either. ("stable",) alone
+# and ("stable","edge") are NOT among its outputs: a final (stable-channel) tag
+# always fans to at least testing, and never skips testing to reach edge directly.
+# issue #2146's acceptance criteria require an unlisted destination to abort, so
+# this is the single, closed source of truth — never widen it to "any ordered
+# subset" elsewhere.
 _VALID_TAGGED_DESTINATIONS: frozenset[tuple[str, ...]] = frozenset(
     {
         ("edge",),

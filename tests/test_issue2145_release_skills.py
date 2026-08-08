@@ -140,9 +140,9 @@ def test_notes_prompt_uses_current_grammar_and_context_only_links() -> None:
     ("tag", "ordered_tags", "expected"),
     (
         ("v4.0.1", ("v4.0.0",), ("stable", "testing", "edge")),
-        ("v4.0.1", ("v4.0.0", "v5.0.0.a1"), ("stable", "testing")),
+        ("v4.0.1", ("v4.0.0", "v5.0.0.a1"), ("stable", "testing", "edge")),
         ("v4.0.1.a1", ("v4.0.0",), ("testing", "edge")),
-        ("v4.0.1.a1", ("v4.0.0", "v5.0.0.a1"), ("testing",)),
+        ("v4.0.1.a1", ("v4.0.0", "v5.0.0.a1"), ("testing", "edge")),
         ("v4.0.0.a1", (), ("edge",)),
     ),
 )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from scripts.release_version import derive_destinations, get_tags_zero_after, primary_channel_for_tag
+from scripts.release_version import derive_destinations, primary_channel_for_tag
 
 
 def _destinations(
@@ -34,28 +34,27 @@ def _destinations(
         ("v4.0.0", ("stable", "testing", "edge")),
     ],
 )
-def test_missing_zero_anchor_derives_all_required_destinations(tag: str, expected: tuple[str, ...]) -> None:
+def test_no_later_tags_derives_destinations_by_shape_alone(tag: str, expected: tuple[str, ...]) -> None:
     assert _destinations(tag, []) == expected
 
 
-def test_later_zero_prerelease_transitions_both_prerelease_and_final() -> None:
+def test_later_family_patch_zero_prerelease_no_longer_narrows_destinations() -> None:
     assert _destinations("v4.0.1.a1", ["v4.0.0"]) == ("testing", "edge")
     assert _destinations("v4.0.0", ["v4.0.0"]) == ("stable", "testing", "edge")
     tags = ["v4.0.0", "v4.1.0.a1"]
-    assert _destinations("v4.0.1.a1", tags) == ("testing",)
-    assert _destinations("v4.0.0", tags) == ("stable", "testing")
+    assert _destinations("v4.0.1.a1", tags) == ("testing", "edge")
+    assert _destinations("v4.0.0", tags) == ("stable", "testing", "edge")
 
 
-def test_nonzero_prerelease_and_final_drop_edge_after_later_zero_tag() -> None:
+def test_nonzero_prerelease_and_final_keep_edge_regardless_of_later_zero_tags() -> None:
     assert _destinations("v4.0.1.a1", ["v4.0.0"]) == ("testing", "edge")
-    assert _destinations("v4.0.1.a1", ["v4.0.0", "v4.1.0.a1", "v4.1.0.r1"]) == ("testing",)
-    assert _destinations("v4.0.1", ["v4.0.0", "v4.1.0.r1"]) == ("stable", "testing")
+    assert _destinations("v4.0.1.a1", ["v4.0.0", "v4.1.0.a1", "v4.1.0.r1"]) == ("testing", "edge")
+    assert _destinations("v4.0.1", ["v4.0.0", "v4.1.0.r1"]) == ("stable", "testing", "edge")
 
 
-def test_malformed_nonzero_and_wrong_branch_tags_do_not_count() -> None:
-    tags = ["v4.0.0", "v4.1.0.a1", "v4.1.0.gamma.9", "v4.1.0.1", "v4.1.0.r2"]
-    branches = {"v4.0.0": "release/4.0", "v4.1.0.a1": "release/4.2", "v4.1.0.r2": "release/4.1"}
-    assert _destinations("v4.0.1.a1", tags, branches=branches) == ("testing",)
+def test_patch_zero_prerelease_stays_edge_only_regardless_of_later_families() -> None:
+    tags = ["v4.0.0", "v4.1.0.a1", "v4.1.0.r1"]
+    assert _destinations("v4.0.0.a1", tags) == ("edge",)
 
 
 def test_current_tag_branch_mismatch_fails_before_classification() -> None:
@@ -63,20 +62,9 @@ def test_current_tag_branch_mismatch_fails_before_classification() -> None:
         _destinations("v4.0.1.a1", [], branches={"v4.0.1.a1": "release/4.1"})
 
 
-def test_missing_anchor_is_none_safe() -> None:
-    assert _destinations("v4.0.1.a1", ["v4.0.0.a1"]) == ("testing", "edge")
-
-
-def test_zero_prereleases_use_numeric_family_not_sequence_order() -> None:
-    tags = ["v4.2.0.a1", "v4.0.0", "v3.9.0.a1", "v4.1.1.a1", "v4.1.56"]
-    branches = {
-        "v4.2.0.a1": "release/4.2",
-        "v4.0.0": "release/4.0",
-        "v3.9.0.a1": "release/3.9",
-        "v4.1.1.a1": "release/4.1",
-        "v4.1.56": "release/4.1",
-    }
-    assert get_tags_zero_after("v4.0.0", tags, tag_branches=branches) == ["v4.2.0.a1"]
+def test_current_tag_branch_argument_mismatch_fails() -> None:
+    with pytest.raises(ValueError, match="current tag.*release/4.0"):
+        _destinations("v4.0.1.a1", [], branch="release/9.9")
 
 
 @pytest.mark.parametrize(

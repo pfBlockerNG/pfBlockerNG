@@ -89,60 +89,6 @@ def _invalid(tag: str) -> ValueError:
     return ValueError(f"invalid release tag: {tag!r}")
 
 
-def get_tag(
-    major: str | int,
-    minor: str | int,
-    patch: str | int,
-    tags: Sequence[str] = (),
-    *,
-    branch: str | None = None,
-    tag_branches: Mapping[str, str] | None = None,
-) -> str | None:
-    """Return an exact valid tag, optionally restricted to one release line."""
-    expected = (str(major), str(minor), str(patch))
-    branches = tag_branches or {}
-    for candidate in tags:
-        try:
-            shape = _tag_shape(candidate)
-        except ValueError:
-            continue
-        if shape[:3] == expected and shape[3] is None and (branch is None or branches.get(candidate) == branch):
-            return candidate
-    return None
-
-
-def get_tags_zero_after(
-    tag_for_zero: str | None,
-    tags: Sequence[str] = (),
-    *,
-    tag_branches: Mapping[str, str] | None = None,
-) -> list[str]:
-    """Return higher-family patch-zero prereleases on their own release lines."""
-    if tag_for_zero is None:
-        return []
-    try:
-        anchor_major, anchor_minor, _anchor_patch, _anchor_stage, _anchor_sequence = _tag_shape(tag_for_zero)
-    except ValueError:
-        return []
-    branches = tag_branches or {}
-    anchor_family = (int(anchor_major), int(anchor_minor))
-    result: list[str] = []
-    for candidate in tags:
-        try:
-            major, minor, patch, stage, _sequence = _tag_shape(candidate)
-        except ValueError:
-            continue
-        candidate_family = (int(major), int(minor))
-        if (
-            patch == "0"
-            and stage is not None
-            and candidate_family > anchor_family
-            and branches.get(candidate) == f"release/{major}.{minor}"
-        ):
-            result.append(candidate)
-    return result
-
-
 def derive_destinations(
     tag: str,
     *,
@@ -150,7 +96,13 @@ def derive_destinations(
     ordered_tags: Sequence[str] = (),
     tag_branches: Mapping[str, str] | None = None,
 ) -> tuple[Channel, ...]:
-    """Derive the ordered catalogue tuple for one release tag."""
+    """Derive the ordered catalogue tuple for one release tag.
+
+    Unconditional fan-out (issue #2251): every channel catalogue strictly contains
+    its slower channels' files (edge >= testing >= stable), so the destination tuple
+    depends only on the current tag's own shape, never on sibling tags. `ordered_tags`
+    stays in the signature for caller stability; it is no longer consulted.
+    """
     major, minor, patch, stage, _sequence = _tag_shape(tag)
     release_line = f"release/{major}.{minor}"
     if branch != release_line:
@@ -160,11 +112,9 @@ def derive_destinations(
         raise ValueError(f"current tag {tag!r} is not on {release_line!r}")
     if stage is not None and patch == "0":
         return ("edge",)
-    anchor = get_tag(major, minor, 0, ordered_tags, branch=release_line, tag_branches=branches)
-    has_later_zero = bool(get_tags_zero_after(anchor, ordered_tags, tag_branches=branches))
     if stage is not None:
-        return ("testing",) if has_later_zero else ("testing", "edge")
-    return ("stable", "testing") if has_later_zero else ("stable", "testing", "edge")
+        return ("testing", "edge")
+    return ("stable", "testing", "edge")
 
 
 def derive_destinations_from_git(
@@ -209,7 +159,6 @@ def derive_destinations_from_git(
         ]
         return trailers == [f"pfBlockerNG-Release-Channel: {expected}"]
 
-    tags = git("for-each-ref", "--sort=creatordate", "--format=%(refname:strip=2)", "refs/tags/").splitlines()
     tag_commit = git_optional("rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}")
     if current_commit and tag_commit and current_commit != tag_commit:
         raise ValueError(f"current tag {tag!r} does not match the selected source commit")
@@ -235,25 +184,11 @@ def derive_destinations_from_git(
         if result.returncode != 0:
             raise ValueError(f"current tag {tag!r} is not reachable from {branch!r}")
 
-    branch_map: dict[str, str] = {}
-    for candidate in tags:
-        try:
-            major, minor, patch, stage, _sequence = _tag_shape(candidate)
-        except ValueError:
-            continue
-        line = f"release/{major}.{minor}"
-        # The current tag never reaches this skip: a patch-zero prerelease expects the same
-        # edge trailer, so the check above has already rejected it.
-        if patch == "0" and stage is not None and not has_exact_channel_trailer(candidate, "edge"):
-            continue
-        commit = git("rev-parse", "--verify", f"refs/tags/{candidate}^{{commit}}")
-        ref = f"refs/remotes/origin/{line}"
-        if not git_optional("show-ref", "--verify", ref):
-            ref = line
-        result = subprocess.run(["git", "-C", repo_path, "merge-base", "--is-ancestor", commit, ref], check=False)
-        if result.returncode == 0:
-            branch_map[candidate] = line
-    return derive_destinations(tag, branch=branch, ordered_tags=tags, tag_branches=branch_map)
+    # Unconditional fan-out (issue #2251): destinations depend only on the current
+    # tag's own shape, validated above (branch, annotation, trailer, ancestry).
+    # No other tag in the repository can change the outcome, so there is nothing
+    # left to scan for.
+    return derive_destinations(tag, branch=branch)
 
 
 def primary_channel_for_tag(tag: str) -> Channel:
