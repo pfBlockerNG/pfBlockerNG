@@ -338,10 +338,9 @@ Proceed to the merge ONLY when the review step finished cleanly:
 - **Findings ledger:** a numbered list of every finding with its outcome —
   `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into
   the audit comment; refuse to merge while any item lacks an outcome.
-- **No external reviewer on a substantive PR** (CodeRabbit dropped, nobody else
-  reviewed): escalate instead of merging on the adversarial legs alone — a focused
-  extra pass over the final diff (top tier preferred, else small tier), or pace the
-  merge.
+- **No external reviewer** (CodeRabbit dropped, nobody else reviewed): note the skip
+  in the audit trail; the three legs carry the review (rule retired 2026-08-08 — 1
+  real catch in 6 escalations, absorbed by the per-leg top-tier correctness review).
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline
   comments on the PR (paginated, no login filter) — reviewers you never armed a wait
   for can post seconds before the merge — and triage
