@@ -819,7 +819,7 @@ class RetentionTests(_TempDirTestCase):
 
 
 # --------------------------------------------------------------------------- #
-# Containment-aware retention (PR #2253 review, CodeRabbit Major): edge receives the
+# Containment-aware retention: edge receives the
 # union of every tagged stream, so pruning it independently of stable/testing can evict
 # a canonical version one of them still serves, silently breaking the strict-containment
 # contract (edge superset-of testing superset-of stable). prune_retained must protect any
@@ -830,9 +830,8 @@ class RetentionTests(_TempDirTestCase):
 class ContainmentAwarePruningTests(_TempDirTestCase):
     @_requires_engine
     def test_edge_protects_version_still_retained_by_stable(self) -> None:
-        # Matrix row 1 -- the CodeRabbit repro: 6 canonical versions in edge (one
-        # beyond keep=5), the oldest ALSO present as a canonical .pkg in stable for the
-        # same varver. Old (pre-fix) behaviour evicts it anyway; fixed behaviour must not.
+        # 6 canonical versions in edge (one beyond keep=5), the oldest ALSO present
+        # as a canonical .pkg in stable for the same varver: it must survive the prune.
         out = self.tmp / "out"
         edge_dir = out / "edge" / "ce-2.8"
         stable_dir = out / "stable" / "ce-2.8"
@@ -848,7 +847,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_edge_prunes_when_not_protected(self) -> None:
-        # Matrix row 2 -- protection is presence-based, not unconditional: with no
+        # Protection is presence-based, not unconditional: with no
         # stable/testing directory at all, edge's oldest-beyond-keep is still evicted.
         out = self.tmp / "out"
         edge_dir = out / "edge" / "ce-2.8"
@@ -862,7 +861,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_testing_protects_version_retained_by_stable(self) -> None:
-        # Matrix row 3a -- testing's only slower channel is stable.
+        # Testing's only slower channel is stable.
         out = self.tmp / "out"
         testing_dir = out / "testing" / "ce-2.8"
         stable_dir = out / "stable" / "ce-2.8"
@@ -877,7 +876,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_edge_protects_via_either_slower_channel(self) -> None:
-        # Matrix row 3b -- edge's slower tuple is (stable, testing): two DIFFERENT
+        # Edge's slower tuple is (stable, testing): two DIFFERENT
         # old-beyond-keep versions, one protected only by stable and one only by
         # testing, must BOTH survive -- proving the check isn't a single-channel lookup.
         out = self.tmp / "out"
@@ -896,7 +895,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_stable_ignores_faster_channel_presence(self) -> None:
-        # Matrix row 4 -- stable has no slower channel (_SLOWER_CHANNELS["stable"] ==
+        # Stable has no slower channel (_SLOWER_CHANNELS["stable"] ==
         # ()): an old stable version also present in edge (a FASTER channel) does NOT
         # protect the stable copy. Containment only ever flows slower<-faster, never back.
         out = self.tmp / "out"
@@ -913,7 +912,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_nightly_independent_no_protection(self) -> None:
-        # Matrix row 5 -- nightly is untagged and independent (_SLOWER_CHANNELS["nightly"]
+        # Nightly is untagged and independent (_SLOWER_CHANNELS["nightly"]
         # == ()): a version also present in stable grants no protection.
         out = self.tmp / "out"
         nightly_dir = out / "nightly" / "ce-2.8"
@@ -929,7 +928,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_missing_slower_channel_directory_no_protection(self) -> None:
-        # Matrix row 6 -- neither slower-channel directory exists AT ALL (not merely
+        # Neither slower-channel directory exists AT ALL (not merely
         # missing this varver): no error, no protection, normal eviction.
         out = self.tmp / "out"
         edge_dir = out / "edge" / "ce-2.8"
@@ -945,7 +944,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
     @_requires_engine
     def test_slower_channel_dependency_and_meta_never_protect(self) -> None:
-        # Matrix row 7 -- a dependency .pkg in the slower channel whose OWN version
+        # A dependency .pkg in the slower channel whose OWN version
         # string coincidentally matches edge's oldest canonical version must not grant
         # protection (name mismatch), and the slower dir's real catalog descriptor
         # files (data.pkg/packagesite.pkg, from a genuine regenerate_catalogue pass)
@@ -984,7 +983,7 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
 
 
 class SlowerChannelsConsistencyTests(unittest.TestCase):
-    # Matrix row 9 -- pure constant-shape checks, no engine/fixtures needed.
+    # Pure constant-shape checks, no engine/fixtures needed.
     def test_keys_match_known_channels(self) -> None:
         self.assertEqual(set(ca._SLOWER_CHANNELS), ca._KNOWN_CHANNELS)
 
