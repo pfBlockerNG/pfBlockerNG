@@ -135,6 +135,21 @@ def test_env_map_scanner_catches_a_planted_offence() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_workflows_pin_the_current_ci_runner_series() -> None:
+    """Every container job must ride the series `.github/docker/VERSION` names —
+    the invariant lost with the retired migration test (PR #2233), resurrected
+    here where CI actually executes it. A stale pin runs a whole job family on
+    an old toolchain while the gates read as green (issue #2232)."""
+    version = int((ROOT / ".github/docker/VERSION").read_text(encoding="utf-8").strip())
+    offenders: list[str] = []
+    for path in _workflow_files():
+        for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            for tag in re.findall(r"ghcr\.io/pfblockerng/ci-runner(?:-vm)?:([0-9]+)", line):
+                if int(tag) != version:
+                    offenders.append(f"{path.relative_to(ROOT)}:{line_no}: series {tag} != {version}")
+    assert not offenders, "workflow image pins must match .github/docker/VERSION:\n  " + "\n  ".join(offenders)
+
+
 def test_local_smoke_pins_the_current_ci_runner_series() -> None:
     version = int((ROOT / ".github/docker/VERSION").read_text(encoding="utf-8").strip())
     text = (ROOT / "scripts/local-smoke.sh").read_text(encoding="utf-8")

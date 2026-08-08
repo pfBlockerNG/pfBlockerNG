@@ -110,7 +110,7 @@ jobs:
     name: Resolve refresh matrix (CE + Plus)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:3
+      image: ghcr.io/pfblockerng/ci-runner:4
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -216,7 +216,7 @@ jobs:
     if: ${{ needs.plan.outputs.count != '0' }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:3
+      image: ghcr.io/pfblockerng/ci-runner-vm:4
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

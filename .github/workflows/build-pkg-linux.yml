@@ -122,7 +122,7 @@ jobs:
     name: build pfBlockerNG .pkg (portable, Linux)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:3
+      image: ghcr.io/pfblockerng/ci-runner:4
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
