@@ -68,6 +68,18 @@ META_CONF = (
 DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
 CONF_PRIORITY = 100
 
+# Per-channel repo-conf stanza key (issue #2147 step B): the four channels
+# (stable/testing/edge/nightly) plus the legacy "release" default all carry the
+# ONE canonical pfSense-pkg-pfBlockerNG identity — channel only picks the
+# stanza name + URL path segment. Mirrors add-repo.sh's CHANNEL case.
+_CHANNEL_REPO_NAMES = {
+    "release": "pfblockerng",
+    "nightly": "pfblockerng-nightly",
+    "stable": "pfblockerng-stable",
+    "testing": "pfblockerng-testing",
+    "edge": "pfblockerng-edge",
+}
+
 # A NO_ARCH package's manifest ABI wildcards ONLY the final CPU segment — e.g.
 # "FreeBSD:15:*" (probed live against a real Netgate noarch package; issue
 # #1806). Tight: '*' is valid ONLY as the whole final segment, never elsewhere
@@ -1319,24 +1331,25 @@ def build_repo_matrix(
     return {"built": built}
 
 
-def print_conf(resolved_url: str) -> None:
-    """Emit the release-channel repo-conf stanza.
+def print_conf(resolved_url: str, *, channel: str = "release") -> None:
+    """Emit the repo-conf stanza for ``channel`` (default: the legacy release channel).
 
     ``resolved_url`` is the fully-resolved URL for the box's edition/version
     (ADR-39; arch-less since issue #1806 — the catalog is NO_ARCH):
-    ``<base>/release/<varver>`` — no ``${ABI}`` token.
+    ``<base>/<channel>/<varver>`` — no ``${ABI}`` token.
     Supply ``--catalog-path <varver>`` so tests can pin the exact bytes.
     """
     url = resolved_url.rstrip("/")
+    repo_name = _CHANNEL_REPO_NAMES[channel]
     sys.stdout.write(
         "# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.\n"
-        "# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).\n"
+        f"# pfBlockerNG ({channel} channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
         "# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"
         "# issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.\n"
-        "pfblockerng: {\n"
+        f"{repo_name}: {{\n"
         f'  url: "{url}",\n'
         "  mirror_type: none,\n"
         "  signature_type: none,\n"
@@ -1380,8 +1393,19 @@ def main(argv: list[str]) -> int:
         help=(
             "catalog subtree for --print-conf, a bare '<varver>' (e.g. 'ce-2.8', "
             "'plus-26.03') — the catalog is arch-less (NO_ARCH; issue #1806). "
-            "When supplied, the emitted url is <base-url>/release/<catalog-path>. "
+            "When supplied, the emitted url is <base-url>/<channel>/<catalog-path>. "
             "Required for byte-identical output across all four generators."
+        ),
+    )
+    ap.add_argument(
+        "--channel",
+        choices=["stable", "testing", "edge", "nightly"],
+        default=None,
+        dest="channel",
+        help=(
+            "catalogue channel for --print-conf (stable|testing|edge|nightly); default "
+            "is the legacy release channel (repo `pfblockerng`, carries both stable+devel). "
+            "All four channels resolve to the ONE canonical pfSense-pkg-pfBlockerNG package."
         ),
     )
     ap.add_argument(
@@ -1534,7 +1558,8 @@ def main(argv: list[str]) -> int:
             ap.error("--print-conf requires --catalog-path <varver>")
         _base = args.base_url.rstrip("/")
         _cat = args.catalog_path.strip("/")
-        print_conf(f"{_base}/release/{_cat}")
+        _channel = args.channel or "release"
+        print_conf(f"{_base}/{_channel}/{_cat}", channel=_channel)
         return 0
 
     if args.build_matrix:

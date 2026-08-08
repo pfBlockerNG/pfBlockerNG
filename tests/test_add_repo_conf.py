@@ -55,24 +55,47 @@ _OLD_WORKER_URL = "https://pkg.pfblockerng.workers.dev"
 _CE_28 = "ce-2.8"
 _PLUS_2603 = "plus-26.03"
 
+# The four channels (issue #2147 step B) — each owns its own <channel>/<varver>/
+# catalog subtree, all serving the ONE canonical pfSense-pkg-pfBlockerNG package.
+# `release` is the pre-existing legacy default (NOT one of the four; --channel
+# release is rejected — see test_channel_release_rejected).
+_CHANNELS = ("stable", "testing", "edge", "nightly")
+_CHANNEL_REPO_NAMES = {
+    "release": "pfblockerng",
+    "stable": "pfblockerng-stable",
+    "testing": "pfblockerng-testing",
+    "edge": "pfblockerng-edge",
+    "nightly": "pfblockerng-nightly",
+}
+_CHANNEL_CONF_NAMES = {
+    "release": "pfblockerng.conf",
+    "stable": "pfblockerng-stable.conf",
+    "testing": "pfblockerng-testing.conf",
+    "edge": "pfblockerng-edge.conf",
+    "nightly": "pfblockerng-nightly.conf",
+}
+
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
 
 
-def _print_conf_portable(catalog_path: str = _CE_28, base_url: str = _PAGES_BASE) -> str:
+def _print_conf_portable(catalog_path: str = _CE_28, base_url: str = _PAGES_BASE, *, channel: str | None = None) -> str:
     """Run ``build-repo-portable.py --print-conf`` and return stdout."""
+    argv = [
+        sys.executable,
+        str(_BUILD_REPO_PORTABLE),
+        "--print-conf",
+        "--catalog-path",
+        catalog_path,
+        "--base-url",
+        base_url,
+    ]
+    if channel is not None:
+        argv += ["--channel", channel]
     proc = subprocess.run(
-        [
-            sys.executable,
-            str(_BUILD_REPO_PORTABLE),
-            "--print-conf",
-            "--catalog-path",
-            catalog_path,
-            "--base-url",
-            base_url,
-        ],
+        argv,
         capture_output=True,
         text=True,
         check=True,
@@ -100,7 +123,7 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28, base_url: str = _PA
     return proc.stdout
 
 
-def _run_add_repo(root: str, *, nightly: bool = False) -> None:
+def _run_add_repo(root: str, *, nightly: bool = False, extra_args: tuple[str, ...] = ()) -> None:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
     PKG_BIN is overridden to a stub that exits 0 (no output) for every
@@ -135,7 +158,7 @@ def _run_add_repo(root: str, *, nightly: bool = False) -> None:
         "PFBLOCKERNG_ROOT": root,
         "PKG_BIN": fake_pkg,
     }
-    argv = ["sh", str(_ADD_REPO), *(["--nightly"] if nightly else [])]
+    argv = ["sh", str(_ADD_REPO), *(["--nightly"] if nightly else []), *extra_args]
     subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
 
@@ -539,3 +562,247 @@ def test_print_conf_requires_catalog_path(argv: list[str], needle: str) -> None:
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert proc.returncode != 0, f"{argv!r} should fail without --catalog-path"
     assert needle in proc.stderr.lower(), proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# Four-channel expression (issue #2147 step B) — stable/testing/edge/nightly
+# --------------------------------------------------------------------------- #
+#
+# Live per-channel boot-time conf generation (stable/testing/edge) lands with
+# issue #2148; until then --print-conf renders all four channels, and only the
+# legacy default (release) + nightly channels bootstrap live. The rc.d hook
+# (pfblockerng_repo_generate.sh) is untouched — its 2-channel byte-identity
+# test above (test_hook_output_byte_identical_to_print_conf_*) is a DEFERRAL
+# row for #2148, not extended here.
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_four_channel_conf_byte_identical_across_all_three_generators(channel: str) -> None:
+    """The <channel> conf from add-repo.sh == build-repo.sh == build-repo-portable.py.
+
+    Mirrors test_release_conf_byte_identical_across_all_three_generators for each of
+    the four new channels.
+    """
+    add = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    build = _print_conf_sh(_BUILD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    portable = _print_conf_portable(_CE_28, _PAGES_BASE, channel=channel)
+
+    assert add, f"add-repo.sh --channel {channel} produced empty output"
+    assert build, f"build-repo.sh --channel {channel} produced empty output"
+    assert portable, f"build-repo-portable.py --channel {channel} produced empty output"
+
+    assert add == build, f"add-repo.sh vs build-repo.sh drift ({channel}):\nadd:\n{add}\nbuild:\n{build}"
+    assert add == portable, (
+        f"add-repo.sh vs build-repo-portable.py drift ({channel}):\nadd:\n{add}\nportable:\n{portable}"
+    )
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_four_channel_url_path_segment_and_repo_name(channel: str) -> None:
+    """The resolved url:'s path segment is the channel name; the stanza is keyed by its repo name."""
+    conf = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    repo_name = _CHANNEL_REPO_NAMES[channel]
+    expected_url = f"{_PAGES_BASE}/{channel}/{_CE_28}"
+
+    assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), (
+        f"repo name {repo_name!r} not found in conf:\n{conf}"
+    )
+    url_val = _field(conf, "url").strip('"')
+    assert url_val == expected_url, f"url mismatch for {channel!r}: expected {expected_url!r}, got {url_val!r}"
+    assert "${ABI}" not in conf
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_four_channel_priority_and_signature_type(channel: str) -> None:
+    """Every channel carries the SAME priority 100 (equal project priority above Netgate's 0)."""
+    conf = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    assert _field(conf, "priority") == "100"
+    assert _field(conf, "signature_type") == "none"
+    assert _field(conf, "mirror_type") == "none"
+    assert _field(conf, "enabled") == "yes"
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+@pytest.mark.parametrize("generator", ["add-repo.sh", "build-repo.sh", "build-repo-portable.py"])
+def test_four_channel_no_abi_placeholder(generator: str, channel: str) -> None:
+    """No producer emits the literal ``${ABI}`` token for any of the four channels."""
+    if generator == "add-repo.sh":
+        conf = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    elif generator == "build-repo.sh":
+        conf = _print_conf_sh(_BUILD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
+    else:
+        conf = _print_conf_portable(_CE_28, _PAGES_BASE, channel=channel)
+    assert "${ABI}" not in conf, f"{generator} {channel}: found ${{ABI}} in conf:\n{conf}"
+
+
+def test_add_repo_channel_conf_name_mapping_source_pin() -> None:
+    """add-repo.sh's CHANNEL case maps every channel to its conf filename.
+
+    Live per-channel boot-time write for stable/testing/edge is unreachable until
+    issue #2148 (see test_add_repo_live_bootstrap_rejects_unimplemented_channels
+    below) — pin the CONF_NAME mapping at the source until a live test can cover it.
+    """
+    src = _ADD_REPO.read_text()
+    for channel in (*_CHANNELS, "release"):
+        conf_name = _CHANNEL_CONF_NAMES[channel]
+        assert f'CONF_NAME="{conf_name}"' in src, f"missing CONF_NAME mapping for {channel!r} in add-repo.sh"
+
+
+# --------------------------------------------------------------------------- #
+# add-repo.sh live-bootstrap channel gate
+# --------------------------------------------------------------------------- #
+
+
+def _add_repo_stub_root(root: str) -> dict[str, str]:
+    """Build a CE 2.8.1 box fixture + pkg stub under root; return the env to run with."""
+    bin_dir = os.path.join(root, "bin")
+    os.makedirs(bin_dir, exist_ok=True)
+    fake_pkg = os.path.join(bin_dir, "pkg")
+    with open(fake_pkg, "w") as fh:
+        fh.write("#!/bin/sh\n# fake pkg stub for tests\nexit 0\n")
+    os.chmod(fake_pkg, 0o755)
+    return {**os.environ, "PFBLOCKERNG_ROOT": root, "PKG_BIN": fake_pkg}
+
+
+@pytest.mark.parametrize("channel", ["stable", "testing", "edge"])
+def test_add_repo_live_bootstrap_rejects_unimplemented_channels(channel: str) -> None:
+    """Live bootstrap for stable/testing/edge is not implemented — exits 2, names #2148.
+
+    Scenario: given PFBLOCKERNG_ROOT + a stub PKG_BIN (a live box would use the real
+    ones), when add-repo.sh --channel <ch> runs with NO --print-conf, then it exits 2
+    with a message pointing at issue #2148 (the ticket that lands per-channel
+    boot-time conf generation) instead of attempting to bootstrap.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        env = _add_repo_stub_root(root)
+        proc = subprocess.run(
+            ["sh", str(_ADD_REPO), "--channel", channel],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert proc.returncode == 2, proc.stderr
+        assert "#2148" in proc.stderr, f"live-bootstrap rejection for {channel!r} must name #2148:\n{proc.stderr}"
+
+        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / _CHANNEL_CONF_NAMES[channel]
+        assert not conf_path.exists(), f"rejected channel {channel!r} must write nothing:\n{conf_path}"
+
+
+def test_add_repo_channel_nightly_live_bootstrap_matches_flag_nightly() -> None:
+    """--channel nightly's live path behaves exactly like --nightly (allowed; same identity)."""
+    with tempfile.TemporaryDirectory() as root_flag, tempfile.TemporaryDirectory() as root_channel:
+        _run_add_repo(root_flag, nightly=True)
+        _run_add_repo(root_channel, extra_args=("--channel", "nightly"))
+
+        conf_flag = Path(root_flag) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-nightly.conf"
+        conf_channel = Path(root_channel) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-nightly.conf"
+        assert conf_flag.exists(), "--nightly must write pfblockerng-nightly.conf"
+        assert conf_channel.exists(), "--channel nightly must write pfblockerng-nightly.conf"
+        assert conf_flag.read_text() == conf_channel.read_text(), (
+            "--channel nightly must byte-match --nightly's live-bootstrap output"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# --channel hostile-input rows (all three generators where applicable)
+# --------------------------------------------------------------------------- #
+
+
+def test_add_repo_channel_requires_a_value() -> None:
+    """`--channel` with no following value errors cleanly (exit 2)."""
+    proc = subprocess.run(
+        ["sh", str(_ADD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert "--channel requires a value" in proc.stderr, proc.stderr
+
+
+def test_build_repo_channel_requires_a_value() -> None:
+    """`--channel` with no following value errors cleanly (exit 2)."""
+    proc = subprocess.run(
+        ["sh", str(_BUILD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert "--channel requires a value" in proc.stderr, proc.stderr
+
+
+def test_build_repo_portable_channel_requires_a_value() -> None:
+    """`--channel` with no following value errors cleanly (argparse exit 2)."""
+    proc = subprocess.run(
+        [sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf", "--catalog-path", _CE_28, "--channel"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 2, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["sh", str(_ADD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel", "bogus"],
+        ["sh", str(_BUILD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel", "bogus"],
+        [sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf", "--catalog-path", _CE_28, "--channel", "bogus"],
+    ],
+    ids=["add-repo.sh", "build-repo.sh", "build-repo-portable.py"],
+)
+def test_channel_bogus_rejected_with_valid_list(argv: list[str]) -> None:
+    """`--channel bogus` fails (exit 2) and the error names all four valid channels."""
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert proc.returncode == 2, proc.stderr
+    stderr_lower = proc.stderr.lower()
+    for ch in _CHANNELS:
+        assert ch in stderr_lower, f"{argv[0]}: valid channel {ch!r} not listed in error:\n{proc.stderr}"
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["sh", str(_ADD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel", "release"],
+        ["sh", str(_BUILD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel", "release"],
+        [sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf", "--catalog-path", _CE_28, "--channel", "release"],
+    ],
+    ids=["add-repo.sh", "build-repo.sh", "build-repo-portable.py"],
+)
+def test_channel_release_rejected(argv: list[str]) -> None:
+    """`--channel release` is REJECTED — release is the legacy default, not a four-channel name."""
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert proc.returncode == 2, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["sh", str(_ADD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel", "EDGE"],
+        ["sh", str(_BUILD_REPO), "--print-conf", "--catalog-path", _CE_28, "--channel", "EDGE"],
+        [sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf", "--catalog-path", _CE_28, "--channel", "EDGE"],
+    ],
+    ids=["add-repo.sh", "build-repo.sh", "build-repo-portable.py"],
+)
+def test_channel_wrong_case_rejected(argv: list[str]) -> None:
+    """`--channel EDGE` (wrong case) is rejected — exact lowercase match only."""
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert proc.returncode == 2, proc.stderr
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["sh", str(_ADD_REPO), "--print-conf", "--channel", "edge"],
+        ["sh", str(_BUILD_REPO), "--print-conf", "--channel", "edge"],
+        [sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf", "--channel", "edge"],
+    ],
+    ids=["add-repo.sh", "build-repo.sh", "build-repo-portable.py"],
+)
+def test_print_conf_channel_still_requires_catalog_path(argv: list[str]) -> None:
+    """`--print-conf --channel edge` without `--catalog-path` still fails (existing guard fires)."""
+    proc = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert proc.returncode != 0, proc.stderr
+    assert "catalog-path" in proc.stderr.lower(), proc.stderr

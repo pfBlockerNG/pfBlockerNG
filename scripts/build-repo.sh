@@ -17,7 +17,7 @@
 #
 # Usage:
 #   build-repo.sh --in <dir-of-.pkg> --out <dir> --varver <varver>
-#   build-repo.sh --print-conf --catalog-path <varver> [--base-url <url>]
+#   build-repo.sh --print-conf --catalog-path <varver> [--base-url <url>] [--channel <ch>]
 #
 # Options:
 #   --in DIR          directory holding the input .pkg files (searched, non-recursive)
@@ -26,6 +26,8 @@
 #   --print-conf      print the client repo-conf template to stdout and exit
 #   --catalog-path P  <varver> path the printed conf's url resolves to
 #   --base-url URL    base URL for --print-conf (default: the ADR Pages base)
+#   --channel CH      catalogue channel for --print-conf: stable|testing|edge|nightly
+#                     (default: the legacy release channel, repo `pfblockerng`)
 #
 # Env:
 #   PKG_BIN           the pkg binary to use (default: pkg)
@@ -45,21 +47,38 @@ set -eu
 DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
 CONF_PRIORITY=100
 
+# Per-channel repo-conf stanza key (issue #2147 step B): the four channels
+# (stable/testing/edge/nightly) plus the legacy `release` default all carry the
+# ONE canonical pfSense-pkg-pfBlockerNG identity — this only picks the stanza
+# name + URL path segment. Mirrors add-repo.sh's CHANNEL case.
+_conf_repo_name() {
+    case "$1" in
+        release) printf 'pfblockerng' ;;
+        nightly) printf 'pfblockerng-nightly' ;;
+        stable)  printf 'pfblockerng-stable' ;;
+        testing) printf 'pfblockerng-testing' ;;
+        edge)    printf 'pfblockerng-edge' ;;
+    esac
+}
+
 print_conf() {
-    # $1 = fully-resolved URL (no trailing slash). The URL is a STATIC, directly-resolved
-    # string for the box's edition/version — no ${ABI} token (ADR-39), arch-less
-    # since issue #1806 (NO_ARCH). Supply --catalog-path <varver> (e.g. "ce-2.8")
-    # so the test can pin the exact resolved conf; the url is then base/release/<varver>.
+    # $1 = fully-resolved URL (no trailing slash). $2 = channel (default "release").
+    # The URL is a STATIC, directly-resolved string for the box's edition/version —
+    # no ${ABI} token (ADR-39), arch-less since issue #1806 (NO_ARCH). Supply
+    # --catalog-path <varver> (e.g. "ce-2.8") so the test can pin the exact
+    # resolved conf; the url is then base/<channel>/<varver>.
     base="$1"
+    channel="${2:-release}"
+    repo="$(_conf_repo_name "${channel}")"
     cat <<EOF
 # Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
-# pfBlockerNG (release channel) — self-hosted pkg repository (ADR-17).
+# pfBlockerNG (${channel} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
 # fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
 # issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
-pfblockerng: {
+${repo}: {
   url: "${base}",
   mirror_type: none,
   signature_type: none,
@@ -75,6 +94,7 @@ OUT=""
 PRINT_CONF=0
 BASE_URL="$DEFAULT_BASE_URL"
 CATALOG_PATH=""
+CHANNEL="release"
 PKG_BIN="${PKG_BIN:-pkg}"
 
 VARVER=""
@@ -87,8 +107,15 @@ while [ $# -gt 0 ]; do
         --print-conf)    PRINT_CONF=1; shift ;;
         --base-url)      BASE_URL="$2"; shift 2 ;;
         --catalog-path)  CATALOG_PATH="$2"; shift 2 ;;
+        --channel)
+            [ $# -ge 2 ] || { echo "build-repo: --channel requires a value" >&2; exit 2; }
+            case "$2" in
+                stable|testing|edge|nightly) CHANNEL="$2" ;;
+                *) echo "build-repo: invalid --channel '$2' — valid channels: stable, testing, edge, nightly" >&2; exit 2 ;;
+            esac
+            shift 2 ;;
         -h|--help)
-            sed -n '18,31p' "$0"   # the Usage/Options/Env block from the header
+            sed -n '18,33p' "$0"   # the Usage/Options/Env block from the header
             exit 0 ;;
         *) echo "build-repo: unknown arg: $1" >&2; exit 2 ;;
     esac
@@ -99,8 +126,8 @@ if [ "$PRINT_CONF" -eq 1 ]; then
         echo "build-repo: --catalog-path <varver> is required with --print-conf" >&2
         exit 2
     }
-    _full_url="${BASE_URL%/}/release/${CATALOG_PATH}"
-    print_conf "${_full_url%/}"
+    _full_url="${BASE_URL%/}/${CHANNEL}/${CATALOG_PATH}"
+    print_conf "${_full_url%/}" "${CHANNEL}"
     exit 0
 fi
 

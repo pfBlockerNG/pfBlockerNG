@@ -17,18 +17,34 @@
 # the hook and runs it; the hook is the single source of the resolved conf.
 #
 # CHANNELS
-#   Default (NO argument) sets up the RELEASE repo `pfblockerng` — one shared catalog
-#   carrying BOTH the stable and devel packages, exactly like Netgate ships
-#   `pfSense-pkg-pfBlockerNG` and `-devel` from its single `pfSense` repo (the two
-#   packages CONFLICT — install one, see --help).
+#   The Pages catalogue is FOUR channels — stable, testing, edge, nightly — each
+#   owning its own <channel>/<varver>/ catalog subtree, ALL resolving to the ONE
+#   canonical package `pfSense-pkg-pfBlockerNG` (channel is catalogue placement,
+#   not a package-name suffix). Select one with `--channel <ch>`.
 #
-#   --nightly sets up the SEPARATE `pfblockerng-nightly` repo instead (its own
-#   `nightly/` catalog path). Bleeding edge — NOT for daily use: the only guarantee is
-#   that CI passed (devel still carries a stability target; nightly does not):
+#   LEGACY (unchanged; still the default with NO argument): sets up the RELEASE
+#   repo `pfblockerng` — one shared catalog carrying BOTH the stable and devel
+#   packages, exactly like Netgate ships `pfSense-pkg-pfBlockerNG` and `-devel`
+#   from its single `pfSense` repo (the two packages CONFLICT — install one, see
+#   --help). `--channel release` is REJECTED — release is this legacy default,
+#   not one of the four channel names.
+#
+#   `--nightly` (or `--channel nightly`) sets up the SEPARATE `pfblockerng-nightly`
+#   repo instead (its own `nightly/` catalog path). Bleeding edge — NOT for daily
+#   use: the only guarantee is that CI passed (devel still carries a stability
+#   target; nightly does not):
 #       pkg install pfSense-pkg-pfBlockerNG-nightly
 #
-#   default     -> conf /usr/local/etc/pkg/repos/pfblockerng.conf,         repo `pfblockerng`
-#   --nightly   -> conf /usr/local/etc/pkg/repos/pfblockerng-nightly.conf, repo `pfblockerng-nightly`
+#   LIVE BOOTSTRAP STATUS: only the legacy default (release) and nightly channels
+#   run the live bootstrap (rc.d hook install + pkg update + verify) today.
+#   `--channel stable|testing|edge` is --print-conf-only until issue #2148 lands
+#   per-channel boot-time conf generation — the live path exits 2 for those three.
+#
+#   default                      -> conf pfblockerng.conf,          repo `pfblockerng`          (legacy release)
+#   --nightly / --channel nightly -> conf pfblockerng-nightly.conf,  repo `pfblockerng-nightly`
+#   --channel stable              -> conf pfblockerng-stable.conf,   repo `pfblockerng-stable`   (--print-conf only; #2148)
+#   --channel testing             -> conf pfblockerng-testing.conf,  repo `pfblockerng-testing`  (--print-conf only; #2148)
+#   --channel edge                -> conf pfblockerng-edge.conf,     repo `pfblockerng-edge`     (--print-conf only; #2148)
 #
 # THE CONF (single source of truth — byte-identical to `build-repo.sh --print-conf`,
 # `build-repo-portable.py --print-conf`, and what the rc.d hook writes):
@@ -106,7 +122,11 @@ add-repo.sh — bootstrap pfBlockerNG's self-hosted pkg repository (run ON the p
 Usage:
   add-repo.sh                                set up the release repo (stable + devel), pkg update, verify
   add-repo.sh --nightly                      set up the nightly repo instead (bleeding edge; not for daily use)
-  add-repo.sh --print-conf [--nightly] [--catalog-path <varver>]
+  add-repo.sh --channel nightly              same as --nightly
+  add-repo.sh --channel stable|testing|edge  NOT YET LIVE — exits 2; per-channel boot-time conf
+                                              generation lands with issue #2148. Use --print-conf
+                                              --channel <ch> --catalog-path <varver> to inspect the conf now.
+  add-repo.sh --print-conf [--nightly | --channel <stable|testing|edge|nightly>] --catalog-path <varver>
                                              print the repo conf to stdout and exit (no writes)
   add-repo.sh --base-url <url> [--nightly]   override the catalog base (forks/staging)
 
@@ -123,6 +143,13 @@ USAGE
 while [ $# -gt 0 ]; do
     case "$1" in
         --nightly)      CHANNEL="nightly"; shift ;;
+        --channel)
+            [ $# -ge 2 ] || { printf 'add-repo: --channel requires a value\n' >&2; exit 2; }
+            case "$2" in
+                stable|testing|edge|nightly) CHANNEL="$2" ;;
+                *) printf 'add-repo: invalid --channel '\''%s'\'' — valid channels: stable, testing, edge, nightly\n' "$2" >&2; exit 2 ;;
+            esac
+            shift 2 ;;
         --print-conf)   PRINT_CONF=1; shift ;;
         --catalog-path)
             [ $# -ge 2 ] || { printf 'add-repo: --catalog-path requires a value\n' >&2; exit 2; }
@@ -132,16 +159,22 @@ while [ $# -gt 0 ]; do
             BASE_URL="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         -*) printf 'add-repo: unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
-        *)  printf 'add-repo: unexpected argument '\''%s'\'' — the channel is a flag (--nightly); the release repo is the default. See --help.\n' "$1" >&2; exit 2 ;;
+        *)  printf 'add-repo: unexpected argument '\''%s'\'' — the channel is a flag (--nightly / --channel); the release repo is the default. See --help.\n' "$1" >&2; exit 2 ;;
     esac
 done
 
 # ── Per-channel identity ───────────────────────────────────────────────────────
-# release (default) -> repo `pfblockerng`,        conf pfblockerng.conf,        Pages root
+# release (default) -> repo `pfblockerng`,          conf pfblockerng.conf,          Pages root
 #                      carries BOTH pfSense-pkg-pfBlockerNG (stable) and ...-devel
-# nightly           -> repo `pfblockerng-nightly`, conf pfblockerng-nightly.conf, `nightly/` subtree
-# PKG_NAMES: the package(s) the verify step checks + the install hints printed (the
-# release repo carries two; nightly one).
+# nightly           -> repo `pfblockerng-nightly`,  conf pfblockerng-nightly.conf,  `nightly/` subtree
+# stable            -> repo `pfblockerng-stable`,   conf pfblockerng-stable.conf,   `stable/` subtree
+# testing           -> repo `pfblockerng-testing`,  conf pfblockerng-testing.conf,  `testing/` subtree
+# edge              -> repo `pfblockerng-edge`,     conf pfblockerng-edge.conf,     `edge/` subtree
+# The four channels (stable/testing/edge/nightly) all carry the ONE canonical
+# `pfSense-pkg-pfBlockerNG` identity — channel is catalogue placement, not a
+# package-name suffix. PKG_NAMES: the package(s) the verify step checks + the
+# install hints printed (the legacy release repo carries two; every other
+# channel carries one).
 case "$CHANNEL" in
     release)
         REPO_NAME="pfblockerng"
@@ -152,6 +185,21 @@ case "$CHANNEL" in
         REPO_NAME="pfblockerng-nightly"
         CONF_NAME="pfblockerng-nightly.conf"
         PKG_NAMES="pfSense-pkg-pfBlockerNG-nightly"
+        ;;
+    stable)
+        REPO_NAME="pfblockerng-stable"
+        CONF_NAME="pfblockerng-stable.conf"
+        PKG_NAMES="pfSense-pkg-pfBlockerNG"
+        ;;
+    testing)
+        REPO_NAME="pfblockerng-testing"
+        CONF_NAME="pfblockerng-testing.conf"
+        PKG_NAMES="pfSense-pkg-pfBlockerNG"
+        ;;
+    edge)
+        REPO_NAME="pfblockerng-edge"
+        CONF_NAME="pfblockerng-edge.conf"
+        PKG_NAMES="pfSense-pkg-pfBlockerNG"
         ;;
 esac
 CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
@@ -193,6 +241,22 @@ if [ "$PRINT_CONF" -eq 1 ]; then
     print_conf "${_url}"
     exit 0
 fi
+
+# ── Live-bootstrap channel gate ─────────────────────────────────────────────────
+# Per-channel boot-time conf generation (stable/testing/edge) lands with issue
+# #2148; until then only the legacy default (release) and nightly bootstrap live
+# here (the rc.d hook only knows those two channels). --print-conf already
+# exited above for every channel, so this only gates the live path.
+case "$CHANNEL" in
+    stable|testing|edge)
+        printf 'add-repo: live bootstrap for --channel %s is not implemented yet — per-channel\n' "${CHANNEL}" >&2
+        printf '  boot-time conf generation lands with issue #2148.\n' >&2
+        printf '  Until then, use the default (release) or --nightly for live bootstrap, or:\n' >&2
+        printf '    add-repo.sh --print-conf --channel %s --catalog-path <varver>\n' "${CHANNEL}" >&2
+        printf '  to inspect the conf now.\n' >&2
+        exit 2
+        ;;
+esac
 
 # ── Live bootstrap ─────────────────────────────────────────────────────────────
 command -v "$PKG_BIN" >/dev/null 2>&1 || {
