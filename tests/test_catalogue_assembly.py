@@ -224,6 +224,18 @@ def _drop(catalogue_dir: Path, *sources: Path) -> None:
         shutil.copy2(source, catalogue_dir / source.name)
 
 
+def _seed_canonical(tmp: Path, catalogue_dir: Path, versions: list[str], *, abi: str = "FreeBSD:15:*") -> None:
+    """Drop canonically-named .pkg fixtures for each of ``versions`` into
+    ``catalogue_dir`` — shared by RetentionTests and ContainmentAwarePruningTests
+    below. ``tmp`` is the scratch dir the source fixture files get written into
+    before ``_drop`` copies them under their canonical on-disk name."""
+    for v in versions:
+        _drop(
+            catalogue_dir,
+            _canonical_pkg(tmp, version=v, abi=abi, local_name=f"pfSense-pkg-pfBlockerNG-{v}.pkg"),
+        )
+
+
 def _pkg_names(catalogue_dir: Path) -> list[str]:
     """The catalogue's own emitted package names, excluding the catalog descriptor
     archives (data.pkg/packagesite.pkg) so a test can compare against a plain
@@ -681,15 +693,7 @@ class RetentionTests(_TempDirTestCase):
         # Canonically-named on disk already — a real catalogue directory only ever
         # holds build_repo's own canonical <name>-<version>.pkg output; prune_retained
         # never renames anything, it only deletes whole files.
-        for v in versions:
-            _drop(
-                catalogue_dir,
-                _canonical_pkg(
-                    self.tmp,
-                    version=v,
-                    local_name=f"pfSense-pkg-pfBlockerNG-{v}.pkg",
-                ),
-            )
+        _seed_canonical(self.tmp, catalogue_dir, versions)
 
     @_requires_engine
     def test_below_keep_all_survive(self) -> None:
@@ -786,6 +790,18 @@ class RetentionTests(_TempDirTestCase):
         self.assertIn("positive integer", str(ctx.exception))
 
     @_requires_engine
+    def test_non_int_keep_count_rejected(self) -> None:
+        # type(keep) is not int -- a bool or float keep must be rejected the same as
+        # a plain out-of-range int (`type(...) is not int`, not `isinstance`, on
+        # purpose: bool IS an int subclass and must not sneak through as keep=True).
+        out = self.tmp / "out"
+        catalogue_dir = out / "stable" / "ce-2.8"
+        self._seed(catalogue_dir, ["1.0.0"])
+        with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
+            ca.prune_retained(out, "stable", "ce-2.8", engine=_ENGINE, keep_count_for=lambda c, v: 5.0)
+        self.assertIn("positive integer", str(ctx.exception))
+
+    @_requires_engine
     def test_pruned_generation_absent_after_regenerate(self) -> None:
         """Retention runs BEFORE regeneration in the real flow: an evicted
         generation must never reappear once the catalogue is rebuilt."""
@@ -798,6 +814,182 @@ class RetentionTests(_TempDirTestCase):
         remaining = _pkg_names(catalogue_dir)
         self.assertEqual(len(remaining), ca.DEFAULT_RETENTION_KEEP)
         self.assertNotIn("pfSense-pkg-pfBlockerNG-1.0.0.pkg", remaining)
+
+
+# --------------------------------------------------------------------------- #
+# Containment-aware retention (PR #2253 review, CodeRabbit Major): edge receives the
+# union of every tagged stream, so pruning it independently of stable/testing can evict
+# a canonical version one of them still serves, silently breaking the strict-containment
+# contract (edge superset-of testing superset-of stable). prune_retained must protect any
+# generation still present, canonically, in one of `channel`'s slower channels.
+# --------------------------------------------------------------------------- #
+
+
+class ContainmentAwarePruningTests(_TempDirTestCase):
+    @_requires_engine
+    def test_edge_protects_version_still_retained_by_stable(self) -> None:
+        # Matrix row 1 -- the CodeRabbit repro: 6 canonical versions in edge (one
+        # beyond keep=5), the oldest ALSO present as a canonical .pkg in stable for the
+        # same varver. Old (pre-fix) behaviour evicts it anyway; fixed behaviour must not.
+        out = self.tmp / "out"
+        edge_dir = out / "edge" / "ce-2.8"
+        stable_dir = out / "stable" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, edge_dir, versions)
+        _seed_canonical(self.tmp, stable_dir, [versions[0]])
+
+        evicted = ca.prune_retained(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(evicted, ())
+        self.assertEqual(len(_pkg_names(edge_dir)), len(versions))
+        self.assertIn(f"pfSense-pkg-pfBlockerNG-{versions[0]}.pkg", _pkg_names(edge_dir))
+
+    @_requires_engine
+    def test_edge_prunes_when_not_protected(self) -> None:
+        # Matrix row 2 -- protection is presence-based, not unconditional: with no
+        # stable/testing directory at all, edge's oldest-beyond-keep is still evicted.
+        out = self.tmp / "out"
+        edge_dir = out / "edge" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, edge_dir, versions)
+
+        evicted = ca.prune_retained(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(len(evicted), 1)
+        self.assertEqual(evicted[0].name, f"pfSense-pkg-pfBlockerNG-{versions[0]}.pkg")
+
+    @_requires_engine
+    def test_testing_protects_version_retained_by_stable(self) -> None:
+        # Matrix row 3a -- testing's only slower channel is stable.
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        stable_dir = out / "stable" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, testing_dir, versions)
+        _seed_canonical(self.tmp, stable_dir, [versions[0]])
+
+        evicted = ca.prune_retained(out, "testing", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(evicted, ())
+        self.assertEqual(len(_pkg_names(testing_dir)), len(versions))
+
+    @_requires_engine
+    def test_edge_protects_via_either_slower_channel(self) -> None:
+        # Matrix row 3b -- edge's slower tuple is (stable, testing): two DIFFERENT
+        # old-beyond-keep versions, one protected only by stable and one only by
+        # testing, must BOTH survive -- proving the check isn't a single-channel lookup.
+        out = self.tmp / "out"
+        edge_dir = out / "edge" / "ce-2.8"
+        stable_dir = out / "stable" / "ce-2.8"
+        testing_dir = out / "testing" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 2)]
+        _seed_canonical(self.tmp, edge_dir, versions)
+        _seed_canonical(self.tmp, stable_dir, [versions[0]])
+        _seed_canonical(self.tmp, testing_dir, [versions[1]])
+
+        evicted = ca.prune_retained(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(evicted, ())
+        self.assertEqual(len(_pkg_names(edge_dir)), len(versions))
+
+    @_requires_engine
+    def test_stable_ignores_faster_channel_presence(self) -> None:
+        # Matrix row 4 -- stable has no slower channel (_SLOWER_CHANNELS["stable"] ==
+        # ()): an old stable version also present in edge (a FASTER channel) does NOT
+        # protect the stable copy. Containment only ever flows slower<-faster, never back.
+        out = self.tmp / "out"
+        stable_dir = out / "stable" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, stable_dir, versions)
+        _seed_canonical(self.tmp, edge_dir, [versions[0]])
+
+        evicted = ca.prune_retained(out, "stable", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(len(evicted), 1)
+        self.assertEqual(evicted[0].name, f"pfSense-pkg-pfBlockerNG-{versions[0]}.pkg")
+
+    @_requires_engine
+    def test_nightly_independent_no_protection(self) -> None:
+        # Matrix row 5 -- nightly is untagged and independent (_SLOWER_CHANNELS["nightly"]
+        # == ()): a version also present in stable grants no protection.
+        out = self.tmp / "out"
+        nightly_dir = out / "nightly" / "ce-2.8"
+        stable_dir = out / "stable" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, nightly_dir, versions)
+        _seed_canonical(self.tmp, stable_dir, [versions[0]])
+
+        evicted = ca.prune_retained(out, "nightly", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(len(evicted), 1)
+        self.assertEqual(evicted[0].name, f"pfSense-pkg-pfBlockerNG-{versions[0]}.pkg")
+
+    @_requires_engine
+    def test_missing_slower_channel_directory_no_protection(self) -> None:
+        # Matrix row 6 -- neither slower-channel directory exists AT ALL (not merely
+        # missing this varver): no error, no protection, normal eviction.
+        out = self.tmp / "out"
+        edge_dir = out / "edge" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, edge_dir, versions)
+        self.assertFalse((out / "stable").exists())
+        self.assertFalse((out / "testing").exists())
+
+        evicted = ca.prune_retained(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(len(evicted), 1)
+        self.assertEqual(evicted[0].name, f"pfSense-pkg-pfBlockerNG-{versions[0]}.pkg")
+
+    @_requires_engine
+    def test_slower_channel_dependency_and_meta_never_protect(self) -> None:
+        # Matrix row 7 -- a dependency .pkg in the slower channel whose OWN version
+        # string coincidentally matches edge's oldest canonical version must not grant
+        # protection (name mismatch), and the slower dir's real catalog descriptor
+        # files (data.pkg/packagesite.pkg, from a genuine regenerate_catalogue pass)
+        # must never be read as a canonical manifest. A dependency .pkg sitting in the
+        # PRUNED (edge) directory itself is untouched either way (mirrors
+        # RetentionTests.test_dependency_pkg_never_counted_or_touched).
+        out = self.tmp / "out"
+        edge_dir = out / "edge" / "ce-2.8"
+        stable_dir = out / "stable" / "ce-2.8"
+        versions = [f"1.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP + 1)]
+        _seed_canonical(self.tmp, edge_dir, versions)
+        _drop(
+            edge_dir,
+            _dep_pkg(self.tmp, name="py311-charset-normalizer", version="3.4.0", local_name="dep-edge.pkg"),
+        )
+
+        _seed_canonical(self.tmp, stable_dir, ["9.9.9"])
+        _drop(
+            stable_dir,
+            _dep_pkg(
+                self.tmp,
+                name="py311-charset-normalizer",
+                version=versions[0],
+                local_name=f"py311-charset-normalizer-{versions[0]}.pkg",
+            ),
+        )
+        ca.regenerate_catalogue(out, "stable", "ce-2.8", engine=_ENGINE)
+        self.assertTrue((stable_dir / "data.pkg").is_file())
+        self.assertTrue((stable_dir / "packagesite.pkg").is_file())
+
+        evicted = ca.prune_retained(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(len(evicted), 1)
+        self.assertEqual(evicted[0].name, f"pfSense-pkg-pfBlockerNG-{versions[0]}.pkg")
+        self.assertIn("dep-edge.pkg", _pkg_names(edge_dir))
+
+
+class SlowerChannelsConsistencyTests(unittest.TestCase):
+    # Matrix row 9 -- pure constant-shape checks, no engine/fixtures needed.
+    def test_keys_match_known_channels(self) -> None:
+        self.assertEqual(set(ca._SLOWER_CHANNELS), ca._KNOWN_CHANNELS)
+
+    def test_values_are_subsets_of_known_channels_and_never_self_referential(self) -> None:
+        for channel, slower in ca._SLOWER_CHANNELS.items():
+            self.assertTrue(set(slower).issubset(ca._KNOWN_CHANNELS))
+            self.assertNotIn(channel, slower)
 
 
 # --------------------------------------------------------------------------- #

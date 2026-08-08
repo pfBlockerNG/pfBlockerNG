@@ -1162,15 +1162,14 @@ def test_render_page_edge_ahead_of_testing_and_stable_shows_divergence() -> None
 
 
 def test_render_page_trust_section_present_and_accurate() -> None:
-    """Row 10 (issue #2251 step 2): the trust/provenance section documents
-    signature_type: none, priority equality, the single-repository-subscription /
-    strict-containment / numeric-ordering model, repository-qualified downgrades, and
+    """The trust/provenance section documents signature_type: none, priority
+    equality, the single-repository-subscription / strict-containment /
+    numeric-ordering model, repository-qualified downgrades, and containment-aware
     retention — with NO catalogue-signing claim anywhere outside the explicit 'no
     signing key' sentence (a deliberately failable assertion, not a vacuous one), and
     NO retired equal-priority-version-arbitration claim."""
     page = gl.render_page("https://x/pkg", [], _stub_conf)
 
-    # signature_type: none — static trust prose (independent of the injected conf_fn).
     assert "signature_type: none" in page
     # The ONE place 'signing' may appear: the explicit no-signing-key sentence.
     assert "no catalogue-signing key" in page
@@ -1183,31 +1182,33 @@ def test_render_page_trust_section_present_and_accurate() -> None:
     # Priority-equality prose (still true — priority decides project-vs-Netgate, ADR-17).
     assert "equal priority" in page
     assert "<code>100</code>" in page
-    # Coverage row 1: the single-repository-subscription heading + its topic sentence.
     assert "Single-repository subscription" in page
     assert "subscribes to exactly one channel repository" in page
-    # Coverage row 2: the retired multi-repo-version-arbitration claim must be gone —
-    # reintroducing it fails this tripwire.
+    # The retired multi-repo-version-arbitration claim must be gone — reintroducing it
+    # fails this tripwire.
     assert "selects the highest compatible version across" not in page
-    # Coverage row 3: strict-containment prose + numeric-ordering statement, pinned via
-    # the owner's own worked example (4.0.0.a2 outranking a later-published 3.2.x).
+    # Strict-containment prose + numeric-ordering statement, pinned via the owner's own
+    # worked example (4.0.0.a2 outranking a later-published 3.2.x).
     assert "strictly contains everything its slower channels carry" in page
     assert "orders versions numerically, component-wise" in page
     assert "<code>4.0.0.a2</code>" in page
-    # Coverage row 4: rollback is in-repo on a faster channel; the repository-qualified
-    # downgrade string is retained verbatim.
+    # Rollback is in-repo on a faster channel; the repository-qualified downgrade
+    # string is retained verbatim.
     assert "repository-qualified downgrade" in page
     assert "containment keeps the older build around" in page
-    # Coverage row 7: the retired conditional-fan-out phrasing must be gone; the
-    # unconditional fan-out is stated as an unqualified "always".
+    # The retired conditional-fan-out phrasing must be gone; the unconditional fan-out
+    # is stated as an unqualified "always".
     assert "until a later release family opens a new Edge" not in page
     assert "always fans out to every channel" in page
-    # Retention count — pinned to the publisher's constant so the page cannot
-    # silently drift from the real retention policy.
+    # Retention count — pinned to the publisher's constant so the page cannot silently
+    # drift from the real retention policy. Also pins the containment-survives-
+    # retention wording (issue #2146 R1 review, PR #2253): a faster channel's own
+    # keep-count churn must never be described as unconditional once it can protect a
+    # slower channel's still-retained version.
     import catalogue_assembly
 
     assert f"retains the newest {catalogue_assembly.DEFAULT_RETENTION_KEEP}" in page
-    # Netgate identity / provenance-differs prose, and the no-in-UI-switcher note.
+    assert "additionally retains any canonical package one of its slower channels still retains" in page
     assert "Netgate" in page
     assert "commit" in page.lower() and "created" in page.lower()
 
