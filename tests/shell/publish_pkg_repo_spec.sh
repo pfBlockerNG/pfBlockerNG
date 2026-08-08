@@ -252,8 +252,13 @@ PY
     RESULTS_DIR="${base}/results"
     export PUBLISH_KIND HANDOFF_FILE RESULTS_DIR
     mkdir -p "$RESULTS_DIR"
+    # DELIBERATELY a different row than common_env's own $ROUTE_MATRIX (freebsd
+    # 15/2.8/CE/8.3/py311) -- n9 stages the landing matrix on this handoff row
+    # and asserts against ITS values; if the nightly arm ever regressed to
+    # reading $ROUTE_MATRIX instead, the assertion must fail on a value
+    # mismatch, not pass on accidental byte-identity between the two fixtures.
     cat > "$HANDOFF_FILE" <<'JSON'
-{"run_id":"10:1","allocation":{"pkg_version":"26.08.0001"},"route_matrix":[{"freebsd_major":"15","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]}
+{"run_id":"10:1","allocation":{"pkg_version":"26.08.0001"},"route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}
 JSON
   }
 
@@ -641,6 +646,25 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  It 'n4c: nightly mode missing allocation.pkg_version aborts before any commit, even after staging'
+    # jq -er '.allocation.pkg_version' HANDOFF_FILE builds the commit message --
+    # this handoff is otherwise valid (the stubbed publisher succeeds and
+    # reports an "updated" target, so staging has ALREADY happened by the time
+    # this read runs) but its allocation object carries no pkg_version key at
+    # all, so jq -er sees a null result and aborts (set -e) before the commit
+    # that would otherwise follow. Same containment guarantee as a non-zero
+    # publisher exit (n4a/n4b): a damaged/incomplete run must never reach a
+    # commit, however late in the pipeline the fault is discovered.
+    nightly_env
+    printf '%s' '{"run_id":"10:1","allocation":{},"route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}' > "$HANDOFF_FILE"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    When run script "$script"
+    The status should equal 1
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
   It 'n5: nightly mode NOOP output commits nothing'
     nightly_env
     export FAKE_MODE=noop
@@ -692,6 +716,12 @@ HOOK
   End
 
   It 'n9: nightly mode derives the landing matrix from the handoff route_matrix, not $ROUTE_MATRIX'
+    # nightly_env's handoff route_matrix (freebsd 16/2.9/Plus/8.4/py312) is
+    # DELIBERATELY a different row than common_env's own $ROUTE_MATRIX
+    # (freebsd 15/2.8/CE/8.3/py311, still exported here): asserting the
+    # HANDOFF row's own values is what a wrong `landing_input="$ROUTE_MATRIX"`
+    # read in the nightly arm would actually fail on -- byte-identical
+    # fixtures would let that regression pass silently.
     nightly_env
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
@@ -701,6 +731,7 @@ HOOK
     The output should include 'ADVANCE'
     The stderr should include 'main'
     seen="$(cat "${base}/landing-matrix-seen.json")"
-    The variable seen should equal '[{"abi":"FreeBSD:15:*","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]'
+    The variable seen should equal '[{"abi":"FreeBSD:16:*","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]'
+    The variable seen should not include '"pfsense_version":"2.8"'
   End
 End
