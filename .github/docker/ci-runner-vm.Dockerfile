@@ -15,9 +15,21 @@
 # RUNTIME REQUIREMENT: /dev/kvm must be passed into the container. tests/smoke/boot_vm.sh
 # boots the guest with `-enable-kvm -cpu host` and the workflow asserts the device before
 # calling it — a FreeBSD guest under TCG is not merely slower, it times the suite out.
+#
+# ARCHITECTURE (#2256): published for amd64 AND arm64, but the two are not equivalent.
+# The guest is an x86_64 pfSense image, and `-enable-kvm` needs an x86 host — there is no
+# x86 KVM on Apple Silicon. So the arm64 variant carries a working qemu/oras/Playwright
+# toolchain (useful for qemu-img overlay work, pulling and pushing the image artifacts,
+# and UI work against a box that already exists) but CANNOT boot the guest. The smoke and
+# Web-UI VM legs stay amd64-only; nothing about that is fixed by this image existing for
+# arm64, and pretending otherwise would trade a clear "no runner" error for a 40-minute
+# TCG timeout.
 
-ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:4
+ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:5
 FROM ${BASE_IMAGE}
+
+# Same role as in the base image: only the prebuilt-binary download below needs it.
+ARG TARGETARCH
 
 LABEL org.opencontainers.image.source=https://github.com/pfBlockerNG/pfBlockerNG
 LABEL org.opencontainers.image.description="pfBlockerNG CI toolchain (VM workflows: qemu, oras, Playwright)"
@@ -34,15 +46,23 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR. Replaces
-# oras-project/setup-oras@v2, which resolved a floating latest on every run.
+# oras-project/setup-oras@v2, which resolved a floating latest on every run. One pinned
+# asset per architecture (#2256) — a single hash cannot verify two different tarballs.
 ARG ORAS_VERSION=1.3.3
-ARG ORAS_SHA256=9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
-RUN curl -fsSLo /tmp/oras.tar.gz \
-      "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz" \
- && echo "${ORAS_SHA256}  /tmp/oras.tar.gz" | sha256sum -c - \
- && tar -xzf /tmp/oras.tar.gz -C /tmp oras \
- && install -m 0755 /tmp/oras /usr/local/bin/oras \
- && rm -f /tmp/oras.tar.gz /tmp/oras
+ARG ORAS_SHA256_AMD64=9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+ARG ORAS_SHA256_ARM64=ac7156f93a21e903f7ad606c792f3560f17e0cd0e36365634701b1e7cc4e4eca
+RUN set -eu; \
+    case "${TARGETARCH}" in \
+      amd64) oras_sha="${ORAS_SHA256_AMD64}" ;; \
+      arm64) oras_sha="${ORAS_SHA256_ARM64}" ;; \
+      *) echo "oras: no pinned asset for TARGETARCH=${TARGETARCH}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSLo /tmp/oras.tar.gz \
+      "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_${TARGETARCH}.tar.gz"; \
+    echo "${oras_sha}  /tmp/oras.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/oras.tar.gz -C /tmp oras; \
+    install -m 0755 /tmp/oras /usr/local/bin/oras; \
+    rm -f /tmp/oras.tar.gz /tmp/oras
 
 # The smoke harness's Python dependencies, pinned by tests/smoke/requirements.txt itself
 # (the workflows install that same file at runtime; baking it makes that a no-op instead
