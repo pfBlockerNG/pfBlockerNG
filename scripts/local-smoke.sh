@@ -203,6 +203,13 @@ fi
 #                      `sysctl -w`, which a container cannot perform against the host.
 #   the bind mounts    repo, shared image store, ports tree and guest key all live on the
 #                      box; without them every run re-clones and re-pulls.
+#   --add-host ...     issue #2230: routes ghcr.io to the box's LAN zot mirror when
+#                      PFB_LAN_REGISTRY is set in the BOX's own environment -- the
+#                      `${...:+...}` is left UNEXPANDED here (escaped `\$`) so the
+#                      remote shell resolves it, not this caller; unset expands to
+#                      zero words, so the flag is silently absent (today's behavior).
+#   the CA mount       the LAN mirror's cert validates against the system bundle; the
+#                      container carries no CA store of its own to check it against.
 # Ref-stable: the one-liner is the only part that has to work across refs;
 # smoke-on-box.sh handles everything else.
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
@@ -215,10 +222,12 @@ _bootstrap="cd /root/pfBlockerNG \
  && exec docker run --rm \
       --device /dev/kvm \
       --sysctl net.ipv4.ip_unprivileged_port_start=53 \
+      \${PFB_LAN_REGISTRY:+--add-host ghcr.io:\$PFB_LAN_REGISTRY} \
       -v /root/pfBlockerNG:/root/pfBlockerNG \
       -v /root/images:/root/images \
       -v /root/FreeBSD-ports:/root/FreeBSD-ports \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
+      -v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro \
       -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR \
       -w /root/pfBlockerNG \
       ghcr.io/pfblockerng/ci-runner-vm:4 \
