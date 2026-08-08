@@ -29,9 +29,10 @@ prerelease patch rule. Every operation uses a pinned source SHA.
 
 The tag shape alone does not select Testing versus Edge. Require the explicit channel,
 release target, admitted `release/X.Y` branch, and workflow output. The workflow's primary
-kind owns the one Release and notes run. Destination tuple is catalogue fan-out only:
-Stable primary may route to Testing or Edge, and Testing primary may route to Edge, without
-creating a second Release, running notes twice, or changing the primary kind.
+kind owns the one Release and notes run. Destination tuple is catalogue fan-out only, and
+unconditional (issue #2251): Stable primary always also routes to Testing and Edge, and
+Testing primary always also routes to Edge — never creating a second Release, running notes twice,
+or changing the primary kind.
 
 - Stable primary keeps Stable notes across every destination.
 - Testing primary keeps Testing notes across every destination.

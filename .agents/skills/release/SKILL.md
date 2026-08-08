@@ -26,10 +26,11 @@ prerelease patch rule. Use a pinned source SHA for every channel.
 - Tag shape alone does not select a target: validate explicit channel and release target
   with `scripts/release-version.sh`. Primary kind is the workflow output: Stable for a
   final tag, Edge for a patch-zero prerelease, and Testing for a nonzero-patch prerelease.
-- The ordered destination tuple is catalogue routing only. A Testing primary may route to
-  `(testing,)` or `(testing, edge)`; a Stable primary may route to `(stable, testing)` or
-  `(stable, testing, edge)`; a distinct-target Edge primary routes to `(edge,)`. Copies
-  reuse the same tag, Release, notes, assets, and provenance.
+- The ordered destination tuple is catalogue routing only, and unconditional (issue #2251):
+  a Stable primary always routes to `(stable, testing, edge)`; a Testing primary always
+  routes to `(testing, edge)`; a distinct-target Edge primary always routes to `(edge,)`.
+  Every channel catalogue strictly contains its slower channels' files. Copies reuse the
+  same tag, Release, notes, assets, and provenance.
 - Nightly is untagged, has no GitHub Release, and has no release notes. It is generated
   independently from its pinned source when its input changes. A changed input uses UTC date
   `YYYYMMDD`; another changed input on the same date uses `YYYYMMDD_1`, then `_2`. An
