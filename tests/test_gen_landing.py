@@ -1171,9 +1171,13 @@ def test_render_page_trust_section_present_and_accurate() -> None:
     # signature_type: none — static trust prose (independent of the injected conf_fn).
     assert "signature_type: none" in page
     # The ONE place 'signing' may appear: the explicit no-signing-key sentence.
-    assert "signing key" in page
-    assert page.lower().count("signing") == 1
-    assert "signed catalogue" not in page.lower()
+    assert "no catalogue-signing key" in page
+    # Allowlist, not substring-count: strip the two legitimate framings, then NO
+    # sign-rooted wording may remain — a rephrased signing claim anywhere fails here.
+    residue = page.lower().replace("signature_type: none", "").replace("no catalogue-signing key", "")
+    assert "signing" not in residue
+    assert "signed" not in residue
+    assert "signature" not in residue
     # Priority-equality prose.
     assert "equal priority" in page
     assert "<code>100</code>" in page
