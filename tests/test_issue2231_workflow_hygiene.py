@@ -182,53 +182,96 @@ def test_local_smoke_pins_the_current_ci_runner_series() -> None:
 # --------------------------------------------------------------------------- #
 
 
-# Any value at all, not just an empty one: actionlint skips the pass in silence
-# for every `-shellcheck` value it cannot resolve to a binary — `-shellcheck=`,
+# Two flags silence the pass. `-shellcheck` with ANY value: actionlint skips the
+# pass in silence for every value it cannot resolve to a binary — `-shellcheck=`,
 # `-shellcheck ''`, a typo'd path, and `-shellcheck -color` (Go's flag package
-# binds `-color` as the value) all exit 0 with run bodies ungraded. The job
-# resolves shellcheck from PATH and the canary below proves it resolved, so the
-# flag has no legitimate use here; keeping it out also keeps the canary's argv
-# equivalent to the tree-grading argv.
-_SHELLCHECK_FLAG = re.compile(r"--?shellcheck\b")
+# binds `-color` as the value) all exit 0 with run bodies ungraded. `-ignore`:
+# a regex that filters matched messages out of the report, so `-ignore
+# 'shellcheck reported'` grades the tree and discards every finding. The job
+# resolves shellcheck from PATH and its canary proves the resolution, so neither
+# flag has a legitimate use here; keeping `-shellcheck` out also keeps the
+# canary's argv equivalent to the tree-grading argv.
+#
+# The left boundary matters: unanchored, the pattern matches the tail of any
+# hyphenated token, so the `paths-ignore:` keys and a `canary-shellcheck.yml`
+# filename would trip the gate. Comment lines are skipped for the same reason —
+# they document the flags, they cannot pass them.
+_PASS_SILENCER = re.compile(r"(?<![\w-])--?(?:shellcheck|ignore)\b")
 
 
-def _shellcheck_pass_disablers(text: str) -> list[str]:
-    """Every `-shellcheck` flag handed to actionlint in ``text``. A `\\` + newline
-    is folded first, so a flag split from its invocation across a continuation is
-    still seen."""
-    return _SHELLCHECK_FLAG.findall(re.sub(r"\\\n\s*", " ", text))
+def _pass_silencers(text: str) -> list[str]:
+    """Every non-comment line of ``text`` handing actionlint a flag that switches
+    its embedded shellcheck pass off or filters the pass's findings away, located
+    for the failure message. Line-agnostic by construction, so a flag split from
+    its invocation across a `\\` + newline continuation is still its own line."""
+    return [
+        f"test.yml:{n}: {line.strip()}"
+        for n, line in enumerate(text.splitlines(), 1)
+        if not line.lstrip().startswith("#") and _PASS_SILENCER.search(line)
+    ]
 
 
 def test_actionlint_job_keeps_the_embedded_shellcheck_pass() -> None:
     """`run:` bodies are shell that no other gate reads — the ShellCheck job
     scans `src scripts .claude/hooks`, never `.github/workflows` (issue #2241).
-    A `-shellcheck` value actionlint cannot resolve turns the pass off silently,
-    so a quoting or word-splitting bug in a workflow body would reach `devel`
-    ungated. The job's own canary catches the runtime half (a binary missing from
-    the image); this catches the source half."""
+    An unresolvable `-shellcheck` value turns the pass off silently and `-ignore`
+    discards its findings, either way letting a quoting or word-splitting bug in
+    a workflow body reach `devel` ungated. The job's own canary catches the
+    runtime half (a binary missing from the image); this catches the source
+    half."""
     text = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
     assert '"$AL"' in text, "the actionlint job no longer invokes $AL — update this gate"
-    assert "canary-sc.yml" in text, (
-        "the actionlint job lost its shellcheck canary — without it a ci-runner that stops "
-        "shipping shellcheck turns the run-body pass off silently"
+    assert "echo $CANARY" in text, (
+        "the actionlint job lost its shellcheck canary — the fixture whose unquoted expansion "
+        "must fail actionlint is what proves the embedded pass ran at all, so without it a "
+        "ci-runner that stops shipping shellcheck turns run-body coverage off silently"
     )
-    disablers = _shellcheck_pass_disablers(text)
-    assert not disablers, (
-        "the actionlint job must not pass -shellcheck: every value actionlint cannot resolve "
-        f"disables the embedded pass over run: bodies, silently. Found: {disablers}"
+    silencers = _pass_silencers(text)
+    assert not silencers, (
+        "the actionlint job must pass neither -shellcheck (every value actionlint cannot "
+        "resolve disables the embedded pass over run: bodies, silently) nor -ignore (which "
+        "filters the pass's findings out of the report):\n  " + "\n  ".join(silencers)
     )
 
 
-def test_shellcheck_disabler_scanner_catches_every_spelling() -> None:
-    """Vacuity guard: every spelling that disables the pass is reported —
-    including the two that bind a value the flag's own line makes look harmless
-    (an explicit path, and `-color` swallowed as the value)."""
-    assert _shellcheck_pass_disablers('xargs -0 "$AL" -shellcheck= -color') == ["-shellcheck"]
-    assert _shellcheck_pass_disablers("\"$AL\" -shellcheck '' f.yml") == ["-shellcheck"]
-    assert _shellcheck_pass_disablers('"$AL" \\\n  -shellcheck=  -color') == ["-shellcheck"]
-    assert _shellcheck_pass_disablers('xargs -0 "$AL" -shellcheck -color') == ["-shellcheck"]
-    assert _shellcheck_pass_disablers('"$AL" -shellcheck=/usr/local/bin/shellcheck f.yml') == ["-shellcheck"]
-    assert _shellcheck_pass_disablers('"$AL" --shellcheck=/usr/bin/shellcheckk f.yml') == ["--shellcheck"]
-    assert _shellcheck_pass_disablers('"$AL" -color f.yml') == []
-    # The job's own comments say "shellcheck" a lot; only the FLAG may trip it.
-    assert _shellcheck_pass_disablers("# actionlint runs shellcheck --norc; see .shellcheckrc") == []
+def test_no_actionlint_config_filters_the_shellcheck_pass() -> None:
+    """`.github/actionlint.yaml` can drop messages per path (`paths: {glob:
+    {ignore: [regex]}}`, the skeleton `actionlint -init-config` writes). That
+    silences the tree while BOTH canaries stay green: they are graded from
+    `$RUNNER_TEMP`, outside the repo project, where no config applies."""
+    for name in ("actionlint.yaml", "actionlint.yml"):
+        config = ROOT / ".github" / name
+        if not config.exists():
+            continue
+        assert "shellcheck" not in config.read_text(encoding="utf-8").lower(), (
+            f".github/{name} filters shellcheck messages out of actionlint's report — run "
+            "bodies would go ungraded while the job's canaries, graded outside the project, "
+            "stay green"
+        )
+
+
+def test_pass_silencer_scanner_catches_every_spelling() -> None:
+    """Vacuity guard: every spelling that silences the pass is reported —
+    including the three that look harmless on their own line (an explicit path,
+    `-color` swallowed as the value, and an `-ignore` regex) — while prose and
+    hyphenated tokens are not."""
+    assert _pass_silencers('xargs -0 "$AL" -shellcheck= -color') == ['test.yml:1: xargs -0 "$AL" -shellcheck= -color']
+    assert _pass_silencers("\"$AL\" -shellcheck '' f.yml") == ["test.yml:1: \"$AL\" -shellcheck '' f.yml"]
+    assert _pass_silencers('"$AL" \\\n  -shellcheck=  -color') == ["test.yml:2: -shellcheck=  -color"]
+    assert _pass_silencers('xargs -0 "$AL" -shellcheck -color') == ['test.yml:1: xargs -0 "$AL" -shellcheck -color']
+    assert _pass_silencers('"$AL" -shellcheck=/usr/local/bin/shellcheck f.yml') == [
+        'test.yml:1: "$AL" -shellcheck=/usr/local/bin/shellcheck f.yml'
+    ]
+    assert _pass_silencers('"$AL" --shellcheck=/usr/bin/shellcheckk f.yml') == [
+        'test.yml:1: "$AL" --shellcheck=/usr/bin/shellcheckk f.yml'
+    ]
+    assert _pass_silencers("xargs -0 \"$AL\" -color -ignore 'shellcheck reported issue'") == [
+        "test.yml:1: xargs -0 \"$AL\" -color -ignore 'shellcheck reported issue'"
+    ]
+    assert _pass_silencers('"$AL" -color f.yml') == []
+    # Prose must not trip it: a comment cannot pass a flag, `paths-ignore:` and a
+    # `canary-shellcheck.yml` filename are not flags, and `--norc` is not one either.
+    assert _pass_silencers("          # never pass -shellcheck here, nor -ignore") == []
+    assert _pass_silencers("# actionlint runs shellcheck --norc; see .shellcheckrc") == []
+    assert _pass_silencers("      paths-ignore:\n        - '**.md'") == []
+    assert _pass_silencers('> "$RUNNER_TEMP/canary-shellcheck.yml"') == []
