@@ -28,7 +28,10 @@ the fresh-session workflow ([`workflow.md`](workflow.md)); for ad-hoc coding, fo
 same shape. The higher
 model may implement a fix **directly** when it is relatively small and doable in one step —
 and always handles **docs / config / settings / skills** directly. Delegation is for
-non-trivial, multi-step `src/`/`tests/`/CI work.
+non-trivial, multi-step `src/`/`tests/`/CI work. **Review-fix rounds are the canonical
+direct case** (owner, 2026-08-08): a small fix the session understands — or a reviewer's
+proposed solution it agrees with — is applied by the session itself, tests included,
+never spawned to a sub-agent.
 
 - **The per-step verifier is always small tier** (owner directive 2026-07-14) — never the
   top-tier model that authored the brief; a different model reads with different blind

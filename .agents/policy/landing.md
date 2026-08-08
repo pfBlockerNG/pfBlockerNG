@@ -152,10 +152,8 @@ older than 10 minutes with no CodeRabbit message → conclude NOACK immediately.
 - **ACK** (any CodeRabbit message) → **quota fast-path first**: if the ONLY content is
   a rate-limit notice (no inline comments, no submitted review, no "actionable
   comments" header) whose own "Next review available in" time is **> 5 minutes**,
-  drop CodeRabbit for this flow immediately — do not arm the finished-wait; surface
-  the skip. A notice quoting ≤ 5 minutes, or any real review content beside it, →
-  wait for the finished review (content-first: a transient notice often precedes the
-  real review).
+  drop CodeRabbit immediately — no finished-wait; surface the skip. A notice quoting ≤ 5 minutes, or any real review content beside it, →
+  wait for the finished review (a transient notice often precedes the real review).
 - **NOACK** → nudge **once** (`@coderabbitai review` as a top-level comment), then
   re-run the ack wait with a fresh 10-minute window anchored on *now* (`--since`).
   ACK → proceed as above; still silent → CodeRabbit is unavailable; the adversarial
@@ -165,34 +163,33 @@ Waiting on the finished review (`--until finished`; the same script is the singl
 implementation of the state machine, handle matching case-insensitive and anchored —
 never append `[bot]` yourself):
 
-- **FINISHED** — terminal result posted, including a clean pass. Content takes
-  precedence over a quota phrase: real review content beside a notice is FINISHED.
+- **FINISHED** — terminal result posted, including a clean pass. Content beats a
+  quota phrase: real review content beside a notice is FINISHED.
 - **QUOTA `<mins>`** — the reviewer did not review and is rate-limited. The
   **5-minute rule**: `mins > 5` (or unparsable) → drop the handle and continue;
   `mins ≤ 5` → wait ~5 minutes (self-exiting background sleep, never foreground),
   nudge once, re-arm in finished-only mode with `--since` now; ANY further problem on
-  the nudged wait → give up on CodeRabbit — never block on it twice. Before acting on
-  any QUOTA, eyeball the PR for posted content (a stale notice can sit beside a
-  completed review — content wins). Always surface a skipped reviewer; a skipped bot
+  the nudged wait → give up on CodeRabbit — never block on it twice. Before acting,
+  eyeball the PR for posted content (a stale notice can sit beside a completed
+  review — content wins). Always surface a skipped reviewer; a skipped bot
   is never reported as "PR clean".
 - **NOTPRESENT** — zero engagement within the presence window (~5 min): the handle
   is not reviewing this PR; skip it without blocking (not a failure).
 - **DECLINE** (base isn't the default branch) — post one comment asking for a full
   review (`@coderabbitai trigger full review and tell me when you are finished`;
   canonical fallback `@coderabbitai full review`), re-arm **finished-only** with
-  `--since` now (deliberate: never re-trigger on a repeat decline).
+  `--since` now (never re-trigger on a repeat decline).
 - **PAUSE** (branch too active) — post `@coderabbitai resume` once, re-arm
   finished-only. Avoid tripping the pause: batch fixes into ONE push while a review
   is pending.
 - **TIMEOUT** — first check for a **silent pause** (walkthrough stuck at "review in
   progress"/"processing new changes" with no terminal result): treat as PAUSE.
-  Otherwise report and ask whether to keep waiting or proceed with what is there.
-- If CodeRabbit acknowledged but never finished, proceed on the adversarial review
-  and note the timeout (the nudge is for the no-ack case only). If it turns up late,
-  fold its review in before the merge gate.
-- The bot's wording drifts — when diagnostics show a finished/declined review the
-  matcher missed, read the comment body and adjust the patterns instead of waiting
-  out the timeout.
+  Otherwise report and ask: keep waiting or proceed.
+- CodeRabbit acked but never finished → proceed on the adversarial review, note the
+  timeout (the nudge is no-ack only); a late review folds in before the merge gate.
+- The bot's wording drifts — diagnostics show a finished/declined review the matcher
+  missed: read the comment body and adjust the patterns instead of waiting out the
+  timeout.
 - Multiple handles (e.g. adding Snyk explicitly): run the wait once per handle,
   continue when all **engaged** reviewers finish; tolerate absent ones. The
   DECLINE/PAUSE/nudge machinery is CodeRabbit-specific; other handles use only
@@ -264,7 +261,9 @@ still gets its reply, pointing at the shared resolution. Then per finding:
 
 ### Applying fixes
 
-- Minimal changes matching repo conventions.
+- Minimal changes matching repo conventions. **A small, well-understood fix** — e.g.
+  one adopting a reviewer suggestion the session agrees with — **is applied directly
+  by the session, tests included, never delegated** (delegation.md scope).
 - **A finding that names a class** ("the X clauses", "all Y call sites", "… etc.") is
   fixed by re-enumerating the class **tree-wide from the source** (`git grep` across
   every scan root), never from the finding's wording or the one file it names; paste
@@ -309,10 +308,10 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   path, privilege, hand-crafted yes/no, impact scope, black-box reproduction), and a
   link back to the review comment; link the issue in the thread reply. Optionally
   also fix it in its own branch + PR — the issue is the required artifact.
-- **One audit comment on the PR** summarising the adversarial review (model, effort
-  `medium`, the size metric that drove the model choice, and the **head SHA
-  reviewed** — the pointer the next re-review keys on) and noting CodeRabbit's
-  review if one arrived, plus the per-finding resolution.
+- **One audit comment on the PR** summarising the adversarial review (model, effort,
+  the size metric that drove the model choice, and the **head SHA reviewed** — the
+  next re-review's pointer) and noting CodeRabbit's review if one arrived, plus the
+  per-finding resolution.
 
 ### The merge gate (all paths)
 
@@ -378,8 +377,8 @@ unavailable → the client's GitHub MCP tools with wakeup-paced bounded checks.
 
 - Merge with rebase (`gh pr merge N --rebase`); never `--merge` or `--squash`.
 - **Do not pass `--delete-branch`:** its local post-merge step checks out the base
-  branch and fails when another worktree holds that base, even though the remote
-  merge succeeded. Merge first, verify, then delete separately.
+  branch and fails when another worktree holds it, even though the remote merge
+  succeeded. Merge first, verify, then delete separately.
 - **Verify the merge actually landed:** the PR's state must read `MERGED` (the local
   step can error while the remote merge succeeded).
 - Delete the remote branch separately (`git push origin --delete <head>`), then
