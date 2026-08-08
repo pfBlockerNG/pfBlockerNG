@@ -800,6 +800,8 @@ class RetentionTests(_TempDirTestCase):
         with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
             ca.prune_retained(out, "stable", "ce-2.8", engine=_ENGINE, keep_count_for=lambda c, v: 5.0)
         self.assertIn("positive integer", str(ctx.exception))
+        with self.assertRaises(ca.CatalogueAssemblyError):
+            ca.prune_retained(out, "stable", "ce-2.8", engine=_ENGINE, keep_count_for=lambda c, v: True)
 
     @_requires_engine
     def test_pruned_generation_absent_after_regenerate(self) -> None:
