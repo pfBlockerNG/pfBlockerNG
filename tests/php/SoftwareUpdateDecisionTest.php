@@ -17,6 +17,8 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_channel_from_pkgname')]
 #[CoversFunction('pfb_channel_from_repo_name')]
+#[CoversFunction('pfb_channel_for_install')]
+#[CoversFunction('pfb_software_cache_matches_repo')]
 #[CoversFunction('pfb_software_is_our_build')]
 #[CoversFunction('pfb_update_available')]
 #[CoversFunction('pfb_software_check_enabled')]
@@ -85,6 +87,69 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	public function testChannelFromRepoName(?string $repo, ?string $expected): void
 	{
 		$this->assertSame($expected, pfb_channel_from_repo_name($repo));
+	}
+
+	/*
+	 * ---- pfb_channel_for_install() — the ONE derivation both callers use (issue #2148) ----
+	 * The Software page label and the cron notice text must never disagree about what
+	 * channel a box is on, so the repo-first/name-fallback composition lives in one
+	 * function rather than as a repeated expression at each call site. Pinned here on all
+	 * three outcomes: the repo decides when it names a channel, the name decides when the
+	 * repo is the legacy shared catalogue (or is absent, as on a sideloaded `pkg add`),
+	 * and neither recognising the install yields null for the caller to render 'unknown'.
+	 */
+	public static function channelForInstallProvider(): array
+	{
+		return [
+			// The repo WINS over the name: this is the whole point of the cutover — the
+			// canonical identity lives in every catalogue, so the name would say 'stable'.
+			'edge catalogue beats the canonical name' => ['pfblockerng-edge', 'pfSense-pkg-pfBlockerNG', 'edge'],
+			'testing catalogue beats the name'        => ['pfblockerng-testing', 'pfSense-pkg-pfBlockerNG', 'testing'],
+			// Legacy shared repo: it names no channel, so the NAME still discriminates.
+			'legacy repo falls back to -devel'        => ['pfblockerng', 'pfSense-pkg-pfBlockerNG-devel', 'devel'],
+			'legacy repo falls back to canonical'     => ['pfblockerng', 'pfSense-pkg-pfBlockerNG', 'stable'],
+			// A sideloaded `pkg add` records no repo at all — the Tier-A deploy's case.
+			'no repo falls back to the name'          => ['', 'pfSense-pkg-pfBlockerNG-nightly', 'nightly'],
+			'null repo falls back to the name'        => [null, 'pfSense-pkg-pfBlockerNG', 'stable'],
+			// Neither half recognises it: a Netgate or hand-built package.
+			'netgate repo, foreign name -> null'      => ['pfSense', 'pfSense-pkg-suricata', null],
+			'unknown repo, unknown name -> null'      => ['whatever', '', null],
+		];
+	}
+
+	#[DataProvider('channelForInstallProvider')]
+	public function testChannelForInstall(?string $repo, ?string $pkgname, ?string $expected): void
+	{
+		$this->assertSame($expected, pfb_channel_for_install($repo, $pkgname));
+	}
+
+	/*
+	 * ---- pfb_software_cache_matches_repo() — is this cache still ours? (issue #2148) ----
+	 * Two consumers ask it: the cron orchestrator, deciding whether cached
+	 * latest/last_notified may be REUSED, and the Software page, deciding whether cached
+	 * latest/last-checked/status may be DISPLAYED. They must answer identically — the
+	 * orchestrator's rescope lands only on the next tick, so a page using a looser rule
+	 * would pair the new channel's label with the previous catalogue's version in between.
+	 * A cache with NO repo key predates the scope and is adopted, not discarded: that is
+	 * every existing box exactly once, and discarding it re-notifies an announced version.
+	 */
+	public static function cacheMatchesRepoProvider(): array
+	{
+		return [
+			'same catalogue'                  => [['repo' => 'pfblockerng-edge'], 'pfblockerng-edge', TRUE],
+			'different catalogue'             => [['repo' => 'pfblockerng-stable'], 'pfblockerng-edge', FALSE],
+			'legacy repo vs a channel repo'   => [['repo' => 'pfblockerng'], 'pfblockerng-stable', FALSE],
+			'pre-#2148 cache: no repo key'    => [['pkgname' => 'pfSense-pkg-pfBlockerNG'], 'pfblockerng', TRUE],
+			'empty cache: nothing recorded'   => [[], 'pfblockerng-edge', TRUE],
+			'recorded empty vs a real repo'   => [['repo' => ''], 'pfblockerng-edge', FALSE],
+			'recorded empty vs empty (sideload)' => [['repo' => ''], '', TRUE],
+		];
+	}
+
+	#[DataProvider('cacheMatchesRepoProvider')]
+	public function testCacheMatchesRepo(array $cache, string $repo, bool $expected): void
+	{
+		$this->assertSame($expected, pfb_software_cache_matches_repo($cache, $repo));
 	}
 
 	/*

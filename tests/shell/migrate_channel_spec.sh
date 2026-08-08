@@ -103,7 +103,10 @@ install)
         *) _name="$1"; shift ;;
         esac
     done
-    _ver="$(awk -F"${_tab}" -v r="${_repo}" -v n="${_name}" '$1 == r && $2 == n { print $3 }' "${_d}/catalog")"
+    # Real `pkg install` resolves the HIGHEST version the repo offers, and a catalogue
+    # routinely offers several (retention + containment). `sort -V` stands in for pkg's
+    # component-wise numeric ordering.
+    _ver="$(awk -F"${_tab}" -v r="${_repo}" -v n="${_name}" '$1 == r && $2 == n { print $3 }' "${_d}/catalog" | sort -V | tail -n 1)"
     [ -n "${_ver}" ] || exit 1
     awk -F"${_tab}" -v n="${_name}" '$1 != n' "${_d}/installed" > "${_d}/installed.new"
     printf '%s\t%s\t%s\n' "${_name}" "${_ver}" "${PFB_STUB_INSTALL_REPO:-${_repo}}" >> "${_d}/installed.new"
@@ -127,6 +130,19 @@ info)
         [ -n "${_p}" ] || continue
         printf '\t%s\n' "${_p}"
     done < "${_d}/payload"
+    exit 0
+    ;;
+version)
+    # `pkg version -t <a> <b>` -> '>' | '=' | '<'. The script uses it to pick the build
+    # `install` will resolve, so the two must agree — both go through `sort -V` here.
+    [ "$1" = "-t" ] || exit 64
+    if [ "$2" = "$3" ]; then
+        printf '=\n'
+    elif [ "$(printf '%s\n%s\n' "$2" "$3" | sort -V | tail -n 1)" = "$2" ]; then
+        printf '>\n'
+    else
+        printf '<\n'
+    fi
     exit 0
     ;;
 *)
@@ -509,6 +525,42 @@ Describe 'migrate-channel.sh — switching between channels serving the identica
     End
 End
 
+Describe 'migrate-channel.sh — a catalogue offering several builds'
+    # The ordinary shape, not an edge case: retention keeps the newest few builds and
+    # containment back-fills a faster channel with its slower channels' builds, so a
+    # channel catalogue routinely offers more than one version of the canonical
+    # package. `pkg install` resolves the HIGHEST, so the script must predict the same
+    # one — naming any other would fail its own post-migration version check and report
+    # a successful migration as broken.
+    setup() {
+        _make_box
+        _subscribe edge
+        _install "pfSense-pkg-pfBlockerNG-devel" "3.2.15" "pfblockerng"
+        # Deliberately NOT in ascending catalogue order: taking the first line would
+        # pick 4.0.0, and taking the last would pick 3.9.0.
+        _publish "pfblockerng-edge" "pfSense-pkg-pfBlockerNG" "4.0.0"
+        _publish "pfblockerng-edge" "pfSense-pkg-pfBlockerNG" "4.1.0.a1"
+        _publish "pfblockerng-edge" "pfSense-pkg-pfBlockerNG" "3.9.0"
+        _manifest "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    }
+    cleanup() { rm -rf "${BOX}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the edge catalogue offers three builds, unordered'
+      The value "$(wc -l < "${PFB_STUB_DIR}/catalog" | tr -d ' ')" should equal "3"
+    End
+
+    It 'targets the highest build the catalogue offers, not the first one listed'
+      When run sh "${SCRIPT}" --channel edge
+      The status should be success
+      The stdout should include "Target:    pfSense-pkg-pfBlockerNG-4.1.0.a1"
+      The value "$(_installed_version pfSense-pkg-pfBlockerNG)" should equal "4.1.0.a1"
+      The value "$(_installed_repo pfSense-pkg-pfBlockerNG)" should equal "pfblockerng-edge"
+      The stdout should include "Done"
+    End
+End
+
 # ── FAILURE CANNOT REPORT SUCCESS ─────────────────────────────────────────────
 
 Describe 'migrate-channel.sh — the replacement install fails after the delete'
@@ -524,11 +576,16 @@ Describe 'migrate-channel.sh — the replacement install fails after the delete'
     Before 'setup'
     After  'cleanup'
 
-    It 'reports the box is left with no pfBlockerNG and tells the user to re-run'
+    It 'reports the empty box and hands over a command that actually finishes the job'
+      # NOT "re-run this script": with nothing installed it exits 3 ("nothing to
+      # migrate") — see the "nothing installed" Describe above — so a re-run would
+      # strand the operator at the one moment the box has no pfBlockerNG at all.
       When run sh "${SCRIPT}" --channel stable
       The status should equal 5
       The stdout should include "Removing the legacy identity pfSense-pkg-pfBlockerNG-devel"
       The stderr should include "the box currently has NO pfBlockerNG installed"
+      The stderr should include "install -y -r pfblockerng-stable pfSense-pkg-pfBlockerNG"
+      The stderr should not include "re-run this script"
       The value "$(_installed_names)" should equal ""
     End
 End

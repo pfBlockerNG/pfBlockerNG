@@ -62,12 +62,13 @@ if (!isAllowedPage('pkg_mgr_installed.php')) {
 
 // Resolve the installed package + channel ONCE (used by display + the action shortcuts).
 // issue #2148: channel is CATALOGUE placement — all four catalogues publish the canonical
-// 'pfSense-pkg-pfBlockerNG', so the repo the package came from names the channel. The legacy
-// shared 'pfblockerng' repo carries two identities and names none, so fall back to the name
-// there. Same derivation as pfb_software_update_check(), so page and notice never disagree.
+// 'pfSense-pkg-pfBlockerNG', so the repo the package came from names the channel, with the
+// name as the fallback for the legacy shared repo. pfb_channel_for_install() is that one
+// rule, shared with pfb_software_update_check() so the page label and the notice text
+// cannot drift apart.
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
 $pfb_sw_repo	= pfb_pkg_installed_repo($pfb_sw_pkgname);
-$pfb_sw_channel	= pfb_channel_from_repo_name($pfb_sw_repo) ?? pfb_channel_from_pkgname($pfb_sw_pkgname);
+$pfb_sw_channel	= pfb_channel_for_install($pfb_sw_repo, $pfb_sw_pkgname);
 
 // The "Check for new versions" setting (default ENABLED — the registry default since
 // issue #1887). The accessor reads the gateway itself; no raw value handling here.
@@ -123,19 +124,28 @@ pfb_print_pending_changes_box();
 // always known on an installed box. Only the our-repo "latest" + status + last-checked come
 // from the cron-maintained cache (empty/unknown renders a clean "Not checked yet" — never a
 // warning — so the page passes ui_render on the first GET, before any check has run).
+//
+// issue #2148: the cache is trusted only while it describes an install from the repository
+// the box is on NOW. pfb_software_update_check() rescopes it on a catalogue change, but that
+// lands on the next tick — so between a channel migration and that tick this page would
+// otherwise pair the new channel's label with the PREVIOUS catalogue's version and an
+// "Update available"/"Up to date" verdict for a channel the box has left. Same predicate as
+// the orchestrator's, so the two can never disagree about which cache is current.
 $cache		= pfb_software_read_cache();
+$cache_current	= pfb_software_cache_matches_repo($cache, $pfb_sw_repo);
+$cached_latest	= $cache_current ? (string) ($cache['latest'] ?? '') : '';
 $installed_ver	= pfb_pkg_installed_version($pfb_sw_pkgname);
 $disp_channel	= $pfb_sw_channel ?: gettext('unknown');
 $disp_installed	= ($installed_ver !== '') ? $installed_ver : gettext('unknown');
-$disp_latest	= !empty($cache['latest']) ? (string) $cache['latest'] : gettext('Not checked yet');
-$disp_checked	= !empty($cache['last_checked'])
+$disp_latest	= ($cached_latest !== '') ? $cached_latest : gettext('Not checked yet');
+$disp_checked	= ($cache_current && !empty($cache['last_checked']))
 			? date('Y-m-d H:i:s', (int) $cache['last_checked'])
 			: gettext('never');
 
-$update_available = pfb_update_available($installed_ver, (string) ($cache['latest'] ?? ''));
+$update_available = pfb_update_available($installed_ver, $cached_latest);
 if ($update_available) {
 	$disp_status = '<span class="text-warning">' . gettext('Update available') . '</span>';
-} elseif (!empty($cache['latest'])) {
+} elseif ($cached_latest !== '') {
 	$disp_status = '<span class="text-success">' . gettext('Up to date') . '</span>';
 } else {
 	$disp_status = gettext('Not checked yet');

@@ -3032,6 +3032,86 @@ def test_edge_rollback_stays_within_the_edge_repository(
     assert "Missing dependency" not in combined, f"RUN_DEPENDS did not resolve on the rollback:\n{combined}"
 
 
+@pytest.mark.timeout(1800)  # bootstrap edge + install + re-subscribe to stable + migrate down.
+def test_migrate_channel_moves_a_canonical_install_down_to_a_slower_channel(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+) -> None:
+    """REVERSE MOVE: a canonical install on ``edge`` lands on ``stable``'s OLDER build.
+
+    This is ``migrate-channel.sh``'s other branch — the box already carries the canonical
+    identity, just from the wrong repository — and it is the branch every channel-to-channel
+    transition takes, in both directions. The legacy-identity case cannot stand in for it:
+    that one deletes and installs afresh, while this one must make ``pkg`` move an installed
+    package ACROSS repositories and DOWN a version, which ordinary ``pkg upgrade`` refuses
+    outright. The script emits an UNPINNED ``pkg install -f -y -r <repo> <name>`` for it, so
+    only a live ``pkg`` can show that the repository qualification alone selects the older
+    build; the in-repo rollback case above pins an explicit ``<name>-<version>``, a form the
+    script never produces.
+
+    Scenario: moving from edge back to stable.
+
+    Given the box subscribed to edge and running edge's newer canonical build (BEFORE
+      asserted: ``%v`` is edge's version, ``%R`` is ``pfblockerng-edge``),
+    When  ``add-repo.sh --channel stable`` re-subscribes it (repositories only — the
+      installed package must still report the edge repo at that point, asserted), and then
+      ``migrate-channel.sh --channel stable`` runs,
+    Then  it exits 0, the box still carries exactly the canonical identity, its ``%R`` is
+      now ``pfblockerng-stable``, and its ``%v`` is stable's OLDER version — a downgrade
+      performed by repository qualification alone.
+    """
+    source_channel, target_channel = "edge", "stable"
+    source_repo = channel_repo_name(source_channel)
+    target_repo = channel_repo_name(target_channel)
+    newer = channel_catalogs.versions[source_channel]
+    older = channel_catalogs.versions[target_channel]
+    assert newer != older, f"the transition pair must differ (both {newer!r})"
+
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: the box on edge, running edge's own build from edge's repository.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url, channel=source_channel)
+    pkg_install_qualified(repo_vm, source_repo, CANONICAL_PKG_NAME)
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == newer, (
+        f"BEFORE: expected edge's build {newer!r}, got {pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)!r}"
+    )
+    assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == source_repo, (
+        f"BEFORE: installed from {pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)!r}, expected {source_repo!r}"
+    )
+
+    # WHEN (1): re-subscribe to the slower channel. Repositories ONLY.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url, channel=target_channel)
+    assert project_confs_present(repo_vm) == {channel_conf_name(target_channel)}, (
+        f"re-subscribing to {target_channel} left {sorted(project_confs_present(repo_vm))} behind"
+    )
+    assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == source_repo, (
+        "add-repo.sh moved the INSTALLED package's origin repository — configuring a repository is not a migration"
+    )
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == newer, (
+        "add-repo.sh changed the installed version — it configures repositories only"
+    )
+
+    # WHEN (2): migrate. The script's own unpinned `install -f -r` has to do the work.
+    proc = run_migrate_channel_sh(repo_vm, "--channel", target_channel)
+    assert proc.returncode == 0, (
+        f"migrate-channel.sh --channel {target_channel} exited {proc.returncode}\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+    # THEN: same identity, new repository, OLDER version.
+    assert installed_pfblockerng_names(repo_vm) == [CANONICAL_PKG_NAME], (
+        f"AFTER: expected only {CANONICAL_PKG_NAME}, found {installed_pfblockerng_names(repo_vm)}"
+    )
+    assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == target_repo, (
+        f"AFTER: reports repo {pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)!r}, expected {target_repo!r}"
+    )
+    assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == older, (
+        f"AFTER: expected the downgrade to {older!r}, got "
+        f"{pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)!r} — a repository-qualified "
+        "reinstall did not move the box down to the slower channel's build"
+    )
+
+
 @pytest.mark.timeout(1200)  # legacy bootstrap + install + a refused migration.
 def test_migrate_channel_refuses_an_unsubscribed_channel_before_mutating(
     repo_vm: SmokeVM,

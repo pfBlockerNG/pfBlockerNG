@@ -192,9 +192,11 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     stage_paths="docs/.nojekyll"
     [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
     [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
-    # write_site() also publishes a self-contained add-repo.sh into the site root —
-    # the landing page's bootstrap one-liner fetches it from there.
+    # write_site() also publishes the two client scripts into the site root — the
+    # landing page's bootstrap one-liner and its channel-switch snippet fetch them
+    # from there, so an unstaged copy serves a 404 into `sh`.
     [ -f "${PKG_REPO}/docs/add-repo.sh" ] && stage_paths="${stage_paths} docs/add-repo.sh"
+    [ -f "${PKG_REPO}/docs/migrate-channel.sh" ] && stage_paths="${stage_paths} docs/migrate-channel.sh"
     for target in $touched; do
         stage_paths="${stage_paths} docs/${target}"
     done

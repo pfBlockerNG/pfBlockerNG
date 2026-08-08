@@ -124,27 +124,32 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28, base_url: str = _PA
 
 
 def _run_add_repo(
-    root: str, *, nightly: bool = False, extra_args: tuple[str, ...] = ()
+    root: str, *, nightly: bool = False, extra_args: tuple[str, ...] = (), catalogue_empty: bool = False
 ) -> subprocess.CompletedProcess[str]:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
-    PKG_BIN is overridden to a stub that exits 0 (no output) for every
-    subcommand — add-repo.sh's own live-bootstrap steps (`pkg update`, `pkg
-    rquery`) tolerate that; the generator hook no longer calls `pkg` at all
-    (arch-less catalog; issue #1806 — it used to read `pkg config abi` only to
-    derive the now-retired per-arch leaf). add-repo.sh installs the generator
-    hook into ``root`` and runs it; the hook resolves the conf from
-    ``root/etc/product_label`` (CE here — no "Plus") and ``root/etc/version``
-    (2.8.1). We assert only that the conf file was written; exit code is
-    irrelevant (the rquery verify fails because the stub is empty).
+    PKG_BIN is overridden to a stub that answers `pkg rquery` with a plausible
+    package line, so the bootstrap reaches its success path; every other subcommand
+    is a silent success. The generator hook no longer calls `pkg` at all (arch-less
+    catalog; issue #1806 — it used to read `pkg config abi` only to derive the
+    now-retired per-arch leaf), so `rquery` is the only answer that matters.
+    add-repo.sh installs the generator hook into ``root`` and runs it; the hook
+    resolves the conf from ``root/etc/product_label`` (CE here — no "Plus") and
+    ``root/etc/version`` (2.8.1).
+
+    ``catalogue_empty`` makes `rquery` yield nothing — a channel with no build
+    published for this box's variant. That is the failure path which must leave the
+    box's repository configuration exactly as it found it (issue #2148).
     """
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir, exist_ok=True)
 
-    # pkg stub: exits 0 (no output) for every subcommand.
     fake_pkg = os.path.join(bin_dir, "pkg")
+    rquery_reply = "" if catalogue_empty else "  printf 'pfSense-pkg-pfBlockerNG 4.0.0\\n'\n"
     with open(fake_pkg, "w") as fh:
-        fh.write("#!/bin/sh\n# fake pkg stub for tests\nexit 0\n")
+        fh.write(
+            f'#!/bin/sh\n# fake pkg stub for tests\nif [ "$1" = "rquery" ]; then\n{rquery_reply}  exit 0\nfi\nexit 0\n'
+        )
     os.chmod(fake_pkg, 0o755)
 
     # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no "Plus" → CE).
@@ -751,6 +756,53 @@ def test_add_repo_live_bootstrap_replaces_a_previously_enabled_channel(previous:
         assert _CHANNEL_CONF_NAMES[previous] in (proc.stdout + proc.stderr), (
             f"the switch must report retiring {previous}:\n{proc.stdout}\n{proc.stderr}"
         )
+
+
+def test_add_repo_unpublished_channel_leaves_the_previous_subscription_intact() -> None:
+    """A channel with no build for this box must not cost the box its working subscription.
+
+    Retiring the other project confs BEFORE proving the target catalogue serves this
+    box would strand it: the previous channel is gone, the new one has nothing to
+    install, and the box has no way back short of remembering which channel it was on.
+
+    Scenario: given a box subscribed to nightly, when the user bootstraps edge and the
+    edge catalogue turns out to carry nothing for this variant, then the run fails
+    loudly AND the box is still subscribed to nightly alone — the staged edge conf is
+    removed, so the repository configuration is exactly what it was before.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_add_repo(root, extra_args=("--channel", "nightly"))
+        nightly_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["nightly"]
+        edge_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["edge"]
+        assert nightly_conf.exists(), "before-state: the box must be subscribed to nightly"
+        nightly_before = nightly_conf.read_text()
+
+        proc = _run_add_repo(root, extra_args=("--channel", "edge"), catalogue_empty=True)
+
+        assert proc.returncode != 0, f"an unpublished channel must fail loudly:\n{proc.stdout}\n{proc.stderr}"
+        assert nightly_conf.exists(), "the previous subscription must survive a failed switch"
+        assert nightly_conf.read_text() == nightly_before, "the previous subscription must be left byte-identical"
+        assert not edge_conf.exists(), (
+            f"a failed switch must not leave the unusable conf behind:\n{proc.stdout}\n{proc.stderr}"
+        )
+
+
+def test_add_repo_failed_reswitch_keeps_a_conf_it_did_not_create() -> None:
+    """The failure cleanup removes only what THIS run staged.
+
+    Re-running the bootstrap for the channel the box is already on, against a
+    catalogue that has gone empty, must not delete that existing subscription —
+    removing it would be the very destruction the deferred retirement prevents.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _run_add_repo(root, extra_args=("--channel", "edge"))
+        edge_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES["edge"]
+        assert edge_conf.exists(), "before-state: the box must be subscribed to edge"
+
+        proc = _run_add_repo(root, extra_args=("--channel", "edge"), catalogue_empty=True)
+
+        assert proc.returncode != 0, "an empty catalogue must still fail loudly"
+        assert edge_conf.exists(), "a conf the run did not create must survive its failure"
 
 
 def test_add_repo_channel_nightly_live_bootstrap_matches_flag_nightly() -> None:

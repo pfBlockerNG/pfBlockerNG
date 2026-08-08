@@ -224,16 +224,31 @@ printf '==> Installed: %s-%s (from repo %s)\n' \
 # `pkg rquery -r <repo>` reads that ONE repo's catalogue. Checked before any
 # mutation so a typo'd/unpublished channel can never leave the box with the old
 # package deleted and nothing to install.
-TARGET_VERSION="$("${PKG_BIN}" rquery -r "${TARGET_REPO}" '%v' "${CANONICAL_PKG}" 2>/dev/null || true)"
-TARGET_VERSION="$(printf '%s' "${TARGET_VERSION}" | head -n 1)"
+#
+# A catalogue holds MORE than one version of the canonical package — retention keeps
+# several, and containment back-fills a faster channel with its slower channels'
+# builds — so rquery prints one line per offered version in catalogue order. Taking
+# the first would name a build `pkg install` is not going to choose, and the
+# post-migration version check would then fail a perfectly good migration. Pick the
+# highest with `pkg version -t`, which is the comparator `pkg` itself resolves by.
+TARGET_VERSION=""
+for _offered in $("${PKG_BIN}" rquery -r "${TARGET_REPO}" '%v' "${CANONICAL_PKG}" 2>/dev/null || true); do
+	if [ -z "${TARGET_VERSION}" ] ||
+		[ "$("${PKG_BIN}" version -t "${_offered}" "${TARGET_VERSION}" 2>/dev/null)" = ">" ]; then
+		TARGET_VERSION="${_offered}"
+	fi
+done
 [ -n "${TARGET_VERSION}" ] ||
 	die 4 "repo '${TARGET_REPO}' does not offer ${CANONICAL_PKG} — run \`pkg update -f\`, and check the ${CHANNEL} catalogue has a build for this pfSense edition/version"
 
 printf '==> Target:    %s-%s (repo %s)\n' "${CANONICAL_PKG}" "${TARGET_VERSION}" "${TARGET_REPO}"
 
 # ── 4. No-op: already canonical, already on the target repo ────────────────────
-# Reported, never silent. This is the ordinary outcome of switching between two
-# channels that currently serve the identical tagged artifact.
+# Reported, never silent. Reached by re-running the script after a migration that
+# already completed, or by naming the channel the box is on. A switch BETWEEN two
+# channels serving the identical tagged artifact does NOT land here — its installed
+# repo differs, so it takes the repository-qualified reinstall below and ends with
+# the same version served from the new catalogue.
 if [ "${INSTALLED_KIND}" = "canonical" ] && [ "${INSTALLED_REPO}" = "${TARGET_REPO}" ]; then
 	printf '==> Already on the %s channel as %s-%s — nothing to do.\n' \
 		"${CHANNEL}" "${INSTALLED_NAME}" "${INSTALLED_VERSION}"
@@ -262,7 +277,7 @@ if [ "${INSTALLED_KIND}" = "legacy" ]; then
 		die 5 "\`pkg delete ${INSTALLED_NAME}\` failed — the box is unchanged apart from that failed operation; re-run after fixing the cause"
 	printf '==> Installing %s from %s\n' "${CANONICAL_PKG}" "${TARGET_REPO}"
 	env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" install -y -r "${TARGET_REPO}" "${CANONICAL_PKG}" ||
-		die 5 "\`pkg install -r ${TARGET_REPO} ${CANONICAL_PKG}\` failed AFTER ${INSTALLED_NAME} was removed — the box currently has NO pfBlockerNG installed; re-run this script to complete the migration"
+		die 5 "\`pkg install -r ${TARGET_REPO} ${CANONICAL_PKG}\` failed AFTER ${INSTALLED_NAME} was removed — the box currently has NO pfBlockerNG installed; fix the cause, then finish with: ${PKG_BIN} install -y -r ${TARGET_REPO} ${CANONICAL_PKG}"
 else
 	# Canonical identity, wrong repo. `-f` forces the reinstall even when the
 	# target version equals or is OLDER than the installed one: crossing

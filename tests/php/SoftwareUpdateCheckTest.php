@@ -666,4 +666,100 @@ final class SoftwareUpdateCheckTest extends TestCase
 		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_10'));
 		$this->assertCount(2, $GLOBALS['pfb_test_file_notices'], 'tick 4: still two notices total (de-duped)');
 	}
+
+	/*
+	 * ---- A cache written BEFORE #2148 belongs to this install, not a foreign one ----
+	 *
+	 * The reuse scope gained a `repo` component so a catalogue switch cannot serve the old
+	 * catalogue's latest as the new one's. Every cache written before that change has NO
+	 * `repo` key, which is not a catalogue change — it is the one-time upgrade every
+	 * existing box performs. Reading it as foreign would re-announce a version the box has
+	 * already been notified about and drop the cached latest the offline guard preserves.
+	 */
+	public function testPreCutoverCacheIsAdoptedAndDoesNotReNotify(): void
+	{
+		$this->setCheck('on');
+		// A cache in the pre-#2148 shape: no 'repo' key, already notified for 3.2.0_9.
+		file_put_contents($this->cacheFile(), json_encode([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'channel'       => 'stable',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_notified' => '3.2.0_9',
+			'last_checked'  => 1,
+		]));
+		$this->assertArrayNotHasKey('repo', (array) $this->readCache(), 'before: the cache predates the repo scope');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed_repo' => 'pfblockerng',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		$this->assertSame('3.2.0_9', $cache['last_notified'], 'the already-announced version must survive the upgrade');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'an existing box must not be re-notified once');
+		$this->assertSame('pfblockerng', $cache['repo'], 'the tick records the repo the cache was missing');
+	}
+
+	/**
+	 * Same pre-#2148 cache, but the live read is unavailable (pkg locked / no DNS).
+	 * The cached latest must be served rather than regressing to '' — the exact
+	 * regression the offline guard exists to prevent.
+	 */
+	public function testPreCutoverCacheStillServesLatestWhenTheLiveReadFails(): void
+	{
+		$this->setCheck('on');
+		file_put_contents($this->cacheFile(), json_encode([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'channel'       => 'stable',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_notified' => '3.2.0_9',
+			'last_checked'  => 1,
+		]));
+		$this->assertSame('3.2.0_9', $this->readCache()['latest'], 'before: a last-known latest is cached');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed_repo' => 'pfblockerng',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '',
+		]);
+
+		$this->assertSame('3.2.0_9', $cache['latest'], 'the last-known latest must not regress to empty');
+	}
+
+	/**
+	 * The scope still does its job: a cache carrying a DIFFERENT repo is foreign, so its
+	 * latest and last_notified are dropped. This is the case the repo component was added
+	 * for, and it must survive the pre-cutover carve-out above.
+	 */
+	public function testCacheFromAnotherCatalogueIsStillDiscarded(): void
+	{
+		$this->setCheck('on');
+		file_put_contents($this->cacheFile(), json_encode([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'repo'          => 'pfblockerng-stable',
+			'channel'       => 'stable',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_notified' => '3.2.0_9',
+			'last_checked'  => 1,
+		]));
+		$this->assertSame('pfblockerng-stable', $this->readCache()['repo'], 'before: the cache is stable-scoped');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed_repo' => 'pfblockerng-edge',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		$this->assertSame('pfblockerng-edge', $cache['repo'], 'the cache is rescoped to the new catalogue');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the new catalogue gets its own first notice');
+	}
 }

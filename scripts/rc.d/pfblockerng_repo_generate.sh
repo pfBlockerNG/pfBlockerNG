@@ -118,7 +118,7 @@ EOF
 
 # Regenerate one conf IF it exists (orphan guard: an absent conf stays absent —
 # we never create a channel the user didn't bootstrap).
-# $1 = conf path, $2 = channel word (release|nightly), $3 = repo name.
+# $1 = conf path, $2 = channel word (release|stable|testing|edge|nightly), $3 = repo name.
 _regen_one() {
     _ro_conf="$1"
     _ro_channel="$2"

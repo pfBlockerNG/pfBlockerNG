@@ -4633,6 +4633,41 @@ function pfb_channel_from_repo_name(?string $repo): ?string {
 }
 
 /*
+ * The channel an install is on: the REPO decides, the NAME is the fallback (issue #2148).
+ *
+ * The two mappers above answer half the question each, and every caller needs both halves in
+ * the same order — the Software page label, the cron notice text, and the cached channel. It
+ * lives here as ONE function rather than as a repeated expression so the page and the notice
+ * cannot drift into disagreeing about what channel a box is on.
+ *
+ * NULL when neither half recognises the install (a Netgate or hand-built package); callers
+ * render that as 'unknown'.
+ */
+function pfb_channel_for_install(?string $repo, ?string $pkgname): ?string {
+	return pfb_channel_from_repo_name($repo) ?? pfb_channel_from_pkgname($pkgname);
+}
+
+/*
+ * Does a software-update cache describe an install from $repo? (issue #2148)
+ *
+ * All four catalogues publish the ONE canonical identity, so the package NAME cannot tell
+ * two catalogues apart — the recorded repo can. Both consumers of the cache ask this same
+ * question: the cron orchestrator, deciding whether the cached latest/last_notified may be
+ * reused, and the Software page, deciding whether the cached latest/last-checked/status may
+ * be DISPLAYED. They must agree, because the orchestrator's reset lands only on the next
+ * tick: between a channel migration and that tick the page would otherwise show the new
+ * channel beside the previous catalogue's version and an "Update available" verdict for a
+ * channel the box is no longer on.
+ *
+ * A cache with NO 'repo' key predates #2148. That is not a catalogue change — it is every
+ * existing box, once — so it is adopted rather than discarded; discarding it would
+ * re-announce an already-notified version and blank the last-known latest.
+ */
+function pfb_software_cache_matches_repo(array $cache, string $repo): bool {
+	return !array_key_exists('repo', $cache) || (string) $cache['repo'] === $repo;
+}
+
+/*
  * Provenance gate (2026-06-15 amendment; widened by issue #2148): TRUE only when the build
  * was installed FROM one of OUR repos — the legacy shared 'pfblockerng' (stable + the
  * retired -devel identity) or one of the four per-channel catalogues
@@ -4950,11 +4985,9 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	$repo = array_key_exists('installed_repo', $io)
 		? (string) $io['installed_repo']
 		: pfb_pkg_installed_repo($pkgname);
-	// Repo-first, name-fallback: the legacy shared 'pfblockerng' repo carries BOTH the
-	// canonical and the -devel identity, so it names no channel and the NAME still decides
-	// there. Everything the user SEES (this cache, the notice text, the Software page label)
-	// derives the channel this way.
-	$channel = pfb_channel_from_repo_name($repo) ?? pfb_channel_from_pkgname($pkgname);
+	// Repo-first, name-fallback, through the ONE shared accessor so the cached channel,
+	// the notice text and the Software page label can never disagree.
+	$channel = pfb_channel_for_install($repo, $pkgname);
 
 	$cache = pfb_software_read_cache();
 
@@ -4966,12 +4999,13 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 		$latest = pfb_pkg_latest($pkgname, $repo);
 	}
 	// Only reuse cached latest/last_notified when the cache belongs to the SAME install —
-	// same package name AND same repository. issue #2148: all four catalogues publish the
-	// one canonical identity, so a catalogue switch leaves the NAME unchanged and a
-	// name-only scope would serve the old catalogue's version as the new one's (and its
-	// last_notified would swallow the first genuine notice for the new catalogue).
+	// same package name AND same repository (pfb_software_cache_matches_repo(), the same
+	// predicate the Software page gates its displayed values on). issue #2148: all four
+	// catalogues publish the one canonical identity, so a catalogue switch leaves the NAME
+	// unchanged and a name-only scope would serve the old catalogue's version as the new
+	// one's, with its last_notified swallowing the first genuine notice for the new one.
 	$cache_matches_install = (($cache['pkgname'] ?? '') === $pkgname)
-		&& (($cache['repo'] ?? '') === $repo);
+		&& pfb_software_cache_matches_repo($cache, $repo);
 	if ($latest === '' && $cache_matches_install) {
 		$latest = (string) ($cache['latest'] ?? '');
 	}
