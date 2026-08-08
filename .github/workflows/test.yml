@@ -243,6 +243,7 @@ jobs:
           # `head` on a quoted name reads nothing — the file's shebang would go
           # unchecked (issue #2212). The exemption fence moved inside the loop
           # for the same reason: a `grep` over the listing cannot see NULs.
+          # shellcheck disable=SC2016  # $f expands in the inner `sh -c` script, not here
           bad=$(git ls-files -z | xargs -0 sh -c '
             for f; do
               case $f in
@@ -333,10 +334,9 @@ jobs:
         # PyYAML-based checks could never see that class. actionlint's own parser
         # rejects what GitHub rejects, plus expression/schema errors. The binary
         # is baked into ci-runner (pinned + checksum-verified there, #2232).
-        # -shellcheck= : the embedded shellcheck-on-run-bodies pass is disabled —
-        # this repo's own ShellCheck gates carry that concern with their tuned
-        # scopes, and enabling it here would demand a repo-wide workflow sweep
-        # first (revisit with #2232).
+        # The embedded shellcheck pass over `run:` bodies is ON (#2241). It reads no
+        # .shellcheckrc (actionlint runs shellcheck --norc), and a body-level directive is
+        # ignored: suppress per statement with `# shellcheck disable=` inside the body.
         # Explicit file arguments, never auto-discovery: with no args actionlint
         # looks for a git project and, finding none, reports nothing and exits 0
         # — a silently green gate.
@@ -347,14 +347,14 @@ jobs:
           # motivated it (a duplicate job-level key) before it grades the tree.
           printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    env:\n      A: "1"\n    env:\n      A: "2"\n    steps:\n      - run: "true"\n' \
             > "$RUNNER_TEMP/canary-dup.yml"
-          if "$AL" -shellcheck= "$RUNNER_TEMP/canary-dup.yml" >/dev/null 2>&1; then
+          if "$AL" "$RUNNER_TEMP/canary-dup.yml" >/dev/null 2>&1; then
             echo "::error::actionlint red canary did not fail on a duplicate key"
             exit 1
           fi
           # find, not a bare *.yml glob: covers a future .yaml spelling too, and
           # never hands actionlint an unexpanded literal pattern.
           find .github/workflows -maxdepth 1 \( -name '*.yml' -o -name '*.yaml' \) -print0 \
-            | xargs -0 "$AL" -shellcheck= -color
+            | xargs -0 "$AL" -color
 
   shell-tests:
     name: shellspec (POSIX sh)

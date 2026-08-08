@@ -602,6 +602,7 @@ jobs:
                 ]' matrix_current.json > "$NEWM"
 
               BODY_FILE=$(mktemp)
+              # shellcheck disable=SC2016  # markdown backticks in the PR body, not expansions
               {
                 printf '## Add pfSense %s %s (seen on the update servers)\n\n' "$CHANNEL" "$FAMILY"
                 printf 'The daily reconcile booted the current %s smoke image and found the\n' "$CHANNEL"
@@ -642,6 +643,7 @@ jobs:
               ' matrix_current.json > "$NEWM"
 
               BODY_FILE=$(mktemp)
+              # shellcheck disable=SC2016  # markdown backticks in the PR body, not expansions
               {
                 printf '## Mark pfSense %s %s GA\n\n' "$CHANNEL" "$FAMILY"
                 printf 'The daily reconcile saw a final (non-prerelease) build for the %s %s\n' "$CHANNEL" "$FAMILY"
