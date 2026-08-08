@@ -31,6 +31,10 @@
 #   SMOKE_GHCR_TOKEN  optional; used for `oras login ghcr.io` before image pull
 #   SMOKE_PFSENSE_REF pfSense image ref (default ghcr.io/pfblockerng/pfsense-ce:2.8)
 #   CIVM_REF          civm image ref (default ghcr.io/pfblockerng/civm:v1)
+#   PFB_LAN_REGISTRY  issue #2247: when set (box's own /etc/environment), rewrite a
+#                     leading ghcr.io/ in PFSENSE_REF/CIVM_REF to
+#                     "${PFB_LAN_REGISTRY}/", add --plain-http to every oras call,
+#                     and skip the token-based ghcr.io login (anonymous LAN cache).
 #
 # Test-only (env):
 #   PFB_ONBOX_REPO_ROOT  override the repo path (default /root/pfBlockerNG). Points the
@@ -88,6 +92,24 @@ IMAGES_DIR="/root/images"
 PFSENSE_REF="${SMOKE_PFSENSE_REF:-ghcr.io/pfblockerng/pfsense-ce:2.8}"
 CIVM_REF="${CIVM_REF:-ghcr.io/pfblockerng/civm:v1}"
 
+# ── LAN registry override (issue #2247) ─────────────────────────────────────── #
+# Single choke point: covers this script's own ghcr.io/... defaults above AND a
+# caller-injected full ghcr.io/... ref alike (pfb_rewrite_lan_registry only
+# touches a LEADING ghcr.io/, so a ref that already points elsewhere is a no-op).
+PFSENSE_REF="$(pfb_rewrite_lan_registry "$PFSENSE_REF")"
+CIVM_REF="$(pfb_rewrite_lan_registry "$CIVM_REF")"
+
+# oras-refresh.sh's four oras invocations consume this (default empty -> unquoted
+# expansion is zero words, i.e. no flag); set once here rather than repeating the
+# flag at each call site. Exported: SC1091 is disabled repo-wide (.shellcheckrc),
+# so shellcheck never follows the `.` of oras-refresh.sh from this file and reads
+# this var as dead without it.
+PFB_ORAS_FLAGS=""
+if pfb_lan_registry_active; then
+    PFB_ORAS_FLAGS="--plain-http"
+fi
+export PFB_ORAS_FLAGS
+
 # ── Arg parsing ───────────────────────────────────────────────────────────── #
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -112,9 +134,11 @@ done
 printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
 # Echo the whole resolved configuration, not just the ref: a flag that silently
 # failed to parse otherwise shows up only as a leg that quietly ran the default.
-printf 'smoke-on-box: config abi=%s channel=%s marker=%s filter=%s shard=%s/%s two-vm=%s\n' \
+# pfsense_ref/civm_ref are echoed AFTER their LAN-registry rewrite (issue #2247), so
+# a wrong rewrite is visible here rather than only three steps later, mid pull.
+printf 'smoke-on-box: config abi=%s channel=%s marker=%s filter=%s shard=%s/%s two-vm=%s pfsense_ref=%s civm_ref=%s\n' \
     "$_ABI" "$_CHANNEL" "$_MARKER" "${_FILTER:-<none>}" "$_SHARD" "$_SHARD_TOTAL" \
-    "$([ "$_NO_TWO_VM" -eq 1 ] && echo no || echo yes)" >&2
+    "$([ "$_NO_TWO_VM" -eq 1 ] && echo no || echo yes)" "$PFSENSE_REF" "$CIVM_REF" >&2
 
 # Checked FIRST: this is a property of how we were INVOKED, so failing here costs
 # nothing, while discovering it after the ports refresh and the image pull wastes minutes
@@ -167,14 +191,19 @@ sh scripts/sparse-clone-ports.sh \
 
 # ── Step 3: oras images (refresh when stale; pull when absent) ─────────────── #
 _oras_login_done=0
-pfb_oras_login() {
-    if [ "$_oras_login_done" -eq 0 ] && [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
-        printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
-            oras login ghcr.io --username pfBlockerNG --password-stdin >/dev/null 2>&1 \
-            || true
-        _oras_login_done=1
-    fi
-}
+# issue #2247: the LAN registry is anonymous read-only -- when it is active, leave
+# oras-refresh.sh's own no-op pfb_oras_login stub in effect (sourced above) rather
+# than defining the real token-based ghcr.io login here.
+if ! pfb_lan_registry_active; then
+    pfb_oras_login() {
+        if [ "$_oras_login_done" -eq 0 ] && [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
+            printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
+                oras login ghcr.io --username pfBlockerNG --password-stdin >/dev/null 2>&1 \
+                || true
+            _oras_login_done=1
+        fi
+    }
+fi
 
 pfb_oras_refresh "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "pfSense"
 if [ "$_NO_TWO_VM" -eq 0 ]; then

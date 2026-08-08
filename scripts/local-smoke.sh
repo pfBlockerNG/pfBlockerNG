@@ -203,13 +203,15 @@ fi
 #                      `sysctl -w`, which a container cannot perform against the host.
 #   the bind mounts    repo, shared image store, ports tree and guest key all live on the
 #                      box; without them every run re-clones and re-pulls.
-#   --add-host ...     issue #2230: routes ghcr.io to the box's LAN zot mirror when
-#                      PFB_LAN_REGISTRY is set in the BOX's own environment -- the
-#                      `${...:+...}` is left UNEXPANDED here (escaped `\$`) so the
-#                      remote shell resolves it, not this caller; unset expands to
-#                      zero words, so the flag is silently absent (today's behavior).
-#   the CA mount       the LAN mirror's cert validates against the box's bundle; the
-#                      container's stock CA store lacks the fleet CA that signed it.
+#   the image ref      issue #2247: box-side-expanded `${PFB_LAN_REGISTRY:-ghcr.io}/...`
+#                      (escaped `\$` -- left UNEXPANDED here so the remote box shell
+#                      resolves it against ITS OWN /etc/environment, not this caller's);
+#                      unset falls back to ghcr.io, today's behavior. -e PFB_LAN_REGISTRY
+#                      carries the same var into the container so scripts/smoke-on-box.sh
+#                      and scripts/lib/oras-refresh.sh can rewrite refs and route oras
+#                      --plain-http against the LAN registry themselves. Supersedes the
+#                      --add-host hijack + CA-bundle mount from #2230: one mechanism, no
+#                      private PKI (owner decision 2026-08-08).
 # Ref-stable: the one-liner is the only part that has to work across refs;
 # smoke-on-box.sh handles everything else.
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
@@ -222,15 +224,13 @@ _bootstrap="cd /root/pfBlockerNG \
  && exec docker run --rm \
       --device /dev/kvm \
       --sysctl net.ipv4.ip_unprivileged_port_start=53 \
-      \${PFB_LAN_REGISTRY:+--add-host ghcr.io:\$PFB_LAN_REGISTRY} \
       -v /root/pfBlockerNG:/root/pfBlockerNG \
       -v /root/images:/root/images \
       -v /root/FreeBSD-ports:/root/FreeBSD-ports \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
-      -v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro \
-      -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR \
+      -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
       -w /root/pfBlockerNG \
-      ghcr.io/pfblockerng/ci-runner-vm:4 \
+      \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:4 \
       sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
