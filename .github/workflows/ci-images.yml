@@ -185,6 +185,7 @@ jobs:
             node --version; composer --version
             shellcheck --version | sed -n "s/^version: /shellcheck /p"
             echo "shellspec $(shellspec --version)"
+            echo "actionlint $(actionlint -version | head -n1)"
             kcov --version'
           docker run --rm "${IMAGE_REPO}/ci-runner-vm:${TAG}" sh -c '
             qemu-system-x86_64 --version | head -n1; oras version | head -n2'
