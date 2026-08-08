@@ -109,9 +109,8 @@ def _flag_stray_refs(blocks: dict[str, str]) -> list[str]:
 def test_self_hosted_container_jobs_pull_through_the_lan_registry() -> None:
     """Every self-hosted job with a `container.image` must route the pull
     through `${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/...` (issue #2230): the
-    box fleet hijacks ghcr.io via /etc/hosts to the LAN zot mirror at
-    10.0.0.111, and a literal ref skips that routing silently rather than
-    failing loudly."""
+    variable points the self-hosted fleet at the LAN zot mirror, and a literal
+    ref skips that routing silently rather than failing loudly."""
     offenders: list[str] = []
     checked = 0
     for path in _workflow_files():

@@ -338,6 +338,18 @@ EOF
     The stderr should be present
   End
 
+  It 'passes a byte-exact resolve argv when PFB_ORAS_FLAGS is unset (no empty word)'
+    # A quoted "${PFB_ORAS_FLAGS:-}" would inject an empty argv word here while
+    # the count-based guard above stays green; pin the exact argv instead.
+    When call sh -c '
+      . "$1"; shift
+      STUB_REMOTE_DIGEST=sha256:new pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" pfSense
+      grep "^resolve " "$STUB_ARGV_LOG"
+    ' sh "$LIB" "$IMGDIR"
+    The output should eq 'resolve ghcr.io/x/pfsense-ce:2.8'
+    The stderr should be present
+  End
+
   It 'pfb_lan_registry_active reports set vs unset vs empty-but-set'
     When call sh -c '
       . "$1"; shift
