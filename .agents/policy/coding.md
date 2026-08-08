@@ -1,37 +1,15 @@
 # Coding standards — naming, comments, conventions, linting
 
-Scope: writing code in any language. Load when: any code change, plus the `lang-*.md`
-context file for each touched language (`.agents/context/`).
+Scope: code in any language. Load when: any code change, plus `lang-*.md` context file per touched language (`.agents/context/`).
 
 ## Naming — follow the established pattern
 
-**A new variable, element `id`, dict key, or config key follows the conventions already in
-that file (or similar files)** — match the surrounding pattern (prefix, casing, separators,
-word order); with sibling `pfB_*` identifiers, a wizard flag is `pfB_wizard_disable`, not
-`donotshowthisagain`. An off-pattern name is a smell even when it works. Spans the whole
-stack.
+**New variable, element `id`, dict key, or config key follows conventions already in that file (or similar files)** — match surrounding pattern (prefix, casing, separators, word order); with sibling `pfB_*` identifiers, wizard flag is `pfB_wizard_disable`, not `donotshowthisagain`. Off-pattern name = smell even when works. Spans whole stack.
 
 ## Comments — constraint, not narration
 
-A comment states a constraint the code cannot show; default budget **≤3 lines**. Design
-rationale lives in the ADR / architecture-notes and the comment carries a one-line pointer
-(`// ADR-49: content-sanity gate; contract pinned by PfbTextSanityTest`) — never a
-restatement: a contract stored in ADR + comment + test is three copies, two of which drift.
-One-line regression breadcrumbs stay (`// issue #946: decode UTF-16 BOM first — else
-nul_bytes false-positives`). **Compression sheds redundancy, never essential information: usage
-instructions and function-contract facts (params, returns, invariants, defaults) that
-are expressed nowhere else may be reworded tighter, never removed.** The budget bites
-hardest mid-code; a file header carrying interface documentation may run long.
-**Operational headers of executable scripts are interface documentation, not
-narration** — usage, options/params with defaults, env vars, examples stay in the
-header unless the script itself prints an equivalent `--help`/usage. **Never in
-committed comments:** ADR **phase numbers**
-("wired in Phase 4"), **`RESULTS/` handoff refs**, **review archaeology** (reviewer names,
-`PR #N` finding IDs, `review-fanout CN`), or correctness argument aimed at the gate/reviewer
-— that evidence belongs in the handoff / gate record / PR body, not the tree. Enforced on
-**added** lines under `src/` + `scripts/` by `scripts/check_comment_narration.py`
-(pre-commit + CI, diff-scoped — pre-existing narration is grandfathered until its cleanup
-lands); escape a genuine need inline with `# narration-ok: <reason>`.
+Comment states constraint code cannot show; default budget **≤3 lines**. Design rationale lives in ADR / architecture-notes, comment carries one-line pointer (`// ADR-49: content-sanity gate; contract pinned by PfbTextSanityTest`) — never restatement: contract stored in ADR + comment + test = three copies, two drift. One-line regression breadcrumbs stay (`// issue #946: decode UTF-16 BOM first — else
+nul_bytes false-positives`). **Compression sheds redundancy, never essential information: usage instructions and function-contract facts (params, returns, invariants, defaults) expressed nowhere else may be reworded tighter, never removed.** Budget bites hardest mid-code; file header carrying interface documentation may run long. **Operational headers of executable scripts are interface documentation, not narration** — usage, options/params with defaults, env vars, examples stay in header unless script itself prints equivalent `--help`/usage. **Never in committed comments:** ADR **phase numbers** ("wired in Phase 4"), **`RESULTS/` handoff refs**, **review archaeology** (reviewer names, `PR #N` finding IDs, `review-fanout CN`), or correctness argument aimed at gate/reviewer — that evidence belongs in handoff / gate record / PR body, not tree. Enforced on **added** lines under `src/` + `scripts/` by `scripts/check_comment_narration.py` (pre-commit + CI, diff-scoped — pre-existing narration grandfathered until cleanup lands); escape genuine need inline with `# narration-ok: <reason>`.
 
 ## Code-quality conventions (ADR-28)
 
@@ -43,17 +21,11 @@ lands); escape a genuine need inline with `# narration-ok: <reason>`.
 | 4 — string-ops over regex | `str_*` over `preg_*` where equivalent; hot loops first | `str` methods over `re` in per-line paths | parameter-expansion / `case` over `grep -E`/`sed` | `String.prototype` over `RegExp` |
 | 5 — boolean literals | **uppercase `TRUE`/`FALSE`** (PHPCS-enforced) | `True`/`False` | N/A | lowercase |
 
-Storage adapter rule (behaviour-preserving upgrades, grandfather seeds, canonical current storage,
-`PfbStoredEnum` mechanics) + per-field inventory:
-[`docs/misc/config-gateway.md`](../../docs/misc/config-gateway.md).
+Storage adapter rule (behaviour-preserving upgrades, grandfather seeds, canonical current storage, `PfbStoredEnum` mechanics) + per-field inventory: [`docs/misc/config-gateway.md`](../../docs/misc/config-gateway.md).
 
 ## Normalize once — bind derived values, never re-derive
 
-Derive a normalized form of a value **once**, bind it to a variable, and evaluate every
-subsequent condition and use against that binding — never re-run the same pure operation
-(`strip`/`trim`, `lower`/`strtolower`, `split`/`explode`, decode, `basename`, …) on the
-same input across successive expressions, and never compute a value only to throw it away
-and recompute it later in the same scope. Canonical smell (Python):
+Derive normalized form of value **once**, bind to variable, evaluate every subsequent condition and use against that binding — never re-run same pure operation (`strip`/`trim`, `lower`/`strtolower`, `split`/`explode`, decode, `basename`, …) on same input across successive expressions, never compute value only to throw away and recompute later in same scope. Canonical smell (Python):
 
 ```python
 if not line.strip() or line.lstrip().startswith("#"):  # strips twice…
@@ -61,97 +33,27 @@ if not line.strip() or line.lstrip().startswith("#"):  # strips twice…
 pattern = line.partition("#")[0].strip()  # …then strips again
 ```
 
-Right shape: `line = line.strip()` at loop entry, then test and slice `line`. Same rule in
-PHP (`trim($x)` repeated across an `if` chain), shell (re-running the same
-`${var%...}`/`sed` derivation), and JS. Hot per-line paths (DNSBL/feed parsing) matter
-most, but the rule is about clarity as much as cost — one binding names the invariant
-("`line` is stripped from here on") instead of making the reader re-verify it per use.
-Applies to new code and to any touched block; fix the redundancy when you edit one.
+Right shape: `line = line.strip()` at loop entry, then test and slice `line`. Same rule in PHP (`trim($x)` repeated across `if` chain), shell (re-running same `${var%...}`/`sed` derivation), and JS. Hot per-line paths (DNSBL/feed parsing) matter most, but rule about clarity as much as cost — one binding names invariant ("`line` is stripped from here on") instead of making reader re-verify per use. Applies to new code and any touched block; fix redundancy when you edit one.
 
 ## Text-field sanitization — sanitize once, at ingestion (issue #1723)
 
-Every user-entered text field is sanitized through the shared helpers in
-`pfblockerng.inc` exactly ONCE, at ingestion — the first operation a handler performs on
-the field, before any evaluation of its contents (validation, comparison, persist) —
-never an ad-hoc `trim`/`str_replace` chain and never re-sanitized downstream:
+Every user-entered text field sanitized through shared helpers in `pfblockerng.inc` exactly ONCE, at ingestion — first operation handler performs on field, before any evaluation of contents (validation, comparison, persist) — never ad-hoc `trim`/`str_replace` chain, never re-sanitized downstream:
 
-- **Single-line fields:** `pfb_sanitize_text()` — legacy-encoding→UTF-8 scrub, strips
-  every `\p{C}` character (Cc/Cf/Co/Cs/Cn, which subsumes the BOM) + BOM, Unicode-aware
-  trim. Unicode format characters (ZWJ/ZWNJ, bidi marks) do NOT survive as of issue
-  #1795: this package has no use for them, and letting them through was the seam that
-  let the same input be simultaneously "sanitized" here and "rejected" by a stricter
-  `\p{C}` validator downstream (issue #756/#1761).
-- **Multi-line textarea fields:** `pfb_sanitize_text_area()` at ingestion — CRLF/CR
-  normalized to LF, every `\p{C}` character stripped except `\n`/`\t`, each line
-  right-stripped (indentation survives) — then persisted with a plain `base64_encode()`.
-  `pfb_text_area_encode()` (`base64_encode(pfb_sanitize_text_area(...))`) remains only
-  for programmatic writers whose encode call itself IS the ingestion point (the
-  alerts.php/pfblockerng_extra.inc/pfblockerng_install.inc re-encoders, the Unbound
-  `custom_options` re-encode, `pfblockerng_category_edit.php`'s Reports-tab whitelist-alias
-  `addgroup` branch) — never a second pass after a `$_POST` field already went
-  through the ingestion prologue. Parse through `pfb_text_area_decode()`, which
-  sanitizes once on read, drops blank/whitespace-only rows, and preserves the valid row
-  `"0"`.
-- **Downstream is structural, not sanitizing:** once ingested, a consumer may still do
-  its own per-format hygiene on the one sanitized binding — split into lines, skip
-  blank/comment rows, lowercase — that is shape-parsing for its own use, not a second
-  sanitize pass. Exemplar: `pfb_unbound.py`'s `_load_user_regex_entries()` base64-decodes
-  the persisted blob, then `re.split()`s and strips per line and skips `#`/blank rows —
-  structural parsing of already-sanitized data, never re-stripping control chars.
-- **Validation stays fail-closed:** `pfb_filter()` remains the backstop gate (rejects
-  Cc/BOM and invalid UTF-8; type-specific checks after), run on the one sanitized
-  binding. `PFB_FILTER_DOMAIN` / `PFB_FILTER_TLD` accept IDN input by validating its
-  `idn_to_ascii()` punycode form and returning the original text; mixed-script domains
-  are accepted by design (admins block typosquats in their own lists).
+- **Single-line fields:** `pfb_sanitize_text()` — legacy-encoding→UTF-8 scrub, strips every `\p{C}` character (Cc/Cf/Co/Cs/Cn, subsumes BOM) + BOM, Unicode-aware trim. Unicode format characters (ZWJ/ZWNJ, bidi marks) do NOT survive as of issue #1795: package has no use for them, letting them through was seam that let same input be simultaneously "sanitized" here and "rejected" by stricter `\p{C}` validator downstream (issue #756/#1761).
+- **Multi-line textarea fields:** `pfb_sanitize_text_area()` at ingestion — CRLF/CR normalized to LF, every `\p{C}` character stripped except `\n`/`\t`, each line right-stripped (indentation survives) — then persisted with plain `base64_encode()`. `pfb_text_area_encode()` (`base64_encode(pfb_sanitize_text_area(...))`) remains only for programmatic writers whose encode call itself IS ingestion point (alerts.php/pfblockerng_extra.inc/pfblockerng_install.inc re-encoders, Unbound `custom_options` re-encode, `pfblockerng_category_edit.php`'s Reports-tab whitelist-alias `addgroup` branch) — never second pass after `$_POST` field already went through ingestion prologue. Parse through `pfb_text_area_decode()`, which sanitizes once on read, drops blank/whitespace-only rows, preserves valid row `"0"`.
+- **Downstream is structural, not sanitizing:** once ingested, consumer may still do own per-format hygiene on the one sanitized binding — split into lines, skip blank/comment rows, lowercase — that is shape-parsing for own use, not second sanitize pass. Exemplar: `pfb_unbound.py`'s `_load_user_regex_entries()` base64-decodes persisted blob, then `re.split()`s and strips per line and skips `#`/blank rows — structural parsing of already-sanitized data, never re-stripping control chars.
+- **Validation stays fail-closed:** `pfb_filter()` remains backstop gate (rejects Cc/BOM and invalid UTF-8; type-specific checks after), run on the one sanitized binding. `PFB_FILTER_DOMAIN` / `PFB_FILTER_TLD` accept IDN input by validating its `idn_to_ascii()` punycode form and returning original text; mixed-script domains accepted by design (admins block typosquats in own lists).
 
-A new field MUST route through these helpers; a persist path that deliberately stays
-narrower documents why. The one fork raised so far — the GUI hook-script editor, whose
-saved content is executable script source rather than list data (issue #1728) — was
-resolved *against* a carve-out: it joins the standard (issue #1734), so a literal control
-byte in a hook script must be written as an escape (`\033`). Contracts
-pinned by `PfbSanitizeTextTest`, `TextAreaDecodeTest`, `PfbFilterContractTest`, and
-`tests/smoke/ui/test_sanitize_persist.py`.
+New field MUST route through these helpers; persist path that deliberately stays narrower documents why. One fork raised so far — GUI hook-script editor, whose saved content is executable script source rather than list data (issue #1728) — resolved *against* carve-out: joins standard (issue #1734), so literal control byte in hook script must be written as escape (`\033`). Contracts pinned by `PfbSanitizeTextTest`, `TextAreaDecodeTest`, `PfbFilterContractTest`, `tests/smoke/ui/test_sanitize_persist.py`.
 
 ## Linting
 
-Run linters while working; the `.githooks/pre-commit` hook blocks failing commits
-(path-scoped to staged file types); CI is the final authority.
+Run linters while working; `.githooks/pre-commit` hook blocks failing commits (path-scoped to staged file types); CI is final authority.
 
-- **Python:** `ruff check .` / `ruff check . --fix` / `ruff format .` (config in
-  `pyproject.toml`; `.flake8` mirrors the 120-col limit for IDE Flake8 — keep in sync).
-- **PHP:** Intelephense (`.inc` = PHP via `files.associations`); PHPStan + PHPUnit + PHPCS via
-  `composer install`; run PHPStan/PHPCS through the composer scripts — `composer phpstan` and
-  `composer phpcs -- --standard=phpcs.xml.dist src/` — which carry the required
-  `--memory-limit=1G`/`-d memory_limit=1G` (bare `vendor/bin/phpstan` OOMs at PHP's default
-  128M on this codebase, and PHPStan accepts no memory limit in `phpstan.neon`). The
-  `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in
-  `tests/php/pfsense_doubles.php`). Three custom sniffs (`tests/phpcs/PfBlockerNG/`, each
-  pinned by its own `*SniffTest.php`): **PFBL-01 `RequirePfbFilter`** (semantic validation
-  before exec/manifest-write/path-build inside `pfblockerng.inc` input handlers — add new
-  in-scope surfaces to `scopeFunctions`), **`UppercaseBooleanLiteral`** (all `src/` PHP),
-  **`RequireConfigGateway`** (see the config gateway in
-  [`docs/misc/config-gateway.md`](../../docs/misc/config-gateway.md)).
-- **Shell:** ShellCheck; `.shellcheckrc` suppresses SC1091 + SC2154 only — don't suppress
-  others without justification.
-- **URL-encoding check** (`scripts/check_url_encoding.py`, pre-commit + CI): forbids naked
-  shell-var interpolation into an HTTP-client URL query — let the value ride
-  `curl --data-urlencode` instead.
-- **Version-literal check** (`scripts/check_version_literals.py`, pre-commit + CI): forbids
-  hardcoding a supported pfSense/FreeBSD version token (CE/Plus version, `FreeBSD:NN` ABI,
-  `php8x`/`py31x` flavor, `ce-`/`plus-` varver) as a **value** — an exact quoted literal or a
-  bare `key=value`/`key: value` RHS — anywhere under `src/`/`scripts/`/`.github/workflows/`.
-  Read it from the ci-metadata matrix (`read-version-matrix.sh`) at runtime instead of
-  restating it (a literal silently drifts when the matrix moves). Prose, comments, and Python
-  docstrings stay clean; escape a genuine one-off with an inline `# version-literal-ok: <reason>`.
-  The bare/explicit-path invocation is the authoritative pre-commit/CI gate (full scan); it
-  also has diff-scoped `--staged`/`--diff <base>` modes (issue #1000) that judge only added
-  lines — like `check_comment_narration.py`, but re-reading each changed file's whole content
-  (needed for correct comment/docstring state) and filtering to the added lines, for ad-hoc
-  and CI-PR invocation.
-- **Comment-narration check** (`scripts/check_comment_narration.py`, pre-commit + CI,
-  diff-scoped): forbids ADR phase numbers, `RESULTS/` handoff refs, and review archaeology on
-  **added** lines under `src/` + `scripts/` ("Comments — constraint, not narration"); escape a
-  genuine need inline with `# narration-ok: <reason>`.
-- **Markdown:** `npx markdownlint-cli2` (`--fix` to autofix). Blank line around every
-  heading/list/fence; a language on every fence (`text` for plain output); single trailing
-  newline. Rules + rationale in `.markdownlint.jsonc`; clean lint enforced pre-commit + CI.
+- **Python:** `ruff check .` / `ruff check . --fix` / `ruff format .` (config in `pyproject.toml`; `.flake8` mirrors 120-col limit for IDE Flake8 — keep in sync).
+- **PHP:** Intelephense (`.inc` = PHP via `files.associations`); PHPStan + PHPUnit + PHPCS via `composer install`; run PHPStan/PHPCS through composer scripts — `composer phpstan` and `composer phpcs -- --standard=phpcs.xml.dist src/` — which carry required `--memory-limit=1G`/`-d memory_limit=1G` (bare `vendor/bin/phpstan` OOMs at PHP's default 128M on this codebase, and PHPStan accepts no memory limit in `phpstan.neon`). `stubs/pfsense/` stubs are for PHPStan, NOT runtime doubles (those live in `tests/php/pfsense_doubles.php`). Three custom sniffs (`tests/phpcs/PfBlockerNG/`, each pinned by own `*SniffTest.php`): **PFBL-01 `RequirePfbFilter`** (semantic validation before exec/manifest-write/path-build inside `pfblockerng.inc` input handlers — add new in-scope surfaces to `scopeFunctions`), **`UppercaseBooleanLiteral`** (all `src/` PHP), **`RequireConfigGateway`** (see config gateway in [`docs/misc/config-gateway.md`](../../docs/misc/config-gateway.md)).
+- **Shell:** ShellCheck; `.shellcheckrc` suppresses SC1091 + SC2154 only — don't suppress others without justification.
+- **URL-encoding check** (`scripts/check_url_encoding.py`, pre-commit + CI): forbids naked shell-var interpolation into HTTP-client URL query — let value ride `curl --data-urlencode` instead.
+- **Version-literal check** (`scripts/check_version_literals.py`, pre-commit + CI): forbids hardcoding supported pfSense/FreeBSD version token (CE/Plus version, `FreeBSD:NN` ABI, `php8x`/`py31x` flavor, `ce-`/`plus-` varver) as **value** — exact quoted literal or bare `key=value`/`key: value` RHS — anywhere under `src/`/`scripts/`/`.github/workflows/`. Read from ci-metadata matrix (`read-version-matrix.sh`) at runtime instead of restating (literal silently drifts when matrix moves). Prose, comments, Python docstrings stay clean; escape genuine one-off with inline `# version-literal-ok: <reason>`. Bare/explicit-path invocation is authoritative pre-commit/CI gate (full scan); also has diff-scoped `--staged`/`--diff <base>` modes (issue #1000) that judge only added lines — like `check_comment_narration.py`, but re-reading each changed file's whole content (needed for correct comment/docstring state) and filtering to added lines, for ad-hoc and CI-PR invocation.
+- **Comment-narration check** (`scripts/check_comment_narration.py`, pre-commit + CI, diff-scoped): forbids ADR phase numbers, `RESULTS/` handoff refs, review archaeology on **added** lines under `src/` + `scripts/` ("Comments — constraint, not narration"); escape genuine need inline with `# narration-ok: <reason>`.
+- **Markdown:** `npx markdownlint-cli2` (`--fix` to autofix). Blank line around every heading/list/fence; language on every fence (`text` for plain output); single trailing newline. Rules + rationale in `.markdownlint.jsonc`; clean lint enforced pre-commit + CI.

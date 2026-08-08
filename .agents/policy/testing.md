@@ -1,88 +1,26 @@
 # Testing — how to satisfy the mandate, and the test environment
 
-Scope: writing/changing tests and running the suites. Load when: any change ships tests
-(every change does) or a suite runs locally.
+Scope: writing/changing tests, running suites. Load when: any change ships tests (every change does) or suite runs locally.
 
 ## Test coverage (mandatory) — the five principles
 
-Tests are how a change proves itself. **Five non-negotiable principles govern every change —
-unit, integration, E2E, smoke, or UI. Each is a hard gate: a change that violates any one is
-NOT done, no matter what the line-coverage number says.**
+Tests = how change proves itself. **Five non-negotiable principles govern every change — unit, integration, E2E, smoke, UI. Each a hard gate: change violating any one is NOT done, no matter what line-coverage number says.**
 
-1. **A test is EVIDENCE the change works — for a behaviour change it MUST fail before and pass
-   after, and the proof is TEST-FIRST.** Author the reproduction test(s) **before touching
-   production code**, at full suite quality (every standard here applies — they ship in the
-   suite and double as the defect's in-suite reproduction), and execute them on the untouched
-   code: they **FAIL for the exact reason the change addresses**. From that red run the tests
-   are **frozen** — byte-identical until green (a temporary skip/disable while developing is
-   fine, but the committed file matches the red-run content exactly; record `git hash-object`
-   of each test file at red time). After the change the SAME tests, **zero edits**, **PASS** —
-   one green run proving both that the tests test the condition and that the fix works. Only
-   then write the further tests the change needs. A test written after the fix, or edited
-   between red and green, is evidence of nothing — same for a test already green before the
-   change. **Two exceptions:** behaviour-**PRESERVING** work (refactors, prep phases) pins
-   the *existing* behaviour as an oracle and stays green across the change — still mandatory;
-   and **brand-new code with no pre-existing behaviour to be wrong** needs no red run against
-   the void — the only possible red there is a missing symbol/file, an *existence* test,
-   itself coverage theater. Its tests still ship with it asserting real behaviour, and any
-   change it makes to EXISTING observable behaviour still gets its red-first proof.
-2. **Every change ships WITH its tests.** "The existing suite still passes" is **not**
-   coverage of a new change.
-3. **NEVER coverage theater.** A test must *validate* the code, not merely *execute* it — it
-   carries an assertion that would **fail on a regression**. Green at 100% line coverage with
-   no failable assertion is **rejected**.
-4. **Front-end changes REQUIRE front-end tests.** A change touching `www/` must carry UI tests
-   (ADR-14). A webConfigurator-reachable surface requires **Tier A (`ui_render`)**. A surface
-   recorded in `test_render_smoke.py`'s `EXCLUDED_FROM_TIER_A` because Tier A cannot reach it
-   requires the live tier named by that exclusion plus focused hermetic coverage; never
-   relabel an unreachable Tier-B flow as Tier A. **Tier B (`ui_e2e`/`ui_browser`) is also
-   REQUIRED IFF the change is observable *only* in Tier B** — which explicitly includes a
-   **new page**, a **multi-step flow** (anything spanning more than one request/interaction),
-   and **visual/structural** changes (element positioning/addition/removal, layout). When in
-   doubt, add Tier B.
-5. **Tests express the change's INTENT — they are documentation, not just coverage.** Name and
-   comments state the intended outcome being pinned, never the mechanics of how it is coded.
+1. **Test is EVIDENCE change works — for behaviour change it MUST fail before and pass after, and proof is TEST-FIRST.** Write reproduction test(s) **before touching production code**, at full suite quality (every standard here applies — they ship in suite and double as defect's in-suite reproduction), and run on untouched code: they **FAIL for exact reason change addresses**. From that red run tests **frozen** — byte-identical until green (temporary skip/disable while developing fine, but committed file matches red-run content exactly; record `git hash-object` of each test file at red time). After change SAME tests, **zero edits**, **PASS** — one green run proving both that tests test condition and that fix works. Only then write further tests change needs. Test written after fix, or edited between red and green, proves nothing — same for test already green before change. **Two exceptions:** behaviour-**PRESERVING** work (refactors, prep phases) pins *existing* behaviour as oracle and stays green across change — still mandatory; and **brand-new code with no pre-existing behaviour to be wrong** needs no red run against void — only possible red there is missing symbol/file, an *existence* test, itself coverage theater. Its tests still ship with it asserting real behaviour, and any change it makes to EXISTING observable behaviour still gets red-first proof.
+2. **Every change ships WITH its tests.** "Existing suite still passes" is **not** coverage of new change.
+3. **NEVER coverage theater.** Test must *validate* code, not merely *execute* it — carries assertion that would **fail on regression**. Green at 100% line coverage with no failable assertion is **rejected**.
+4. **Front-end changes REQUIRE front-end tests.** Change touching `www/` must carry UI tests (ADR-14). webConfigurator-reachable surface requires **Tier A (`ui_render`)**. Surface recorded in `test_render_smoke.py`'s `EXCLUDED_FROM_TIER_A` because Tier A cannot reach it requires live tier named by that exclusion plus focused hermetic coverage; never relabel unreachable Tier-B flow as Tier A. **Tier B (`ui_e2e`/`ui_browser`) also REQUIRED IFF change observable *only* in Tier B** — explicitly includes **new page**, **multi-step flow** (anything spanning more than one request/interaction), and **visual/structural** changes (element positioning/addition/removal, layout). When in doubt, add Tier B.
+5. **Tests express change's INTENT — documentation, not just coverage.** Name and comments state intended outcome being pinned, never mechanics of how it coded.
 
 ## Satisfying the principles
 
-- **Branch coverage — test every condition, not one side.** A boolean gets off *and* on (plus
-  any third state); every `if`/`switch`/match branch and documented input class gets its own
-  assertion (exemplar pair: `test_dnsbl_hsts_override_forces_null` /
-  `test_dnsbl_hsts_disabled_keeps_vip`).
-- **Assert the before-state in transition tests.** A test that flips a toggle asserts the
-  *original* result first, so green proves the flip **caused** the change — never just the
-  final state. Extends to any lifecycle (a blocked-after-listing test first asserts the
-  domain *resolved*).
-- **Self-encapsulated — never order-dependent.** Shared fixtures are fine; no test may depend
-  on a sibling running first. Reset per-test state explicitly with an autouse fixture that
-  **fails loudly** if the reset doesn't take (the `tick` smoke-module bug); a module-scoped
-  baseline is NOT per-test isolation.
-- **Specify complex behaviour BDD-style; keep trivial tests trivial.** Non-trivial behaviour
-  (state transitions, precedence, multi-step flows) gets Scenario / Given–When–Then
-  structure.
-- **Synchronize — a duration is never an assertion.** A test waits by consuming the event it
-  needs (a marker, an observed condition, a join) and asserts on THAT — never "the work
-  completed within N seconds", never a fixed sleep as coordination. The only time bound
-  allowed is a generous salvage cap whose sole job is reaping a stuck run; its expiry
-  reports "stuck/environment", loudly and distinguishably from the behaviour under test.
-  Widening a deadline or scaling it by a CI factor is never a flake fix: the deadline is
-  doing assertion work and no constant is large enough (PR #1499 widened 4 s → 16 s;
-  the same test flaked at 16 s five hours later — #1459; class removal tracked in #1517).
-- **On failure, print expected vs actual — no guessing.** Every assertion/poll that can fail
-  puts the comparison on the terminal (AssertJ-style, redacted against the usual secrets); a
-  bare "False" matcher is not acceptable; a diagnostic filtering by token must match the
-  value's **rendered** form (`pfctl` prints port 53 as `domain`). Exemplar:
-  `_redir_match_report` in `tests/smoke/test_dns_redirect.py`.
-- **CI-gate wiring proves its red path in-job (the red canary).** A CI job whose verdict
-  rides shell wiring unit tests cannot cover (pipes, `set` options, exit propagation) ships
-  a red canary: leading lines in the **same** `run:` block as the enforce command (same
-  shell options, so option drift trips it) feed a known-violating input through the
-  identical pipeline shape and require nonzero before the real check runs. The canary is
-  that wiring's red→green (PR #933: the default `bash -e {0}` has no `pipefail`, so `| tee`
-  masked the script's exit 1; exemplar: the `coverage-pairing` job in `test.yml`). Broader
-  corollary: **any newly wired blocking gate** (a pre-commit block, a CI step) demonstrates
-  its red path once, in-session — feed a violating input, watch the gate fail — even when
-  the wiring is a bare `run:` line (PR #937's wiring shipped green-path-only, #943).
+- **Branch coverage — test every condition, not one side.** Boolean gets off *and* on (plus any third state); every `if`/`switch`/match branch and documented input class gets own assertion (exemplar pair: `test_dnsbl_hsts_override_forces_null` / `test_dnsbl_hsts_disabled_keeps_vip`).
+- **Assert before-state in transition tests.** Test that flips toggle asserts *original* result first, so green proves flip **caused** change — never just final state. Extends to any lifecycle (blocked-after-listing test first asserts domain *resolved*).
+- **Self-encapsulated — never order-dependent.** Shared fixtures fine; no test may depend on sibling running first. Reset per-test state explicitly with autouse fixture that **fails loudly** if reset doesn't take (the `tick` smoke-module bug); module-scoped baseline is NOT per-test isolation.
+- **Specify complex behaviour BDD-style; keep trivial tests trivial.** Non-trivial behaviour (state transitions, precedence, multi-step flows) gets Scenario / Given–When–Then structure.
+- **Synchronize — duration never an assertion.** Test waits by consuming event it needs (marker, observed condition, join) and asserts on THAT — never "work completed within N seconds", never fixed sleep as coordination. Only time bound allowed is generous salvage cap whose sole job is reaping stuck run; its expiry reports "stuck/environment", loudly and distinguishably from behaviour under test. Widening deadline or scaling by CI factor never a flake fix: deadline doing assertion work and no constant large enough (PR #1499 widened 4 s → 16 s; same test flaked at 16 s five hours later — #1459; class removal tracked in #1517).
+- **On failure, print expected vs actual — no guessing.** Every assertion/poll that can fail puts comparison on terminal (AssertJ-style, redacted against usual secrets); bare "False" matcher not acceptable; diagnostic filtering by token must match value's **rendered** form (`pfctl` prints port 53 as `domain`). Exemplar: `_redir_match_report` in `tests/smoke/test_dns_redirect.py`.
+- **CI-gate wiring proves its red path in-job (the red canary).** CI job whose verdict rides shell wiring unit tests cannot cover (pipes, `set` options, exit propagation) ships red canary: leading lines in **same** `run:` block as enforce command (same shell options, so option drift trips it) feed known-violating input through identical pipeline shape and require nonzero before real check runs. Canary is that wiring's red→green (PR #933: default `bash -e {0}` has no `pipefail`, so `| tee` masked script's exit 1; exemplar: `coverage-pairing` job in `test.yml`). Broader corollary: **any newly wired blocking gate** (pre-commit block, CI step) demonstrates its red path once, in-session — feed violating input, watch gate fail — even when wiring is bare `run:` line (PR #937's wiring shipped green-path-only, #943).
 
 ## Running tests
 
@@ -93,17 +31,6 @@ composer install        # once; if it 403s in a managed cloud session, run
 vendor/bin/phpunit      # PHP suite: loads the REAL pfblockerng.inc off-appliance
 ```
 
-Environment gotchas that read as fake "baseline failures" — fix the env, never dismiss the
-red: the pytest suite needs a **zstd encoder** (the `zstd` binary or the `zstandard` module);
-a bare managed-cloud container lacks one and ~70 pkg/repo tests fail — the `SessionStart`
-hook auto-installs it (manual: `pip3 install zstandard`). PHPUnit permission-denial tests
-(`chmod 0555` fixtures) **skip under root** via a `posix_getuid() === 0` guard — root
-bypasses file permissions, so a root run cannot simulate the denial (a red there means the
-guard is missing, not that the code broke). Any other local-only failure: diagnose before
-dismissing — if it is genuinely pre-existing on the base branch, **file a tracking issue**
-(exemplars #791, #894); never leave it as folklore.
+Environment gotchas that read as fake "baseline failures" — fix env, never dismiss red: pytest suite needs **zstd encoder** (`zstd` binary or `zstandard` module); bare managed-cloud container lacks one and ~70 pkg/repo tests fail — `SessionStart` hook auto-installs it (manual: `pip3 install zstandard`). PHPUnit permission-denial tests (`chmod 0555` fixtures) **skip under root** via `posix_getuid() === 0` guard — root bypasses file permissions, so root run cannot simulate denial (red there means guard missing, not code broke). Any other local-only failure: diagnose before dismissing — if genuinely pre-existing on base branch, **file tracking issue** (exemplars #791, #894); never leave as folklore.
 
-The PHPUnit bootstrap satisfies `require_once` with empty shims (`tests/php/shims/`) +
-behavioural doubles (`tests/php/pfsense_doubles.php`); when a tested path reaches a new
-pfSense function, add a `function_exists()`-guarded double there (stubs can't serve —
-empty-bodied). See `tests/php/README.md`.
+PHPUnit bootstrap satisfies `require_once` with empty shims (`tests/php/shims/`) + behavioural doubles (`tests/php/pfsense_doubles.php`); when tested path reaches new pfSense function, add `function_exists()`-guarded double there (stubs can't serve — empty-bodied). See `tests/php/README.md`.

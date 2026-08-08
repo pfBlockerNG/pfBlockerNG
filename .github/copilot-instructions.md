@@ -1,37 +1,30 @@
 # Copilot adapter — pfBlockerNG
 
-[`AGENTS.md`](../AGENTS.md) is the canonical, vendor-neutral agent policy bootstrap; this file
-is only the GitHub Copilot adapter. Copilot does not expand imports, so **read `AGENTS.md`
-now** and follow it, including its routing table into `.agents/policy/`, `.agents/context/`,
-and `docs/misc/`. The Copilot noun translation lives in
-[`.agents/context/copilot-adapter.md`](../.agents/context/copilot-adapter.md) — read it at
-session start.
+[`AGENTS.md`](../AGENTS.md) is canonical vendor-neutral agent policy bootstrap; this file only GitHub Copilot adapter. Copilot no expand imports, so **read `AGENTS.md` now** and follow it, including routing table into `.agents/policy/`, `.agents/context/`, `docs/misc/`. Copilot noun translation lives in
+[`.agents/context/copilot-adapter.md`](../.agents/context/copilot-adapter.md) — read at session start.
 
-The hard invariants are in `AGENTS.md`'s never-list and are not restated here: work in a
-dedicated worktree, rebase-only linear history, tests ship with every change and carry a
-red-to-green proof, every config field goes through `PfbConfig`, no direct Python on the
-appliance, POSIX sh only.
+Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated worktree, rebase-only linear history, tests ship with every change and carry red-to-green proof, every config field goes through `PfbConfig`, no direct Python on appliance, POSIX sh only.
 
 ## Copilot-only surfaces
 
-- Skills are discovered from `.agents/skills/` (canonical) and the `.claude/skills/`
-  symlinks onto it — no Copilot-specific copy exists or should be created. The vendored
+- Skills discovered from `.agents/skills/` (canonical) and `.claude/skills/`
+  symlinks onto it — no Copilot-specific copy exists or should be created. Vendored
   `mattpocock-skills` plugin installs from `plugins/mattpocock-skills/.github/plugin/`.
-- The mode capsules ride this file: Copilot's repo-level `.github/hooks/*.json` did not fire
-  on CLI 1.0.78, so nothing is installed outside the repo.
+- Mode capsules ride this file: Copilot repo-level `.github/hooks/*.json` did not fire
+  on CLI 1.0.78, so nothing installed outside repo.
 - Custom agents live in `.github/agents/*.agent.md`, tiered per `.agents/model-tiers.conf`.
-- `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect the session through
-  `COPILOT_CLI`, which the CLI exports into every shell it spawns. Never unset it to dodge a
+- `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
+  `COPILOT_CLI`, which CLI exports into every shell it spawns. Never unset to dodge
   guard it trips.
-- The human owner stays author, committer, and signer. A `Co-authored-by:` trailer for
-  Copilot is emitted only from a locally configured `coauthor.copilot.*` identity; with none
-  configured, disclose authorship in the PR body instead.
+- Human owner stays author, committer, signer. `Co-authored-by:` trailer for
+  Copilot emitted only from locally configured `coauthor.copilot.*` identity; none
+  configured → disclose authorship in PR body instead.
 - **Copilot code review stays disabled** (owner directive, `.agents/policy/landing.md`).
-  That directive is about the review bot and does not restrict Copilot as an agent client.
+  Directive about review bot, not restrict Copilot as agent client.
 
 ## Communication
 
-Activate PONYTAIL full (build the laziest solution that actually works) and CAVEMAN full
+Activate PONYTAIL full (build laziest solution that actually works) and CAVEMAN full
 (terse: drop articles, filler, pleasantries, hedging; fragments fine; technical terms and
 code exact). Two exceptions get normal professional grammar: external or public-facing text
 (issues, PR bodies, commits) and documentation. Commits: `<scope>: <imperative summary>`.

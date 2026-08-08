@@ -1,35 +1,22 @@
 # TOP1M providers — reference (ADR-59)
 
-Scope: TOP1M Whitelist provider framework (ADR-59). Load when: adding or updating
-a TOP1M provider descriptor or auditing provider licences.
+Scope: TOP1M Whitelist provider framework (ADR-59). Load when: adding/updating TOP1M provider descriptor, or auditing provider licences.
 
-The DNSBL **TOP1M Whitelist** feature (DNSBL Configuration page → *TOP1M Whitelist*) downloads a
-"most popular domains" list and whitelists it, to cut false positives on feeds that block full
-URLs (PhishTank, OpenPhish, MalwarePatrol, …). ADR-59 turned the single hardcoded Tranco/Cisco
-pair into a provider framework — a new source is a descriptor row, not a code fork. This note
-records the framework, the per-provider shapes, the licence obligations, and how a user supplies
-Cloudflare's token. Sibling of `docs/misc/tld-lists.md` (a similarly maintained, non-vendored
-external list).
+DNSBL **TOP1M Whitelist** feature (DNSBL Configuration page → *TOP1M Whitelist*) download "most popular domains" list and whitelist it. Cut false positives on feeds blocking full URLs (PhishTank, OpenPhish, MalwarePatrol, …). ADR-59 turn single hardcoded Tranco/Cisco pair into provider framework — new source = descriptor row, not code fork. This note record framework, per-provider shapes, licence obligations, how user supply Cloudflare token. Sibling of `docs/misc/tld-lists.md` (similarly maintained, non-vendored external list).
 
 ## The descriptor table
 
-`pfb_top1m_providers()` in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc` is the single
-source of truth — every provider is one row:
+`pfb_top1m_providers()` in `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc` = single source of truth. Every provider one row:
 
-- **`url`** — the download URL (a stable literal; no per-request parameterization is needed for
-  the default "latest" behaviour any provider ships today).
-- **`container`** — `'zip'` or `'plain'` (uncompressed). Read by `pfb_download()`'s extractor.
-- **`parse`** — `'rank_domain'` (Tranco/Cisco's original 2-column shape) or `'csv'` (a general
-  `str_getcsv()` read using `domain_col`). Read by `pfblockerng_top1m()` (`pfblockerng.inc`).
-- **`header`** — whether the file's first row is a header to skip.
-- **`domain_col`** — the 0-indexed `str_getcsv()` column holding the domain.
-- **`auth`** — `'none'` (keyless) or `array('header' => ..., 'scheme' => ...)` for a
-  token-authenticated provider. Consumed by `pfb_top1m_auth_headers()`, which builds the header
-  `pfb_download()` sends — never a query-string token.
-- **`label`** / **`licence`** — the UI's option text and licence note.
+- **`url`** — download URL (stable literal; no per-request parameterization needed for default "latest" behaviour any provider ships today).
+- **`container`** — `'zip'` or `'plain'` (uncompressed). Read by `pfb_download()` extractor.
+- **`parse`** — `'rank_domain'` (Tranco/Cisco original 2-column shape) or `'csv'` (general `str_getcsv()` read using `domain_col`). Read by `pfblockerng_top1m()` (`pfblockerng.inc`).
+- **`header`** — whether file first row is header to skip.
+- **`domain_col`** — 0-indexed `str_getcsv()` column holding domain.
+- **`auth`** — `'none'` (keyless) or `array('header' => ..., 'scheme' => ...)` for token-authenticated provider. Consumed by `pfb_top1m_auth_headers()`, which builds header `pfb_download()` sends — never query-string token.
+- **`label`** / **`licence`** — UI option text and licence note.
 
-`pfblockerng.php` selects the active row via `$pfb['dnsbl_top1m_type']`/`PfbTop1mSource` and wires
-its `url`/`headers` into the `extras[2]` download slot; no per-provider `if`/`elseif` remains.
+`pfblockerng.php` select active row via `$pfb['dnsbl_top1m_type']`/`PfbTop1mSource`, wire its `url`/`headers` into `extras[2]` download slot. No per-provider `if`/`elseif` remain.
 
 ## Providers
 
@@ -43,57 +30,30 @@ its `url`/`headers` into the `extras[2]` download slot; no per-provider `if`/`el
 
 ## Licence obligations
 
-**Majestic Million** is distributed under **CC BY 3.0** — attribution to Majestic is required.
-**Cloudflare Radar** is distributed under **CC BY-NC 4.0** — non-commercial use only, attribution
-to Cloudflare required. Both notes render on the DNSBL Configuration page next to the source
-picker (`$top1m_text` in `pfblockerng_dnsbl.php`) so a user selecting either sees the obligation
-before enabling it; pfBlockerNG does not enforce non-commercial use, the user is on their own.
+**Majestic Million** under **CC BY 3.0** — attribution to Majestic required. **Cloudflare Radar** under **CC BY-NC 4.0** — non-commercial use only, attribution to Cloudflare required. Both notes render on DNSBL Configuration page next to source picker (`$top1m_text` in `pfblockerng_dnsbl.php`) so user selecting either see obligation before enabling. pfBlockerNG do not enforce non-commercial use — user on own.
 
 ## Supplying the Cloudflare token
 
-Cloudflare Radar needs a Cloudflare API token (a free account, Radar read scope — see the
-in-page link to Cloudflare's own token-creation docs). It is entered in the masked `top1m_token`
-field, shown only when *Cloudflare Radar* is the selected TOP1M source (JS
-`enable_top1m_token()`, driven by which descriptor rows have a non-`'none'` `auth`). The field is
-write-only — never echoed back on a page load — and round-trips through the registered
-`PfbConfig` field of the same name (see `docs/misc/config-gateway.md`'s inventory). A blank save
-preserves the existing stored token rather than clearing it, since the field always renders
-blank.
+Cloudflare Radar need Cloudflare API token (free account, Radar read scope — see in-page link to Cloudflare token-creation docs). Entered in masked `top1m_token` field, shown only when *Cloudflare Radar* is selected TOP1M source (JS `enable_top1m_token()`, driven by which descriptor rows have non-`'none'` `auth`). Field write-only — never echoed back on page load — and round-trips through registered `PfbConfig` field of same name (see `docs/misc/config-gateway.md` inventory). Blank save preserve existing stored token instead of clearing it, since field always render blank.
 
 ## CI health-check
 
-`scripts/misc/check_top1m_providers.py` (`.github/workflows/top1m-healthcheck.yml`, weekly) reads
-the descriptor table via `--extract` and validates each provider via `--check-url` — a real
-recent list, not just a 200. It classifies by `auth`:
+`scripts/misc/check_top1m_providers.py` (`.github/workflows/top1m-healthcheck.yml`, weekly) read descriptor table via `--extract`, validate each provider via `--check-url` — real recent list, not just 200. Classify by `auth`:
 
-- **Keyless** providers are always fetched and validated.
-- A **token** provider is validated only when its CI secret is configured, else the leg **prints
-  a visible `SKIP … needs token, no secret configured` line and exits 0** — it never fails the
-  run merely for lacking a secret, and it never fails silently either.
+- **Keyless** providers always fetched and validated.
+- **Token** provider validated only when its CI secret configured, else leg **print visible `SKIP … needs token, no secret configured` line and exit 0** — never fail run merely for lacking secret, never fail silently either.
 
-The secret's env-var name is **derived from the provider's `label`**, not hand-mapped —
-`_secret_env_from_label()` turns `"Cloudflare Radar"` into `CLOUDFLARE_RADAR_TOKEN` (the
-convention the ADR itself names). Wiring a new token provider's secret is: add the repo secret
-under that derived name, then add one `NAME: ${{ secrets.NAME }}` line to the `check` (and
-`alert`) jobs' `env:` in the workflow — no other script or workflow change.
+Secret env-var name **derived from provider `label`**, not hand-mapped — `_secret_env_from_label()` turn `"Cloudflare Radar"` into `CLOUDFLARE_RADAR_TOKEN` (convention ADR itself name). Wiring new token provider secret: add repo secret under that derived name, then add one `NAME: ${{ secrets.NAME }}` line to `check` (and `alert`) jobs' `env:` in workflow. No other script or workflow change.
 
 ## Adding a provider
 
-1. Add a row to `pfb_top1m_providers()` (url/container/parse/header/domain_col/auth/label/licence).
-2. Add its option to `$options_top1m_source` in `pfblockerng_dnsbl.php`; extend `$top1m_text` with
-   its licence note if it carries one.
-3. If it needs a token, no code changes are required beyond the descriptor's `auth` field — the
-   masked field, its JS toggle, and the CI health-check's classification are all derived from it.
-4. Add Tier-A UI coverage (the new option + any licence text renders); extend the relevant
-   PHPUnit descriptor/parsing tests.
+1. Add row to `pfb_top1m_providers()` (url/container/parse/header/domain_col/auth/label/licence).
+2. Add its option to `$options_top1m_source` in `pfblockerng_dnsbl.php`; extend `$top1m_text` with its licence note if it carry one.
+3. If needs token, no code change beyond descriptor `auth` field — masked field, JS toggle, CI health-check classification all derived from it.
+4. Add Tier-A UI coverage (new option + any licence text renders); extend relevant PHPUnit descriptor/parsing tests.
 
 ## Out of scope
 
-Vendoring/embedding any of these lists; Chrome CrUX (BigQuery-only, not a bulk downloadable
-list); per-provider tokens (one shared `top1m_token` field suffices — only one source is
-active at a time).
+Vendoring/embedding any of these lists; Chrome CrUX (BigQuery-only, not bulk downloadable list); per-provider tokens (one shared `top1m_token` field suffice — only one source active at a time).
 
-Note (#928): the bulk top-10M list itself moved hosting from DomCop to OpenPageRank in 2026 (the
-DomCop URL froze 2026-03-29) — the descriptor above tracks that bulk CSV download, not
-OpenPageRank's separate **per-domain API** (a rank lookup for one domain at a time), which
-remains out of scope for the same reason as Chrome CrUX: this feature only downloads bulk lists.
+Note (#928): bulk top-10M list moved hosting from DomCop to OpenPageRank in 2026 (DomCop URL froze 2026-03-29) — descriptor above track that bulk CSV download, not OpenPageRank separate **per-domain API** (rank lookup one domain at a time), which stay out of scope for same reason as Chrome CrUX: this feature only download bulk lists.

@@ -7,24 +7,23 @@ description: >
   message, or failing command>. Use when the user says "debug this", "why is X
   failing", "investigate this error", or invokes /debug.
 ---
-
-You are debugging under the CLAUDE.md hypothesis-ledger rule: **no fix edit before a
-CONFIRMED hypothesis**. Committing to a path without discriminating evidence is the failure
-mode this skill kills — a plausible story is not a diagnosis.
+You debugging under CLAUDE.md hypothesis-ledger rule: **no fix edit before a CONFIRMED
+hypothesis**. Committing to path without discriminating evidence is failure mode this skill
+kills — plausible story not diagnosis.
 
 Args: `{{ args }}`
 
 ## Step 1 — Reproduce (or gather the artifacts)
 
-Run the failing thing yourself and capture the exact output — the error line, the wrong
-value, the diff between expected and actual. Not reproducible off-appliance? Collect the real
-artifacts instead (logs, the smoke-diagnostics snapshot, `config.xml` section, the pasted
-user report) and say precisely what could not be reproduced and why. **No reproduction and no
-artifacts ⇒ stop and ask for them** — do not theorize from the symptom description alone.
+Run failing thing yourself. Capture exact output — error line, wrong value, diff between
+expected and actual. Not reproducible off-appliance? Collect real artifacts instead (logs,
+smoke-diagnostics snapshot, `config.xml` section, pasted user report) and say precisely what
+could not reproduce and why. **No reproduction and no artifacts ⇒ stop and ask for them** — no
+theorize from symptom description alone.
 
 ## Step 2 — The ledger
 
-Maintain this table in your working notes and carry it into the final report:
+Keep this table in working notes. Carry into final report:
 
 ```text
 OBSERVATIONS (pasted output only, no interpretation)
@@ -39,30 +38,29 @@ PROBES (one per live hypothesis — the cheapest command whose output separates 
 
 Rules:
 
-- **≥2 hypotheses before the first probe.** One hypothesis is a conclusion wearing a lab
-  coat. If you genuinely cannot form a second, write down why — that reasoning is itself
-  checkable.
-- **Probes discriminate; they don't confirm.** A probe whose output would look the same under
-  both hypotheses is not a probe. Prefer reading the effective live state (CLAUDE.md
-  "Investigate, don't assume": the tool's own CLI, the included files, the chroot-relative
-  path) over re-reading the code you already believe you understand.
+- **≥2 hypotheses before first probe.** One hypothesis is conclusion wearing lab coat. Cannot
+  form second? Write down why — that reasoning itself checkable.
+- **Probes discriminate; they don't confirm.** Probe whose output look same under both
+  hypotheses not probe. Prefer reading effective live state (CLAUDE.md "Investigate, don't
+  assume": tool's own CLI, included files, chroot-relative path) over re-reading code you
+  already believe you understand.
 - **Every environmental claim gets probed**, not remembered — default shells, tool exit-code
-  semantics, platform behaviour (the false-"pipefail" and #902 class).
-- All hypotheses refuted → the evidence has told you something: write new hypotheses FROM the
-  probe outputs and continue the ledger. Never fall through to "just try changing X".
+  semantics, platform behaviour (false-"pipefail" and #902 class).
+- All hypotheses refuted? Evidence told you something: write new hypotheses FROM probe
+  outputs, continue ledger. Never fall through to "just try changing X".
 
 ## Step 3 — Fix only after CONFIRMED
 
-- State the confirmed root cause in one sentence, citing the probe that proved it.
-- Root cause, not symptom (ponytail): grep every caller/sibling of the faulty path — the
-  #858→#900 chain was five symptom-fixes of one cause. Enumerate the sibling axes before
-  choosing where the fix goes.
-- The fix follows the test mandate: pin with a test that **fails on the broken code**
-  (executed, output recorded) and passes after. Land per the normal flow (worktree; PR per
-  `.agents/policy/landing.md` for code, direct `devel` for dev-only classes) — or hand the
-  confirmed diagnosis to a delegated implementer if the user only asked for the investigation.
+- State confirmed root cause in one sentence, cite probe that proved it.
+- Root cause, not symptom (ponytail): grep every caller/sibling of faulty path — #858→#900
+  chain was five symptom-fixes of one cause. Enumerate sibling axes before choosing where fix
+  goes.
+- Fix follows test mandate: pin with test that **fails on broken code** (executed, output
+  recorded) and passes after. Land per normal flow (worktree; PR per `.agents/policy/landing.md`
+  for code, direct `devel` for dev-only classes) — or hand confirmed diagnosis to delegated
+  implementer if user only asked for investigation.
 
 ## Step 4 — Report
 
-Final report = verdict (root cause + the confirming probe), the full ledger, the fix (or the
-recommended next step), and any ASSUMED facts that remain unverified.
+Final report = verdict (root cause + confirming probe), full ledger, fix (or recommended next
+step), any ASSUMED facts still unverified.

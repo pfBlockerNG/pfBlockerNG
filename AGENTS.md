@@ -1,70 +1,70 @@
 # pfBlockerNG — agent bootstrap (canonical)
 
-This file is the **canonical, vendor-neutral agent policy bootstrap**. Claude Code loads it
-through `CLAUDE.md` (`@AGENTS.md` import), Codex natively, Copilot via
-`.github/copilot-instructions.md`. Detailed policy lives in `.agents/policy/`, domain
-context in `.agents/context/` and `docs/misc/` — loaded per the routing table below, never
-all at once. Shared behavior changes land there, never in a vendor copy.
+This file = **canonical, vendor-neutral agent policy bootstrap**. Claude Code load it
+through `CLAUDE.md` (`@AGENTS.md` import), Codex native, Copilot via
+`.github/copilot-instructions.md`. Detailed policy live in `.agents/policy/`, domain
+context in `.agents/context/` and `docs/misc/` — load per routing table below, never
+all at once. Shared behavior change land there, never in vendor copy.
 
 ## Scope — the pfBlockerNG-org default
 
-These rules, plus the active client's settings and lifecycle hooks, are the default way of
-working for **every repository in the `pfBlockerNG` GitHub organization**; a repo-local
-canonical-policy rule wins for that repo only. *How we work* (principles, delegation,
-worktrees, landing, tests, issues, commits) carries over; *this package's mechanics*
+These rules, plus active client settings and lifecycle hooks, = default way of
+working for **every repository in the `pfBlockerNG` GitHub organization**; repo-local
+canonical-policy rule win for that repo only. *How we work* (principles, delegation,
+worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 (DNSBL pipeline, smoke suites, pkg repo, language specifics) do not.
 
 ## Working principles — don't guess
 
-- **Never assume** — read the source of truth, investigate the live state, and confirm a
-  genuine fork before building. A clean grep of one file is not proof; a plausible memory is
-  not a fact.
-- **Ambiguity:** pick the obvious option and proceed when there is one; `AskUserQuestion`
-  only when the choice is genuinely the user's (unclear intent, diverging defensible
-  approaches, architecturally significant change). Applies to autonomous flows too.
-- **Evidence:** a claim without a run artifact is ASSUMED; environmental claims written into
-  artifacts are probed in-session first; no self-exemption from a MUST rule without quoting
-  the authorizing user message; debugging lists ≥2 hypotheses + a discriminating probe
+- **Never assume** — read source of truth, investigate live state, confirm
+  genuine fork before build. Clean grep of one file not proof; plausible memory not
+  fact.
+- **Ambiguity:** pick obvious option and proceed when one exist; `AskUserQuestion`
+  only when choice genuinely user's (unclear intent, diverging defensible
+  approaches, architecturally significant change). Apply to autonomous flows too.
+- **Evidence:** claim without run artifact = ASSUMED; environmental claims written into
+  artifacts probed in-session first; no self-exemption from MUST rule without quoting
+  authorizing user message; debugging list ≥2 hypotheses + discriminating probe
   before any fix edit (incident index: `docs/history/incidents.md`).
 
 ## Never-list (hard invariants)
 
-- All repository work happens in a dedicated git worktree — cut via
+- All repository work happen in dedicated git worktree — cut via
   `scripts/agent/work-branch.sh <issue|adr> <NN> [title...] --worktree`; never hand-derive
-  the branch slug.
+  branch slug.
 - Dev-only classes (ADR text, skills, agent workflows/config, documentation-only) commit
-  directly to `devel` after fetch + rebase, still from a worktree; anything touching
-  `src/`, `tests/`, or CI takes the full rebase-only-PR flow with independent review.
-- Merge PRs by rebase only; history stays strictly linear; rebase onto the latest base
-  before every push, PR, or CI/smoke dispatch; clean the diff before you push.
-- Push every green, final commit to its remote branch immediately; work never stays only on
-  a local branch. Dev-only commits push to `devel`; code branches push to their own remote
+  direct to `devel` after fetch + rebase, still from worktree; anything touching
+  `src/`, `tests/`, or CI take full rebase-only-PR flow with independent review.
+- Merge PRs by rebase only; history stay strictly linear; rebase onto latest base
+  before every push, PR, or CI/smoke dispatch; clean diff before push.
+- Push every green, final commit to its remote branch immediately; work never stay only on
+  local branch. Dev-only commits push to `devel`; code branches push to own remote
   branch.
-- Landing a change is not committing it: it means commit, push, open a non-draft PR, address
-  every review round, and rebase-merge it (dev-only classes land at the push to `devel`).
-  Report work as landed only after that completes; otherwise report its real state.
-- A behaviour change needs its test-first red→green proof: reproduction test executed RED
+- Landing change ≠ committing it: mean commit, push, open non-draft PR, address
+  every review round, and rebase-merge it (dev-only classes land at push to `devel`).
+  Report work landed only after that complete; otherwise report real state.
+- Behaviour change need test-first red→green proof: reproduction test executed RED
   before any production edit, frozen byte-identical, re-run GREEN unchanged — executed
   runs, never reasoned through.
-- Every change ships WITH its tests; no coverage theater (every test carries an assertion
-  that fails on regression); a `www/` change carries the reachable UI coverage required by
+- Every change ship WITH its tests; no coverage theater (every test carry assertion
+  that fail on regression); `www/` change carry reachable UI coverage required by
   `.agents/policy/testing.md`.
-- No direct Python interpreter invocation ON the appliance. Consumers invoke
-  `/usr/local/pkg/pfblockerng/pfb_python.sh`; that wrapper alone derives the exact versioned
-  path from the installed package dependency. `pfb_python_interpreter()` delegates to the
-  wrapper for compatibility and test probes. Otherwise use PHP or POSIX sh. Shell is POSIX sh
+- No direct Python interpreter invocation ON appliance. Consumers invoke
+  `/usr/local/pkg/pfblockerng/pfb_python.sh`; that wrapper alone derive exact versioned
+  path from installed package dependency. `pfb_python_interpreter()` delegate to wrapper
+  for compatibility and test probes. Otherwise use PHP or POSIX sh. Shell = POSIX sh
   under strict ash/dash semantics.
-- Every registered config field goes through `PfbConfig` — never direct `config_*_path`.
-- No orphaned waits: harness-tracked work gets no timer; every untracked wait has a hard
-  cap + deadline and dies with its task.
-- `--no-verify` is for humans, not agents. Never weaken a canonical mandate without quoted
+- Every registered config field go through `PfbConfig` — never direct `config_*_path`.
+- No orphaned waits: harness-tracked work get no timer; every untracked wait has hard
+  cap + deadline and die with its task.
+- `--no-verify` for humans, not agents. Never weaken canonical mandate without quoted
   user authorization.
-- Accepted/Implemented ADR bodies and artifacts are immutable — corrections append dated
+- Accepted/Implemented ADR bodies and artifacts immutable — corrections append dated
   amendments.
-- Read the whole GitHub issue (title, body, every comment) before working it.
+- Read whole GitHub issue (title, body, every comment) before working it.
 
-Enforcement is mechanical where possible: `.githooks/` pre-commit/prepare-commit-msg/
-pre-push, CI, and `scripts/agent/run-gates.sh` are authoritative; lifecycle hooks carry the
+Enforcement mechanical where possible: `.githooks/` pre-commit/prepare-commit-msg/
+pre-push, CI, and `scripts/agent/run-gates.sh` authoritative; lifecycle hooks carry
 communication-mode capsules.
 
 ## Routing table — read on trigger, not up front
@@ -93,11 +93,11 @@ communication-mode capsules.
 | PSL / TLD Allow / HSTS / TOP1M refresh | `docs/misc/<public-suffix-list\|tld-lists\|hsts-preload-list\|top1m-providers>.md` |
 | docs-only change; min-CE version bump | `git.md` dev-only classes; `docs/misc/version-bump-runbook.md` (stubs: `scripts/update-pfsense-stubs.py`) |
 
-Delegation shape: substantial coding work is planned/gated by the **top tier**, implemented
-by **small-tier** sub-agents, every step gated by an independent small-tier verifier via the
-brief → handoff → gate contract; the top tier handles small one-step fixes and
-docs/config/settings/skills directly. Tiers top/mid/small map to models in
-`.agents/model-tiers.conf` (disjoint from effort words — "high" is always an effort value).
+Delegation shape: substantial coding work planned/gated by **top tier**, implemented
+by **small-tier** sub-agents, every step gated by independent small-tier verifier via
+brief → handoff → gate contract; top tier handle small one-step fixes and
+docs/config/settings/skills direct. Tiers top/mid/small map to models in
+`.agents/model-tiers.conf` (disjoint from effort words — "high" always effort value).
 New implementation-plan ADRs stopped (wayfinder map #1383).
 
 Test law (five principles, full text in `testing.md`): red-before/green-after test-first
@@ -126,10 +126,10 @@ pfBlockerNG/
 
 ## Communication
 
-Session-start hooks activate ponytail (build lazy) + caveman (talk terse); the capsules are
-the mechanism. Two style exceptions get normal professional grammar: external/public-facing
+Session-start hooks activate ponytail (build lazy) + caveman (talk terse); capsules =
+mechanism. Two style exceptions get normal professional grammar: external/public-facing
 text (issues, PR bodies, commits) and documentation. Commits:
-`<scope>: <imperative summary>`. While working an ADR/issue/PR, prefix replies with the
+`<scope>: <imperative summary>`. While working ADR/issue/PR, prefix replies with
 one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; 📝 authoring ·
 🏗️ implementing ADR · 🤔 investigating · 🛠️ fixing · 👀 awaiting review · ⏳ awaiting CI ·
 🏁 merged/cleanup); omit on plain conversational turns.
@@ -138,16 +138,16 @@ one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; �
 
 Vendor-specific surfaces live in each vendor's own adapter, never in this neutral file:
 
-- **Claude Code** → `CLAUDE.md` (imports this file via `@AGENTS.md`; holds Claude-only
+- **Claude Code** → `CLAUDE.md` (import this file via `@AGENTS.md`; hold Claude-only
   surfaces — hooks in `.claude/settings.json`, skills at `.claude/skills/` symlinked from
   `.agents/skills/`, git-hook marker `CLAUDECODE=1`).
-- **Codex** → `.agents/context/codex-adapter.md`. Codex reads this bootstrap natively but not
-  that file; **read it at session start** for the canonical-noun → Codex translation table and
+- **Codex** → `.agents/context/codex-adapter.md`. Codex read this bootstrap native but not
+  that file; **read it at session start** for canonical-noun → Codex translation table and
   Codex specifics (subagents, attribution, resume, hook/marker surfaces).
-- **GitHub Copilot** → `.github/copilot-instructions.md` (the thin adapter Copilot loads
-  itself; it points here) plus `.agents/context/copilot-adapter.md` for the canonical-noun →
+- **GitHub Copilot** → `.github/copilot-instructions.md` (thin adapter Copilot load
+  itself; it point here) plus `.agents/context/copilot-adapter.md` for canonical-noun →
   Copilot translation table and Copilot specifics (custom agents in `.github/agents/`, repo
-  hooks in `.github/hooks/`, the pid session marker the git hooks read, attribution).
+  hooks in `.github/hooks/`, pid session marker git hooks read, attribution).
   **Read both at session start.**
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die. Drop

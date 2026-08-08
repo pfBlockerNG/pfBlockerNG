@@ -1,58 +1,58 @@
 # Agent role families — shared contract
 
-- **Scope:** vendor-neutral agent role families for Claude, Codex, and Copilot: what each role is
-  for, what it may read and mutate, what it must return, and which model tier serves it
+- **Scope:** vendor-neutral agent role families for Claude, Codex, Copilot: what each role
+  for, what it read and mutate, what it return, which model tier serve it
   (issue [#1387](https://github.com/pfBlockerNG/pfBlockerNG/issues/1387); companion to
-  the fresh-session ticket workflow in [`workflow.md`](workflow.md)).
-- **Load-when:** defining or routing an agent role; changing `.codex/agents/`, `.github/agents/`,
+  fresh-session ticket workflow in [`workflow.md`](workflow.md)).
+- **Load-when:** defining or routing agent role; changing `.codex/agents/`, `.github/agents/`,
   `.agents/model-tiers.conf`, or this registry.
 - **Owner:** repo owner. **Last-verified:** 2026-07-17.
 
 ## Goal
 
-One semantic contract per role family, mapped explicitly onto each vendor's native
-definitions, so every client stays behaviorally aligned without identical files, models,
-tools, or wording. Context-window pollution is the enemy: a role loads its purpose-built
-context slice (its contract section plus the packet's Required reading), never the whole
+One semantic contract per role family, mapped explicit onto each vendor's native
+definitions, so every client stay behaviorally aligned without identical files, models,
+tools, or wording. Context-window pollution = enemy: role load its purpose-built
+context slice (contract section plus packet's Required reading), never whole
 policy corpus.
 
 ## Fixed constraints
 
-- Tier vocabulary is **top / mid / small** from
-  [`.agents/model-tiers.conf`](../model-tiers.conf). The contract names tiers, never
-  vendor model ids; a tier selects the model, and procedures set effort independently.
-- Expensive tiers require evidence (see Tier economics).
-- The delegation contract (`.agents/policy/delegation.md`: brief → handoff → gate) and the task-packet /
-  checkpoint schemas ([`workflow.md`](workflow.md)) bind every role unchanged; a role
-  contract may narrow them, never weaken them.
-- `scripts/check_agent_roles.py` validates the registry below against each vendor's
-  definitions if and only if either side changes (pre-commit + CI). It checks semantic
+- Tier vocabulary = **top / mid / small** from
+  [`.agents/model-tiers.conf`](../model-tiers.conf). Contract name tiers, never
+  vendor model ids; tier select model, procedures set effort independent.
+- Expensive tiers need evidence (see Tier economics).
+- Delegation contract (`.agents/policy/delegation.md`: brief → handoff → gate) and task-packet /
+  checkpoint schemas ([`workflow.md`](workflow.md)) bind every role unchanged; role
+  contract may narrow them, never weaken.
+- `scripts/check_agent_roles.py` validate registry below against each vendor's
+  definitions if and only if either side change (pre-commit + CI). Check semantic
   fields — tier vocabulary, mutation boundaries, binding targets, model-tier pins —
-  never textual identity, so vendor-native wording stays free.
+  never textual identity, so vendor-native wording stay free.
 
 ## Tier economics (Sol/Luna discipline, every vendor)
 
-- **small** is the default executor tier: implementation, verification, review, triage,
-  publishing, and coordination all start small.
-- **top** requires a named routing trigger: planning/gating substantial work; whole-PR
-  review of a large/complex PR (>300 lines, >6 files, or `src/`
-  parsing/guard/scheduling behaviour); verdict-quality triage of a complex issue.
-  Mid-task escalation additionally requires documented evidence **in the ticket** — a
-  failed executed attempt, a falsified packet premise, or cross-cutting design surfaced
-  mid-step; "feels hard" is not evidence ([`workflow.md`](workflow.md) "Model escalation
+- **small** = default executor tier: implementation, verification, review, triage,
+  publishing, coordination all start small.
+- **top** need named routing trigger: planning/gating substantial work; whole-PR
+  review of large/complex PR (>300 lines, >6 files, or `src/`
+  parsing/guard/scheduling behaviour); verdict-quality triage of complex issue.
+  Mid-task escalation also need documented evidence **in ticket** —
+  failed executed attempt, falsified packet premise, or cross-cutting design surfaced
+  mid-step; "feels hard" not evidence ([`workflow.md`](workflow.md) "Model escalation
   and risk triggers").
-- **mid** is a fallback tier: it substitutes an unavailable top, for planning and review
-  alike, and reviews alone in that case — never a default route (2026-08-01: the former
-  small+mid dual pass is retired).
+- **mid** = fallback tier: substitute unavailable top, for planning and review
+  alike, and review alone in that case — never default route (2026-08-01: former
+  small+mid dual pass retired).
 
 ## Role registry (machine-readable)
 
-`scripts/check_agent_roles.py` parses this table. Column vocabularies: **Tiers** —
+`scripts/check_agent_roles.py` parse this table. Column vocabularies: **Tiers** —
 `top`/`mid`/`small`, primary (default) tier first, `+`-separated; **Mutation** —
 `read-only`/`workspace-write`; **Independent** — `yes`/`no`; **bindings** —
 comma-separated `kind:name` (Claude kinds: `skill` = `.agents/skills/<name>/`,
-`policy` = `.agents/policy/<name>`, `session` = the top-level session itself or a
-fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` =
+`policy` = `.agents/policy/<name>`, `session` = top-level session itself or
+fresh native sub-agent it spawn with role's contract; Codex kinds: `agent` =
 `.codex/agents/<name>.toml`, plus `skill`/`policy`/`session` as for Claude).
 
 <!-- role-registry:begin -->
@@ -74,236 +74,236 @@ fresh native sub-agent it spawns with the role's contract; Codex kinds: `agent` 
 ### explorer
 
 - **Purpose & routing:** read-only investigation with cited evidence — locate code,
-  gather facts, triage an issue, run an ADR investigation fan-out. Route here when the
-  outcome is a report, never an edit.
-- **Inputs & task packet:** a scoped question or issue, a worktree path, and the output
+  gather facts, triage issue, run ADR investigation fan-out. Route here when
+  outcome = report, never edit.
+- **Inputs & task packet:** scoped question or issue, worktree path, output
   schema; Required reading as `file:line`/doc pointers, never pasted bodies.
-- **Outputs & evidence:** the requested schema, with every load-bearing fact tagged
-  verified (command + output) or ASSUMED; never a different planning artifact.
+- **Outputs & evidence:** requested schema, every load-bearing fact tagged
+  verified (command + output) or ASSUMED; never different planning artifact.
 - **Permissions & mutation:** read-only. May run read-only commands (grep, `git log`,
-  `gh` reads); never edits, commits, pushes, or changes labels.
-- **Context & skills:** the packet plus its named refs; code-search tooling. Not the full
-  policy corpus. Floor: `issues.md` when triaging; `pfsense-live.md` for a live repro; the
-  routing row of the suspect subsystem.
-- **Stop & escalation:** a packet premise contradicted by source ⇒ STOP and return a
-  structured blocker; an under-specified scope ⇒ route `needs-info`.
-- **Independence:** not required — it serves its caller.
-- **Tier intent:** small by default; top for verdict-quality triage of a complex issue
-  or an evidence-heavy cross-cutting investigation. Never mid.
+  `gh` reads); never edit, commit, push, or change labels.
+- **Context & skills:** packet plus its named refs; code-search tooling. Not full
+  policy corpus. Floor: `issues.md` when triaging; `pfsense-live.md` for live repro;
+  routing row of suspect subsystem.
+- **Stop & escalation:** packet premise contradicted by source ⇒ STOP, return
+  structured blocker; under-specified scope ⇒ route `needs-info`.
+- **Independence:** not required — serve its caller.
+- **Tier intent:** small by default; top for verdict-quality triage of complex issue
+  or evidence-heavy cross-cutting investigation. Never mid.
 
 ### planner
 
-- **Purpose & routing:** decompose substantial work into bounded steps, author the
+- **Purpose & routing:** decompose substantial work into bounded steps, author
   brief/task packet (coverage matrix and hostile-input rows enumerated from source),
-  and gate every delegated step mechanically. Route: substantial multi-step
+  gate every delegated step mechanically. Route: substantial multi-step
   `src/`/`tests/`/CI work, ADR design, ambiguity forks.
-- **Inputs & task packet:** the work item (issue, ADR, map ticket), the live tree, and
-  the policy annexes the item touches.
-- **Outputs & evidence:** the brief (mandatory sections per the delegation contract),
-  the per-step gate record, and HALT/continue decisions — each check an executed
+- **Inputs & task packet:** work item (issue, ADR, map ticket), live tree,
+  policy annexes item touch.
+- **Outputs & evidence:** brief (mandatory sections per delegation contract),
+  per-step gate record, HALT/continue decisions — each check executed
   command with pasted output.
-- **Permissions & mutation:** read-only as the role: briefs and gates, not edits. The
-  session hosting it may switch roles in place — implementer for a small direct fix or
+- **Permissions & mutation:** read-only as role: briefs and gates, not edits.
+  Session hosting it may switch roles in place — implementer for small direct fix or
   docs/config/skills work (CLAUDE.md carve-out), publisher/coordinator for landing and
-  bookkeeping — but the planner never grades its own implementation work.
-- **Context & skills:** the bootstrap (AGENTS.md) and its routed annexes, prior handoffs;
-  the fresh-session workflow ([`workflow.md`](workflow.md)). Floor:
+  bookkeeping — but planner never grade its own implementation work.
+- **Context & skills:** bootstrap (AGENTS.md) and its routed annexes, prior handoffs;
+  fresh-session workflow ([`workflow.md`](workflow.md)). Floor:
   [`delegation.md`](delegation.md) always; `issues.md` on issue work, `landing.md` when
-  landing, `waits.md` when a wait is armed.
-- **Stop & escalation:** a genuine user fork ⇒ ask the user; a falsified premise ⇒ stop
-  and re-plan, loudly. Never silently patch the plan.
-- **Independence:** not independent of the work item, but producer≠gater: the per-step
-  verifier and PR reviewer are always different agents.
-- **Tier intent:** top — every downstream artifact leans on the brief, and brief bugs
-  demonstrably ship defects; mid as the documented sole fallback when top is
+  landing, `waits.md` when wait armed.
+- **Stop & escalation:** genuine user fork ⇒ ask user; falsified premise ⇒ stop
+  and re-plan, loud. Never silent patch plan.
+- **Independence:** not independent of work item, but producer≠gater: per-step
+  verifier and PR reviewer always different agents.
+- **Tier intent:** top — every downstream artifact lean on brief, and brief bugs
+  demonstrably ship defects; mid as documented sole fallback when top
   unavailable.
 
 ### implementer
 
-- **Purpose & routing:** execute exactly one approved brief/packet in the assigned
-  worktree. Two weights, one contract: **full** (default) and **light** — a
-  behaviour-preserving mechanical step pinned by an earlier gate-passed oracle, run
-  without a planning/reconcile wrapper (this is the issue's "quick implementer";
+- **Purpose & routing:** execute exactly one approved brief/packet in assigned
+  worktree. Two weights, one contract: **full** (default) and **light** —
+  behaviour-preserving mechanical step pinned by earlier gate-passed oracle, run
+  without planning/reconcile wrapper (this = issue's "quick implementer";
   same permissions and evidence schema, smaller scope).
-- **Inputs & task packet:** THE BRIEF (mandatory sections) plus the prior step's
-  handoff. Trust the brief — no re-investigating its evidence.
+- **Inputs & task packet:** THE BRIEF (mandatory sections) plus prior step's
+  handoff. Trust brief — no re-investigating its evidence.
 - **Outputs & evidence:** THE HANDOFF, fixed fields: verdict, what changed, gate
   commands + output tails, red→green proof (executed, test-first, frozen), coverage
   matrix ticks, deviations, carry-forward.
 - **Permissions & mutation:** workspace-write inside its worktree; commits as directed.
-  Never pushes protected branches, never merges, never edits the brief or policy.
-- **Context & skills:** the brief, its named refs, the code it edits, and the language
-  annex for the touched file types — nothing broader. Floor: `coding.md`, `testing.md`, the
-  `lang-*.md` per touched file type; domain rows per the routing table.
-- **Stop & escalation:** the ESCALATE contract — a contradicted premise or a mechanism
-  the brief never named ⇒ BLOCKED (or DONE-WITH-DEVIATION), never plain DONE; at most
+  Never push protected branches, never merge, never edit brief or policy.
+- **Context & skills:** brief, its named refs, code it edit, language
+  annex for touched file types — nothing broader. Floor: `coding.md`, `testing.md`,
+  `lang-*.md` per touched file type; domain rows per routing table.
+- **Stop & escalation:** ESCALATE contract — contradicted premise or mechanism
+  brief never named ⇒ BLOCKED (or DONE-WITH-DEVIATION), never plain DONE; at most
   2 executed attempts per step, then checkpoint and escalate citing both runs.
-- **Independence:** none; accountability stays with the spawner. May re-delegate a
-  genuine split, never the whole brief.
-- **Tier intent:** small, always. A higher tier mid-step requires documented evidence
-  in the ticket.
+- **Independence:** none; accountability stay with spawner. May re-delegate
+  genuine split, never whole brief.
+- **Tier intent:** small, always. Higher tier mid-step need documented evidence
+  in ticket.
 
 ### verifier
 
-- **Purpose & routing:** independently re-derive one completed step: re-run the gates,
-  re-execute the red→green proof, read the full diff against every plan item and
+- **Purpose & routing:** independently re-derive one completed step: re-run gates,
+  re-execute red→green proof, read full diff against every plan item and
   coverage row, audit test honesty and conventions. Route: after every delegated step,
-  before the next starts.
-- **Inputs & task packet:** the brief, the handoff, the diff, and the canonical gate
+  before next start.
+- **Inputs & task packet:** brief, handoff, diff, canonical gate
   commands.
-- **Outputs & evidence:** the gate-record fields — commands + results, red/green
-  evidence, per-item diff verdicts, matrix confirmation, and an explicit SKIPPED list.
+- **Outputs & evidence:** gate-record fields — commands + results, red/green
+  evidence, per-item diff verdicts, matrix confirmation, explicit SKIPPED list.
 - **Permissions & mutation:** read-only on sources; may execute gates and tests
-  ephemerally. Never patches a finding — defects route back to the planner.
-- **Context & skills:** the brief + handoff + diff and the canonical gate table;
-  deliberately not the implementer's transcript. Floor: `testing.md`, `landing.md`; the
-  touched `lang-*.md` and the domain rows of the diff.
-- **Stop & escalation:** any defect or unnamed mechanism in the diff ⇒ reject the step;
-  a check it cannot run is recorded SKIPPED with the reason, never silently dropped.
-- **Independence:** required — never the agent (or model) that authored the brief or
-  the diff.
-- **Tier intent:** small, always (owner directive 2026-07-14): a different model reads
-  with different blind spots, and the step gate needs no top tier.
+  ephemerally. Never patch finding — defects route back to planner.
+- **Context & skills:** brief + handoff + diff and canonical gate table;
+  deliberately not implementer's transcript. Floor: `testing.md`, `landing.md`;
+  touched `lang-*.md` and domain rows of diff.
+- **Stop & escalation:** any defect or unnamed mechanism in diff ⇒ reject step;
+  check it cannot run recorded SKIPPED with reason, never silent dropped.
+- **Independence:** required — never agent (or model) that authored brief or
+  diff.
+- **Tier intent:** small, always (owner directive 2026-07-14): different model read
+  with different blind spots, and step gate need no top tier.
 
 ### reviewer
 
 - **Purpose & routing:** three parallel leg reviewers (contract · correctness+hostile
-  · test honesty) over the whole PR diff; re-review legs focus on changes since their
+  · test honesty) over whole PR diff; re-review legs focus on changes since their
   own leg's recorded head SHA. Route: every code PR and fix round.
 - **Inputs & task packet:** PR number, leg, its latest audit comment (head SHA =
   focus base), worktree, intent/acceptance spec.
 - **Outputs & evidence:** schema-forced findings — severity, location, evidence,
-  reproduction — as review output; never an edited tree.
+  reproduction — as review output; never edited tree.
 - **Permissions & mutation:** read-only; may run discriminating probes and hostile
-  inputs. Never edits, commits, or downgrades a pre-existing defect — those route
-  to a tracked follow-up.
-- **Context & skills:** the full diff + surrounding code; the policy annexes the diff
-  touches. Floor: `testing.md`, `landing.md`; the touched `lang-*.md` and the diff's
+  inputs. Never edit, commit, or downgrade pre-existing defect — those route
+  to tracked follow-up.
+- **Context & skills:** full diff + surrounding code; policy annexes diff
+  touch. Floor: `testing.md`, `landing.md`; touched `lang-*.md` and diff's
   domain rows.
-- **Stop & escalation:** the fix→re-review loop continues only while the latest
-  round has a blocking finding; hard cap 3 rounds, then a human decides.
-- **Independence:** required — a fresh context, never the author of the change.
+- **Stop & escalation:** fix→re-review loop continue only while latest
+  round has blocking finding; hard cap 3 rounds, then human decide.
+- **Independence:** required — fresh context, never author of change.
 - **Tier intent:** per leg — correctness+hostile top (mid iff top unavailable),
   contract mid, test honesty small; re-reviews all small.
 
 ### publisher
 
-- **Purpose & routing:** the commit-and-publish operator — mechanical landing:
-  rebase onto the live base, clean the diff, push, open the PR, keep labels in sync,
+- **Purpose & routing:** commit-and-publish operator — mechanical landing:
+  rebase onto live base, clean diff, push, open PR, keep labels in sync,
   run bounded CI/review waits, merge only on instruction. Route: after gates and
-  review, when the remaining work is procedure, not judgment.
-- **Inputs & task packet:** the branch, the work item, and the landing instruction
+  review, when remaining work = procedure, not judgment.
+- **Inputs & task packet:** branch, work item, landing instruction
   (which flow, which labels, merge or stop-before-merge).
-- **Outputs & evidence:** the PR URL, label transitions, and merge/CI state — each
+- **Outputs & evidence:** PR URL, label transitions, merge/CI state — each
   claim with its executed command + output tail.
 - **Permissions & mutation:** git/gh writes only — branch pushes, PR metadata, labels.
   No new source changes beyond rebase conflict resolution; never force-push over
-  another session's PR; every wait is bounded and swept.
-- **Context & skills:** [`landing.md`](landing.md) and the branch/release policy — not the
-  implementation history. Floor: [`landing.md`](landing.md); `context/release.md` for a
+  another session's PR; every wait bounded and swept.
+- **Context & skills:** [`landing.md`](landing.md) and branch/release policy — not
+  implementation history. Floor: [`landing.md`](landing.md); `context/release.md` for
   release, `git.md` for tag/push mechanics.
-- **Stop & escalation:** the same CI failure cause twice after a fix attempt ⇒ stop and
-  checkpoint; a blocking review finding routes back to the planner, never a silent
+- **Stop & escalation:** same CI failure cause twice after fix attempt ⇒ stop and
+  checkpoint; blocking review finding route back to planner, never silent
   self-fix.
 - **Independence:** not required.
-- **Tier intent:** small — procedure execution; never burn the top tier on waits.
+- **Tier intent:** small — procedure execution; never burn top tier on waits.
 
 ### coordinator
 
-- **Purpose & routing:** the low-cost ticket coordinator — shepherd the ticket
+- **Purpose & routing:** low-cost ticket coordinator — shepherd ticket
   lifecycle: pick frontier tickets, claim before work, keep state labels honest, post
   checkpoints, route `needs-info`/`ready-for-human`, dispatch workers with task
   packets. Route: fresh-session ticket workflow sessions and label hygiene.
-- **Inputs & task packet:** the map/ticket state on GitHub — the durable execution
-  state; never a parent transcript.
+- **Inputs & task packet:** map/ticket state on GitHub — durable execution
+  state; never parent transcript.
 - **Outputs & evidence:** claims, structured checkpoints (all fields mandatory), label
-  transitions, and dispatched packets.
+  transitions, dispatched packets.
 - **Permissions & mutation:** GitHub metadata writes (labels, assignees, comments,
-  sub-issue/blocked-by relations). No source edits; never cancels a ticket without a
-  human; never overrides a human-set routing.
-- **Context & skills:** [`workflow.md`](workflow.md) plus the bootstrap routing rows —
+  sub-issue/blocked-by relations). No source edits; never cancel ticket without
+  human; never override human-set routing.
+- **Context & skills:** [`workflow.md`](workflow.md) plus bootstrap routing rows —
   deliberately minimal. Floor: [`workflow.md`](workflow.md); `issues.md`.
 - **Stop & escalation:** approaching compaction ⇒ checkpoint, unassign, terminate;
-  correctness-critical work never continues through compaction.
+  correctness-critical work never continue through compaction.
 - **Independence:** not required.
-- **Tier intent:** small — routing and bookkeeping. Escalation happens by dispatching a
-  planner, not by upgrading the coordinator.
+- **Tier intent:** small — routing and bookkeeping. Escalation happen by dispatching
+  planner, not by upgrading coordinator.
 
 ## Vendor mappings
 
-Behavioral equivalence, not surface parity: each client keeps its native orchestration
-as long as the role's semantic fields land as specified. Tier→model resolution always
-goes through [`model-tiers.conf`](../model-tiers.conf).
+Behavioral equivalence, not surface parity: each client keep its native orchestration
+as long as role's semantic fields land as specified. Tier→model resolution always
+go through [`model-tiers.conf`](../model-tiers.conf).
 
 ### Claude
 
-Roles are fresh sub-agents of the harness, not files: **explorer** takes a packet-scoped
-brief (small default, top for verdict quality; the `Explore` type for ad-hoc read-only
-fan-out); **implementer** executes THE BRIEF in the assigned worktree at small tier;
-**verifier** re-derives one step, never on the brief author's model, plus read-only
-validators per finding; **reviewer** implements the [`landing.md`](landing.md) contract
-(small default, top for large or complex, mid when top is unavailable). **planner**,
-**publisher**, and **coordinator** are the session itself (a small-tier delegate may
-publish), following [`delegation.md`](delegation.md), [`landing.md`](landing.md), and
+Roles = fresh sub-agents of harness, not files: **explorer** take packet-scoped
+brief (small default, top for verdict quality; `Explore` type for ad-hoc read-only
+fan-out); **implementer** execute THE BRIEF in assigned worktree at small tier;
+**verifier** re-derive one step, never on brief author's model, plus read-only
+validators per finding; **reviewer** implement [`landing.md`](landing.md) contract
+(small default, top for large or complex, mid when top unavailable). **planner**,
+**publisher**, **coordinator** = session itself (small-tier delegate may
+publish), following [`delegation.md`](delegation.md), [`landing.md`](landing.md),
 [`workflow.md`](workflow.md).
 
 ### Codex
 
-One TOML file per role at `.codex/agents/<role>.toml` — the registry's Codex column names
-each binding, `model` carries the tier and `sandbox_mode` the mutation boundary. `reviewer`
-uses the `-top` file for a large or complex PR and `-mid` as the top-unavailable substitute.
-`publisher` and `coordinator` stay the session, following [`landing.md`](landing.md) and
+One TOML file per role at `.codex/agents/<role>.toml` — registry's Codex column name
+each binding, `model` carry tier and `sandbox_mode` mutation boundary. `reviewer`
+use `-top` file for large or complex PR and `-mid` as top-unavailable substitute.
+`publisher` and `coordinator` stay session, following [`landing.md`](landing.md) and
 [`workflow.md`](workflow.md).
 
 ### Copilot
 
 Same roles and tiers as Codex, one file per role at `.github/agents/<role>.agent.md`
-(launched from `/agents`): `model` carries the tier, and the mutation boundary rides a
-`<!-- mutation: read-only|workspace-write -->` marker in the body, Copilot having no
+(launched from `/agents`): `model` carry tier, mutation boundary ride
+`<!-- mutation: read-only|workspace-write -->` marker in body, Copilot having no
 `sandbox_mode` of its own.
 
 ## Decisions
 
 Deviations from issue #1387's starting six, with rationale:
 
-- **quick implementer merged into implementer** as the `light` weight: identical
-  permissions, evidence schema, and escalation contract; it differs only in scope cap
-  and skipped wrapping stages. The repo already models this as a routing parameter
-  (`WEIGHT: light` phases), and Codex defines one implementer role.
-- **planner added**: the de-facto top-tier role every vendor already defines
-  (`.codex/agents/planner.toml`; the Claude session + Reconcile stage). The expensive
-  tier needs an explicit contract precisely because it is expensive.
+- **quick implementer merged into implementer** as `light` weight: identical
+  permissions, evidence schema, escalation contract; differ only in scope cap
+  and skipped wrapping stages. Repo already model this as routing parameter
+  (`WEIGHT: light` phases), and Codex define one implementer role.
+- **planner added**: de-facto top-tier role every vendor already define
+  (`.codex/agents/planner.toml`; Claude session + Reconcile stage). Expensive
+  tier need explicit contract precisely because expensive.
 - **code reviewer split into verifier + reviewer**: different outputs (gate record vs
-  findings schema) and different tier routing (the verifier is pinned small by owner
-  directive; the reviewer escalates to top for large/complex PRs). Both stay
-  independent and read-only; Codex serves both from the `adversarial-reviewer` family.
-- **code explorer kept** (named `explorer`), covering evidence gathering, triage, and
-  investigation fan-outs — the Codex `analyst` family.
-- **publisher and coordinator kept**, bound to policy documents rather than a
-  dedicated vendor agent: both are procedure-driven small-tier roles a session
-  fills by loading one document, and neither vendor needs a separate agent definition
+  findings schema) and different tier routing (verifier pinned small by owner
+  directive; reviewer escalate to top for large/complex PRs). Both stay
+  independent and read-only; Codex serve both from `adversarial-reviewer` family.
+- **code explorer kept** (named `explorer`), covering evidence gathering, triage,
+  investigation fan-outs — Codex `analyst` family.
+- **publisher and coordinator kept**, bound to policy documents rather than
+  dedicated vendor agent: both = procedure-driven small-tier roles session
+  fill by loading one document, and neither vendor need separate agent definition
   for them.
-- **The shell discovery guard stays.** `scripts/agent/check-agent-config-parity.sh`
-  keeps skill/workflow adapter parity, `model-tiers.conf` syntax, and its fast
-  pre-commit Codex role→tier pins; `scripts/check_agent_roles.py` owns the
-  registry-driven cross-vendor role semantics. The overlapping pins fail loudly on
-  divergence — folding them is deliberately deferred until the registry has bedded in.
+- **Shell discovery guard stays.** `scripts/agent/check-agent-config-parity.sh`
+  keep skill/workflow adapter parity, `model-tiers.conf` syntax, and its fast
+  pre-commit Codex role→tier pins; `scripts/check_agent_roles.py` own
+  registry-driven cross-vendor role semantics. Overlapping pins fail loud on
+  divergence — folding them deliberately deferred until registry bedded in.
 
 ## Acceptance criteria
 
-- Every registry role has a contract section carrying all eight semantic fields, and
-  explicit Claude, Codex, and Copilot bindings that resolve to real files (or `session`).
-- `scripts/check_agent_roles.py --all` passes on the tree; it fails loudly when a
-  vendor definition drifts from the registry (retiered model pin, sandbox/mutation
+- Every registry role has contract section carrying all eight semantic fields, and
+  explicit Claude, Codex, Copilot bindings that resolve to real files (or `session`).
+- `scripts/check_agent_roles.py --all` pass on tree; fail loud when
+  vendor definition drift from registry (retiered model pin, sandbox/mutation
   mismatch, orphaned vendor role, missing contract field) while tolerating any
   vendor-native wording difference.
-- The check runs if and only if a role surface changes: self-scoped `--staged` in
+- Check run if and only if role surface change: self-scoped `--staged` in
   pre-commit and `--diff <base>` in CI.
 
 ## Out of scope
 
 - Per-role context-slice documents (splitting CLAUDE.md into role-specific required
-  reading) — tracked by the wayfinder map
+  reading) — tracked by wayfinder map
   [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383).
 - Effort-level policy: tiers select models; procedures own their effort settings.
 - Skill/workflow adapter parity and symlink integrity — already owned by

@@ -1,184 +1,166 @@
 # Delegation — tiers, brief/handoff/gate, canonical gates
 
-Scope: delegating any step to a sub-agent, and validating what comes back. Load when:
+Scope: delegate any step to sub-agent, validate what come back. Load when:
 planning, spawning, or gating delegated work (ticket packets and ad-hoc alike).
 
 ## Plan top-tier, implement small-tier
 
 Provider-neutral procedures name three capability tiers — **top / mid / small**
-(deliberately disjoint from the effort-level words, so "high" always means an
-effort value). The machine-readable mapping is `.agents/model-tiers.conf`: the
-**top tier** means `claude-fable-5` in Claude and `gpt-5.6-sol` in Codex; the
-**mid tier** means `claude-opus-5` and `gpt-5.6-terra`; the **small tier**
-means `claude-sonnet-5` and `gpt-5.6-luna`. A tier selects the model, not
-the effort knob: workflows still set their required effort independently.
-The role families built on these tiers (explorer, planner, implementer,
-verifier, reviewer, publisher, coordinator) are specified with their vendor
-bindings in [`agent-roles.md`](agent-roles.md);
-`scripts/check_agent_roles.py` keeps every vendor's definitions aligned
-whenever either side changes.
+(disjoint from effort-level words, so "high" always mean effort value). Machine-readable
+mapping: `.agents/model-tiers.conf`. **Top tier** = `claude-fable-5` in Claude,
+`gpt-5.6-sol` in Codex; **mid tier** = `claude-opus-5` and `gpt-5.6-terra`; **small tier**
+= `claude-sonnet-5` and `gpt-5.6-luna`. Tier pick model, not effort knob: workflows still
+set required effort independently. Role families on these tiers (explorer, planner,
+implementer, verifier, reviewer, publisher, coordinator) specified with vendor bindings in
+[`agent-roles.md`](agent-roles.md); `scripts/check_agent_roles.py` keep every vendor
+definition aligned when either side change.
 
-Substantial coding work is **planned and gated by the top tier** (falling back
-to mid when top is unavailable) and **implemented by small-tier** sub-agents:
-the planner splits the task into steps, a small-tier
-implementer executes each, an **independent small-tier verifier gates every step** (never
-the brief author's model), and the planner validates the returned records before the next
-— that per-step gating is what makes a cheaper implementer safe. Ticket execution follows
-the fresh-session workflow ([`workflow.md`](workflow.md)); for ad-hoc coding, follow the
-same shape. The higher
-model may implement a fix **directly** when it is relatively small and doable in one step —
-and always handles **docs / config / settings / skills** directly. Delegation is for
-non-trivial, multi-step `src/`/`tests/`/CI work. **Review-fix rounds are the canonical
-direct case** (owner, 2026-08-08): a small fix the session understands — or a reviewer's
-proposed solution it agrees with — is applied by the session itself, tests included,
-never spawned to a sub-agent. **Ticket pickup follows the same rule**: the
-session that analyzed a ticket implements it directly when the change
-is small-ish — max a handful of lines in one production file + a couple of tests + a
-few doc files; handing that to an implementer is waste. Hard constraint on ALL direct
-work: session context usage ≤ 50% — past 50% the session MUST delegate.
+Substantial coding work **planned and gated by top tier** (fall back to mid when top
+unavailable) and **implemented by small-tier** sub-agents: planner split task into steps,
+small-tier implementer execute each, **independent small-tier verifier gate every step**
+(never brief author's model), planner validate returned records before next — that per-step
+gating is what make cheaper implementer safe. Ticket execution follow fresh-session workflow
+([`workflow.md`](workflow.md)); ad-hoc coding follow same shape. Higher model may implement
+fix **directly** when small and doable in one step — and always handle **docs / config /
+settings / skills** directly. Delegation for non-trivial, multi-step `src/`/`tests/`/CI work.
+**Review-fix rounds are canonical direct case** (owner, 2026-08-08): small fix session
+understand — or reviewer's proposed solution it agree with — applied by session itself, tests
+included, never spawned to sub-agent. **Ticket pickup follow same rule**: session that
+analyzed ticket implement it directly when change small-ish — max handful of lines in one
+production file + couple tests + few doc files; handing that to implementer is waste. Hard
+constraint on ALL direct work: session context usage ≤ 50% — past 50% session MUST delegate.
 
-- **The per-step verifier is always small tier** (owner directive 2026-07-14) — never the
-  top-tier model that authored the brief; a different model reads with different blind
-  spots. The top model's cross-referencing is reserved for the correctness+hostile
-  review leg ([`landing.md`](landing.md)).
+- **Per-step verifier always small tier** (owner directive 2026-07-14) — never top-tier model
+  that authored brief; different model read with different blind spots. Top model's
+  cross-referencing reserved for correctness+hostile review leg ([`landing.md`](landing.md)).
 
-- **An implementer may re-delegate when a subtask genuinely splits** (parallel siblings, a
-  verifier per finding) — the platform enforces its own nesting-depth cap. **Accountability never splits**: the spawning agent verifies nested work
-  itself before it enters its handoff, every handoff/gate field stays the spawner's to fill,
-  and a nested delegate's defect is the spawner's defect at the gate above. Delegating the
-  whole brief downward unexamined is still a defect — split work, not responsibility.
-- **The planner's brief to the small-tier implementer follows the delegation contract below** — a vague or wrong
-  brief is a planner bug, and a handful of real shipped defects trace directly to brief bugs.
-- **New implementation-plan ADRs stop now** (wayfinder map #1383): big work is charted as a
-  map of tickets with committed specs ([`workflow.md`](workflow.md)); unimplemented ADRs
-  migrate to specs and tickets (#1389); implemented ADRs remain immutable historical
-  records. The retired ADR-phase orchestration (`/adr-phase`, `phase-step`) lives on only
-  in those historical records.
-- **Mode propagation to delegates is mechanical** — the `SubagentStart` hook
-  (`.claude/settings.json` / `.codex/hooks.json`) injects the ponytail + caveman capsule
-  and Token Savior recall preference into every spawned sub-agent; the capsule itself
-  carries the rules (reviewer carve-out; "terse prose, verbatim evidence"). Briefs add a
-  mode line only for a non-default level (e.g. `ultra`).
-- **The small tier follows every directive of the canonical policy (AGENTS.md + its routed files).** The implementer is cheaper, not exempt.
-- **Run at effort xhigh or better** — the session default in `.claude/settings.json`
-  (`effortLevel: xhigh`), and stated explicitly in every spawn (never rely on
-  inheritance). Exception: adversarial reviewers always run at `medium`
-  ([`landing.md`](landing.md)).
+- **Implementer may re-delegate when subtask genuinely split** (parallel siblings, verifier
+  per finding) — platform enforce own nesting-depth cap. **Accountability never split**:
+  spawning agent verify nested work itself before it enter its handoff, every handoff/gate
+  field stay spawner's to fill, nested delegate's defect is spawner's defect at gate above.
+  Delegating whole brief downward unexamined still a defect — split work, not responsibility.
+- **Planner's brief to small-tier implementer follow delegation contract below** — vague or
+  wrong brief is planner bug, and handful of real shipped defects trace directly to brief bugs.
+- **New implementation-plan ADRs stop now** (wayfinder map #1383): big work charted as map of
+  tickets with committed specs ([`workflow.md`](workflow.md)); unimplemented ADRs migrate to
+  specs and tickets (#1389); implemented ADRs stay immutable historical records. Retired
+  ADR-phase orchestration (`/adr-phase`, `phase-step`) live on only in those records.
+- **Mode propagation to delegates is mechanical** — `SubagentStart` hook
+  (`.claude/settings.json` / `.codex/hooks.json`) inject ponytail + caveman capsule and Token
+  Savior recall preference into every spawned sub-agent; capsule itself carry rules (reviewer
+  carve-out; "terse prose, verbatim evidence"). Briefs add mode line only for non-default
+  level (e.g. `ultra`).
+- **Small tier follow every directive of canonical policy (AGENTS.md + its routed files).**
+  Implementer cheaper, not exempt.
+- **Run at effort xhigh or better** — session default in `.claude/settings.json`
+  (`effortLevel: xhigh`), stated explicitly in every spawn (never rely on inheritance).
+  Exception: adversarial reviewers always run at `medium` ([`landing.md`](landing.md)).
 
 ## The delegation contract (brief → handoff → gate)
 
 Three fixed artifacts govern **every** delegated step — ticket packets under
-[`workflow.md`](workflow.md) and ad-hoc delegation alike. The design principle: **cheap models reliably fill
-required fields and reliably drop optional virtues**, so every check is a named field in an
-artifact, and **an empty or missing field is a gate failure** — never a judgment call. This
-contract exists because prose-only gates demonstrably failed: a one-day post-hoc audit
-(issues #900–#909) found ten reproducible defects in work that had passed every prose gate
-and review.
+[`workflow.md`](workflow.md) and ad-hoc delegation alike. Design principle: **cheap models
+reliably fill required fields and reliably drop optional virtues**, so every check is named
+field in artifact, and **empty or missing field is gate failure** — never judgment call.
+Contract exist because prose-only gates demonstrably failed: one-day post-hoc audit
+(issues #900–#909) found ten reproducible defects in work that passed every prose gate and
+review.
 
 ### THE BRIEF (planner → implementer) — mandatory sections
 
-1. **Objective** — the one outcome, tied to the work item.
-2. **Required reading** — `file:line` refs (identifiers, not pasted bodies — the implementer
-   reads just-in-time in its own fresh context); the prior step's handoff.
-3. **Coverage matrix** — when the change touches anything with siblings (v4/v6, address/port,
-   CE/Plus versions, parse modes, providers, every caller of a touched symbol, every branch of
-   a touched conditional): the planner enumerates ALL rows **from the source** — grep output,
-   the version-matrix file, the structure's own definition — **never from memory**. Each row
-   maps to a test or an explicit justified deferral. A brief saying "all X" without the
-   enumerated list is invalid; the planner generating the enumeration is the point
-   (implementers execute enumerated lists well and under-generate them reliably: the
-   #858→#900 five-fix chain, #901, #904, PR #881's missed port axis). A tool whose scope
-   spans file types (a checker/parser over scan roots) gets a mandatory axis "per in-scope
-   file type × its comment/quote syntax", enumerated from the roots' actual extensions
-   (`git ls-files <roots>`) — PR #937 shipped a PHP false-positive class because only the
-   languages the author thought of got rows (#941).
-4. **Hostile-input rows** — for any new/changed parser, regex, or input guard the planner
-   supplies the adversarial input set with expected outcomes: punycode/IDN labels, empty
-   input, header/no-header, quotes + shell/regex metacharacters, tabs and consecutive spaces,
-   oversized values, wrong encoding (#903, #904, #907, #908, #920 were all misses of exactly
-   these).
-5. **Constraints** — the do-NOT-touch list, plus the **never-weaken rule**: a brief may never
-   weaken a canonical-policy mandate. In particular, red→green is **test-first** (testing.md principle #1):
-   the reproduction test authored and executed RED before any production edit, frozen
+1. **Objective** — one outcome, tied to work item.
+2. **Required reading** — `file:line` refs (identifiers, not pasted bodies — implementer read
+   just-in-time in own fresh context); prior step's handoff.
+3. **Coverage matrix** — when change touch anything with siblings (v4/v6, address/port,
+   CE/Plus versions, parse modes, providers, every caller of touched symbol, every branch of
+   touched conditional): planner enumerate ALL rows **from source** — grep output, the
+   version-matrix file, structure's own definition — **never from memory**. Each row map to
+   test or explicit justified deferral. Brief saying "all X" without enumerated list is
+   invalid; planner generating enumeration is the point (implementers execute enumerated lists
+   well and under-generate them reliably: #858→#900 five-fix chain, #901, #904, PR #881's
+   missed port axis). Tool whose scope span file types (checker/parser over scan roots) get
+   mandatory axis "per in-scope file type × its comment/quote syntax", enumerated from roots'
+   actual extensions (`git ls-files <roots>`) — PR #937 shipped PHP false-positive class
+   because only languages author thought of got rows (#941).
+4. **Hostile-input rows** — for any new/changed parser, regex, or input guard planner supply
+   adversarial input set with expected outcomes: punycode/IDN labels, empty input,
+   header/no-header, quotes + shell/regex metacharacters, tabs and consecutive spaces,
+   oversized values, wrong encoding (#903, #904, #907, #908, #920 all misses of exactly these).
+5. **Constraints** — do-NOT-touch list, plus **never-weaken rule**: brief may never weaken
+   canonical-policy mandate. In particular, red→green is **test-first** (testing.md principle
+   #1): reproduction test authored and executed RED before any production edit, frozen
    byte-identical, re-run GREEN unchanged after — **executed runs with output pasted**, never
-   "reasoned through" or "verified by reading". Comments follow "Comments —
-   constraint, not narration" (Code standards): gate-facing justification goes in the
-   handoff, never the code.
-6. **Verification** — the canonical gates (table below) plus per-item acceptance checks, each
-   a runnable command with its expected observable (the shape "WHEN `<command/input>` THEN
-   `<observable>`"), mapping 1:1 to the tests the step ships.
-7. **ESCALATE contract** — if any factual claim in the brief/ADR is contradicted by the code
-   or a live probe, **STOP and return a structured blocker**; never silently patch the plan,
-   never proceed on a premise you have just falsified. Reality outranks the brief, loudly.
-   An environmental claim the brief tags ASSUMED (or embeds with no evidence) is probed
-   before anything is built on it — same STOP rule if the probe refutes it. Same rule when
-   the fix requires **inventing a mechanism the brief never named** (an exemption layer, a
-   state machine, a heuristic): escalate, or at minimum return DONE-WITH-DEVIATION — never
-   plain DONE. PR #937's only blocking bug lived in an improvised exemption layer that had
-   no hostile-input rows because nobody had planned for it to exist (#943).
-8. **Implementer scope — trust the brief, don't re-investigate it.** The brief embeds its
-   evidence (facts carry their run artifacts), so the implementer's reading scope is the
-   brief + its named refs + the code it edits: no re-fetching the issue/ADR, no re-running
-   the brief's enumeration greps, no re-deriving its matrix — the independent verifier and
-   the PR review carry the skepticism, and duplicating them in the implementer is pure
-   step-budget burn. ESCALATE (item 7) is reactive: an *encountered* contradiction
-   triggers it; proactively auditing the brief does not.
+   "reasoned through" or "verified by reading". Comments follow "Comments — constraint, not
+   narration" (Code standards): gate-facing justification go in handoff, never code.
+6. **Verification** — canonical gates (table below) plus per-item acceptance checks, each
+   runnable command with expected observable (shape "WHEN `<command/input>` THEN
+   `<observable>`"), mapping 1:1 to tests the step ships.
+7. **ESCALATE contract** — if any factual claim in brief/ADR contradicted by code or live
+   probe, **STOP and return structured blocker**; never silently patch plan, never proceed on
+   premise you just falsified. Reality outrank brief, loudly. Environmental claim brief tag
+   ASSUMED (or embed with no evidence) get probed before anything built on it — same STOP rule
+   if probe refute it. Same rule when fix require **inventing mechanism brief never named**
+   (exemption layer, state machine, heuristic): escalate, or at minimum return
+   DONE-WITH-DEVIATION — never plain DONE. PR #937's only blocking bug lived in improvised
+   exemption layer that had no hostile-input rows because nobody planned for it to exist (#943).
+8. **Implementer scope — trust brief, don't re-investigate it.** Brief embed its evidence
+   (facts carry their run artifacts), so implementer's reading scope is brief + its named
+   refs + code it edits: no re-fetching issue/ADR, no re-running brief's enumeration greps, no
+   re-deriving its matrix — independent verifier and PR review carry the skepticism,
+   duplicating them in implementer is pure step-budget burn. ESCALATE (item 7) is reactive:
+   *encountered* contradiction trigger it; proactively auditing brief does not.
 
 ### THE HANDOFF (implementer → planner) — fixed fields, missing field = gate reject
 
 - **Verdict**: DONE / DONE-WITH-DEVIATION / BLOCKED.
-- **What changed**: files + a one-line why each; the commit hash.
-- **Gates**: the exact commands run + pasted output tails (pass/fail counts) — never bare
-  claims.
-- **Red→green proof** (behaviour-changing steps): the reproduction test's FAILING output —
+- **What changed**: files + one-line why each; commit hash.
+- **Gates**: exact commands run + pasted output tails (pass/fail counts) — never bare claims.
+- **Red→green proof** (behaviour-changing steps): reproduction test's FAILING output —
   executed BEFORE any production edit — AND its PASSING output after, both pasted from
-  executed runs, plus the test file's `git hash-object` at red time (must equal the committed
-  file — Test coverage #1's freeze).
+  executed runs, plus test file's `git hash-object` at red time (must equal committed file —
+  Test coverage #1's freeze).
 - **Coverage matrix**: every brief row ticked with its test, or its stated deferral.
-- **Deviations / judgment calls** (or "none"); **carry-forward** for the next step.
+- **Deviations / judgment calls** (or "none"); **carry-forward** for next step.
 
 ### THE GATE (planner, after every step) — mechanical, evidenced, artifact-producing
 
-The producer never grades its own work; the gate **re-derives**, it never merely re-reads.
-Every item below is mandatory; a skipped item is recorded as SKIPPED with the reason, so an
-unrun check is visible instead of silent. **Terse prose, full checks** — brevity applies to
-the gate report's wording, never to which checks run.
+Producer never grade own work; gate **re-derives**, never merely re-reads. Every item below
+mandatory; skipped item recorded as SKIPPED with reason, so unrun check visible instead of
+silent. **Terse prose, full checks** — brevity apply to gate report's wording, never to which
+checks run.
 
-1. **Re-run the canonical gates yourself** — `scripts/agent/run-gates.sh --diff <base>`
-   (table below; "touched" is computed from the diff's
-   file types **plus cross-language consumers** — a suite that parses an artifact the diff
-   changes runs regardless of its language).
-2. **Re-execute the red proof yourself** for behaviour changes — never accept the handoff's
-   claim. Revert the production paths to the pre-fix commit (tests stay), require the
-   pinning test to FAIL, restore, require PASS, and enforce the freeze (`git hash-object`
-   of each committed reproduction test equals the handoff's red-time hash — a test edited
-   between red and green, or with no red-time hash, proves nothing). The pre-fix commit is
-   `HEAD~1` only when the step landed exactly one commit; a follow-up doc/ADR
-   reconciliation or a review fix moves it. Record the runs.
-3. **Read the full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN
-   item and **every** coverage-matrix row against what the diff actually does. `--stat` cannot
-   see a hardcoded value, a stubbed branch, or a silently dropped plan item. A mechanism in
-   the diff the brief never named = STOP: the planner writes hostile-input rows for it and
-   their tests land before PASS (PR #937's F1, #943).
+1. **Re-run canonical gates yourself** — `scripts/agent/run-gates.sh --diff <base>`
+   (table below; "touched" computed from diff's file types **plus cross-language consumers** —
+   suite that parses artifact the diff changes run regardless of its language).
+2. **Re-execute red proof yourself** for behaviour changes — never accept handoff's claim.
+   Revert production paths to pre-fix commit (tests stay), require pinning test to FAIL,
+   restore, require PASS, enforce freeze (`git hash-object` of each committed reproduction
+   test equal handoff's red-time hash — test edited between red and green, or with no red-time
+   hash, prove nothing). Pre-fix commit is `HEAD~1` only when step landed exactly one commit;
+   follow-up doc/ADR reconciliation or review fix move it. Record the runs.
+3. **Read full diff** (`git show` — never `--stat` alone) and tick **every** ACTION-PLAN item
+   and **every** coverage-matrix row against what diff actually does. `--stat` cannot see
+   hardcoded value, stubbed branch, or silently dropped plan item. Mechanism in diff the brief
+   never named = STOP: planner write hostile-input rows for it and their tests land before
+   PASS (PR #937's F1, #943).
 4. **Test honesty**: no weakened/removed assertions; every "does NOT contain X" assertion has
-   an X-shaped fixture that could make it fail (vacuity check); no red-run manufactured by
-   monkeypatching a fault production cannot produce (#900's phantom `OSError`); real failure
-   modes exercised through the production surface (an on-disk corrupt file, not an injected
-   exception).
-5. **Conventions**: each new public symbol listed beside 3 sibling symbols proving the name
-   matches the house pattern (#905); comments/docs mentioning touched symbols reconciled with
-   the new reality (stale-comment defects recur); any comment/doc claim naming a **sibling
-   file or house convention** verified by grep — in-repo claims are the cheapest probes there
-   are (PR #937 shipped a fabricated "mirrors the URL-encoding checker" lineage, #941);
-   added comments respect the comment budget ("Comments — constraint, not narration").
-6. **Write the gate record** — a fixed-field block (or per-phase file where the skill says
-   so): commands + results, red/green evidence, per-item diff verdicts, matrix confirmation,
-   the SKIPPED list. This artifact is what makes a skipped check auditable.
+   X-shaped fixture that could make it fail (vacuity check); no red-run manufactured by
+   monkeypatching fault production cannot produce (#900's phantom `OSError`); real failure
+   modes exercised through production surface (on-disk corrupt file, not injected exception).
+5. **Conventions**: each new public symbol listed beside 3 sibling symbols proving name match
+   house pattern (#905); comments/docs mentioning touched symbols reconciled with new reality
+   (stale-comment defects recur); any comment/doc claim naming **sibling file or house
+   convention** verified by grep — in-repo claims are cheapest probes there are (PR #937
+   shipped fabricated "mirrors the URL-encoding checker" lineage, #941); added comments respect
+   comment budget ("Comments — constraint, not narration").
+6. **Write gate record** — fixed-field block (or per-phase file where skill say so): commands +
+   results, red/green evidence, per-item diff verdicts, matrix confirmation, SKIPPED list.
+   This artifact is what make skipped check auditable.
 
 ### Canonical gates (single source of truth — briefs and gates reference THIS table)
 
 Mechanical runner: `scripts/agent/run-gates.sh [--diff <base>]` (`--plan` to preview) —
-change the table and the runner together.
+change table and runner together.
 
 | Touched | Gates (all must pass) |
 | ------- | --------------------- |
@@ -190,55 +172,49 @@ change the table and the runner together.
 
 ## Validating workflow records
 
-What the calling session does with the fixed-field records a delegated implementer/verifier
-returns (the handoff + gate record above).
-**Validate, don't re-derive**: the independent
-verifier just re-ran the gates, re-executed the red proof, and read the full diff, with
-pasted evidence — that mandatory independent gate always executes; the calling session
-skips only a redundant third derivation on top of it.
+What calling session do with fixed-field records delegated implementer/verifier return
+(handoff + gate record above). **Validate, don't re-derive**: independent verifier just
+re-ran gates, re-executed red proof, read full diff, with pasted evidence — that mandatory
+independent gate always execute; calling session skip only redundant third derivation on top
+of it.
 
-- Every fixed field non-empty and internally consistent — a missing/empty field rejects
-  the record, never a judgment call.
-- Every evidence entry is an executed command + pasted output, not prose.
-- Spot-read the load-bearing diff hunks the verdicts rest on.
-- Do NOT re-run the gates, re-execute the red proof, or re-read the whole diff the
-  verifier just processed.
-- Reject a record with any failed or missing item; rejection means HALT (or one corrected
-  re-run) — never patch the record yourself.
+- Every fixed field non-empty and internally consistent — missing/empty field reject record,
+  never judgment call.
+- Every evidence entry is executed command + pasted output, not prose.
+- Spot-read load-bearing diff hunks the verdicts rest on.
+- Do NOT re-run gates, re-execute red proof, or re-read whole diff verifier just processed.
+- Reject record with any failed or missing item; rejection mean HALT (or one corrected
+  re-run) — never patch record yourself.
 
 ## Agent-ops scripts (`scripts/agent/`)
 
-The mechanical procedures the skills used to restate in prose live once, tested, in
+Mechanical procedures the skills used to restate in prose live once, tested, in
 `scripts/agent/`: `wait-reviewer.sh` (reviewer-wait state machine), `wait-checks.sh`
 (CI wait), `run-gates.sh` (canonical-gates runner), `work-branch.sh` (branch sanitiser +
-worktree cutter). Shared contract in `scripts/agent/agent_env.sh`; behaviour pinned
-by `tests/shell/agent_*_spec.sh`.
+worktree cutter). Shared contract in `scripts/agent/agent_env.sh`; behaviour pinned by
+`tests/shell/agent_*_spec.sh`.
 
-- **Portability contract.** All network access rides the `gh`/`git` CLIs — managed
-  cloud environments route git/ssh/https through a localhost proxy that only those
-  CLIs inherit; never call raw endpoints. `gh` absent → the script exits **3** with a
-  `GH-UNAVAILABLE` message: the agent falls back to `mcp__github__*` tools with
-  wakeup-paced checks (waits.md rule #4) — MCP tools are harness
-  tools, unreachable from inside a shell, so the fallback cannot live in the script.
+- **Portability contract.** All network access ride `gh`/`git` CLIs — managed cloud
+  environments route git/ssh/https through localhost proxy that only those CLIs inherit;
+  never call raw endpoints. `gh` absent → script exit **3** with `GH-UNAVAILABLE` message:
+  agent fall back to `mcp__github__*` tools with wakeup-paced checks (waits.md rule #4) — MCP
+  tools are harness tools, unreachable from inside shell, so fallback cannot live in script.
   Any other missing tool → exit **4** (`TOOL-MISSING`). Exit **2** = usage/precondition,
-  **1** = the check itself failed, **0** = verdict reached.
-- **Agent-maintained.** These scripts encode environment mechanics that drift. When an
-  environment change breaks one, the agent fixes the script **in the same session** and
-  lands it via the normal flow (scripts are code-bearing: worktree + PR) — never works
-  around it silently in a transcript.
-- **Hook-context safety.** Git-touching scripts (and any spec whose fixtures run git)
-  scrub the hook-exported `GIT_DIR`/`GIT_INDEX_FILE`/… via
-  `scripts/lib/git-env-scrub.sh` (ADR-47) — inherited hook env otherwise aims fixture
-  git ops at the live repository.
-- **Gate re-runs vs the pre-commit hook (recorded-skip carve-out).** THE GATE item 1's
-  `run-gates.sh` re-run may be recorded as SKIPPED for a gate the pre-commit hook
-  **provably just executed identically**: the gater watched that gate's `[pre-commit]`
-  step line pass on the exact commits being gated, same session, no `--no-verify`. Two
-  hook properties keep this narrow: the hook **skips missing tools instead of failing**
-  (a green commit is not proof a gate ran — only its step line is), and its shellspec
-  run is **impacted-scoped**, not the full suite, so it never satisfies the canonical
-  full-suite shellspec gate. In practice the carve-out covers whole-tree
-  `markdownlint`, the per-file `sh -n`/`shellcheck`/`php -l` lint gates, and the
-  phpstan/phpcs analyses (the hook runs both, memory-capped, off the same configs);
-  the unit suites (`pytest`, `phpunit`) and the full shellspec run exist only in
-  `run-gates.sh` and are never satisfied by pre-commit.
+  **1** = check itself failed, **0** = verdict reached.
+- **Agent-maintained.** These scripts encode environment mechanics that drift. When
+  environment change break one, agent fix script **in same session** and land it via normal
+  flow (scripts are code-bearing: worktree + PR) — never work around it silently in transcript.
+- **Hook-context safety.** Git-touching scripts (and any spec whose fixtures run git) scrub
+  hook-exported `GIT_DIR`/`GIT_INDEX_FILE`/… via `scripts/lib/git-env-scrub.sh` (ADR-47) —
+  inherited hook env otherwise aim fixture git ops at live repository.
+- **Gate re-runs vs pre-commit hook (recorded-skip carve-out).** THE GATE item 1's
+  `run-gates.sh` re-run may be recorded as SKIPPED for gate the pre-commit hook **provably
+  just executed identically**: gater watched that gate's `[pre-commit]` step line pass on
+  exact commits being gated, same session, no `--no-verify`. Two hook properties keep this
+  narrow: hook **skips missing tools instead of failing** (green commit is not proof gate ran
+  — only its step line is), and its shellspec run is **impacted-scoped**, not full suite, so
+  it never satisfy canonical full-suite shellspec gate. In practice carve-out cover whole-tree
+  `markdownlint`, per-file `sh -n`/`shellcheck`/`php -l` lint gates, and phpstan/phpcs
+  analyses (hook run both, memory-capped, off same configs); unit suites (`pytest`,
+  `phpunit`) and full shellspec run exist only in `run-gates.sh` and never satisfied by
+  pre-commit.
