@@ -431,6 +431,7 @@ jobs:
           git worktree remove --force "$WT" || true
 
           BODY_FILE=$(mktemp)
+          # shellcheck disable=SC2016  # markdown backticks in the PR body, not expansions
           {
             printf '## Activate pfSense %s %s (box-verified)\n\n' "$CHANNEL" "$FAMILY"
             printf 'The %s image for `%s` was just published; these values were read from\n' "$CHANNEL" "$FAMILY"

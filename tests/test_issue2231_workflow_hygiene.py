@@ -175,3 +175,23 @@ def test_local_smoke_pins_the_current_ci_runner_series() -> None:
         f"local-smoke.sh pins ci-runner series {tags}, but .github/docker/VERSION is "
         f"{version} — a local run would exercise a different toolchain than CI ships"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 3. The actionlint job keeps its embedded shellcheck pass.
+# --------------------------------------------------------------------------- #
+
+
+def test_actionlint_job_keeps_the_embedded_shellcheck_pass() -> None:
+    """`run:` bodies are shell that no other gate reads — the ShellCheck job
+    scans `src scripts .claude/hooks`, never `.github/workflows` (issue #2241).
+    actionlint's `-shellcheck=` (empty value) silently disables that pass, so a
+    quoting or word-splitting bug in a workflow body would reach `devel`
+    ungated."""
+    text = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+    invocations = [line.strip() for line in text.splitlines() if '"$AL"' in line]
+    assert invocations, "the actionlint job no longer invokes $AL — update this gate"
+    disabled = [line for line in invocations if "-shellcheck=" in line]
+    assert not disabled, (
+        "the actionlint job must not disable the embedded shellcheck pass over run: bodies:\n  " + "\n  ".join(disabled)
+    )

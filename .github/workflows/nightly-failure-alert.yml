@@ -168,6 +168,7 @@ jobs:
           TITLE="[nightly-red] ${WF_NAME} failing on ${BRANCH}"
 
           BODY_FILE=$(mktemp)
+          # shellcheck disable=SC2016  # markdown backticks in the issue body, not expansions
           {
             if [ -n "${RUN_NUMBER:-}" ]; then
               printf '<!-- failure-run: %s:%s -->\n\n' "$RUN_NUMBER" "${RUN_ATTEMPT:-}"

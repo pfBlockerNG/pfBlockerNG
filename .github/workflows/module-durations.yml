@@ -114,6 +114,7 @@ jobs:
           # the download `pattern:` above.
           LOGS=$(sh scripts/module-durations-logs.sh smoke-artifacts)
           echo "Aggregating these shard logs:"
+          # shellcheck disable=SC2086  # deliberate word-split: one arg per log path (all ASCII)
           printf '  %s\n' $LOGS
           # shellcheck disable=SC2086  # deliberate word-split: one arg per log path (all ASCII)
           sh scripts/module-durations.sh $LOGS > tests/smoke/module-durations.txt

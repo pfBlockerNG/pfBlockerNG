@@ -224,8 +224,10 @@ jobs:
             done
             HAS_DEP_PKGS=1
           fi
-          echo "dep_pkg_dir=${DEP_PKG_DIR}" >> "$GITHUB_OUTPUT"
-          echo "has_dep_pkgs=${HAS_DEP_PKGS}" >> "$GITHUB_OUTPUT"
+          {
+            echo "dep_pkg_dir=${DEP_PKG_DIR}"
+            echo "has_dep_pkgs=${HAS_DEP_PKGS}"
+          } >> "$GITHUB_OUTPUT"
           # W1: a caller whose fan-out is per-version (smoke.yml/ui-tests.yml) must
           # override --dep-artifact-name so two same-major rows don't collide on
           # upload; blank (the default, safe for a per-major-deduped caller like
