@@ -140,14 +140,31 @@ def test_workflows_pin_the_current_ci_runner_series() -> None:
     """Every container job must ride the series `.github/docker/VERSION` names —
     the invariant lost with the retired migration test (PR #2233), resurrected
     here where CI actually executes it. A stale pin runs a whole job family on
-    an old toolchain while the gates read as green (issue #2232)."""
+    an old toolchain while the gates read as green (issue #2232).
+
+    The series lives in the trailing `/pfblockerng/ci-runner(-vm)?:N` path
+    segment regardless of what prefixes it: a bare `ghcr.io/...` ref (hosted
+    jobs) or the `${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/...` expression
+    (self-hosted jobs, issue #2230) both name the same series the same way.
+    Matching only `ghcr\\.io/...` would silently stop scanning the six
+    self-hosted sites the day #2230 landed — the floor assertion below is the
+    tripwire for that regression."""
     version = int((ROOT / ".github/docker/VERSION").read_text(encoding="utf-8").strip())
     offenders: list[str] = []
+    refs_found = 0
     for path in _workflow_files():
         for line_no, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            for tag in re.findall(r"ghcr\.io/pfblockerng/ci-runner(?:-vm)?:([0-9]+)", line):
+            for tag in re.findall(r"/pfblockerng/ci-runner(?:-vm)?:([0-9]+)", line):
+                refs_found += 1
                 if int(tag) != version:
                     offenders.append(f"{path.relative_to(ROOT)}:{line_no}: series {tag} != {version}")
+    # Today's count (issue #2230): 64 total ci-runner(-vm) refs across workflows
+    # + actions. A regex that stops matching the expression-form sites would
+    # scan fewer refs and pass vacuously instead of failing loudly.
+    assert refs_found >= 64, (
+        f"only found {refs_found} ci-runner(-vm) refs, expected at least 64 — "
+        "the series regex likely stopped matching some ref form"
+    )
     assert not offenders, "workflow image pins must match .github/docker/VERSION:\n  " + "\n  ".join(offenders)
 
 

@@ -94,6 +94,25 @@ EOF
     The output should include '--sysctl net.ipv4.ip_unprivileged_port_start=53'
   End
 
+  It 'add-hosts ghcr.io to the LAN registry, expanded box-side (issue #2230)'
+    # The box fleet hijacks ghcr.io via /etc/hosts to the LAN zot mirror
+    # (10.0.0.111). PFB_LAN_REGISTRY lives in the BOX's /etc/environment, not
+    # the orchestrator's -- so this must survive as an UNEXPANDED ${...:+...}
+    # fragment in the bootstrap string handed to select-box.sh, and expand only
+    # once the remote shell runs it. Unset on the fake box here: `:+` on an
+    # unset var is zero words, so nothing to assert its expansion against --
+    # this pins the literal fragment survives the caller-side double quotes.
+    When call bootstrap --ref dummy
+    The output should include '${PFB_LAN_REGISTRY:+--add-host ghcr.io:$PFB_LAN_REGISTRY}'
+  End
+
+  It 'mounts the CA bundle so TLS against the LAN registry validates (issue #2230)'
+    # zot's cert SANs DNS:ghcr.io + IP:10.0.0.111; the container needs the
+    # system CA bundle to validate it, same as the box does.
+    When call bootstrap --ref dummy
+    The output should include '-v /etc/ssl/certs/ca-certificates.crt:/etc/ssl/certs/ca-certificates.crt:ro'
+  End
+
   It 'mounts the repo, the shared image store, the ports tree and the guest key'
     When call bootstrap --ref dummy
     The output should include '/root/pfBlockerNG:/root/pfBlockerNG'
