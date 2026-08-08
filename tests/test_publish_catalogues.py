@@ -402,7 +402,7 @@ class IntakeDestinationsTests(unittest.TestCase):
 
     def test_destinations_stable_edge_skipping_testing_rejected(self) -> None:
         """F2: derive_destinations never skips testing to go straight from stable to
-        edge — ("stable","edge") is not among its five possible outputs."""
+        edge — ("stable","edge") is not in the intake allow-list."""
         with self.assertRaises(pc.IntakeError):
             pc.parse_intake(_REPO, "1", "v4.0.0", '["stable","edge"]', "10:1")
 
