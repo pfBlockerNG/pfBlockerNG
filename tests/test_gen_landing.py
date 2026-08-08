@@ -1183,8 +1183,11 @@ def test_render_page_trust_section_present_and_accurate() -> None:
     assert "<code>100</code>" in page
     # Repository-qualified downgrade prose.
     assert "repository-qualified downgrade" in page
-    # Retention count (catalogue_assembly.DEFAULT_RETENTION_KEEP == 5).
-    assert "retains the newest 5" in page
+    # Retention count — pinned to the publisher's constant so the page cannot
+    # silently drift from the real retention policy.
+    import catalogue_assembly
+
+    assert f"retains the newest {catalogue_assembly.DEFAULT_RETENTION_KEEP}" in page
     # Netgate identity / provenance-differs prose, and the no-in-UI-switcher note.
     assert "Netgate" in page
     assert "commit" in page.lower() and "created" in page.lower()
