@@ -276,7 +276,7 @@ still gets its reply, pointing at the shared resolution. Then per finding:
 - Re-run the canonical gates for whatever the fixes touched
   (`scripts/agent/run-gates.sh --diff <base>`); nothing red.
 - Commit (`<scope>: <imperative summary>`) and push to the PR head branch — batched
-  into one push, not many rapid commits.
+  into ONE push.
 - **Review-fix commits are new unreviewed code** (audited defect chains have entered
   through them): any non-trivial APPLY gets a re-review round (all legs, small tier;
   each focused on the changes since its own leg's recorded head SHA) before the
@@ -285,7 +285,9 @@ still gets its reply, pointing at the shared resolution. Then per finding:
   **Exempt:** a round whose every APPLY implements its reviewer's own concrete
   suggestion, tests adjusted, differing only in formatting or in what CI catches
   (SKIPs/DEFERs do not block it) — a reviewer cannot answer its own instruction
-  differently. Anything else — a different fix, a finding with no concrete suggestion
+  differently. Explicitly covered: purely mechanical and comment-only changes made
+  in response to and in accordance with the reviewer's feedback.
+  Anything else — a different fix, a finding with no concrete suggestion
   to match, extra edits riding along — takes the re-review and the reviewer's own
   approval.
 
