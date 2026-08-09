@@ -47,7 +47,7 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
     monkeypatch.setattr(repo, "pkg_install_from_repo", fake_install)
     monkeypatch.setattr(repo, "pkg_repo_origin_of", fake_origin)
 
-    repo.test_install_from_live_pages_url(object())
+    repo.test_install_from_live_pages_url(cast(SmokeVM, object()))
 
     assert seen == {
         "delete": repo.CANONICAL_PKG_NAME,
