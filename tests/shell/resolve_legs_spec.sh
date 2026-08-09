@@ -449,7 +449,7 @@ Describe 'resolve-legs.sh image-ref'
 
     setup() {
         scrub_git_env
-        unset INPUT_REF INPUT_VERSION INPUT_IMAGE_NAME SMOKE_IMAGE_REPO SMOKE_IMAGE_NAME SMOKE_IMAGE_TAG GITHUB_OUTPUT
+        unset INPUT_REF INPUT_VERSION INPUT_IMAGE_NAME SMOKE_IMAGE_REPO SMOKE_IMAGE_NAME SMOKE_IMAGE_TAG GITHUB_OUTPUT PFB_LAN_REGISTRY
     }
     BeforeEach 'setup'
 
@@ -482,6 +482,205 @@ Describe 'resolve-legs.sh image-ref'
         The status should be success
         The output should include 'pfsense-ce:2.8'
         The error should include 'resolved image ref'
+    End
+
+    # ── LAN registry rewrite (issue #2246) ────────────────────────────────── #
+
+    It 'rewrites the composed ref through the LAN registry when PFB_LAN_REGISTRY is set'
+        When run env \
+            PFB_LAN_REGISTRY="10.0.0.111" \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal '10.0.0.111/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+    It 'rewrites an INPUT_REF-provided full ref through the LAN registry too'
+        When run env \
+            PFB_LAN_REGISTRY="10.0.0.111" \
+            INPUT_REF="ghcr.io/pfblockerng/pfsense-ce@sha256:abc" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal '10.0.0.111/pfblockerng/pfsense-ce@sha256:abc'
+        The error should include 'resolved image ref'
+    End
+
+    It 'leaves the ref unchanged when PFB_LAN_REGISTRY is unset'
+        When run env \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal 'ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+    It 'leaves the ref unchanged when PFB_LAN_REGISTRY is empty-but-set (hostile: inert)'
+        When run env \
+            PFB_LAN_REGISTRY="" \
+            SMOKE_IMAGE_REPO="ghcr.io/pfblockerng" \
+            INPUT_IMAGE_NAME="pfsense-ce" \
+            INPUT_VERSION="2.8" \
+            sh "$SCRIPT" image-ref
+        The status should be success
+        The output should equal 'ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The error should include 'resolved image ref'
+    End
+
+End
+
+Describe 'resolve-legs.sh digest — LAN registry routing (issue #2246)'
+    # oras is stubbed on PATH; it records every invocation's full argv so an
+    # example can assert which flags reached which subcommand (mirrors the
+    # stub in tests/shell/oras_refresh_spec.sh).
+
+    setup() {
+        scrub_git_env
+        WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rldigest.XXXXXX")"
+        BIN="${WORK}/bin"
+        mkdir -p "$BIN"
+        cat > "${BIN}/oras" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${STUB_ARGV_LOG}"
+case "$1" in
+  resolve)
+    if [ -n "${STUB_RESOLVE_EMPTY:-}" ]; then :; else printf '%s\n' "${STUB_DIGEST:-sha256:deadbeef}"; fi
+    ;;
+  manifest) printf '{"digest":"%s"}\n' "${STUB_DIGEST:-sha256:deadbeef}" ;;
+  login)    : ;;
+  *) exit 1 ;;
+esac
+EOF
+        chmod +x "${BIN}/oras"
+        STUB_ARGV_LOG="${WORK}/argv.log"
+        printf '' > "$STUB_ARGV_LOG"
+        PATH="${BIN}:${PATH}"
+        unset PFB_LAN_REGISTRY GITHUB_OUTPUT SMOKE_GHCR_USER SMOKE_GHCR_TOKEN
+        export PATH STUB_ARGV_LOG
+    }
+    BeforeEach 'setup'
+
+    cleanup() { rm -rf "$WORK"; }
+    AfterEach 'cleanup'
+
+    It 'LAN active: skips the ghcr.io login and threads --plain-http into resolve'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:aaaa" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:aaaa'
+        The contents of file "$STUB_ARGV_LOG" should not include 'login'
+        The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
+    End
+
+    It 'LAN active: threads --plain-http into the manifest-fetch fallback when resolve is empty'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:bbbb" STUB_RESOLVE_EMPTY=1 \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8 --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should not include 'login'
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:bbbb'
+    End
+
+    It 'LAN inactive: logs into ghcr.io and passes no flag to resolve'
+        When run env STUB_DIGEST="sha256:cccc" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
+        The contents of file "$STUB_ARGV_LOG" should include 'resolve ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:cccc'
+    End
+
+    It 'PFB_LAN_REGISTRY empty-but-set behaves as inactive (hostile: login present, no flag)'
+        When run env PFB_LAN_REGISTRY="" STUB_DIGEST="sha256:dddd" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
+        The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
+        The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:dddd'
+    End
+
+End
+
+Describe 'resolve-legs.sh pull (issue #2246)'
+    # Same argv-recording oras stub as the digest Describe above; the pull
+    # subcommand only ever calls `oras pull`.
+
+    setup() {
+        scrub_git_env
+        WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rlpull.XXXXXX")"
+        BIN="${WORK}/bin"
+        OUTDIR="${WORK}/out"
+        mkdir -p "$BIN"
+        cat > "${BIN}/oras" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${STUB_ARGV_LOG}"
+case "$1" in
+  pull) printf '%s\n' "$PWD" >> "${STUB_CWD_LOG}"; touch pulled.qcow2 ;;
+  *) exit 1 ;;
+esac
+EOF
+        chmod +x "${BIN}/oras"
+        STUB_ARGV_LOG="${WORK}/argv.log"
+        STUB_CWD_LOG="${WORK}/cwd.log"
+        printf '' > "$STUB_ARGV_LOG"
+        printf '' > "$STUB_CWD_LOG"
+        PATH="${BIN}:${PATH}"
+        unset PFB_LAN_REGISTRY
+        export PATH STUB_ARGV_LOG STUB_CWD_LOG
+    }
+    BeforeEach 'setup'
+
+    cleanup() { rm -rf "$WORK"; }
+    AfterEach 'cleanup'
+
+    It 'pulls digest-pinned and creates the outdir'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The contents of file "$STUB_CWD_LOG" should include "$OUTDIR"
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'strips an existing @digest suffix before pinning the new one (hostile)'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:oldold" "sha256:newnew" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:newnew'
+        The contents of file "$STUB_ARGV_LOG" should not include 'oldold'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'accepts a bare digest without the sha256: prefix (hostile: plain string-concat semantics)'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "deadbeef" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@deadbeef'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'threads --plain-http when the LAN registry is active'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" \
+            sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'passes no flag when the LAN registry is inactive'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The contents of file "$STUB_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
+        The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
+        The error should include 'pulled.qcow2'
+    End
+
+    It 'logs the outdir listing to stderr'
+        When run sh "$SCRIPT" pull "ghcr.io/pfblockerng/pfsense-ce:2.8" "sha256:aaaa" "${OUTDIR}"
+        The status should be success
+        The error should include 'pulled.qcow2'
     End
 
 End
