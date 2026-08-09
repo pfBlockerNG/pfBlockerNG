@@ -52,7 +52,7 @@ jobs:
     name: Refresh TLD lists and open PR on change
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:5
+      image: ghcr.io/pfblockerng/ci-runner:6
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

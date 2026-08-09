@@ -335,6 +335,17 @@ def test_vm_image_carries_every_vm_workload_dependency() -> None:
     assert "oras" in _read(VM_DOCKERFILE), "the VM image must bake oras (GHCR qcow2 pulls)"
 
 
+def test_vm_image_carries_the_egress_gate_toolchain() -> None:
+    """`helpers.block_egress()`/`unblock_egress()` shell out to `sudo iptables`
+    inside the smoke job container (issue #2261). The GitHub-hosted runners
+    carried iptables on the HOST, so the enumerated-workload test above never
+    saw it; the containerized fleet must bake it. sudo already rides the base
+    image — asserted here too so neither half of the gate can silently drop."""
+    text = _read(VM_DOCKERFILE) + _read(BASE_DOCKERFILE)
+    assert "iptables" in text, "the VM image is missing iptables (block_egress, issue #2261)"
+    assert "sudo" in _read(BASE_DOCKERFILE), "the base image must carry sudo (block_egress runs `sudo iptables`)"
+
+
 def test_vm_image_bakes_chromium_against_the_pinned_playwright() -> None:
     """The browser binary is downloaded per Playwright version. Baking it from any list
     other than tests/smoke/requirements.txt — the one the smoke jobs install at runtime —

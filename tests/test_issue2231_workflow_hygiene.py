@@ -177,6 +177,33 @@ def test_local_smoke_pins_the_current_ci_runner_series() -> None:
     )
 
 
+def test_egress_gating_container_jobs_grant_net_admin() -> None:
+    """Any workflow that arms the hermetic egress gate (sets SMOKE_BLOCK_EGRESS)
+    runs `sudo iptables` inside its job container, which needs CAP_NET_ADMIN —
+    Docker's default capability set silently lacks it, and the gate then fails
+    every case that uses it (issue #2261). File-level association is enough:
+    each arming workflow defines exactly one container job today, and a false
+    positive here is a loud test failure, not a silent unprotected job."""
+    arming = re.compile(r"^\s*SMOKE_BLOCK_EGRESS:\s*['\"]?1['\"]?\s*(?:#.*)?$")
+    armed_files = 0
+    offenders: list[str] = []
+    for path in _workflow_files():
+        text = path.read_text(encoding="utf-8")
+        if not any(arming.match(line) for line in text.splitlines()):
+            continue
+        armed_files += 1
+        if "--cap-add=NET_ADMIN" not in text:
+            offenders.append(str(path.relative_to(ROOT)))
+    assert armed_files >= 1, (
+        "no workflow sets SMOKE_BLOCK_EGRESS any more — either the egress gate "
+        "moved (update this test) or it was silently dropped (that is a bug)"
+    )
+    assert not offenders, (
+        "workflows arming SMOKE_BLOCK_EGRESS must grant the job container "
+        "--cap-add=NET_ADMIN or block_egress fails every hermetic case:\n  " + "\n  ".join(offenders)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 3. The actionlint job keeps its embedded shellcheck pass.
 # --------------------------------------------------------------------------- #
