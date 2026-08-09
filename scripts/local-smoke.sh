@@ -172,6 +172,8 @@ _ABI_Q="$(_sq "$_ABI")"
 _MARKER_Q="$(_sq "$_MARKER")"
 _REPO_LIVE_URL_Q="$(_sq "${SMOKE_REPO_LIVE_URL:-}")"
 _NIGHTLY_LIVE_URL_Q="$(_sq "${SMOKE_NIGHTLY_LIVE_URL:-}")"
+_PFSENSE_REF_Q="$(_sq "${SMOKE_PFSENSE_REF:-}")"
+_CIVM_REF_Q="$(_sq "${CIVM_REF:-}")"
 
 # Build the smoke-on-box.sh flags string (structured, no word-split risk after encoding).
 _ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --channel '$_CHANNEL' --marker '$_MARKER_Q'"
@@ -230,7 +232,8 @@ _bootstrap="cd /root/pfBlockerNG \
       -v /root/images:/root/images \
       -v /root/FreeBSD-ports:/root/FreeBSD-ports \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
-      -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
+      -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \
+      -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
       -e SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' -e SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \
       -w /root/pfBlockerNG \
       \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:6 \
