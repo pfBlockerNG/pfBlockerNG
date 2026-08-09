@@ -446,7 +446,7 @@ identically locally and in CI.
 
 | Script | Use |
 | --- | --- |
-| [`resolve-legs.sh`](resolve-legs.sh) | Six subcommands: `legs` (scope ladder + THREE-WAY jq + `-k` derivation), `image-ref`, `digest`, `exact-image-name`, `vm-identity`, `scrub`. Called from `smoke.yml`, `smoke-single.yml`, `ui-tests.yml`. |
+| [`resolve-legs.sh`](resolve-legs.sh) | Seven subcommands: `legs` (scope ladder + THREE-WAY jq + `-k` derivation), `image-ref`, `digest`, `pull`, `exact-image-name`, `vm-identity`, `scrub`. Called from `smoke.yml`, `smoke-single.yml`, `ui-tests.yml`. |
 | [`parity-guard.sh`](parity-guard.sh) | Lint workflows for build-parity (Rules 1-3: build-leg.sh) and test-parity (Rules 4-5: run-smoke.sh) violations. Run in CI (test.yml shell-tests job). |
 | [`git-env-scrub-guard.sh`](git-env-scrub-guard.sh) | Meta-assertion: no raw `unset GIT_DIR` outside the lib; every git-using spec calls `scrub_git_env`. |
 | [`lib/git-env-scrub.sh`](lib/git-env-scrub.sh) | Sourceable lib exporting `pfb_scrub_git_env()` — unsets the six GIT_\* vars the pre-commit hook exports. |
