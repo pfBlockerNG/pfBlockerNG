@@ -210,6 +210,68 @@ EOF
     The output should eq 'DISTINCT'
   End
 
+  # ── per-ref consumer views ────────────────────────────────────────────────── #
+
+  It 'exposes only the selected ref when sibling images share the store'
+    When call sh -c '
+      . "$1"; shift
+      STUB_REMOTE_DIGEST=sha256:ce pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" CE
+      STUB_ARTIFACT_NAME=pfSense-Plus_26.03.qcow2 STUB_REMOTE_DIGEST=sha256:plus \
+        pfb_oras_refresh ghcr.io/x/pfsense-plus:26.03 "$1" Plus
+      pfb_oras_ref_view ghcr.io/x/pfsense-ce:2.8 "$1" "$2"
+      printf "store=%s view=%s selected=%s\n" \
+        "$(find "$1" -maxdepth 1 -name "*.qcow2" | wc -l | tr -d " ")" \
+        "$(find "$2" -maxdepth 1 -name "*.qcow2" | wc -l | tr -d " ")" \
+        "$(basename "$(readlink "$2/pfSense-CE_2.8.qcow2")")"
+    ' sh "$LIB" "$IMGDIR" "${WORK}/view"
+    The status should equal 0
+    The stdout should equal 'store=2 view=1 selected=pfSense-CE_2.8.qcow2'
+    The stderr should be present
+  End
+
+  It 'refuses a ref state with no qcow2 and preserves the prior view'
+    mkdir -p "${WORK}/view"
+    true > "${WORK}/view/sentinel"
+    When call sh -c '
+      . "$1"; shift
+      state="$(pfb_oras_digest_file ghcr.io/x/empty:1 "$1")"
+      printf "sha256:empty\n" > "$state"
+      pfb_oras_ref_view ghcr.io/x/empty:1 "$1" "$2"
+    ' sh "$LIB" "$IMGDIR" "${WORK}/view"
+    The status should equal 1
+    The stderr should include 'ref ghcr.io/x/empty:1 records 0 qcow2 artifacts'
+    The file "${WORK}/view/sentinel" should be exist
+  End
+
+  It 'refuses a ref state with multiple qcow2 files and names them'
+    mkdir -p "${WORK}/view"
+    true > "${WORK}/view/sentinel"
+    When call sh -c '
+      . "$1"; shift
+      state="$(pfb_oras_digest_file ghcr.io/x/multiple:1 "$1")"
+      printf "sha256:multiple\na.qcow2\nb.qcow2\n" > "$state"
+      true > "$1/a.qcow2"
+      true > "$1/b.qcow2"
+      pfb_oras_ref_view ghcr.io/x/multiple:1 "$1" "$2"
+    ' sh "$LIB" "$IMGDIR" "${WORK}/view"
+    The status should equal 1
+    The stderr should include 'records 2 qcow2 artifacts'
+    The stderr should include 'a.qcow2 b.qcow2'
+    The file "${WORK}/view/sentinel" should be exist
+  End
+
+  It 'refuses a recorded qcow2 that is missing from the shared store'
+    When call sh -c '
+      . "$1"; shift
+      state="$(pfb_oras_digest_file ghcr.io/x/missing:1 "$1")"
+      printf "sha256:missing\nmissing.qcow2\n" > "$state"
+      pfb_oras_ref_view ghcr.io/x/missing:1 "$1" "$2"
+    ' sh "$LIB" "$IMGDIR" "${WORK}/view"
+    The status should equal 1
+    The stderr should include 'recorded artifact missing for ghcr.io/x/missing:1'
+    The path "${WORK}/view" should not be exist
+  End
+
   It 'refuses to name a digest file when sha256sum is unavailable'
     # Hide sha256sum from PATH: without it the pipe yields an empty suffix and every ref
     # shares one name again. Asserting the shape of the NAME cannot catch that -- the guard

@@ -44,6 +44,41 @@ pfb_oras_digest_file() {
     printf '%s/.digest-%s-%s\n' "$2" "$_od_safe" "$_od_hash"
 }
 
+# Expose exactly one recorded qcow2 for a ref without copying the shared payload.
+pfb_oras_ref_view() {
+    _orv_ref="$1"
+    _orv_store="$2"
+    _orv_view="$3"
+    _orv_state="$(pfb_oras_digest_file "$_orv_ref" "$_orv_store")" || return 1
+    _orv_count=0
+    _orv_name=''
+    _orv_names=''
+    while IFS= read -r _orv_line; do
+        case "$_orv_line" in
+            *.qcow2)
+                _orv_count=$((_orv_count + 1))
+                _orv_name="$_orv_line"
+                _orv_names="${_orv_names:+$_orv_names }$_orv_line"
+                ;;
+        esac
+    done <<EOF
+$(sed -n '2,$p' "$_orv_state" 2>/dev/null)
+EOF
+    if [ "$_orv_count" -ne 1 ]; then
+        printf 'oras-refresh: ref %s records %s qcow2 artifacts in %s: %s\n' \
+            "$_orv_ref" "$_orv_count" "$_orv_store" "${_orv_names:-<none>}" >&2
+        return 1
+    fi
+    if [ ! -f "${_orv_store}/${_orv_name}" ]; then
+        printf 'oras-refresh: recorded artifact missing for %s: %s\n' \
+            "$_orv_ref" "${_orv_store}/${_orv_name}" >&2
+        return 1
+    fi
+    rm -rf "$_orv_view"
+    mkdir -p "$_orv_view"
+    ln -s "${_orv_store}/${_orv_name}" "${_orv_view}/${_orv_name}"
+}
+
 # pfb_oras_refresh <ref> <published-dir> <label>
 #
 # Serialised per ref. Staging + rename already keeps the BYTES safe under concurrency, but

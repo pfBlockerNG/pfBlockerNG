@@ -151,6 +151,63 @@ STUBEOF
     The contents of file "$SPARSE_CHANNEL_FILE" should equal 'testing'
   End
 
+  It 'exposes only the selected image for each refreshed ref'
+    printf '0\n' > "${WORK}/port-floor"
+
+    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+pfb_lan_registry_active() { return 1; }
+pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
+pfb_oras_refresh() { :; }
+pfb_oras_ref_view() {
+    printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$VIEW_LOG"
+    mkdir -p "$3"
+    true > "$3/selected.qcow2"
+}
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'server=%s count=%s\n' "$SMOKE_IMAGE_DIR" \
+    "$(find "$SMOKE_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
+printf 'client=%s count=%s\n' "$SMOKE_CLIENT_IMAGE_DIR" \
+    "$(find "$SMOKE_CLIENT_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
+        "${FAKE_ROOT}/scripts/run-smoke.sh"
+
+    mkdir -p "${FAKE_ROOT}/.venv/bin"
+    cat > "${FAKE_ROOT}/.venv/bin/python" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/.venv/bin/python"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    VIEW_LOG="${WORK}/views"
+    export SMOKE_SSH_KEY VIEW_LOG
+
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
+    The stdout should include "client=${FAKE_ROOT}/out/smoke-images/civm count=1"
+    The contents of file "$VIEW_LOG" should include "ghcr.io/pfblockerng/pfsense-ce:2.8|/root/images/pfsense|${FAKE_ROOT}/out/smoke-images/pfsense"
+    The contents of file "$VIEW_LOG" should include "ghcr.io/pfblockerng/civm:v1|/root/images/civm|${FAKE_ROOT}/out/smoke-images/civm"
+  End
+
   It 'clears an invalid existing venv before recreating it'
     printf '0\n' > "${WORK}/port-floor"
 
@@ -159,6 +216,7 @@ STUBEOF
 pfb_lan_registry_active() { return 1; }
 pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
 pfb_oras_refresh() { :; }
+pfb_oras_ref_view() { mkdir -p "$3"; true > "$3/selected.qcow2"; }
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh
@@ -201,6 +259,7 @@ STUBEOF
 pfb_lan_registry_active() { return 1; }
 pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
 pfb_oras_refresh() { :; }
+pfb_oras_ref_view() { mkdir -p "$3"; true > "$3/selected.qcow2"; }
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh

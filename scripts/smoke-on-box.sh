@@ -210,9 +210,14 @@ if [ "$_NO_TWO_VM" -eq 0 ]; then
     pfb_oras_refresh "$CIVM_REF" "${IMAGES_DIR}/civm" "civm"
 fi
 
-export SMOKE_IMAGE_DIR="${IMAGES_DIR}/pfsense"
+_IMAGE_VIEW_ROOT="${REPO_ROOT}/out/smoke-images"
+SMOKE_IMAGE_DIR="${_IMAGE_VIEW_ROOT}/pfsense"
+pfb_oras_ref_view "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "$SMOKE_IMAGE_DIR"
+export SMOKE_IMAGE_DIR
 if [ "$_NO_TWO_VM" -eq 0 ]; then
-    export SMOKE_CLIENT_IMAGE_DIR="${IMAGES_DIR}/civm"
+    SMOKE_CLIENT_IMAGE_DIR="${_IMAGE_VIEW_ROOT}/civm"
+    pfb_oras_ref_view "$CIVM_REF" "${IMAGES_DIR}/civm" "$SMOKE_CLIENT_IMAGE_DIR"
+    export SMOKE_CLIENT_IMAGE_DIR
     export NO_TWO_VM=0
 else
     export NO_TWO_VM=1
