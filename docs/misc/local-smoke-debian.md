@@ -149,6 +149,16 @@ export SMOKE_PKG="$(sh scripts/build-leg.sh --ports-dir /root/FreeBSD-ports)"
 PFSENSE_REF="${SMOKE_PFSENSE_REF:-ghcr.io/pfblockerng/pfsense-ce:2.8}"
 CIVM_REF="${SMOKE_CLIENT_IMAGE_REF:-ghcr.io/pfblockerng/civm:v1}"
 . scripts/lib/oras-refresh.sh
+PFB_ORAS_FLAGS=''
+if pfb_lan_registry_active; then
+    PFSENSE_REF="$(pfb_rewrite_lan_registry "$PFSENSE_REF")"
+    CIVM_REF="$(pfb_rewrite_lan_registry "$CIVM_REF")"
+    PFB_ORAS_FLAGS=--plain-http
+elif [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
+    printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
+        oras login ghcr.io --username pfBlockerNG --password-stdin
+fi
+export PFB_ORAS_FLAGS
 pfb_oras_refresh "$PFSENSE_REF" /root/images/pfsense pfSense
 pfb_oras_refresh "$CIVM_REF" /root/images/civm civm
 pfb_oras_ref_view "$PFSENSE_REF" /root/images/pfsense out/smoke-images/pfsense
