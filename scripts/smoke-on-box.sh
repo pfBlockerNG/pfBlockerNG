@@ -187,7 +187,7 @@ sh scripts/sparse-clone-ports.sh \
     "https://github.com/pfBlockerNG/FreeBSD-ports" \
     "pfblockerng/use-github" \
     "$PORTS_DIR" \
-    "devel" "$_php_ver" "$_py_flavor" >&2
+    "$_CHANNEL" "$_php_ver" "$_py_flavor" >&2
 
 # ── Step 3: oras images (refresh when stale; pull when absent) ─────────────── #
 _oras_login_done=0

@@ -30,7 +30,8 @@ Describe 'smoke-on-box.sh (issue #2223)'
     # and the image refresh both shell out, and neither is what this spec covers.
     cat > "${FAKE_ROOT}/scripts/sparse-clone-ports.sh" <<'STUBEOF'
 #!/bin/sh
-exit 0
+[ -z "${SPARSE_CHANNEL_FILE:-}" ] || printf '%s\n' "$4" > "$SPARSE_CHANNEL_FILE"
+exit "${SPARSE_EXIT:-0}"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/sparse-clone-ports.sh"
     mkdir -p "${WORK}/bin"
@@ -135,6 +136,19 @@ STUBEOF
     When run sh "$SCRIPT" --not-a-real-flag
     The status should not equal 0
     The stderr should be present
+  End
+
+  It 'prepares the same channel selected for the package build'
+    # Stop at the sparse-Ports boundary: no image pull, host prep, package build or VM.
+    printf '0\n' > "${WORK}/port-floor"
+    SPARSE_CHANNEL_FILE="${WORK}/sparse-channel"
+    SPARSE_EXIT=42
+    export SPARSE_CHANNEL_FILE SPARSE_EXIT
+
+    When run sh "$SCRIPT" --ref HEAD --channel edge
+    The status should equal 42
+    The stderr should include 'channel=edge'
+    The contents of file "$SPARSE_CHANNEL_FILE" should equal 'edge'
   End
 
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
