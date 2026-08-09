@@ -705,6 +705,26 @@ def pkg_build_record(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> dict[s
     return record
 
 
+def assert_live_package(
+    vm: SmokeVM,
+    name: str,
+    expected_version: str,
+    expected_source_sha: str,
+    expected_channel: str,
+) -> str:
+    """Assert the installed package identity bound by the rehearsal caller."""
+    version = pkg_installed_version_of(vm, name)
+    assert version == expected_version, f"installed {version!r}, expected {expected_version!r}"
+    record = pkg_build_record(vm, name)
+    assert record.get("source_sha") == expected_source_sha, (
+        f"installed source {record.get('source_sha')!r}, expected {expected_source_sha!r}"
+    )
+    assert record.get("channel") == expected_channel, (
+        f"installed channel {record.get('channel')!r}, expected {expected_channel!r}"
+    )
+    return version
+
+
 def pkg_installed_version(vm: SmokeVM, *, timeout: float = 60.0) -> str | None:
     """The installed ``%v`` of the branch package, or ``None`` if absent."""
     return pkg_installed_version_of(vm, PKG_NAME, timeout=timeout)
@@ -1460,11 +1480,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         expected_origin = channel_repo_name(selected_channel)
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
-        version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
-        assert version == expected_version, f"installed {version!r}, expected {expected_version!r}"
-        record = pkg_build_record(repo_vm, CANONICAL_PKG_NAME)
-        assert record.get("source_sha") == expected_source_sha
-        assert record.get("channel") == selected_channel
+        assert_live_package(repo_vm, CANONICAL_PKG_NAME, expected_version, expected_source_sha, selected_channel)
     finally:
         pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         _ssh_check(repo_vm, "/bin/rm", "-f", REPO_CONF)
@@ -1498,6 +1514,8 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
         assert value, f"{name} is required for the live downgrade"
     assert expected_semantic_version is not None
     assert expected_nightly_version is not None
+    assert expected_semantic_source is not None
+    assert expected_nightly_source is not None
 
     semantic_channel = semantic_url.rsplit("/", 1)[-1]
     assert semantic_channel in CHANNELS[:3], (
@@ -1518,12 +1536,14 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
         reset_channel_subscription(repo_vm)
         run_add_repo_sh(repo_vm, common_base, channel="nightly")
         pkg_install_qualified(repo_vm, channel_repo_name("nightly"), CANONICAL_PKG_NAME)
-        nightly_version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
-        assert nightly_version == expected_nightly_version
+        nightly_version = assert_live_package(
+            repo_vm,
+            CANONICAL_PKG_NAME,
+            expected_nightly_version,
+            expected_nightly_source,
+            "nightly",
+        )
         assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name("nightly")
-        nightly_record = pkg_build_record(repo_vm, CANONICAL_PKG_NAME)
-        assert nightly_record.get("source_sha") == expected_nightly_source
-        assert nightly_record.get("channel") == "nightly"
 
         run_add_repo_sh(repo_vm, common_base, channel=semantic_channel)
         ordinary = _pkg_retry(
@@ -1550,16 +1570,18 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
             f"qualified Nightly -> {semantic_channel} migration failed: rc={migrated.returncode}\n"
             f"stdout:\n{migrated.stdout}\nstderr:\n{migrated.stderr}"
         )
-        semantic_version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
-        assert semantic_version == expected_semantic_version
+        semantic_version = assert_live_package(
+            repo_vm,
+            CANONICAL_PKG_NAME,
+            expected_semantic_version,
+            expected_semantic_source,
+            semantic_channel,
+        )
         ordering = _ssh_check(repo_vm, "pkg", "version", "-t", semantic_version, nightly_version).stdout.strip()
         assert ordering == "<", (
             f"expected a real downgrade from Nightly {nightly_version!r}, got {semantic_version!r} ({ordering!r})"
         )
         assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name(semantic_channel)
-        semantic_record = pkg_build_record(repo_vm, CANONICAL_PKG_NAME)
-        assert semantic_record.get("source_sha") == expected_semantic_source
-        assert semantic_record.get("channel") == semantic_channel
         assert installed_pfblockerng_names(repo_vm) == [CANONICAL_PKG_NAME]
     finally:
         reset_channel_subscription(repo_vm)

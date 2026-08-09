@@ -51,10 +51,10 @@ from .test_repo_install import (
     _box_real_varver,
     _ensure_egress_open,
     _ssh_check,
+    assert_live_package,
     build_guest_repo,
     pin_pages_hosts,
     pkg_annotation,
-    pkg_build_record,
     poll_catalog_served,
     read_compact_version,
     repo_priority,
@@ -435,11 +435,7 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
         assert "Missing dependency" not in out, f"deps did not resolve from the live nightly catalog:\n{out}"
         origin = pkg_q(smoke_vm, "%R", CANONICAL_PKG_NAME)
         assert origin == NIGHTLY_REPO, f"installed from {origin!r}, expected our nightly repo {NIGHTLY_REPO!r}"
-        version = pkg_q(smoke_vm, "%v", CANONICAL_PKG_NAME)
-        assert version == expected_version, f"installed {version!r}, expected {expected_version!r}"
-        record = pkg_build_record(smoke_vm, CANONICAL_PKG_NAME)
-        assert record.get("source_sha") == expected_source_sha
-        assert record.get("channel") == "nightly"
+        assert_live_package(smoke_vm, CANONICAL_PKG_NAME, expected_version, expected_source_sha, "nightly")
     finally:
         pkg_delete(smoke_vm, CANONICAL_PKG_NAME)
         smoke_vm.ssh("/bin/rm", "-f", NIGHTLY_LIVE_CONF, timeout=60.0)
