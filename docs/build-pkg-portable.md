@@ -299,6 +299,14 @@ ports-framework moves):
   Identical bytes for short paths; an install path over ustar's 100/155-char
   limits makes Python's `tarfile` raise — loud, and no port path comes close.
 - **Payload tar uid/gid**: libpkg on FreeBSD stamps `65534`, the tool `0`.
+- **Recipe `CONFLICTS` is deliberately not replayed** (issue #2259). libpkg's
+  manifest schema does parse a `conflicts` field, but real `make package` never
+  emits it — Netgate's own `pfSense-pkg-pfBlockerNG` artifact carries no
+  `conflicts` key in either manifest despite its port declaring `CONFLICTS=`
+  (probed from the upstream repo, 2026-08-09) — and guest libpkg aborts
+  `pkg add` registering a manifest conflict against a package that is not
+  installed (`NOT NULL constraint failed: pkg_conflicts.conflict_id`). Channel
+  mutual exclusion rides pkg's file-path collision detection instead.
   Extraction uses the manifest's `uname`/`gname` (`root`/`wheel`) either way.
 - **`licenselogic`**: the tool guesses `"and"` for >1 license; the framework
   emits `LICENSE_COMB` verbatim (`dual`/`multi`). No port has >1 license today.
