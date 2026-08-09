@@ -90,6 +90,13 @@ jobs:
           # published" (a re-run, or the merge of the branch a dispatch published from)
           # apart from "someone changed a Dockerfile without bumping VERSION". Git tree ids
           # are content hashes, so this needs no build and cannot be spoofed by a timestamp.
+          #
+          # Deliberately NOT covering this workflow file, whose build flags (BASE_IMAGE,
+          # the arch matrix) do affect the image: hashing it would demand a VERSION bump
+          # for a comment. The asymmetry is safe — an equal marker can only ever mean
+          # "publish nothing", never an overwrite — so the cost is a lost warning, not a
+          # mutated tag. The build context needs no coverage: the only paths read from it
+          # are the three COPY sources above, all inside the hashed tree.
           inputs="$(git rev-parse "HEAD:.github/docker") $(git rev-parse "HEAD:tests/smoke/requirements.txt")"
           marker="inputs-$(printf '%s' "$inputs" | sha256sum | cut -c1-16)"
           echo "marker=$marker" >> "$GITHUB_OUTPUT"
@@ -176,6 +183,7 @@ jobs:
 
           clash=''
           already=''
+          present=''
           for image in ci-runner ci-runner-vm; do
             # Exchange the job token for a registry pull token (the OCI auth flow) rather
             # than presenting base64(token) as a bearer: the latter is accepted for some
@@ -204,6 +212,7 @@ jobs:
               case "$status" in
                 404) echo "${image}:${ref} is free" ;;
                 200)
+                  [ "$ref" = "${TAG}" ] && present="$present ${image}"
                   if [ "$marker_status" = '200' ]; then
                     echo "${image}:${ref} is already published from these exact inputs"
                   else
@@ -228,12 +237,24 @@ jobs:
             exit 1
           fi
 
-          # Both images already carry this run's marker: the series is published and its
-          # content matches, so there is nothing to do. Verification builds still run.
-          if [ "$already" = ' ci-runner ci-runner-vm' ]; then
+          # The no-op is an ALL-or-nothing state: both images published, both carrying this
+          # run's marker. Anything short of that and publishing would re-push whichever
+          # image already owns the series — the exact overwrite the guard exists to refuse,
+          # reached through a half-finished publish or a package deleted to fix visibility.
+          # Requiring the bare tags too, not just the markers, keeps a marker orphaned by a
+          # partial tag delete from reading as "published" forever behind a green run.
+          if [ "$already" = ' ci-runner ci-runner-vm' ] && [ "$present" = ' ci-runner ci-runner-vm' ]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "::notice::${TAG} is already published from these exact build inputs (${MARKER}); nothing to push"
             exit 0
+          fi
+
+          if [ -n "$already" ] || [ -n "$present" ]; then
+            echo "the series is only PARTLY published — marker:${already:-none} tag:${present:-none}"
+            echo "Publishing now would re-push the part that already exists, replacing"
+            echo "published bytes. Delete the ${TAG} tags for the image(s) above, or bump"
+            echo ".github/docker/VERSION — never re-push a series one image already owns."
+            exit 1
           fi
 
           echo "publish=true" >> "$GITHUB_OUTPUT"
@@ -253,10 +274,23 @@ jobs:
         # manifest list was created would leave the series half-owned and the next run
         # blocked by its own overwrite guard.
         #
+        # Gated on the BRANCH decision, not on whether this run pushes. A run that finds
+        # the series already published still reports the visibility of what is published;
+        # gating on the narrower decision would mean a series is checked once, at birth,
+        # and never again for the life of the series — while the packages sit private.
+        # It only FAILS the run when this run is about to push, because that is the point
+        # where the workflow can still avoid making things worse. Otherwise it is a loud
+        # warning: the condition is real and needs a human with UI access, but blocking an
+        # unrelated no-op run on it helps nobody.
+        #
         # Deliberately UNAUTHENTICATED: it asks for an anonymous pull token exactly as an
-        # outside contributor's runner would. Do NOT add credentials — that would make it
-        # pass on a private package, which is the one case it exists to catch.
-        if: steps.guard.outputs.publish == 'true'
+        # outside contributor's runner would. Do NOT add credentials to the curl — that
+        # would make it pass on a private package, which is the one case it exists to
+        # catch. GH_TOKEN below is for `gh api` only.
+        if: steps.publish.outputs.enabled == 'true'
+        env:
+          WILL_PUSH: ${{ steps.guard.outputs.publish }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           namespace="${IMAGE_REPO#ghcr.io/}"
 
@@ -266,30 +300,40 @@ jobs:
               | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
             if [ -n "$bearer" ]; then
               echo "${image}: anonymously readable"
-            else
+            elif err="$(gh api "/orgs/${namespace}/packages/container/${image}" 2>&1 >/dev/null)"; then
               # A package that does not exist yet also refuses a token, and that is the
               # legitimate first-ever publish. Tell the two apart by asking the API we ARE
               # allowed to read: no package -> nothing to be private about.
-              if gh api "/orgs/${namespace}/packages/container/${image}" >/dev/null 2>&1; then
-                echo "${image}: exists and refuses an anonymous pull token — it is PRIVATE"
-                private="$private ${image}"
-              else
-                echo "${image}: does not exist yet; first publish will create it"
+              echo "${image}: exists and refuses an anonymous pull token — it is PRIVATE"
+              private="$private ${image}"
+            elif printf '%s' "$err" | grep -q 'HTTP 404'; then
+              echo "${image}: does not exist yet; first publish will create it"
+            else
+              # 401/403/rate limit/network prove nothing about existence. Guessing
+              # "absent" here waves a private package straight through, which is the only
+              # failure this step exists to prevent.
+              echo "cannot determine whether ${image} exists: ${err}"
+              if [ "$WILL_PUSH" = 'true' ]; then
+                echo "::error::refusing to push without confirming ${image} is public"
+                exit 1
               fi
+              echo "::warning::could not verify ${image} visibility"
             fi
           done
 
           if [ -n "$private" ]; then
-            echo "::error::these packages are not public:$private"
             echo "Fork pull requests and fresh clones cannot pull them, so their container"
             echo "jobs will fail at 'docker pull' with a misleading 'manifest unknown'."
-            echo "Nothing has been pushed by this run. Visibility is UI-only; for each above open:"
+            echo "Visibility is UI-only; for each package above open:"
             echo "  https://github.com/orgs/${namespace}/packages/container/<name>/settings"
-            echo "set Danger Zone -> Change visibility -> Public, then re-run this workflow."
-            exit 1
+            echo "and set Danger Zone -> Change visibility -> Public."
+            if [ "$WILL_PUSH" = 'true' ]; then
+              echo "::error::refusing to publish into packages nobody can pull:$private"
+              echo "Nothing has been pushed by this run; fix visibility and re-run."
+              exit 1
+            fi
+            echo "::warning::these packages are not public:$private (this run publishes nothing)"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ── build ────────────────────────────────────────────────────────────────────────
   # One job per architecture, each on a runner of THAT architecture. Everything is built
