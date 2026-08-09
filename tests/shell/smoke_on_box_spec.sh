@@ -145,10 +145,10 @@ STUBEOF
     SPARSE_EXIT=42
     export SPARSE_CHANNEL_FILE SPARSE_EXIT
 
-    When run sh "$SCRIPT" --ref HEAD --channel edge
+    When run sh "$SCRIPT" --ref HEAD --channel testing
     The status should equal 42
-    The stderr should include 'channel=edge'
-    The contents of file "$SPARSE_CHANNEL_FILE" should equal 'edge'
+    The stderr should include 'channel=testing'
+    The contents of file "$SPARSE_CHANNEL_FILE" should equal 'testing'
   End
 
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
