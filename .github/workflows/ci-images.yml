@@ -242,7 +242,7 @@ jobs:
           # The no-op is an ALL-or-nothing state: both images published, both carrying this
           # run's marker. Anything short of that and publishing would re-push whichever
           # image already owns the series — the exact overwrite the guard exists to refuse,
-          # reached through a half-finished publish or a package deleted to fix visibility.
+          # reached through a half-finished publish or a package deleted out-of-band.
           # Requiring the bare tags too, not just the markers, keeps a marker orphaned by a
           # partial tag delete from reading as "published" forever behind a green run.
           if [ "$already" = ' ci-runner ci-runner-vm' ] && [ "$present" = ' ci-runner ci-runner-vm' ]; then

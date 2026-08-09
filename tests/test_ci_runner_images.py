@@ -340,10 +340,18 @@ def test_vm_image_carries_the_egress_gate_toolchain() -> None:
     inside the smoke job container (issue #2261). The GitHub-hosted runners
     carried iptables on the HOST, so the enumerated-workload test above never
     saw it; the containerized fleet must bake it. sudo already rides the base
-    image — asserted here too so neither half of the gate can silently drop."""
-    text = _read(VM_DOCKERFILE) + _read(BASE_DOCKERFILE)
-    assert "iptables" in text, "the VM image is missing iptables (block_egress, issue #2261)"
-    assert "sudo" in _read(BASE_DOCKERFILE), "the base image must carry sudo (block_egress runs `sudo iptables`)"
+    image — asserted here too so neither half of the gate can silently drop.
+
+    Anchored to the `RUN apt-get install` blocks, not whole-file text: both
+    Dockerfiles carry rationale comments that NAME these packages, so a
+    whole-file substring stays green with the package dropped (review mutation
+    on PR #2262)."""
+    vm_installs = " ".join(b for b in _run_blocks(_read(VM_DOCKERFILE)) if b.startswith("RUN apt-get"))
+    base_installs = " ".join(b for b in _run_blocks(_read(BASE_DOCKERFILE)) if b.startswith("RUN apt-get"))
+    assert " iptables " in f"{vm_installs} {base_installs} ", (
+        "no RUN apt-get block installs iptables (block_egress, issue #2261)"
+    )
+    assert " sudo " in f"{base_installs} ", "the base image must apt-install sudo (block_egress runs `sudo iptables`)"
 
 
 def test_vm_image_bakes_chromium_against_the_pinned_playwright() -> None:
