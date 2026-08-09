@@ -224,6 +224,11 @@ PIPEOF
 chmod +x "\${venv}/bin/pip"
 EOF
     chmod +x "${WORK}/shim/python3"
+    cat > "${WORK}/shim/ps" << 'EOF'
+#!/bin/sh
+exit "${PS_EXIT:-1}"
+EOF
+    chmod +x "${WORK}/shim/ps"
   }
 
   cleanup() { [ -n "${WORK}" ] && rm -rf "${WORK}"; [ ! -d "${WORK}" ] || return 1; }
@@ -321,10 +326,23 @@ EOF
     # is the portable always-alive, never-ours case - unless this user IS root,
     # where kill -0 1 succeeds and the example would assert the plain live-holder
     # path instead, proving nothing about EPERM.
-    Skip if "running as root: kill -0 1 succeeds, so the fixture is not EPERM" [ "$(id -u)" -eq 0 ]
+    Skip if "kill -0 1 succeeds, so the fixture is not EPERM" sh -c 'kill -0 1 2>/dev/null'
     mkdir -p "${WORK}/venv.rebuild.lock"
     printf '1\n' > "${WORK}/venv.rebuild.lock/pid"
-    When run env PATH="${WORK}/shim:${PATH}" TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 sh "${SCRIPT}"
+    When run env PATH="${WORK}/shim:${PATH}" PS_EXIT=0 TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'concurrent rebuild'
+    The directory "${WORK}/venv.rebuild.lock" should be exist
+    The file "${WORK}/venv/pip-args.log" should not be exist
+  End
+
+  It 'keeps a lock when ps cannot determine whether the holder is alive'
+    sh -c 'exit 0' &
+    unknown_pid=$!
+    wait "${unknown_pid}"
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    printf '%s\n' "${unknown_pid}" > "${WORK}/venv.rebuild.lock/pid"
+    When run env PATH="${WORK}/shim:${PATH}" PS_EXIT=127 TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 sh "${SCRIPT}"
     The status should be failure
     The stderr should include 'concurrent rebuild'
     The directory "${WORK}/venv.rebuild.lock" should be exist

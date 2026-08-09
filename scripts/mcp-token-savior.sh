@@ -50,9 +50,11 @@ holder_alive() {
 	kill -0 "$1" 2>/dev/null && return 0
 	# kill -0 also fails with EPERM for a LIVE process this user may not signal,
 	# so its failure is not proof of death. ps answers regardless of ownership;
-	# no ps at all is no evidence, and doubt must never reap a held lock.
+	# no usable ps is no evidence, and doubt must never reap a held lock. The
+	# supported macOS/Linux ps implementations return 1 when no PID matched.
 	command -v ps >/dev/null 2>&1 || return 0
-	ps -p "$1" >/dev/null 2>&1
+	ps -p "$1" >/dev/null 2>&1 && return 0
+	[ "$?" -ne 1 ]
 }
 
 # stdout is the MCP stdio channel — install chatter must stay on stderr
