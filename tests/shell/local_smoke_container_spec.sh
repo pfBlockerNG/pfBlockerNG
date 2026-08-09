@@ -133,14 +133,18 @@ EOF
     The output should include '-e PFB_LAN_REGISTRY'
   End
 
-  It 'passes optional live catalogue URL values across SSH into the container'
+  It 'passes caller smoke values across SSH into the container'
     SMOKE_REPO_LIVE_URL='https://example.test/pkg/docs/edge'
     SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'
-    export SMOKE_REPO_LIVE_URL SMOKE_NIGHTLY_LIVE_URL
+    SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'
+    CIVM_REF='ghcr.io/example/civm:v2'
+    export SMOKE_REPO_LIVE_URL SMOKE_NIGHTLY_LIVE_URL SMOKE_PFSENSE_REF CIVM_REF
 
     When call bootstrap --ref dummy
     The output should include "-e SMOKE_REPO_LIVE_URL='https://example.test/pkg/docs/edge'"
     The output should include "-e SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'"
+    The output should include "-e SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'"
+    The output should include "-e CIVM_REF='ghcr.io/example/civm:v2'"
   End
 
   It 'mounts the repo, the shared image store, the ports tree and the guest key'
