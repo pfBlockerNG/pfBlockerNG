@@ -183,16 +183,24 @@ def test_egress_gating_container_jobs_grant_net_admin() -> None:
     Docker's default capability set silently lacks it, and the gate then fails
     every case that uses it (issue #2261). File-level association is enough:
     each arming workflow defines exactly one container job today, and a false
-    positive here is a loud test failure, not a silent unprotected job."""
-    arming = re.compile(r"^\s*SMOKE_BLOCK_EGRESS:\s*['\"]?1['\"]?\s*(?:#.*)?$")
+    positive here is a loud test failure, not a silent unprotected job.
+
+    Two scoping rules, both from review mutations on PR #2262: the arming match
+    accepts ANY non-empty value because helpers.py arms on any non-empty string
+    (a workflow arming with "true" must not escape the gate), and the capability
+    must appear on a container `options:` line specifically — a whole-file
+    substring was proven vacuous by the gate's own diagnostic echo naming
+    --cap-add=NET_ADMIN in its error text."""
+    arming = re.compile(r"^\s*SMOKE_BLOCK_EGRESS:\s*['\"]?[^'\"\s#]")
+    granted = re.compile(r"^\s*options:.*--cap-add=NET_ADMIN")
     armed_files = 0
     offenders: list[str] = []
     for path in _workflow_files():
-        text = path.read_text(encoding="utf-8")
-        if not any(arming.match(line) for line in text.splitlines()):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if not any(arming.match(line) for line in lines):
             continue
         armed_files += 1
-        if "--cap-add=NET_ADMIN" not in text:
+        if not any(granted.match(line) for line in lines):
             offenders.append(str(path.relative_to(ROOT)))
     assert armed_files >= 1, (
         "no workflow sets SMOKE_BLOCK_EGRESS any more — either the egress gate "
@@ -200,7 +208,8 @@ def test_egress_gating_container_jobs_grant_net_admin() -> None:
     )
     assert not offenders, (
         "workflows arming SMOKE_BLOCK_EGRESS must grant the job container "
-        "--cap-add=NET_ADMIN or block_egress fails every hermetic case:\n  " + "\n  ".join(offenders)
+        "--cap-add=NET_ADMIN on its `options:` line or block_egress fails every "
+        "hermetic case:\n  " + "\n  ".join(offenders)
     )
 
 
