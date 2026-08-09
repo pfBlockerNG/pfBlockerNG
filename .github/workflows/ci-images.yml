@@ -144,9 +144,11 @@ jobs:
         # the branch a dispatch already published from — the latter guaranteed, since the
         # dispatch escape hatch exists precisely so the series lands before the PR does.
         # So each series is published with a marker tag naming the git tree of its build
-        # inputs, and a series already carrying THIS run's marker is a no-op: nothing to
-        # push, publish is switched off, the run stays green. A series without it, or with
-        # someone else's, is the clash the guard was written for and still fails.
+        # inputs, and a series whose tags are ALL present and ALL carry THIS run's marker
+        # is a no-op: nothing to push, publish is switched off, the run stays green. One
+        # carrying someone else's marker is the clash the guard was written for. Anything
+        # between — one image published and the other not, or a marker with no series
+        # behind it — is refused outright by the all-or-nothing check at the end.
         #
         # The per-architecture tags are guarded too, not just the final manifest list.
         # They are an implementation detail of assembling it, but they are still published
@@ -252,8 +254,9 @@ jobs:
           if [ -n "$already" ] || [ -n "$present" ]; then
             echo "the series is only PARTLY published — marker:${already:-none} tag:${present:-none}"
             echo "Publishing now would re-push the part that already exists, replacing"
-            echo "published bytes. Delete the ${TAG} tags for the image(s) above, or bump"
-            echo ".github/docker/VERSION — never re-push a series one image already owns."
+            echo "published bytes. For each image named above delete EVERY tag of this"
+            echo "series — ${TAG}, ${TAG}-amd64, ${TAG}-arm64 and ${TAG}-${MARKER} — or"
+            echo "bump .github/docker/VERSION. Deleting only ${TAG} lands back here."
             exit 1
           fi
 
