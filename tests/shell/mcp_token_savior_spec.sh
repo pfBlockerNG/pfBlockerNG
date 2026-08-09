@@ -349,6 +349,36 @@ EOF
     The file "${WORK}/venv/pip-args.log" should not be exist
   End
 
+  It 'keeps a lock when ps cannot execute its holder probe'
+    sh -c 'exit 0' &
+    unknown_pid=$!
+    wait "${unknown_pid}"
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    printf '%s\n' "${unknown_pid}" > "${WORK}/venv.rebuild.lock/pid"
+    When run env PATH="${WORK}/shim:${PATH}" PS_EXIT=126 TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'concurrent rebuild'
+    The directory "${WORK}/venv.rebuild.lock" should be exist
+    The file "${WORK}/venv/pip-args.log" should not be exist
+  End
+
+  It 'keeps a lock when ps is unavailable'
+    mkdir -p "${WORK}/no-ps"
+    for tool in cat dirname mkdir rm sleep; do
+      ln -s "$(command -v "${tool}")" "${WORK}/no-ps/${tool}"
+    done
+    sh -c 'exit 0' &
+    unknown_pid=$!
+    wait "${unknown_pid}"
+    mkdir -p "${WORK}/venv.rebuild.lock"
+    printf '%s\n' "${unknown_pid}" > "${WORK}/venv.rebuild.lock/pid"
+    When run env PATH="${WORK}/no-ps" TS_VENV="${WORK}/venv" TS_LOCK_WAIT=2 /bin/sh "${SCRIPT}"
+    The status should be failure
+    The stderr should include 'concurrent rebuild'
+    The directory "${WORK}/venv.rebuild.lock" should be exist
+    The file "${WORK}/venv/pip-args.log" should not be exist
+  End
+
   It 'records its own live PID in the lock it holds'
     # Without this, the reap above would be unreachable in production: no holder
     # would ever leave a PID for a later session to test. The python3 wrapper runs
