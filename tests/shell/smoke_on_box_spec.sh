@@ -183,6 +183,7 @@ STUBEOF
         "${FAKE_ROOT}/scripts/run-smoke.sh"
 
     mkdir -p "${FAKE_ROOT}/.venv/bin"
+    true > "${FAKE_ROOT}/.venv/reuse-sentinel"
     cat > "${FAKE_ROOT}/.venv/bin/python" <<'STUBEOF'
 #!/bin/sh
 exit 0
@@ -204,6 +205,7 @@ STUBEOF
     The stderr should include 'running smoke'
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
     The stdout should include "client=${FAKE_ROOT}/out/smoke-images/civm count=1"
+    The file "${FAKE_ROOT}/.venv/reuse-sentinel" should be exist
     The contents of file "$VIEW_LOG" should include "ghcr.io/pfblockerng/pfsense-ce:2.8|/root/images/pfsense|${FAKE_ROOT}/out/smoke-images/pfsense"
     The contents of file "$VIEW_LOG" should include "ghcr.io/pfblockerng/civm:v1|/root/images/civm|${FAKE_ROOT}/out/smoke-images/civm"
   End
@@ -229,11 +231,17 @@ STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
     mkdir -p "${FAKE_ROOT}/.venv/bin"
-    ln -s "${WORK}/missing-python3" "${FAKE_ROOT}/.venv/bin/python"
+    cat > "${FAKE_ROOT}/.venv/bin/python" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$VENV_PYTHON_ARGS_FILE"
+exit 1
+STUBEOF
+    chmod +x "${FAKE_ROOT}/.venv/bin/python"
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
     VENV_ARGS_FILE="${WORK}/venv-args"
-    export SMOKE_SSH_KEY VENV_ARGS_FILE
+    VENV_PYTHON_ARGS_FILE="${WORK}/venv-python-args"
+    export SMOKE_SSH_KEY VENV_ARGS_FILE VENV_PYTHON_ARGS_FILE
 
     cat > "${WORK}/bin/python3" <<'STUBEOF'
 #!/bin/sh
@@ -249,6 +257,7 @@ STUBEOF
     When run sh "$SCRIPT" --ref HEAD --no-two-vm
     The status should equal 42
     The stderr should include 'provisioning test venv'
+    The contents of file "$VENV_PYTHON_ARGS_FILE" should equal '-m pip --version'
     The contents of file "$VENV_ARGS_FILE" should equal "-m venv --clear ${FAKE_ROOT}/.venv"
   End
 
@@ -291,6 +300,36 @@ STUBEOF
     The status should equal 2
     The stderr should include 'unsafe venv path'
     The file "${VENV_TARGET}/sentinel" should be exist
+  End
+
+  It 'refuses a non-directory venv root without clearing it'
+    printf '0\n' > "${WORK}/port-floor"
+
+    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+pfb_lan_registry_active() { return 1; }
+pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
+pfb_oras_refresh() { :; }
+pfb_oras_ref_view() { mkdir -p "$3"; true > "$3/selected.qcow2"; }
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+
+    printf 'sentinel\n' > "${FAKE_ROOT}/.venv"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    export SMOKE_SSH_KEY
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 2
+    The stderr should include 'unsafe venv path'
+    The contents of file "${FAKE_ROOT}/.venv" should equal 'sentinel'
   End
 
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #

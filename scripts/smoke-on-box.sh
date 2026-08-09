@@ -306,7 +306,7 @@ fi
 # The box ships python3 but not pytest; install the harness deps (version-pinned
 # by the checked-out ref's tests/smoke/requirements.txt, + pytest explicitly, the
 # same set CI installs) into ${REPO_ROOT}/.venv so run-smoke.sh's non-CI .venv
-# preference uses it. Idempotent: reuse an existing venv; pip is a no-op when the
+# preference uses it. Idempotent: reuse a valid existing venv; pip is a no-op when the
 # pinned deps are already satisfied.
 printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
 _VENV_DIR="${REPO_ROOT}/.venv"
@@ -315,7 +315,9 @@ if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; the
     printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
     exit 2
 fi
-[ -x "${_VENV_DIR}/bin/python" ] || python3 -m venv --clear "$_VENV_DIR"
+if [ ! -x "${_VENV_DIR}/bin/python" ] || ! "${_VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
+    python3 -m venv --clear "$_VENV_DIR"
+fi
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet --upgrade pip
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet -r "${REPO_ROOT}/tests/smoke/requirements.txt" pytest
 
