@@ -45,7 +45,7 @@ jobs:
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:5
+      image: ghcr.io/pfblockerng/ci-runner:6
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -129,7 +129,7 @@ jobs:
        github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:5
+      image: ghcr.io/pfblockerng/ci-runner:6
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

@@ -25,7 +25,7 @@
 # arm64, and pretending otherwise would trade a clear "no runner" error for a 40-minute
 # TCG timeout.
 
-ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:5
+ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:6
 FROM ${BASE_IMAGE}
 
 # Same role as in the base image: only the prebuilt-binary download below needs it.
@@ -40,9 +40,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # `dig` (the DNSBL assertions); openssh-client is the ssh/scp round-trip every on-box
 # step rides. The guest reaches the host through SLIRP user networking and a QEMU socket
 # NIC (boot_vm.sh), so no tap/bridge privileges are needed — only /dev/kvm.
+# iptables is the hermetic egress gate (tests/smoke/helpers.py block_egress, issue
+# #2261): the GitHub-hosted runners carried it on the HOST, so the enumerated
+# workload lists never named it. It flips the CONTAINER netns OUTPUT policy, so the
+# job also needs CAP_NET_ADMIN (granted in smoke-single.yml's container options).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      dnsutils openssh-client qemu-system-x86 qemu-utils \
+      dnsutils iptables openssh-client qemu-system-x86 qemu-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR. Replaces

@@ -296,7 +296,7 @@ jobs:
     continue-on-error: ${{ inputs.nonblocking }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:5
+      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:6
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -305,7 +305,10 @@ jobs:
       # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
       # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
       # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
-      options: --init --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
+      # NET_ADMIN: helpers.block_egress() (armed by SMOKE_BLOCK_EGRESS below) flips this
+      # container netns's iptables OUTPUT policy for the hermetic probes -- Docker's
+      # default capability set lacks it and every hermetic case then errors (issue #2261).
+      options: --init --device /dev/kvm --cap-add=NET_ADMIN --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
     # issue #2246: host env does not reach a GHA container job -- the repo
     # variable is the only channel scripts/resolve-legs.sh's LAN-registry
@@ -338,6 +341,15 @@ jobs:
           qemu-system-x86_64 -accel help | grep -qw kvm || {
             echo '::error::this qemu has no KVM accelerator'; exit 1; }
           echo 'KVM acceleration: available'
+          # Same assert-early contract for the hermetic egress gate (issue #2261): the
+          # suite arms SMOKE_BLOCK_EGRESS, and a missing iptables binary or a container
+          # without CAP_NET_ADMIN would otherwise surface as dozens of per-case errors
+          # an hour from now. `-S` lists rules without modifying anything; it fails on
+          # either a missing binary or a capability denial.
+          sudo iptables -w -S OUTPUT >/dev/null || {
+            echo '::error::iptables unusable in the job container (missing package or --cap-add=NET_ADMIN) -- block_egress would fail every hermetic case'
+            exit 1; }
+          echo 'Egress gate: iptables usable'
 
       - name: Resolve the version matrix (SMOKE_MATRIX_JSON for the variant topology)
         # The repo-smoke variant cases derive every ABI / PHP / Python / catalog from the
