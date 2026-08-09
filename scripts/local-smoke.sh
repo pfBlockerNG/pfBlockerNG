@@ -229,6 +229,7 @@ _bootstrap="cd /root/pfBlockerNG \
       -v /root/FreeBSD-ports:/root/FreeBSD-ports \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
       -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF -e CIVM_REF -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
+      -e SMOKE_REPO_LIVE_URL -e SMOKE_NIGHTLY_LIVE_URL \
       -w /root/pfBlockerNG \
       \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:6 \
       sh scripts/smoke-on-box.sh $_ob_flags"

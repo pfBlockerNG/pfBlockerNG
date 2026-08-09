@@ -133,6 +133,12 @@ EOF
     The output should include '-e PFB_LAN_REGISTRY'
   End
 
+  It 'passes optional live catalogue URLs into the container'
+    When call bootstrap --ref dummy
+    The output should include '-e SMOKE_REPO_LIVE_URL'
+    The output should include '-e SMOKE_NIGHTLY_LIVE_URL'
+  End
+
   It 'mounts the repo, the shared image store, the ports tree and the guest key'
     When call bootstrap --ref dummy
     The output should include '/root/pfBlockerNG:/root/pfBlockerNG'
