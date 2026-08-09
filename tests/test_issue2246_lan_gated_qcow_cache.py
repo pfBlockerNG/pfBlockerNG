@@ -6,16 +6,17 @@ which bakes no PyYAML.
 
 The self-hosted `smoke` job (smoke-single.yml) and `ui` job (ui-tests.yml)
 cache their pfSense/civm qcow2 pulls via `actions/cache` restore+save pairs.
-Those pairs are a GitHub-hosted FALLBACK only (issue #2244's plan: keep them
-for the case the self-hosted fleet is unavailable) — on the self-hosted
-fleet itself the LAN zot cache already serves the same bytes at LAN speed, so
-running the GitHub-backend cache on top would only add a slower, strictly
-worse WAN round-trip. Owner refinement (2026-08-09): every such cache step
-must carry `vars.PFB_LAN_REGISTRY == ''` in its `if:` — an unset repo
-variable compares equal to `''`, so the cache defaults ON for a plain
-GitHub-hosted run and OFF on the self-hosted fleet (var set). This is a
-regression guard: a cache step that loses its gate silently reintroduces the
-WAN round-trip on the very fleet the LAN cache exists to serve.
+Those pairs exist solely as the GitHub-hosted fallback (for when the
+self-hosted fleet is unavailable) — on the self-hosted fleet the LAN zot
+cache already serves the same bytes at LAN speed, so the GitHub-backend
+cache on top would only add a slower, strictly worse WAN round-trip. Every
+such cache step must therefore carry `vars.PFB_LAN_REGISTRY == ''` in its
+`if:` — an unset repo variable compares equal to `''`, so the cache
+defaults ON for a plain GitHub-hosted run and OFF on the self-hosted fleet
+(var set). A cache step that loses its gate silently reintroduces the WAN
+round-trip on the very fleet the LAN cache exists to serve; a cache step
+that disappears entirely breaks the hosted fallback — both directions are
+pinned here.
 
 It also guards the job-level `PFB_LAN_REGISTRY` env forwarding the pulls (and
 this gate) depend on: host env does not reach a GHA container job, so the
@@ -100,29 +101,33 @@ def _is_unguarded_cache_step(step: str) -> bool:
 
 def test_self_hosted_cache_steps_are_lan_gated() -> None:
     """Every actions/cache step inside a self-hosted job must be gated off
-    when the LAN zot cache is active. The cache pairs stay as the
-    GitHub-hosted fallback (owner refinement, issue #2246); on self-hosted
-    every one of them must carry `vars.PFB_LAN_REGISTRY == ''` in its `if:`."""
+    when the LAN zot cache is active (the pairs stay as the GitHub-hosted
+    fallback), and every expected fallback pair must still EXIST — a deleted
+    pair breaks the hosted fallback as surely as a lost gate breaks the
+    self-hosted path."""
     blocks = _self_hosted_blocks()
     assert len(blocks) >= 2, (
         f"expected at least 2 self-hosted job blocks (smoke-single.yml's smoke + "
         f"ui-tests.yml's ui), found {len(blocks)} — job-block scanner regressed or "
         "the workflows changed shape"
     )
-    total_cache_steps = 0
+    per_job_cache_steps: dict[str, int] = {}
     offenders: list[str] = []
     for job_name, block in blocks.items():
         for step in _step_blocks(block):
             if not _CACHE_STEP_USE.search(step):
                 continue
-            total_cache_steps += 1
+            per_job_cache_steps[job_name] = per_job_cache_steps.get(job_name, 0) + 1
             if _is_unguarded_cache_step(step):
                 offenders.append(f"{job_name} ({_step_name(step)})")
-    assert total_cache_steps >= 3, (
-        f"expected at least 3 actions/cache steps across the two self-hosted jobs "
-        f"(smoke-single.yml's pfSense+civm restore/save pairs, ui-tests.yml's "
-        f"pfSense pair), found {total_cache_steps} — step-block scanner regressed "
-        "or the workflows changed shape"
+    expected_cache_steps = {
+        "smoke-single.yml::smoke": 4,  # pfSense + civm restore/save pairs
+        "ui-tests.yml::ui": 2,  # pfSense restore/save pair
+    }
+    assert per_job_cache_steps == expected_cache_steps, (
+        f"actions/cache fallback steps changed: expected {expected_cache_steps}, "
+        f"found {per_job_cache_steps} — a removed pair breaks the GitHub-hosted "
+        "fallback; an added one needs its LAN gate and a row here"
     )
     assert not offenders, (
         "self-hosted actions/cache step(s) are missing the LAN-registry gate "
