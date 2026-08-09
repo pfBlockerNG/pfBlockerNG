@@ -232,25 +232,31 @@ EOF
       ref=ghcr.io/x/pfsense-ce:2.8
       STUB_REMOTE_DIGEST=sha256:old pfb_oras_refresh "$ref" "$1" CE || exit 1
       mkdir -p "$3/bin"
-      RACE_REAL_BASENAME="$(command -v basename)"
-      cat > "$3/bin/basename" <<"EOF"
+      RACE_REAL_MV="$(command -v mv)"
+      RACE_REAL_CP="$(command -v cp)"
+      cat > "$3/bin/mv" <<"EOF"
 #!/bin/sh
-count="$(cat "$RACE_COUNT" 2>/dev/null || echo 0)"
-count=$((count + 1))
-printf "%s\n" "$count" > "$RACE_COUNT"
-if [ "$count" -eq 3 ]; then
+case "${0##*/}" in
+  mv) real="$RACE_REAL_MV" ;;
+  cp) real="$RACE_REAL_CP" ;;
+esac
+case "$3" in
+  */.digest-*)
+    [ "${0##*/}" = mv ] || true > "$3"
     true > "$RACE_READY"
     tries=0
     while [ ! -e "$RACE_RELEASE" ] && [ "$tries" -lt 500 ]; do
-        sleep 0.01
-        tries=$((tries + 1))
+      sleep 0.01
+      tries=$((tries + 1))
     done
-fi
-exec "$RACE_REAL_BASENAME" "$@"
+    ;;
+esac
+exec "$real" "$@"
 EOF
-      chmod +x "$3/bin/basename"
-      RACE_COUNT="$3/count" RACE_READY="$3/ready" RACE_RELEASE="$3/release"
-      export RACE_REAL_BASENAME RACE_COUNT RACE_READY RACE_RELEASE
+      chmod +x "$3/bin/mv"
+      ln "$3/bin/mv" "$3/bin/cp"
+      RACE_READY="$3/ready" RACE_RELEASE="$3/release"
+      export RACE_REAL_MV RACE_REAL_CP RACE_READY RACE_RELEASE
       PATH="$3/bin:$PATH" STUB_REMOTE_DIGEST=sha256:new \
         pfb_oras_refresh "$ref" "$1" CE &
       refresh_pid=$!
