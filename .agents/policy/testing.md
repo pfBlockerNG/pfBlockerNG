@@ -31,6 +31,17 @@ composer install        # once; if it 403s in a managed cloud session, run
 vendor/bin/phpunit      # PHP suite: loads the REAL pfblockerng.inc off-appliance
 ```
 
+**Running a suite inside the CI toolchain — `scripts/run-in-docker.sh <cmd>`.** Wraps any repo command in `ghcr.io/pfblockerng/ci-runner`, the image the gates grade with, so a local red/green answers the same question CI does. Also the faster path on Apple Silicon (59 s vs 201 s for `python3 -m pytest -q`: the suite is process-spawn bound and Linux `fork`/`exec` is far cheaper than macOS). Prefer it when **reproducing a CI-only failure**, when the host toolchain versions differ from the matrix, or for any long suite run on Apple Silicon.
+
+```sh
+scripts/run-in-docker.sh python3 -m pytest -q      # any command, same argv
+scripts/run-in-docker.sh shellspec --shell dash
+PFB_VM=1 scripts/run-in-docker.sh ...              # ci-runner-vm (qemu, oras, Playwright)
+PFB_BUILD=1 scripts/run-in-docker.sh ...           # build the image locally, no GHCR login
+```
+
+**It never refuses to run, so verify WHERE it ran before claiming a containerised result.** Docker missing, daemon down, image unpullable (the packages are private today), a failed build, no work tree — each prints one reason line and execs on the host instead. That line is lost to `2>/dev/null` and to a captured `$(...)`, so the fact rides the environment: **`PFB_RUNNER` is `container` or `host`, and unset when the wrapper was not involved.** Reporting "ran in the CI image" on a `PFB_RUNNER=host` run is a fabricated verification claim — check it, or say "on the host". Container/host differences are real and known: the process-group signal tests and one mtime race test fail in the container, and platform-gated cases skip differently. **CI grades on Linux, so the container is the closer answer where they disagree** — but a fallback run is a HOST run and carries the host's verdict.
+
 Environment gotchas that read as fake "baseline failures" — fix env, never dismiss red: pytest suite needs **zstd encoder** (`zstd` binary or `zstandard` module); bare managed-cloud container lacks one and ~70 pkg/repo tests fail — `SessionStart` hook auto-installs it (manual: `pip3 install zstandard`). PHPUnit permission-denial tests (`chmod 0555` fixtures) **skip under root** via `posix_getuid() === 0` guard — root bypasses file permissions, so root run cannot simulate denial (red there means guard missing, not code broke). Any other local-only failure: diagnose before dismissing — if genuinely pre-existing on base branch, **file tracking issue** (exemplars #791, #894); never leave as folklore.
 
 PHPUnit bootstrap satisfies `require_once` with empty shims (`tests/php/shims/`) + behavioural doubles (`tests/php/pfsense_doubles.php`); when tested path reaches new pfSense function, add `function_exists()`-guarded double there (stubs can't serve — empty-bodied). See `tests/php/README.md`.

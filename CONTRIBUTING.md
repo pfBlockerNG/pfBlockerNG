@@ -151,6 +151,27 @@ plus behavioural doubles for the pfSense runtime functions) — see
 [`tests/php/README.md`](tests/php/README.md). Deep pfSense-runtime integration
 stays the live-VM smoke's job (ADR-04).
 
+To run any of these inside the same image CI grades with, prefix the command with
+`scripts/run-in-docker.sh`:
+
+```sh
+scripts/run-in-docker.sh python3 -m pytest -q
+scripts/run-in-docker.sh vendor/bin/phpunit
+scripts/run-in-docker.sh                       # no command: an interactive shell
+```
+
+Worth doing when a failure reproduces only in CI, or when your local Python/PHP/Node
+differs from the matrix. On Apple Silicon it is also simply faster for the Python
+suite — 59 s against 201 s, measured back to back — because the suite is
+process-spawn bound and Linux `fork`/`exec` costs far less than macOS.
+
+It never refuses to run: if Docker is missing, the daemon is down, or the image
+cannot be pulled (the packages are private for now — `PFB_BUILD=1` builds it locally
+instead), it prints why and runs the command on the host. `PFB_RUNNER` is set to
+`container` or `host` so you can tell which happened after the fact, and a few tests
+legitimately differ between the two: the process-group signal cases and one mtime
+race fail under Linux containers, and platform-gated cases skip differently.
+
 ### Shell tests (shellspec)
 
 The POSIX `sh` — the `ip_pre_AWS_*.sh` region pre-scripts and the testable
