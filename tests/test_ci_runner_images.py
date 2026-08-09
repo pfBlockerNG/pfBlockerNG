@@ -219,10 +219,19 @@ def test_every_prebuilt_binary_is_pinned_for_every_published_architecture() -> N
             # The URL must actually vary by architecture — a block that reads TARGETARCH
             # only to pick a hash, while still fetching one fixed arch's tarball, would
             # install an x86 binary on arm64 and pass every other check in this file.
+            #
+            # Derived from the URL itself, never from a variable NAME: an earlier version
+            # accepted any block merely containing "_arch", which the ShellCheck block
+            # satisfies through its `sc_arch` variable no matter what the URL fetches.
             url = re.search(r"https://\S+", block)
-            assert url and "${TARGETARCH}" in url.group(0) or "_arch" in block, (
+            assert url, f"{dockerfile.name}: arch-selecting block with no URL:\n{block[:400]}"
+            interpolated = re.findall(r"\$\{(\w+)\}", url.group(0))
+            varies = "TARGETARCH" in interpolated or any(
+                re.search(rf"\b{arch}\)[^;]*\b{var}=", block) for var in interpolated for arch in PUBLISHED_ARCHES
+            )
+            assert varies, (
                 f"{dockerfile.name}: block selects on TARGETARCH but its URL does not vary "
-                f"by architecture:\n{block[:400]}"
+                f"by architecture (interpolates {interpolated}):\n{block[:400]}"
             )
             for arch in PUBLISHED_ARCHES:
                 assert re.search(rf"\b{arch}\)", block), (
@@ -519,6 +528,31 @@ def test_publish_workflow_builds_every_architecture_natively() -> None:
     assert "arm" not in runners["amd64"], f"amd64 must build on an x86 runner, got {runners['amd64']!r}"
 
 
+def test_the_published_index_is_verified_to_carry_every_architecture() -> None:
+    """A tag that resolves for only one architecture must fail the run that made it.
+
+    This is the failure the whole restructure invites: `fail-fast: false` lets one matrix
+    leg push while the other dies, and `imagetools create` will happily assemble an index
+    from whatever it is given. Without this step the workflow reports success and the
+    breakage surfaces later, on the other architecture, at `docker run`.
+
+    The step shipped with no coverage at all — deleting it, or dropping one architecture
+    from it, left the suite green.
+    """
+    step = _step(_read(PUBLISH_WORKFLOW), "Verify both architectures are in the published index")
+    body = "\n".join(ln for ln in step.splitlines() if not ln.lstrip().startswith("#"))
+
+    for arch in PUBLISHED_ARCHES:
+        assert re.search(rf'\*" {arch} "\*\)', body), f"the index check must require {arch}; step was:\n{body}"
+        assert re.search(rf"{arch} missing", body), f"a missing {arch} must be named in the failure; step was:\n{body}"
+    assert body.count("exit 1") >= len(PUBLISHED_ARCHES), (
+        f"each missing architecture must fail the job; step was:\n{body}"
+    )
+    # Parsed as a document, not pattern-matched: a greedy line regex over the raw index
+    # collapses to one architecture whenever the registry serves it compact.
+    assert "jq -r" in body, f"the index must be parsed with jq, not a regex over raw JSON:\n{body}"
+
+
 def test_published_images_are_checked_for_public_pullability_without_credentials() -> None:
     """The runner images must be pullable by someone with no token, and the check that
     proves it must not authenticate.
@@ -571,19 +605,41 @@ def _guard_script() -> str:
     return "\n".join(out)
 
 
-def _run_guard(tmp_path: Path, manifest_status: str, *, curl_fails: bool = False) -> int:
-    """Execute the guard with a stubbed curl answering `manifest_status`."""
+def _run_guard(
+    tmp_path: Path,
+    manifest_status: str,
+    *,
+    curl_fails: bool = False,
+    marker_status: str | None = None,
+    arch_status: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Execute the guard with a stubbed curl.
+
+    `manifest_status` answers the bare series tag, `arch_status` the per-architecture
+    tags, `marker_status` the build-inputs marker (each defaulting to the bare tag's).
+    Answering PER REF is what makes the interesting cases expressible at all: one status
+    for every request cannot distinguish "the series carries this build's marker" (a
+    re-run — nothing to do) from "it does not" (the overwrite this guard refuses), and
+    cannot tell a loop over three refs from a loop over one.
+    """
+    marker_status = manifest_status if marker_status is None else marker_status
+    arch_status = manifest_status if arch_status is None else arch_status
     stub = tmp_path / "bin"
     stub.mkdir(exist_ok=True)
     (stub / "curl").write_text(
         "#!/bin/sh\n"
         'for a in "$@"; do case "$a" in *"/token?"*) printf \'{"token":"stub"}\'; exit 0;; esac; done\n'
         f"{'exit 7' if curl_fails else ''}\n"
+        # Order matters: the marker ref also ends in a suffix, so match it first.
+        'for a in "$@"; do case "$a" in *"-inputs-"*)'
+        f" printf '%s' '{marker_status}'; exit 0;; esac; done\n"
+        'for a in "$@"; do case "$a" in *"-amd64"|*"-arm64")'
+        f" printf '%s' '{arch_status}'; exit 0;; esac; done\n"
         f"printf '%s' '{manifest_status}'\n"
     )
     (stub / "curl").chmod(0o755)
 
-    proc = subprocess.run(
+    return subprocess.run(
         ["sh", "-c", _guard_script()],
         capture_output=True,
         text=True,
@@ -591,33 +647,84 @@ def _run_guard(tmp_path: Path, manifest_status: str, *, curl_fails: bool = False
             "PATH": f"{stub}:/usr/bin:/bin",
             "IMAGE_REPO": "ghcr.io/pfblockerng",
             "TAG": "1",
+            "MARKER": "inputs-deadbeefdeadbeef",
+            "WANT_PUBLISH": "true",
             "GHCR_TOKEN": "stub-token",
+            "GITHUB_OUTPUT": str(tmp_path / "gh_out"),
         },
         check=False,
     )
-    return proc.returncode
+
+
+def _guard_publish_output(tmp_path: Path) -> str:
+    """The `publish=` the guard wrote to GITHUB_OUTPUT, or '' if it wrote none."""
+    out = tmp_path / "gh_out"
+    text = out.read_text(encoding="utf-8") if out.exists() else ""
+    match = re.search(r"^publish=(\S+)$", text, re.MULTILINE)
+    return match.group(1) if match else ""
 
 
 def test_the_overwrite_guard_permits_a_push_only_when_the_tag_is_absent(tmp_path: Path) -> None:
     """EXECUTED, not grepped. A text assertion cannot tell this guard from a fail-open
     rewrite: two different fail-open bodies were shown to satisfy the previous version of
     this test. Only running it against known HTTP answers pins the behaviour."""
-    assert _run_guard(tmp_path, "404") == 0, "HTTP 404 means the tag is free; the push must proceed"
+    proc = _run_guard(tmp_path, "404")
+    assert proc.returncode == 0, f"HTTP 404 means the tag is free; the push must proceed\n{proc.stderr}"
+    assert _guard_publish_output(tmp_path) == "true", "a free series must leave publishing enabled"
+
+
+def test_the_overwrite_guard_treats_its_own_republish_as_a_no_op(tmp_path: Path) -> None:
+    """A series already published FROM THESE EXACT INPUTS is nothing to push, not a clash.
+
+    Two ordinary flows land here and both were unrecoverable while the check was
+    existence-only: re-running a publish, and merging the branch a dispatch published
+    from — the latter guaranteed, because the dispatch escape hatch exists so the series
+    can land before the PR that pins it. The run must go green having pushed nothing.
+    """
+    proc = _run_guard(tmp_path, "200", marker_status="200")
+    assert proc.returncode == 0, f"an identical republish must not fail the run\n{proc.stdout}\n{proc.stderr}"
+    assert _guard_publish_output(tmp_path) == "false", f"publishing must be switched OFF, not left on:\n{proc.stdout}"
 
 
 def test_the_overwrite_guard_blocks_on_anything_that_is_not_a_clean_absence(tmp_path: Path) -> None:
-    """200 is a clash. 403/401 mean we could not read the tag (wrong scope, revoked
-    credential); 000 means the request itself failed. None of those prove the tag is free,
-    and pushing on them is exactly the fail-open mode this guard exists to prevent."""
-    assert _run_guard(tmp_path, "200") != 0, "HTTP 200 is a published tag; the push must be refused"
+    """200 without this build's marker is a clash. 403/401 mean we could not read the tag
+    (wrong scope, revoked credential); 000 means the request itself failed. None of those
+    prove the tag is free, and pushing on them is exactly the fail-open mode this guard
+    exists to prevent."""
+    # The series exists but was built from DIFFERENT inputs — the overwrite case.
+    proc = _run_guard(tmp_path, "200", marker_status="404")
+    assert proc.returncode != 0, "a published series without this build's marker must be refused"
+    assert "DIFFERENT inputs" in proc.stdout, f"the refusal must say why:\n{proc.stdout}"
 
     for status in ("401", "403", "500", "502"):
-        assert _run_guard(tmp_path, status) != 0, (
+        assert _run_guard(tmp_path, status).returncode != 0, (
             f"HTTP {status} does not prove the tag is free; the guard must refuse to push"
         )
+        # An unreadable MARKER is equally undeterminable: treating it as absent would turn
+        # a re-run into a clash, and treating it as present would wave an overwrite through.
+        assert _run_guard(tmp_path, "200", marker_status=status).returncode != 0, (
+            f"an unreadable marker (HTTP {status}) must refuse, not guess"
+        )
 
-    assert _run_guard(tmp_path, "000", curl_fails=True) != 0, (
+    assert _run_guard(tmp_path, "000", curl_fails=True).returncode != 0, (
         "a failed request must refuse the push, not treat the tag as free"
+    )
+
+
+def test_the_overwrite_guard_catches_a_half_published_series(tmp_path: Path) -> None:
+    """A leftover per-architecture tag is a clash, even when the bare series tag is free.
+
+    `fail-fast: false` exists so one architecture's failure does not cancel the other, so
+    one leg CAN push `:N-amd64` and the other die before `:N-arm64` — leaving a partial
+    series and no manifest list. If the guard only looked at the bare tag it would call
+    that "free" and let the next run complete somebody else's half-finished series with
+    freshly built bytes, which is precisely the silent-mismatch the immutability rule
+    exists to prevent.
+    """
+    proc = _run_guard(tmp_path, "404", arch_status="200", marker_status="404")
+    assert proc.returncode != 0, f"a leftover per-arch tag must be refused even with the bare tag free\n{proc.stdout}"
+    assert "-amd64" in proc.stdout or "-arm64" in proc.stdout, (
+        f"the refusal must name the per-architecture tag it found:\n{proc.stdout}"
     )
 
 
@@ -716,13 +823,26 @@ def test_publish_workflow_publishes_only_from_devel_and_main() -> None:
     # single place where the branch policy lives. Since #2256 the decision is made once in
     # the preflight job and consumed by the others through `needs`, so which expression is
     # correct depends on where the step lives — but "gated on nothing" is wrong everywhere.
-    same_job = "if: steps.publish.outputs.enabled == 'true'"
+    same_job = "if: steps.guard.outputs.publish == 'true'"
     downstream = "if: needs.preflight.outputs.publish == 'true'"
-    for step_name in ("Log in to GHCR", "Refuse to overwrite a published tag", "Push this architecture"):
+    for step_name in ("Log in to GHCR", "Refuse to publish into a package nobody can pull", "Push this architecture"):
         step = _step(workflow, step_name)
         assert same_job in step or downstream in step, (
             f"{step_name!r} must be gated on the publish decision; step was:\n{step}"
         )
+
+    # The overwrite guard is the one exception, and deliberately so: it CONSUMES the
+    # branch decision and narrows it (an identical republish turns publishing off), so it
+    # cannot also be gated by its own output. It must still honour the branch policy
+    # rather than ignoring it — hence reading it, and refusing to run the probes at all
+    # when this is not a publishing run.
+    guard = _step(workflow, "Refuse to overwrite a published tag")
+    assert "WANT_PUBLISH: ${{ steps.publish.outputs.enabled }}" in guard, (
+        f"the guard must consume the branch decision; step was:\n{guard}"
+    )
+    assert re.search(r'if \[ "\$WANT_PUBLISH" != .true. \]', guard), (
+        f"the guard must short-circuit when this run does not publish; step was:\n{guard}"
+    )
 
     # The job that assembles and pushes the manifest list is gated as a whole, so a
     # pull-request run cannot create the tag even though its builds ran.
