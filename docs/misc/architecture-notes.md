@@ -758,10 +758,10 @@ immediately followed by its node-ID value.
 **CI as parallel dispatch (ADR-47 P5).** Workflows are thin dispatch wrappers; all step logic
 lives in shared scripts that run identically locally and in CI:
 
-- `scripts/resolve-legs.sh` — six subcommands covering the inline blocks previously
+- `scripts/resolve-legs.sh` — seven subcommands covering the inline blocks previously
   repeated across `smoke.yml`, `smoke-single.yml`, and `ui-tests.yml`:
   `legs` (scope ladder + THREE-WAY jq + filter derivation), `image-ref`, `digest`,
-  `exact-image-name`, `vm-identity`, `scrub`. `legs` prints the resolved JSON to
+  `pull`, `exact-image-name`, `vm-identity`, `scrub`. `legs` prints the resolved JSON to
   stdout for same-step capture and also writes `scope=`, `ci_matrix=`, `pytest_filter=`
   to `$GITHUB_OUTPUT` for cross-step consumption.
 - `scripts/lib/git-env-scrub.sh` — sourceable POSIX-sh lib exporting `pfb_scrub_git_env()`,

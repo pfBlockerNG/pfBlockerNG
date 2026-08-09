@@ -87,10 +87,15 @@ def _step_name(step: str) -> str:
     return m.group(1).strip() if m else step.strip().splitlines()[0]
 
 
+_IF_LINE = re.compile(r"^\s*if:\s*(\S.*)$", re.MULTILINE)
+
+
 def _is_unguarded_cache_step(step: str) -> bool:
-    """True when `step` uses actions/cache but its `if:` does not carry the
-    LAN-registry gate — i.e. it would also run on the self-hosted fleet."""
-    return bool(_CACHE_STEP_USE.search(step)) and _LAN_GATE not in step
+    """True when `step` uses actions/cache but no `if:` LINE carries the
+    LAN-registry gate — a gate merely quoted in a comment must not count."""
+    if not _CACHE_STEP_USE.search(step):
+        return False
+    return not any(_LAN_GATE in m.group(1) for m in _IF_LINE.finditer(step))
 
 
 def test_self_hosted_cache_steps_are_lan_gated() -> None:
@@ -200,9 +205,20 @@ def test_scanner_flags_unguarded_cache_step_but_passes_a_lan_gated_one() -> None
         "          path: image\n"
         "          key: pfsense-img-abc\n"
     )
+    gate_only_in_comment = (
+        "      - name: Restore cached pfSense image\n"
+        "        # skipped when the LAN cache serves (vars.PFB_LAN_REGISTRY == '')\n"
+        "        uses: actions/cache/restore@v5\n"
+        "        with:\n"
+        "          path: image\n"
+        "          key: pfsense-img-abc\n"
+    )
     assert _is_unguarded_cache_step(unguarded)
     assert not _is_unguarded_cache_step(guarded_restore)
     assert not _is_unguarded_cache_step(guarded_save)
+    assert _is_unguarded_cache_step(gate_only_in_comment), (
+        "a gate quoted in a comment, with no if: line, must still be flagged"
+    )
 
 
 def test_step_blocks_splits_a_steps_list_into_individual_steps() -> None:
