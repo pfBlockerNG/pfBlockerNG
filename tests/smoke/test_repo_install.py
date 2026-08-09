@@ -696,7 +696,9 @@ def pkg_repo_origin(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     return _ssh_check(vm, "pkg", "query", "%R", PKG_NAME, timeout=timeout).stdout.strip()
 
 
-def pkg_install_from_repo(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.CompletedProcess[str]:
+def pkg_install_from_repo(
+    vm: SmokeVM, *, pkg_name: str = PKG_NAME, timeout: float = 600.0
+) -> subprocess.CompletedProcess[str]:
     """``pkg install -y <name>`` across ALL enabled repos — NO ``-r``, NO ``-f``.
 
     This is the exact shape ``pkg_install()`` uses (ADR-17 §1 Context 3): resolve
@@ -708,19 +710,19 @@ def pkg_install_from_repo(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.
     completed process so the caller can read the "Missing dependency" line
     (deps-resolved evidence) off stderr/stdout.
     """
-    remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME)
+    remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", pkg_name)
     deadline = time.monotonic() + timeout
     while True:
         result = _pkg_retry_until(vm, *remote, deadline=deadline, timeout=timeout)
         if result.returncode != 0:
             raise RuntimeError(
-                f"pkg install {PKG_NAME} failed: rc={result.returncode}\n"
+                f"pkg install {pkg_name} failed: rc={result.returncode}\n"
                 f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
             )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise subprocess.TimeoutExpired(remote, timeout)
-        if pkg_installed_version(vm, timeout=min(60.0, remaining)) is not None:
+        if pkg_installed_version_of(vm, pkg_name, timeout=min(60.0, remaining)) is not None:
             return result
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -745,9 +747,9 @@ def pkg_upgrade(vm: SmokeVM, *, timeout: float = 600.0) -> subprocess.CompletedP
     return result
 
 
-def pkg_delete(vm: SmokeVM, *, timeout: float = 300.0) -> None:
+def pkg_delete(vm: SmokeVM, *, pkg_name: str = PKG_NAME, timeout: float = 300.0) -> None:
     """Remove the package if present (between cases + final cleanup)."""
-    vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", PKG_NAME, timeout=timeout)
+    vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y", pkg_name, timeout=timeout)
 
 
 # --------------------------------------------------------------------------- #
@@ -1432,21 +1434,23 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     prior_hosts = pin_pages_hosts(repo_vm, host)
     try:
         pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
-        pkg_delete(repo_vm)
+        pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         write_live_repo_conf(repo_vm, base_url, varver, priority=pfsense_prio + 100)
 
         # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
         # meta.conf, malformed packagesite, mismatched sum, or an unreachable URL — fails here).
         pkg_update(repo_vm)
-        assert pkg_installed_version(repo_vm) is None, f"{PKG_NAME} unexpectedly present before the live-URL install"
+        assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) is None, (
+            f"{CANONICAL_PKG_NAME} unexpectedly present before the live-URL install"
+        )
 
         # THEN: install resolves from our LIVE repo, deps included, .pkg checksum validated.
-        proc = pkg_install_from_repo(repo_vm)
+        proc = pkg_install_from_repo(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         combined = proc.stdout + proc.stderr
         assert "Missing dependency" not in combined, (
             f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
         )
-        origin = pkg_repo_origin(repo_vm)
+        origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
     finally:
         restore_pages_hosts(repo_vm, prior_hosts)
