@@ -678,6 +678,23 @@ def test_print_conf_base_url_override(capsys: pytest.CaptureFixture[str]) -> Non
     assert "${ABI}" not in out
 
 
+def test_print_conf_accepts_selected_channel_root(capsys: pytest.CaptureFixture[str]) -> None:
+    """A selected channel root stays exact instead of gaining the legacy release segment."""
+    rc = brp.main(
+        [
+            "--print-conf",
+            "--base-url",
+            "https://pfblockerng.github.io/pkg/docs/edge",
+            "--catalog-path",
+            "ce-2.8",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "pfblockerng-edge: {" in out
+    assert 'url: "https://pfblockerng.github.io/pkg/docs/edge/ce-2.8"' in out
+
+
 def test_cli_requires_in_and_out(capsys: pytest.CaptureFixture[str]) -> None:
     """Without --in/--out (and no --print-conf) the CLI errors."""
     with pytest.raises(SystemExit):
