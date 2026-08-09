@@ -151,6 +151,49 @@ STUBEOF
     The contents of file "$SPARSE_CHANNEL_FILE" should equal 'testing'
   End
 
+  It 'clears an invalid existing venv before recreating it'
+    printf '0\n' > "${WORK}/port-floor"
+
+    # Reach only the venv boundary: package/image work is unrelated and remains stubbed.
+    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+pfb_lan_registry_active() { return 1; }
+pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
+pfb_oras_refresh() { :; }
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+
+    mkdir -p "${FAKE_ROOT}/.venv/bin"
+    ln -s "${WORK}/missing-python3" "${FAKE_ROOT}/.venv/bin/python"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    VENV_ARGS_FILE="${WORK}/venv-args"
+    export SMOKE_SSH_KEY VENV_ARGS_FILE
+
+    cat > "${WORK}/bin/python3" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$VENV_ARGS_FILE"
+exit 42
+STUBEOF
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/python3" "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 42
+    The stderr should include 'provisioning test venv'
+    The contents of file "$VENV_ARGS_FILE" should equal "-m venv --clear ${FAKE_ROOT}/.venv"
+  End
+
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
   #
   # The config echo (config abi=... pfsense_ref=... civm_ref=...) fires BEFORE the

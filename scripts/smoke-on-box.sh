@@ -304,7 +304,7 @@ fi
 # preference uses it. Idempotent: reuse an existing venv; pip is a no-op when the
 # pinned deps are already satisfied.
 printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
-[ -x "${REPO_ROOT}/.venv/bin/python" ] || python3 -m venv "${REPO_ROOT}/.venv"
+[ -x "${REPO_ROOT}/.venv/bin/python" ] || python3 -m venv --clear "${REPO_ROOT}/.venv"
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet --upgrade pip
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet -r "${REPO_ROOT}/tests/smoke/requirements.txt" pytest
 
