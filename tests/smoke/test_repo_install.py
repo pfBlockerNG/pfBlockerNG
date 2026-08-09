@@ -157,14 +157,14 @@ ADD_REPO_GENERATE_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "
 GUEST_ADD_REPO_RCD_DIR = f"{GUEST_SPIKE_DIR}/rc.d"
 
 # Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
-# deploys the catalog to the repo's standard project Pages URL (gh api
-# repos/.../pages -> html_url https://pfblockerng.github.io/pkg/); we serve over HTTPS.
+# deploys each catalogue beneath the repo's standard project Pages URL; the caller passes
+# the selected channel root (for example https://pfblockerng.github.io/pkg/edge).
 # This dispatch-only test proves a REAL pfSense box `pkg update`/`pkg install`
 # against the LIVE https URL (not file://) — the maintainer's real-URL check. It is
 # GATED on SMOKE_REPO_LIVE_URL: unset -> SKIP (the file:// VM-acceptance above is the
 # always-on proof; the live URL only exists once the deploy has run).
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
-DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg"
+DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg/edge"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
 # only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
@@ -1250,7 +1250,7 @@ def _live_base_url() -> str | None:
     """The live Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_REPO_LIVE_URL``: set it to the deployed base (e.g.
-    ``https://pfblockerng.github.io/pkg``) to run the live check after a publish
+    ``https://pfblockerng.github.io/pkg/edge``) to run the live check after a publish
     dispatch; leave it unset and the test SKIPS (the always-on proof is the
     file:// VM-acceptance above). A bare ``1``/``true`` selects the default base.
     """
@@ -1266,11 +1266,10 @@ def poll_catalog_served(base_url: str, catalog_path: str, *, attempts: int = 30,
     """Poll the live ``<base>/<catalog_path>/meta.conf`` until it serves (first deploy + DNS/cert lag).
 
     Arch-less (NO_ARCH — issue #1806): a published catalog is keyed by varver alone,
-    no ``${ABI}``/CPU segment. ``catalog_path`` is the caller's full subtree UNDER
-    ``base_url`` — no channel is hardcoded here, since callers' bases differ (the
-    release check's base is the pkg root, so it passes ``f"release/{varver}"``; the
-    nightly check's base already ends in ``/nightly``, so it passes the bare
-    ``varver``). The catalog files a client ``pkg update`` consumes are ``meta.conf``
+    no ``${ABI}``/CPU segment. ``catalog_path`` is the caller's full subtree under
+    ``base_url`` — no channel is hardcoded here because both tagged and Nightly callers
+    pass a selected channel root and the bare ``varver``. The catalog files a client
+    ``pkg update`` consumes are ``meta.conf``
     + ``packagesite.pkg``; a 200 on both is the runner-side BACKSTOP that the deploy
     actually published a usable tree, independent of the guest. Raises with the last
     error if the URL never serves within the budget.
@@ -1348,12 +1347,12 @@ def restore_pages_hosts(vm: SmokeVM, prior_hosts: str, *, timeout: float = 60.0)
 
 
 def write_live_repo_conf(vm: SmokeVM, base_url: str, varver: str, *, priority: int, timeout: float = 60.0) -> None:
-    """Write OUR production conf pointing at the LIVE ``<base>/release/<varver>`` Pages URL.
+    """Write OUR production conf pointing at the LIVE ``<channel-base>/<varver>`` Pages URL.
 
     Built from the SAME generator the publish job emits (``build-repo-portable.py
     --print-conf --base-url <base> --catalog-path <varver>``), but with the
     ``priority:`` raised above the Netgate ``pfSense`` repo so cross-repo resolution
-    favours ours. The conf URL is fully resolved (``<base>/release/<varver>`` —
+    favours ours. The conf URL is fully resolved (``<channel-base>/<varver>`` —
     arch-less, NO_ARCH, issue #1806): there is no ``${ABI}`` pkg(8) variable any
     more, the caller supplies the concrete varver.
     """
@@ -1392,7 +1391,7 @@ def write_live_repo_conf(vm: SmokeVM, base_url: str, varver: str, *, priority: i
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     """PHASE-3b LIVE URL: a real pfSense box installs from the DEPLOYED Pages catalog
-    over its public HTTPS ``https://pfblockerng.github.io/pkg/release/<varver>`` URL
+    over its public HTTPS ``https://pfblockerng.github.io/pkg/<channel>/<varver>`` URL
     (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_REPO_LIVE_URL`` (unset -> SKIP). The always-on
@@ -1400,9 +1399,9 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     publish pipeline serves, so it can only run after a publish dispatch has deployed.
 
     Given the publish job has DEPLOYED the catalog to Pages (runner-side backstop:
-      ``<base>/release/<varver>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest
+      ``<channel-base>/<varver>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest
       has the Pages IPs pinned for the host (its DNS is sandboxed), the package is
-      ABSENT, and OUR conf points at the live ``release/<varver>`` URL above the
+      ABSENT, and OUR conf points at the live ``<channel-base>/<varver>`` URL above the
       Netgate ``pfSense`` repo,
     When ``pkg update`` reads the live catalog and ``pkg install -y`` runs (NO ``-r``,
       NO ``-f``),
@@ -1424,9 +1423,9 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     # NEVER own_variant().catalog / the matrix: matrix_variants() dedupes by (abi,
     # variant), so two same-major editions (e.g. Plus 26.03 + 26.07) collapse onto
     # the first, which would poll/serve the wrong catalog for this leg. This
-    # release check's base is the pkg root, so the full subtree is "release/<varver>".
+    # The caller passes a selected channel root, so the subtree is the bare varver.
     varver = _box_real_varver(repo_vm)
-    poll_catalog_served(base_url, f"release/{varver}")
+    poll_catalog_served(base_url, varver)
 
     # GIVEN: Pages IPs pinned (guest DNS is sandboxed), package absent, our conf at
     # the LIVE url above pfSense.
