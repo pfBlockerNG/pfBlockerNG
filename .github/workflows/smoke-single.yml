@@ -327,7 +327,7 @@ jobs:
           ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
-      - name: Assert KVM acceleration is available
+      - name: Assert KVM acceleration and the egress gate are available
         # The container gets /dev/kvm via `--device`; the old udev rule that made it
         # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
         # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
