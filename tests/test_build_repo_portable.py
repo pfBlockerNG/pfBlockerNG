@@ -685,6 +685,8 @@ def test_print_conf_accepts_selected_channel_root(capsys: pytest.CaptureFixture[
             "--print-conf",
             "--base-url",
             "https://pfblockerng.github.io/pkg/docs/edge",
+            "--channel",
+            "edge",
             "--catalog-path",
             "ce-2.8",
         ]
@@ -693,6 +695,32 @@ def test_print_conf_accepts_selected_channel_root(capsys: pytest.CaptureFixture[
     out = capsys.readouterr().out
     assert "pfblockerng-edge: {" in out
     assert 'url: "https://pfblockerng.github.io/pkg/docs/edge/ce-2.8"' in out
+
+
+def test_print_conf_infers_selected_channel_root(capsys: pytest.CaptureFixture[str]) -> None:
+    """A trailing channel selects that channel when --channel is omitted."""
+    rc = brp.main(
+        [
+            "--print-conf",
+            "--base-url",
+            "https://pfblockerng.github.io/pkg/docs/edge",
+            "--catalog-path",
+            "ce-2.8",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "pfblockerng-edge: {" in out
+    assert 'url: "https://pfblockerng.github.io/pkg/docs/edge/ce-2.8"' in out
+
+
+def test_print_conf_does_not_treat_host_as_channel(capsys: pytest.CaptureFixture[str]) -> None:
+    """A channel-named host is not a selected channel path."""
+    rc = brp.main(["--print-conf", "--base-url", "https://edge", "--catalog-path", "ce-2.8"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "pfblockerng: {" in out
+    assert 'url: "https://edge/release/ce-2.8"' in out
 
 
 def test_cli_requires_in_and_out(capsys: pytest.CaptureFixture[str]) -> None:

@@ -27,6 +27,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import urllib.parse
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import TypeGuard
@@ -1559,9 +1560,10 @@ def main(argv: list[str]) -> int:
             ap.error("--print-conf requires --catalog-path <varver>")
         _base = args.base_url.rstrip("/")
         _cat = args.catalog_path.strip("/")
-        _parent, _sep, _selected = _base.rpartition("/")
-        if args.channel is None and _sep and _selected in _CHANNEL_REPO_NAMES:
-            _base = _parent
+        _parts = urllib.parse.urlsplit(_base)
+        _parent, _sep, _selected = _parts.path.rpartition("/")
+        if _sep and _selected in _CHANNEL_REPO_NAMES and args.channel in {None, _selected}:
+            _base = urllib.parse.urlunsplit(_parts._replace(path=_parent))
             _channel = _selected
         else:
             _channel = args.channel or "release"

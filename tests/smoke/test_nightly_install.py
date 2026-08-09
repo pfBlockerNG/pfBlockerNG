@@ -347,7 +347,7 @@ def _live_nightly_url() -> str | None:
 
 @pytest.mark.timeout(900)
 def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
-    """PHASE-5d LIVE NIGHTLY URL: a real pfSense box installs the canonical package from the
+    """A real pfSense box installs the canonical package from the
     deployed nightly Pages catalog over its public HTTPS URL (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_NIGHTLY_LIVE_URL`` (unset -> SKIP). The
