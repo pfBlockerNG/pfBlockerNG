@@ -349,7 +349,6 @@ class Build:
     files: list[StagedFile] = field(default_factory=list)
     directories: list[str] = field(default_factory=list)
     scripts: dict[str, str] = field(default_factory=dict)
-    conflicts: list[str] = field(default_factory=list)
     annotations: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -1153,8 +1152,11 @@ def make_manifest(b: Build, *, compact: bool) -> dict:
     # {"FreeBSD_version": <__FreeBSD_version of the build host>}).
     if b.annotations:
         m["annotations"] = b.annotations
-    if b.conflicts:
-        m["conflicts"] = b.conflicts
+    # A recipe CONFLICTS line deliberately does NOT surface here (issue #2259):
+    # real `make package` never embeds it (Netgate's 2.8.1 catalog has zero
+    # `conflicts` keys), and guest libpkg dies registering a conflict against a
+    # not-installed package (NOT NULL pkg_conflicts.conflict_id). Channel
+    # exclusivity rides pkg's file-path conflict detection instead.
     if compact:
         return m
     # `fflags: 0` matches `pkg create` (no file flags set). mtime is the staged file's
@@ -1895,7 +1897,6 @@ def run_build(args: argparse.Namespace) -> Build:
 
     b.directories = plist_dirs
     b.scripts = build_scripts(mk, portdir / "files")
-    b.conflicts = mk.get("CONFLICTS").split()
     # Declared RUN_DEPENDS/LIB_DEPENDS + the deps USES injects (php/python), as
     # `make package` records them. Dedup by name (declared win).
     deps: dict[str, Dep] = {}
