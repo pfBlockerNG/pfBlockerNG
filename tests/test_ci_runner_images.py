@@ -519,6 +519,44 @@ def test_publish_workflow_builds_every_architecture_natively() -> None:
     assert "arm" not in runners["amd64"], f"amd64 must build on an x86 runner, got {runners['amd64']!r}"
 
 
+def test_published_images_are_checked_for_public_pullability_without_credentials() -> None:
+    """The runner images must be pullable by someone with no token, and the check that
+    proves it must not authenticate.
+
+    Package visibility is per-package, UI-only (no REST endpoint), and a newly created
+    package defaults to PRIVATE — so this is a state the project can silently fall into,
+    and every job inside the org keeps passing when it does, because they all
+    authenticate. The ones that break are fresh clones and FORK pull requests, whose
+    GITHUB_TOKEN cannot read the org's private packages; they fail at `docker pull` with
+    `manifest unknown`, nowhere near the cause.
+
+    The vacuity trap this pins: adding credentials to the check would make it pass on a
+    private package, which is precisely the case it exists to catch. So the step must
+    carry no Authorization header of its own and no token from the job environment —
+    the only bearer allowed is the one the REGISTRY hands back anonymously.
+    """
+    step = _step(_read(PUBLISH_WORKFLOW), "Verify the published tags are pullable ANONYMOUSLY")
+    body = "\n".join(ln for ln in step.splitlines() if not ln.lstrip().startswith("#"))
+
+    # It must ask the registry for an anonymous pull token, and act on the answer.
+    assert "ghcr.io/token?service=ghcr.io&scope=repository:" in body, (
+        f"the check must request an anonymous pull token; step was:\n{body}"
+    )
+    assert "manifests/" in body, f"the check must fetch a manifest, not just a token; step was:\n{body}"
+    assert "exit 1" in body, f"a private package must fail the job; step was:\n{body}"
+
+    # No credential may reach it: GHCR issues an anonymous token only for a PUBLIC
+    # package, so any token from the job would mask exactly the failure being hunted.
+    for leak in ("GHCR_TOKEN", "secrets.GITHUB_TOKEN", "github.token", "docker login"):
+        assert leak not in step, f"the anonymous pullability check must not authenticate, found {leak!r}:\n{step}"
+
+    # The one Authorization header allowed is the registry's own anonymous bearer.
+    auth_headers = re.findall(r"Authorization: ([^\"']+)", body)
+    assert auth_headers == ["Bearer ${bearer}"], (
+        f"the only Authorization allowed is the anonymously-obtained bearer, found {auth_headers}"
+    )
+
+
 def _guard_script() -> str:
     """The overwrite guard's `run:` body, dedented so it can be executed."""
     step = _step(_read(PUBLISH_WORKFLOW), "Refuse to overwrite a published tag")
