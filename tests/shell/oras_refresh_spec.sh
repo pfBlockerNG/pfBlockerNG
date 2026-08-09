@@ -239,7 +239,7 @@ count="$(cat "$RACE_COUNT" 2>/dev/null || echo 0)"
 count=$((count + 1))
 printf "%s\n" "$count" > "$RACE_COUNT"
 if [ "$count" -eq 3 ]; then
-    : > "$RACE_READY"
+    true > "$RACE_READY"
     tries=0
     while [ ! -e "$RACE_RELEASE" ] && [ "$tries" -lt 500 ]; do
         sleep 0.01
@@ -260,14 +260,14 @@ EOF
         tries=$((tries + 1))
       done
       if [ ! -e "$RACE_READY" ]; then
-        : > "$RACE_RELEASE"
+        true > "$RACE_RELEASE"
         wait "$refresh_pid"
         echo TIMEOUT
         exit 1
       fi
       pfb_oras_ref_view "$ref" "$1" "$2"
       view_rc=$?
-      : > "$RACE_RELEASE"
+      true > "$RACE_RELEASE"
       wait "$refresh_pid"
       refresh_rc=$?
       printf "view_rc=%s refresh_rc=%s\n" "$view_rc" "$refresh_rc"
