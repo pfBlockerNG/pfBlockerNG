@@ -612,15 +612,20 @@ def _run_guard(
     curl_fails: bool = False,
     marker_status: str | None = None,
     arch_status: str | None = None,
+    vm_status: str | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Execute the guard with a stubbed curl.
 
     `manifest_status` answers the bare series tag, `arch_status` the per-architecture
-    tags, `marker_status` the build-inputs marker (each defaulting to the bare tag's).
-    Answering PER REF is what makes the interesting cases expressible at all: one status
-    for every request cannot distinguish "the series carries this build's marker" (a
-    re-run — nothing to do) from "it does not" (the overwrite this guard refuses), and
-    cannot tell a loop over three refs from a loop over one.
+    tags, `marker_status` the build-inputs marker (each defaulting to the bare tag's),
+    and `vm_status` overrides EVERY ref of the second image.
+
+    Answering per ref, and per image, is what makes the interesting cases expressible
+    at all: one status for every request cannot distinguish "the series carries this
+    build's marker" (a re-run — nothing to do) from "it does not" (the overwrite this
+    guard refuses), cannot tell a loop over three refs from a loop over one, and cannot
+    reach the half-published states where one image owns the series and the other does
+    not — which is precisely where an overwrite hides.
     """
     marker_status = manifest_status if marker_status is None else marker_status
     arch_status = manifest_status if arch_status is None else arch_status
@@ -630,8 +635,15 @@ def _run_guard(
         "#!/bin/sh\n"
         'for a in "$@"; do case "$a" in *"/token?"*) printf \'{"token":"stub"}\'; exit 0;; esac; done\n'
         f"{'exit 7' if curl_fails else ''}\n"
+        # The second image is a distinct path segment, so it can be answered wholesale
+        # before any ref matching — that is the only way to express a partial publish.
+        + (
+            f'for a in "$@"; do case "$a" in *"/ci-runner-vm/"*) printf \'%s\' \'{vm_status}\'; exit 0;; esac; done\n'
+            if vm_status is not None
+            else ""
+        )
         # Order matters: the marker ref also ends in a suffix, so match it first.
-        'for a in "$@"; do case "$a" in *"-inputs-"*)'
+        + 'for a in "$@"; do case "$a" in *"-inputs-"*)'
         f" printf '%s' '{marker_status}'; exit 0;; esac; done\n"
         'for a in "$@"; do case "$a" in *"-amd64"|*"-arm64")'
         f" printf '%s' '{arch_status}'; exit 0;; esac; done\n"
@@ -702,7 +714,10 @@ def test_the_overwrite_guard_blocks_on_anything_that_is_not_a_clean_absence(tmp_
         )
         # An unreadable MARKER is equally undeterminable: treating it as absent would turn
         # a re-run into a clash, and treating it as present would wave an overwrite through.
-        assert _run_guard(tmp_path, "200", marker_status=status).returncode != 0, (
+        # The series is left FREE here on purpose — with it published, the clash path
+        # refuses on its own and this assertion would pass without the guard ever
+        # consulting the marker status at all.
+        assert _run_guard(tmp_path, "404", marker_status=status).returncode != 0, (
             f"an unreadable marker (HTTP {status}) must refuse, not guess"
         )
 
@@ -726,6 +741,180 @@ def test_the_overwrite_guard_catches_a_half_published_series(tmp_path: Path) -> 
     assert "-amd64" in proc.stdout or "-arm64" in proc.stdout, (
         f"the refusal must name the per-architecture tag it found:\n{proc.stdout}"
     )
+
+
+def test_the_overwrite_guard_refuses_a_partly_published_series(tmp_path: Path) -> None:
+    """One image owning the series while the other does not is NOT a no-op.
+
+    The marker excuses tags that this exact build published, so a state where only one
+    image carries it reads as "no clash" — and if that fell through to publishing, the
+    run would re-push the image that already exists, replacing published bytes under a
+    tag ~60 workflow references resolve. The Dockerfiles pin no apt versions, so those
+    bytes are a different toolchain, which is the silent-swap the series exists to stop.
+
+    Reachable two ways: the publish loop completing one image and failing on the other,
+    and deleting one package to fix its visibility (what the gate below tells you to do).
+    """
+    for vm in ("404", "200"):
+        published, missing = ("ci-runner", "ci-runner-vm") if vm == "404" else ("ci-runner-vm", "ci-runner")
+        proc = _run_guard(tmp_path, "200" if vm == "404" else "404", vm_status=vm)
+        assert proc.returncode != 0, (
+            f"{published} owns the series and {missing} does not — publishing would "
+            f"overwrite {published}, so the guard must refuse:\n{proc.stdout}"
+        )
+        assert _guard_publish_output(tmp_path) != "true", "a partial publish must never enable the push"
+
+
+def test_the_overwrite_guard_needs_the_series_itself_not_just_its_marker(tmp_path: Path) -> None:
+    """A marker with no series behind it must not read as "already published".
+
+    Keyed on the marker alone, this state is a permanent green no-op: the run reports
+    success, pushes nothing, and every later run decides the same, so the series never
+    gets published at all. The guard must key on the series being THERE as well.
+    """
+    proc = _run_guard(tmp_path, "404", marker_status="200")
+    assert proc.returncode != 0, f"a marker without the series behind it must not be a no-op:\n{proc.stdout}"
+
+
+def test_the_marker_is_produced_as_well_as_consumed() -> None:
+    """The guard is executed against stubs, which only pins the READING half.
+
+    Every link in the writing half was mutable in silence: dropping the marker `--tag`,
+    dropping either preflight output, or deriving the marker from a constant all left the
+    suite green while breaking the mechanism — the worst of them (reverting preflight's
+    `publish` output to the branch decision) turning the guard's `publish=false` into a
+    real overwrite on every merge-after-dispatch, i.e. strictly worse than the bug it fixes.
+    """
+    workflow = _read(PUBLISH_WORKFLOW)
+
+    # The consumers read `needs.preflight.outputs.*`, so the job must export the guard's
+    # decision — not the branch decision it narrows.
+    assert re.search(r"publish:\s*\$\{\{\s*steps\.guard\.outputs\.publish\s*\}\}", workflow), (
+        "preflight must export the GUARD's decision as `publish`; exporting the branch "
+        "decision would let the publish job push a series the guard just declared present"
+    )
+    assert re.search(r"marker:\s*\$\{\{\s*steps\.version\.outputs\.marker\s*\}\}", workflow), (
+        "preflight must export `marker`; unset, the publish job tags `:${TAG}-` and the "
+        "guard looks for a marker that will never exist"
+    )
+
+    # Derived from git, not from a constant or a timestamp: a constant would make every
+    # build of a series share one marker, so a real Dockerfile change would read as
+    # "already published from these exact inputs" and be silently dropped.
+    version_step = _step(workflow, "Read the image tag series")
+    assert 'git rev-parse "HEAD:.github/docker"' in version_step, "the marker must hash the Dockerfile tree"
+    assert "tests/smoke/requirements.txt" in version_step, "the marker must cover the requirement files COPYed in"
+
+    # Written in the SAME imagetools call that creates the series, so the two cannot
+    # diverge: no state exists where the series is published without its marker.
+    merge = _step(workflow, "Create the manifest lists")
+    assert re.search(r'--tag "\$\{IMAGE_REPO\}/\$\{image\}:\$\{TAG\}-\$\{MARKER\}"', merge), (
+        f"the marker tag must be pushed alongside the series tag:\n{merge}"
+    )
+
+
+def test_the_preflight_visibility_probe_is_uncredentialed() -> None:
+    """The probe asks whether a STRANGER can pull, so a credential makes it vacuous.
+
+    More exposed than its post-publish twin: `GH_TOKEN` is legitimately in this step's
+    env for the `gh api` existence check, so a credential is right there to be reached
+    for, and adding one to the curl makes the step pass on the private package it exists
+    to catch.
+    """
+    step = _step(_read(PUBLISH_WORKFLOW), "Refuse to publish into a package nobody can pull")
+    probe = "\n".join(ln for ln in step.splitlines() if "curl" in ln or "ghcr.io/token" in ln)
+    assert probe, "the preflight probe must ask the registry for an anonymous token"
+    assert "-u " not in probe and "Authorization" not in probe and "GH_TOKEN" not in probe, (
+        f"the anonymous-pull probe must carry no credentials:\n{probe}"
+    )
+
+    # It must also run on every publishing-branch run, not only when this run pushes:
+    # gating it on the guard means a series is checked once, at birth, and never again.
+    assert re.search(r"if:\s*steps\.publish\.outputs\.enabled == 'true'", step), (
+        f"the visibility probe must be gated on the BRANCH decision, not the push decision:\n{step[:400]}"
+    )
+
+
+def _run_visibility_probe(
+    tmp_path: Path,
+    *,
+    token: str,
+    gh_rc: int,
+    gh_err: str = "",
+    will_push: str = "true",
+) -> subprocess.CompletedProcess[str]:
+    """Execute the visibility probe with `curl` and `gh` stubbed.
+
+    `token` is what the registry's token endpoint returns ('' = refused, i.e. the package
+    is private OR absent), and `gh_rc`/`gh_err` are how the existence check answers.
+    """
+    step = _step(_read(PUBLISH_WORKFLOW), "Refuse to publish into a package nobody can pull")
+    body = step.split("run: |\n", 1)[1]
+    lines = body.splitlines()
+    indent = len(lines[0]) - len(lines[0].lstrip())
+    out = []
+    for line in lines:
+        if line.strip() and not line.startswith(" " * indent):
+            break
+        out.append(line[indent:])
+
+    stub = tmp_path / "bin"
+    stub.mkdir(exist_ok=True)
+    (stub / "curl").write_text(f"#!/bin/sh\nprintf '%s' '{{\"token\":\"{token}\"}}'\n")
+    (stub / "gh").write_text(f"#!/bin/sh\nprintf '%s\\n' '{gh_err}' >&2\nexit {gh_rc}\n")
+    for name in ("curl", "gh"):
+        (stub / name).chmod(0o755)
+
+    return subprocess.run(
+        ["sh", "-c", "\n".join(out)],
+        capture_output=True,
+        text=True,
+        env={
+            "PATH": f"{stub}:/usr/bin:/bin",
+            "IMAGE_REPO": "ghcr.io/pfblockerng",
+            "WILL_PUSH": will_push,
+            "GH_TOKEN": "stub-token",
+        },
+        check=False,
+    )
+
+
+def test_the_visibility_probe_refuses_when_it_cannot_prove_the_package_is_absent(tmp_path: Path) -> None:
+    """A package that refuses an anonymous token is private OR absent, and only the API
+    can say which. Every way of ASKING can also fail — 401, 403 (the likely answer for a
+    job token against the org packages endpoint), a rate limit, a DNS error — and none of
+    those prove absence. Guessing "absent" there is a silent fail-open on the single case
+    this step exists to catch, which is worse than not having the step.
+    """
+    # The happy paths first, so the refusals below are not passing for a trivial reason.
+    assert _run_visibility_probe(tmp_path, token="anon", gh_rc=1).returncode == 0, (
+        "an anonymously readable package must pass"
+    )
+    absent = _run_visibility_probe(tmp_path, token="", gh_rc=1, gh_err="gh: Not Found (HTTP 404)")
+    assert absent.returncode == 0, f"a package that does not exist yet is the first publish:\n{absent.stdout}"
+
+    private = _run_visibility_probe(tmp_path, token="", gh_rc=0)
+    assert private.returncode != 0, (
+        f"a package that exists and refuses an anonymous token is private:\n{private.stdout}"
+    )
+
+    for err in (
+        "gh: Resource not accessible by integration (HTTP 403)",
+        "gh: Bad credentials (HTTP 401)",
+        "gh: API rate limit exceeded (HTTP 429)",
+        "dial tcp: lookup api.github.com: no such host",
+    ):
+        proc = _run_visibility_probe(tmp_path, token="", gh_rc=1, gh_err=err)
+        assert proc.returncode != 0, (
+            f"{err!r} does not prove the package is absent, so it must not be waved through:\n{proc.stdout}"
+        )
+
+    # ...but only the run that is about to push is FAILED by it. A no-op run reports the
+    # condition and stays green: it is real, and it needs a human with UI access, but
+    # blocking an unrelated merge on something this workflow cannot fix helps nobody.
+    warned = _run_visibility_probe(tmp_path, token="", gh_rc=0, will_push="false")
+    assert warned.returncode == 0, f"a run that publishes nothing must not be failed by it:\n{warned.stdout}"
+    assert "::warning::" in warned.stdout, f"...but it must still say so, loudly:\n{warned.stdout}"
 
 
 def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
@@ -819,17 +1008,32 @@ def test_publish_workflow_publishes_only_from_devel_and_main() -> None:
             f"event={event} ref={ref} must yield enabled={expected}"
         )
 
-    # Every step that can mutate the registry hangs off that one decision, so there is a
+    # Every step that can MUTATE the registry hangs off that one decision, so there is a
     # single place where the branch policy lives. Since #2256 the decision is made once in
     # the preflight job and consumed by the others through `needs`, so which expression is
     # correct depends on where the step lives — but "gated on nothing" is wrong everywhere.
     same_job = "if: steps.guard.outputs.publish == 'true'"
     downstream = "if: needs.preflight.outputs.publish == 'true'"
-    for step_name in ("Log in to GHCR", "Refuse to publish into a package nobody can pull", "Push this architecture"):
+    for step_name in ("Log in to GHCR", "Push this architecture"):
         step = _step(workflow, step_name)
         assert same_job in step or downstream in step, (
             f"{step_name!r} must be gated on the publish decision; step was:\n{step}"
         )
+
+    # The visibility probe mutates nothing, so it is deliberately WIDER: it runs on every
+    # publishing-branch run and reports what is published, because gating a package-level
+    # fact on a tag-level decision would check a series once, at birth, and never again.
+    # What stays gated is its VERDICT — it only fails the run that is about to push.
+    probe = _step(workflow, "Refuse to publish into a package nobody can pull")
+    assert "if: steps.publish.outputs.enabled == 'true'" in probe, (
+        f"the visibility probe must run on every publishing-branch run; step was:\n{probe}"
+    )
+    assert "WILL_PUSH: ${{ steps.guard.outputs.publish }}" in probe, (
+        f"the probe must consume the push decision to know whether to fail; step was:\n{probe}"
+    )
+    assert re.search(r'if \[ "\$WILL_PUSH" = .true. \]; then\n\s+echo "::error', probe), (
+        f"a private package must be a hard error on the run that would push into it:\n{probe}"
+    )
 
     # The overwrite guard is the one exception, and deliberately so: it CONSUMES the
     # branch decision and narrows it (an identical republish turns publishing off), so it
