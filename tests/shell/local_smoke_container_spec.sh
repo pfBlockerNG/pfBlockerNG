@@ -133,10 +133,14 @@ EOF
     The output should include '-e PFB_LAN_REGISTRY'
   End
 
-  It 'passes optional live catalogue URLs into the container'
+  It 'passes optional live catalogue URL values across SSH into the container'
+    SMOKE_REPO_LIVE_URL='https://example.test/pkg/docs/edge'
+    SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'
+    export SMOKE_REPO_LIVE_URL SMOKE_NIGHTLY_LIVE_URL
+
     When call bootstrap --ref dummy
-    The output should include '-e SMOKE_REPO_LIVE_URL'
-    The output should include '-e SMOKE_NIGHTLY_LIVE_URL'
+    The output should include "-e SMOKE_REPO_LIVE_URL='https://example.test/pkg/docs/edge'"
+    The output should include "-e SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'"
   End
 
   It 'mounts the repo, the shared image store, the ports tree and the guest key'
