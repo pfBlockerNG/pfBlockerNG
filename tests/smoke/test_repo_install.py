@@ -156,13 +156,8 @@ GUEST_ADD_REPO_SH = f"{GUEST_SPIKE_DIR}/add-repo.sh"
 ADD_REPO_GENERATE_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
 GUEST_ADD_REPO_RCD_DIR = f"{GUEST_SPIKE_DIR}/rc.d"
 
-# Phase-3b (ADR-17) LIVE GitHub-Pages-URL end-to-end check. The publish pipeline
-# deploys each catalogue beneath the repo's standard project Pages URL; the caller passes
-# the selected channel root (for example https://pfblockerng.github.io/pkg/edge).
-# This dispatch-only test proves a REAL pfSense box `pkg update`/`pkg install`
-# against the LIVE https URL (not file://) — the maintainer's real-URL check. It is
-# GATED on SMOKE_REPO_LIVE_URL: unset -> SKIP (the file:// VM-acceptance above is the
-# always-on proof; the live URL only exists once the deploy has run).
+# The caller supplies a selected channel root beneath the project Pages URL through
+# SMOKE_REPO_LIVE_URL; when unset, the live HTTPS check is skipped.
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
 LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
 DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg/edge"
@@ -1393,25 +1388,7 @@ def write_live_repo_conf(vm: SmokeVM, base_url: str, varver: str, *, priority: i
 
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
-    """PHASE-3b LIVE URL: a real pfSense box installs from the DEPLOYED Pages catalog
-    over its public HTTPS ``https://pfblockerng.github.io/pkg/<channel>/<varver>`` URL
-    (no ``-f``).
-
-    DISPATCH-ONLY + GATED on ``SMOKE_REPO_LIVE_URL`` (unset -> SKIP). The always-on
-    proof is the file:// VM-acceptance above; this exercises the REAL transport the
-    publish pipeline serves, so it can only run after a publish dispatch has deployed.
-
-    Given the publish job has DEPLOYED the catalog to Pages (runner-side backstop:
-      ``<channel-base>/<varver>/meta.conf`` + ``packagesite.pkg`` serve 200), the guest
-      has the Pages IPs pinned for the host (its DNS is sandboxed), the package is
-      ABSENT, and OUR conf points at the live ``<channel-base>/<varver>`` URL above the
-      Netgate ``pfSense`` repo,
-    When ``pkg update`` reads the live catalog and ``pkg install -y`` runs (NO ``-r``,
-      NO ``-f``),
-    Then ``pkg update`` accepts the deployed catalog AND the install comes from OUR
-      selected channel repo (``pkg query %R`` == ``pfblockerng-<channel>``) with deps resolved and the .pkg
-      checksum validated — the deployed Pages repo is real + installable over HTTPS.
-    """
+    """Install the canonical package from the selected live Pages repository."""
     base_url = _live_base_url()
     if base_url is None:
         pytest.skip(f"{LIVE_BASE_URL_ENV} not set — live Pages-URL check is dispatch-only (file:// proof always runs)")
@@ -1457,6 +1434,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
     finally:
+        pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         restore_pages_hosts(repo_vm, prior_hosts)
 
 
@@ -1508,6 +1486,10 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
             "-y",
             CANONICAL_PKG_NAME,
             timeout=600.0,
+        )
+        assert ordinary.returncode == 0, (
+            f"ordinary pkg upgrade failed: rc={ordinary.returncode}\n"
+            f"stdout:\n{ordinary.stdout}\nstderr:\n{ordinary.stderr}"
         )
         assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == nightly_version, (
             f"ordinary pkg upgrade unexpectedly downgraded Nightly via {semantic_channel}:\n"

@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from typing import cast
 
+import pytest
 from pytest import MonkeyPatch
 
 from tests.smoke import test_nightly_install as nightly
@@ -12,7 +13,7 @@ from tests.smoke.conftest import SmokeVM
 
 def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) -> None:
     """The deployed channel catalog is queried and installed by its canonical package identity."""
-    seen: dict[str, str] = {}
+    seen: dict[str, list[str] | str] = {"delete": []}
 
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
     monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
@@ -26,7 +27,9 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
     monkeypatch.setattr(repo, "pkg_repo_origin", lambda *_args, **_kwargs: repo.OURS_REPO_NAME)
 
     def fake_delete(_vm: object, *, pkg_name: str = repo.PKG_NAME, **_kwargs: object) -> None:
-        seen["delete"] = pkg_name
+        deletes = seen["delete"]
+        assert isinstance(deletes, list)
+        deletes.append(pkg_name)
 
     def fake_query(_vm: object, pkg_name: str, **_kwargs: object) -> None:
         seen["query"] = pkg_name
@@ -50,7 +53,7 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
     repo.test_install_from_live_pages_url(cast(SmokeVM, object()))
 
     assert seen == {
-        "delete": repo.CANONICAL_PKG_NAME,
+        "delete": [repo.CANONICAL_PKG_NAME, repo.CANONICAL_PKG_NAME],
         "query": repo.CANONICAL_PKG_NAME,
         "install": repo.CANONICAL_PKG_NAME,
         "origin": repo.CANONICAL_PKG_NAME,
@@ -107,3 +110,41 @@ def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch
         "install": repo.CANONICAL_PKG_NAME,
         "query": repo.CANONICAL_PKG_NAME,
     }
+
+
+def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: MonkeyPatch) -> None:
+    """A failed ordinary upgrade cannot be accepted as proof that Nightly stayed installed."""
+
+    class FakeVM:
+        def ssh(self, *_args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    versions = iter(["20260810_2", "20260810_2"])
+
+    def fail_if_migration_reached(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("migration reached")
+
+    monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/stable")
+    monkeypatch.setenv(repo.LIVE_NIGHTLY_URL_ENV, "https://example.test/pkg/nightly")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
+    monkeypatch.setattr(repo, "reset_channel_subscription", lambda *_args: None)
+    monkeypatch.setattr(repo, "run_add_repo_sh", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_install_qualified", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: next(versions))
+    monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_args: repo.channel_repo_name("nightly"))
+    monkeypatch.setattr(
+        repo,
+        "_pkg_retry",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 17, "", "upgrade failed"),
+    )
+    monkeypatch.setattr(
+        repo,
+        "run_migrate_channel_sh",
+        fail_if_migration_reached,
+    )
+
+    with pytest.raises(AssertionError, match="ordinary pkg upgrade failed"):
+        repo.test_live_nightly_downgrade_requires_selected_semantic_repo(cast(SmokeVM, FakeVM()))
