@@ -304,7 +304,13 @@ fi
 # preference uses it. Idempotent: reuse an existing venv; pip is a no-op when the
 # pinned deps are already satisfied.
 printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
-[ -x "${REPO_ROOT}/.venv/bin/python" ] || python3 -m venv --clear "${REPO_ROOT}/.venv"
+_VENV_DIR="${REPO_ROOT}/.venv"
+# `venv --clear` follows a directory symlink and erases its target before failing.
+if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; then
+    printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
+    exit 2
+fi
+[ -x "${_VENV_DIR}/bin/python" ] || python3 -m venv --clear "$_VENV_DIR"
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet --upgrade pip
 "${REPO_ROOT}/.venv/bin/python" -m pip install --quiet -r "${REPO_ROOT}/tests/smoke/requirements.txt" pytest
 

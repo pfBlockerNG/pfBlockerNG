@@ -194,6 +194,46 @@ STUBEOF
     The contents of file "$VENV_ARGS_FILE" should equal "-m venv --clear ${FAKE_ROOT}/.venv"
   End
 
+  It 'refuses a symlinked venv root without clearing its target'
+    printf '0\n' > "${WORK}/port-floor"
+
+    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+pfb_lan_registry_active() { return 1; }
+pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
+pfb_oras_refresh() { :; }
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+
+    VENV_TARGET="${WORK}/external-venv-target"
+    mkdir -p "$VENV_TARGET" "${FAKE_ROOT}/tests/smoke"
+    true > "${VENV_TARGET}/sentinel"
+    true > "${FAKE_ROOT}/tests/smoke/requirements.txt"
+    ln -s "$VENV_TARGET" "${FAKE_ROOT}/.venv"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    PIP_NO_INDEX=1
+    export SMOKE_SSH_KEY PIP_NO_INDEX
+
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 2
+    The stderr should include 'unsafe venv path'
+    The file "${VENV_TARGET}/sentinel" should be exist
+  End
+
   # ── LAN registry ref rewrite (issue #2247) ───────────────────────────────── #
   #
   # The config echo (config abi=... pfsense_ref=... civm_ref=...) fires BEFORE the
