@@ -45,6 +45,7 @@ from . import helpers as h
 from .conftest import SmokeVM
 from .pkg_identity import branch_pkg_name
 from .test_repo_install import (
+    CANONICAL_PKG_NAME,
     _box_real_varver,
     _ensure_egress_open,
     _ssh_check,
@@ -346,7 +347,7 @@ def _live_nightly_url() -> str | None:
 
 @pytest.mark.timeout(900)
 def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
-    """PHASE-5d LIVE NIGHTLY URL: a real pfSense box installs -nightly from the
+    """PHASE-5d LIVE NIGHTLY URL: a real pfSense box installs the canonical package from the
     deployed nightly Pages catalog over its public HTTPS URL (no ``-f``).
 
     DISPATCH-ONLY + GATED on ``SMOKE_NIGHTLY_LIVE_URL`` (unset -> SKIP). The
@@ -400,7 +401,7 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
     prior_hosts = pin_pages_hosts(smoke_vm, host)
     try:
         pfsense_prio = repo_priority(smoke_vm, "pfSense")
-        pkg_delete(smoke_vm, NIGHTLY_NAME)
+        pkg_delete(smoke_vm, CANONICAL_PKG_NAME)
 
         # Write the production nightly conf: pfblockerng-nightly, HTTPS live URL, NONE-signed.
         # The URL is fully resolved (arch-less, NO_ARCH — issue #1806): no ${ABI} pkg(8)
@@ -427,15 +428,17 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
 
         # WHEN: pkg update reads the live nightly catalog.
         pkg_update(smoke_vm)
-        assert not pkg_present(smoke_vm, NIGHTLY_NAME), "precondition: -nightly absent before live install"
+        assert not pkg_present(smoke_vm, CANONICAL_PKG_NAME), (
+            "precondition: canonical package absent before live install"
+        )
 
-        out = pkg_install(smoke_vm, NIGHTLY_NAME)
+        out = pkg_install(smoke_vm, CANONICAL_PKG_NAME)
 
         # THEN: installed from our nightly repo, deps resolved, checksum validated.
         assert "Missing dependency" not in out, f"deps did not resolve from the live nightly catalog:\n{out}"
-        origin = pkg_q(smoke_vm, "%R", NIGHTLY_NAME)
+        origin = pkg_q(smoke_vm, "%R", CANONICAL_PKG_NAME)
         assert origin == NIGHTLY_REPO, f"installed from {origin!r}, expected our nightly repo {NIGHTLY_REPO!r}"
     finally:
-        pkg_delete(smoke_vm, NIGHTLY_NAME)
+        pkg_delete(smoke_vm, CANONICAL_PKG_NAME)
         smoke_vm.ssh("/bin/rm", "-f", NIGHTLY_LIVE_CONF, timeout=60.0)
         restore_pages_hosts(smoke_vm, prior_hosts)
