@@ -146,8 +146,15 @@ git fetch && git checkout <REF>
 # Set required env (normally provided by smoke-on-box.sh):
 export SMOKE_SSH_KEY=/root/smoke-ssh-key
 export SMOKE_PKG="$(sh scripts/build-leg.sh --ports-dir /root/FreeBSD-ports)"
-export SMOKE_IMAGE_DIR=/root/images/pfsense
-export SMOKE_CLIENT_IMAGE_DIR=/root/images/civm
+PFSENSE_REF="${SMOKE_PFSENSE_REF:-ghcr.io/pfblockerng/pfsense-ce:2.8}"
+CIVM_REF="${SMOKE_CLIENT_IMAGE_REF:-ghcr.io/pfblockerng/civm:v1}"
+. scripts/lib/oras-refresh.sh
+pfb_oras_refresh "$PFSENSE_REF" /root/images/pfsense pfSense
+pfb_oras_refresh "$CIVM_REF" /root/images/civm civm
+pfb_oras_ref_view "$PFSENSE_REF" /root/images/pfsense out/smoke-images/pfsense
+pfb_oras_ref_view "$CIVM_REF" /root/images/civm out/smoke-images/civm
+export SMOKE_IMAGE_DIR="$PWD/out/smoke-images/pfsense"
+export SMOKE_CLIENT_IMAGE_DIR="$PWD/out/smoke-images/civm"
 export SMOKE_STUB_DNS_ADDR=127.0.0.1
 export SMOKE_STUB_DNS_PORT=53
 
@@ -168,8 +175,8 @@ civm OCI image at `ghcr.io/pfblockerng/civm:v1` (~600 MB). qcow2 named
 `pfSense-CE-v1.qcow2` and its OCI annotation says "pfSense CE" — **that label is templated
 lie**; image is Debian client, not pfSense.
 
-`SMOKE_CLIENT_IMAGE_DIR` must hold **exactly one** `*.qcow2`, so keep in own directory
-separate from `SMOKE_IMAGE_DIR`.
+Each `SMOKE_*_IMAGE_DIR` view must hold **exactly one** `*.qcow2`; the shared stores may
+hold several ref-specific images.
 
 ## Building the `.pkg` off-FreeBSD (CI reference)
 
