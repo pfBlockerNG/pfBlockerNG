@@ -1,7 +1,7 @@
 #!/bin/sh
 # scripts/resolve-legs.sh — shared leg-resolution + per-leg helpers (ADR-47).
 #
-# Six subcommands covering the inline blocks previously repeated across
+# Seven subcommands covering the inline blocks previously repeated across
 # smoke.yml / smoke-single.yml / ui-tests.yml:
 #
 #   legs        [--test-dir DIR] [--label LABEL]
@@ -32,15 +32,29 @@
 #                 build-pkg job matrixes over it so each version leg builds
 #                 its .pkg once, shared by every shard (issue #857).
 #
-#   image-ref   Compose the pfSense/civm image ref from env vars.
+#   image-ref   Compose the pfSense/civm image ref from env vars, then pass it
+#               through pfb_rewrite_lan_registry (issue #2246): a leading
+#               ghcr.io/ is rewritten to ${PFB_LAN_REGISTRY}/ when set, both
+#               branches alike (INPUT_REF and the composed REPO/NAME:TAG).
 #               Reads: INPUT_REF, INPUT_VERSION, INPUT_IMAGE_NAME,
-#                      SMOKE_IMAGE_REPO, SMOKE_IMAGE_NAME, SMOKE_IMAGE_TAG.
+#                      SMOKE_IMAGE_REPO, SMOKE_IMAGE_NAME, SMOKE_IMAGE_TAG,
+#                      PFB_LAN_REGISTRY.
 #               Writes ref= to $GITHUB_OUTPUT; prints ref to stdout.
 #
 #   digest      <ref>
-#               Resolve the GHCR manifest digest via oras.
-#               Reads: SMOKE_GHCR_USER, SMOKE_GHCR_TOKEN.
+#               Resolve the GHCR manifest digest via oras. When the LAN
+#               registry is active (issue #2246), skips the ghcr.io login
+#               (the LAN zot cache is anonymous) and threads PFB_ORAS_FLAGS
+#               (--plain-http) into both the resolve and the manifest-fetch
+#               fallback.
+#               Reads: SMOKE_GHCR_USER, SMOKE_GHCR_TOKEN, PFB_LAN_REGISTRY.
 #               Writes digest= k= to $GITHUB_OUTPUT.
+#
+#   pull        <ref> <digest> <outdir>
+#               Digest-pinned oras pull into outdir (issue #2246): replaces
+#               the inline pull steps in smoke-single.yml/ui-tests.yml so the
+#               PFB_ORAS_FLAGS threading lives once, alongside digest.
+#               Reads: PFB_LAN_REGISTRY (via PFB_ORAS_FLAGS, set once below).
 #
 #   exact-image-name
 #               Derive IMG_NAME from IMAGE_REF + INPUT_IMAGE_NAME.
@@ -69,6 +83,20 @@ _RL_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 # shellcheck source=scripts/lib/git-env-scrub.sh
 . "${_RL_DIR}/lib/git-env-scrub.sh"
 pfb_scrub_git_env
+
+# ── LAN registry helpers (issue #2246) ────────────────────────────────── #
+# shellcheck source=scripts/lib/oras-refresh.sh
+. "${_RL_DIR}/lib/oras-refresh.sh"
+
+# PFB_ORAS_FLAGS: set once, mirroring smoke-on-box.sh's pattern, so both
+# _rl_digest and _rl_pull pick up --plain-http from the SAME variable rather
+# than each re-deriving it. Default empty -> unquoted expansion is zero words
+# (POSIX word splitting) at every call site below.
+PFB_ORAS_FLAGS=""
+if pfb_lan_registry_active; then
+    PFB_ORAS_FLAGS="--plain-http"
+fi
+export PFB_ORAS_FLAGS
 
 # ── _rl_legs ─────────────────────────────────────────────────────────────── #
 _rl_legs() {
@@ -260,6 +288,11 @@ _rl_image_ref() {
         TAG="${INPUT_VERSION:-${SMOKE_IMAGE_TAG:-2.8}}"
         REF="${REPO%/}/${NAME}:${TAG}"
     fi
+    # issue #2246: rewrite a leading ghcr.io/ to the LAN zot cache when active —
+    # both branches above alike (a caller-injected INPUT_REF and the composed
+    # REPO/NAME:TAG both take the same ghcr.io/... prefix form). Inert when
+    # PFB_LAN_REGISTRY is unset/empty.
+    REF="$(pfb_rewrite_lan_registry "$REF")"
     if [ -n "${GITHUB_OUTPUT:-}" ]; then
         printf 'ref=%s\n' "$REF" >> "$GITHUB_OUTPUT"
     fi
@@ -271,11 +304,18 @@ _rl_image_ref() {
 # Resolve the GHCR manifest digest for a given ref via oras.
 _rl_digest() {
     _ref="${1:?resolve-legs digest: <ref> required}"
-    printf '%s\n' "${SMOKE_GHCR_TOKEN:-}" | oras login ghcr.io \
-        --username "${SMOKE_GHCR_USER:-}" --password-stdin
-    DIGEST="$(oras resolve "$_ref" 2>/dev/null || true)"
+    # issue #2246: the LAN zot cache is anonymous read-only -- skip the
+    # token-based ghcr.io login when it is active, mirroring smoke-on-box.sh's
+    # own no-op-login-when-LAN-active pattern.
+    if ! pfb_lan_registry_active; then
+        printf '%s\n' "${SMOKE_GHCR_TOKEN:-}" | oras login ghcr.io \
+            --username "${SMOKE_GHCR_USER:-}" --password-stdin
+    fi
+    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see oras-refresh.sh
+    DIGEST="$(oras resolve ${PFB_ORAS_FLAGS:-} "$_ref" 2>/dev/null || true)"
     if [ -z "$DIGEST" ]; then
-        DIGEST="$(oras manifest fetch "$_ref" --descriptor | jq -r '.digest')"
+        # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see oras-refresh.sh
+        DIGEST="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_ref" --descriptor | jq -r '.digest')"
     fi
     case "$DIGEST" in
         sha256:*) ;;
@@ -288,6 +328,22 @@ _rl_digest() {
         } >> "$GITHUB_OUTPUT"
     fi
     printf 'resolved %s -> %s\n' "$_ref" "$DIGEST"
+}
+
+# ── _rl_pull ─────────────────────────────────────────────────────────────── #
+# Digest-pinned oras pull into <outdir> (issue #2246). Replaces the inline
+# pull steps in smoke-single.yml/ui-tests.yml — the flag threading lives once,
+# shared with _rl_digest via PFB_ORAS_FLAGS (set at sourcing time above).
+_rl_pull() {
+    _p_ref="${1:?resolve-legs pull: <ref> required}"
+    _p_digest="${2:?resolve-legs pull: <digest> required}"
+    _p_outdir="${3:?resolve-legs pull: <outdir> required}"
+    mkdir -p "$_p_outdir"
+    # ${_p_ref%@*} strips any existing @digest suffix before pinning the new
+    # one -- same semantics as the inline steps this replaces.
+    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see oras-refresh.sh
+    ( cd "$_p_outdir" && oras pull ${PFB_ORAS_FLAGS:-} "${_p_ref%@*}@${_p_digest}" )
+    ls -l "$_p_outdir" >&2
 }
 
 # ── _rl_exact_image_name ─────────────────────────────────────────────────── #
@@ -421,13 +477,14 @@ _rl_scrub() {
 }
 
 # ── Dispatch ─────────────────────────────────────────────────────────────── #
-_RL_CMD="${1:?resolve-legs.sh: subcommand required (legs|image-ref|digest|exact-image-name|vm-identity|scrub)}"
+_RL_CMD="${1:?resolve-legs.sh: subcommand required (legs|image-ref|digest|pull|exact-image-name|vm-identity|scrub)}"
 shift
 
 case "$_RL_CMD" in
     legs)             _rl_legs              "$@" ;;
     image-ref)        _rl_image_ref              ;;
     digest)           _rl_digest            "$@" ;;
+    pull)             _rl_pull              "$@" ;;
     exact-image-name) _rl_exact_image_name       ;;
     vm-identity)      _rl_vm_identity       "$@" ;;
     scrub)            _rl_scrub             "$@" ;;

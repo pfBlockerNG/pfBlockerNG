@@ -307,6 +307,11 @@ jobs:
       # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
       options: --init --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
+    # issue #2246: host env does not reach a GHA container job -- the repo
+    # variable is the only channel scripts/resolve-legs.sh's LAN-registry
+    # routing (image-ref/digest/pull) has to detect the LAN zot cache.
+    env:
+      PFB_LAN_REGISTRY: ${{ vars.PFB_LAN_REGISTRY }}
 
     steps:
       - name: Checkout
@@ -392,41 +397,28 @@ jobs:
           # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
           sh scripts/resolve-legs.sh digest "$IMAGE_REF"
 
-      - name: Restore cached pfSense image
-        id: pfcache
-        uses: actions/cache/restore@v5
-        with:
-          path: image
-          key: pfsense-img-${{ steps.digest.outputs.k }}
-
-      - name: Pull pfSense image from private GHCR (by digest)
-        if: steps.pfcache.outputs.cache-hit != 'true'
+      # issue #2246: pulls through scripts/resolve-legs.sh pull, unconditionally —
+      # no actions/cache restore/save pair. When the LAN zot cache is active
+      # (PFB_LAN_REGISTRY set above), the digest step already resolved the ref
+      # THROUGH zot, so this digest-pinned pull is served from the LAN cache at
+      # LAN speed; actions/cache on self-hosted would only add a slower,
+      # strictly-worse WAN round-trip to GitHub's own cache backend on top of
+      # that. Key = the resolved digest, so it never serves stale either way.
+      - name: Pull pfSense image (by digest)
         env:
           IMAGE_REF: ${{ steps.ref.outputs.ref }}
           DIGEST: ${{ steps.digest.outputs.digest }}
         run: |
           set -eu
-          mkdir -p image
-          # Pull by digest (the login from the resolve step persists in-job) so
-          # the content matches the cache key exactly — no tag-race window.
-          oras pull "${IMAGE_REF%@*}@${DIGEST}" --output image
-          ls -l image
-
-      # Save right after the pull (before the run) so the image is cached even if
-      # a later step fails. Key = the resolved digest, so it never serves stale.
-      - name: Save pfSense image to cache
-        if: steps.pfcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: image
-          key: pfsense-img-${{ steps.digest.outputs.k }}
+          sh scripts/resolve-legs.sh pull "$IMAGE_REF" "$DIGEST" image
 
       # The civm client VM (ADR-04 two-VM topology) — the realistic LAN client the
-      # DNS probes run on. Resolve its digest (cache key), restore-or-pull, and
-      # cache it exactly like the pfSense image. The oras login from the digest
-      # step above persists in-job. SMOKE_CLIENT_IMAGE_NAME/_TAG are repo VARIABLES
-      # (default civm:v1).
-      - name: Resolve civm image ref + digest (cache key)
+      # DNS probes run on. Resolve its digest, then pull it exactly like the
+      # pfSense image above (issue #2246: no cache pair here either). The oras
+      # login from the digest step above persists in-job (skipped entirely when
+      # the LAN registry is active). SMOKE_CLIENT_IMAGE_NAME/_TAG are repo
+      # VARIABLES (default civm:v1).
+      - name: Resolve civm image ref + digest
         id: civm
         env:
           SMOKE_IMAGE_REPO: ${{ vars.SMOKE_IMAGE_REPO }}
@@ -445,31 +437,13 @@ jobs:
           REF="$(INPUT_IMAGE_NAME="$NAME" INPUT_VERSION="$TAG" sh scripts/resolve-legs.sh image-ref)"
           sh scripts/resolve-legs.sh digest "$REF"
 
-      - name: Restore cached civm image
-        id: civmcache
-        uses: actions/cache/restore@v5
-        with:
-          path: client-image
-          key: civm-img-${{ steps.civm.outputs.k }}
-
-      - name: Pull civm image from GHCR (by digest)
-        if: steps.civmcache.outputs.cache-hit != 'true'
+      - name: Pull civm image (by digest)
         env:
           CIVM_REF: ${{ steps.civm.outputs.ref }}
           DIGEST: ${{ steps.civm.outputs.digest }}
         run: |
           set -eu
-          mkdir -p client-image
-          # Pull by digest (content matches the cache key exactly — no tag race).
-          oras pull "${CIVM_REF%@*}@${DIGEST}" --output client-image
-          ls -l client-image
-
-      - name: Save civm image to cache
-        if: steps.civmcache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        with:
-          path: client-image
-          key: civm-img-${{ steps.civm.outputs.k }}
+          sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
 
       - name: Write private SSH key (mode 600)
         env:
