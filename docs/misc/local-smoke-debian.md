@@ -134,47 +134,6 @@ wrappers. Shared `scripts/lib/git-env-scrub.sh` scrubs six GIT_\* vars that
 pre-commit hook exports; every script sources it at entry so git fixture repos never
 corrupted by inherited GIT_DIR.
 
-## Manual run (advanced: on-box directly, no orchestrator)
-
-If already on box or want to iterate without lease overhead:
-
-```sh
-# On the box:
-cd /root/pfBlockerNG
-git fetch && git checkout <REF>
-
-# Set required env (normally provided by smoke-on-box.sh):
-export SMOKE_SSH_KEY=/root/smoke-ssh-key
-export SMOKE_PKG="$(sh scripts/build-leg.sh --ports-dir /root/FreeBSD-ports)"
-PFSENSE_REF="${SMOKE_PFSENSE_REF:-ghcr.io/pfblockerng/pfsense-ce:2.8}"
-CIVM_REF="${SMOKE_CLIENT_IMAGE_REF:-ghcr.io/pfblockerng/civm:v1}"
-. scripts/lib/oras-refresh.sh
-PFB_ORAS_FLAGS=''
-if pfb_lan_registry_active; then
-    PFSENSE_REF="$(pfb_rewrite_lan_registry "$PFSENSE_REF")"
-    CIVM_REF="$(pfb_rewrite_lan_registry "$CIVM_REF")"
-    PFB_ORAS_FLAGS=--plain-http
-elif [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
-    printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
-        oras login ghcr.io --username pfBlockerNG --password-stdin
-fi
-export PFB_ORAS_FLAGS
-pfb_oras_refresh "$PFSENSE_REF" /root/images/pfsense pfSense
-pfb_oras_refresh "$CIVM_REF" /root/images/civm civm
-pfb_oras_ref_view "$PFSENSE_REF" /root/images/pfsense out/smoke-images/pfsense
-pfb_oras_ref_view "$CIVM_REF" /root/images/civm out/smoke-images/civm
-export SMOKE_IMAGE_DIR="$PWD/out/smoke-images/pfsense"
-export SMOKE_CLIENT_IMAGE_DIR="$PWD/out/smoke-images/civm"
-export SMOKE_STUB_DNS_ADDR=127.0.0.1
-export SMOKE_STUB_DNS_PORT=53
-
-sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
-pkill -9 -f qemu-system-x86_64 2>/dev/null || true
-
-# Run (same argv as CI):
-sh scripts/run-smoke.sh --paths tests/smoke -m smoke --timeout 30 --filter "test_dns_redirect"
-```
-
 ## The two-VM topology
 
 Many cases (`test_dns_redirect.py`, anything depending on `lan_interface`) need
