@@ -189,14 +189,20 @@ EOF
 
     # Only now is the ref genuinely published, so only now record its state: the digest,
     # then the artifacts this ref owns, so a later run can tell ITS image from a sibling's.
-    if [ -n "$_or_remote" ]; then
-        { printf '%s\n' "$_or_remote"
-          for _or_p in "$_or_dir"/*.qcow2; do
-              [ -e "$_or_p" ] || continue
-              case " $_or_published " in *" $(basename "$_or_p") "*) basename "$_or_p" ;; esac
-          done
-        } > "$_or_digest_file"
-    fi
+    _or_state_tmp="$(mktemp "${_or_dir}/.state.XXXXXX")" || return 1
+    { printf '%s\n' "$_or_remote"
+      for _or_p in "$_or_dir"/*.qcow2; do
+          [ -e "$_or_p" ] || continue
+          case " $_or_published " in *" $(basename "$_or_p") "*) basename "$_or_p" ;; esac
+      done
+    } > "$_or_state_tmp" || {
+        rm -f "$_or_state_tmp"
+        return 1
+    }
+    mv -f "$_or_state_tmp" "$_or_digest_file" || {
+        rm -f "$_or_state_tmp"
+        return 1
+    }
 
     return 0
 }

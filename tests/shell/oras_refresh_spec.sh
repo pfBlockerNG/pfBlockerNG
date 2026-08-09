@@ -45,6 +45,7 @@ case "$1" in
     ;;
   manifest)
     # oras manifest fetch <ref> --descriptor -- only reached when resolve fails.
+    if [ -n "${STUB_MANIFEST_FAIL:-}" ]; then exit 1; fi
     printf '{"digest":"%s"}\n' "${STUB_REMOTE_DIGEST}"
     ;;
   pull)
@@ -71,7 +72,7 @@ EOF
     STUB_ARTIFACT_NAME="pfSense-CE_2.8.qcow2"
     PATH="${BIN}:${PATH}"
     export PATH STUB_PULL_LOG STUB_CWD_LOG STUB_ARGV_LOG STUB_ARTIFACT_NAME \
-        STUB_REMOTE_DIGEST ORAS_PULL_FAIL STUB_RESOLVE_FAIL
+        STUB_REMOTE_DIGEST ORAS_PULL_FAIL STUB_RESOLVE_FAIL STUB_MANIFEST_FAIL
   }
 
   cleanup() { rm -rf "$WORK"; }
@@ -211,6 +212,70 @@ EOF
   End
 
   # ── per-ref consumer views ────────────────────────────────────────────────── #
+
+  It 'records pulled artifacts when digest lookup is unavailable'
+    When call sh -c '
+      . "$1"; shift
+      STUB_RESOLVE_FAIL=1 STUB_MANIFEST_FAIL=1 \
+        pfb_oras_refresh ghcr.io/x/pfsense-ce:2.8 "$1" CE || exit 1
+      pfb_oras_ref_view ghcr.io/x/pfsense-ce:2.8 "$1" "$2"
+      find "$2" -maxdepth 1 -name "*.qcow2" | wc -l | tr -d " "
+    ' sh "$LIB" "$IMGDIR" "${WORK}/view"
+    The status should equal 0
+    The stdout should equal '1'
+    The stderr should be present
+  End
+
+  It 'keeps ref state readable while a concurrent refresh publishes it'
+    When call sh -c '
+      . "$1"; shift
+      ref=ghcr.io/x/pfsense-ce:2.8
+      STUB_REMOTE_DIGEST=sha256:old pfb_oras_refresh "$ref" "$1" CE || exit 1
+      mkdir -p "$3/bin"
+      RACE_REAL_BASENAME="$(command -v basename)"
+      cat > "$3/bin/basename" <<"EOF"
+#!/bin/sh
+count="$(cat "$RACE_COUNT" 2>/dev/null || echo 0)"
+count=$((count + 1))
+printf "%s\n" "$count" > "$RACE_COUNT"
+if [ "$count" -eq 3 ]; then
+    : > "$RACE_READY"
+    tries=0
+    while [ ! -e "$RACE_RELEASE" ] && [ "$tries" -lt 500 ]; do
+        sleep 0.01
+        tries=$((tries + 1))
+    done
+fi
+exec "$RACE_REAL_BASENAME" "$@"
+EOF
+      chmod +x "$3/bin/basename"
+      RACE_COUNT="$3/count" RACE_READY="$3/ready" RACE_RELEASE="$3/release"
+      export RACE_REAL_BASENAME RACE_COUNT RACE_READY RACE_RELEASE
+      PATH="$3/bin:$PATH" STUB_REMOTE_DIGEST=sha256:new \
+        pfb_oras_refresh "$ref" "$1" CE &
+      refresh_pid=$!
+      tries=0
+      while [ ! -e "$RACE_READY" ] && [ "$tries" -lt 500 ]; do
+        sleep 0.01
+        tries=$((tries + 1))
+      done
+      if [ ! -e "$RACE_READY" ]; then
+        : > "$RACE_RELEASE"
+        wait "$refresh_pid"
+        echo TIMEOUT
+        exit 1
+      fi
+      pfb_oras_ref_view "$ref" "$1" "$2"
+      view_rc=$?
+      : > "$RACE_RELEASE"
+      wait "$refresh_pid"
+      refresh_rc=$?
+      printf "view_rc=%s refresh_rc=%s\n" "$view_rc" "$refresh_rc"
+    ' sh "$LIB" "$IMGDIR" "${WORK}/view" "${WORK}/race"
+    The status should equal 0
+    The stdout should equal 'view_rc=0 refresh_rc=0'
+    The stderr should be present
+  End
 
   It 'exposes only the selected ref when sibling images share the store'
     When call sh -c '
