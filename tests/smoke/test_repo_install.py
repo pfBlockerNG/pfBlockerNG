@@ -1408,7 +1408,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     When ``pkg update`` reads the live catalog and ``pkg install -y`` runs (NO ``-r``,
       NO ``-f``),
     Then ``pkg update`` accepts the deployed catalog AND the install comes from OUR
-      repo (``pkg query %R`` == ``pfblockerng``) with deps resolved and the .pkg
+      selected channel repo (``pkg query %R`` == ``pfblockerng-<channel>``) with deps resolved and the .pkg
       checksum validated — the deployed Pages repo is real + installable over HTTPS.
     """
     base_url = _live_base_url()
@@ -1450,8 +1450,11 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         assert "Missing dependency" not in combined, (
             f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
         )
+        selected_channel = base_url.rsplit("/", 1)[-1]
+        assert selected_channel in CHANNELS, f"live base URL does not end in a known channel: {base_url!r}"
+        expected_origin = channel_repo_name(selected_channel)
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
-        assert origin == OURS_REPO_NAME, f"installed from {origin!r}, expected our repo {OURS_REPO_NAME!r}"
+        assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
     finally:
         restore_pages_hosts(repo_vm, prior_hosts)
 

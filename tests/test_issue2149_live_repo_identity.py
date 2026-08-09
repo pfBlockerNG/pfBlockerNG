@@ -37,7 +37,7 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
 
     def fake_origin(_vm: object, pkg_name: str, **_kwargs: object) -> str:
         seen["origin"] = pkg_name
-        return repo.OURS_REPO_NAME
+        return "pfblockerng-edge"
 
     monkeypatch.setattr(repo, "pkg_delete", fake_delete)
     monkeypatch.setattr(repo, "pkg_installed_version_of", fake_query)
