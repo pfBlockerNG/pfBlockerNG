@@ -320,3 +320,55 @@ jobs:
               *) echo "arm64 missing from ${image}:${TAG}"; exit 1 ;;
             esac
           done
+
+      - name: Verify the published tags are pullable ANONYMOUSLY
+        # Package visibility is a per-PACKAGE setting that GitHub exposes only in the UI —
+        # there is no REST endpoint for it — and a newly created package defaults to
+        # PRIVATE. A private runner image is a silent trap: this workflow authenticates,
+        # so it passes either way, and so does every job in this org. What breaks is
+        # everyone without a token — a fresh clone, and every FORK pull request, whose
+        # `GITHUB_TOKEN` cannot read the org's private packages. Those jobs fail at
+        # `docker pull` with `manifest unknown`, nowhere near the cause.
+        #
+        # So the check is deliberately UNAUTHENTICATED: it asks the registry for an
+        # anonymous pull token exactly the way an outside contributor's runner would.
+        # GHCR only issues one for a public package, which makes "can a stranger pull
+        # this?" the assertion, rather than a visibility field that no token here can
+        # even read reliably. Do NOT add credentials to this step — authenticating it
+        # would make it pass on a private package and defeat its only purpose.
+        env:
+          TAG: ${{ needs.preflight.outputs.tag }}
+        run: |
+          accept='application/vnd.oci.image.index.v1+json'
+          accept="$accept, application/vnd.docker.distribution.manifest.list.v2+json"
+          namespace="${IMAGE_REPO#ghcr.io/}"
+
+          private=''
+          for image in ci-runner ci-runner-vm; do
+            bearer="$(curl -sS "https://ghcr.io/token?service=ghcr.io&scope=repository:${namespace}/${image}:pull" \
+              | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+            if [ -z "$bearer" ]; then
+              echo "${image}: the registry refused an anonymous pull token"
+              private="$private ${image}"
+              continue
+            fi
+            status="$(curl -sS -o /dev/null -w '%{http_code}' \
+              -H "Authorization: Bearer ${bearer}" -H "Accept: ${accept}" \
+              "https://ghcr.io/v2/${namespace}/${image}/manifests/${TAG}")" || status='000'
+            if [ "$status" = "200" ]; then
+              echo "${image}:${TAG} is publicly pullable"
+            else
+              echo "${image}:${TAG} is NOT anonymously readable (HTTP ${status})"
+              private="$private ${image}"
+            fi
+          done
+
+          if [ -n "$private" ]; then
+            echo "::error::these packages are not public:$private"
+            echo "Fork pull requests and fresh clones cannot pull them, so their container"
+            echo "jobs will fail at 'docker pull' with a misleading 'manifest unknown'."
+            echo "Visibility is UI-only (no REST endpoint). For each package above open:"
+            echo "  https://github.com/orgs/${namespace}/packages/container/<name>/settings"
+            echo "and set Danger Zone -> Change visibility -> Public."
+            exit 1
+          fi
