@@ -183,7 +183,7 @@ fi
 # The bootstrap string:
 #   1. cd to the repo on the box
 #   2. narrow the working tree to the paths a smoke leg reads (src/ builds the .pkg,
-#      scripts/ is the harness, tests/smoke/ is the suite). 38 MB of tracked files
+#      scripts/ is the harness, stubs/python/ supports root conftest, tests/smoke/ is the suite). 38 MB of tracked files
 #      against 13 MB for what a leg actually uses; .ADRs/, tests/php/ and plugins/ are
 #      the bulk of the difference and none of them is read here.
 #   3. fetch the requested ref and check out its FETCHED TIP (FETCH_HEAD) — NOT a
@@ -217,7 +217,7 @@ fi
 # shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
 _bootstrap="cd /root/pfBlockerNG \
  && git sparse-checkout init --cone \
- && git sparse-checkout set src scripts tests/smoke \
+ && git sparse-checkout set src scripts stubs/python tests/smoke \
  && git fetch --quiet origin '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
  && git fetch --quiet --no-tags origin ci-metadata:refs/remotes/origin/ci-metadata \
