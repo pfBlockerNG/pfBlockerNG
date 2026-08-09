@@ -2447,7 +2447,18 @@ def test_project_rejects_tracked_ports_symlink_outside_checkout(tmp_path: Path) 
     assert bpp.main(_project_args(ports, portdir, record, source=tmp_path / "source")) == 1
 
 
-def test_manifest_includes_recipe_conflicts(tmp_path: Path) -> None:
+def test_manifest_omits_recipe_conflicts(tmp_path: Path) -> None:
+    """A recipe CONFLICTS line must NOT surface in either manifest (issue #2259).
+
+    Real `make package`/`pkg repo` never embed CONFLICTS in a package: Netgate's
+    own 2.8.1 catalog carries zero `conflicts` keys even though the
+    pfSense-pkg-pfBlockerNG(-devel) ports declare CONFLICTS. Shipping the key
+    makes guest libpkg register a conflict row against a package that is not
+    installed and die with `NOT NULL constraint failed: pkg_conflicts.conflict_id`
+    on every `pkg add` (observed on CE 2.8.1 pkg 1.21 and Plus 26.03/26.07 pkg 2.x
+    alike). Channel exclusivity still holds via pkg's file-path conflict
+    detection — the channel packages ship the same file set.
+    """
     ports, portdir = _make_classic_port(tmp_path)
     makefile = portdir / "Makefile"
     makefile.write_text("CONFLICTS=\tfoo-* bar-*\n" + makefile.read_text())
@@ -2472,5 +2483,5 @@ def test_manifest_includes_recipe_conflicts(tmp_path: Path) -> None:
         == 0
     )
     full, compact, _ = _read_pkg(out / "testpkg-1.0_2.pkg")
-    assert full["conflicts"] == ["foo-*", "bar-*"]
-    assert compact["conflicts"] == ["foo-*", "bar-*"]
+    assert "conflicts" not in full, f"full +MANIFEST must omit conflicts, got {full.get('conflicts')!r}"
+    assert "conflicts" not in compact, f"+COMPACT_MANIFEST must omit conflicts, got {compact.get('conflicts')!r}"
