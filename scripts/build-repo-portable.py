@@ -1393,7 +1393,8 @@ def main(argv: list[str]) -> int:
         help=(
             "catalog subtree for --print-conf, a bare '<varver>' (e.g. 'ce-2.8', "
             "'plus-26.03') — the catalog is arch-less (NO_ARCH; issue #1806). "
-            "When supplied, the emitted url is <base-url>/<channel>/<catalog-path>. "
+            "The emitted URL is <base-url>/<channel>/<catalog-path>; a base URL already "
+            "ending in a channel is accepted as that selected channel root. "
             "Required for byte-identical output across all four generators."
         ),
     )
@@ -1558,7 +1559,12 @@ def main(argv: list[str]) -> int:
             ap.error("--print-conf requires --catalog-path <varver>")
         _base = args.base_url.rstrip("/")
         _cat = args.catalog_path.strip("/")
-        _channel = args.channel or "release"
+        _parent, _sep, _selected = _base.rpartition("/")
+        if args.channel is None and _sep and _selected in _CHANNEL_REPO_NAMES:
+            _base = _parent
+            _channel = _selected
+        else:
+            _channel = args.channel or "release"
         print_conf(f"{_base}/{_channel}/{_cat}", channel=_channel)
         return 0
 
