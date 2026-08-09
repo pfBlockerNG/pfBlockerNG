@@ -164,6 +164,7 @@ GUEST_ADD_REPO_RCD_DIR = f"{GUEST_SPIKE_DIR}/rc.d"
 # GATED on SMOKE_REPO_LIVE_URL: unset -> SKIP (the file:// VM-acceptance above is the
 # always-on proof; the live URL only exists once the deploy has run).
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
+LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
 DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg/edge"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
 # only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
@@ -1456,6 +1457,79 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
     finally:
+        restore_pages_hosts(repo_vm, prior_hosts)
+
+
+@pytest.mark.timeout(1800)
+def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM) -> None:
+    """A date-version Nightly install moves down only through an explicit selected repo.
+
+    The caller supplies one semantic channel root plus the Nightly root from the same
+    deployed tree. Ordinary ``pkg upgrade`` must leave Nightly's higher date version
+    untouched; the shipped bootstrap + migration scripts must then move the canonical
+    package to the selected Stable, Testing, or Edge repository and its lower version.
+    """
+    semantic_url = _live_base_url()
+    nightly_url = os.environ.get(LIVE_NIGHTLY_URL_ENV, "").rstrip("/")
+    if semantic_url is None or not nightly_url:
+        pytest.skip(f"{LIVE_BASE_URL_ENV} and {LIVE_NIGHTLY_URL_ENV} are required for the live downgrade")
+    assert semantic_url is not None
+
+    semantic_channel = semantic_url.rsplit("/", 1)[-1]
+    assert semantic_channel in CHANNELS[:3], (
+        f"semantic live URL must end in stable, testing, or edge, got {semantic_url!r}"
+    )
+    common_base = semantic_url.rsplit("/", 1)[0]
+    assert nightly_url == f"{common_base}/nightly", (
+        f"semantic and Nightly URLs must share one deployed root: {semantic_url!r}, {nightly_url!r}"
+    )
+    host = urllib.parse.urlparse(common_base).hostname
+    assert host, f"could not parse a host from {common_base!r}"
+
+    varver = _box_real_varver(repo_vm)
+    poll_catalog_served(semantic_url, varver)
+    poll_catalog_served(nightly_url, varver)
+    prior_hosts = pin_pages_hosts(repo_vm, host)
+    try:
+        reset_channel_subscription(repo_vm)
+        run_add_repo_sh(repo_vm, common_base, channel="nightly")
+        pkg_install_qualified(repo_vm, channel_repo_name("nightly"), CANONICAL_PKG_NAME)
+        nightly_version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
+        assert nightly_version is not None, "Nightly install did not register a version"
+        assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name("nightly")
+
+        run_add_repo_sh(repo_vm, common_base, channel=semantic_channel)
+        ordinary = _pkg_retry(
+            repo_vm,
+            "env",
+            "ASSUME_ALWAYS_YES=yes",
+            "pkg",
+            "upgrade",
+            "-y",
+            CANONICAL_PKG_NAME,
+            timeout=600.0,
+        )
+        assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) == nightly_version, (
+            f"ordinary pkg upgrade unexpectedly downgraded Nightly via {semantic_channel}:\n"
+            f"stdout:\n{ordinary.stdout}\nstderr:\n{ordinary.stderr}"
+        )
+
+        migrated = run_migrate_channel_sh(repo_vm, "--channel", semantic_channel)
+        assert migrated.returncode == 0, (
+            f"qualified Nightly -> {semantic_channel} migration failed: rc={migrated.returncode}\n"
+            f"stdout:\n{migrated.stdout}\nstderr:\n{migrated.stderr}"
+        )
+        semantic_version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
+        assert semantic_version is not None and semantic_version != nightly_version
+        ordering = _ssh_check(repo_vm, "pkg", "version", "-t", semantic_version, nightly_version).stdout.strip()
+        assert ordering == "<", (
+            f"expected a real downgrade from Nightly {nightly_version!r}, got {semantic_version!r} ({ordering!r})"
+        )
+        assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name(semantic_channel)
+        assert installed_pfblockerng_names(repo_vm) == [CANONICAL_PKG_NAME]
+    finally:
+        reset_channel_subscription(repo_vm)
+        repo_vm.ssh("/bin/rm", "-f", GUEST_MIGRATE_CHANNEL_SH, GUEST_HOOK_PATH, timeout=60.0)
         restore_pages_hosts(repo_vm, prior_hosts)
 
 
