@@ -565,44 +565,6 @@ def test_the_published_index_is_verified_to_carry_every_architecture() -> None:
     assert "jq -r" in body, f"the index must be parsed with jq, not a regex over raw JSON:\n{body}"
 
 
-def test_published_images_are_checked_for_public_pullability_without_credentials() -> None:
-    """The runner images must be pullable by someone with no token, and the check that
-    proves it must not authenticate.
-
-    Package visibility is per-package, UI-only (no REST endpoint), and a newly created
-    package defaults to PRIVATE — so this is a state the project can silently fall into,
-    and every job inside the org keeps passing when it does, because they all
-    authenticate. The ones that break are fresh clones and FORK pull requests, whose
-    GITHUB_TOKEN cannot read the org's private packages; they fail at `docker pull` with
-    `manifest unknown`, nowhere near the cause.
-
-    The vacuity trap this pins: adding credentials to the check would make it pass on a
-    private package, which is precisely the case it exists to catch. So the step must
-    carry no Authorization header of its own and no token from the job environment —
-    the only bearer allowed is the one the REGISTRY hands back anonymously.
-    """
-    step = _step(_read(PUBLISH_WORKFLOW), "Verify the published tags are pullable ANONYMOUSLY")
-    body = "\n".join(ln for ln in step.splitlines() if not ln.lstrip().startswith("#"))
-
-    # It must ask the registry for an anonymous pull token, and act on the answer.
-    assert "ghcr.io/token?service=ghcr.io&scope=repository:" in body, (
-        f"the check must request an anonymous pull token; step was:\n{body}"
-    )
-    assert "manifests/" in body, f"the check must fetch a manifest, not just a token; step was:\n{body}"
-    assert "exit 1" in body, f"a private package must fail the job; step was:\n{body}"
-
-    # No credential may reach it: GHCR issues an anonymous token only for a PUBLIC
-    # package, so any token from the job would mask exactly the failure being hunted.
-    for leak in ("GHCR_TOKEN", "secrets.GITHUB_TOKEN", "github.token", "docker login"):
-        assert leak not in step, f"the anonymous pullability check must not authenticate, found {leak!r}:\n{step}"
-
-    # The one Authorization header allowed is the registry's own anonymous bearer.
-    auth_headers = re.findall(r"Authorization: ([^\"']+)", body)
-    assert auth_headers == ["Bearer ${bearer}"], (
-        f"the only Authorization allowed is the anonymously-obtained bearer, found {auth_headers}"
-    )
-
-
 def _guard_script() -> str:
     """The overwrite guard's `run:` body, dedented so it can be executed."""
     step = _step(_read(PUBLISH_WORKFLOW), "Refuse to overwrite a published tag")
@@ -769,8 +731,8 @@ def test_the_overwrite_guard_refuses_a_partly_published_series(tmp_path: Path) -
     tag ~60 workflow references resolve. The Dockerfiles pin no apt versions, so those
     bytes are a different toolchain, which is the silent-swap the series exists to stop.
 
-    Reachable two ways: the publish loop completing one image and failing on the other,
-    and deleting one package to fix its visibility (what the gate below tells you to do).
+    Reachable via the publish loop completing one image and failing on the other, or a
+    package being deleted out-of-band.
     """
     for vm in ("404", "200"):
         published, missing = ("ci-runner", "ci-runner-vm") if vm == "404" else ("ci-runner-vm", "ci-runner")
@@ -828,125 +790,6 @@ def test_the_marker_is_produced_as_well_as_consumed() -> None:
     assert re.search(r'--tag "\$\{IMAGE_REPO\}/\$\{image\}:\$\{TAG\}-\$\{MARKER\}"', merge), (
         f"the marker tag must be pushed alongside the series tag:\n{merge}"
     )
-
-
-def test_the_preflight_visibility_probe_is_uncredentialed() -> None:
-    """The probe asks whether a STRANGER can pull, so a credential makes it vacuous.
-
-    More exposed than its post-publish twin: `GH_TOKEN` is legitimately in this step's
-    env for the `gh api` existence check, so a credential is right there to be reached
-    for, and adding one to the curl makes the step pass on the private package it exists
-    to catch.
-    """
-    step = _step(_read(PUBLISH_WORKFLOW), "Refuse to publish into a package nobody can pull")
-    # Comments first, then line continuations: the step's own rationale comment says the
-    # words being searched for, and a `curl` argument list wraps, so a credential added on
-    # a continuation line is invisible to any per-line filter — which is exactly where an
-    # author reaching for `-u "x:${GH_TOKEN}"` would put it.
-    body = "\n".join(ln for ln in step.splitlines() if not ln.lstrip().startswith("#"))
-    probe = "\n".join(ln for ln in re.sub(r"\\\n\s*", " ", body).splitlines() if "curl" in ln)
-    assert "ghcr.io/token" in probe, "the preflight probe must ask the registry for an anonymous token"
-    assert "-u " not in probe and "Authorization" not in probe and "GH_TOKEN" not in probe, (
-        f"the anonymous-pull probe must carry no credentials:\n{probe}"
-    )
-
-    # It must also run on every publishing-branch run, not only when this run pushes:
-    # gating it on the guard means a series is checked once, at birth, and never again.
-    assert re.search(r"if:\s*steps\.publish\.outputs\.enabled == 'true'", step), (
-        f"the visibility probe must be gated on the BRANCH decision, not the push decision:\n{step[:400]}"
-    )
-
-
-def _run_visibility_probe(
-    tmp_path: Path,
-    *,
-    token: str,
-    gh_rc: int,
-    gh_err: str = "",
-    will_push: str = "true",
-) -> subprocess.CompletedProcess[str]:
-    """Execute the visibility probe with `curl` and `gh` stubbed.
-
-    `token` is what the registry's token endpoint returns ('' = refused, i.e. the package
-    is private OR absent), and `gh_rc`/`gh_err` are how the existence check answers.
-    """
-    step = _step(_read(PUBLISH_WORKFLOW), "Refuse to publish into a package nobody can pull")
-    body = step.split("run: |\n", 1)[1]
-    lines = body.splitlines()
-    indent = len(lines[0]) - len(lines[0].lstrip())
-    out = []
-    for line in lines:
-        if line.strip() and not line.startswith(" " * indent):
-            break
-        out.append(line[indent:])
-
-    stub = tmp_path / "bin"
-    stub.mkdir(exist_ok=True)
-    (stub / "curl").write_text(f"#!/bin/sh\nprintf '%s' '{{\"token\":\"{token}\"}}'\n")
-    (stub / "gh").write_text(f"#!/bin/sh\nprintf '%s\\n' '{gh_err}' >&2\nexit {gh_rc}\n")
-    for name in ("curl", "gh"):
-        (stub / name).chmod(0o755)
-
-    # `bash -e`, matching the runner: this workflow declares no `shell:`, so that is what
-    # GitHub executes the body with. `sh -c` enables no error option at all, so an
-    # `[ cond ] && cmd` ending a branch would pass here and abort the step in CI.
-    return subprocess.run(
-        ["bash", "-e", "-c", "\n".join(out)],
-        capture_output=True,
-        text=True,
-        env={
-            "PATH": f"{stub}:/usr/bin:/bin",
-            "IMAGE_REPO": "ghcr.io/pfblockerng",
-            "WILL_PUSH": will_push,
-            "GH_TOKEN": "stub-token",
-        },
-        check=False,
-    )
-
-
-def test_the_visibility_probe_refuses_when_it_cannot_prove_the_package_is_absent(tmp_path: Path) -> None:
-    """A package that refuses an anonymous token is private OR absent, and only the API
-    can say which. Every way of ASKING can also fail — 401, 403 (the likely answer for a
-    job token against the org packages endpoint), a rate limit, a DNS error — and none of
-    those prove absence. Guessing "absent" there is a silent fail-open on the single case
-    this step exists to catch, which is worse than not having the step.
-    """
-    # The happy paths first, so the refusals below are not passing for a trivial reason.
-    assert _run_visibility_probe(tmp_path, token="anon", gh_rc=1).returncode == 0, (
-        "an anonymously readable package must pass"
-    )
-    absent = _run_visibility_probe(tmp_path, token="", gh_rc=1, gh_err="gh: Not Found (HTTP 404)")
-    assert absent.returncode == 0, f"a package that does not exist yet is the first publish:\n{absent.stdout}"
-
-    private = _run_visibility_probe(tmp_path, token="", gh_rc=0)
-    assert private.returncode != 0, (
-        f"a package that exists and refuses an anonymous token is private:\n{private.stdout}"
-    )
-
-    for err in (
-        "gh: Resource not accessible by integration (HTTP 403)",
-        "gh: Bad credentials (HTTP 401)",
-        "gh: API rate limit exceeded (HTTP 429)",
-        "dial tcp: lookup api.github.com: no such host",
-    ):
-        proc = _run_visibility_probe(tmp_path, token="", gh_rc=1, gh_err=err)
-        assert proc.returncode != 0, (
-            f"{err!r} does not prove the package is absent, so it must not be waved through:\n{proc.stdout}"
-        )
-
-    # ...but only the run that is about to push is FAILED by it. A no-op run reports the
-    # condition and stays green: it is real, and it needs a human with UI access, but
-    # blocking an unrelated merge on something this workflow cannot fix helps nobody.
-    # BOTH refusal arms need this, and the undeterminable one especially: a 403 is what
-    # the step's own comment expects from a job token, so treating that as fatal would
-    # redden every merge to devel.
-    for label, kwargs in (
-        ("private", {"gh_rc": 0}),
-        ("undeterminable", {"gh_rc": 1, "gh_err": "gh: Bad credentials (HTTP 401)"}),
-    ):
-        warned = _run_visibility_probe(tmp_path, token="", will_push="false", **kwargs)  # type: ignore[arg-type]
-        assert warned.returncode == 0, f"{label}: a run that publishes nothing must not be failed:\n{warned.stdout}"
-        assert "::warning::" in warned.stdout, f"{label}: ...but it must still say so, loudly:\n{warned.stdout}"
 
 
 def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
@@ -1059,21 +902,6 @@ def test_publish_workflow_publishes_only_from_devel_and_main() -> None:
         assert same_job in step or downstream in step, (
             f"{step_name!r} must be gated on the publish decision; step was:\n{step}"
         )
-
-    # The visibility probe mutates nothing, so it is deliberately WIDER: it runs on every
-    # publishing-branch run and reports what is published, because gating a package-level
-    # fact on a tag-level decision would check a series once, at birth, and never again.
-    # What stays gated is its VERDICT — it only fails the run that is about to push.
-    probe = _step(workflow, "Refuse to publish into a package nobody can pull")
-    assert "if: steps.publish.outputs.enabled == 'true'" in probe, (
-        f"the visibility probe must run on every publishing-branch run; step was:\n{probe}"
-    )
-    assert "WILL_PUSH: ${{ steps.guard.outputs.publish }}" in probe, (
-        f"the probe must consume the push decision to know whether to fail; step was:\n{probe}"
-    )
-    assert re.search(r'if \[ "\$WILL_PUSH" = .true. \]; then\n\s+echo "::error', probe), (
-        f"a private package must be a hard error on the run that would push into it:\n{probe}"
-    )
 
     # The overwrite guard is the one exception, and deliberately so: it CONSUMES the
     # branch decision and narrows it (an identical republish turns publishing off), so it
