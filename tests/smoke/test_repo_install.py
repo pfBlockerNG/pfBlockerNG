@@ -160,6 +160,10 @@ GUEST_ADD_REPO_RCD_DIR = f"{GUEST_SPIKE_DIR}/rc.d"
 # SMOKE_REPO_LIVE_URL; when unset, the live HTTPS check is skipped.
 LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
 LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
+LIVE_EXPECTED_SOURCE_SHA_ENV = "SMOKE_REPO_EXPECTED_SOURCE_SHA"
+LIVE_EXPECTED_VERSION_ENV = "SMOKE_REPO_EXPECTED_VERSION"
+NIGHTLY_EXPECTED_SOURCE_SHA_ENV = "SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA"
+NIGHTLY_EXPECTED_VERSION_ENV = "SMOKE_NIGHTLY_EXPECTED_VERSION"
 DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg/edge"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
 # only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
@@ -680,6 +684,25 @@ def pkg_repo_origin_of(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> str 
     raise RuntimeError(
         f"pkg query %R {name} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
+
+
+def pkg_annotation(vm: SmokeVM, name: str, key: str, *, timeout: float = 60.0) -> str | None:
+    """Return one installed package annotation from ``pkg info -A``."""
+    out = _ssh_check(vm, "pkg", "info", "-A", name, timeout=timeout).stdout
+    for line in out.splitlines():
+        annotation, separator, value = line.partition(":")
+        if separator and annotation.strip() == key:
+            return value.strip()
+    return None
+
+
+def pkg_build_record(vm: SmokeVM, name: str, *, timeout: float = 60.0) -> dict[str, object]:
+    """Return the installed package's publisher-validated build record."""
+    raw = pkg_annotation(vm, name, "pfb_build_record", timeout=timeout)
+    assert raw is not None, f"{name} has no pfb_build_record annotation"
+    record: object = json.loads(raw)
+    assert isinstance(record, dict), f"{name} pfb_build_record is not an object: {raw!r}"
+    return record
 
 
 def pkg_installed_version(vm: SmokeVM, *, timeout: float = 60.0) -> str | None:
@@ -1393,6 +1416,10 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     if base_url is None:
         pytest.skip(f"{LIVE_BASE_URL_ENV} not set — live Pages-URL check is dispatch-only (file:// proof always runs)")
     assert base_url is not None  # for the type-checker: pytest.skip above is NoReturn
+    expected_source_sha = os.environ.get(LIVE_EXPECTED_SOURCE_SHA_ENV)
+    expected_version = os.environ.get(LIVE_EXPECTED_VERSION_ENV)
+    assert expected_source_sha, f"{LIVE_EXPECTED_SOURCE_SHA_ENV} is required with {LIVE_BASE_URL_ENV}"
+    assert expected_version, f"{LIVE_EXPECTED_VERSION_ENV} is required with {LIVE_BASE_URL_ENV}"
 
     host = urllib.parse.urlparse(base_url).hostname
     assert host, f"could not parse a host from {base_url!r}"
@@ -1433,8 +1460,14 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         expected_origin = channel_repo_name(selected_channel)
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
+        version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
+        assert version == expected_version, f"installed {version!r}, expected {expected_version!r}"
+        record = pkg_build_record(repo_vm, CANONICAL_PKG_NAME)
+        assert record.get("source_sha") == expected_source_sha
+        assert record.get("channel") == selected_channel
     finally:
         pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
+        _ssh_check(repo_vm, "/bin/rm", "-f", REPO_CONF)
         restore_pages_hosts(repo_vm, prior_hosts)
 
 
@@ -1452,6 +1485,19 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
     if semantic_url is None or not nightly_url:
         pytest.skip(f"{LIVE_BASE_URL_ENV} and {LIVE_NIGHTLY_URL_ENV} are required for the live downgrade")
     assert semantic_url is not None
+    expected_semantic_source = os.environ.get(LIVE_EXPECTED_SOURCE_SHA_ENV)
+    expected_semantic_version = os.environ.get(LIVE_EXPECTED_VERSION_ENV)
+    expected_nightly_source = os.environ.get(NIGHTLY_EXPECTED_SOURCE_SHA_ENV)
+    expected_nightly_version = os.environ.get(NIGHTLY_EXPECTED_VERSION_ENV)
+    for name, value in (
+        (LIVE_EXPECTED_SOURCE_SHA_ENV, expected_semantic_source),
+        (LIVE_EXPECTED_VERSION_ENV, expected_semantic_version),
+        (NIGHTLY_EXPECTED_SOURCE_SHA_ENV, expected_nightly_source),
+        (NIGHTLY_EXPECTED_VERSION_ENV, expected_nightly_version),
+    ):
+        assert value, f"{name} is required for the live downgrade"
+    assert expected_semantic_version is not None
+    assert expected_nightly_version is not None
 
     semantic_channel = semantic_url.rsplit("/", 1)[-1]
     assert semantic_channel in CHANNELS[:3], (
@@ -1473,8 +1519,11 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
         run_add_repo_sh(repo_vm, common_base, channel="nightly")
         pkg_install_qualified(repo_vm, channel_repo_name("nightly"), CANONICAL_PKG_NAME)
         nightly_version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
-        assert nightly_version is not None, "Nightly install did not register a version"
+        assert nightly_version == expected_nightly_version
         assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name("nightly")
+        nightly_record = pkg_build_record(repo_vm, CANONICAL_PKG_NAME)
+        assert nightly_record.get("source_sha") == expected_nightly_source
+        assert nightly_record.get("channel") == "nightly"
 
         run_add_repo_sh(repo_vm, common_base, channel=semantic_channel)
         ordinary = _pkg_retry(
@@ -1502,12 +1551,15 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
             f"stdout:\n{migrated.stdout}\nstderr:\n{migrated.stderr}"
         )
         semantic_version = pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME)
-        assert semantic_version is not None and semantic_version != nightly_version
+        assert semantic_version == expected_semantic_version
         ordering = _ssh_check(repo_vm, "pkg", "version", "-t", semantic_version, nightly_version).stdout.strip()
         assert ordering == "<", (
             f"expected a real downgrade from Nightly {nightly_version!r}, got {semantic_version!r} ({ordering!r})"
         )
         assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name(semantic_channel)
+        semantic_record = pkg_build_record(repo_vm, CANONICAL_PKG_NAME)
+        assert semantic_record.get("source_sha") == expected_semantic_source
+        assert semantic_record.get("channel") == semantic_channel
         assert installed_pfblockerng_names(repo_vm) == [CANONICAL_PKG_NAME]
     finally:
         reset_channel_subscription(repo_vm)

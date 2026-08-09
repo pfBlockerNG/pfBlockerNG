@@ -46,11 +46,15 @@ from .conftest import SmokeVM
 from .pkg_identity import branch_pkg_name
 from .test_repo_install import (
     CANONICAL_PKG_NAME,
+    NIGHTLY_EXPECTED_SOURCE_SHA_ENV,
+    NIGHTLY_EXPECTED_VERSION_ENV,
     _box_real_varver,
     _ensure_egress_open,
     _ssh_check,
     build_guest_repo,
     pin_pages_hosts,
+    pkg_annotation,
+    pkg_build_record,
     poll_catalog_served,
     read_compact_version,
     repo_priority,
@@ -125,17 +129,6 @@ def pkg_q(vm: SmokeVM, fmt: str, name: str, *, timeout: float = 60.0) -> str:
     """``pkg query <fmt> <name>`` (e.g. ``%v``/``%R``) — empty string if absent."""
     r = vm.ssh("pkg", "query", fmt, name, timeout=timeout)
     return r.stdout.strip() if r.returncode == 0 else ""
-
-
-def pkg_annotation(vm: SmokeVM, name: str, key: str, *, timeout: float = 60.0) -> str | None:
-    """The value of annotation ``key`` from ``pkg info -A`` (the provenance oracle)."""
-    out = _ssh_check(vm, "pkg", "info", "-A", name, timeout=timeout).stdout
-    for line in out.splitlines():
-        # `pkg info -A` prints `  <key>         : <value>`.
-        k, sep, v = line.partition(":")
-        if sep and k.strip() == key:
-            return v.strip()
-    return None
 
 
 def pkg_update(vm: SmokeVM, *, timeout: float = 240.0) -> None:
@@ -372,6 +365,10 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
             f"{LIVE_NIGHTLY_URL_ENV} not set — live nightly URL check is dispatch-only (file:// proof always runs)"
         )
     assert base_url is not None  # for the type-checker
+    expected_source_sha = os.environ.get(NIGHTLY_EXPECTED_SOURCE_SHA_ENV)
+    expected_version = os.environ.get(NIGHTLY_EXPECTED_VERSION_ENV)
+    assert expected_source_sha, f"{NIGHTLY_EXPECTED_SOURCE_SHA_ENV} is required with {LIVE_NIGHTLY_URL_ENV}"
+    assert expected_version, f"{NIGHTLY_EXPECTED_VERSION_ENV} is required with {LIVE_NIGHTLY_URL_ENV}"
 
     host = urllib.parse.urlparse(base_url).hostname
     assert host, f"could not parse a host from {base_url!r}"
@@ -438,6 +435,11 @@ def test_install_from_live_nightly_url(smoke_vm: SmokeVM) -> None:
         assert "Missing dependency" not in out, f"deps did not resolve from the live nightly catalog:\n{out}"
         origin = pkg_q(smoke_vm, "%R", CANONICAL_PKG_NAME)
         assert origin == NIGHTLY_REPO, f"installed from {origin!r}, expected our nightly repo {NIGHTLY_REPO!r}"
+        version = pkg_q(smoke_vm, "%v", CANONICAL_PKG_NAME)
+        assert version == expected_version, f"installed {version!r}, expected {expected_version!r}"
+        record = pkg_build_record(smoke_vm, CANONICAL_PKG_NAME)
+        assert record.get("source_sha") == expected_source_sha
+        assert record.get("channel") == "nightly"
     finally:
         pkg_delete(smoke_vm, CANONICAL_PKG_NAME)
         smoke_vm.ssh("/bin/rm", "-f", NIGHTLY_LIVE_CONF, timeout=60.0)

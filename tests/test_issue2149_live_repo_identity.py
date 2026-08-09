@@ -14,8 +14,18 @@ from tests.smoke.conftest import SmokeVM
 def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) -> None:
     """The deployed channel catalog is queried and installed by its canonical package identity."""
     seen: dict[str, list[str] | str] = {"delete": []}
+    ssh_calls: list[tuple[str, ...]] = []
+    expected_source = "a" * 40
+    expected_version = "4.0.0.a21"
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            ssh_calls.append(args)
+            return subprocess.CompletedProcess([], 0, "", "")
 
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", expected_source)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", expected_version)
     monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
     monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
     monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
@@ -31,9 +41,14 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
         assert isinstance(deletes, list)
         deletes.append(pkg_name)
 
-    def fake_query(_vm: object, pkg_name: str, **_kwargs: object) -> None:
+    versions = iter([None, expected_version])
+
+    def fake_query(_vm: object, pkg_name: str, **_kwargs: object) -> str | None:
         seen["query"] = pkg_name
-        return None
+        version = next(versions)
+        if version is not None:
+            seen["version"] = version
+        return version
 
     def fake_install(
         _vm: object, *, pkg_name: str = repo.PKG_NAME, **_kwargs: object
@@ -45,24 +60,34 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
         seen["origin"] = pkg_name
         return "pfblockerng-edge"
 
+    def fake_record(_vm: object, pkg_name: str, **_kwargs: object) -> dict[str, object]:
+        seen["record"] = pkg_name
+        return {"channel": "edge", "source_sha": expected_source}
+
     monkeypatch.setattr(repo, "pkg_delete", fake_delete)
     monkeypatch.setattr(repo, "pkg_installed_version_of", fake_query)
     monkeypatch.setattr(repo, "pkg_install_from_repo", fake_install)
     monkeypatch.setattr(repo, "pkg_repo_origin_of", fake_origin)
+    monkeypatch.setattr(repo, "pkg_build_record", fake_record, raising=False)
 
-    repo.test_install_from_live_pages_url(cast(SmokeVM, object()))
+    repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
 
     assert seen == {
         "delete": [repo.CANONICAL_PKG_NAME, repo.CANONICAL_PKG_NAME],
         "query": repo.CANONICAL_PKG_NAME,
         "install": repo.CANONICAL_PKG_NAME,
         "origin": repo.CANONICAL_PKG_NAME,
+        "record": repo.CANONICAL_PKG_NAME,
+        "version": expected_version,
     }
+    assert ("/bin/rm", "-f", repo.REPO_CONF) in ssh_calls
 
 
 def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch) -> None:
     """The deployed Nightly catalog is installed by the shared canonical package identity."""
     seen: dict[str, list[str] | str] = {"delete": []}
+    expected_source = "b" * 40
+    expected_version = "20260810_2"
 
     class FakeVM:
         def ssh(self, *_args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -72,6 +97,8 @@ def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch
             return ["true"]
 
     monkeypatch.setattr(nightly, "_live_nightly_url", lambda: "https://example.test/pkg/nightly")
+    monkeypatch.setenv("SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA", expected_source)
+    monkeypatch.setenv("SMOKE_NIGHTLY_EXPECTED_VERSION", expected_version)
     monkeypatch.setattr(nightly, "_box_real_varver", lambda _vm: "ce-current")
     monkeypatch.setattr(nightly, "poll_catalog_served", lambda *_args: None)
     monkeypatch.setattr(nightly, "_ensure_egress_open", lambda: None)
@@ -97,11 +124,19 @@ def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch
 
     def fake_query(_vm: object, _fmt: str, name: str, **_kwargs: object) -> str:
         seen["query"] = name
+        if _fmt == "%v":
+            seen["version"] = expected_version
+            return expected_version
         return nightly.NIGHTLY_REPO
+
+    def fake_record(_vm: object, pkg_name: str, **_kwargs: object) -> dict[str, object]:
+        seen["record"] = pkg_name
+        return {"channel": "nightly", "source_sha": expected_source}
 
     monkeypatch.setattr(nightly, "pkg_delete", fake_delete)
     monkeypatch.setattr(nightly, "pkg_install", fake_install)
     monkeypatch.setattr(nightly, "pkg_q", fake_query)
+    monkeypatch.setattr(nightly, "pkg_build_record", fake_record, raising=False)
 
     nightly.test_install_from_live_nightly_url(cast(SmokeVM, FakeVM()))
 
@@ -109,6 +144,8 @@ def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch
         "delete": [repo.CANONICAL_PKG_NAME, repo.CANONICAL_PKG_NAME],
         "install": repo.CANONICAL_PKG_NAME,
         "query": repo.CANONICAL_PKG_NAME,
+        "record": repo.CANONICAL_PKG_NAME,
+        "version": expected_version,
     }
 
 
@@ -126,6 +163,10 @@ def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: Mon
 
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/stable")
     monkeypatch.setenv(repo.LIVE_NIGHTLY_URL_ENV, "https://example.test/pkg/nightly")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", "c" * 40)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", "89.0.2")
+    monkeypatch.setenv("SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA", "b" * 40)
+    monkeypatch.setenv("SMOKE_NIGHTLY_EXPECTED_VERSION", "20260810_2")
     monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
     monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
     monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
@@ -135,6 +176,12 @@ def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: Mon
     monkeypatch.setattr(repo, "pkg_install_qualified", lambda *_args: None)
     monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: next(versions))
     monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_args: repo.channel_repo_name("nightly"))
+    monkeypatch.setattr(
+        repo,
+        "pkg_build_record",
+        lambda *_args: {"channel": "nightly", "source_sha": "b" * 40},
+        raising=False,
+    )
     monkeypatch.setattr(
         repo,
         "_pkg_retry",
