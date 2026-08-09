@@ -18,6 +18,7 @@ grading against whatever the image happens to carry:
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -651,8 +652,13 @@ def _run_guard(
     )
     (stub / "curl").chmod(0o755)
 
+    # The guard APPENDS to GITHUB_OUTPUT, so a call reusing a tmp_path would otherwise read
+    # back the previous call's decision — a trap for tests that loop over states.
+    (tmp_path / "gh_out").unlink(missing_ok=True)
+
     return subprocess.run(
-        ["sh", "-c", _guard_script()],
+        # `bash -e`, matching the runner: the workflow declares no `shell:`.
+        ["bash", "-e", "-c", _guard_script()],
         capture_output=True,
         text=True,
         env={
@@ -822,8 +828,13 @@ def test_the_preflight_visibility_probe_is_uncredentialed() -> None:
     to catch.
     """
     step = _step(_read(PUBLISH_WORKFLOW), "Refuse to publish into a package nobody can pull")
-    probe = "\n".join(ln for ln in step.splitlines() if "curl" in ln or "ghcr.io/token" in ln)
-    assert probe, "the preflight probe must ask the registry for an anonymous token"
+    # Comments first, then line continuations: the step's own rationale comment says the
+    # words being searched for, and a `curl` argument list wraps, so a credential added on
+    # a continuation line is invisible to any per-line filter — which is exactly where an
+    # author reaching for `-u "x:${GH_TOKEN}"` would put it.
+    body = "\n".join(ln for ln in step.splitlines() if not ln.lstrip().startswith("#"))
+    probe = "\n".join(ln for ln in re.sub(r"\\\n\s*", " ", body).splitlines() if "curl" in ln)
+    assert "ghcr.io/token" in probe, "the preflight probe must ask the registry for an anonymous token"
     assert "-u " not in probe and "Authorization" not in probe and "GH_TOKEN" not in probe, (
         f"the anonymous-pull probe must carry no credentials:\n{probe}"
     )
@@ -865,8 +876,11 @@ def _run_visibility_probe(
     for name in ("curl", "gh"):
         (stub / name).chmod(0o755)
 
+    # `bash -e`, matching the runner: this workflow declares no `shell:`, so that is what
+    # GitHub executes the body with. `sh -c` enables no error option at all, so an
+    # `[ cond ] && cmd` ending a branch would pass here and abort the step in CI.
     return subprocess.run(
-        ["sh", "-c", "\n".join(out)],
+        ["bash", "-e", "-c", "\n".join(out)],
         capture_output=True,
         text=True,
         env={
@@ -912,9 +926,16 @@ def test_the_visibility_probe_refuses_when_it_cannot_prove_the_package_is_absent
     # ...but only the run that is about to push is FAILED by it. A no-op run reports the
     # condition and stays green: it is real, and it needs a human with UI access, but
     # blocking an unrelated merge on something this workflow cannot fix helps nobody.
-    warned = _run_visibility_probe(tmp_path, token="", gh_rc=0, will_push="false")
-    assert warned.returncode == 0, f"a run that publishes nothing must not be failed by it:\n{warned.stdout}"
-    assert "::warning::" in warned.stdout, f"...but it must still say so, loudly:\n{warned.stdout}"
+    # BOTH refusal arms need this, and the undeterminable one especially: a 403 is what
+    # the step's own comment expects from a job token, so treating that as fatal would
+    # redden every merge to devel.
+    for label, kwargs in (
+        ("private", {"gh_rc": 0}),
+        ("undeterminable", {"gh_rc": 1, "gh_err": "gh: Bad credentials (HTTP 401)"}),
+    ):
+        warned = _run_visibility_probe(tmp_path, token="", will_push="false", **kwargs)  # type: ignore[arg-type]
+        assert warned.returncode == 0, f"{label}: a run that publishes nothing must not be failed:\n{warned.stdout}"
+        assert "::warning::" in warned.stdout, f"{label}: ...but it must still say so, loudly:\n{warned.stdout}"
 
 
 def test_publish_workflow_refuses_to_overwrite_a_published_tag() -> None:
@@ -1015,7 +1036,15 @@ def test_publish_workflow_publishes_only_from_devel_and_main() -> None:
     same_job = "if: steps.guard.outputs.publish == 'true'"
     downstream = "if: needs.preflight.outputs.publish == 'true'"
     for step_name in ("Log in to GHCR", "Push this architecture"):
-        step = _step(workflow, step_name)
+        # `_step` bounds on the next sibling `- `, which for a job's LAST step runs on into
+        # the next JOB header — and that header carries an identical `if:`, which would
+        # satisfy this assertion for free while the step itself was ungated.
+        step = "\n".join(
+            itertools.takewhile(
+                lambda ln: not ln.strip() or ln.startswith(" " * 8),
+                _step(workflow, step_name).splitlines(),
+            )
+        )
         assert same_job in step or downstream in step, (
             f"{step_name!r} must be gated on the publish decision; step was:\n{step}"
         )
