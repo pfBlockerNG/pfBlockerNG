@@ -82,14 +82,15 @@ EOF
         pfSense-pkg-pfBlockerNG-testing \
         pfSense-pkg-pfBlockerNG-edge \
         pfSense-pkg-pfBlockerNG-devel \
-        pfSense-pkg-pfBlockerNG-nightly
+        pfSense-pkg-pfBlockerNG-nightly \
+        PFSENSE-PKG-PFBLOCKERNG-EDGE
       do
         PFB_PKG_TEST_NAME="${pkg_name}" PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" \
           "${wrapper}" --print-interpreter || return
       done
     }
     expected=$(printf '%s\n' "${bindir}/python3.11" "${bindir}/python3.11" "${bindir}/python3.11" \
-      "${bindir}/python3.11" "${bindir}/python3.11")
+      "${bindir}/python3.11" "${bindir}/python3.11" "${bindir}/python3.11")
     When call run_valid_packages
     The output should equal "${expected}"
     The status should be success

@@ -117,6 +117,29 @@ _PY_PATH_OPEN = "<<<PFBPY>>>"
 _PY_PATH_CLOSE = "<<<PFBPYEND>>>"
 
 
+def _validated_python_paths(payload: str, out: str) -> tuple[str, str]:
+    fields = payload.split("\n")
+    assert len(fields) == 2, f"expected interpreter and wrapper paths: stdout={out!r}"
+    resolved, wrapper = fields
+    assert resolved, f"pfb_python_interpreter() returned an empty path: stdout={out!r}"
+    assert wrapper, f"PFB_PYTHON_WRAPPER was empty: stdout={out!r}"
+    return resolved, wrapper
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        pytest.param("\n/wrapper", "pfb_python_interpreter() returned an empty path", id="empty-interpreter"),
+        pytest.param("/interpreter\n", "PFB_PYTHON_WRAPPER was empty", id="empty-wrapper"),
+        pytest.param("/interpreter", "expected interpreter and wrapper paths", id="missing-wrapper"),
+        pytest.param("/interpreter\n/wrapper\nextra", "expected interpreter and wrapper paths", id="extra-field"),
+    ],
+)
+def test_python_path_fields_name_invalid_output(payload: str, message: str) -> None:
+    with pytest.raises(AssertionError, match=re.escape(message)):
+        _validated_python_paths(payload, f"{_PY_PATH_OPEN}{payload}{_PY_PATH_CLOSE}")
+
+
 def _guest_python(vm: SmokeVM) -> str:
     """The package Python wrapper on the guest, cross-checked with PHP.
 
@@ -138,11 +161,7 @@ def _guest_python(vm: SmokeVM) -> str:
     assert result.returncode == 0 and start != -1 and end != -1, (
         f"pfb_python_interpreter() resolution failed: rc={result.returncode} stdout={out!r} stderr={result.stderr!r}"
     )
-    fields = out[start + len(_PY_PATH_OPEN) : end].split("\n")
-    assert len(fields) == 2, f"expected interpreter and wrapper paths: stdout={out!r}"
-    resolved, wrapper = fields
-    assert resolved, f"pfb_python_interpreter() returned an empty path: stdout={out!r}"
-    assert wrapper, f"PFB_PYTHON_WRAPPER was empty: stdout={out!r}"
+    resolved, wrapper = _validated_python_paths(out[start + len(_PY_PATH_OPEN) : end], out)
     wrapper_result = vm.ssh(
         f"printf %s {_PY_PATH_OPEN!r}; {shlex.quote(wrapper)} --print-interpreter; printf %s {_PY_PATH_CLOSE!r}",
         timeout=120,
