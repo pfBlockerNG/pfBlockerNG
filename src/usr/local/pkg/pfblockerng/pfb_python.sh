@@ -2,7 +2,8 @@
 # Resolve and execute pfBlockerNG's package-provided Python interpreter.
 #
 # Normal mode queries /usr/local/sbin/pkg for the installed
-# pfSense-pkg-pfBlockerNG, then reads its direct dependencies. The only
+# current pfSense-pkg-pfBlockerNG channel package (plus legacy -devel), then
+# reads its direct dependencies. The only
 # accepted direct dependency names are pyNN/pythonNN (NN is at least two
 # digits); module dependencies and ambiguous versions fail closed.
 #
@@ -52,14 +53,14 @@ else
 	)
 	pkg_status=$?
 	if [ "${pkg_status}" -ne 0 ]; then
-		fail "package-name query failed (expected pfSense-pkg-pfBlockerNG stable/devel/nightly via ${pkg_bin})"
+		fail "package-name query failed (expected a current pfSense-pkg-pfBlockerNG channel or legacy -devel via ${pkg_bin})"
 	fi
 
 	pkg_name=''
 	while IFS= read -r candidate || [ -n "${candidate}" ]; do
 		candidate_lc=$(printf '%s' "${candidate}" | LC_ALL=C tr '[:upper:]' '[:lower:]')
 		case "${candidate_lc}" in
-			pfsense-pkg-pfblockerng|pfsense-pkg-pfblockerng-devel|pfsense-pkg-pfblockerng-nightly)
+			pfsense-pkg-pfblockerng|pfsense-pkg-pfblockerng-testing|pfsense-pkg-pfblockerng-edge|pfsense-pkg-pfblockerng-devel|pfsense-pkg-pfblockerng-nightly)
 				pkg_name=${candidate}
 				break
 				;;
@@ -68,7 +69,7 @@ else
 ${pkg_names}
 EOF
 	if [ -z "${pkg_name}" ]; then
-		fail "no valid pfBlockerNG package (expected stable/devel/nightly, got ${pkg_names:-none})"
+		fail "no valid pfBlockerNG package (expected a current channel or legacy -devel, got ${pkg_names:-none})"
 	fi
 
 	dependencies=$(

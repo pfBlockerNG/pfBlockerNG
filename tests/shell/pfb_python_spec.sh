@@ -63,21 +63,35 @@ EOF
     cleanup
   End
 
-  It 'accepts the first valid stable/devel/nightly package after unknown names'
+  It 'accepts every current package identity plus legacy devel after unknown names'
     setup
     pkg="${work}/pkg"
-    cat > "${pkg}" <<EOF
+    cat > "${pkg}" <<'EOF'
 #!/bin/sh
-if [ "\$2" = '-g' ]; then
-  printf '%s\n' 'unknown-package' 'PFSENSE-PKG-PFBLOCKERNG-devel'
+if [ "$2" = '-g' ]; then
+  printf '%s\n' 'unknown-package' "$PFB_PKG_TEST_NAME"
 else
-  [ "\$3" = 'PFSENSE-PKG-PFBLOCKERNG-devel' ] || exit 1
+  [ "$3" = "$PFB_PKG_TEST_NAME" ] || exit 1
   printf '%s\n' 'python311'
 fi
 EOF
     chmod +x "${pkg}"
-    When run env PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" "${wrapper}" --print-interpreter
-    The output should equal "${bindir}/python3.11"
+    run_valid_packages() {
+      for pkg_name in \
+        pfSense-pkg-pfBlockerNG \
+        pfSense-pkg-pfBlockerNG-testing \
+        pfSense-pkg-pfBlockerNG-edge \
+        pfSense-pkg-pfBlockerNG-devel \
+        pfSense-pkg-pfBlockerNG-nightly
+      do
+        PFB_PKG_TEST_NAME="${pkg_name}" PFB_PKG_BIN="${pkg}" PFB_PYTHON_DIR="${bindir}" \
+          "${wrapper}" --print-interpreter || return
+      done
+    }
+    expected=$(printf '%s\n' "${bindir}/python3.11" "${bindir}/python3.11" "${bindir}/python3.11" \
+      "${bindir}/python3.11" "${bindir}/python3.11")
+    When call run_valid_packages
+    The output should equal "${expected}"
     The status should be success
     cleanup
   End

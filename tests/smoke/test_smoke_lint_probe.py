@@ -138,7 +138,9 @@ def _guest_python(vm: SmokeVM) -> str:
     assert result.returncode == 0 and start != -1 and end != -1, (
         f"pfb_python_interpreter() resolution failed: rc={result.returncode} stdout={out!r} stderr={result.stderr!r}"
     )
-    resolved, wrapper = out[start + len(_PY_PATH_OPEN) : end].strip().splitlines()
+    fields = out[start + len(_PY_PATH_OPEN) : end].split("\n")
+    assert len(fields) == 2, f"expected interpreter and wrapper paths: stdout={out!r}"
+    resolved, wrapper = fields
     assert resolved, f"pfb_python_interpreter() returned an empty path: stdout={out!r}"
     assert wrapper, f"PFB_PYTHON_WRAPPER was empty: stdout={out!r}"
     wrapper_result = vm.ssh(
