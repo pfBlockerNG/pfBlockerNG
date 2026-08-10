@@ -8,8 +8,9 @@ pfb_lan_registry_active() {
 
 # pfb_rewrite_lan_registry <ref>
 #
-# Rewrite a leading ghcr.io/ to the configured LAN registry. Other refs and any
-# tag or @digest suffix pass through unchanged.
+# Rewrite a leading ghcr.io/ to the configured LAN registry. PFB_LAN_REGISTRY
+# is a bare host[:port] with no trailing slash. Other refs and any tag or
+# @digest suffix pass through unchanged.
 pfb_rewrite_lan_registry() {
     if ! pfb_lan_registry_active; then
         printf '%s\n' "$1"

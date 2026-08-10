@@ -164,7 +164,7 @@ EOF
     The output should include '/root/FreeBSD-ports:/root/FreeBSD-ports'
     The output should include '/root/smoke-ssh-key'
     The output should not include '/root/images:/root/images'
-    The output should include 'docker run --rm'
+    The output should include 'docker run --rm '
   End
 
   # ── the sparse checkout ──────────────────────────────────────────────────── #

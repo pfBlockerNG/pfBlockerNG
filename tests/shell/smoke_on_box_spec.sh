@@ -44,6 +44,7 @@ case "$*" in
             *civm*) true > civm.qcow2 ;;
             *)      true > pfsense.qcow2 ;;
         esac
+        exit "${ORAS_PULL_EXIT:-0}"
         ;;
 esac
 exit 0
@@ -194,8 +195,9 @@ STUBEOF
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
     PFB_LAN_REGISTRY=10.0.0.111
+    SMOKE_GHCR_TOKEN=test-token
     PFB_ONBOX_IMAGES_DIR="${FAKE_ROOT}/out/smoke-images"
-    export SMOKE_SSH_KEY PFB_LAN_REGISTRY PFB_ONBOX_IMAGES_DIR
+    export SMOKE_SSH_KEY PFB_LAN_REGISTRY SMOKE_GHCR_TOKEN PFB_ONBOX_IMAGES_DIR
 
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
@@ -241,9 +243,9 @@ STUBEOF
     chmod +x "${FAKE_ROOT}/.venv/bin/python"
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
-    PFB_LAN_REGISTRY=10.0.0.111
+    SMOKE_GHCR_TOKEN=test-token
     PFB_ONBOX_IMAGES_DIR="${FAKE_ROOT}/out/smoke-images"
-    export SMOKE_SSH_KEY PFB_LAN_REGISTRY PFB_ONBOX_IMAGES_DIR
+    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN PFB_ONBOX_IMAGES_DIR
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
 exit 0
@@ -254,8 +256,21 @@ STUBEOF
     The status should equal 0
     The stderr should include 'running smoke'
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
-    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
+    The contents of file "$ORAS_ARGV_LOG" should include 'login ghcr.io --username pfBlockerNG --password-stdin'
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8'
+    The contents of file "$ORAS_ARGV_LOG" should not include '--plain-http'
     The contents of file "$ORAS_ARGV_LOG" should not include 'civm'
+  End
+
+  It 'propagates a direct image pull failure'
+    printf '0\n' > "${WORK}/port-floor"
+    ORAS_PULL_EXIT=37
+    export ORAS_PULL_EXIT
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 37
+    The stderr should include 'pulling pfSense image'
+    The stderr should not include 'building .pkg'
   End
 
   It 'clears an invalid existing venv before recreating it'
