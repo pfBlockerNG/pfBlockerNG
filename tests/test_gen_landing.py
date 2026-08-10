@@ -765,10 +765,11 @@ def test_older_nightlies_lists_retained_excludes_latest() -> None:
     # table, never the latest (which lives in the edition table itself).
     matrix = [_mx("FreeBSD:16:amd64", "26.03", "Plus", "8.5", "py311")]
     html = gl._packages_html([new, mid, old, tst], matrix)
-    assert "<h3>pfSense Plus</h3>" in html
+    assert "<h3>Nightly</h3>" in html
+    assert "<h4>pfSense Plus</h4>" in html
     assert "<details><summary>Older nightlies (2)</summary>" in html
     # The disclosure sits AFTER the edition's main table (folded under it).
-    assert html.index("<h3>pfSense Plus</h3>") < html.index("Older nightlies (2)")
+    assert html.index("<h4>pfSense Plus</h4>") < html.index("Older nightlies (2)")
     details = html[html.index("Older nightlies (2)") :]
     assert "3.2.16.20260613.4" in details and "3.2.16.20260601.1" in details
     assert "3.2.16.20260614.9" not in details  # the current nightly stays out of the 'older' disclosure
@@ -784,9 +785,10 @@ def test_older_nightlies_empty_when_only_latest() -> None:
     # …and the packages block omits the disclosure entirely (no empty 'Older nightlies' affordance).
     html = gl._packages_html([only], None)
     assert "Older nightlies" not in html
-    # With no disclosures present, the edition table is the SOLE table here, so its own
-    # Channel column is isolated: it must carry one (pins the edition call site's with_channel=True).
-    assert "<th>Channel</th>" in html
+    # The Nightly heading identifies the channel, so the table does not repeat it as a column.
+    assert "<h3>Nightly</h3>" in html
+    assert "<h4>Other builds</h4>" in html
+    assert "<th>Channel</th>" not in html
 
 
 def test_older_nightlies_fold_under_each_edition() -> None:
@@ -809,12 +811,13 @@ def test_older_nightlies_fold_under_each_edition() -> None:
 
     html = gl._packages_html([ce_new, ce_old, plus_new, plus_old], matrix)
 
-    # CE section before Plus section; each has its own folded older-nightlies disclosure.
-    assert html.index("<h3>pfSense CE</h3>") < html.index("<h3>pfSense Plus</h3>")
+    # Nightly owns CE then Plus; each edition has its own folded history.
+    assert "<h3>Nightly</h3>" in html
+    assert html.index("<h4>pfSense CE</h4>") < html.index("<h4>pfSense Plus</h4>")
     assert html.count("<summary>Older nightlies (1)</summary>") == 2  # one per edition (each ABI: 1 older)
     # The CE section spans from its heading to the Plus heading; the Plus section follows.
-    ce_section = html[html.index("<h3>pfSense CE</h3>") : html.index("<h3>pfSense Plus</h3>")]
-    plus_section = html[html.index("<h3>pfSense Plus</h3>") :]
+    ce_section = html[html.index("<h4>pfSense CE</h4>") : html.index("<h4>pfSense Plus</h4>")]
+    plus_section = html[html.index("<h4>pfSense Plus</h4>") :]
     # Each edition's disclosure folds in its OWN ABI's older nightly, never the other's.
     assert "Older nightlies (1)" in ce_section and "FreeBSD:15:amd64" in ce_section
     assert "FreeBSD:16:aarch64" not in ce_section and ">2.8<" in ce_section and ">8.3<" in ce_section
@@ -853,19 +856,17 @@ def test_older_releases_lists_retained_excludes_latest() -> None:
     assert ("testing", "3.2.14") in versions
     assert ("stable", "3.0.0") in versions
 
-    # The packages block folds them into a disclosure under the edition table.
+    # The packages block scopes each disclosure to its own channel.
     matrix = [_mx("FreeBSD:16:amd64", "2.8", "CE", "8.3", "py311")]
     html = gl._packages_html(all_pkgs, matrix)
-    assert "<h3>pfSense CE</h3>" in html
-    assert "<details><summary>Older releases (3)</summary>" in html
-    # Disclosure sits AFTER the edition's main table (before any Older nightlies entry).
-    assert html.index("<h3>pfSense CE</h3>") < html.index("Older releases (3)")
-    details = html[html.index("Older releases (3)") :]
-    assert "3.2.15" in details and "3.2.14" in details and "3.0.0" in details
-    assert "3.2.16" not in details  # the newest testing stays out of the 'older' disclosure
-    assert "3.1.0" not in details  # the newest stable stays out of the 'older' disclosure
-    # The disclosure table carries a Channel column (testing/stable mixed) + the same edition columns.
-    assert "<th>Channel</th>" in details and "<th>pfSense</th>" in details
+    assert html.index("<h3>Stable</h3>") < html.index("<h3>Testing</h3>") < html.index("<h3>Nightly</h3>")
+    stable = html[html.index("<h3>Stable</h3>") : html.index("<h3>Testing</h3>")]
+    testing = html[html.index("<h3>Testing</h3>") : html.index("<h3>Nightly</h3>")]
+    assert "<h4>pfSense CE</h4>" in stable and "<h4>pfSense CE</h4>" in testing
+    assert "Older releases (1)" in stable and "3.0.0" in stable and "3.2.15" not in stable
+    assert "Older releases (2)" in testing and "3.2.15" in testing and "3.2.14" in testing
+    assert "3.0.0" not in testing
+    assert "<th>Channel</th>" not in html and "<th>pfSense</th>" in html
 
 
 def test_older_releases_empty_when_only_latest_per_channel() -> None:
@@ -909,6 +910,43 @@ def test_older_releases_spans_stable_testing_and_edge_never_nightly() -> None:
     assert "nightly" not in channels
 
 
+def test_packages_html_orders_channels_then_editions() -> None:
+    """Published packages group by cadence channel, then pfSense edition."""
+    channel_versions = (
+        ("stable", "1.0.0"),
+        ("testing", "1.1.0.r1"),
+        ("edge", "2.0.0.a1"),
+        ("nightly", "20260810"),
+    )
+    pkgs = [
+        *[
+            _pkg(channel, _CANON, version, "FreeBSD:15:*", f"{channel}/ce-2.8/c.pkg")
+            for channel, version in channel_versions
+        ],
+        *[
+            _pkg(channel, _CANON, version, "FreeBSD:16:*", f"{channel}/plus-26.03/p.pkg")
+            for channel, version in channel_versions
+        ],
+    ]
+    matrix = [
+        _mx("FreeBSD:15:*", "2.8", "CE", "8.3", "py311"),
+        _mx("FreeBSD:16:*", "26.03", "Plus", "8.5", "py311"),
+    ]
+
+    html = gl._packages_html(pkgs, matrix)
+
+    assert html.index("<h3>Stable</h3>") < html.index("<h3>Testing</h3>")
+    assert html.index("<h3>Testing</h3>") < html.index("<h3>Edge</h3>")
+    assert html.index("<h3>Edge</h3>") < html.index("<h3>Nightly</h3>")
+    for channel, next_channel in (("Stable", "Testing"), ("Testing", "Edge"), ("Edge", "Nightly")):
+        section = html[html.index(f"<h3>{channel}</h3>") : html.index(f"<h3>{next_channel}</h3>")]
+        assert section.index("<h4>pfSense CE</h4>") < section.index("<h4>pfSense Plus</h4>")
+    nightly = html[html.index("<h3>Nightly</h3>") :]
+    assert nightly.index("<h4>pfSense CE</h4>") < nightly.index("<h4>pfSense Plus</h4>")
+    assert html.count('<div class="tablewrap"><table>') == 8
+    assert "<th>Channel</th>" not in html
+
+
 def test_older_releases_fold_under_each_edition() -> None:
     """Scenario: each edition's older releases fold UNDER that edition's own table.
 
@@ -929,19 +967,20 @@ def test_older_releases_fold_under_each_edition() -> None:
 
     html = gl._packages_html([ce_new, ce_old, plus_new, plus_old], matrix)
 
-    # CE section before Plus section; each has its own folded older-releases disclosure.
-    assert html.index("<h3>pfSense CE</h3>") < html.index("<h3>pfSense Plus</h3>")
+    # Testing owns CE then Plus; each edition has its own folded history.
+    assert "<h3>Testing</h3>" in html
+    assert html.index("<h4>pfSense CE</h4>") < html.index("<h4>pfSense Plus</h4>")
     assert html.count("<summary>Older releases (1)</summary>") == 2  # one per edition (each ABI: 1 older)
     # The CE section spans from its heading to the Plus heading; the Plus section follows.
-    ce_section = html[html.index("<h3>pfSense CE</h3>") : html.index("<h3>pfSense Plus</h3>")]
-    plus_section = html[html.index("<h3>pfSense Plus</h3>") :]
+    ce_section = html[html.index("<h4>pfSense CE</h4>") : html.index("<h4>pfSense Plus</h4>")]
+    plus_section = html[html.index("<h4>pfSense Plus</h4>") :]
     # Each edition's disclosure folds in its OWN ABI's older release, never the other's.
     assert "Older releases (1)" in ce_section and "FreeBSD:15:amd64" in ce_section
     assert "FreeBSD:16:aarch64" not in ce_section and ">2.8<" in ce_section and ">8.3<" in ce_section
     assert "Older releases (1)" in plus_section and "FreeBSD:16:aarch64" in plus_section
     assert "FreeBSD:15:amd64" not in plus_section and ">26.03<" in plus_section and ">8.5<" in plus_section
-    # Channel column present in older-releases disclosures (stable/testing/edge can coexist).
-    assert "<th>Channel</th>" in ce_section and "<th>Channel</th>" in plus_section
+    # The Testing heading identifies the channel; neither table repeats it as a column.
+    assert "<th>Channel</th>" not in ce_section and "<th>Channel</th>" not in plus_section
 
 
 def test_build_edition_sections_unmatched_abi_falls_to_other() -> None:
@@ -1016,9 +1055,9 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
 
     # Latest versions surfaced for the present channels.
     assert "3.2.16.20260614.9" in page
-    # One table per pfSense edition, CE before Plus.
-    assert "<h3>pfSense CE</h3>" in page
-    assert "<h3>pfSense Plus</h3>" in page
+    # Each channel splits into pfSense edition tables, CE before Plus.
+    assert "<h4>pfSense CE</h4>" in page
+    assert "<h4>pfSense Plus</h4>" in page
     assert page.index("pfSense CE") < page.index("pfSense Plus")
     # Each table carries the informative pfSense version + PHP + Python columns (joined
     # from the matrix), plus Published and Commit.

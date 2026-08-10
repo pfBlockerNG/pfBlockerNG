@@ -265,6 +265,7 @@ header h1{margin:0 0 .25rem;font-size:2rem}
 header p{margin:0;color:var(--mut)}
 h2{margin:2.5rem 0 1rem;font-size:1.3rem;border-bottom:1px solid var(--bd);padding-bottom:.4rem}
 h3{margin:1.6rem 0 .5rem;font-size:1.05rem}
+h4{margin:1.2rem 0 .4rem;font-size:.95rem;color:var(--mut)}
 .cards{display:grid;gap:1rem;grid-template-columns:minmax(0,1fr)}
 .card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:1rem 1.1rem}
 .card h3{margin:0 0 .15rem;font-size:1.1rem}
@@ -632,21 +633,34 @@ def _row_html(r: dict, *, with_channel: bool) -> str:
 
 
 def _packages_html(pkgs: list[dict], matrix: list[dict] | None) -> str:
-    """The Published-packages block: one titled table per pfSense edition, each followed by
-    that edition's retained older releases and older nightlies, each folded into a collapsed
-    disclosure."""
+    """Published packages by Stable/Testing/Edge/Nightly, then pfSense edition."""
     sections = [(k, rows) for k, rows in build_edition_sections(pkgs, matrix) if rows]
     if not sections:
         return '<p class="empty">No packages published yet.</p>'
     older_releases_by_edition = _older_releases_by_edition(pkgs, matrix)
     older_nightlies_by_edition = _older_nightlies_by_edition(pkgs, matrix)
-    return "".join(
-        f"<h3>{_esc(EDITION_LABELS.get(k, k))}</h3>"
-        f"{_versions_table_html(rows, with_channel=True)}"
-        f"{_older_releases_details(older_releases_by_edition.get(k, []))}"
-        f"{_older_nightlies_details(older_nightlies_by_edition.get(k, []))}"
-        for k, rows in sections
-    )
+    out: list[str] = []
+    for channel in CH_ORDER:
+        channel_body: list[str] = []
+        for edition, rows in sections:
+            current = [row for row in rows if row["channel"] == channel]
+            older_rows = (
+                older_nightlies_by_edition.get(edition, [])
+                if channel == "nightly"
+                else older_releases_by_edition.get(edition, [])
+            )
+            older = [row for row in older_rows if row["channel"] == channel]
+            if not current and not older:
+                continue
+            channel_body.append(f"<h4>{_esc(EDITION_LABELS.get(edition, edition))}</h4>")
+            if current:
+                channel_body.append(_versions_table_html(current, with_channel=False))
+            channel_body.append(
+                _older_nightlies_details(older) if channel == "nightly" else _older_releases_details(older)
+            )
+        if channel_body:
+            out.append(f"<h3>{_esc(channel.capitalize())}</h3>{''.join(channel_body)}")
+    return "".join(out)
 
 
 def older_nightlies(pkgs: list[dict]) -> list[dict]:
@@ -724,12 +738,12 @@ def _older_releases_by_edition(pkgs: list[dict], matrix: list[dict] | None) -> d
 
 def _older_releases_details(rows: list[dict]) -> str:
     """One edition's retained older releases, folded into a collapsed disclosure; "" when
-    that edition has none. Includes Channel column (stable/testing/edge can all appear)."""
+    that channel has none. The surrounding heading identifies the channel."""
     if not rows:
         return ""
     return (
         f"<details><summary>Older releases ({len(rows)})</summary>"
-        f"{_versions_table_html(rows, with_channel=True)}</details>"
+        f"{_versions_table_html(rows, with_channel=False)}</details>"
     )
 
 
