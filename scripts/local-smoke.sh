@@ -45,7 +45,7 @@
 # The leased box runs scripts/smoke-on-box.sh, which:
 #   - checks out the requested ref
 #   - updates FreeBSD-ports (pfblockerng/use-github)
-#   - refreshes or pulls pfSense + civm images via oras
+#   - pulls pfSense + civm images into disposable container-local paths via oras
 #   - lowers ip_unprivileged_port_start + kills stale qemu
 #   - builds the .pkg via build-leg.sh
 #   - runs scripts/run-smoke.sh (the canonical pytest argv)
@@ -209,14 +209,14 @@ fi
 #                      than failing cleanly. The device passes host → LXC → container.
 #   --sysctl ...       the non-root mock DNS binds :53. This replaces an in-script
 #                      `sysctl -w`, which a container cannot perform against the host.
-#   the bind mounts    repo, shared image store, ports tree and guest key all live on the
-#                      box; without them every run re-clones and re-pulls.
+#   the bind mounts    repo, ports tree and guest key live on the box; image artifacts stay
+#                      in the disposable container writable layer for this workload.
 #   the image ref      issue #2247: box-side-expanded `${PFB_LAN_REGISTRY:-ghcr.io}/...`
 #                      (escaped `\$` -- left UNEXPANDED here so the remote box shell
 #                      resolves it against ITS OWN /etc/environment, not this caller's);
 #                      unset falls back to ghcr.io, today's behavior. -e PFB_LAN_REGISTRY
 #                      carries the same var into the container so scripts/smoke-on-box.sh
-#                      and scripts/lib/oras-refresh.sh can rewrite refs and route oras
+#                      and scripts/lib/lan-registry.sh can rewrite refs and route oras
 #                      --plain-http against the LAN registry themselves. Supersedes the
 #                      --add-host hijack + CA-bundle mount from #2230: one mechanism, no
 #                      private PKI (owner decision 2026-08-08).
@@ -233,7 +233,6 @@ _bootstrap="cd /root/pfBlockerNG \
       --device /dev/kvm \
       --sysctl net.ipv4.ip_unprivileged_port_start=53 \
       -v /root/pfBlockerNG:/root/pfBlockerNG \
-      -v /root/images:/root/images \
       -v /root/FreeBSD-ports:/root/FreeBSD-ports \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
       -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \

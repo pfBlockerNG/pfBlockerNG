@@ -24,10 +24,10 @@ Describe 'smoke-on-box.sh (issue #2223)'
     # The real libs the script sources before it parses anything.
     cp "${PFB_ROOT}/scripts/lib/git-env-scrub.sh" "${FAKE_ROOT}/scripts/lib/"
     cp "${PFB_ROOT}/scripts/lib/smoke-tier.sh"    "${FAKE_ROOT}/scripts/lib/"
-    cp "${PFB_ROOT}/scripts/lib/oras-refresh.sh"  "${FAKE_ROOT}/scripts/lib/"
+    cp "${PFB_ROOT}/scripts/lib/lan-registry.sh"  "${FAKE_ROOT}/scripts/lib/"
 
-    # Stubs for the steps between arg-parsing and the port-floor gate: the ports refresh
-    # and the image refresh both shell out, and neither is what this spec covers.
+    # Stubs for the steps between arg-parsing and the port-floor gate: the ports update
+    # and image pulls both shell out, and neither is what this setup covers.
     cat > "${FAKE_ROOT}/scripts/sparse-clone-ports.sh" <<'STUBEOF'
 #!/bin/sh
 [ -z "${SPARSE_CHANNEL_FILE:-}" ] || printf '%s\n' "$4" > "$SPARSE_CHANNEL_FILE"
@@ -37,11 +37,22 @@ STUBEOF
     mkdir -p "${WORK}/bin"
     cat > "${WORK}/bin/oras" <<'STUBEOF'
 #!/bin/sh
+printf '%s\n' "$*" >> "${ORAS_ARGV_LOG:-/dev/null}"
+case "$*" in
+    *\ pull\ *|pull\ *)
+        case "$*" in
+            *civm*) true > civm.qcow2 ;;
+            *)      true > pfsense.qcow2 ;;
+        esac
+        ;;
+esac
 exit 0
 STUBEOF
     chmod +x "${WORK}/bin/oras"
     PATH="${WORK}/bin:${PATH}"
-    export PATH
+    ORAS_ARGV_LOG="${WORK}/oras-argv"
+    true > "$ORAS_ARGV_LOG"
+    export PATH ORAS_ARGV_LOG
 
     git_fixture -C "$FAKE_ROOT" init --quiet . >/dev/null 2>&1
     git_fixture -C "$FAKE_ROOT" -c user.name=t -c user.email=t@example.com \
@@ -57,7 +68,9 @@ STUBEOF
 
     PFB_ONBOX_REPO_ROOT="$FAKE_ROOT"
     PFB_ONBOX_PORTS_DIR="${WORK}/ports"
-    export WORK FAKE_ROOT PFB_ONBOX_REPO_ROOT PFB_ONBOX_PORTS_DIR PFB_ONBOX_PORT_FLOOR_FILE
+    PFB_ONBOX_IMAGES_DIR="${WORK}/images"
+    export WORK FAKE_ROOT PFB_ONBOX_REPO_ROOT PFB_ONBOX_PORTS_DIR PFB_ONBOX_IMAGES_DIR \
+        PFB_ONBOX_PORT_FLOOR_FILE
   }
 
   teardown() { rm -rf "$WORK"; }
@@ -151,19 +164,8 @@ STUBEOF
     The contents of file "$SPARSE_CHANNEL_FILE" should equal 'testing'
   End
 
-  It 'exposes only the selected image for each refreshed ref'
+  It 'pulls both images into distinct container-local directories'
     printf '0\n' > "${WORK}/port-floor"
-
-    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
-pfb_lan_registry_active() { return 1; }
-pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
-pfb_oras_refresh() { :; }
-pfb_oras_ref_view() {
-    printf '%s|%s|%s\n' "$1" "$2" "$3" >> "$VIEW_LOG"
-    mkdir -p "$3"
-    true > "$3/selected.qcow2"
-}
-STUBEOF
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh
 printf '%s\n' /tmp/fake.pkg
@@ -191,8 +193,9 @@ STUBEOF
     chmod +x "${FAKE_ROOT}/.venv/bin/python"
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
-    VIEW_LOG="${WORK}/views"
-    export SMOKE_SSH_KEY VIEW_LOG
+    PFB_LAN_REGISTRY=10.0.0.111
+    PFB_ONBOX_IMAGES_DIR="${FAKE_ROOT}/out/smoke-images"
+    export SMOKE_SSH_KEY PFB_LAN_REGISTRY PFB_ONBOX_IMAGES_DIR
 
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
@@ -206,19 +209,62 @@ STUBEOF
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
     The stdout should include "client=${FAKE_ROOT}/out/smoke-images/civm count=1"
     The file "${FAKE_ROOT}/.venv/reuse-sentinel" should be exist
-    The contents of file "$VIEW_LOG" should include "ghcr.io/pfblockerng/pfsense-ce:2.8|/root/images/pfsense|${FAKE_ROOT}/out/smoke-images/pfsense"
-    The contents of file "$VIEW_LOG" should include "ghcr.io/pfblockerng/civm:v1|/root/images/civm|${FAKE_ROOT}/out/smoke-images/civm"
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/civm:v1'
+    The contents of file "$ORAS_ARGV_LOG" should not include 'resolve'
+    The contents of file "$ORAS_ARGV_LOG" should not include 'manifest'
+    The contents of file "$ORAS_ARGV_LOG" should not include 'login'
+  End
+
+  It 'pulls only pfSense when --no-two-vm is set'
+    printf '0\n' > "${WORK}/port-floor"
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'server=%s count=%s\n' "$SMOKE_IMAGE_DIR" \
+    "$(find "$SMOKE_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
+        "${FAKE_ROOT}/scripts/run-smoke.sh"
+    mkdir -p "${FAKE_ROOT}/.venv/bin"
+    cat > "${FAKE_ROOT}/.venv/bin/python" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${FAKE_ROOT}/.venv/bin/python"
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    PFB_LAN_REGISTRY=10.0.0.111
+    PFB_ONBOX_IMAGES_DIR="${FAKE_ROOT}/out/smoke-images"
+    export SMOKE_SSH_KEY PFB_LAN_REGISTRY PFB_ONBOX_IMAGES_DIR
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stderr should include 'running smoke'
+    The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
+    The contents of file "$ORAS_ARGV_LOG" should not include 'civm'
   End
 
   It 'clears an invalid existing venv before recreating it'
     printf '0\n' > "${WORK}/port-floor"
 
     # Reach only the venv boundary: package/image work is unrelated and remains stubbed.
-    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+    cat > "${FAKE_ROOT}/scripts/lib/lan-registry.sh" <<'STUBEOF'
 pfb_lan_registry_active() { return 1; }
 pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
-pfb_oras_refresh() { :; }
-pfb_oras_ref_view() { mkdir -p "$3"; true > "$3/selected.qcow2"; }
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh
@@ -264,11 +310,9 @@ STUBEOF
   It 'refuses a symlinked venv root without clearing its target'
     printf '0\n' > "${WORK}/port-floor"
 
-    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+    cat > "${FAKE_ROOT}/scripts/lib/lan-registry.sh" <<'STUBEOF'
 pfb_lan_registry_active() { return 1; }
 pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
-pfb_oras_refresh() { :; }
-pfb_oras_ref_view() { mkdir -p "$3"; true > "$3/selected.qcow2"; }
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh
@@ -305,11 +349,9 @@ STUBEOF
   It 'refuses a non-directory venv root without clearing it'
     printf '0\n' > "${WORK}/port-floor"
 
-    cat > "${FAKE_ROOT}/scripts/lib/oras-refresh.sh" <<'STUBEOF'
+    cat > "${FAKE_ROOT}/scripts/lib/lan-registry.sh" <<'STUBEOF'
 pfb_lan_registry_active() { return 1; }
 pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
-pfb_oras_refresh() { :; }
-pfb_oras_ref_view() { mkdir -p "$3"; true > "$3/selected.qcow2"; }
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh

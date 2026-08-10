@@ -13,8 +13,8 @@
 #   * --sysctl net.ipv4.ip_unprivileged_port_start=53 — the non-root mock DNS binds :53.
 #     This used to be an in-script `sysctl -w`, which cannot work from inside a container;
 #     the namespaced sysctl replaces it, so if it is dropped the mock DNS fails to bind.
-#   * the bind mounts — the repo, the shared image store, the ports tree and the guest SSH
-#     key all live on the box and must be visible inside, or every run re-clones and re-pulls.
+#   * the bind mounts — the repo, ports tree and guest SSH key live on the box and must be
+#     visible inside; image artifacts stay in the disposable container writable layer.
 #   * the sparse checkout — a smoke leg reads src/, scripts/, stubs/python/ and tests/smoke/.
 #     Checking out the whole tree costs 38 MB against 13 MB for what it uses.
 #
@@ -127,7 +127,7 @@ EOF
   End
 
   It 'passes PFB_LAN_REGISTRY into the container (issue #2247)'
-    # smoke-on-box.sh and oras-refresh.sh, running INSIDE the container, need the
+    # smoke-on-box.sh and lan-registry.sh, running INSIDE the container, need the
     # var themselves to rewrite ghcr.io refs and route oras --plain-http.
     When call bootstrap --ref dummy
     The output should include '-e PFB_LAN_REGISTRY'
@@ -158,12 +158,13 @@ EOF
     The output should include "-e CIVM_REF='ghcr.io/example/civm:v2'"
   End
 
-  It 'mounts the repo, the shared image store, the ports tree and the guest key'
+  It 'keeps persistent mounts and makes image storage container-local'
     When call bootstrap --ref dummy
     The output should include '/root/pfBlockerNG:/root/pfBlockerNG'
-    The output should include '/root/images:/root/images'
     The output should include '/root/FreeBSD-ports:/root/FreeBSD-ports'
     The output should include '/root/smoke-ssh-key'
+    The output should not include '/root/images:/root/images'
+    The output should include 'docker run --rm'
   End
 
   # ── the sparse checkout ──────────────────────────────────────────────────── #
