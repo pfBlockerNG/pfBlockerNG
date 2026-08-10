@@ -373,19 +373,6 @@ def _bootstrap_install(base: str, channel: str) -> str:
     )
 
 
-def _channel_switch_commands(base: str) -> str:
-    """The copyable two-step channel switch: move the subscription, then move the
-    installed package. Adding the target repository alone is a documented silent
-    no-op (`pkg` never leaves a package's origin repository), so both lines ship
-    together (issue #2148)."""
-    return (
-        f"fetch -qo - {base}/add-repo.sh \\\n"
-        f"  | sh -s -- --base-url {base} --channel <ch>\n"
-        f"fetch -qo - {base}/migrate-channel.sh \\\n"
-        "  | sh -s -- --channel <ch>"
-    )
-
-
 # Per-channel card copy: title, optional badge, and the audience/cadence prose. Fixed
 # content decisions for the four-channel model, issue #2147 step A (the landing page):
 # Stable = final tagged releases; Testing = nonzero-patch prereleases validating the
@@ -439,73 +426,6 @@ def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Call
         f'<p class="blurb">{meta["blurb"]}</p>'
         f"{_copyable(_esc(_bootstrap_install(base, channel)))}"
         f"{_manual_conf_details(conf_fn, channel)}</div>"
-    )
-
-
-def _trust_section_html(base: str) -> str:
-    """The trust/provenance section: what 'installing from this repo' actually means
-    under the four-channel model (issue #2147). No catalogue-signing claim anywhere;
-    the NONE-signed trust anchor is HTTPS/TLS to the Pages host (mirrors add-repo.sh's
-    own conf comment). *base* is woven into the channel-switching subsection, whose
-    two client scripts are both served from it (issue #2148).
-    """
-    return (
-        "<h2>Trust &amp; channel model</h2>"
-        "<h3>One tagged artifact, several catalogues</h3>"
-        '<p class="blurb">Stable, Testing, and Edge may intentionally serve the exact same canonical '
-        "package &mdash; same name, same version, same bytes &mdash; because a single tagged release "
-        "always fans out to every channel its tag kind reaches: a Stable final lands in Stable, Testing, "
-        "and Edge; a Testing prerelease lands in Testing and Edge; an Edge patch-zero prerelease lands "
-        "in Edge alone. Edge's own latest simply moves ahead numerically once a new release family "
-        "opens there &mdash; the fan-out itself never depends on what else has been published. This is "
-        "catalogue placement, not separate builds, and not a repository-priority policy.</p>"
-        "<h3>Trust model</h3>"
-        '<p class="blurb">Every repository conf sets <code>signature_type: none</code> &mdash; there is '
-        "no catalogue-signing key. The trust anchor is HTTPS/TLS to this Pages host.</p>"
-        "<h3>Single-repository subscription</h3>"
-        '<p class="blurb">A box subscribes to exactly one channel repository at a time. The four '
-        "channel repos share one equal priority (<code>100</code>), above the base Netgate "
-        "<code>pfSense</code> repo (priority <code>0</code>); live <code>pkg</code> resolution at equal "
-        "priority ignores version ordering between repos, and upgrades of an installed package never "
-        "leave its origin repository &mdash; so enabling a second project channel repo is not how "
-        "channel selection works. This is safe because each channel catalogue strictly contains "
-        "everything its slower channels carry: Edge holds every package Testing does, and Testing holds "
-        "every package Stable does, so a Stable final always lands in Stable, Testing, and Edge; a "
-        "Testing prerelease always lands in Testing and Edge; an Edge patch-zero prerelease lands in "
-        "Edge alone. One subscription therefore already has every package a box could need, because "
-        "<code>pkg</code> orders versions numerically, component-wise &mdash; never by release date: if "
-        "Edge holds <code>4.0.0.a2</code> and a later <code>3.2.16.a3</code> or <code>3.2.17</code> is "
-        "published into it, the latest in Edge stays <code>4.0.0.a2</code>, and the older build stays in "
-        "the Edge catalogue as in-repo rollback material. Switching forward (to a higher version) is "
-        "replacing the enabled conf with the faster channel's and upgrading normally. Rolling back is an "
-        "explicit repository-qualified downgrade/reinstall &mdash; available within the same repo on a "
-        "faster channel (containment keeps the older build around), or after switching the conf to a "
-        "slower channel. Removing a channel means removing its conf. Identical name/version across "
-        "catalogues remains valid only because the bytes and provenance are identical.</p>"
-        "<h3>Retention</h3>"
-        '<p class="blurb">Each <code>&lt;channel&gt;/&lt;varver&gt;/</code> catalogue retains the newest '
-        "5 canonical packages; a faster channel additionally retains any canonical package one of "
-        "its slower channels still retains, so containment (Edge &supe; Testing &supe; Stable) "
-        "survives retention, not only fan-out. Dependency packages are not pruned.</p>"
-        "<h3>Netgate identity</h3>"
-        '<p class="blurb">The canonical package shares its name with the pfBlockerNG package Netgate '
-        "ships in its own <code>pfSense</code> repo &mdash; provenance differs. Every build published "
-        "here carries <code>commit</code>/<code>created</code> annotations linking it to the source "
-        "commit that produced it; repository priority decides which build <code>pkg</code> selects when "
-        "both are enabled.</p>"
-        "<h3>Channel switching</h3>"
-        '<p class="blurb">Switching channels is two steps, and the second one is not optional. '
-        f"<code>{_esc(base)}/add-repo.sh</code> run with <code>--channel &lt;ch&gt;</code> moves the "
-        "<em>subscription</em>: it writes that channel's conf and retires every other project conf. "
-        "It does not move the <em>installed package</em> &mdash; <code>pkg</code> keeps an installed "
-        "package pinned to its origin repository and offers no upgrade across repositories, so a box "
-        "that only gains a conf silently keeps running its old build. "
-        f"<code>{_esc(base)}/migrate-channel.sh</code> run with the same "
-        "<code>--channel &lt;ch&gt;</code> performs the repository-qualified operation that actually "
-        "moves it, replaces a legacy suffixed identity "
-        "(<code>-devel</code>, <code>-nightly</code>) with the canonical package, and verifies the "
-        "result before reporting success. There is no in-UI channel switcher by design.</p>"
-        f"{_copyable(_esc(_channel_switch_commands(base)))}"
     )
 
 
@@ -943,11 +863,8 @@ def render_page(
         "<header><h1>pfBlockerNG</h1>"
         "<p>Self-hosted FreeBSD <code>pkg</code> repository for pfSense&nbsp;CE &amp; pfSense&nbsp;Plus.</p></header>"
         "<p>Install pfBlockerNG straight from this repository: pick a channel below and run its "
-        f"commands on your firewall (as <code>root</code>). Every channel installs the same canonical "
-        f"package (<code>{CANONICAL_EMITTED_IDENTITY}</code>) from its own repository &mdash; see "
-        "Trust &amp; channel model below for how the four relate.</p>"
+        "commands on your firewall (as <code>root</code>).</p>"
         f'<h2>Channels</h2><div class="cards">{cards}</div>'
-        f"{_trust_section_html(base)}"
         f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
         f"{eol_block}"
         "<h2>Repository files</h2>"

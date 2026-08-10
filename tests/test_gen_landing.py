@@ -1044,8 +1044,8 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert f"sh -s -- --base-url {base} --channel testing\npkg install {_CANON}</pre>" in page
     assert f"sh -s -- --base-url {base} --channel edge\npkg install {_CANON}</pre>" in page
     assert f"sh -s -- --base-url {base} --channel nightly\npkg install {_CANON}</pre>" in page
-    # One bootstrap per card, plus the channel-switch snippet's first step (issue #2148).
-    assert page.count(f"fetch -qo - {base}/add-repo.sh") == 5
+    # One bootstrap per card.
+    assert page.count(f"fetch -qo - {base}/add-repo.sh") == 4
     # The manual conf came from the injected conf function — one per channel.
     for ch in gl.CH_ORDER:
         assert f"{ch}-conf-snippet" in page
@@ -1098,10 +1098,9 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     assert f"\npkg install {_CANON}</pre>" in page
     assert f"{btn}<pre>stable-conf-snippet</pre>" in page
 
-    # Exactly the nine command snippets are copyable — a unified command + a manual conf in
-    # each of the four channel cards, plus the two-step channel switch (issue #2148). Inline
-    # <code> is not copyable.
-    assert page.count('<button class="copy"') == 9
+    # Exactly the eight card snippets are copyable — a unified command + a manual conf in
+    # each of the four channel cards. Inline <code> is not copyable.
+    assert page.count('<button class="copy"') == 8
 
     # The styling + the behaviour that make the button work are shipped inline (static page).
     assert ".copy{" in page and ".snip{position:relative}" in page
@@ -1129,10 +1128,9 @@ def test_render_page_empty_channel_shows_not_yet_published_for_every_card() -> N
     assert page.count("not yet published") == 4
 
 
-def test_render_page_shared_version_across_stable_testing_edge_and_trust_prose() -> None:
+def test_render_page_shared_version_across_stable_testing_edge() -> None:
     """Row 4: the SAME canonical pkg name+version fixture present in stable/testing/edge
-    means all three cards show the same version, and the trust section's shared-bytes
-    prose is present."""
+    means all three cards show the same version."""
     ver = "4.0.0"
     pkgs = [
         _pkg("stable", _CANON, ver, "FreeBSD:15:*", f"stable/ce-2.8/x-{ver}.pkg"),
@@ -1143,9 +1141,6 @@ def test_render_page_shared_version_across_stable_testing_edge_and_trust_prose()
 
     # Same version string surfaces on stable, testing, AND edge's card (3 occurrences).
     assert page.count(f'<p class="ver">Latest <code>{ver}</code></p>') == 3
-    # The shared-bytes trust prose.
-    assert "same name, same version, same bytes" in page
-    assert "fans out to every channel" in page
 
 
 def test_render_page_edge_ahead_of_testing_and_stable_shows_divergence() -> None:
@@ -1163,83 +1158,15 @@ def test_render_page_edge_ahead_of_testing_and_stable_shows_divergence() -> None
     assert '<p class="ver">Latest <code>4.1.0.a1</code></p>' in page
 
 
-def test_render_page_trust_section_present_and_accurate() -> None:
-    """The trust/provenance section documents signature_type: none, priority
-    equality, the single-repository-subscription / strict-containment /
-    numeric-ordering model, repository-qualified downgrades, and containment-aware
-    retention — with NO catalogue-signing claim anywhere outside the explicit 'no
-    signing key' sentence (a deliberately failable assertion, not a vacuous one), and
-    NO retired equal-priority-version-arbitration claim."""
+def test_render_page_omits_internal_trust_and_channel_model() -> None:
+    """Development and implementation details do not leak into the user-facing page."""
     page = gl.render_page("https://x/pkg", [], _stub_conf)
 
-    assert "signature_type: none" in page
-    # The ONE place 'signing' may appear: the explicit no-signing-key sentence.
-    assert "no catalogue-signing key" in page
-    # Allowlist, not substring-count: strip the two legitimate framings, then NO
-    # sign-rooted wording may remain — a rephrased signing claim anywhere fails here.
-    residue = page.lower().replace("signature_type: none", "").replace("no catalogue-signing key", "")
-    assert "signing" not in residue
-    assert "signed" not in residue
-    assert "signature" not in residue
-    # Priority-equality prose (still true — priority decides project-vs-Netgate, ADR-17).
-    assert "equal priority" in page
-    assert "<code>100</code>" in page
-    assert "Single-repository subscription" in page
-    assert "subscribes to exactly one channel repository" in page
-    # The retired multi-repo-version-arbitration claim must be gone — reintroducing it
-    # fails this tripwire.
-    assert "selects the highest compatible version across" not in page
-    # Strict-containment prose + numeric-ordering statement, pinned via the owner's own
-    # worked example (4.0.0.a2 outranking a later-published 3.2.x).
-    assert "strictly contains everything its slower channels carry" in page
-    assert "orders versions numerically, component-wise" in page
-    assert "<code>4.0.0.a2</code>" in page
-    # Rollback is in-repo on a faster channel; the repository-qualified downgrade
-    # string is retained verbatim.
-    assert "repository-qualified downgrade" in page
-    assert "containment keeps the older build around" in page
-    # The retired conditional-fan-out phrasing must be gone; the unconditional fan-out
-    # is stated as an unqualified "always".
-    assert "until a later release family opens a new Edge" not in page
-    assert "always fans out to every channel" in page
-    # Retention count — pinned to the publisher's constant so the page cannot silently
-    # drift from the real retention policy. Also pins the containment-survives-
-    # retention wording (issue #2146 R1 review, PR #2253): a faster channel's own
-    # keep-count churn must never be described as unconditional once it can protect a
-    # slower channel's still-retained version.
-    import catalogue_assembly
-
-    assert f"retains the newest {catalogue_assembly.DEFAULT_RETENTION_KEEP}" in page
-    assert "additionally retains any canonical package one of its slower channels still retains" in page
-    assert "Netgate" in page
-    assert "commit" in page.lower() and "created" in page.lower()
-
-
-def test_render_page_channel_switching_documents_the_migration_tooling() -> None:
-    """Channel switching is a TWO-step client operation, and the page must say so.
-
-    Before issue #2148 landed, the section deferred: "client tooling for it is tracked
-    separately (issue #2148)". That deferral is now false — `add-repo.sh --channel <ch>`
-    moves the subscription and `migrate-channel.sh --channel <ch>` moves the installed
-    package onto it. Adding the repository alone is the documented silent no-op (`pkg`
-    keeps an installed package pinned to its origin repository), so a page that names
-    only the first step would actively mislead.
-    """
-    page = gl.render_page("https://x/pkg", [], _stub_conf)
-
-    assert "Channel switching" in page
-    # The deferral is retired — reintroducing it fails here.
-    assert "tracked separately" not in page
-    # Both steps, in order, both fetchable from this site.
-    switch_step_1 = "https://x/pkg/add-repo.sh"
-    switch_step_2 = "https://x/pkg/migrate-channel.sh"
-    assert switch_step_1 in page
-    assert switch_step_2 in page
-    assert page.rindex(switch_step_1) < page.rindex(switch_step_2)
-    # The mandatory flag, rendered escaped in the prose and literal in the snippet.
-    assert "--channel &lt;ch&gt;" in page
-    # The reason the second step exists at all — adding a conf moves nothing.
-    assert "origin repository" in page
+    assert "Every channel installs the same canonical package" not in page
+    assert "Trust &amp; channel model" not in page
+    assert "signature_type: none" not in page
+    assert "Single-repository subscription" not in page
+    assert "Channel switching" not in page
 
 
 def test_render_autoindex_lists_dirs_files_and_parent() -> None:
