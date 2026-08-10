@@ -536,7 +536,7 @@ End
 Describe 'resolve-legs.sh digest — LAN registry routing (issue #2246)'
     # oras is stubbed on PATH; it records every invocation's full argv so an
     # example can assert which flags reached which subcommand (mirrors the
-    # stub in tests/shell/oras_refresh_spec.sh).
+    # stub in this file's digest-routing examples).
 
     setup() {
         scrub_git_env

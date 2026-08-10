@@ -85,8 +85,8 @@ _RL_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 pfb_scrub_git_env
 
 # ── LAN registry helpers (issue #2246) ────────────────────────────────── #
-# shellcheck source=scripts/lib/oras-refresh.sh
-. "${_RL_DIR}/lib/oras-refresh.sh"
+# shellcheck source=scripts/lib/lan-registry.sh
+. "${_RL_DIR}/lib/lan-registry.sh"
 
 # PFB_ORAS_FLAGS: set once, mirroring smoke-on-box.sh's pattern, so both
 # _rl_digest and _rl_pull pick up --plain-http from the SAME variable rather
@@ -311,10 +311,10 @@ _rl_digest() {
         printf '%s\n' "${SMOKE_GHCR_TOKEN:-}" | oras login ghcr.io \
             --username "${SMOKE_GHCR_USER:-}" --password-stdin
     fi
-    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see oras-refresh.sh
+    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
     DIGEST="$(oras resolve ${PFB_ORAS_FLAGS:-} "$_ref" 2>/dev/null || true)"
     if [ -z "$DIGEST" ]; then
-        # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see oras-refresh.sh
+        # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
         DIGEST="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_ref" --descriptor | jq -r '.digest')"
     fi
     case "$DIGEST" in
@@ -341,7 +341,7 @@ _rl_pull() {
     mkdir -p "$_p_outdir"
     # ${_p_ref%@*} strips any existing @digest suffix before pinning the new
     # one -- same semantics as the inline steps this replaces.
-    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var, see oras-refresh.sh
+    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
     ( cd "$_p_outdir" && oras pull ${PFB_ORAS_FLAGS:-} "${_p_ref%@*}@${_p_digest}" )
     ls -l "$_p_outdir" >&2
 }

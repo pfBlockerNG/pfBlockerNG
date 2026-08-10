@@ -19,9 +19,13 @@ GitHub Actions. These cost real time to relearn; CI workflow
   live in `ghcr.io/pfblockerng/ci-runner-vm`, which leg runs inside (issue #2223).
   Box need credentials for that private image (`/root/.docker/config.json`).
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
-- pfSense CE qcow2 under `/root/images/pfsense/` (auto-pulled by `smoke-on-box.sh` if absent
-  or stale vs GHCR digest; set `SMOKE_GHCR_TOKEN` to authenticate pull).
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by `smoke-on-box.sh`).
+
+Image storage is not a box prerequisite. Each `docker run --rm` workload pulls its selected
+pfSense image (and civm image unless `--no-two-vm`) into container-local
+`/root/images/{pfsense,civm}`; Docker removes that writable layer when the workload exits.
+Set `PFB_LAN_REGISTRY` on the box to use the durable LAN zot cache; without it, pulls use
+GHCR and `SMOKE_GHCR_TOKEN` may authenticate the pull.
 
 ## Running (new: via lease + on-box execution)
 
@@ -111,10 +115,11 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
      then `git fetch` + `git checkout FETCH_HEAD`. Ref resolved HERE; container
      runs already-resolved tree and never fetches.
    - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.
-   - `docker run` leg inside `ci-runner-vm`, with `--device /dev/kvm` and
-     `--sysctl net.ipv4.ip_unprivileged_port_start=53`. Inside it, `oras` digest-compares
-     then pulls pfSense + civm images into `/root/images/{pfsense,civm}` (shared store
-     bind-mounted from host) if stale.
+   - `docker run --rm` leg inside `ci-runner-vm`, with `--device /dev/kvm` and
+     `--sysctl net.ipv4.ip_unprivileged_port_start=53`. Inside it, `oras` pulls pfSense
+     civm images directly into disposable `/root/images/{pfsense,civm}` directories.
+     The LAN zot registry remains the durable fleet cache when `PFB_LAN_REGISTRY` is set;
+     no qcow2 store is shared between boxes.
    - `pkill -9 -f qemu-system-x86_64`. Port floor set by caller's `--sysctl`
      flag, not in-script: `smoke-on-box.sh` now treats it as precondition and refuses
      to run when above 53, naming missing flag.
@@ -144,8 +149,8 @@ civm OCI image at `ghcr.io/pfblockerng/civm:v1` (~600 MB). qcow2 named
 `pfSense-CE-v1.qcow2` and its OCI annotation says "pfSense CE" — **that label is templated
 lie**; image is Debian client, not pfSense.
 
-Each `SMOKE_*_IMAGE_DIR` view must hold **exactly one** `*.qcow2`; the shared stores may
-hold several ref-specific images.
+Each `SMOKE_*_IMAGE_DIR` must hold **exactly one** `*.qcow2` after its direct pull. The
+directories disappear with the container after the workload exits.
 
 ## Building the `.pkg` off-FreeBSD (CI reference)
 

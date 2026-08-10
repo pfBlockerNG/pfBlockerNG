@@ -41,11 +41,13 @@
 #                        script at a fixture repo; never set on a box.
 #   PFB_ONBOX_PORTS_DIR  override the ports checkout (default /root/FreeBSD-ports); same
 #                        purpose, never set on a box.
+#   PFB_ONBOX_IMAGES_DIR override the image root (default /root/images); test-only seam,
+#                        never set on a box. The container writable layer owns this root.
 #
 # RESPONSIBILITIES (in order):
 #   1. (the caller resolved the ref before invoking this script)
 #   2. Ensure /root/FreeBSD-ports is current on pfblockerng/use-github.
-#   3. Refresh /root/images/{pfsense,civm} via oras (digest-compare; pull when absent).
+#   3. Pull /root/images/{pfsense,civm} directly via oras into this workload's filesystem.
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
 #   5. Build .pkg via build-leg.sh → SMOKE_PKG.
 #   6. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
@@ -81,13 +83,13 @@ pfb_scrub_git_env
 # Marker → (paths, timeout, browser?) mapping for the ADR-14 UI tiers.
 # shellcheck source=scripts/lib/smoke-tier.sh
 . "${REPO_ROOT}/scripts/lib/smoke-tier.sh"
-# Shared-image-store-safe refresh (issue #2218): staging + rename publish, per-ref digests.
-# shellcheck source=scripts/lib/oras-refresh.sh
-. "${REPO_ROOT}/scripts/lib/oras-refresh.sh"
+# LAN registry ref rewrite and mode detection (issue #2247).
+# shellcheck source=scripts/lib/lan-registry.sh
+. "${REPO_ROOT}/scripts/lib/lan-registry.sh"
 # Seam (test-only, mirroring PFB_ONBOX_REPO_ROOT): lets the spec reach the port-floor
 # precondition without writing to /root. Never set on a box.
 PORTS_DIR="${PFB_ONBOX_PORTS_DIR:-/root/FreeBSD-ports}"
-IMAGES_DIR="/root/images"
+IMAGES_DIR="${PFB_ONBOX_IMAGES_DIR:-/root/images}"
 
 PFSENSE_REF="${SMOKE_PFSENSE_REF:-ghcr.io/pfblockerng/pfsense-ce:2.8}"
 CIVM_REF="${CIVM_REF:-ghcr.io/pfblockerng/civm:v1}"
@@ -99,11 +101,8 @@ CIVM_REF="${CIVM_REF:-ghcr.io/pfblockerng/civm:v1}"
 PFSENSE_REF="$(pfb_rewrite_lan_registry "$PFSENSE_REF")"
 CIVM_REF="$(pfb_rewrite_lan_registry "$CIVM_REF")"
 
-# oras-refresh.sh's four oras invocations consume this (default empty -> unquoted
-# expansion is zero words, i.e. no flag); set once here rather than repeating the
-# flag at each call site. Exported: SC1091 is disabled repo-wide (.shellcheckrc),
-# so shellcheck never follows the `.` of oras-refresh.sh from this file and reads
-# this var as dead without it.
+# Direct oras pulls consume this (default empty -> unquoted expansion is zero words,
+# i.e. no flag); set once here rather than repeating the flag at each call site.
 PFB_ORAS_FLAGS=""
 if pfb_lan_registry_active; then
     PFB_ORAS_FLAGS="--plain-http"
@@ -189,34 +188,43 @@ sh scripts/sparse-clone-ports.sh \
     "$PORTS_DIR" \
     "$_CHANNEL" "$_php_ver" "$_py_flavor" >&2
 
-# ── Step 3: oras images (refresh when stale; pull when absent) ─────────────── #
+# ── Step 3: oras images (direct pull into this workload) ───────────────────── #
 _oras_login_done=0
-# issue #2247: the LAN registry is anonymous read-only -- when it is active, leave
-# oras-refresh.sh's own no-op pfb_oras_login stub in effect (sourced above) rather
-# than defining the real token-based ghcr.io login here.
-if ! pfb_lan_registry_active; then
-    pfb_oras_login() {
-        if [ "$_oras_login_done" -eq 0 ] && [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
-            printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
-                oras login ghcr.io --username pfBlockerNG --password-stdin >/dev/null 2>&1 \
-                || true
-            _oras_login_done=1
-        fi
-    }
-fi
+# issue #2247: the LAN registry is anonymous read-only, so skip token-based login there.
+_oras_login() {
+    if [ "$_oras_login_done" -eq 0 ] && [ -n "${SMOKE_GHCR_TOKEN:-}" ]; then
+        printf '%s\n' "$SMOKE_GHCR_TOKEN" | \
+            oras login ghcr.io --username pfBlockerNG --password-stdin >/dev/null 2>&1 \
+            || true
+        _oras_login_done=1
+    fi
+}
 
-pfb_oras_refresh "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "pfSense"
+_oras_pull() {
+    _op_ref="$1"
+    _op_dir="$2"
+    _op_tag="$3"
+    mkdir -p "$_op_dir"
+    if ! pfb_lan_registry_active; then
+        case "$_op_ref" in
+            ghcr.io/*) _oras_login ;;
+        esac
+    fi
+    printf 'smoke-on-box: pulling %s image (%s) -> %s\n' \
+        "$_op_tag" "$_op_ref" "$_op_dir" >&2
+    # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
+    ( cd "$_op_dir" && oras pull ${PFB_ORAS_FLAGS:-} "$_op_ref" ) >&2
+}
+
+_oras_pull "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "pfSense"
 if [ "$_NO_TWO_VM" -eq 0 ]; then
-    pfb_oras_refresh "$CIVM_REF" "${IMAGES_DIR}/civm" "civm"
+    _oras_pull "$CIVM_REF" "${IMAGES_DIR}/civm" "civm"
 fi
 
-_IMAGE_VIEW_ROOT="${REPO_ROOT}/out/smoke-images"
-SMOKE_IMAGE_DIR="${_IMAGE_VIEW_ROOT}/pfsense"
-pfb_oras_ref_view "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "$SMOKE_IMAGE_DIR"
+SMOKE_IMAGE_DIR="${IMAGES_DIR}/pfsense"
 export SMOKE_IMAGE_DIR
 if [ "$_NO_TWO_VM" -eq 0 ]; then
-    SMOKE_CLIENT_IMAGE_DIR="${_IMAGE_VIEW_ROOT}/civm"
-    pfb_oras_ref_view "$CIVM_REF" "${IMAGES_DIR}/civm" "$SMOKE_CLIENT_IMAGE_DIR"
+    SMOKE_CLIENT_IMAGE_DIR="${IMAGES_DIR}/civm"
     export SMOKE_CLIENT_IMAGE_DIR
     export NO_TWO_VM=0
 else
