@@ -1,8 +1,7 @@
 """Self-hosted fleet pulls route through the LAN zot registry (issue #2230).
 
-Deliberately stdlib-only, mirroring tests/test_issue2231_workflow_hygiene.py: the
-CI pytest leg runs inside ci-runner, which bakes no PyYAML. This is a stray-ref
-guard actionlint cannot express — a self-hosted container image naming a literal
+Uses a narrow text parser because this is a stray-ref guard actionlint cannot
+express — a self-hosted container image naming a literal
 `ghcr.io/...` ref is schema-legal but bypasses the LAN registry routing,
 silently reverting every pull on that job to the public path.
 

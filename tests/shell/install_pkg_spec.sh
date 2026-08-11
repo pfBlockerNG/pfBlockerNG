@@ -18,7 +18,7 @@ Describe 'install-pkg.sh'
 
   setup() {
     scrub_git_env
-    unset SMOKE_DEP_PKGS FAIL_PKG_ADD_MATCH
+    unset SMOKE_DEP_PKGS FAIL_PKG_ADD_MATCH EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/instpkgspec.XXXXXX")"
     FAKE_BIN="${WORK}/bin"
     mkdir -p "$FAKE_BIN"
@@ -42,6 +42,11 @@ Describe 'install-pkg.sh'
 #!/bin/sh
 for _a in "$@"; do :; done
 printf '%s\n' "$_a" >> "$SSH_LOG"
+if [ "${EXEC_REMOTE_PKG_CONTEXT:-0}" -eq 1 ]; then
+    case "$_a" in
+        *PFB_PKG_CONTEXT*) eval "/bin/sh -c $_a"; exit $? ;;
+    esac
+fi
 case "$_a" in
     *unbound-control*) exit 0 ;;
 esac
@@ -67,6 +72,21 @@ esac
 exit 0
 SSHEOF
     chmod +x "${FAKE_BIN}/ssh"
+
+    cat > "${FAKE_BIN}/pkg" <<'PKGEOF'
+#!/bin/sh
+case "$1" in
+    config) printf '%s\n' 'FreeBSD:15:amd64' ;;
+    add) printf 'Installing %s...\n' "${2##*/}" ;;
+esac
+PKGEOF
+    chmod +x "${FAKE_BIN}/pkg"
+
+    cat > "${FAKE_BIN}/ps" <<'PSEOF'
+#!/bin/sh
+[ -z "${PFB_FAKE_PS_OUTPUT:-}" ] || printf '%s\n' "$PFB_FAKE_PS_OUTPUT"
+PSEOF
+    chmod +x "${FAKE_BIN}/ps"
 
     # Fake scp: records its SRC (second-to-last positional arg; last is
     # "$SSH_TARGET:$REMOTE") to $SCP_LOG, one per line.
@@ -112,6 +132,26 @@ SCPEOF
     The line 1 of contents of file "$SSH_LOG" should include 'pkg-static'
     The line 1 of contents of file "$SSH_LOG" should not include 'grep -E'
     The line 1 of contents of file "$SSH_LOG" should include 'pkg add'
+  End
+
+  It 'terminates an empty boot-process list before pkg output'
+    EXEC_REMOTE_PKG_CONTEXT=1
+    export EXEC_REMOTE_PKG_CONTEXT
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should include 'PFB_PKG_CONTEXT boot_pkg_processes=none'
+    The stdout should include 'none
+Installing pfBlockerNG-devel.pkg...'
+  End
+
+  It 'logs a matching boot process without an empty-list sentinel'
+    EXEC_REMOTE_PKG_CONTEXT=1
+    PFB_FAKE_PS_OUTPUT='42 sh /bin/sh /etc/rc.update_pkg_metadata now'
+    export EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should include 'PFB_PKG_CONTEXT boot_pkg_processes=42 sh /bin/sh /etc/rc.update_pkg_metadata now'
+    The stdout should not include 'boot_pkg_processes=none'
   End
 
   It 'two SMOKE_DEP_PKGS entries: deps scp'"'"'d + pkg add'"'"'d before the branch pkg, in order'

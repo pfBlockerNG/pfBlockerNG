@@ -17,6 +17,7 @@ Describe 'smoke-on-box.sh (issue #2223)'
 
   setup() {
     scrub_git_env
+    unset ORAS_DESCRIPTOR_DIGEST SMOKE_PFSENSE_REF SMOKE_PFSENSE_VERSION
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/smokeonbox.XXXXXX")"
     FAKE_ROOT="${WORK}/repo"
     mkdir -p "${FAKE_ROOT}/scripts/lib"
@@ -45,7 +46,7 @@ case "$*" in
         ;;
     *manifest\ fetch*)
         case "$*" in
-            *--descriptor*) printf '%s\n' '{"digest":"sha256:manifest"}' ;;
+            *--descriptor*) printf '{"digest":"%s"}\n' "${ORAS_DESCRIPTOR_DIGEST:-sha256:manifest}" ;;
             *) printf '%s\n' '{"annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}' ;;
         esac
         exit 0
@@ -248,6 +249,7 @@ STUBEOF
 #!/bin/sh
 printf 'server=%s count=%s\n' "$SMOKE_IMAGE_DIR" \
     "$(find "$SMOKE_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
+printf 'expected_version=%s\n' "$SMOKE_PFSENSE_VERSION"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
         "${FAKE_ROOT}/scripts/run-smoke.sh"
@@ -260,8 +262,9 @@ STUBEOF
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
     SMOKE_GHCR_TOKEN=test-token
+    SMOKE_PFSENSE_REF=ghcr.io/pfblockerng/pfsense-ce@sha256:manifest
     PFB_ONBOX_IMAGES_DIR="${FAKE_ROOT}/out/smoke-images"
-    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN PFB_ONBOX_IMAGES_DIR
+    export SMOKE_SSH_KEY SMOKE_GHCR_TOKEN SMOKE_PFSENSE_REF PFB_ONBOX_IMAGES_DIR
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
 exit 0
@@ -272,8 +275,9 @@ STUBEOF
     The status should equal 0
     The stderr should include 'running smoke'
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
+    The stdout should include 'expected_version=?'
     The contents of file "$ORAS_ARGV_LOG" should include 'login ghcr.io --username pfBlockerNG --password-stdin'
-    The contents of file "$ORAS_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce:2.8'
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull ghcr.io/pfblockerng/pfsense-ce@sha256:manifest'
     The contents of file "$ORAS_ARGV_LOG" should not include '--plain-http'
     The contents of file "$ORAS_ARGV_LOG" should not include 'civm'
   End
@@ -287,6 +291,17 @@ STUBEOF
     The status should equal 37
     The stderr should include 'pulling pfSense image'
     The stderr should not include 'building .pkg'
+  End
+
+  It 'rejects a descriptor that disagrees with the resolved digest before pulling'
+    printf '0\n' > "${WORK}/port-floor"
+    ORAS_DESCRIPTOR_DIGEST=sha256:different
+    export ORAS_DESCRIPTOR_DIGEST
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 1
+    The stderr should include 'descriptor digest sha256:different disagrees with resolved digest sha256:manifest'
+    The contents of file "$ORAS_ARGV_LOG" should not include 'pull ghcr.io/pfblockerng/pfsense-ce'
   End
 
   It 'clears an invalid existing venv before recreating it'

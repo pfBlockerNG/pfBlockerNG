@@ -1,9 +1,7 @@
 """Workflow-file hygiene gates (issue #2231).
 
-Deliberately stdlib-only: the CI pytest leg runs inside ci-runner, which bakes
-no PyYAML, and the test.yml drift gate (test_benchmarks_ci_deps.py) bans any
-`pip install` there. For WORKFLOW files, duplicate-key/schema/expression
-validation is actionlint's job (the `actionlint` job in test.yml; #2232).
+For WORKFLOW files, duplicate-key/schema/expression validation is actionlint's
+job (the `actionlint` job in test.yml; #2232).
 actionlint speaks only the workflow schema, so `.github/actions/*/action.yml`
 has no duplicate-key gate — tolerable because a malformed action manifest
 fails its referencing job LOUDLY at use, unlike a workflow file, which GitHub
