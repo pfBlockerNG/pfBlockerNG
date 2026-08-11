@@ -71,7 +71,7 @@
       "py_flavor": "py311",
       "variant": "CE",
       "status": "beta",
-      "ci": false,
+      "ci": true,
       "extra_pkgs": [
         "textproc/py-charset-normalizer"
       ],
