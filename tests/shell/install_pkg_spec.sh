@@ -144,13 +144,27 @@ SCPEOF
 Installing pfBlockerNG-devel.pkg...'
   End
 
-  It 'logs a matching boot process without an empty-list sentinel'
+  It 'logs every boot pkg process class and excludes observer decoys'
     EXEC_REMOTE_PKG_CONTEXT=1
-    PFB_FAKE_PS_OUTPUT='42 sh /bin/sh /etc/rc.update_pkg_metadata now'
+    PFB_FAKE_PS_OUTPUT='42 sh /bin/sh /etc/rc.update_pkg_metadata now
+43 sh /bin/sh /usr/local/sbin/pfSense-upgrade -uf
+44 sh /bin/sh /usr/local/libexec/pfSense-upgrade -uf
+45 lockf /usr/bin/lockf -s -t 5 /tmp/pfSense-upgrade.lock /usr/local/libexec/pfSense-upgrade -uf
+46 pkg pkg add /tmp/package.pkg
+47 pkg-static /usr/local/sbin/pkg-static rquery %v pkg
+98 sh /bin/sh -c printf /bin/sh /etc/rc.update_pkg_metadata now
+99 awk awk /bin/sh /usr/local/sbin/pfSense-upgrade'
     export EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT
     When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
     The status should be success
     The stdout should include 'PFB_PKG_CONTEXT boot_pkg_processes=42 sh /bin/sh /etc/rc.update_pkg_metadata now'
+    The stdout should include '43 sh /bin/sh /usr/local/sbin/pfSense-upgrade -uf'
+    The stdout should include '44 sh /bin/sh /usr/local/libexec/pfSense-upgrade -uf'
+    The stdout should include '45 lockf /usr/bin/lockf -s -t 5 /tmp/pfSense-upgrade.lock'
+    The stdout should include '46 pkg pkg add /tmp/package.pkg'
+    The stdout should include '47 pkg-static /usr/local/sbin/pkg-static rquery %v pkg'
+    The stdout should not include '98 sh /bin/sh -c'
+    The stdout should not include '99 awk awk'
     The stdout should not include 'boot_pkg_processes=none'
   End
 
