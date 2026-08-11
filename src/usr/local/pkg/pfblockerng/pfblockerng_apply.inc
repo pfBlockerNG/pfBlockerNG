@@ -4755,8 +4755,7 @@ function sync_package_pfblockerng($cron='') {
 		// Remove any IPs in Alerts unlock feature
 		unlink_if_exists("{$pfb['ip_unlock']}");
 
-		require_once('filter.inc');
-		filter_configure_sync();
+		mwexec('/etc/rc.filter_configure_sync');
 
 		// Stop/Restart pfb_filter service for new rule changes
 		if ($pfb['enable'] !== PfbToggle::On) {
