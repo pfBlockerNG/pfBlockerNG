@@ -488,6 +488,14 @@ def test_baked_pins_match_their_own_sources_of_truth() -> None:
     )
 
 
+def test_base_image_bakes_the_workflow_yaml_parser() -> None:
+    requirements = _read(DOCKER_DIR / "ci-requirements.txt")
+    assert re.search(r"^PyYAML==6\.0\.3$", requirements, re.MULTILINE), (
+        "ci-runner must bake the pinned PyYAML imported by the smoke identity tests"
+    )
+    assert "import yaml" in _read(ROOT / "tests/test_smoke_boot_identity.py")
+
+
 def test_image_version_is_an_integer_series() -> None:
     assert re.fullmatch(r"\d+", _read(VERSION_FILE).strip()), (
         "the image tag series is a bare integer, bumped on every .github/docker change"
