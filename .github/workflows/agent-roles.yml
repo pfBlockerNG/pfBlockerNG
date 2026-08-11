@@ -29,7 +29,7 @@ jobs:
     name: Agent roles (role registry vs vendor role definitions)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

@@ -20,9 +20,11 @@ pytest-cov==7.1.0
 # Import-time deps that decide whether tests RUN or importorskip-skip:
 # dnspython is the shard-splitter's end-to-end correctness gate (issue #861) and is
 # pinned to the same version tests/smoke/requirements.txt installs; charset-normalizer
-# lets the issue #1797 feed-encoding converter test execute.
+# lets the issue #1797 feed-encoding converter test execute; PyYAML parses workflow
+# structure for the smoke identity wiring regression.
 dnspython==2.8.0
 charset-normalizer==3.4.9
+PyYAML==6.0.3
 
 # The manual-only `benchmarks` job (test.yml, workflow_dispatch + run_benchmarks) installs
 # benchmarks/requirements.txt. Pinned there, restated here so a dispatched benchmark run

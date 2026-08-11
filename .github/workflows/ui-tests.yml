@@ -233,7 +233,7 @@ jobs:
     name: Resolve the (tier x version) matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -367,7 +367,7 @@ jobs:
     continue-on-error: ${{ matrix.release_blocking == 'false' }}
     runs-on: [self-hosted, Linux, X64]
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:6
+      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -749,7 +749,7 @@ jobs:
     name: All UI legs passed (AND gate)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
