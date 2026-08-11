@@ -22,7 +22,7 @@ counts as PHP-staging, because it can sweep one in.
 
 Text-parsed rather than PyYAML, following the house idiom in
 tests/test_ci_tool_pins.py and tests/test_ci_checkout_persist_credentials.py:
-test.yml's "Install test dependencies" step installs no YAML parser.
+this guard reasons about shell and comments that a YAML object model discards.
 """
 
 import re

@@ -39,7 +39,7 @@ jobs:
     name: Pin inputs and allocate version
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -235,7 +235,7 @@ jobs:
     if: needs.prepare.outputs.outcome == 'build'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -399,7 +399,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -546,7 +546,7 @@ jobs:
     if: needs.prepare.outputs.outcome == 'build' && needs.handoff.result == 'success'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:6
+      image: ghcr.io/pfblockerng/ci-runner:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
