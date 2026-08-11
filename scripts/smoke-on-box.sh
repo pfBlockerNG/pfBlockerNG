@@ -236,9 +236,13 @@ _oras_pull() {
             "$_op_tag" "$_op_descriptor_digest" "$_op_digest" >&2
         exit 1
     }
+    # Annotations live in the manifest body; digest-addressed descriptors may
+    # omit them. Read the body by the exact digest that the pull uses below.
+    # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
+    _op_manifest="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "${_op_ref%@*}@${_op_digest}")"
     printf 'smoke-on-box: %s image identity %s\n' "$_op_tag" \
-        "$(printf '%s\n' "$_op_descriptor" | jq -c \
-            '{digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')" >&2
+        "$(printf '%s\n' "$_op_manifest" | jq -c --arg digest "$_op_digest" \
+            '{digest:$digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')" >&2
     # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
     ( cd "$_op_dir" && oras pull ${PFB_ORAS_FLAGS:-} "${_op_ref%@*}@${_op_digest}" ) >&2
 }

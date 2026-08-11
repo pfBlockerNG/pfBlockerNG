@@ -44,7 +44,10 @@ case "$*" in
         exit 0
         ;;
     *manifest\ fetch*)
-        printf '%s\n' '{"digest":"sha256:manifest","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}'
+        case "$*" in
+            *--descriptor*) printf '%s\n' '{"digest":"sha256:manifest"}' ;;
+            *) printf '%s\n' '{"annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}' ;;
+        esac
         exit 0
         ;;
     *\ pull\ *|pull\ *)
@@ -227,6 +230,7 @@ STUBEOF
     The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/civm:v1@sha256:manifest'
     The contents of file "$ORAS_ARGV_LOG" should include 'resolve --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
     The contents of file "$ORAS_ARGV_LOG" should include 'manifest fetch --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8@sha256:manifest --descriptor'
+    The contents of file "$ORAS_ARGV_LOG" should include 'manifest fetch --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8@sha256:manifest'
     The contents of file "$ORAS_ARGV_LOG" should not include 'login'
   End
 

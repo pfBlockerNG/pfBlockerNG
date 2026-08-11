@@ -333,8 +333,12 @@ _rl_digest() {
             "$DESCRIPTOR_DIGEST" "$DIGEST" "$_ref" >&2
         exit 1
     }
-    printf 'resolved image identity %s\n' "$(printf '%s\n' "$DESCRIPTOR" | jq -c \
-        '{digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')"
+    # Annotations live in the manifest body; some registries omit them from a
+    # digest-addressed descriptor. Fetch the body by the same immutable digest.
+    # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
+    MANIFEST="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "${_ref%@*}@${DIGEST}")"
+    printf 'resolved image identity %s\n' "$(printf '%s\n' "$MANIFEST" | jq -c --arg digest "$DIGEST" \
+        '{digest:$digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')"
     if [ -n "${GITHUB_OUTPUT:-}" ]; then
         {
             printf 'digest=%s\n' "$DIGEST"
