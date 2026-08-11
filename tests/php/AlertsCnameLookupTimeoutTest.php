@@ -4,11 +4,7 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/**
- * Issue #2083: the Alerts addwhitelistdom CNAME lookup is a transient drill | awk
- * pipeline.  The extracted production block is run in a child so the red oracle
- * can safely prove that an unbounded drill leaves the request stuck.
- */
+/** Issue #2083: the Alerts CNAME lookup is bounded and never consumes incomplete data. */
 final class AlertsCnameLookupTimeoutTest extends TestCase
 {
 	private const ALERTS_PHP = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_alerts.php';
@@ -42,6 +38,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$run = $this->runLookup(TRUE, TRUE);
 
 		$this->assertTrue($run['completed'], 'bounded lookup must return after the fixture stalls; child output: ' . $run['child_log']);
+		$this->assertTrue($run['partial_seen'], 'drill must emit partial output before the timeout fires');
 		$this->assertSame([], $run['cname_list'], 'partial CNAME output must be discarded on timeout');
 		$this->assertCount(1, $run['timeout_calls'], 'timeout shim must receive one bounded lookup');
 		$argv = $run['timeout_calls'][0];
@@ -59,6 +56,18 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$this->assertSame([], $run['capture_files'], 'timed-out capture files must be cleaned up');
 	}
 
+	public function testDrillFailureDiscardsPartialOutput(): void
+	{
+		$run = $this->runLookup(FALSE, FALSE, TRUE, FALSE, TRUE);
+
+		$this->assertTrue($run['completed'], 'failed drill must not abort the request; child output: ' . $run['child_log']);
+		$this->assertTrue($run['partial_seen'], 'drill must emit partial output before failing');
+		$this->assertSame([], $run['cname_list'], 'output from a failed drill must be discarded');
+		$this->assertCount(1, $run['timeout_calls']);
+		$this->assertStringContainsString('CNAME lookup FAILED (exit 7)', $run['log']);
+		$this->assertSame([], $run['capture_files']);
+	}
+
 	public function testCaptureFailureIsLoggedWithoutReadingMissingFile(): void
 	{
 		$run = $this->runLookup(FALSE, FALSE, FALSE);
@@ -68,6 +77,18 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$this->assertSame([], $run['timeout_calls'], 'failed outer redirection must not launch the lookup');
 		$this->assertStringContainsString('CNAME lookup FAILED', $run['log']);
 		$this->assertStringNotContainsString('file(', $run['child_log'], 'missing capture file must not emit a PHP warning');
+	}
+
+	public function testMissingCaptureAfterSuccessfulLookupIsLogged(): void
+	{
+		$run = $this->runLookup(FALSE, FALSE, TRUE, TRUE);
+
+		$this->assertTrue($run['completed'], 'missing capture must not abort the request; child output: ' . $run['child_log']);
+		$this->assertSame([], $run['cname_list'], 'missing capture must not produce CNAME data');
+		$this->assertCount(1, $run['timeout_calls'], 'the lookup must succeed before its capture disappears');
+		$this->assertStringContainsString('CNAME lookup FAILED (capture missing)', $run['log']);
+		$this->assertStringNotContainsString('file(', $run['child_log'], 'missing capture file must not emit a PHP warning');
+		$this->assertSame([], $run['capture_files']);
 	}
 
 	public function testLookupUsesDefaultReaperAndRegularFileCapture(): void
@@ -86,12 +107,11 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 	}
 
 	/**
-	 * @return array{completed:bool,cname_list:list<string>,timeout_calls:list<list<string>>,log:string,capture_files:list<string>,child_log:string,drill_path:string}
+	 * @return array{completed:bool,cname_list:list<string>,timeout_calls:list<list<string>>,log:string,capture_files:list<string>,child_log:string,drill_path:string,partial_seen:bool}
 	 */
-	private function runLookup(bool $stall, bool $expectTimeout, bool $captureAvailable = TRUE): array
+	private function runLookup(bool $stall, bool $expectTimeout, bool $captureAvailable = TRUE, bool $removeCapture = FALSE, bool $drillFails = FALSE): array
 	{
 		$marker = "{$this->tmp}/stall marker.log";
-		$drill_log = "{$this->tmp}/drill args.log";
 		$timeout_log = "{$this->tmp}/timeout args.log";
 		$timeout_flag = "{$this->tmp}/timeout fired";
 		$result = "{$this->tmp}/lookup result.json";
@@ -100,6 +120,8 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		$drill = $this->fixture('drill fixture.sh',
 			"printf '%s\\n' --START-- \"\$\$\" >> " . escapeshellarg($marker) . "\n"
 			. "printf '%b\\n' 'partial.example.com.\\t300\\tIN\\tCNAME\\talias.example.com.'\n"
+			. "printf '%s\\n' --PARTIAL-WRITTEN-- >> " . escapeshellarg($marker) . "\n"
+			. ($drillFails ? "exit 7\n" : '')
 			. ($stall ? "while true; do sleep 1; done\n" : '')
 		);
 		$timeout = $this->fixture('timeout fixture.sh',
@@ -107,9 +129,13 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 			. "printf '%s\\n' \"\$@\" >> " . escapeshellarg($timeout_log) . "\n"
 			. "shift 5\n"
 			. "\"\$@\" & child=\$!\n"
-			. "(sleep 1; touch " . escapeshellarg($timeout_flag) . "; kill -TERM \$child 2>/dev/null) & watchdog=\$!\n"
+			. ($stall
+				? "tries=0\nwhile ! grep -q -- --PARTIAL-WRITTEN-- " . escapeshellarg($marker) . "; do\n"
+					. "tries=\$((tries + 1)); [ \"\$tries\" -ge 200 ] && { kill -TERM \$child 2>/dev/null; wait \$child 2>/dev/null; exit 125; }; sleep 0.01\n"
+					. "done\ntouch " . escapeshellarg($timeout_flag) . "; kill -TERM \$child 2>/dev/null\n"
+				: '')
 			. "wait \$child; rc=\$?\n"
-			. "kill \$watchdog 2>/dev/null; wait \$watchdog 2>/dev/null\n"
+			. ($removeCapture ? "rm -f " . escapeshellarg($this->tmp) . "/pfb_alerts_cname_*\n" : '')
 			. "[ -f " . escapeshellarg($timeout_flag) . " ] && exit 124\n"
 			. "exit \$rc\n"
 		);
@@ -121,6 +147,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		}
 		$worker_code = "<?php\n"
 			. 'require_once ' . var_export($bootstrap, TRUE) . ";\n"
+			. "if (function_exists('posix_setsid')) { posix_setsid(); }\n"
 			. 'eval(' . var_export($function, TRUE) . ");\n"
 			. '$GLOBALS[\'pfb\'][\'extdns\'] = \'127.0.0.1\';' . "\n"
 			. '$GLOBALS[\'pfb\'][\'drill\'] = ' . var_export($drill, TRUE) . ";\n"
@@ -143,39 +170,43 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 		if (!is_resource($process)) {
 			throw new RuntimeException('could not start lookup worker');
 		}
+		$worker_status = proc_get_status($process);
+		$worker_pid = (int) ($worker_status['pid'] ?? 0);
 
-		$deadline = microtime(TRUE) + 8.0;
+		$completed = FALSE;
 		$marker_seen = FALSE;
-		while (microtime(TRUE) < $deadline) {
-			if (is_file($marker)) {
-				$marker_seen = TRUE;
+		$failure = NULL;
+		try {
+			$deadline = microtime(TRUE) + 8.0;
+			while (microtime(TRUE) < $deadline) {
+				if (is_file($marker)) {
+					$marker_seen = TRUE;
+				}
+				if (is_file($result)) {
+					break;
+				}
+				usleep(10_000);
 			}
-			if (is_file($result)) {
-				break;
-			}
-			usleep(10_000);
-		}
 
-		$status = proc_get_status($process);
-		$completed = is_file($result);
-		if (!$completed) {
-			if ($expectTimeout) {
-				$this->fail('STUCK/ENVIRONMENT: bounded lookup did not return; marker=' . ($marker_seen ? 'seen' : 'missing'));
+			$completed = is_file($result);
+			$failure = !$completed && $expectTimeout
+				? 'STUCK/ENVIRONMENT: bounded lookup did not return; marker=' . ($marker_seen ? 'seen' : 'missing')
+				: NULL;
+		} finally {
+			if (!$completed) {
+				$group_killed = $worker_pid > 0 && function_exists('posix_kill') && @posix_kill(-$worker_pid, 9);
+				if (!$group_killed) {
+					proc_terminate($process, 9);
+				}
 			}
-			// Red-path salvage: terminate the worker and the fixture it launched.
-			proc_terminate($process, 9);
-			$drill_pid = $this->fixturePid($marker);
-			if ($drill_pid !== NULL && function_exists('posix_kill')) {
-				posix_kill($drill_pid, 9);
-			}
-			proc_close($process);
-		}
-		else {
 			proc_close($process);
 		}
 		$drill_pid = $this->fixturePid($marker);
 		if ($drill_pid !== NULL && function_exists('posix_kill')) {
 			@posix_kill($drill_pid, 9);
+		}
+		if ($failure !== NULL) {
+			$this->fail($failure);
 		}
 
 		$payload = is_file($result) ? json_decode((string) file_get_contents($result), TRUE) : [];
@@ -188,6 +219,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 			'capture_files' => glob("{$this->tmp}/pfb_alerts_cname_*") ?: [],
 			'child_log' => is_file($child_log) ? (string) file_get_contents($child_log) : '',
 			'drill_path' => $drill,
+			'partial_seen' => is_file($marker) && str_contains((string) file_get_contents($marker), '--PARTIAL-WRITTEN--'),
 		];
 	}
 
