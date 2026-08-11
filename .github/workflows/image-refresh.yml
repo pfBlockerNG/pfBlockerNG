@@ -12,9 +12,10 @@ name: Upgrade pfSense smoke images
 #
 # PUBLISH GUARD (inside scripts/image-upgrade.sh):
 #   1. Prior GHCR tag pulled and booted writable under QEMU/KVM.
-#   2. pkg update -f → pkg upgrade -n dry-run → ONLY if upgrades pending:
-#      pkg upgrade -y + reboot + wait SSH (baked deps updated; pfBlockerNG is NOT
-#      on the base image and is never touched).
+#   2. Same-version refreshes pass --upgrade-pkgs: pkg update -f → pkg upgrade -n
+#      dry-run → ONLY if upgrades pending: pkg upgrade -y + reboot + wait SSH
+#      (baked deps updated; pfBlockerNG is NOT on the base image and is never touched).
+#      Cross-version legs omit --upgrade-pkgs so pfSense-upgrade owns the OS transition.
 #   3. pfSense-upgrade (reboots the box).
 #   4. Wait until version changes.
 #   5. Health gate: poll up to 300 s for EITHER the webConfigurator to answer
@@ -297,8 +298,9 @@ jobs:
       # scripts/image-upgrade.sh runs locally (runner IS the KVM host — no
       # --proxmox, mirroring build-image.yml). It:
       #   1. Pulls --from tag (oras), boots writable copy under KVM.
-      #   2. With --upgrade-pkgs: pkg update -f + pkg upgrade -n (dry-run detect);
-      #      ONLY if upgrades pending → pkg upgrade -y + reboot + wait SSH.
+      #   2. Same-version refreshes pass --upgrade-pkgs: pkg update -f + pkg upgrade
+      #      -n (dry-run detect); ONLY if upgrades pending → pkg upgrade -y + reboot
+      #      + wait SSH. Cross-version legs omit it; pfSense-upgrade owns the transition.
       #   3. Runs pfSense-upgrade (reboots the box), waits for version to change.
       #   4. Health gate: polls up to 300 s for webConfigurator HTTP or pfctl live
       #      ruleset; fail-closed (die → no publish) if neither answers.
@@ -325,6 +327,8 @@ jobs:
           # Run-body export, not an env: map value — GitHub Actions never
           # shell-expands env-map values (issue #2231).
           export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
+          UPGRADE_PKGS_FLAG=
+          [ "$FROM_TAG" = "$TARGET_TAG" ] && UPGRADE_PKGS_FLAG=--upgrade-pkgs
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
@@ -336,7 +340,7 @@ jobs:
             --compression "${{ inputs.compression }}" \
             --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
             --facts-out "$PWD/box-facts.env" \
-            --upgrade-pkgs
+            ${UPGRADE_PKGS_FLAG:+"$UPGRADE_PKGS_FLAG"}
 
       # ── Activation PR: box-verified matrix update (issue #1837) ────────────
       # The upgrade leg is the only moment automation has SSH into a live box
