@@ -682,6 +682,7 @@ jobs:
           # SMOKE_IMAGE_DIR points the fixture at the ALREADY-PULLED qcow2 so the
           # boot needs no network. SMOKE_IMAGE_REF is kept for provenance/logs.
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_PFSENSE_VERSION: ${{ inputs.pfsense_version }}
           # QEMU NIC MAC + SMBIOS uuid for the VM boot (ADR-24): conftest passes
           # these through to boot_vm.sh. RESOLVED_* come from the "Resolve VM
           # identity" step — the CE pin for a CE image (byte-identical to a bare

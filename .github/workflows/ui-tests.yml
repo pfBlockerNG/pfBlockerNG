@@ -629,6 +629,8 @@ jobs:
         env:
           # Point the fixture at the ALREADY-PULLED qcow2 so the boot needs no network.
           SMOKE_IMAGE_REF: ${{ steps.ref.outputs.ref }}
+          SMOKE_PFSENSE_VERSION: ${{ matrix.version }}
+          SMOKE_ABI: FreeBSD:${{ matrix.freebsd_major }}:amd64
           SMOKE_SSH_KEY: smoke_key
           SMOKE_PKG: ${{ steps.paths.outputs.pkg }}
           # issue #1806 D2: this leg's dep .pkgs (space-separated absolute paths),

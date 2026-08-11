@@ -325,8 +325,14 @@ _rl_digest() {
     esac
     if [ -z "$DESCRIPTOR" ]; then
         # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
-        DESCRIPTOR="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_ref" --descriptor)"
+        DESCRIPTOR="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "${_ref%@*}@${DIGEST}" --descriptor)"
     fi
+    DESCRIPTOR_DIGEST="$(printf '%s\n' "$DESCRIPTOR" | jq -r '.digest')"
+    [ "$DESCRIPTOR_DIGEST" = "$DIGEST" ] || {
+        printf '::error::descriptor digest %s disagrees with resolved digest %s for %s\n' \
+            "$DESCRIPTOR_DIGEST" "$DIGEST" "$_ref" >&2
+        exit 1
+    }
     printf 'resolved image identity %s\n' "$(printf '%s\n' "$DESCRIPTOR" | jq -c \
         '{digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')"
     if [ -n "${GITHUB_OUTPUT:-}" ]; then

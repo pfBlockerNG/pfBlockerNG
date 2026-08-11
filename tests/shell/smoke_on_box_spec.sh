@@ -39,6 +39,10 @@ STUBEOF
 #!/bin/sh
 printf '%s\n' "$*" >> "${ORAS_ARGV_LOG:-/dev/null}"
 case "$*" in
+    resolve*)
+        printf '%s\n' 'sha256:manifest'
+        exit 0
+        ;;
     *manifest\ fetch*)
         printf '%s\n' '{"digest":"sha256:manifest","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}'
         exit 0
@@ -185,7 +189,8 @@ printf 'server=%s count=%s\n' "$SMOKE_IMAGE_DIR" \
     "$(find "$SMOKE_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
 printf 'client=%s count=%s\n' "$SMOKE_CLIENT_IMAGE_DIR" \
     "$(find "$SMOKE_CLIENT_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
-printf 'identity image_ref=%s expected_abi=%s\n' "$SMOKE_IMAGE_REF" "$SMOKE_ABI"
+printf 'identity image_ref=%s expected_version=%s expected_abi=%s\n' \
+    "$SMOKE_IMAGE_REF" "$SMOKE_PFSENSE_VERSION" "$SMOKE_ABI"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
         "${FAKE_ROOT}/scripts/run-smoke.sh"
@@ -215,13 +220,13 @@ STUBEOF
     The stderr should include 'running smoke'
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
     The stdout should include "client=${FAKE_ROOT}/out/smoke-images/civm count=1"
-    The stdout should include 'identity image_ref=10.0.0.111/pfblockerng/pfsense-ce:2.8 expected_abi=FreeBSD:15:amd64'
+    The stdout should include 'identity image_ref=10.0.0.111/pfblockerng/pfsense-ce:2.8 expected_version=2.8 expected_abi=FreeBSD:15:amd64'
     The stderr should include '"pfsense_version":"2.8.1-RELEASE"'
     The file "${FAKE_ROOT}/.venv/reuse-sentinel" should be exist
-    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
-    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/civm:v1'
-    The contents of file "$ORAS_ARGV_LOG" should not include 'resolve'
-    The contents of file "$ORAS_ARGV_LOG" should include 'manifest fetch --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8 --descriptor'
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8@sha256:manifest'
+    The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/civm:v1@sha256:manifest'
+    The contents of file "$ORAS_ARGV_LOG" should include 'resolve --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
+    The contents of file "$ORAS_ARGV_LOG" should include 'manifest fetch --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8@sha256:manifest --descriptor'
     The contents of file "$ORAS_ARGV_LOG" should not include 'login'
   End
 

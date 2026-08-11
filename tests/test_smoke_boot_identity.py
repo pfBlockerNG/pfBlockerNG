@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 
 from tests.smoke import conftest as smoke_conftest
 
@@ -24,11 +25,14 @@ def test_log_guest_identity_reports_observed_and_expected_facts(
             return subprocess.CompletedProcess(
                 remote,
                 0,
-                "etc_version=2.8.1-RELEASE\nversionpatch=0\nkernel=15.0-CURRENT\nabi=FreeBSD:15:amd64\n",
+                "etc_version=2.8.1-RELEASE\nversionpatch=0\n"
+                "kernel_release=15.0-CURRENT\nkernel_version=FreeBSD 15 build\n"
+                "abi=FreeBSD:15:amd64\n",
                 "",
             )
 
     monkeypatch.setenv("SMOKE_IMAGE_REF", "registry.example/pfsense-ce:2.8")
+    monkeypatch.setenv("SMOKE_PFSENSE_VERSION", "2.8")
     monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
     fake_vm = FakeVM()
 
@@ -36,12 +40,97 @@ def test_log_guest_identity_reports_observed_and_expected_facts(
 
     assert fake_vm.calls == [((smoke_conftest.GUEST_IDENTITY_COMMAND,), 30.0)]
     assert capsys.readouterr().out.splitlines() == [
-        "PFB_GUEST_IDENTITY image_ref=registry.example/pfsense-ce:2.8 expected_abi=FreeBSD:15:amd64",
+        "PFB_GUEST_IDENTITY image_ref=registry.example/pfsense-ce:2.8 "
+        "expected_version=2.8 expected_abi=FreeBSD:15:amd64",
         "PFB_GUEST_IDENTITY etc_version=2.8.1-RELEASE",
         "PFB_GUEST_IDENTITY versionpatch=0",
-        "PFB_GUEST_IDENTITY kernel=15.0-CURRENT",
+        "PFB_GUEST_IDENTITY kernel_release=15.0-CURRENT",
+        "PFB_GUEST_IDENTITY kernel_version=FreeBSD 15 build",
         "PFB_GUEST_IDENTITY abi=FreeBSD:15:amd64",
     ]
+    assert "/bin/cat /etc/version" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/bin/cat /etc/versionpatch" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/usr/bin/uname -r" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/usr/bin/uname -v" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/usr/local/sbin/pkg config ABI" in smoke_conftest.GUEST_IDENTITY_COMMAND
+
+
+def test_log_guest_identity_failure_is_loud_and_read_only() -> None:
+    class FailingVM:
+        def __init__(self) -> None:
+            self.calls: list[tuple[tuple[str, ...], float]] = []
+
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            self.calls.append((remote, timeout))
+            return subprocess.CompletedProcess(remote, 7, "partial-fact\n", "probe-failed\n")
+
+    fake_vm = FailingVM()
+    with pytest.raises(RuntimeError, match=r"guest identity probe failed \(rc=7\)") as exc_info:
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, fake_vm))
+
+    assert "partial-fact" in str(exc_info.value)
+    assert "probe-failed" in str(exc_info.value)
+    assert fake_vm.calls == [((smoke_conftest.GUEST_IDENTITY_COMMAND,), 30.0)]
+
+
+def test_log_guest_identity_empty_output_is_loud() -> None:
+    class EmptyVM:
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(remote, 0, "", "")
+
+    with pytest.raises(RuntimeError, match=r"guest identity probe failed \(rc=0\)"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, EmptyVM()))
+
+
+def test_successful_deploy_emits_installer_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    live_helpers = importlib.import_module("tests.smoke.helpers")
+    pkg = tmp_path / "package.pkg"
+    pkg.write_bytes(b"pkg")
+
+    class FakeVM:
+        ssh_target = "root@127.0.0.1"
+        ssh_port = 2222
+        ssh_key_path = "smoke-key"
+
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(remote, 0, "", "")
+
+    monkeypatch.setattr(
+        live_helpers.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0], 0, "PFB_PKG_CONTEXT absolute_abi=FreeBSD:15:amd64\n", "installer-warning\n"
+        ),
+    )
+    monkeypatch.setattr(
+        live_helpers,
+        "php_eval",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args, 0, "OK", ""),
+    )
+
+    live_helpers.deploy(cast(Any, FakeVM()), str(pkg))
+
+    captured = capsys.readouterr()
+    assert "PFB_PKG_CONTEXT absolute_abi=FreeBSD:15:amd64" in captured.out
+    assert "installer-warning" in captured.err
+
+
+@pytest.mark.parametrize(
+    ("workflow", "job", "expected_version", "expected_abi"),
+    [
+        ("ui-tests.yml", "ui", "${{ matrix.version }}", "FreeBSD:${{ matrix.freebsd_major }}:amd64"),
+        ("smoke-single.yml", "smoke", "${{ inputs.pfsense_version }}", "${{ inputs.abi }}"),
+    ],
+)
+def test_live_workflows_export_expected_guest_identity(
+    workflow: str, job: str, expected_version: str, expected_abi: str
+) -> None:
+    doc = yaml.safe_load((Path(__file__).parents[1] / ".github" / "workflows" / workflow).read_text())
+    step = next(item for item in doc["jobs"][job]["steps"] if str(item.get("name", "")).startswith("Run the "))
+    assert step["env"]["SMOKE_PFSENSE_VERSION"] == expected_version
+    assert step["env"]["SMOKE_ABI"] == expected_abi
 
 
 def test_boot_and_probe_logs_identity_after_boot_completion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

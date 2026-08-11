@@ -70,10 +70,11 @@ FIXTURES_DIR = SMOKE_DIR / "fixtures"
 GUEST_IDENTITY_COMMAND = (
     "etc_version=$(/bin/cat /etc/version 2>/dev/null || printf '?'); "
     "versionpatch=$(/bin/cat /etc/versionpatch 2>/dev/null || printf '?'); "
-    "kernel=$(/usr/bin/uname -r 2>/dev/null || printf '?'); "
+    "kernel_release=$(/usr/bin/uname -r 2>/dev/null || printf '?'); "
+    "kernel_version=$(/usr/bin/uname -v 2>/dev/null || printf '?'); "
     "abi=$(/usr/local/sbin/pkg config ABI 2>/dev/null || printf '?'); "
-    "printf 'etc_version=%s\\nversionpatch=%s\\nkernel=%s\\nabi=%s\\n' "
-    '"$etc_version" "$versionpatch" "$kernel" "$abi"'
+    "printf 'etc_version=%s\\nversionpatch=%s\\nkernel_release=%s\\nkernel_version=%s\\nabi=%s\\n' "
+    '"$etc_version" "$versionpatch" "$kernel_release" "$kernel_version" "$abi"'
 )
 
 # Host<->guest exposure baked into boot_vm.sh's hostfwd map (see RESULTS/01).
@@ -341,7 +342,9 @@ def _log_guest_identity(vm: SmokeVM) -> None:
         )
     print(
         "PFB_GUEST_IDENTITY "
-        f"image_ref={os.environ.get('SMOKE_IMAGE_REF', '?')} expected_abi={os.environ.get('SMOKE_ABI', '?')}"
+        f"image_ref={os.environ.get('SMOKE_IMAGE_REF', '?')} "
+        f"expected_version={os.environ.get('SMOKE_PFSENSE_VERSION', '?')} "
+        f"expected_abi={os.environ.get('SMOKE_ABI', '?')}"
     )
     for line in result.stdout.splitlines():
         print(f"PFB_GUEST_IDENTITY {line}")
