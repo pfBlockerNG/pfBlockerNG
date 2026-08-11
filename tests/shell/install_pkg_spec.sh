@@ -102,6 +102,15 @@ SCPEOF
     The contents of file "$SSH_LOG" should include "$(basename "$PKGFILE")"
   End
 
+  It 'logs pkg identity in the same remote shell immediately before pkg add'
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should be present
+    The line 1 of contents of file "$SSH_LOG" should include 'PFB_PKG_CONTEXT'
+    The line 1 of contents of file "$SSH_LOG" should include '/usr/local/sbin/pkg config ABI'
+    The line 1 of contents of file "$SSH_LOG" should include 'pkg add'
+  End
+
   It 'two SMOKE_DEP_PKGS entries: deps scp'"'"'d + pkg add'"'"'d before the branch pkg, in order'
     SMOKE_DEP_PKGS="${DEP1} ${DEP2}"
     export SMOKE_DEP_PKGS
