@@ -295,6 +295,16 @@ ssh_guest() {
 # a new release branch such as 2_9_0 while the image still runs 2.8.1.
 pfb_switch_branch() {
     _psb_branch="$1"; _psb_log_dir="$2"
+    case "$_psb_branch" in
+        *\'*) die "--branch name must not contain a single quote: $_psb_branch" ;;
+    esac
+    if [ -z "$_psb_branch" ] || \
+       [ "$(printf '%s/' "$_psb_branch" | LC_ALL=C tr -d '0-9A-Za-z._-')" != '/' ]; then
+        die "invalid update branch name: $_psb_branch"
+    fi
+    case "$_psb_branch" in
+        [._-]*) die "invalid update branch name: $_psb_branch" ;;
+    esac
     log "switching pfSense update branch to '${_psb_branch}' (via pkg_switch_repo)"
 
     if ! _psb_catalog=$(ssh_guest '/usr/local/sbin/pfSense-repoc -p' 2>&1); then
@@ -652,13 +662,6 @@ fi
 # branch's versions. Fail-closed: a wrong/missing branch name aborts the run
 # rather than silently upgrading on the wrong (stable) branch.
 if [ -n "$BRANCH" ]; then
-    # Guard against a branch name containing a single quote (it would break the
-    # PHP string literal below). Branch names from ci-metadata are safe, but
-    # reject anything surprising rather than silently truncating or injecting.
-    case "$BRANCH" in
-        *\'*) die "--branch name must not contain a single quote: $BRANCH" ;;
-    esac
-
     pfb_switch_branch "$BRANCH" "$LOCAL_DIR"
 fi
 
