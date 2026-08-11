@@ -181,6 +181,7 @@ printf 'server=%s count=%s\n' "$SMOKE_IMAGE_DIR" \
     "$(find "$SMOKE_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
 printf 'client=%s count=%s\n' "$SMOKE_CLIENT_IMAGE_DIR" \
     "$(find "$SMOKE_CLIENT_IMAGE_DIR" -maxdepth 1 -name '*.qcow2' | wc -l | tr -d ' ')"
+printf 'identity image_ref=%s expected_abi=%s\n' "$SMOKE_IMAGE_REF" "$SMOKE_ABI"
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
         "${FAKE_ROOT}/scripts/run-smoke.sh"
@@ -210,6 +211,7 @@ STUBEOF
     The stderr should include 'running smoke'
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
     The stdout should include "client=${FAKE_ROOT}/out/smoke-images/civm count=1"
+    The stdout should include 'identity image_ref=10.0.0.111/pfblockerng/pfsense-ce:2.8 expected_abi=FreeBSD:15:amd64'
     The file "${FAKE_ROOT}/.venv/reuse-sentinel" should be exist
     The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
     The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/civm:v1'

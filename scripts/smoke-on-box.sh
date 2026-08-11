@@ -223,6 +223,11 @@ fi
 
 SMOKE_IMAGE_DIR="${IMAGES_DIR}/pfsense"
 export SMOKE_IMAGE_DIR
+# Give the in-guest identity probe the same resolved expectations this launcher
+# used to pull and build. CI already exports both; local pfb-box runs must too.
+SMOKE_IMAGE_REF="$PFSENSE_REF"
+SMOKE_ABI="$_ABI"
+export SMOKE_IMAGE_REF SMOKE_ABI
 if [ "$_NO_TWO_VM" -eq 0 ]; then
     SMOKE_CLIENT_IMAGE_DIR="${IMAGES_DIR}/civm"
     export SMOKE_CLIENT_IMAGE_DIR
