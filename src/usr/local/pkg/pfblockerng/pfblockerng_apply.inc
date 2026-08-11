@@ -4756,7 +4756,7 @@ function sync_package_pfblockerng($cron='') {
 		unlink_if_exists("{$pfb['ip_unlock']}");
 
 		require_once('filter.inc');
-		filter_configure();
+		filter_configure_sync();
 
 		// Stop/Restart pfb_filter service for new rule changes
 		if ($pfb['enable'] !== PfbToggle::On) {
