@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import subprocess
 from pathlib import Path
 from typing import Any, cast
@@ -9,7 +10,6 @@ from typing import Any, cast
 import pytest
 
 from tests.smoke import conftest as smoke_conftest
-from tests.smoke import helpers
 
 
 def test_log_guest_identity_reports_observed_and_expected_facts(
@@ -46,6 +46,7 @@ def test_log_guest_identity_reports_observed_and_expected_facts(
 
 def test_boot_and_probe_logs_identity_after_boot_completion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     events: list[str] = []
+    live_helpers = importlib.import_module("tests.smoke.helpers")
 
     class FakeProcess:
         pid = 1234
@@ -59,7 +60,7 @@ def test_boot_and_probe_logs_identity_after_boot_completion(monkeypatch: pytest.
 
     monkeypatch.setattr(smoke_conftest.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     monkeypatch.setattr(smoke_conftest.subprocess, "run", fake_run)
-    monkeypatch.setattr(helpers, "wait_boot_complete", lambda vm: events.append("boot-complete"))
+    monkeypatch.setattr(live_helpers, "wait_boot_complete", lambda vm: events.append("boot-complete"))
     monkeypatch.setattr(smoke_conftest, "_log_guest_identity", lambda vm: events.append("identity"), raising=False)
 
     handle = smoke_conftest.boot_and_probe(Path("base.qcow2"), "smoke-key", log_path=tmp_path / "vm.log")
