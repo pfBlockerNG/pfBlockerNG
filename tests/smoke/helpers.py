@@ -47,6 +47,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from collections.abc import Callable, Iterable, Sequence
@@ -426,6 +427,10 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
         raise RuntimeError(
             f"install-pkg.sh failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
     # Re-assert after POST-INSTALL: idempotent, and it fails loudly if the install removed dbdir.
     _write_cron_disable_flag(vm, timeout=timeout)
 

@@ -550,7 +550,7 @@ case "$1" in
   resolve)
     if [ -n "${STUB_RESOLVE_EMPTY:-}" ]; then :; else printf '%s\n' "${STUB_DIGEST:-sha256:deadbeef}"; fi
     ;;
-  manifest) printf '{"digest":"%s","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}\n' "${STUB_DIGEST:-sha256:deadbeef}" ;;
+  manifest) printf '{"digest":"%s","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}\n' "${STUB_DESCRIPTOR_DIGEST:-${STUB_DIGEST:-sha256:deadbeef}}" ;;
   login)    : ;;
   *) exit 1 ;;
 esac
@@ -567,32 +567,34 @@ EOF
     cleanup() { rm -rf "$WORK"; }
     AfterEach 'cleanup'
 
-    It 'LAN active: skips the ghcr.io login and threads --plain-http into resolve'
+    It 'LAN active: logs annotations from the descriptor pinned to the resolved digest'
         When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:aaaa" \
             sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
         The status should be success
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:aaaa'
         The contents of file "$STUB_ARGV_LOG" should not include 'login'
         The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
-        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8 --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa --descriptor'
         The output should include '"pfsense_version":"2.8.1-RELEASE"'
     End
 
-    It 'LAN active: threads --plain-http into the manifest-fetch fallback when resolve is empty'
+    It 'LAN active: derives the digest atomically from the tag descriptor when resolve is empty'
         When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:bbbb" STUB_RESOLVE_EMPTY=1 \
             sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
         The status should be success
         The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8 --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
         The contents of file "$STUB_ARGV_LOG" should not include 'login'
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:bbbb'
     End
 
-    It 'LAN inactive: logs into ghcr.io and passes no flag to resolve'
+    It 'LAN inactive: logs into ghcr.io and fetches the descriptor without the LAN flag'
         When run env STUB_DIGEST="sha256:cccc" \
             sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
         The status should be success
         The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
         The contents of file "$STUB_ARGV_LOG" should include 'resolve ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:cccc --descriptor'
         The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:cccc'
     End
@@ -604,6 +606,14 @@ EOF
         The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
         The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:dddd'
+    End
+
+    It 'rejects a descriptor whose digest disagrees with the resolved immutable identity'
+        When run env PFB_LAN_REGISTRY="10.0.0.111" STUB_DIGEST="sha256:aaaa" \
+            STUB_DESCRIPTOR_DIGEST="sha256:bbbb" \
+            sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
+        The status should be failure
+        The error should include 'descriptor digest sha256:bbbb disagrees with resolved digest sha256:aaaa'
     End
 
 End

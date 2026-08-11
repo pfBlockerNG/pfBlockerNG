@@ -108,6 +108,9 @@ SCPEOF
     The stdout should be present
     The line 1 of contents of file "$SSH_LOG" should include 'PFB_PKG_CONTEXT'
     The line 1 of contents of file "$SSH_LOG" should include '/usr/local/sbin/pkg config ABI'
+    The line 1 of contents of file "$SSH_LOG" should include '/etc/rc.[u]pdate_pkg_metadata'
+    The line 1 of contents of file "$SSH_LOG" should include '/usr/local/sbin/[p]kg(-static)?'
+    The line 1 of contents of file "$SSH_LOG" should not include "|[p]kg'"
     The line 1 of contents of file "$SSH_LOG" should include 'pkg add'
   End
 

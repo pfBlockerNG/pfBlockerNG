@@ -212,15 +212,35 @@ _oras_pull() {
     fi
     printf 'smoke-on-box: pulling %s image (%s) -> %s\n' \
         "$_op_tag" "$_op_ref" "$_op_dir" >&2
-    # The tag alone cannot prove what booted. Log the registry's immutable digest
-    # and release annotations next to every pull (including LAN zot rewrites).
+    # Resolve once, then fetch annotations and pull by that immutable digest.
+    # This prevents a moving tag from making the log describe different bytes.
     # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
-    _op_descriptor="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_op_ref" --descriptor)"
+    _op_digest="$(oras resolve ${PFB_ORAS_FLAGS:-} "$_op_ref" 2>/dev/null || true)"
+    _op_descriptor=""
+    if [ -z "$_op_digest" ]; then
+        # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
+        _op_descriptor="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_op_ref" --descriptor)"
+        _op_digest="$(printf '%s\n' "$_op_descriptor" | jq -r '.digest')"
+    fi
+    case "$_op_digest" in
+        sha256:*) ;;
+        *) printf 'smoke-on-box: invalid %s image digest: %s\n' "$_op_tag" "$_op_digest" >&2; exit 1 ;;
+    esac
+    if [ -z "$_op_descriptor" ]; then
+        # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
+        _op_descriptor="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "${_op_ref%@*}@${_op_digest}" --descriptor)"
+    fi
+    _op_descriptor_digest="$(printf '%s\n' "$_op_descriptor" | jq -r '.digest')"
+    [ "$_op_descriptor_digest" = "$_op_digest" ] || {
+        printf 'smoke-on-box: %s descriptor digest %s disagrees with resolved digest %s\n' \
+            "$_op_tag" "$_op_descriptor_digest" "$_op_digest" >&2
+        exit 1
+    }
     printf 'smoke-on-box: %s image identity %s\n' "$_op_tag" \
         "$(printf '%s\n' "$_op_descriptor" | jq -c \
             '{digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')" >&2
     # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
-    ( cd "$_op_dir" && oras pull ${PFB_ORAS_FLAGS:-} "$_op_ref" ) >&2
+    ( cd "$_op_dir" && oras pull ${PFB_ORAS_FLAGS:-} "${_op_ref%@*}@${_op_digest}" ) >&2
 }
 
 _oras_pull "$PFSENSE_REF" "${IMAGES_DIR}/pfsense" "pfSense"
@@ -233,8 +253,10 @@ export SMOKE_IMAGE_DIR
 # Give the in-guest identity probe the same resolved expectations this launcher
 # used to pull and build. CI already exports both; local pfb-box runs must too.
 SMOKE_IMAGE_REF="$PFSENSE_REF"
+_pfsense_ref_without_digest="${PFSENSE_REF%@*}"
+SMOKE_PFSENSE_VERSION="${SMOKE_PFSENSE_VERSION:-${_pfsense_ref_without_digest##*:}}"
 SMOKE_ABI="$_ABI"
-export SMOKE_IMAGE_REF SMOKE_ABI
+export SMOKE_IMAGE_REF SMOKE_PFSENSE_VERSION SMOKE_ABI
 if [ "$_NO_TWO_VM" -eq 0 ]; then
     SMOKE_CLIENT_IMAGE_DIR="${IMAGES_DIR}/civm"
     export SMOKE_CLIENT_IMAGE_DIR
