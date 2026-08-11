@@ -4009,12 +4009,13 @@ def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.
     the timeout RAISES loudly rather than returning, so a never-completing boot fails the
     run instead of silently racing. The boot flag can clear while
     ``rc.update_pkg_metadata`` still runs ``pfSense-upgrade`` and temporarily rewrites
-    pkg's effective ABI, so that boot job must also be gone before deployment.
+    pkg's effective ABI. That job atomically publishes ``pfSense_version.rc`` only after
+    both update phases finish, so the per-boot file is the stable completion signal.
     """
     deadline = time.monotonic() + timeout
     snippet = "echo '<<BOOT>>' . (is_platform_booting() ? '1' : '0') . '<<END>>';"
     last = "?"
-    last_pkg_processes = "not checked"
+    last_metadata = "not checked"
     while time.monotonic() < deadline:
         # Under boot load pfSsh.php (full config load+lock) can be slow; let one over-30s probe
         # retry on the remaining budget instead of aborting the whole wait. The deadline still
@@ -4028,30 +4029,17 @@ def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.
             last = out.split("<<BOOT>>", 1)[1].split("<<END>>", 1)[0].strip()
             if last == "0":
                 try:
-                    processes = vm.ssh("/bin/ps", "axww", "-o", "pid=", "-o", "comm=", "-o", "args=", timeout=30.0)
+                    metadata = vm.ssh("/bin/test", "-f", "/var/run/pfSense_version.rc", timeout=30.0)
                 except subprocess.TimeoutExpired:
-                    last_pkg_processes = "timeout"
+                    last_metadata = "timeout"
                     continue
-                if processes.returncode != 0:
-                    last_pkg_processes = (
-                        f"probe rc={processes.returncode} stdout={processes.stdout!r} stderr={processes.stderr!r}"
-                    )
-                else:
-                    active = []
-                    for line in processes.stdout.splitlines():
-                        fields = line.split(None, 2)
-                        if len(fields) != 3:
-                            continue
-                        _pid, command, arguments = fields
-                        if command == "sh" and arguments.startswith("/bin/sh /etc/rc.update_pkg_metadata"):
-                            active.append(line)
-                    last_pkg_processes = "\n".join(active) or "none"
-                    if not active:
-                        return
+                last_metadata = f"rc={metadata.returncode} stdout={metadata.stdout!r} stderr={metadata.stderr!r}"
+                if metadata.returncode == 0:
+                    return
         time.sleep(delay)
     raise RuntimeError(
         f"pfSense boot did not settle after {timeout:.0f}s: is_platform_booting() last returned "
-        f"{last!r} (expected '0'); boot package processes last observed: {last_pkg_processes!r}. "
+        f"{last!r} (expected '0'); /var/run/pfSense_version.rc last probe: {last_metadata}. "
         f"pfBlockerNG updates would race boot-time state."
     )
 
