@@ -550,7 +550,12 @@ case "$1" in
   resolve)
     if [ -n "${STUB_RESOLVE_EMPTY:-}" ]; then :; else printf '%s\n' "${STUB_DIGEST:-sha256:deadbeef}"; fi
     ;;
-  manifest) printf '{"digest":"%s","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}\n' "${STUB_DESCRIPTOR_DIGEST:-${STUB_DIGEST:-sha256:deadbeef}}" ;;
+  manifest)
+    case "$*" in
+      *--descriptor*) printf '{"digest":"%s"}\n' "${STUB_DESCRIPTOR_DIGEST:-${STUB_DIGEST:-sha256:deadbeef}}" ;;
+      *) printf '{"annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}\n' ;;
+    esac
+    ;;
   login)    : ;;
   *) exit 1 ;;
 esac
@@ -575,6 +580,7 @@ EOF
         The contents of file "$STUB_ARGV_LOG" should not include 'login'
         The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
         The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:aaaa'
         The output should include '"pfsense_version":"2.8.1-RELEASE"'
     End
 
@@ -583,6 +589,7 @@ EOF
             sh "$SCRIPT" digest "ghcr.io/pfblockerng/pfsense-ce:2.8"
         The status should be success
         The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8 --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:bbbb'
         The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
         The contents of file "$STUB_ARGV_LOG" should not include 'login'
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:bbbb'
@@ -595,6 +602,7 @@ EOF
         The contents of file "$STUB_ARGV_LOG" should include 'login ghcr.io'
         The contents of file "$STUB_ARGV_LOG" should include 'resolve ghcr.io/pfblockerng/pfsense-ce:2.8'
         The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:cccc --descriptor'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch ghcr.io/pfblockerng/pfsense-ce:2.8@sha256:cccc'
         The contents of file "$STUB_ARGV_LOG" should not include '--plain-http'
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:cccc'
     End

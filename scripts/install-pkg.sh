@@ -114,7 +114,7 @@ pkg_add_lock_retry() {
         _rc=0
         # Same-shell probe: a separate SSH round-trip can observe a different ABI
         # while first-boot metadata settles. The final pkg command supplies status.
-        _out=$(ssh_t "printf 'PFB_PKG_CONTEXT utc='; date -u '+%Y-%m-%dT%H:%M:%SZ'; printf 'PFB_PKG_CONTEXT absolute_abi='; /usr/local/sbin/pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT path_pkg='; command -v pkg 2>&1 || true; printf 'PFB_PKG_CONTEXT path_abi='; pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT boot_pkg_processes='; ps axww 2>&1 | grep -E '/etc/rc.[u]pdate_pkg_metadata|/usr/local/(sbin|libexec)/[p]fSense-upgrade|/usr/local/sbin/[p]kg(-static)?' || true; env ASSUME_ALWAYS_YES=yes pkg add '${_pkg_remote}'" 2>&1) || _rc=$?
+        _out=$(ssh_t "printf 'PFB_PKG_CONTEXT utc='; date -u '+%Y-%m-%dT%H:%M:%SZ'; printf 'PFB_PKG_CONTEXT absolute_abi='; /usr/local/sbin/pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT path_pkg='; command -v pkg 2>&1 || true; printf 'PFB_PKG_CONTEXT path_abi='; pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT boot_pkg_processes='; ps axww -o pid= -o comm= -o args= 2>&1 | awk '(\$2 == \"sh\" && (\$0 ~ /\/bin\/sh \/etc\/rc\.update_pkg_metadata / || \$0 ~ /\/bin\/sh \/usr\/local\/(sbin|libexec)\/pfSense-upgrade /)) || (\$2 == \"lockf\" && \$0 ~ /\/tmp\/pfSense-upgrade\.lock/) || \$2 == \"pkg\" || \$2 == \"pkg-static\"' || true; env ASSUME_ALWAYS_YES=yes pkg add '${_pkg_remote}'" 2>&1) || _rc=$?
         if [ -n "$_out" ]; then printf '%s\n' "$_out"; fi
         if [ "$_rc" -eq 0 ]; then return 0; fi
         case "$_out" in
