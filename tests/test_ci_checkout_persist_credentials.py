@@ -12,12 +12,9 @@ line-number list, which rots on the first edit -- and fails, naming the
 offending sites, the moment one regresses to the implicit (persisting)
 default.
 
-Text-parsed rather than PyYAML: the `test` job's "Install test dependencies"
-step (test.yml) installs only pytest/pytest-cov/dnspython -- no PyYAML -- and
-adding it would be a workflow change outside this guard's scope (issue #1691
-touches credential persistence only). Parsing follows the house idiom in
-tests/test_ci_tool_pins.py (plain text, no YAML parser), generalised to walk
-every step block instead of anchoring on one named job.
+Text-parsed because this security guard must preserve comments, which PyYAML
+discards. Parsing follows the house idiom in tests/test_ci_tool_pins.py,
+generalised to walk every step block instead of anchoring on one named job.
 
 Both `.yml` and `.yaml` are scanned: GitHub Actions loads either extension
 from .github/workflows/, so a guard that only globbed `*.yml` would be a

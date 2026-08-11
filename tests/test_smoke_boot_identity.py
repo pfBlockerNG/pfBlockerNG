@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 
 from tests.smoke import conftest as smoke_conftest
 
@@ -117,32 +118,19 @@ def test_successful_deploy_emits_installer_diagnostics(
 
 
 @pytest.mark.parametrize(
-    ("workflow", "step_name", "expected_version", "expected_abi"),
+    ("workflow", "job", "expected_version", "expected_abi"),
     [
-        (
-            "ui-tests.yml",
-            "Run the UI tier",
-            "${{ matrix.version }}",
-            "FreeBSD:${{ matrix.freebsd_major }}:amd64",
-        ),
-        (
-            "smoke-single.yml",
-            "Run the live-VM matrix",
-            "${{ inputs.pfsense_version }}",
-            "${{ inputs.abi }}",
-        ),
+        ("ui-tests.yml", "ui", "${{ matrix.version }}", "FreeBSD:${{ matrix.freebsd_major }}:amd64"),
+        ("smoke-single.yml", "smoke", "${{ inputs.pfsense_version }}", "${{ inputs.abi }}"),
     ],
 )
 def test_live_workflows_export_expected_guest_identity(
-    workflow: str, step_name: str, expected_version: str, expected_abi: str
+    workflow: str, job: str, expected_version: str, expected_abi: str
 ) -> None:
-    text = (Path(__file__).parents[1] / ".github" / "workflows" / workflow).read_text()
-    start = text.index(f"      - name: {step_name}")
-    end = text.find("\n      - name:", start + 1)
-    step = text[start : end if end >= 0 else None]
-
-    assert f"SMOKE_PFSENSE_VERSION: {expected_version}" in step
-    assert f"SMOKE_ABI: {expected_abi}" in step
+    doc = yaml.safe_load((Path(__file__).parents[1] / ".github" / "workflows" / workflow).read_text())
+    step = next(item for item in doc["jobs"][job]["steps"] if str(item.get("name", "")).startswith("Run the "))
+    assert step["env"]["SMOKE_PFSENSE_VERSION"] == expected_version
+    assert step["env"]["SMOKE_ABI"] == expected_abi
 
 
 def test_boot_and_probe_logs_identity_after_boot_completion(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

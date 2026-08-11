@@ -134,6 +134,9 @@ jobs:
         # same interpreter twice and report two green legs for one version.
         run: echo "/opt/python/${{ matrix.python-version }}/bin" >> "$GITHUB_PATH"
 
+      - name: Install workflow-parser dependency
+        run: python -m pip install PyYAML==6.0.3
+
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml
         run: python -m pytest

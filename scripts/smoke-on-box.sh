@@ -30,6 +30,8 @@
 #   SMOKE_SSH_KEY     path to pfSense guest SSH key (default /root/smoke-ssh-key)
 #   SMOKE_GHCR_TOKEN  optional; used for `oras login ghcr.io` before image pull
 #   SMOKE_PFSENSE_REF pfSense image ref (default ghcr.io/pfblockerng/pfsense-ce:2.8)
+#   SMOKE_PFSENSE_VERSION expected guest version; default is the image tag, or `?`
+#                         when SMOKE_PFSENSE_REF is digest-only
 #   CIVM_REF          civm image ref (default ghcr.io/pfblockerng/civm:v1)
 #   PFB_LAN_REGISTRY  issue #2247: when set (box's own /etc/environment), rewrite a
 #                     leading ghcr.io/ in PFSENSE_REF/CIVM_REF to
@@ -258,7 +260,12 @@ export SMOKE_IMAGE_DIR
 # used to pull and build. CI already exports both; local pfb-box runs must too.
 SMOKE_IMAGE_REF="$PFSENSE_REF"
 _pfsense_ref_without_digest="${PFSENSE_REF%@*}"
-SMOKE_PFSENSE_VERSION="${SMOKE_PFSENSE_VERSION:-${_pfsense_ref_without_digest##*:}}"
+_pfsense_ref_leaf="${_pfsense_ref_without_digest##*/}"
+case "$_pfsense_ref_leaf" in
+    *:*) _pfsense_ref_version="${_pfsense_ref_leaf##*:}" ;;
+    *) _pfsense_ref_version="?" ;;
+esac
+SMOKE_PFSENSE_VERSION="${SMOKE_PFSENSE_VERSION:-$_pfsense_ref_version}"
 SMOKE_ABI="$_ABI"
 export SMOKE_IMAGE_REF SMOKE_PFSENSE_VERSION SMOKE_ABI
 if [ "$_NO_TWO_VM" -eq 0 ]; then

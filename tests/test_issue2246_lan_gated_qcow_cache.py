@@ -1,8 +1,7 @@
 """Self-hosted actions/cache qcow2 steps stay LAN-gated (issue #2246).
 
-Deliberately stdlib-only, mirroring tests/test_issue2231_workflow_hygiene.py and
-tests/test_issue2230_lan_registry.py: the CI pytest leg runs inside ci-runner,
-which bakes no PyYAML.
+Uses the same narrow text parser as tests/test_issue2231_workflow_hygiene.py
+and tests/test_issue2230_lan_registry.py.
 
 The self-hosted `smoke` job (smoke-single.yml) and `ui` job (ui-tests.yml)
 cache their pfSense/civm qcow2 pulls via `actions/cache` restore+save pairs.
