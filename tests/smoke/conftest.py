@@ -67,6 +67,15 @@ BOOT_VM_SH = SMOKE_DIR / "boot_vm.sh"
 WAIT_READY_SH = SMOKE_DIR / "wait_ready.sh"
 FIXTURES_DIR = SMOKE_DIR / "fixtures"
 
+GUEST_IDENTITY_COMMAND = (
+    "etc_version=$(/bin/cat /etc/version 2>/dev/null || printf '?'); "
+    "versionpatch=$(/bin/cat /etc/versionpatch 2>/dev/null || printf '?'); "
+    "kernel=$(/usr/bin/uname -r 2>/dev/null || printf '?'); "
+    "abi=$(/usr/local/sbin/pkg config ABI 2>/dev/null || printf '?'); "
+    "printf 'etc_version=%s\\nversionpatch=%s\\nkernel=%s\\nabi=%s\\n' "
+    '"$etc_version" "$versionpatch" "$kernel" "$abi"'
+)
+
 # Host<->guest exposure baked into boot_vm.sh's hostfwd map (see RESULTS/01).
 DEFAULT_HOST = "127.0.0.1"
 
@@ -323,6 +332,21 @@ class BootHandle:
     log_file: BinaryIO = field(repr=False)
 
 
+def _log_guest_identity(vm: SmokeVM) -> None:
+    """Emit the booted guest facts needed to diagnose image/matrix drift."""
+    result = vm.ssh(GUEST_IDENTITY_COMMAND, timeout=30.0)
+    if result.returncode != 0 or not result.stdout.strip():
+        raise RuntimeError(
+            f"guest identity probe failed (rc={result.returncode})\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    print(
+        "PFB_GUEST_IDENTITY "
+        f"image_ref={os.environ.get('SMOKE_IMAGE_REF', '?')} expected_abi={os.environ.get('SMOKE_ABI', '?')}"
+    )
+    for line in result.stdout.splitlines():
+        print(f"PFB_GUEST_IDENTITY {line}")
+
+
 @timed_step("boot_and_probe")
 def boot_and_probe(
     base_image: Path,
@@ -421,6 +445,7 @@ def boot_and_probe(
 
     try:
         helpers.wait_boot_complete(vm)
+        _log_guest_identity(vm)
     except Exception:
         # Route a boot-complete failure (its loud timeout, or an SSH/php_eval error) through the
         # SAME cleanup as a wait_ready failure: capture diagnostics, kill qemu, close the log --
