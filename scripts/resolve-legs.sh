@@ -313,14 +313,22 @@ _rl_digest() {
     fi
     # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
     DIGEST="$(oras resolve ${PFB_ORAS_FLAGS:-} "$_ref" 2>/dev/null || true)"
+    DESCRIPTOR=""
     if [ -z "$DIGEST" ]; then
         # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
-        DIGEST="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_ref" --descriptor | jq -r '.digest')"
+        DESCRIPTOR="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_ref" --descriptor)"
+        DIGEST="$(printf '%s\n' "$DESCRIPTOR" | jq -r '.digest')"
     fi
     case "$DIGEST" in
         sha256:*) ;;
         *) printf '::error::could not resolve a sha256 digest for %s (got '\''%s'\'')\n' "$_ref" "$DIGEST" >&2; exit 1 ;;
     esac
+    if [ -z "$DESCRIPTOR" ]; then
+        # shellcheck disable=SC2086  # intentional: unquoted default-empty flag var
+        DESCRIPTOR="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_ref" --descriptor)"
+    fi
+    printf 'resolved image identity %s\n' "$(printf '%s\n' "$DESCRIPTOR" | jq -c \
+        '{digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')"
     if [ -n "${GITHUB_OUTPUT:-}" ]; then
         {
             printf 'digest=%s\n' "$DIGEST"

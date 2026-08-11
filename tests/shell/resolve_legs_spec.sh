@@ -550,7 +550,7 @@ case "$1" in
   resolve)
     if [ -n "${STUB_RESOLVE_EMPTY:-}" ]; then :; else printf '%s\n' "${STUB_DIGEST:-sha256:deadbeef}"; fi
     ;;
-  manifest) printf '{"digest":"%s"}\n' "${STUB_DIGEST:-sha256:deadbeef}" ;;
+  manifest) printf '{"digest":"%s","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}\n' "${STUB_DIGEST:-sha256:deadbeef}" ;;
   login)    : ;;
   *) exit 1 ;;
 esac
@@ -574,6 +574,8 @@ EOF
         The output should include 'resolved ghcr.io/pfblockerng/pfsense-ce:2.8 -> sha256:aaaa'
         The contents of file "$STUB_ARGV_LOG" should not include 'login'
         The contents of file "$STUB_ARGV_LOG" should include 'resolve --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8'
+        The contents of file "$STUB_ARGV_LOG" should include 'manifest fetch --plain-http ghcr.io/pfblockerng/pfsense-ce:2.8 --descriptor'
+        The output should include '"pfsense_version":"2.8.1-RELEASE"'
     End
 
     It 'LAN active: threads --plain-http into the manifest-fetch fallback when resolve is empty'

@@ -39,6 +39,10 @@ STUBEOF
 #!/bin/sh
 printf '%s\n' "$*" >> "${ORAS_ARGV_LOG:-/dev/null}"
 case "$*" in
+    *manifest\ fetch*)
+        printf '%s\n' '{"digest":"sha256:manifest","annotations":{"io.github.pfblockerng.pfsense-version":"2.8.1-RELEASE","org.opencontainers.image.version":"2.8","org.opencontainers.image.created":"2026-07-28T08:48:36Z"}}'
+        exit 0
+        ;;
     *\ pull\ *|pull\ *)
         case "$*" in
             *civm*) true > civm.qcow2 ;;
@@ -212,11 +216,12 @@ STUBEOF
     The stdout should include "server=${FAKE_ROOT}/out/smoke-images/pfsense count=1"
     The stdout should include "client=${FAKE_ROOT}/out/smoke-images/civm count=1"
     The stdout should include 'identity image_ref=10.0.0.111/pfblockerng/pfsense-ce:2.8 expected_abi=FreeBSD:15:amd64'
+    The stderr should include '"pfsense_version":"2.8.1-RELEASE"'
     The file "${FAKE_ROOT}/.venv/reuse-sentinel" should be exist
     The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8'
     The contents of file "$ORAS_ARGV_LOG" should include 'pull --plain-http 10.0.0.111/pfblockerng/civm:v1'
     The contents of file "$ORAS_ARGV_LOG" should not include 'resolve'
-    The contents of file "$ORAS_ARGV_LOG" should not include 'manifest'
+    The contents of file "$ORAS_ARGV_LOG" should include 'manifest fetch --plain-http 10.0.0.111/pfblockerng/pfsense-ce:2.8 --descriptor'
     The contents of file "$ORAS_ARGV_LOG" should not include 'login'
   End
 
