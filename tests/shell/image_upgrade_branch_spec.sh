@@ -51,6 +51,10 @@ Describe 'image-upgrade.sh update-branch selection'
     ' _ "$SCRIPT" "$WORK"
   }
 
+  run_newline_branch() {
+    run_branch_block available "$(printf 'bad\n2_9_0')"
+  }
+
   It 'accepts a live branch absent from pkg_list_repos'
     When call run_branch_block available 2_9_0
     The status should be success
@@ -82,5 +86,13 @@ Describe 'image-upgrade.sh update-branch selection'
     The status should be failure
     The stderr should include 'must not contain a single quote'
     The contents of file "$CALLS" should not include 'pfSense-repoc'
+  End
+
+  It 'rejects a newline before querying the catalogue'
+    When call run_newline_branch
+    The status should be failure
+    The stderr should include 'invalid update branch name'
+    The contents of file "$CALLS" should not include 'pfSense-repoc'
+    The contents of file "$CALLS" should not include 'pfSsh.php'
   End
 End
