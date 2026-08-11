@@ -498,3 +498,9 @@ section is the authoritative correction.**
 Absent/corrupt-ledger reads remain fail-safe current-runtime behaviour. Historical
 "downgrade-safe" wording does not establish an older-package compatibility requirement. Package
 downgrade is unsupported; no inverse ledger conversion or downgrade-only test is required.
+
+## Amendment — 2026-08-11: fixed tick cadence (issue #2090)
+
+The `pfb_tick_interval` wording in §7 step 3 is historical. "Within one tick interval" now means
+within one fixed 15-minute tick; there is no registered `pfb_tick_interval` config/CLI knob. A stale
+raw value may remain in `config.xml`, but scheduling ignores it.

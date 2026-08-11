@@ -234,12 +234,6 @@
         "read_adapter": null,
         "write_adapter": null
     },
-    "pfb_tick_interval": {
-        "section": "installedpackages/pfblockerng/config/0",
-        "default": "15",
-        "read_adapter": null,
-        "write_adapter": null
-    },
     "pfb_quiet_hours": {
         "section": "installedpackages/pfblockerng/config/0",
         "default": "",

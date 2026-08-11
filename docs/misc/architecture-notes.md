@@ -1437,7 +1437,7 @@ window. `PFB_TRIGGER` values are unchanged across the migration, so the ADR-12 h
 ### One trigger-tick + the due-ledger
 
 The four legacy cron families (`cron`/`dcc`/`bl`/`ss_refresh`) collapse to **one** crontab entry —
-`*/<pfb_tick_interval> … pfblockerng.php cron-tick` (default every **15 min**). `cron-tick` is the
+`*/15 … pfblockerng.php cron-tick` (fixed every **15 min**). `cron-tick` is the
 cron-only wrapper: it runs the tick unless `/var/db/pfblockerng/.pfb_cron_disable` exists, in which
 case it logs `[ Disabled by … ]` and dispatches nothing (issue #1204 — the smoke suite's scheduler
 off switch; the Update page reports the suppression). The direct `pfblockerng.php tick` verb is
@@ -1502,10 +1502,9 @@ so every re-fetched feed re-ingests regardless of content. A read-only **Schedul
 from the ledger (last-run / next-due per job); a tidied update-log pane. No raw verb strings in
 the UI.
 
-Two registered `PfbConfig` knobs (ADR-29), both with safe defaults and **no GUI control** — set via
-config/CLI for advanced tuning:
+One registered `PfbConfig` knob remains (ADR-29), with a safe default and **no GUI control** — set
+via config/CLI for advanced tuning:
 
-- **`pfb_tick_interval`** (default `15`) — tick cadence in minutes; `*/N` in crontab.
 - **`pfb_quiet_hours`** (default `''` = apply immediately) — maintenance window that defers apply.
 
 ### Tests & DoD

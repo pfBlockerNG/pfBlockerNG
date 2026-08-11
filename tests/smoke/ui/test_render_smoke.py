@@ -753,13 +753,15 @@ def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
     manual config cleanup is needed; the harness flag (outside config.xml) still needs its
     own restore.
 
-    Given the master switch ON, a fresh sync pass (installs the current cron-tick entry),
+    Given the master switch ON, stale pfb_tick_interval=30, and a fresh sync pass,
         and the harness flag removed,
     When GET pfblockerng_update.php,
     Then the cron-status line shows neither the harness banner nor '[ Missing cron task ]'.
     """
     flag = helpers.PFB_CRON_DISABLE_PATH
     helpers.set_package_enabled(smoke_vm, True)
+    helpers.config_set(smoke_vm, _CFG_TICK_INTERVAL, "30")
+    assert helpers.config_get(smoke_vm, _CFG_TICK_INTERVAL) == "30", "stale tick interval seed must remain raw 30"
     helpers.reload(smoke_vm, "update")
     rm = smoke_vm.ssh("rm", "-f", flag)
     assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
@@ -769,6 +771,14 @@ def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
         assert result.ok, f"Update page render oracle failed: {result.detail}"
         assert f"[ Disabled by {flag} ]" not in resp.text, (
             "Update page still shows the harness disable banner after the flag was removed"
+        )
+        cron_lines = [
+            line.split()
+            for line in smoke_vm.ssh("/usr/bin/grep", "pfblockerng.php cron-tick", "/etc/crontab").stdout.splitlines()
+            if "cron-tick" in line
+        ]
+        assert len(cron_lines) == 1 and cron_lines[0][0] == "*/15", (
+            f"stale pfb_tick_interval=30 must still install exactly one fixed */15 cron-tick entry; got {cron_lines!r}"
         )
         assert "[ Missing cron task ]" not in resp.text, (
             "Update page misreports '[ Missing cron task ]' on a healthy, enabled, synced box -- "
@@ -1252,6 +1262,7 @@ def test_update_page_schedule_shows_seconds_precision(
 
 
 _CFG_PFB_ENABLE = "installedpackages/pfblockerng/config/0/enable_cb"
+_CFG_TICK_INTERVAL = "installedpackages/pfblockerng/config/0/pfb_tick_interval"
 _DNSBL_STAT_DB = "/var/unbound/pfb_py_dnsbl.sqlite"
 _WIDGET_PAGE = "/widgets/widgets/pfblockerng.widget.php"
 

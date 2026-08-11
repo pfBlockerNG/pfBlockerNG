@@ -156,8 +156,7 @@ class RequireConfigGatewaySniff implements Sniff
 		// ADR-40: alias-table apply mode + batch size
 		'installedpackages/pfblockerng/config/0/pfb_alias_delta_mode',
 		'installedpackages/pfblockerng/config/0/pfb_alias_delta_batch',
-		// ADR-43: tick-cron dispatch interval + apply-on-change window
-		'installedpackages/pfblockerng/config/0/pfb_tick_interval',
+		// ADR-43: apply-on-change window
 		'installedpackages/pfblockerng/config/0/pfb_quiet_hours',
 		// issue #1109: log-retention trim hysteresis margin percent
 		'installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct',

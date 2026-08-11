@@ -438,7 +438,7 @@ originally because `pfblockerng_extra.inc` hosts `PfbConfig` itself (gateway can
 through itself) and `pfblockerng_migrate.inc` predates registry. `pfblockerng_extra.inc` has
 since grown well beyond gateway — also hosts real dispatch/scheduling logic (e.g.
 ADR-43 due-ledger API and `pfblockerng_tick()`). That code is registered-field-adjacent (reads
-`pfb_interval`/`pfb_quiet_hours`/`pfb_tick_interval` via `PfbConfig::read()` already) but sniff
+`pfb_interval`/`pfb_quiet_hours` via `PfbConfig::read()` already) but sniff
 cannot enforce it there — any new code landing in this file must self-police `PfbConfig` usage for
 registered keys (direct `config_get_path`/`config_set_path` on one is rule violation sniff
 will not catch); rely on manual review, not mechanical gate.

@@ -121,3 +121,7 @@ Post-fix verification:
   python -m pytest -q                                       → 1882 passed, 4 skipped
 
 ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=5
+
+POST-MERGE AMENDMENT — 2026-08-11 (issue #2090)
+The configurable pfb_tick_interval implementation recorded above was retired. cron-tick now uses a
+fixed */15 cadence; the registry key and clamp are removed, and stale raw config.xml values are inert.

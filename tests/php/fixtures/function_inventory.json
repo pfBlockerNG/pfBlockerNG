@@ -10261,19 +10261,6 @@
             }
         ]
     },
-    "pfb_tick_interval_clamp": {
-        "returnsRef": false,
-        "returnType": "int",
-        "params": [
-            {
-                "name": "raw",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
     "pfb_tick_seed": {
         "returnsRef": false,
         "returnType": "string",
@@ -12098,13 +12085,6 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "bool",
-                "default": null
-            },
-            {
-                "name": "tick_min",
-                "byRef": false,
-                "variadic": false,
-                "type": "int",
                 "default": null
             },
             {

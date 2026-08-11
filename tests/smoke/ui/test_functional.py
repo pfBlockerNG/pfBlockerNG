@@ -1921,7 +1921,7 @@ def test_update_page_cron_status_reports_scheduled_tick(
 ) -> None:
     """Cron Status reports the scheduled tick, NOT "[ Missing cron task ]".
 
-    ADR-43 installs ONE ``*/pfb_tick_interval`` cron tick whenever pfBlockerNG is
+    ADR-43 installs ONE fixed ``*/15`` cron tick whenever pfBlockerNG is
     enabled. The Update page previously probed the crontab with the legacy
     interval/min/24hour signature, which never matches that tick, so it falsely
     rendered "[ Missing cron task ]" and a time derived from the feed cadence. This
@@ -1971,7 +1971,7 @@ def test_update_page_cron_status_reports_scheduled_tick(
         assert not looks_like_login_page(body), "Update page GET returned the login form (session lost)"
         assert "Missing cron task" not in body, (
             "Cron Status still shows '[ Missing cron task ]' although the cron-tick cron IS "
-            "installed — the page must probe the */N cron-tick signature, not the legacy "
+            "installed — the page must probe the */15 cron-tick signature, not the legacy "
             "interval/min/24hour cron"
         )
         assert "NEXT Scheduled CRON Event will run at" in body, "Cron Status header missing from the Update page"

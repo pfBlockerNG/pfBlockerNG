@@ -4808,11 +4808,11 @@ function sync_package_pfblockerng($cron='') {
 	#	Define/Apply CRON Jobs		#
 	#########################################
 
-	// ADR-43: one trigger-tick replaces the cron/dcc/ss_refresh/bl fleet.
-	// A single */pfb_tick_interval cron entry fires; the tick reads the due-ledger
+	// ADR-43: one fixed 15-minute trigger-tick replaces the cron/dcc/ss_refresh/bl fleet.
+	// A single */15 cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	pfblockerng_configure_tick_cron($pfb['enable'] === PfbToggle::On, pfb_tick_interval_clamp(PfbConfig::read('gen/pfb_tick_interval')), $pfb['log']);
+	pfblockerng_configure_tick_cron($pfb['enable'] === PfbToggle::On, $pfb['log']);
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {

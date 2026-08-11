@@ -7173,8 +7173,8 @@ function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_
 
 // issue #1204: extracted from sync_package_pfblockerng() so PHPUnit can pin the
 // tick cron's install/teardown behaviour without driving the whole sync pass.
-function pfblockerng_configure_tick_cron(bool $enabled, int $tick_min, string $log): void {
-	$pfb_tick_min = '*/' . $tick_min;
+function pfblockerng_configure_tick_cron(bool $enabled, string $log): void {
+	$pfb_tick_min = '*/15';
 	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$log} 2>&1";
 
 	if ($enabled) {
