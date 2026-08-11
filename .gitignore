@@ -63,5 +63,8 @@ test-results/
 .claude/worktrees/
 .codex/local-notes.md
 
+# Per-machine Claude Code overrides (e.g. Windows Git Bash path) — never committed
+.claude/settings.local.json
+
 # token-savior MCP server index cache (one per project root / worktree)
 .token-savior-cache.json
