@@ -212,6 +212,13 @@ _oras_pull() {
     fi
     printf 'smoke-on-box: pulling %s image (%s) -> %s\n' \
         "$_op_tag" "$_op_ref" "$_op_dir" >&2
+    # The tag alone cannot prove what booted. Log the registry's immutable digest
+    # and release annotations next to every pull (including LAN zot rewrites).
+    # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
+    _op_descriptor="$(oras manifest fetch ${PFB_ORAS_FLAGS:-} "$_op_ref" --descriptor)"
+    printf 'smoke-on-box: %s image identity %s\n' "$_op_tag" \
+        "$(printf '%s\n' "$_op_descriptor" | jq -c \
+            '{digest, pfsense_version:(.annotations["io.github.pfblockerng.pfsense-version"] // null), image_version:(.annotations["org.opencontainers.image.version"] // null), created:(.annotations["org.opencontainers.image.created"] // null)}')" >&2
     # shellcheck disable=SC2086  # intentional: empty flags expand to zero words
     ( cd "$_op_dir" && oras pull ${PFB_ORAS_FLAGS:-} "$_op_ref" ) >&2
 }
