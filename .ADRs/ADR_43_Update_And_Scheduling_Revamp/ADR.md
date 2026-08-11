@@ -380,3 +380,15 @@ Phase 6 is the GUI; Phase 7 is migration/docs/live proof.
 - **The cron consolidation cannot preserve cadence + jitter + avoid the boot stampede** without
   regression (Phase 4 pins fail). Then keep the separate `dcc`/`bl` jobs (their jitter is in crontab)
   and apply the tick only to the feed `cron` + `ss_refresh`; the rest of the ADR stands.
+
+## 8. Post-merge amendments
+
+### 2026-08-11 — fixed tick cadence (issue #2090)
+
+The configurable tick-frequency requirements in §2.G, §3, §5, and Phase 4 remain above as the
+historical decision. They are superseded by issue #2090:
+
+- The single `cron-tick` entry runs at a fixed `*/15` cadence.
+- `pfb_tick_interval` is no longer a registered `PfbConfig` field or supported config/CLI knob.
+- A stale raw `pfb_tick_interval` value in `config.xml` is left unchanged but is inert; no schema
+  migration is performed.

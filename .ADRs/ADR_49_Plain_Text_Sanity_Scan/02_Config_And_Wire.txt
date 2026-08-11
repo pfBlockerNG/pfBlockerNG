@@ -162,3 +162,7 @@ Include:
   `<header>_v4` in the log line, per the ADR-48 handoff), and that the flag is
   set via config (no GUI) so the smoke sets pfb_feed_sanity='on' directly.
 - PHPUnit/phpstan/phpcs summaries; commit hash + push confirmation.
+
+POST-ACCEPTANCE ADDENDUM — 2026-08-11 (issue #2090)
+The comparison to ADR-43's pfb_tick_interval above is historical: that scheduler knob was retired,
+and cron-tick now runs at a fixed */15 cadence. pfb_feed_sanity remains a supported config-only knob.

@@ -67,25 +67,21 @@ final class TickCronInstallTest extends TestCase
 	{
 		$this->assertSame([], $this->cronCommands());
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
 	}
 
 	public function testEnableRemovesStaleCronTickBeforeReinstall(): void
 	{
-		// A pre-existing cron-tick entry at a DIFFERENT interval (interval changed
-		// 30 -> 15 across a settings save) must not linger alongside the fresh one.
-		// The MINUTE field is the discriminator: both entries carry the same command,
-		// so asserting the command alone would pass even if the stale */30 survived.
 		$this->seedCronItem(0, self::CRON_TICK_CMD, '*/30');
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
 		$this->assertSame('*/30', config_get_path('cron/item/0/minute'), 'before: the stale interval is in place');
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
-		$this->assertSame('*/15', config_get_path('cron/item/0/minute'), 'after: the entry carries the NEW interval');
+		$this->assertSame('*/15', config_get_path('cron/item/0/minute'), 'after: the entry carries the fixed interval');
 	}
 
 	public function testEnableReplacesACronTickEntryWhoseCommandChanged(): void
@@ -98,7 +94,7 @@ final class TickCronInstallTest extends TestCase
 		$this->seedCronItem(0, $stale, '*/15');
 		$this->assertSame([$stale], $this->cronCommands());
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'the stale-command entry must not linger beside the fresh one');
 	}
@@ -110,7 +106,7 @@ final class TickCronInstallTest extends TestCase
 		$this->seedCronItem(0, self::LEGACY_TICK_CMD, '*/15');
 		$this->assertSame([self::LEGACY_TICK_CMD], $this->cronCommands());
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
 	}
@@ -119,7 +115,7 @@ final class TickCronInstallTest extends TestCase
 	{
 		$this->seedCronItem(0, self::CRON_TICK_CMD, '*/15');
 
-		pfblockerng_configure_tick_cron(FALSE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(FALSE, self::LOG);
 
 		$this->assertSame([], $this->cronCommands());
 	}
@@ -129,7 +125,7 @@ final class TickCronInstallTest extends TestCase
 		// A box that upgraded straight into 'disabled' must still lose its old tick entry.
 		$this->seedCronItem(0, self::LEGACY_TICK_CMD, '*/15');
 
-		pfblockerng_configure_tick_cron(FALSE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(FALSE, self::LOG);
 
 		$this->assertSame([], $this->cronCommands());
 	}
@@ -143,10 +139,10 @@ final class TickCronInstallTest extends TestCase
 		// legacy entry left to absorb it) exposes a too-loose needle.
 		$this->seedCronItem(0, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron >> ' . self::LOG . ' 2>&1', '0');
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'first sync: legacy cron removed, cron-tick installed');
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands(), 'steady-state resync: the cron-tick entry must survive the migration teardown');
 	}
 
@@ -157,7 +153,7 @@ final class TickCronInstallTest extends TestCase
 		$this->seedCronItem(2, '/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bl >> ' . self::LOG . ' 2>&1', '0');
 		$this->assertCount(3, $this->cronCommands());
 
-		pfblockerng_configure_tick_cron(TRUE, 15, self::LOG);
+		pfblockerng_configure_tick_cron(TRUE, self::LOG);
 
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
 	}

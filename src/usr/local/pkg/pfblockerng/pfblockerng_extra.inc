@@ -989,16 +989,6 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-40 companion; delta mode is new in 4.0, grandfathered installs run \'replace\' where batch is inert',
 		],
 
-		// ADR-43: tick-cron dispatch interval in minutes (1–60). Default '15'.
-		// One cron tick fires every */pfb_tick_interval; jobs run only when due
-		// per the due-ledger. Default 15 matches the tightest existing job (ss_refresh).
-		'gen/pfb_tick_interval' => [
-			'default'       => '15',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'no_grandfather' => 'ADR-43 trigger-tick engine replaces the cron fleet uniformly for all installs (accepted redesign, no per-install variance)',
-		],
-
 		// ADR-43: optional apply-on-change maintenance window ("HH:MM-HH:MM", local time).
 		// When set: detected changes outside the window are deferred (pending); the first tick
 		// inside the window applies them. Empty string (default) = apply immediately (no deferral).
@@ -3814,21 +3804,6 @@ function pfb_due_ledger_mark_ran_anchored(
 }
 
 /**
- * pfb_tick_interval_clamp — clamp a raw pfb_tick_interval config value to a valid cron minute.
- *
- * Accepts the raw string from PfbConfig::read('gen/pfb_tick_interval') and returns an int
- * suitable for use as the cron minute field (1–60). Non-numeric or out-of-range values
- * are clamped: 0 → 1, >60 → 60, non-int (e.g. 'abc') → 1.
- *
- * @param string $raw   Raw config value (e.g. '15', '0', '100', 'abc').
- * @return int          Clamped interval in [1, 60].
- */
-function pfb_tick_interval_clamp(string $raw): int
-{
-	return max(1, min(60, (int) $raw));
-}
-
-/**
  * pfb_next_tick_boundary — when does the next cron tick fire?
  *
  * The ADR-43 scheduler is one cron tick that fires every $tick_min minutes (the cron minute
@@ -3837,7 +3812,7 @@ function pfb_tick_interval_clamp(string $raw): int
  * the Update page can show "next run at" and "time remaining" for the actual scheduled cron
  * (not the legacy per-feed interval cadence).
  *
- * @param int $tick_min  Clamped tick interval in minutes (see pfb_tick_interval_clamp).
+ * @param int $tick_min  Tick interval in minutes (the scheduler passes fixed 15).
  * @param int $cur_hour  Current hour (0–23).
  * @param int $cur_min   Current minute (0–59).
  * @param int $cur_sec   Current second (0–59).

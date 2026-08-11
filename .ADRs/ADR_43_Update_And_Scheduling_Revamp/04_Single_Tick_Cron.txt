@@ -83,3 +83,8 @@ HANDOFF — write `.ADRs/ADR_43_Update_And_Scheduling_Revamp/RESULTS/04_Results.
 Record: the tick verb name + dispatch logic; the single-tick crontab line + default freq knob (PfbConfig
 key); how legacy knobs seed the ledger; the #468 persist integration; cadence/jitter test results;
 the reboot smoke result; the go-ahead for Phase 5.
+
+POST-MERGE AMENDMENT — 2026-08-11 (issue #2090)
+The tick-frequency-knob requirements above are historical. The cron-tick cadence is fixed at */15;
+pfb_tick_interval is no longer registered or supported through config/CLI. A stale raw config.xml
+value remains stored but inert, with no schema migration.

@@ -201,7 +201,7 @@ further actions).
 - Prompt: `03_Mode_Setting.txt`
 - Register **`pfb_feed_mgmt_mode`** (`off`/`notify`/`auto`, default `off`) — renamed
   2026-07-03 to match the `pfb_*` convention of the sibling registered keys
-  (`pfb_agg_types`, `pfb_alias_delta_mode`, `pfb_tick_interval`) — in `pfb_cfg_registry()`
+  (`pfb_agg_types`, `pfb_alias_delta_mode`) — in `pfb_cfg_registry()`
   (+ `since`) + the RequireConfigGateway sniff `$registeredPaths`; read/write via `PfbConfig`.
   Mode values ⇒ a **backed enum** per ADR-28 item 1 (the `PfbIdnMode` pattern), not a plain
   string; add the field's row to the `docs/misc/config-gateway.md` inventory. No reconcile

@@ -220,11 +220,11 @@ $tab_array_sub = pfb_edit_hooks_tabs('run');
 display_top_tabs($tab_array_sub, TRUE);
 pfb_print_pending_changes_box(TRUE);
 
-// ADR-43: the scheduler is a single */pfb_tick_interval cron tick that fires every hour ('*'),
+// ADR-43: the scheduler is a single fixed */15 cron tick,
 // installed iff pfBlockerNG is enabled (the feed `interval` only gates the feed job *inside* the
 // tick, not the tick itself). So the "NEXT Scheduled CRON Event" tracks the tick boundary; the
 // per-feed cadence lives in the Schedule view below.
-$pfb_tick_min = pfb_tick_interval_clamp(PfbConfig::read('gen/pfb_tick_interval'));
+$pfb_tick_min = 15;
 
 if ($pfb['enable'] === PfbToggle::On) {
 	list($next_hour, $next_min, $sec_remain) =

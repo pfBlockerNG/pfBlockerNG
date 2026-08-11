@@ -83,3 +83,7 @@ ADR-43 implementation complete on the branch. Ready to land via PR (rebase-only)
 dispatch the live-VM fan-out for acceptance.
 
 ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=DONE
+
+POST-MERGE AMENDMENT — 2026-08-11 (issue #2090)
+The two-knob description above is historical. pfb_tick_interval was retired; cron-tick now uses a
+fixed */15 cadence, while pfb_quiet_hours remains the only advanced scheduling knob.

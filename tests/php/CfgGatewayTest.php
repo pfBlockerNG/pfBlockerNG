@@ -812,56 +812,33 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// ADR-43 — pfb_tick_interval (plain string; tick-cron dispatch interval)
+	// ADR-43 — pfb_tick_interval retirement
 	// -----------------------------------------------------------------------
 
 	/**
-	 * pfb_tick_interval absent key returns the registered default '15'.
+	 * Retired pfb_tick_interval remains inert: PfbConfig rejects the key while raw XML stays untouched.
 	 *
 	 * Scenario:
-	 *   Background: pfb_tick_interval is a plain-string field; default = '15'.
-	 *     Given no stored value.
-	 *     When PfbConfig::read('gen/pfb_tick_interval').
-	 *     Then '15' is returned (registered default).
+	 *   Given a stale stored value of '30'.
+	 *   When the retired gateway key is read.
+	 *   Then it throws InvalidArgumentException and does not rewrite the raw config value.
 	 */
-	public function testPfbTickIntervalAbsentKeyReturnsDefault(): void
+	public function testRetiredPfbTickIntervalIsUnknownAndRawValueUnchanged(): void
 	{
 		$path = 'installedpackages/pfblockerng/config/0/pfb_tick_interval';
-
-		// Before: absent.
-		$this->assertNull(config_get_path($path), 'before: pfb_tick_interval must be absent');
-
-		// When/Then: absent → default '15'.
-		$result = PfbConfig::read('gen/pfb_tick_interval');
-		$this->assertSame('15', $result, 'pfb_tick_interval absent -> default 15');
-	}
-
-	/**
-	 * pfb_tick_interval round-trips losslessly for a non-default value.
-	 *
-	 * Scenario:
-	 *   Background: pfb_tick_interval is a plain-string field.
-	 *     Given stored = '30'.
-	 *     When PfbConfig::write('gen/pfb_tick_interval', PfbConfig::read('gen/pfb_tick_interval')).
-	 *     Then stored string == '30' (write(read('30')) == '30').
-	 */
-	public function testPfbTickIntervalRoundTrip(): void
-	{
-		$path = 'installedpackages/pfblockerng/config/0/pfb_tick_interval';
-
-		// Given: '30' stored.
 		$this->seedConfig($path, '30');
+		$this->assertSame('30', config_get_path($path), "before: stale pfb_tick_interval seed is '30'");
 
-		// Before: raw value is '30'.
-		$this->assertSame('30', config_get_path($path), "before: pfb_tick_interval seed is '30'");
+		$caught = NULL;
+		try {
+			PfbConfig::read('gen/pfb_tick_interval');
+		} catch (InvalidArgumentException $exception) {
+			$caught = $exception;
+		}
 
-		// When: read -> write.
-		$val = PfbConfig::read('gen/pfb_tick_interval');
-		$this->assertSame('30', $val, "read: pfb_tick_interval '30' -> '30'");
-
-		// After: write back produces '30'.
-		PfbConfig::write('gen/pfb_tick_interval', $val);
-		$this->assertSame('30', config_get_path($path), "write(read('30'))=='30' for pfb_tick_interval");
+		$this->assertInstanceOf(InvalidArgumentException::class, $caught,
+			'retired pfb_tick_interval must be rejected as an unknown gateway key');
+		$this->assertSame('30', config_get_path($path), 'retired key read must leave stale raw value unchanged');
 	}
 
 	// -----------------------------------------------------------------------
@@ -1256,8 +1233,7 @@ final class CfgGatewayTest extends TestCase
 			// ADR-40: alias-table apply mode + batch size
 			'pfb_alias_delta_mode',
 			'pfb_alias_delta_batch',
-			// ADR-43: tick-cron dispatch interval + apply-on-change window
-			'pfb_tick_interval',
+			// ADR-43: apply-on-change window
 			'pfb_quiet_hours',
 			// issue #1109: log-retention trim hysteresis margin percent
 			'pfb_log_trim_margin_pct',
@@ -2846,7 +2822,7 @@ final class CfgGatewayTest extends TestCase
 		$fixture_path = __DIR__ . '/fixtures/cfg_registry_pre1931_parity.json';
 		$fixture      = json_decode((string) file_get_contents($fixture_path), TRUE);
 		$this->assertIsArray($fixture, 'parity fixture must decode to an array');
-		$this->assertCount(103, $fixture, 'parity fixture must carry exactly 103 entries (guards a truncated oracle)');
+		$this->assertCount(102, $fixture, 'parity fixture must carry exactly 102 entries (guards a truncated oracle)');
 
 		$alias_of_section = array_flip(PFB_SECTIONS);
 		$registry         = pfb_cfg_registry();
