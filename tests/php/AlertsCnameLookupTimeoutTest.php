@@ -14,7 +14,7 @@ final class AlertsCnameLookupTimeoutTest extends TestCase
 	protected function setUp(): void
 	{
 		$this->tmp = sys_get_temp_dir() . '/pfb alerts cname ' . bin2hex(random_bytes(6));
-		mkdir($this->tmp, 0777, true);
+		mkdir($this->tmp, 0777, TRUE);
 	}
 
 	protected function tearDown(): void
