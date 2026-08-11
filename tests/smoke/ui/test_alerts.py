@@ -10,7 +10,8 @@ token, and POST the exact ``{action: ..., domain/ip/table: ...}`` set the page's
 JS would send (mirroring ``test_log.py``'s manual-POST pattern).
 
 What this file establishes -- the same oracle discipline as ``test_functional.py``:
-the oracle is the box's EFFECTIVE state, NEVER the HTTP response body. For the
+the behavioral oracle is the box's EFFECTIVE state, never the HTTP response body;
+the response may prove only authenticated rendering and reachability. For the
 config-store actions (whitelist / TLD-exclusion / IP suppression) that is the
 ``config.xml`` node the handler writes (read via :func:`helpers.config_get`,
 base64-decoded -- these are pfBlockerNG textarea fields). For the marquee
@@ -88,7 +89,8 @@ def _post_action(webui: WebUI, data: dict[str, str], *, timeout: float = 300.0) 
     Re-harvests the token (per-render), merges it into ``data``, and POSTs to the
     alerts page exactly as the page's JS would -- no ``save`` button (these handlers
     gate on ``isset($_POST['<action>'])``, not on ``save``). The caller asserts
-    EFFECTIVE state (config.xml / DNS), never this response.
+    EFFECTIVE state (config.xml / DNS); the response may only establish authenticated
+    rendering and reachability.
     """
     payload: dict[str, Any] = {"__csrf_magic": _csrf(webui)}
     payload.update(data)

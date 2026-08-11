@@ -962,8 +962,11 @@ if (isset($_POST) && !empty($_POST)) {
 			// 30s DNS ceiling matches the established SafeSearch and whoisconvert lookups (#2014/#2015).
 			$cname_lookup_timeout = 30;
 			$cname_lookup_kill_grace = 5;
-			$cname_lookup_file = "{$g['tmp_path']}/pfb_alerts_cname_" . getmypid() . '_' . bin2hex(random_bytes(8));
-			$cname_lookup_pipeline = "{$drill_esc} {$domain_esc} {$ext_dns} | /usr/bin/awk '/CNAME/ {sub(\"[.]\$\", \"\", \$5); print \$5;}'";
+			$cname_lookup_prefix = "{$g['tmp_path']}/pfb_alerts_cname_" . getmypid() . '_' . bin2hex(random_bytes(8));
+			$cname_lookup_file = "{$cname_lookup_prefix}_result";
+			$cname_lookup_raw_file = "{$cname_lookup_prefix}_raw";
+			$cname_lookup_pipeline = "{$drill_esc} {$domain_esc} {$ext_dns} > " . escapeshellarg($cname_lookup_raw_file) .
+				" 2>&1 && /usr/bin/awk '/CNAME/ {sub(\"[.]\$\", \"\", \$5); print \$5;}' " . escapeshellarg($cname_lookup_raw_file);
 			$cname_lookup_cmd = "{$timeout_esc} -s TERM -k {$cname_lookup_kill_grace} {$cname_lookup_timeout} /bin/sh -c " .
 				escapeshellarg($cname_lookup_pipeline) . ' > ' . escapeshellarg($cname_lookup_file) . " 2>&1 < /dev/null";
 			$cname_lookup_output = array();
@@ -979,6 +982,7 @@ if (isset($_POST) && !empty($_POST)) {
 				$cname_list = file($cname_lookup_file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: array();
 			}
 			@unlink($cname_lookup_file);
+			@unlink($cname_lookup_raw_file);
 		}
 
 		// Remove 'www.' prefix
