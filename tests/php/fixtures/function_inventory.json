@@ -3273,6 +3273,39 @@
             }
         ]
     },
+    "pfb_due_ledger_cache_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "document",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "expected_hash",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_due_ledger_entry_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "entry",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_due_ledger_is_due": {
         "returnsRef": false,
         "returnType": "bool",
@@ -3471,6 +3504,33 @@
             }
         ]
     },
+    "pfb_due_ledger_read_cache": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "config_hash",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
     "pfb_due_ledger_read_entry": {
         "returnsRef": false,
         "returnType": "?array",
@@ -3559,9 +3619,50 @@
             }
         ]
     },
+    "pfb_due_ledger_write_cache": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "entries",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "config_hash",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
     "pfb_due_ledger_write_entry": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": [
             {
                 "name": "job_key",
@@ -3583,6 +3684,20 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
@@ -9222,6 +9337,47 @@
             }
         ]
     },
+    "pfb_schedule_atomic_json_publish": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "document",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable|array",
+                "default": null
+            },
+            {
+                "name": "validator",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
     "pfb_schedule_group_active_rows": {
         "returnsRef": false,
         "returnType": "bool",
@@ -9394,6 +9550,73 @@
                 "variadic": false,
                 "type": "?callable",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_schedule_state_read": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
+    "pfb_schedule_state_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_schedule_state_write": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
             }
         ]
     },
