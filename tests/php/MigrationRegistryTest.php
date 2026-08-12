@@ -56,6 +56,7 @@ final class MigrationRegistryTest extends TestCase
 	{
 		$GLOBALS['config']                    = [];
 		$GLOBALS['pfb_test_write_config_calls'] = [];
+		$GLOBALS['pfb_test_file_notices']       = [];
 	}
 
 	private function seedDnsbl(array $data): void
@@ -334,6 +335,7 @@ final class MigrationRegistryTest extends TestCase
 		$this->assertSame('7', config_get_path(self::GEN_SECTION . '/pfb_schedule_weekday'));
 		$this->assertSame('3', config_get_path(self::GEN_SECTION . '/skipfeed'));
 		$this->assertCount(1, $this->writeConfigCalls());
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'fresh schedule seeding is not malformed legacy state');
 	}
 
 	// -----------------------------------------------------------------------
