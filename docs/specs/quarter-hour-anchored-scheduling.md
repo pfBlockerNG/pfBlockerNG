@@ -34,9 +34,11 @@ scheduling model.
 - Feed schedule state lives in configuration. The disposable due-ledger cache contains one shared
   `cron` entry for the next scheduled feed wake; it never gains per-feed entries or a duplicate
   feed-schedule store.
-- Durable per-feed and per-Extra execution facts record successful outcomes needed to reconstruct
-  the cache. Durable pending markers preserve work which must survive cache loss. Both are runtime
-  history, not another copy of schedule configuration.
+- Durable per-feed execution history stores `last_successful_check` separately from
+  `last_completed_occurrence`. Completion outcome is `success` or `retry-cap-reached`; failed
+  attempts below the cap complete nothing. Durable per-Extra success facts and pending markers
+  preserve the remaining work which must survive cache loss. These are runtime history, not
+  another copy of schedule configuration.
 - Existing manual update, Force Update/Reload, Hold, Never, disabled group, disabled row,
   package-disabled, feed-pass lock, cache-regeneration, and pending-apply contracts remain unless
   this specification explicitly changes them.
@@ -163,7 +165,9 @@ particular, an outcome which currently leaves a `.fail` marker continues to retr
 ticks, subject to the existing `skipfeed` daily threshold. Fresh installs default `skipfeed` to
 `3`; options `0` (**No Limit**) through `6` remain available, and upgrades preserve configured
 values, including `0`. A successful unchanged or conditional source check counts as successful
-execution even though feed content was not modified.
+execution even though feed content was not modified, and completes that occurrence even if later
+processing fails. Retry-cap exhaustion completes the occurrence with outcome
+`retry-cap-reached`; failures below the cap do not complete it.
 
 The scheduled-feed master switch does not discard pending applies. Changing the Automatic Apply
 Window does not rephase feed cadence; pending work is reconsidered on the next fixed tick.
@@ -213,9 +217,9 @@ and at pfSense's existing page privilege gate; no unreachable in-page denial sea
 
 After authorization and validation, save configuration through the normal pfSense path. Then
 derive the schedule cache into a temporary file, validate it there, and rename it into place.
-Preserve successful-execution facts and durable pending markers. If cache generation, validation,
-or publication fails, configuration remains saved and the General page visibly reports that
-schedule-cache generation failed and the likely bug should be reported.
+Preserve successful-execution/completed-occurrence facts and durable pending markers. If cache
+generation, validation, or publication fails, configuration remains saved and the General page
+visibly reports that schedule-cache generation failed and the likely bug should be reported.
 
 The cache may live in temporary storage. Boot, pfBlockerNG enablement, and every tick regenerate a
 missing, malformed, or configuration-stale cache before scheduling decisions are made. This makes
@@ -296,8 +300,8 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
     CE and Plus legs.
 15. Cache lifecycle tests cover valid, missing, malformed, configuration-stale, temporary-write
     failure, validation failure, rename failure, reboot/enable/tick regeneration, and valid no-wake
-    state. Execution-history tests distinguish successful changed and unchanged checks from
-    outcomes which retain urgent retry state.
+    state. Execution-history tests distinguish successful changed and unchanged checks, failures
+    below the retry cap, retry-cap exhaustion, and downstream failure after source success.
 16. `scripts/agent/run-gates.sh --diff origin/devel` and all focused PHP, smoke, and UI suites pass;
     every behavior change carries frozen test-first red-to-green evidence.
 
@@ -307,7 +311,8 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 - A per-minute or resident scheduler, arbitrary cron expressions, phased crontab minute lists, or
   an install-generated offset/re-roll UX.
 - Per-feed due-ledger entries or any second persisted copy of feed schedule configuration. Durable
-  successful-execution facts and pending markers are runtime history and are explicitly in scope.
+  successful-execution/completed-occurrence facts and pending markers are runtime history and are
+  explicitly in scope.
 - Schedule overrides for Extras, SafeSearch, apply reconciliation, log maintenance, or work that
   has no existing feed-group schedule.
 - New privileges, timezone controls, UTC schedule storage, or changes to pfSense local-clock
@@ -317,6 +322,4 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 
 ## Open forks
 
-- [Switch runtime to the Default Schedule](https://github.com/pfBlockerNG/pfBlockerNG/issues/2308):
-  decide the durable terminal occurrence fact needed when retry exhaustion consumes a scheduled
-  occurrence without a successful source check.
+None.
