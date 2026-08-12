@@ -94,7 +94,7 @@ final class MigrationRegistryTest extends TestCase
 	 * -- it must run while dnsbl_mode still evidences pre-upgrade Unbound mode, which
 	 * ADR-02 overwrites).
 	 */
-	public function testRegistryHasFourEntriesInOrder(): void
+	public function testRegistryHasFiveEntriesInOrder(): void
 	{
 		$registry = pfb_migration_registry();
 
