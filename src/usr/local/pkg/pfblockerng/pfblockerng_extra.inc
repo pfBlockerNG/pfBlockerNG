@@ -4372,6 +4372,321 @@ function pfb_schedule_state_write(
 	);
 }
 
+function pfb_schedule_runtime_hash_projection(array $model): array
+{
+	$entries = [];
+	foreach ($model['entries'] as $id => $entry) {
+		$entries[$id] = [
+			'cadence' => $entry['cadence'],
+			'enabled' => $entry['enabled'],
+			'override' => $entry['override'],
+		];
+	}
+	ksort($entries, SORT_STRING);
+	return [
+		'scheduled' => $model['scheduled'],
+		'default' => $model['default'],
+		'entries' => $entries,
+	];
+}
+
+/** Build the strict, secret-free schedule image consumed by the tick planner. */
+function pfb_schedule_runtime_model(array $general, array $sections): ?array
+{
+	$token = static function (mixed $value, int $min, int $max): ?int {
+		if (!is_string($value) || !preg_match('/^(?:0|[1-9][0-9]*)$/D', $value)) {
+			return NULL;
+		}
+		$number = (int) $value;
+		return $number >= $min && $number <= $max ? $number : NULL;
+	};
+	$minute = static function (mixed $value) use ($token): ?int {
+		$value = $token($value, 0, 45);
+		return $value !== NULL && in_array($value, [0, 15, 30, 45], TRUE) ? $value : NULL;
+	};
+	$read_schedule = static function (array $source) use ($token, $minute): ?array {
+		$weekday = $token($source['schedule_weekday'] ?? NULL, 1, 7);
+		$hour = $token($source['schedule_hour'] ?? NULL, 0, 23);
+		$minute_value = $minute($source['schedule_minute'] ?? NULL);
+		return $weekday === NULL || $hour === NULL || $minute_value === NULL
+			? NULL
+			: ['weekday' => $weekday, 'hour' => $hour, 'minute' => $minute_value];
+	};
+	if (count(array_diff(array_keys($sections), ['ipv4', 'ipv6', 'dnsbl'])) !== 0
+		|| count($sections) !== 3
+		|| !is_string($general['pfb_scheduled_feed_updates'] ?? NULL)
+		|| !in_array($general['pfb_scheduled_feed_updates'], ['on', ''], TRUE)) {
+		return NULL;
+	}
+	$default = [
+		'weekday' => $token($general['pfb_schedule_weekday'] ?? NULL, 1, 7),
+		'hour' => $token($general['pfb_schedule_hour'] ?? NULL, 0, 23),
+		'minute' => $minute($general['pfb_schedule_minute'] ?? NULL),
+	];
+	if (in_array(NULL, $default, TRUE)) {
+		return NULL;
+	}
+	$cadences = ['Never', '01hour', '02hours', '03hours', '04hours', '06hours', '08hours', '12hours', 'EveryDay', 'Weekly'];
+	$entries = [];
+	$hash_projection = [
+		'scheduled' => $general['pfb_scheduled_feed_updates'] === 'on',
+		'default' => $default,
+		'entries' => [],
+	];
+	foreach (['ipv4', 'ipv6', 'dnsbl'] as $family) {
+		if (!is_array($sections[$family])) {
+			return NULL;
+		}
+		$suffix = $family === 'dnsbl' ? '' : ($family === 'ipv4' ? '_v4' : '_v6');
+		foreach ($sections[$family] as $group) {
+			if (!is_array($group) || !array_key_exists('action', $group)
+				|| !array_key_exists('cron', $group) || !array_key_exists('row', $group)
+				|| !is_string($group['cron']) || !in_array($group['cron'], $cadences, TRUE)
+				|| !is_array($group['row'])) {
+				return NULL;
+			}
+			if (!is_string($group['action'])) {
+				return NULL;
+			}
+			$override_token = $group['schedule_override'] ?? '';
+			if (!is_string($override_token) || !in_array($override_token, ['on', ''], TRUE)) {
+				return NULL;
+			}
+			$override = NULL;
+			if ($override_token === 'on') {
+				$override = $read_schedule($group);
+				if ($override === NULL) {
+					return NULL;
+				}
+			}
+			$enabled = $general['pfb_scheduled_feed_updates'] === 'on'
+				&& pfb_group_action_valid($group['action'], $family)
+				&& $group['action'] !== 'Disabled'
+				&& $group['cron'] !== 'Never';
+			foreach ($group['row'] as $row) {
+				if (!is_array($row)) {
+					return NULL;
+				}
+				if (array_key_exists('url', $row) && !is_string($row['url'])) {
+					return NULL;
+				}
+				$url = $row['url'] ?? NULL;
+				if (!is_string($url) || $url === '') {
+					continue;
+				}
+				if (array_key_exists('state', $row)) {
+					if (!is_string($row['state']) || !in_array($row['state'], ['Enabled', 'Flex', 'Hold', 'Disabled'], TRUE)) {
+						return NULL;
+					}
+					if ($row['state'] === 'Disabled') {
+						continue;
+					}
+				}
+				$header = $row['header'] ?? NULL;
+				if (!is_string($header) || $header === '' || !preg_match('/^[A-Za-z0-9_]+$/D', $header)) {
+					return NULL;
+				}
+				$id = $family . ':' . (string) $header . $suffix;
+				if (array_key_exists($id, $entries)) {
+					return NULL;
+				}
+				$entry = [
+					'cadence' => $group['cron'],
+					'enabled' => $enabled,
+					'has_active_rows' => TRUE,
+					'override' => $override,
+				];
+				$entries[$id] = $entry;
+				$hash_projection['entries'][$id] = [
+					'cadence' => $entry['cadence'],
+					'enabled' => $entry['enabled'],
+					'override' => $entry['override'],
+				];
+			}
+		}
+	}
+	ksort($hash_projection['entries'], SORT_STRING);
+	$encoded = json_encode($hash_projection, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+	return [
+		'config_hash' => hash('sha256', $encoded),
+		'scheduled' => $hash_projection['scheduled'],
+		'default' => $default,
+		'entries' => $entries,
+	];
+}
+
+function pfb_schedule_state_update(
+	callable $update,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	$path = $ledger_dir . '/pfb_schedule_state.json';
+	return pfb_schedule_atomic_json_publish(
+		$path,
+		static function () use ($path, $update): array {
+			$state = ['schema' => 1, 'items' => []];
+			if (is_file($path)) {
+				$raw = @file_get_contents($path);
+				if ($raw === FALSE || $raw === '') {
+					throw new RuntimeException('schedule state unreadable');
+				}
+				$decoded = json_decode($raw, TRUE);
+				if (!pfb_schedule_state_valid($decoded)) {
+					throw new RuntimeException('schedule state malformed');
+				}
+				$state = $decoded;
+			}
+			$result = $update($state);
+			if (!is_array($result) || !pfb_schedule_state_valid($result)) {
+				throw new RuntimeException('schedule state update invalid');
+			}
+			return $result;
+		},
+		static fn (mixed $value): bool => pfb_schedule_state_valid($value),
+		$io,
+		$timeout_s
+	);
+}
+
+function pfb_schedule_state_set_pending(
+	array $occurrences,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	if ($occurrences === []) {
+		return TRUE;
+	}
+	foreach ($occurrences as $id => $occurrence) {
+		if (!is_string($id) || $id === '' || is_numeric($id) || !is_int($occurrence) || $occurrence < 0) {
+			return FALSE;
+		}
+	}
+	return pfb_schedule_state_update(
+		static function (array $state) use ($occurrences): array {
+			foreach ($occurrences as $id => $occurrence) {
+				$item = $state['items'][$id] ?? [];
+				$item['pending_occurrence'] = $occurrence;
+				$state['items'][$id] = $item;
+			}
+			return $state;
+		},
+		$ledger_dir,
+		$io,
+		$timeout_s
+	);
+}
+
+function pfb_schedule_runtime_model_valid(mixed $model): bool
+{
+	if (!is_array($model) || count(array_diff(array_keys($model), ['config_hash', 'scheduled', 'default', 'entries'])) !== 0
+		|| count(array_diff(['config_hash', 'scheduled', 'default', 'entries'], array_keys($model))) !== 0
+		|| !preg_match('/^[0-9a-f]{64}$/D', (string) ($model['config_hash'] ?? ''))
+		|| !is_bool($model['scheduled'] ?? NULL)
+		|| !is_array($model['default'] ?? NULL) || !is_array($model['entries'] ?? NULL)) {
+		return FALSE;
+	}
+	$default = $model['default'];
+	if (count(array_diff(array_keys($default), ['weekday', 'hour', 'minute'])) !== 0
+		|| !is_int($default['weekday'] ?? NULL) || $default['weekday'] < 1 || $default['weekday'] > 7
+		|| !is_int($default['hour'] ?? NULL) || $default['hour'] < 0 || $default['hour'] > 23
+		|| !is_int($default['minute'] ?? NULL) || !in_array($default['minute'], [0, 15, 30, 45], TRUE)) {
+		return FALSE;
+	}
+	foreach ($model['entries'] as $id => $entry) {
+		$valid_id = preg_match('/^ipv4:[A-Za-z0-9_]+_v4$/D', (string) $id)
+			|| preg_match('/^ipv6:[A-Za-z0-9_]+_v6$/D', (string) $id)
+			|| preg_match('/^dnsbl:[A-Za-z0-9_]+$/D', (string) $id);
+		if (!is_string($id) || !$valid_id || !is_array($entry)
+			|| count(array_diff(array_keys($entry), ['cadence', 'enabled', 'has_active_rows', 'override'])) !== 0
+			|| count(array_diff(['cadence', 'enabled', 'has_active_rows', 'override'], array_keys($entry))) !== 0
+			|| !is_string($entry['cadence'] ?? NULL)
+			|| !in_array($entry['cadence'], ['Never', '01hour', '02hours', '03hours', '04hours', '06hours', '08hours', '12hours', 'EveryDay', 'Weekly'], TRUE)
+			|| !is_bool($entry['enabled'] ?? NULL) || ($entry['has_active_rows'] ?? NULL) !== TRUE) {
+			return FALSE;
+		}
+		if ($entry['override'] !== NULL && (!is_array($entry['override'])
+			|| count(array_diff(array_keys($entry['override']), ['weekday', 'hour', 'minute'])) !== 0
+			|| !is_int($entry['override']['weekday'] ?? NULL) || $entry['override']['weekday'] < 1 || $entry['override']['weekday'] > 7
+			|| !is_int($entry['override']['hour'] ?? NULL) || $entry['override']['hour'] < 0 || $entry['override']['hour'] > 23
+			|| !is_int($entry['override']['minute'] ?? NULL) || !in_array($entry['override']['minute'], [0, 15, 30, 45], TRUE))) {
+			return FALSE;
+		}
+	}
+	try {
+		$encoded = json_encode(pfb_schedule_runtime_hash_projection($model), JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
+	} catch (Throwable) {
+		return FALSE;
+	}
+	return hash('sha256', $encoded) === $model['config_hash'];
+}
+
+function pfb_schedule_cache_refresh(
+	array $model,
+	array $state,
+	int $now,
+	DateTimeZone $timezone,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	if (!pfb_schedule_runtime_model_valid($model) || !pfb_schedule_state_valid($state)) {
+		return FALSE;
+	}
+	$groups = $model['entries'];
+	foreach ($groups as $id => &$entry) {
+		$item = $state['items'][$id] ?? NULL;
+		if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
+			$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
+		}
+	}
+	unset($entry);
+	$plan = pfb_schedule_plan($groups, $model['default'], NULL, $now, $timezone);
+	$pending = FALSE;
+	foreach ($model['entries'] as $id => $_entry) {
+		if (array_key_exists($id, $state['items']) && array_key_exists('pending_occurrence', $state['items'][$id])) {
+			$pending = TRUE;
+			break;
+		}
+	}
+	$due = $pending || $plan['due'] !== [];
+	$next_due = $due ? $now : $plan['next_due'];
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	$document = static function () use ($path, $next_due, $now, $model): array {
+		$existing = [];
+		$pending_apply = FALSE;
+		if (is_file($path)) {
+			$raw = @file_get_contents($path);
+			$decoded = $raw === FALSE || $raw === '' ? NULL : json_decode($raw, TRUE);
+			if (!pfb_due_ledger_document_valid($decoded)) {
+				throw new RuntimeException('schedule cache malformed');
+			}
+			$pending_apply = is_array($decoded['cron'] ?? NULL)
+				&& (($decoded['cron']['pending_apply'] ?? FALSE) === TRUE);
+			foreach ($decoded as $key => $value) {
+				if ($key !== '_meta' && $key !== 'cron') {
+					$existing[$key] = $value;
+				}
+			}
+		}
+		if ($next_due !== NULL || $pending_apply) {
+			$existing['cron'] = ['last_run' => $now, 'next_due' => $next_due ?? $now, 'jitter' => 0];
+			if ($pending_apply) {
+				$existing['cron']['pending_apply'] = TRUE;
+			}
+		}
+		return ['_meta' => ['schema' => 1, 'config_hash' => $model['config_hash']]] + $existing;
+	};
+	return pfb_schedule_atomic_json_publish(
+		$path,
+		$document,
+		static fn (mixed $value): bool => pfb_due_ledger_cache_valid($value, $model['config_hash']),
+		$io,
+		$timeout_s
+	);
+}
+
 /**
  * pfb_due_ledger_is_due — is the named job due to run on this tick?
  *
