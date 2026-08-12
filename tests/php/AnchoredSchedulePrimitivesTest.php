@@ -101,7 +101,19 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		);
 	}
 
-	public function testNextOccurrenceRejectsMalformedInputsAndNeverReturnsNull(): void
+	public function testNextOccurrenceUsesNonzeroPhaseForEveryMultiHourCadence(): void
+	{
+		$reference = $this->timestamp('2026-01-05 00:00:00');
+		foreach (['02hours', '03hours', '04hours', '06hours', '08hours', '12hours'] as $cadence) {
+			$this->assertSame(
+				$this->timestamp('2026-01-05 01:00:00'),
+				pfb_schedule_next_occurrence($cadence, 1, 1, 0, $reference, $this->scheduleTimezone),
+				"{$cadence} must honor a nonzero hourly phase"
+			);
+		}
+	}
+
+	public function testNextOccurrenceReturnsNullOnlyForNeverAndRejectsMalformedInputs(): void
 	{
 		$reference = $this->timestamp('2026-01-05 00:00:00');
 		$this->assertNull(pfb_schedule_next_occurrence('Never', 1, 0, 0, $reference, $this->scheduleTimezone));
@@ -144,6 +156,18 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 			$this->timestamp('2026-11-01 01:15:00 EST'),
 			pfb_schedule_next_occurrence('EveryDay', 7, 1, 15, (int) $first, $timezone),
 			'repeated fall-back local slot must be observed twice'
+		);
+	}
+
+	public function testWeeklyOccurrenceSearchCrossesMissingSpringForwardWeek(): void
+	{
+		$timezone = new DateTimeZone('America/New_York');
+		$reference = $this->timestamp('2026-03-01 02:15:00 EST');
+
+		$this->assertSame(
+			$this->timestamp('2026-03-15 02:15:00 EDT'),
+			pfb_schedule_next_occurrence('Weekly', 7, 2, 15, $reference, $timezone),
+			'weekly search must continue after a nonexistent DST occurrence'
 		);
 	}
 
@@ -251,7 +275,6 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$validDefault = ['weekday' => 1, 'hour' => 4, 'minute' => 0];
 		$validGroup = ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL];
 		$invalid = [
-			[['feed' => $validGroup], 'not-an-array'],
 			[['feed' => 42], $validDefault],
 			[[1 => $validGroup], $validDefault],
 			[['feed' => ['enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL]], $validDefault],
@@ -268,9 +291,16 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 			try {
 				pfb_schedule_plan($groups, $default, NULL, $this->timestamp('2026-01-05 00:00:00'), $this->scheduleTimezone);
 				$this->fail('malformed normalized schedule unexpectedly accepted');
-			} catch (Throwable $e) {
+			} catch (InvalidArgumentException $e) {
 				$this->assertNotSame('', $e->getMessage());
 			}
 		}
+	}
+
+	public function testSchedulePlanRejectsNonArrayDefaultScheduleWithTypeError(): void
+	{
+		$groups = ['feed' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL]];
+		$this->expectException(TypeError::class);
+		pfb_schedule_plan($groups, 'not-an-array', NULL, $this->timestamp('2026-01-05 00:00:00'), $this->scheduleTimezone);
 	}
 }
