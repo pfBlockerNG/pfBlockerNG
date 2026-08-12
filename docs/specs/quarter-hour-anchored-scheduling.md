@@ -11,12 +11,13 @@ supersedes that ticket's earlier sub-hourly examples.
 ## Goal
 
 Replace the legacy global feed interval and scattered schedule phase controls with one visible
-quarter-hour Default Schedule, optional feed-group schedule overrides, and one authoritative
-feed wake in the existing due ledger.
+quarter-hour Default Schedule, optional feed-group schedule overrides, and one derived feed wake
+in the existing due-ledger cache.
 
 The result preserves each feed group's configured cadence, runs calendar-scheduled Extras before
-feeds at a shared slot, catches missed work up once, and migrates existing schedules atomically
-without reintroducing a user-configurable tick or a second scheduling model.
+feeds at a shared slot, catches missed work up once, and migrates existing schedules through the
+normal pfSense configuration save path without reintroducing a user-configurable tick or a second
+scheduling model.
 
 ## Fixed constraints
 
@@ -30,12 +31,15 @@ without reintroducing a user-configurable tick or a second scheduling model.
   thirty-minute feed cadences are not added.
 - A feed group's cadence is authoritative. It is never intersected with a separate global
   cadence. Numeric `pfb_interval` values retire instead of becoming a new global rate limit.
-- Feed schedule state lives in configuration. The due ledger contains one shared `cron` entry
-  for the next scheduled feed wake; it never gains per-feed entries or a duplicate feed-schedule
-  store.
+- Feed schedule state lives in configuration. The disposable due-ledger cache contains one shared
+  `cron` entry for the next scheduled feed wake; it never gains per-feed entries or a duplicate
+  feed-schedule store.
+- Durable per-feed and per-Extra execution facts record successful outcomes needed to reconstruct
+  the cache. Durable pending markers preserve work which must survive cache loss. Both are runtime
+  history, not another copy of schedule configuration.
 - Existing manual update, Force Update/Reload, Hold, Never, disabled group, disabled row,
-  package-disabled, feed-pass lock, ledger-unavailable fail-safe, and pending-apply contracts
-  remain unless this specification explicitly changes them.
+  package-disabled, feed-pass lock, cache-regeneration, and pending-apply contracts remain unless
+  this specification explicitly changes them.
 - SafeSearch and apply reconciliation retain their fixed zero-jitter 900-second ledger cadences.
   Log maintenance remains on each eligible idle tick.
 - Registered General fields use `PfbConfig`; dynamic IPv4, IPv6, and DNSBL feed-group fields
@@ -139,10 +143,10 @@ At a `cron` wake, exact and idempotent per-feed gates select only groups with an
 Mixed hourly/daily/weekly groups do not pull one another early. Multiple groups sharing a slot run
 once each. Two consecutive ticks never run the same occurrence twice.
 
-The shared `cron` ledger entry stores the earliest future occurrence among enabled, scheduled
+The shared `cron` cache entry stores the earliest future occurrence among enabled, scheduled
 groups. A cadence, action, active-row state, master-switch, or effective schedule change
-immediately recomputes that wake. With scheduling Off and no pending work, the entry exposes no
-future scheduled-feed wake.
+immediately recomputes that wake. A valid cache without a `cron` entry represents no future
+scheduled-feed wake.
 
 ### Catch-up, pending work, and failure
 
@@ -151,7 +155,15 @@ eligible tick. Missed occurrences are never replayed. After that pass, the share
 to the earliest future occurrence.
 
 A busy feed pass or existing pending state preserves one pending occurrence and retries it on the
-next eligible tick. A corrupt or unavailable ledger retains the existing fail-safe behavior.
+next eligible tick. Missing, malformed, or configuration-stale cache state is regenerated before
+due work is selected; cache absence never becomes a second scheduling policy.
+
+Feed download/probe and downstream-processing failures retain their existing retry behavior. In
+particular, an outcome which currently leaves a `.fail` marker continues to retry on later fixed
+ticks, subject to the existing `skipfeed` daily threshold. Fresh installs default `skipfeed` to
+`3`; options `0` (**No Limit**) through `6` remain available, and upgrades preserve configured
+values, including `0`. A successful unchanged or conditional source check counts as successful
+execution even though feed content was not modified.
 
 The scheduled-feed master switch does not discard pending applies. Changing the Automatic Apply
 Window does not rephase feed cadence; pending work is reconsidered on the next fixed tick.
@@ -187,7 +199,7 @@ Its help text is:
 
 The window restricts automatic applies, not scheduled feed checks or Extras refreshes.
 
-### Validation, authorization, and atomic saves
+### Validation, authorization, and cache publication
 
 General schedule components are always required and strictly validated, even when scheduled feed
 updates are Off. Missing checkboxes mean Off; literal `on` means On. Array-valued or other checkbox
@@ -196,23 +208,29 @@ Missing, array-valued, malformed, or out-of-set schedule input produces visible 
 saves never silently coerce it.
 
 Registered fields use the existing delta-aware `PfbConfig::writeSection()` General-page
-authorization boundary. Authorization failure changes neither configuration nor ledger.
+authorization boundary. Authorization denial is covered at that hermetic gateway/controller seam
+and at pfSense's existing page privilege gate; no unreachable in-page denial seam is introduced.
 
-After authorization, compare canonical old and proposed scheduling state. Rephasing the shared
-`cron` ledger is part of the General or group save transaction. Preserve `last_run` and pending
-state. When scheduling is On and no work is pending, store the earliest enabled-feed occurrence
-strictly after save time. If ledger rephasing fails, reject the complete submission with a visible
-error and leave both configuration and ledger unchanged, including unrelated fields submitted in
-the same save.
+After authorization and validation, save configuration through the normal pfSense path. Then
+derive the schedule cache into a temporary file, validate it there, and rename it into place.
+Preserve successful-execution facts and durable pending markers. If cache generation, validation,
+or publication fails, configuration remains saved and the General page visibly reports that
+schedule-cache generation failed and the likely bug should be reported.
+
+The cache may live in temporary storage. Boot, pfBlockerNG enablement, and every tick regenerate a
+missing, malformed, or configuration-stale cache before scheduling decisions are made. This makes
+power loss between configuration publication and cache rename recoverable without a cross-file
+transaction or journal.
 
 ### Installation and upgrade migration
 
-Use one idempotent, atomic migration/seed boundary spanning General configuration and the IPv4,
-IPv6, and DNSBL group sections. No independent field rename may expose mixed legacy/new scheduling
-state.
+Use one idempotent migration/seed pass spanning General configuration and the IPv4, IPv6, and
+DNSBL group sections, then publish it through the normal pfSense `write_config()` path. No
+independent per-field flush is introduced.
 
 Fresh installs persist Sunday and one uniformly selected `(H,M)` from the 28 quarter-hour slots
-`00:00` through `06:45`. The values are normal visible settings and are never recalculated.
+`00:00` through `06:45`, plus `skipfeed=3`. The values are normal visible settings and are never
+recalculated.
 
 On upgrade:
 
@@ -227,8 +245,10 @@ On upgrade:
 6. Invalid or missing `dow` on a current Weekly group falls back to inherited Sunday and emits a
    notice. Invalid inactive `dow` is discarded.
 7. Group hour/minute values seed from migrated General `(H,M)`.
-8. Only after complete new state is durable, remove `pfb_interval`, `pfb_min`, `pfb_hour`,
-   `pfb_dailystart`, and every legacy group `dow`.
+8. Remove `pfb_interval`, `pfb_min`, `pfb_hour`, `pfb_dailystart`, and every legacy group `dow`
+   from the configuration image published by that pass.
+9. Preserve the existing `skipfeed` value, including `0`; an absent legacy value retains the
+   former unlimited behavior.
 
 Malformed-state notices name affected keys, never values. Migration never reseeds an already
 migrated installation. Fresh groups inherit the Default Schedule (`schedule_override=''`).
@@ -238,12 +258,13 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 1. Crontab contains one literal `*/15` pfBlockerNG tick and no user-configurable tick override;
    stale stored tick values cannot change runtime cadence.
 2. Fresh-install seeding persists Sunday and one of the 28 allowed `(H,M)` slots; repeated runtime
-   reads never reseed it.
-3. One atomic upgrade test covers General plus IPv4, IPv6, and DNSBL groups and proves every valid,
+   reads never reseed it. It also persists `skipfeed=3`, while upgrade coverage proves configured
+   values and legacy absence remain unlimited.
+3. One upgrade test covers General plus IPv4, IPv6, and DNSBL groups and proves every valid,
    invalid, missing, Weekly, non-Weekly, active, and inactive migration branch, including notices
    that name keys but not values.
-4. Failure injection at each migration write boundary proves no partially migrated configuration
-   is observable and rerunning a completed migration is a no-op.
+4. Migration publishes once through the normal pfSense path, and rerunning a completed migration
+   is a no-op.
 5. Calendar tests cover every allowed minute, hour/day/week wrap, every existing hourly-through-
    weekly cadence, inherited and overridden phase, local-clock transition cases already supported
    by pfSense, and the strictly-after-reference rule.
@@ -256,8 +277,9 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 9. Due Extras run before feeds at a shared slot. Injected `dcc` and `bl` failures preserve and feed
    last-known-good data and do not block the feed pass.
 10. General and group save tests prove strict scalar/set validation, dormant-value preservation,
-    unchanged override values while Off, delta-aware authorization, immediate ledger rephasing,
-    preserved `last_run`/pending state, and full rollback on ledger failure.
+    unchanged override values while Off, delta-aware authorization, immediate cache rephasing,
+    preserved successful-execution/pending facts, and saved configuration plus a visible warning
+    on cache failure.
 11. Automatic Apply Window tests prove empty, inclusive start, exclusive end, midnight wrap, equal-
     endpoint rejection, canonical storage, forgotten endpoints when unchecked, and pending apply at
     the first eligible tick.
@@ -266,11 +288,17 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
     their explicit migration/save paths.
 13. General and group UI changes carry Tier-A render coverage and Tier-B browser coverage for
     control presence, placement, enable/disable behavior, cadence-dependent Weekday behavior,
-    validation errors, save/reload persistence, and authorization/ledger-failure errors.
+    validation errors, save/reload persistence, the existing privilege gate, and cache-failure
+    warnings.
 14. Focused live smoke proves fresh-install seed persistence, one genuine legacy migration,
     inherited and overridden hourly/daily/weekly dispatch, shared-slot Extras ordering,
-    once-only downtime catch-up, and pending apply-window behavior on selected CE and Plus legs.
-15. `scripts/agent/run-gates.sh --diff origin/devel` and all focused PHP, smoke, and UI suites pass;
+    once-only downtime catch-up, cache regeneration, and pending apply-window behavior on selected
+    CE and Plus legs.
+15. Cache lifecycle tests cover valid, missing, malformed, configuration-stale, temporary-write
+    failure, validation failure, rename failure, reboot/enable/tick regeneration, and valid no-wake
+    state. Execution-history tests distinguish successful changed and unchanged checks from
+    outcomes which retain urgent retry state.
+16. `scripts/agent/run-gates.sh --diff origin/devel` and all focused PHP, smoke, and UI suites pass;
     every behavior change carries frozen test-first red-to-green evidence.
 
 ## Out of scope
@@ -278,7 +306,8 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 - User-facing feed cadences below one hour, including 15 and 30 minutes.
 - A per-minute or resident scheduler, arbitrary cron expressions, phased crontab minute lists, or
   an install-generated offset/re-roll UX.
-- Per-feed due-ledger entries or any second persisted copy of feed schedule state.
+- Per-feed due-ledger entries or any second persisted copy of feed schedule configuration. Durable
+  successful-execution facts and pending markers are runtime history and are explicitly in scope.
 - Schedule overrides for Extras, SafeSearch, apply reconciliation, log maintenance, or work that
   has no existing feed-group schedule.
 - New privileges, timezone controls, UTC schedule storage, or changes to pfSense local-clock
@@ -288,4 +317,6 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 
 ## Open forks
 
-None.
+- [Switch runtime to the Default Schedule](https://github.com/pfBlockerNG/pfBlockerNG/issues/2308):
+  decide the durable terminal occurrence fact needed when retry exhaustion consumes a scheduled
+  occurrence without a successful source check.
