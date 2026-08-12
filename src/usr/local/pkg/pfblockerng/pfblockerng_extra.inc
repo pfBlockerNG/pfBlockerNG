@@ -3550,7 +3550,7 @@ function pfb_schedule_next_occurrence(
 	}
 
 	$interval = max(1, $valid_cadences[$cadence]);
-	$limit = $reference + (8 * 86400);
+	$limit = $reference + (15 * 86400);
 	$candidate = $reference + 1;
 	while ($candidate <= $limit) {
 		$local = (new DateTimeImmutable('@' . $candidate))->setTimezone($timezone);
