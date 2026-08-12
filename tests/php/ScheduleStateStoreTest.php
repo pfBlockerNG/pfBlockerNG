@@ -63,7 +63,47 @@ final class ScheduleStateStoreTest extends TestCase
 				[$failure => TRUE]
 			), $failure);
 			$this->assertSame($before, file_get_contents($path), $failure . ' must preserve target');
+			$this->assertSame([], glob($this->dir . '/.pfb_schedule.*') ?: [], $failure . ' must remove staging files');
 		}
+	}
+
+	public function testEntryUpdateRejectsMalformedSiblingAndPreservesCache(): void
+	{
+		$path = $this->dir . '/pfb_due_ledger.json';
+		$documents = [
+			['good' => ['last_run' => 1, 'next_due' => 2, 'jitter' => 0], 'bad' => ['last_run' => '1']],
+			['_meta' => ['schema' => 1, 'config_hash' => self::HASH], 'bad' => ['last_run' => '1']],
+		];
+		foreach ($documents as $document) {
+			file_put_contents($path, json_encode($document));
+			$before = file_get_contents($path);
+
+			$this->assertFalse(pfb_due_ledger_write_entry(
+				'dcc',
+				['last_run' => 3, 'next_due' => 4, 'jitter' => 0],
+				$this->dir
+			));
+			$this->assertSame($before, file_get_contents($path));
+		}
+	}
+
+	public function testPendingUpdateUsesLatestEntryInsideExclusiveTransaction(): void
+	{
+		$path = $this->dir . '/pfb_due_ledger.json';
+		$this->assertTrue(pfb_due_ledger_write_entry(
+			'cron',
+			['last_run' => 1, 'next_due' => 2, 'jitter' => 0],
+			$this->dir
+		));
+		$newer = ['last_run' => 100, 'next_due' => 200, 'jitter' => 0];
+
+		pfb_due_ledger_set_pending('cron', $this->dir, 5.0, [
+			'before_document' => static function () use ($path, $newer): void {
+				file_put_contents($path, json_encode(['cron' => $newer]));
+			},
+		]);
+
+		$this->assertSame($newer + ['pending_apply' => TRUE], pfb_due_ledger_read_entry('cron', $this->dir));
 	}
 
 	public function testStateAbsentIsCanonicalEmptyAndFullItemRoundTrips(): void
@@ -105,6 +145,17 @@ final class ScheduleStateStoreTest extends TestCase
 		$this->assertNull(pfb_schedule_state_read($this->dir));
 		foreach (['fail_temp', 'fail_write', 'fail_read', 'fail_validate', 'fail_rename'] as $failure) {
 			$this->assertFalse(pfb_schedule_state_write($valid, $this->dir, [$failure => TRUE]), $failure);
+			$this->assertSame([], glob($this->dir . '/.pfb_schedule.*') ?: [], $failure . ' must remove staging files');
+		}
+	}
+
+	public function testStateRejectsEveryNumericLookingOpaqueId(): void
+	{
+		foreach (['01', '1.5', '1e3', '+1', ' 1 '] as $id) {
+			$this->assertFalse(pfb_schedule_state_write(
+				['schema' => 1, 'items' => [$id => ['pending_occurrence' => 0]]],
+				$this->dir
+			), 'numeric-looking id must be rejected: ' . var_export($id, TRUE));
 		}
 	}
 }

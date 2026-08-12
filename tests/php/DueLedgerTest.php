@@ -16,12 +16,13 @@ use PHPUnit\Framework\TestCase;
  *   pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
  *   pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $timeout_s = 5.0,
  *                          ?bool &$unavailable = NULL): ?array
- *   pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): void
+ *   pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): bool
  *   pfb_due_ledger_is_due(string $job_key, int $interval, int $now,
  *                          string $seed, int $jitter_max, string $ledger_dir,
  *                          float $timeout_s = 5.0): bool
  *   pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): bool
- *   pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): void
+ *   pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0,
+ *                          array $io = []): void
  *   pfb_due_ledger_mark_ran(string $job_key, int $interval, int $now,
  *                            string $seed, int $jitter_max, string $ledger_dir): void
  *   pfb_due_ledger_mark_ran_anchored(string $job_key, int $interval, int $now,
