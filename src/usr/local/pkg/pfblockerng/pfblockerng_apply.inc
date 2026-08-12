@@ -1993,9 +1993,17 @@ function sync_package_pfblockerng($cron='') {
 							$logtab		= $pfbarr['logtab'];
 
 							$txt_exists	= file_exists("{$pfbfolder}/{$header}.txt");
+							$scheduled_selected = pfb_schedule_feed_selected('dnsbl', $header);
+							if (!$scheduled_selected && !$txt_exists) {
+								continue;
+							}
 							$reuse_unset	= $pfbreuse == '';
 							$staging_current_generation = pfb_dnsbl_staging_is_current_generation(
 								pfb_dnsbl_staging_first_line("{$pfbfolder}/{$header}.txt"));
+							if (!$scheduled_selected) {
+								$pfb_dnsbl_script_pre = $pfb_dnsbl_script_post = FALSE;
+								$staging_current_generation = TRUE;
+							}
 
 							// issue #1960/#1278: a configured pre/post script re-runs its transform
 							// every pass, but the Hold contract ("download once, never again") is
@@ -2007,8 +2015,8 @@ function sync_package_pfblockerng($cron='') {
 							// and stays deliberately ungated -- see the comment there).
 							$pfb_dnsbl_verbatim_reuse = pfb_dnsbl_verbatim_reuse_active(
 								$txt_exists,
-								file_exists("{$pfbfolder}/{$header}.update"),
-								file_exists("{$pfbfolder}/{$header}.fail"),
+								$scheduled_selected && file_exists("{$pfbfolder}/{$header}.update"),
+								$scheduled_selected && file_exists("{$pfbfolder}/{$header}.fail"),
 								$reuse_unset,
 								$staging_current_generation);
 							$pfb_dnsbl_reuse_decision = pfb_dnsbl_script_reuse_decision(
@@ -2144,6 +2152,12 @@ function sync_package_pfblockerng($cron='') {
 											// Clear any previous download fail marker
 											unlink_if_exists("{$pfbfolder}/{$header}.fail");
 											$downloaded_fresh = TRUE;
+											if (!empty($pfb['scheduled_runtime_cron'])) {
+												pfb_schedule_state_record_outcome(
+													"dnsbl:{$header}", PfbScheduleTerminalResult::Success,
+													(string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc')
+												);
+											}
 										}
 									}
 								}
@@ -3550,6 +3564,14 @@ function sync_package_pfblockerng($cron='') {
 						$pfborig	= $pfbarr['orig'];
 						$pfbreuse	= $pfbarr['reuse'];
 						$logtab		= $pfbarr['logtab'];
+						$scheduled_family = $list['vtype'] === '_v4' ? 'ipv4' : 'ipv6';
+						$scheduled_selected = pfb_schedule_feed_selected($scheduled_family, $header);
+						if (!$scheduled_selected && !file_exists("{$pfbfolder}/{$header}.txt")) {
+							continue;
+						}
+						if (!$scheduled_selected) {
+							$pfb_script_pre = $pfb_script_post = FALSE;
+						}
 
 						// Collect active alias list (Used for pfctl update when 'Reputation' is enabled.
 						$pfb_alias_lists_all[] = "{$alias}";
@@ -3569,8 +3591,8 @@ function sync_package_pfblockerng($cron='') {
 						// to the existing local-reuse branch below, never the network). No
 						// baseline -> stay on the fast path; no Hold-specific branch anywhere.
 						$pfb_ip_verbatim_reuse = file_exists("{$pfbfolder}/{$header}.txt") &&
-						    !file_exists("{$pfbfolder}/{$header}.update") &&
-						    !file_exists("{$pfbfolder}/{$header}.fail") &&
+						    (!$scheduled_selected || !file_exists("{$pfbfolder}/{$header}.update")) &&
+						    (!$scheduled_selected || !file_exists("{$pfbfolder}/{$header}.fail")) &&
 						    $pfbreuse == '';
 						$pfb_ip_reuse_decision = pfb_ip_script_reuse_decision(
 						    $pfb_ip_verbatim_reuse, $pfb_script_pre, $pfb_script_post,
@@ -3705,6 +3727,12 @@ function sync_package_pfblockerng($cron='') {
 										// Clear any previous download fail marker
 										unlink_if_exists("{$pfbfolder}/{$header}.fail");
 										$downloaded_fresh = TRUE;
+										if (!empty($pfb['scheduled_runtime_cron'])) {
+											pfb_schedule_state_record_outcome(
+												"{$scheduled_family}:{$header}", PfbScheduleTerminalResult::Success,
+												(string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc')
+											);
+										}
 										pfb_logger('.', 1);
 									}
 								}

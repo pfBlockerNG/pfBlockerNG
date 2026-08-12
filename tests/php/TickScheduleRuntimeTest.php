@@ -128,6 +128,76 @@ final class TickScheduleRuntimeTest extends TestCase
 		$this->assertIsArray(pfb_due_ledger_read_cache($this->dir, $repaired['_meta']['config_hash']));
 	}
 
+	public function testWorkerCompletionDuringReservationSuppressesStaleDispatch(): void
+	{
+		$model = pfb_schedule_runtime_config();
+		$this->assertIsArray($model);
+		$plan = pfb_schedule_plan($model['entries'], $model['default'], NULL, time(), new DateTimeZone(date_default_timezone_get()));
+		$occurrence = $plan['occurrences']['ipv4:runtime_v4'];
+		$calls = 0;
+		$GLOBALS['pfb']['schedule_state_io'] = [
+			'before_document' => function () use (&$calls, $occurrence): void {
+				if ($calls++ !== 0) {
+					return;
+				}
+				file_put_contents($this->stateDir . '/pfb_schedule_state.json', json_encode([
+					'schema' => 1,
+					'items' => ['ipv4:runtime_v4' => [
+						'last_completed_occurrence' => $occurrence,
+						'completion_outcome' => 'success',
+					]],
+				]));
+			},
+		];
+
+		pfblockerng_tick([]);
+
+		$this->assertNotContains(
+			'Tick: dispatching feed cron.',
+			array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message')
+		);
+		$this->assertFileDoesNotExist($this->dir . '/spawns');
+		$state = pfb_schedule_state_read($this->stateDir);
+		$this->assertArrayNotHasKey('pending_occurrence', $state['items']['ipv4:runtime_v4']);
+	}
+
+	public function testWorkerCompletionDuringDispatchMarkSuppressesSpawn(): void
+	{
+		$model = pfb_schedule_runtime_config();
+		$this->assertIsArray($model);
+		$plan = pfb_schedule_plan($model['entries'], $model['default'], NULL, time(), new DateTimeZone(date_default_timezone_get()));
+		$occurrence = $plan['occurrences']['ipv4:runtime_v4'];
+		$this->assertTrue(pfb_schedule_state_write([
+			'schema' => 1,
+			'items' => ['ipv4:runtime_v4' => [
+				'pending_occurrence' => $occurrence,
+				'pending_dispatch_at' => time() - 900,
+			]],
+		], $this->stateDir));
+		$calls = 0;
+		$GLOBALS['pfb']['schedule_state_io'] = [
+			'before_document' => function () use (&$calls, $occurrence): void {
+				if ($calls++ !== 1) {
+					return;
+				}
+				file_put_contents($this->stateDir . '/pfb_schedule_state.json', json_encode([
+					'schema' => 1,
+					'items' => ['ipv4:runtime_v4' => [
+						'last_completed_occurrence' => $occurrence,
+						'completion_outcome' => 'success',
+					]],
+				]));
+			},
+		];
+
+		pfblockerng_tick([]);
+
+		$this->assertNotContains(
+			'Tick: dispatching feed cron.',
+			array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message')
+		);
+	}
+
 	public function testCachePublicationFailureSuppressesCronAndPreservesBytes(): void
 	{
 		$before = '{"broken":true}';

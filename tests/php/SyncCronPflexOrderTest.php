@@ -16,7 +16,7 @@ use PHPUnit\Framework\TestCase;
  *
  * The cron module is an appliance-only scheduler surface. This suite scans executable
  * tokens with php_strip_whitespace and pins the ORDER of the two statements: the first
- * `$pflex = FALSE` derivation line must precede the first `pfb_update_check(` call site.
+ * `$pflex = FALSE` derivation line must precede the row call wrapper invocation.
  */
 final class SyncCronPflexOrderTest extends TestCase
 {
@@ -42,7 +42,7 @@ final class SyncCronPflexOrderTest extends TestCase
 		self::$functionBody = $m[0];
 	}
 
-	public function testDerivationAndCallSiteBothPresentExactlyOnceAndTwoOrMoreTimes(): void
+	public function testDerivationAndRowCallArePresentExactlyOnce(): void
 	{
 		$body = self::$functionBody;
 
@@ -54,12 +54,12 @@ final class SyncCronPflexOrderTest extends TestCase
 			. 'the derivation must not have been duplicated or removed by the fix'
 		);
 
-		$callSiteCount = substr_count($body, 'pfb_update_check(');
-		$this->assertGreaterThanOrEqual(
-			2,
+		$callSiteCount = substr_count($body, '$check($feed_id, $header,');
+		$this->assertSame(
+			3,
 			$callSiteCount,
-			"expected at least 2 'pfb_update_check(' call sites in pfblockerng_sync_cron(), found {$callSiteCount} -- "
-			. 'the .fail retry site plus at least one cron-schedule site must both still exist'
+			"expected exactly 3 row check calls in pfblockerng_sync_cron(), found {$callSiteCount} -- "
+			. 'the urgent retry, force-all, and selected scheduled paths must all remain'
 		);
 	}
 
@@ -78,9 +78,9 @@ final class SyncCronPflexOrderTest extends TestCase
 		$body = self::$functionBody;
 
 		$derivationPos = strpos($body, '$pflex = FALSE');
-		$callSitePos   = strpos($body, 'pfb_update_check(');
+		$callSitePos   = strpos($body, '$check($feed_id, $header,');
 
-		if ($derivationPos === false || $callSitePos === false) {
+		if ($derivationPos === FALSE || $callSitePos === FALSE) {
 			$this->fail('precondition failed: derivation or call site missing -- see the vacuity-guard test');
 		}
 

@@ -29,6 +29,11 @@
 // Tests: tests/php/CfgAdaptersTest.php.
 // ---------------------------------------------------------------------------
 
+enum PfbScheduleTerminalResult: string {
+	case Success = 'success';
+	case RetryCapReached = 'retry-cap-reached';
+}
+
 // PfbStoredEnum — the contract every config-backed enum implements. Reads own raw-token
 // fallback; field-aware gateway writes own empty Off storage and absence deletion.
 interface PfbStoredEnum
@@ -4337,6 +4342,10 @@ function pfb_schedule_state_valid(mixed $state): bool
 		if ($has_occurrence !== $has_outcome || ($has_outcome && !in_array($item['completion_outcome'], ['success', 'retry-cap-reached'], TRUE))) {
 			return FALSE;
 		}
+		if ($has_occurrence && array_key_exists('pending_occurrence', $item)
+		    && $item['pending_occurrence'] <= $item['last_completed_occurrence']) {
+			return FALSE;
+		}
 	}
 	return TRUE;
 }
@@ -4591,10 +4600,10 @@ function pfb_schedule_state_set_pending(
 		static function (array $state) use ($occurrences): array {
 			foreach ($occurrences as $id => $occurrence) {
 				$item = $state['items'][$id] ?? [];
-				$previous = $item['pending_occurrence'] ?? NULL;
-				$item['pending_occurrence'] = $occurrence;
-				if ($previous !== $occurrence) {
-					unset($item['pending_dispatch_at']);
+				$completed = $item['last_completed_occurrence'] ?? NULL;
+				if (!array_key_exists('pending_occurrence', $item)
+				    && (!is_int($completed) || $occurrence > $completed)) {
+					$item['pending_occurrence'] = $occurrence;
 				}
 				$state['items'][$id] = $item;
 			}
@@ -4604,6 +4613,71 @@ function pfb_schedule_state_set_pending(
 		$io,
 		$timeout_s
 	);
+}
+
+/** Stable feed identity shared by scheduler and synchronous apply loops. */
+function pfb_schedule_feed_id(string $family, string $header): ?string
+{
+	if ($family === 'dnsbl' && preg_match('/^[A-Za-z0-9_]+$/D', $header)) {
+		return "dnsbl:{$header}";
+	}
+	if ($family === 'ipv4' && preg_match('/^[A-Za-z0-9_]+_v4$/D', $header)) {
+		return "ipv4:{$header}";
+	}
+	if ($family === 'ipv6' && preg_match('/^[A-Za-z0-9_]+_v6$/D', $header)) {
+		return "ipv6:{$header}";
+	}
+	return NULL;
+}
+
+/** Whether this row belongs to the current scheduled pass. */
+function pfb_schedule_feed_selected(string $family, string $header): bool
+{
+	global $pfb;
+	if (empty($pfb['scheduled_runtime_cron'])) {
+		return TRUE;
+	}
+	$id = pfb_schedule_feed_id($family, $header);
+	return $id !== NULL && isset($pfb['scheduled_selected_ids'][$id]);
+}
+
+/** Record a terminal source check without inventing completion for an unreserved item. */
+function pfb_schedule_state_record_outcome(
+	string $id,
+	PfbScheduleTerminalResult $outcome,
+	string $ledger_dir,
+	?int $now = NULL,
+	array $io = []
+): bool {
+	if (!preg_match('/^(?:ipv4:[A-Za-z0-9_]+_v4|ipv6:[A-Za-z0-9_]+_v6|dnsbl:[A-Za-z0-9_]+)$/D', $id)) {
+		return FALSE;
+	}
+	$now ??= time();
+	$ok = pfb_schedule_state_update(
+		static function (array $state) use ($id, $outcome, $now): array {
+			$item = $state['items'][$id] ?? [];
+			if ($outcome === PfbScheduleTerminalResult::RetryCapReached
+			    && !array_key_exists('pending_occurrence', $item)) {
+				return $state;
+			}
+			if ($outcome === PfbScheduleTerminalResult::Success) {
+				$item['last_successful_check'] = $now;
+			}
+			if (array_key_exists('pending_occurrence', $item)) {
+				$item['last_completed_occurrence'] = $item['pending_occurrence'];
+				$item['completion_outcome'] = $outcome->value;
+				unset($item['pending_occurrence'], $item['pending_dispatch_at']);
+			}
+			$state['items'][$id] = $item;
+			return $state;
+		},
+		$ledger_dir,
+		$io
+	);
+	if (!$ok && function_exists('logger')) {
+		logger(LOG_WARNING, localize_text("Scheduled feed outcome publication failed [ {$id} ]"), LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+	return $ok;
 }
 
 function pfb_schedule_runtime_model_valid(mixed $model): bool
@@ -5232,18 +5306,6 @@ function pfblockerng_tick(
 			}
 			unset($entry);
 			$plan = pfb_schedule_plan($groups, $runtime_model['default'], NULL, $now, $timezone);
-			$pending_exists = FALSE;
-			$recent_pending = FALSE;
-			foreach ($runtime_model['entries'] as $id => $_entry) {
-				$item = $runtime_state['items'][$id] ?? NULL;
-				if (is_array($item) && array_key_exists('pending_occurrence', $item)) {
-					$pending_exists = TRUE;
-					if (array_key_exists('pending_dispatch_at', $item)
-						&& $item['pending_dispatch_at'] > $now - 900) {
-						$recent_pending = TRUE;
-					}
-				}
-			}
 			$state_published = TRUE;
 			if ($plan['occurrences'] !== []) {
 				$state_published = pfb_schedule_state_set_pending(
@@ -5251,9 +5313,22 @@ function pfblockerng_tick(
 					$state_dir,
 					is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
 				);
-				if ($state_published) {
-					foreach ($plan['occurrences'] as $id => $occurrence) {
-						$runtime_state['items'][$id]['pending_occurrence'] = $occurrence;
+			}
+			if ($state_published) {
+				$runtime_state = pfb_schedule_state_read($state_dir);
+				$state_published = $runtime_state !== NULL;
+			}
+			$pending_exists = FALSE;
+			$recent_pending = FALSE;
+			if ($state_published) {
+				foreach ($runtime_model['entries'] as $id => $_entry) {
+					$item = $runtime_state['items'][$id] ?? NULL;
+					if (is_array($item) && array_key_exists('pending_occurrence', $item)) {
+						$pending_exists = TRUE;
+						if (array_key_exists('pending_dispatch_at', $item)
+							&& $item['pending_dispatch_at'] > $now - 900) {
+							$recent_pending = TRUE;
+						}
 					}
 				}
 			}
@@ -5272,9 +5347,9 @@ function pfblockerng_tick(
 				logger(LOG_NOTICE, localize_text('Tick: scheduled feed reservation failed; cron suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 			} elseif ($recent_pending) {
 				logger(LOG_INFO, localize_text('Tick: scheduled feed dispatch already reserved; waiting for completion.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			} elseif (($plan['occurrences'] !== [] || $pending_exists) && pfb_feed_pass_busy()) {
+			} elseif ($pending_exists && pfb_feed_pass_busy()) {
 				logger(LOG_INFO, localize_text('Tick: scheduled feed deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			} elseif ($plan['occurrences'] !== [] || $pending_exists) {
+			} elseif ($pending_exists) {
 				$dispatch_ids = [];
 				foreach ($runtime_model['entries'] as $id => $_entry) {
 					$item = $runtime_state['items'][$id] ?? NULL;
@@ -5282,11 +5357,13 @@ function pfblockerng_tick(
 						$dispatch_ids[$id] = TRUE;
 					}
 				}
+				$marked_any = FALSE;
 				$marked = pfb_schedule_state_update(
-					static function (array $state) use ($dispatch_ids, $now): array {
+					static function (array $state) use ($dispatch_ids, $now, &$marked_any): array {
 						foreach (array_keys($dispatch_ids) as $id) {
 							if (array_key_exists($id, $state['items']) && array_key_exists('pending_occurrence', $state['items'][$id])) {
 								$state['items'][$id]['pending_dispatch_at'] = $now;
+								$marked_any = TRUE;
 							}
 						}
 						return $state;
@@ -5294,7 +5371,7 @@ function pfblockerng_tick(
 					$state_dir,
 					is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
 				);
-				if (!$marked) {
+				if (!$marked || !$marked_any) {
 					logger(LOG_NOTICE, localize_text('Tick: scheduled dispatch reservation failed; cron suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 				} else {
 					logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);

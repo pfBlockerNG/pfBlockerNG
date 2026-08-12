@@ -1777,6 +1777,9 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 									'/usr/local/www/',
 									'/usr/local/share/GeoIP/',
 									'/usr/local/share/GeoIP/cc/' );
+				if (!empty($pfb['dbdir']) && is_string($pfb['dbdir']) && realpath($pfb['dbdir']) !== FALSE) {
+					$allowed_path[] = rtrim(realpath($pfb['dbdir']), '/') . '/';
+				}
 
 				// Canonicalize before any membership test so a relative
 				// ('..') or redundant-separator path cannot escape an allowed

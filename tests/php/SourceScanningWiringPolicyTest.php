@@ -153,7 +153,6 @@ final class SourceScanningWiringPolicyTest extends TestCase
 		'PfbSyncStatusIpWritersTest.php' => '#993 live sync/download/firewall orchestration',
 		'ProbeBodyPurgeTest.php' => 'destructive package installer caller',
 		'SyncCronPflexOrderTest.php' => 'off-limits live scheduling surface',
-		'TickChildDeferralOrderingTest.php' => 'off-limits background scheduling race',
 		'TimestampCosmeticNormalizationTest.php' => 'multiple live top-level/external producers',
 		'ToggleMirrorComparisonGuardTest.php' => 'inherently whole-tree config-type rule',
 		'ToggleEmptyPreservationTest.php' => 'six config-backed page save bindings',
@@ -168,8 +167,8 @@ final class SourceScanningWiringPolicyTest extends TestCase
 			array_keys(self::RETAINED),
 			array_keys(self::EXCLUDED_NON_WIRING)
 		);
-		$this->assertCount(134, $audited);
-		$this->assertCount(134, array_unique($audited));
+		$this->assertCount(133, $audited);
+		$this->assertCount(133, array_unique($audited));
 		foreach ($audited as $file) {
 			$this->assertFileExists(__DIR__ . "/{$file}");
 		}
