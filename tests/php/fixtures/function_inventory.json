@@ -9222,6 +9222,52 @@
             }
         ]
     },
+    "pfb_schedule_group_active_rows": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "rows",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_schedule_migrate": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "entropy",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_schedule_minute_token": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_schedule_next_occurrence": {
         "returnsRef": false,
         "returnType": "?int",
@@ -9270,6 +9316,33 @@
             }
         ]
     },
+    "pfb_schedule_numeric_token": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "value",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "min",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "max",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_schedule_plan": {
         "returnsRef": false,
         "returnType": "array",
@@ -9308,6 +9381,19 @@
                 "variadic": false,
                 "type": "DateTimeZone",
                 "default": null
+            }
+        ]
+    },
+    "pfb_schedule_slot_seed": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "entropy",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },

@@ -88,7 +88,7 @@ final class MigrationRegistryTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Registry returns exactly four entries in the correct declared order (issue #1921
+	 * Registry returns exactly five entries in the correct declared order (issue #1921
 	 * S2: the other four migrations folded into pfb_registry_pass(); issue #1907 adds
 	 * the bespoke python-gated-toggles migration, positioned immediately before ADR-02
 	 * -- it must run while dnsbl_mode still evidences pre-upgrade Unbound mode, which
@@ -98,7 +98,7 @@ final class MigrationRegistryTest extends TestCase
 	{
 		$registry = pfb_migration_registry();
 
-		$this->assertCount(4, $registry);
+		$this->assertCount(5, $registry);
 
 		// issue #1898's per-row key rename runs first -- the scalar-section half now
 		// lives as registry 'old_name' slots consumed by pfb_registry_pass(), which
@@ -110,6 +110,7 @@ final class MigrationRegistryTest extends TestCase
 		// Then the original install.inc sequence for what remains, order unchanged.
 		$this->assertSame('adr02-dnsbl-python-mode',    $registry[2]['id']);
 		$this->assertSame('pfbl03-control-legacy-seed', $registry[3]['id']);
+		$this->assertSame('issue2308-quarter-hour-schedule', $registry[4]['id']);
 	}
 
 	/**
@@ -327,10 +328,12 @@ final class MigrationRegistryTest extends TestCase
 
 		pfb_run_migrations();
 
-		// After: still no sections and no writes (all migrations return NULL for empty input).
+		// After: schedule migration creates the canonical General schema in one write.
 		$this->assertSame([], config_get_path(self::DNSBL_SECTION, []));
-		$this->assertSame([], config_get_path(self::GEN_SECTION, []));
-		$this->assertSame([], $this->writeConfigCalls());
+		$this->assertSame('on', config_get_path(self::GEN_SECTION . '/pfb_scheduled_feed_updates'));
+		$this->assertSame('7', config_get_path(self::GEN_SECTION . '/pfb_schedule_weekday'));
+		$this->assertSame('3', config_get_path(self::GEN_SECTION . '/skipfeed'));
+		$this->assertCount(1, $this->writeConfigCalls());
 	}
 
 	// -----------------------------------------------------------------------
@@ -517,7 +520,11 @@ final class MigrationRegistryTest extends TestCase
 			'pfb_control_legacy_seeded' => 'on',
 			'pfb_dnsbl_lenient'         => 'on',
 		]);
-		$this->seedGen(['enable_cb' => 'on', 'pfb_keep' => 'on']);
+		$this->seedGen([
+			'enable_cb' => 'on', 'pfb_keep' => 'on', 'skipfeed' => '0',
+			'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7',
+			'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0',
+		]);
 
 		// First run should be a no-op since all keys already carry migrated values.
 		pfb_run_migrations();

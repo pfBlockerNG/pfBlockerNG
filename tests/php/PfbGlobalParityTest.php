@@ -159,14 +159,14 @@ final class PfbGlobalParityTest extends TestCase
 	 * Via gateway: PfbConfig::read('gen/skipfeed') = '0' (registered default).
 	 * PARITY: '0' and 0 are equivalent for the downstream numeric comparisons.
 	 */
-	public function testParitySkipfeedAbsentYieldsZeroString(): void
+	public function testParitySkipfeedAbsentYieldsFreshDefaultThree(): void
 	{
 		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/skipfeed'));
 
 		$result = PfbConfig::read('gen/skipfeed');
 
-		// Registry default '0'; old code: null -> 0 (int). Numeric equivalence.
-		$this->assertSame('0', $result, 'skipfeed absent -> "0" (parity with pfb_global null->0)');
+		// Fresh-install registry default is 3; OLDCFG migration preserves unlimited 0.
+		$this->assertSame('3', $result, 'skipfeed absent -> fresh default "3"');
 	}
 
 	/**
