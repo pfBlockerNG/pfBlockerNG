@@ -139,6 +139,9 @@ final class ScheduleStateStoreTest extends TestCase
 			['schema' => 1, 'items' => ['1' => ['pending_occurrence' => 0]]],
 			['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => -1]]],
 			['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1.5]]],
+			['schema' => 1, 'items' => ['feed' => ['pending_dispatch_at' => -1]]],
+			['schema' => 1, 'items' => ['feed' => ['pending_dispatch_at' => 1.5, 'pending_occurrence' => 0]]],
+			['schema' => 1, 'items' => ['feed' => ['pending_dispatch_at' => 1]]],
 			['schema' => 1, 'items' => ['feed' => ['last_completed_occurrence' => 1]]],
 			['schema' => 1, 'items' => ['feed' => ['last_completed_occurrence' => 1, 'completion_outcome' => 'bad']]],
 			['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 0, 'unknown' => 1]]],
@@ -214,6 +217,14 @@ final class ScheduleStateStoreTest extends TestCase
 			$this->assertFalse(pfb_schedule_state_set_pending([$id => $occurrence], $this->dir));
 		}
 		$this->assertFileDoesNotExist($this->dir . '/pfb_schedule_state.json');
+	}
+
+	public function testPendingOccurrenceReplacesStaleDispatchMarker(): void
+	{
+		$state = ['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1, 'pending_dispatch_at' => 2]]];
+		$this->assertTrue(pfb_schedule_state_write($state, $this->dir));
+		$this->assertTrue(pfb_schedule_state_set_pending(['feed' => 3], $this->dir));
+		$this->assertSame(['pending_occurrence' => 3], pfb_schedule_state_read($this->dir)['items']['feed']);
 	}
 
 	public function testStateUpdateReadsAfterExclusiveLockCallbackMutation(): void

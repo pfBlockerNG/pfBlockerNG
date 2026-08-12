@@ -5,9 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\TestCase;
 
 /**
- * issue #1175 — pfblockerng_tick() must DEFER its feed-cron dispatch when a feed
- * pass is already running, instead of dispatching a second overlapping pass that
- * races the shared recompute staging files (masterfile.new etc.).
+ * Fixed-job and manual-apply regressions for the real pfblockerng_tick() entrypoint.
  *
  * Drives the REAL pfblockerng_tick() entrypoint (TickEntrypointTest's sandbox
  * pattern: a private $pfb['dbdir']/runlog/extraslog per test, restored on
@@ -16,21 +14,8 @@ use PHPUnit\Framework\TestCase;
  * dispatching branch's exec() redirect opens $pfb['runlog']/['extraslog'] for
  * real regardless of whether /usr/local/bin/php exists on this dev box).
  *
- * The running pass is simulated WITHOUT the pfb_feed_pass_* helpers under test
- * in the deferral cases below (they must hold across the RED run, where they do
- * not exist yet): this suite fopen()s the lock file itself and flock(LOCK_EX)s
- * it on its OWN handle -- a second, independent open file description
- * contending for the SAME file. flock(2) locks belong to the open file
- * description, not the process, so two handles in one process genuinely
- * contend, and the kernel drops the lock on process death (a crashed pass can
- * never wedge the system).
- *
- * Red->green: before this change pfblockerng_tick()'s feed-cron dispatch branch
- * had no running-pass check -- it always exec()'d and mark_ran_anchored()'d the
- * ledger, even while another pass held the lock. testDueCronDefersWhenFeedPassLockIsHeld
- * drives that branch with a due 'cron' job while the lock is held and pins (a)
- * the ledger entry's next_due is untouched (no dispatch) and (b) pending_apply
- * is set so the next tick retries.
+ * Feed-pass contention and scheduled reservation behavior are pinned by
+ * TickScheduleRuntimeTest; this suite keeps fixed cadence and manual apply paths.
  */
 final class TickFeedPassDeferralTest extends TestCase
 {
@@ -43,7 +28,7 @@ final class TickFeedPassDeferralTest extends TestCase
 	/** Per-test private sandbox for $pfb['dbdir'] -- see TickEntrypointTest::setUp(). */
 	private string $dbdir = '';
 
-	/** The argv recorder installPhpArgvRecorder() wrote, and its spawn log. */
+	/** The argv recorder and spawn log used by fixed-job/manual-apply regressions. */
 	private string $recorderPath = '';
 
 	private string $spawnLog = '';
@@ -306,213 +291,6 @@ SH;
 		return sprintf('%02d:%02d-%02d:%02d', intdiv($start, 60), $start % 60, intdiv($end, 60), $end % 60);
 	}
 
-	// -----------------------------------------------------------------------
-	// Row 11 (coverage matrix) -- the RED->GREEN pinning test.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Scenario:
-	 *   Given a due 'cron' ledger entry (10s past due) and pfb_interval='24'.
-	 *   And   ANOTHER process holds the feed-pass lock (simulated raw flock).
-	 *   Before: the 'cron' entry's next_due is 10s in the past (due).
-	 *   When  pfblockerng_tick() runs.
-	 *   Then  the feed cron is NOT dispatched -- next_due is UNCHANGED (no
-	 *         mark_ran/mark_ran_anchored) -- AND pending_apply is set so the
-	 *         next tick retries the deferred dispatch.
-	 */
-	public function testDueCronDefersWhenFeedPassLockIsHeld(): void
-	{
-		$this->seedTickPrereqs('24');
-		pfb_global();
-		if (!is_dir($GLOBALS['pfb']['logdir'])) {
-			@mkdir($GLOBALS['pfb']['logdir'], 0755, TRUE);
-		}
-
-		$now      = time();
-		$interval = 86400;
-
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $now - $interval - 10,
-			'next_due' => $now - 10,	// 10s past due -- would dispatch this tick
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		$this->holdLockAsAnotherProcess();
-
-		$before = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($before, 'test setup: cron ledger entry must exist before the tick');
-		$this->assertSame($now - 10, $before['next_due'], 'test setup sanity: cron ledger entry pre-seeded due');
-
-		// Act.
-		pfblockerng_tick();
-
-		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($after, 'cron ledger entry must still exist after the tick');
-		$this->assertSame($now - 10, $after['next_due'],
-			'cron next_due must be UNCHANGED (no dispatch while a feed pass is running): expected '
-			. ($now - 10) . " got {$after['next_due']}");
-		$this->assertTrue(!empty($after['pending_apply']),
-			'cron ledger entry must be marked pending_apply so the NEXT tick retries the deferred dispatch');
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 12 -- regression pin: a due cron dispatches normally when the lock
-	// is free (the new check must not block legitimate work).
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Scenario:
-	 *   Given a due 'cron' ledger entry and pfb_interval='24'; NO other process
-	 *   holds the feed-pass lock.
-	 *   When  pfblockerng_tick() runs.
-	 *   Then  the feed cron IS dispatched -- next_due advances by exactly the
-	 *         interval from its own previous next_due (mark_ran_anchored), and
-	 *         no pending_apply flag is left set.
-	 */
-	public function testDueCronDispatchesWhenFeedPassLockIsFree(): void
-	{
-		$this->seedTickPrereqs('24');
-		pfb_global();
-		if (!is_dir($GLOBALS['pfb']['logdir'])) {
-			@mkdir($GLOBALS['pfb']['logdir'], 0755, TRUE);
-		}
-
-		$now      = time();
-		$interval = 86400;
-		$oldNextDue = $now - 10;
-
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $oldNextDue - $interval,
-			'next_due' => $oldNextDue,
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		// issue #1666: this test genuinely dispatches (lock free, cron due) --
-		// neuter $pfb['php'] so that dispatch exec()s a harmless recording stub
-		// instead of a REAL "pfblockerng.php cron" background shell a sibling
-		// suite's pfb_update_pass_running() `ps` scan could then see.
-		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
-
-		// Act -- no lock held anywhere.
-		pfblockerng_tick();
-
-		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($after, 'cron ledger entry must exist after the tick');
-		$this->assertSame($oldNextDue + $interval, $after['next_due'],
-			'cron next_due must advance by exactly the interval when the lock is free: expected '
-			. ($oldNextDue + $interval) . " got {$after['next_due']}");
-		$this->assertTrue(empty($after['pending_apply']),
-			'a dispatched cron must not be left pending_apply');
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 13 -- retry: a job deferred by a prior tick's busy lock dispatches
-	// on the NEXT tick once the lock has freed.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Scenario:
-	 *   Given a 'cron' ledger entry left pending_apply=TRUE by a prior deferred
-	 *   tick (next_due still in the past, untouched by that deferral).
-	 *   And   the feed-pass lock is now FREE.
-	 *   When  pfblockerng_tick() runs.
-	 *   Then  the feed cron IS dispatched this time -- next_due advances and
-	 *         pending_apply is cleared (mark_ran_anchored writes a clean entry).
-	 */
-	public function testPendingFromPriorDeferralDispatchesOnceLockFrees(): void
-	{
-		$this->seedTickPrereqs('24');
-		pfb_global();
-		if (!is_dir($GLOBALS['pfb']['logdir'])) {
-			@mkdir($GLOBALS['pfb']['logdir'], 0755, TRUE);
-		}
-
-		$now      = time();
-		$interval = 86400;
-		$oldNextDue = $now - 10;
-
-		// Simulates the Row-11 outcome: still due, left pending by a prior tick.
-		pfb_due_ledger_write_entry('cron', [
-			'last_run'      => $oldNextDue - $interval,
-			'next_due'      => $oldNextDue,
-			'jitter'        => 0,
-			'pending_apply' => TRUE,
-		], $GLOBALS['pfb']['dbdir']);
-
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		// issue #1666: this test genuinely dispatches (lock free, cron still due) --
-		// neuter $pfb['php'] so that dispatch exec()s a harmless recording stub
-		// instead of a REAL "pfblockerng.php cron" background shell a sibling
-		// suite's pfb_update_pass_running() `ps` scan could then see.
-		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
-
-		// Act -- lock is free this time.
-		pfblockerng_tick();
-
-		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($after, 'cron ledger entry must exist after the retry tick');
-		$this->assertSame($oldNextDue + $interval, $after['next_due'],
-			'the retried cron must dispatch and advance next_due by the interval: expected '
-			. ($oldNextDue + $interval) . " got {$after['next_due']}");
-		$this->assertTrue(empty($after['pending_apply']),
-			'a successfully retried dispatch must clear pending_apply');
-	}
-
-	// -----------------------------------------------------------------------
-	// Row 14 -- quiet-hours interaction: outside the apply window, the
-	// existing quiet-hours defer path wins regardless of lock state.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Scenario:
-	 *   Given a due 'cron' entry, pfb_quiet_hours set to a window that excludes
-	 *   "now", AND another process holds the feed-pass lock.
-	 *   When  pfblockerng_tick() runs.
-	 *   Then  no exception -- the tick defers via the quiet-hours branch (the
-	 *         lock check is inside the in-window arm, never reached here) and
-	 *         pending_apply is set exactly once.
-	 */
-	public function testDueCronOutsideQuietHoursDefersRegardlessOfLockState(): void
-	{
-		$window = $this->outsideWindowNow();
-		$this->seedTickPrereqs('24', $window);
-		pfb_global();
-		if (!is_dir($GLOBALS['pfb']['logdir'])) {
-			@mkdir($GLOBALS['pfb']['logdir'], 0755, TRUE);
-		}
-
-		$now      = time();
-		$interval = 86400;
-
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $now - $interval - 10,
-			'next_due' => $now - 10,
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		$this->holdLockAsAnotherProcess();
-
-		// Act -- must not throw.
-		pfblockerng_tick();
-
-		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($after, 'cron ledger entry must exist after the tick');
-		$this->assertTrue(!empty($after['pending_apply']),
-			'outside the quiet-hours window the tick must defer via pending_apply, whether or not '
-			. 'a feed pass is running');
-	}
-
 	/**
 	 * Scenario:
 	 *   Given pfb_interval='Disabled' and a future cron ledger entry whose manual
@@ -624,22 +402,6 @@ SH;
 			'closed quiet-hours window must retain disabled pending apply and every cadence field unchanged');
 	}
 
-	public function testScheduledCronUsesConfiguredPhpExactlyOnce(): void
-	{
-		$this->seedTickPrereqs('24');
-		pfb_global();
-		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
-		$now = time();
-		$this->seedDueLedgerEntry('cron', $now);
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl', $now);
-
-		pfblockerng_tick();
-
-		$this->assertSame([
-			['/usr/local/www/pfblockerng/pfblockerng.php', 'cron'],
-		], $this->awaitRecordedInvocations());
-	}
 
 	public function testDccUsesConfiguredPhpExactlyOnce(): void
 	{

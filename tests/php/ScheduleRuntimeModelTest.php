@@ -246,7 +246,7 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertSame($now, $cache['cron']['next_due']);
 	}
 
-	public function testRefreshRejectsMalformedTargetWithoutChangingBytes(): void
+	public function testRefreshReplacesMalformedTargetAtomically(): void
 	{
 		$model = pfb_schedule_runtime_model($this->general(), $this->sections([
 			$this->group('Deny_Inbound', 'EveryDay', [$this->row('feed')]),
@@ -255,7 +255,21 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$path = $this->dir . '/pfb_due_ledger.json';
 		file_put_contents($path, '{"broken":true}');
 		$before = file_get_contents($path);
-		$this->assertFalse(pfb_schedule_cache_refresh($model, ['schema' => 1, 'items' => []], time(), new DateTimeZone('UTC'), $this->dir));
+		$this->assertTrue(pfb_schedule_cache_refresh($model, ['schema' => 1, 'items' => []], time(), new DateTimeZone('UTC'), $this->dir));
+		$this->assertNotSame($before, file_get_contents($path));
+		$this->assertIsArray(pfb_due_ledger_read_cache($this->dir, $model['config_hash']));
+	}
+
+	public function testRefreshPublicationFailurePreservesMalformedBytes(): void
+	{
+		$model = pfb_schedule_runtime_model($this->general(), $this->sections([
+			$this->group('Deny_Inbound', 'EveryDay', [$this->row('feed')]),
+		]));
+		$this->assertIsArray($model);
+		$path = $this->dir . '/pfb_due_ledger.json';
+		file_put_contents($path, '{"broken":true}');
+		$before = file_get_contents($path);
+		$this->assertFalse(pfb_schedule_cache_refresh($model, ['schema' => 1, 'items' => []], time(), new DateTimeZone('UTC'), $this->dir, ['fail_rename' => TRUE]));
 		$this->assertSame($before, file_get_contents($path));
 	}
 
@@ -274,7 +288,7 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertTrue(pfb_schedule_cache_refresh($model, $completed, $now, new DateTimeZone('UTC'), $this->dir));
 		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
 		$this->assertSame(TRUE, $cache['cron']['pending_apply']);
-		$this->assertGreaterThan($now, $cache['cron']['next_due']);
+		$this->assertSame(2, $cache['cron']['next_due']);
 
 		$off = pfb_schedule_runtime_model($this->general(''), $this->sections([
 			$this->group('Deny_Inbound', 'EveryDay', [$this->row('feed')]),
@@ -283,6 +297,6 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertTrue(pfb_schedule_cache_refresh($off, $completed, $now, new DateTimeZone('UTC'), $this->dir));
 		$cache = pfb_due_ledger_read_cache($this->dir, $off['config_hash']);
 		$this->assertSame(TRUE, $cache['cron']['pending_apply']);
-		$this->assertSame($now, $cache['cron']['next_due']);
+		$this->assertSame(2, $cache['cron']['next_due']);
 	}
 }
