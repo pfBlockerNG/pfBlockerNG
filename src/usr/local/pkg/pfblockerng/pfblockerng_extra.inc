@@ -3518,7 +3518,8 @@ function pfb_schedule_next_occurrence(
 	int    $weekday,
 	int    $hour,
 	int    $minute,
-	int    $reference
+	int    $reference,
+	DateTimeZone $timezone
 ): ?int {
 	$valid_cadences = [
 		'Never'    => 0,
@@ -3552,14 +3553,16 @@ function pfb_schedule_next_occurrence(
 	$limit = $reference + (8 * 86400);
 	$candidate = $reference + 1;
 	while ($candidate <= $limit) {
-		$parts = explode('/', date('N/G/i/s', $candidate));
+		$local = (new DateTimeImmutable('@' . $candidate))->setTimezone($timezone);
+		$parts = explode('/', $local->format('N/G/i/s'));
 		if ($parts[3] === '00' && ((int) $parts[2] % 15) === 0) {
 			break;
 		}
 		$candidate++;
 	}
 	while ($candidate <= $limit) {
-		$parts = explode('/', date('N/G/i/s', $candidate));
+		$local = (new DateTimeImmutable('@' . $candidate))->setTimezone($timezone);
+		$parts = explode('/', $local->format('N/G/i/s'));
 		$local_weekday = (int) $parts[0];
 		$local_hour = (int) $parts[1];
 		$local_minute = (int) $parts[2];
@@ -3584,7 +3587,13 @@ function pfb_schedule_next_occurrence(
  *
  * This is pure: callers provide all group state and both clock readings.
  */
-function pfb_schedule_plan(array $groups, array $default_schedule, ?int $since, int $now): array
+function pfb_schedule_plan(
+	array $groups,
+	array $default_schedule,
+	?int $since,
+	int $now,
+	DateTimeZone $timezone
+): array
 {
 	$validate_schedule = static function (mixed $schedule): void {
 		if (!is_array($schedule)
@@ -3627,7 +3636,8 @@ function pfb_schedule_plan(array $groups, array $default_schedule, ?int $since, 
 			$effective['weekday'],
 			$effective['hour'],
 			$effective['minute'],
-			$now
+			$now,
+			$timezone
 		);
 		$eligible = $group['enabled'] && $group['has_active_rows'] && $group['cadence'] !== 'Never';
 		if (!$eligible) {
@@ -3641,7 +3651,8 @@ function pfb_schedule_plan(array $groups, array $default_schedule, ?int $since, 
 				$effective['weekday'],
 				$effective['hour'],
 				$effective['minute'],
-				$since
+				$since,
+				$timezone
 			);
 			if ($past !== NULL && $past <= $now) {
 				$due[] = $key;

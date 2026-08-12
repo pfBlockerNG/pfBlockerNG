@@ -9260,6 +9260,13 @@
                 "variadic": false,
                 "type": "int",
                 "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "DateTimeZone",
+                "default": null
             }
         ]
     },
@@ -9293,6 +9300,13 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "int",
+                "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "DateTimeZone",
                 "default": null
             }
         ]
