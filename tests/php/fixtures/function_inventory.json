@@ -9439,6 +9439,61 @@
             }
         ]
     },
+    "pfb_schedule_cache_refresh": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "DateTimeZone",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
     "pfb_schedule_group_active_rows": {
         "returnsRef": false,
         "returnType": "bool",
@@ -9601,6 +9656,52 @@
             }
         ]
     },
+    "pfb_schedule_runtime_hash_projection": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_schedule_runtime_model": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": [
+            {
+                "name": "general",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_schedule_runtime_model_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_schedule_slot_seed": {
         "returnsRef": false,
         "returnType": "array",
@@ -9624,6 +9725,74 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
+    "pfb_schedule_state_set_pending": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "occurrences",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            }
+        ]
+    },
+    "pfb_schedule_state_update": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "update",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             },
             {
                 "name": "timeout_s",

@@ -164,4 +164,78 @@ final class ScheduleStateStoreTest extends TestCase
 			), 'numeric-looking id must be rejected: ' . var_export($id, TRUE));
 		}
 	}
+
+	public function testStateUpdateStartsEmptyMergesLatestFactsAndPendingOccurrences(): void
+	{
+		$this->assertTrue(pfb_schedule_state_update(
+			static function (array $state): array {
+				$state['items']['feed'] = ['last_successful_check' => 10];
+				return $state;
+			},
+			$this->dir
+		));
+		$this->assertTrue(pfb_schedule_state_set_pending(['feed' => 20, 'new-feed' => 30], $this->dir));
+		$this->assertSame([
+			'schema' => 1,
+			'items' => [
+				'feed' => ['last_successful_check' => 10, 'pending_occurrence' => 20],
+				'new-feed' => ['pending_occurrence' => 30],
+			],
+		], pfb_schedule_state_read($this->dir));
+	}
+
+	public function testStateUpdateRejectsMalformedExistingCallbackResultsAndPreservesBytes(): void
+	{
+		$path = $this->dir . '/pfb_schedule_state.json';
+		file_put_contents($path, '{"schema":1,"items":null}');
+		$before = file_get_contents($path);
+		$this->assertFalse(pfb_schedule_state_update(static fn (array $state): array => $state, $this->dir));
+		$this->assertSame($before, file_get_contents($path));
+
+		$this->assertTrue(pfb_schedule_state_write(['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1]]], $this->dir));
+		$before = file_get_contents($path);
+		foreach ([
+			static fn (array $state): array => ['schema' => 2, 'items' => []],
+			static fn (array $state): array => ['schema' => 1, 'items' => ['feed' => []]],
+			static function (array $state): array { throw new RuntimeException('callback failed'); },
+		] as $update) {
+			$this->assertFalse(pfb_schedule_state_update($update, $this->dir));
+			$this->assertSame($before, file_get_contents($path));
+		}
+	}
+
+	public function testPendingValidationIsAtomicAndEmptyMapIsNoOp(): void
+	{
+		$this->assertTrue(pfb_schedule_state_set_pending([], $this->dir));
+		$this->assertFileDoesNotExist($this->dir . '/pfb_schedule_state.json');
+		foreach ([
+			['', 1], ['1', 1], ['feed', -1], ['feed', 1.5], ['feed', '1'],
+		] as [$id, $occurrence]) {
+			$this->assertFalse(pfb_schedule_state_set_pending([$id => $occurrence], $this->dir));
+		}
+		$this->assertFileDoesNotExist($this->dir . '/pfb_schedule_state.json');
+	}
+
+	public function testStateUpdateReadsAfterExclusiveLockCallbackMutation(): void
+	{
+		$path = $this->dir . '/pfb_schedule_state.json';
+		$this->assertTrue(pfb_schedule_state_write(['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1]]], $this->dir));
+		$newer = ['schema' => 1, 'items' => ['feed' => ['last_successful_check' => 9]]];
+		$blocked = FALSE;
+		$this->assertTrue(pfb_schedule_state_update(
+			static function (array $state) use ($newer): array {
+				return ['schema' => 1, 'items' => $state['items'] + $newer['items']];
+			},
+			$this->dir,
+			['before_document' => static function () use ($path, $newer, &$blocked): void {
+				$lock = fopen($path . '.lock', 'c');
+				$would_block = 0;
+				$blocked = !flock($lock, LOCK_EX | LOCK_NB, $would_block) && $would_block === 1;
+				fclose($lock);
+				file_put_contents($path, json_encode($newer));
+			}],
+		));
+		$this->assertTrue($blocked);
+		$this->assertSame($newer, pfb_schedule_state_read($this->dir));
+	}
 }
