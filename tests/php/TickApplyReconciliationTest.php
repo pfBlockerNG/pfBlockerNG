@@ -48,7 +48,7 @@ final class TickApplyReconciliationTest extends TestCase
 
 		foreach (['dbdir', 'aliasdir', 'dnsbldir', 'pfctl', 'php', 'log', 'errlog', 'runlog', 'extraslog',
 			  'dnsbl_file', 'dnsbl_python_unmount'] as $k) {
-			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : false;
+			$this->saved[$k] = array_key_exists($k, $GLOBALS['pfb'] ?? []) ? $GLOBALS['pfb'][$k] : FALSE;
 		}
 
 		$GLOBALS['pfb']['dbdir']      = $this->dir;
@@ -84,7 +84,7 @@ final class TickApplyReconciliationTest extends TestCase
 	protected function tearDown(): void
 	{
 		foreach ($this->saved as $k => $prev) {
-			if ($prev === false) {
+			if ($prev === FALSE) {
 				unset($GLOBALS['pfb'][$k]);
 			} else {
 				$GLOBALS['pfb'][$k] = $prev;
@@ -545,11 +545,11 @@ final class TickApplyReconciliationTest extends TestCase
 
 	/**
 	 * Scenario:
-	 *   Given setUp()'s future-dated cron/dcc/bl ledger entries and the
+	 *   Given setUp()'s future-dated fixed-job ledger entries and the
 	 *   recording-stub $pfb['php'] (issue #1666).
 	 *   When  pfblockerng_tick() runs once.
-	 *   Then  the php-recorder's calls log stays absent -- no dispatch branch
-	 *         fired, so nothing could have exec()'d a real background process.
+	 *   Then  the runtime cache is published without a cron entry, fixed-job
+	 *         entries stay unchanged, and the php-recorder stays absent.
 	 *
 	 * Red->green (manual scratch probe, issue #1666): temporarily removing the
 	 * setUp() ledger seeding makes this FAIL -- the absent 'dcc' entry reads
@@ -557,30 +557,27 @@ final class TickApplyReconciliationTest extends TestCase
 	 * tick dispatches it through the recorder, populating the calls log.
 	 *
 	 * The calls log alone is race-blind: a fired dispatch backgrounds the
-	 * recorder exec (`&`), so its write can land AFTER this assertion runs,
-	 * letting a real dispatch pass undetected. The deterministic check is the
-	 * ledger entry itself -- each dispatch branch (cron/dcc/bl) synchronously
-	 * calls pfb_due_ledger_mark_ran*() BEFORE pfblockerng_tick() returns, so a
-	 * fired dispatch rewrites its own entry (last_run/next_due) before control
-	 * comes back here. Snapshot every entry before the tick and assert each is
-	 * byte-identical after.
+	 * recorder exec (`&`), so its write can land after this assertion. Fixed-job
+	 * ledger entries are synchronous; the runtime cache is the cron oracle.
 	 */
 	public function testTickDispatchesNothingWhenNoJobIsDue(): void
 	{
 		$before = [];
-		foreach (['cron', 'dcc', 'bl'] as $jobKey) {
+		foreach (['dcc', 'bl'] as $jobKey) {
 			$before[$jobKey] = pfb_due_ledger_read_entry($jobKey, $this->dir);
 		}
 
 		$this->tick();
 
-		foreach (['cron', 'dcc', 'bl'] as $jobKey) {
+		foreach (['dcc', 'bl'] as $jobKey) {
 			$this->assertSame($before[$jobKey], pfb_due_ledger_read_entry($jobKey, $this->dir),
 				"expected the '{$jobKey}' due-ledger entry to stay unchanged across a tick with every "
-				. 'ledger entry future-dated -- a rewritten entry means its dispatch branch fired '
-				. '(pfb_due_ledger_mark_ran*() runs synchronously before a fired branch returns) '
-				. "(issue #1666)");
+				. 'fixed-job ledger entry future-dated (issue #1666)');
 		}
+		$cache = pfb_due_ledger_read_cache($this->dir, pfb_schedule_runtime_config()['config_hash']);
+		$this->assertIsArray($cache, 'runtime cache must be published before scheduled selection');
+		$this->assertArrayNotHasKey('cron', $cache,
+			'no configured runtime feed must not leave a legacy cron wake entry behind');
 
 		// Best-effort secondary check: the recorder's write is backgrounded, so
 		// an absent calls log does NOT by itself prove nothing dispatched (the
@@ -588,7 +585,7 @@ final class TickApplyReconciliationTest extends TestCase
 		// are the deterministic proof. This only catches the case where a
 		// dispatch fired AND its write already landed.
 		$this->assertFileDoesNotExist($this->phpCallsLog(),
-			'expected no cron/dcc/bl dispatch branch to fire on a tick with every '
+			'expected no fixed-job dispatch branch to fire on a tick with every '
 			. 'ledger entry future-dated -- a populated calls log means this suite '
 			. 'leaked a real pfblockerng.php dispatch (issue #1666)');
 	}

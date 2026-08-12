@@ -9656,6 +9656,11 @@
             }
         ]
     },
+    "pfb_schedule_runtime_config": {
+        "returnsRef": false,
+        "returnType": "?array",
+        "params": []
+    },
     "pfb_schedule_runtime_hash_projection": {
         "returnsRef": false,
         "returnType": "array",
