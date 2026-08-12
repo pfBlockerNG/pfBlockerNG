@@ -21,7 +21,7 @@
  */
 
 // Determine if source list file has an updated timestamp
-function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $format, $vtype, $srcint=FALSE) {
+function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $format, $vtype, $srcint=FALSE): ?PfbScheduleTerminalResult {
 	global $pfb;
 
 	$log = "[ {$header} ]\n";
@@ -30,7 +30,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 	if (empty(pfb_filter($header, PFB_FILTER_WORD, 'php'))) {
 		pfb_logger("\n Failed to update due to Invalid header name!", 2);
-		return;
+		return NULL;
 	}
 
 	// Re-evaluate URL
@@ -49,14 +49,14 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 		if (empty(pfb_filter($list_url, $pfb_filter_type, 'php'))) {
                         pfb_logger("\n Invalid {$pfb_filter_text}. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
-			return;
+			return NULL;
 		}
 
 		$log = "\t\t\t\t\t\t\tUpdate found\n";
 		pfb_logger("{$log}", 1);
 		$pfb['update_cron'] = TRUE;
 		touch("{$pfbfolder}/{$header}.update");
-		return;
+		return NULL;
 	}
 	elseif ($format == 'geoip') {
 		if (strpos($list_url, ' ') !== FALSE) {
@@ -66,7 +66,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			$list_url = "/usr/local/share/GeoIP/cc/{$list_url}{$vtype}.txt";
 		} else {
 			pfb_logger("\n Invalid GEOIP. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
-			return;
+			return NULL;
 		}
 	}
 	elseif (!pfb_filter($list_url, PFB_FILTER_URL, 'php')) {
@@ -76,7 +76,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		// why vetting failed). The line below stays for non-guard rejects.
 		pfb_log_feed_host_reject($list_url, $header, 1);
 		pfb_logger("\n Invalid URL. Terminating Download! [ " . pfb_redact_url($list_url) . " ]\n", 1);
-		return;
+		return NULL;
 	}
 
 	$list_url_esc	= escapeshellarg("{$list_url}");
@@ -91,7 +91,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			$log = "  Max daily download failure attempts exceeded. Clear widget 'failed downloads' to reset.\n\n";
 			pfb_logger("{$log}", 1);
 			unlink_if_exists("{$pfbfolder}/{$header}.fail");
-			return;
+			return PfbScheduleTerminalResult::RetryCapReached;
 		}
 	}
 
@@ -101,7 +101,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		pfb_logger("{$log}", 1);
 		$pfb['update_cron'] = TRUE;
 		touch("{$pfbfolder}/{$header}.update");
-		return;
+		return NULL;
 	}
 
 	// Check if List file doesn't exist or Format is 'whois'.
@@ -109,7 +109,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		$log = "\t\t\t\t\t\t\tUpdate found\n";
 		pfb_logger("{$log}", 1);
 		$pfb['update_cron'] = TRUE;
-		return;
+		return NULL;
 	}
 
 	$local_file = "{$pfborig}/{$header}.orig";
@@ -121,7 +121,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			pfb_logger("{$log}", 1);
 			$pfb['update_cron'] = TRUE;
 			touch("{$pfbfolder}/{$header}.update");
-			return;
+			return NULL;
 		}
 
 		// Determine if URL is a pfSense localfile
@@ -138,6 +138,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			if (!$pfb['cron_update']) {
 				$log = "[ {$header} ] ( local feed unchanged )\tUpdate not required\n";
 				pfb_logger("{$log}", 1);
+				return PfbScheduleTerminalResult::Success;
 			}
 		}
 		else {
@@ -168,7 +169,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 				touch("{$pfbfolder}/{$header}.fail");
 				pfb_logger("{$log}", 1);
-				return;
+				return NULL;
 			}
 
 			$probe_meta = $probe_result->responseMeta;
@@ -181,7 +182,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 				unlink_if_exists("{$pfborig}/{$header}.md5.raw");
 				// Persist any refreshed validators from the 304 response.
 				pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
-				return;
+				return PfbScheduleTerminalResult::Success;
 			}
 
 			if ($probe_status === '200') {
@@ -204,7 +205,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
 					$pfb['update_cron'] = TRUE;
 					touch("{$pfbfolder}/{$header}.update");
-					return;
+					return PfbScheduleTerminalResult::Success;
 				}
 				else {
 					$log = "\n[ {$header} ] ( content unchanged )\tUpdate not required\n";
@@ -213,7 +214,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 					// Refresh validators even on a spurious 200 so the next run can
 					// go conditional (the server may start honouring ETags).
 					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
-					return;
+					return PfbScheduleTerminalResult::Success;
 				}
 			}
 
@@ -223,7 +224,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 			pfb_logger("{$log}", 1);
 			$pfb['update_cron'] = TRUE;
 			touch("{$pfbfolder}/{$header}.update");
-			return;
+			return NULL;
 		}
 	} else {
 		$pfb['cron_update'] = TRUE;
@@ -237,7 +238,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		pfb_logger("{$log}", 1);
 		touch("{$pfbfolder}/{$header}.update");
 	}
-	return;
+	return $pfb['cron_update'] ? PfbScheduleTerminalResult::Success : NULL;
 }
 
 
@@ -254,7 +255,7 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	// sync_package_pfblockerng(); its tail call below reenters the SAME lock.
 	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
 	if (!pfb_feed_pass_begin('cron')) {
-		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+		pfb_logger("\n Scheduled feed pass deferred: feed lock unavailable; durable pending occurrences retained.\n", 1);
 		return;
 	}
 
@@ -263,9 +264,49 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	// which is only reached at the very end); without this the tail would stay silent until then.
 	pfb_runlog_begin();
 
-	$hour = date('G');
-	$dow  = date('N');
 	$pfb['update_cron'] = FALSE;
+	$scheduled_runtime = !$force_all;
+	$state_dir = (string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+	$runtime_model = NULL;
+	$runtime_state = NULL;
+	$pending_ids = [];
+	if ($scheduled_runtime) {
+		$runtime_model = pfb_schedule_runtime_config();
+		$runtime_state = pfb_schedule_state_read($state_dir);
+		if ($runtime_model === NULL || $runtime_state === NULL) {
+			pfb_logger("\n Scheduled feed runtime unavailable; cron selection suppressed.\n", 2);
+			if ($pfb_feed_pass_owner) {
+				pfb_feed_pass_release();
+			}
+			return;
+		}
+		if ($runtime_model['scheduled']) {
+			foreach ($runtime_model['entries'] as $id => $entry) {
+				$item = $runtime_state['items'][$id] ?? NULL;
+				if ($entry['enabled'] && is_array($item) && array_key_exists('pending_occurrence', $item)) {
+					$pending_ids[$id] = TRUE;
+				}
+			}
+		}
+	}
+	$pfb['scheduled_runtime_cron'] = $scheduled_runtime;
+	$pfb['scheduled_selected_ids'] = $pending_ids;
+	$check = static function (
+		string $feed_id,
+		string $header,
+		string $url,
+		string $folder,
+		string $orig,
+		bool $flex,
+		string $format,
+		string $vtype,
+		mixed $srcint
+	) use ($scheduled_runtime, $state_dir): void {
+		$result = pfb_update_check($header, $url, $folder, $orig, $flex, $format, $vtype, $srcint);
+		if ($scheduled_runtime && $result !== NULL) {
+			pfb_schedule_state_record_outcome($feed_id, $result, $state_dir);
+		}
+	};
 	$log = " CRON  PROCESS  START [ " . pfb_pkg_ver() . " ]\n";
 	pfb_logger("{$log}", 1);
 
@@ -302,6 +343,11 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 						pfb_determine_list_detail($list['action'], '', '', '');
 						$pfbfolder	= $pfbarr['folder'];
 						$pfborig	= $pfbarr['orig'];
+						$family = $is_dnsbl ? 'dnsbl' : ($vtype === '_v4' ? 'ipv4' : 'ipv6');
+						$feed_id = pfb_schedule_feed_id($family, $header);
+						if ($feed_id === NULL) {
+							continue;
+						}
 
 						// Bypass update if state is defined as 'Hold' and list file exists
 						if ($row['state'] == 'Hold' && file_exists("{$pfbfolder}/{$header}.txt")) {
@@ -318,32 +364,17 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 
 						// Attempt download, when a previous 'fail' file marker is found.
 						if (file_exists("{$pfbfolder}/{$header}.fail")) {
-							pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+							if ($scheduled_runtime) {
+								$pfb['scheduled_selected_ids'][$feed_id] = TRUE;
+							}
+							$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
 							continue;
 						}
 
 						if ($force_all) {
-							// Bypass the hour-gate: check every in-scope feed unconditionally.
-							pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-						} else {
-							switch ($list['cron']) {
-								case 'EveryDay':
-									if ($hour == $pfb['24hour']) {
-										pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-									}
-									break;
-								case 'Weekly':
-									if ($hour == $pfb['24hour'] && $dow == $list['dow']) {
-										pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-									}
-									break;
-								default:
-									$pfb_sch = pfb_cron_base_hour($list['cron']);
-									if (in_array($hour, $pfb_sch)) {
-										pfb_update_check($header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-									}
-									break;
-							}
+							$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+						} elseif (isset($pending_ids[$feed_id])) {
+							$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
 						}
 					}
 				}

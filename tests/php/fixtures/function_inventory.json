@@ -9494,6 +9494,46 @@
             }
         ]
     },
+    "pfb_schedule_feed_id": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_schedule_feed_selected": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_schedule_group_active_rows": {
         "returnsRef": false,
         "returnType": "bool",
@@ -9737,6 +9777,47 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            }
+        ]
+    },
+    "pfb_schedule_state_record_outcome": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "id",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "outcome",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbScheduleTerminalResult",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
@@ -11934,7 +12015,7 @@
     },
     "pfb_update_check": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "?PfbScheduleTerminalResult",
         "params": [
             {
                 "name": "header",
