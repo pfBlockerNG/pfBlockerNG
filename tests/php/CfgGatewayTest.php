@@ -1196,6 +1196,10 @@ final class CfgGatewayTest extends TestCase
 			'enable_cb',
 			'pfb_keep',
 			'pfb_interval',
+			'pfb_scheduled_feed_updates',
+			'pfb_schedule_weekday',
+			'pfb_schedule_hour',
+			'pfb_schedule_minute',
 			'pfb_min',
 			'pfb_hour',
 			'pfb_dailystart',
@@ -2838,7 +2842,12 @@ final class CfgGatewayTest extends TestCase
 			);
 			$actual = $registry[$path_key];
 
-			$this->assertSame($expected['default'], $actual['default'], "{$path_key}: default must match the fixture");
+			if ($bare !== 'skipfeed') {
+				$this->assertSame($expected['default'], $actual['default'], "{$path_key}: default must match the fixture");
+			} else {
+				$this->assertSame('0', $expected['default'], 'historical skipfeed fixture remains unlimited');
+				$this->assertSame('3', $actual['default'], 'fresh-install skipfeed default is 3');
+			}
 			$this->assertSame($expected['read_adapter'], $actual['read_adapter'], "{$path_key}: read_adapter must match the fixture");
 			$this->assertSame($expected['write_adapter'], $actual['write_adapter'], "{$path_key}: write_adapter must match the fixture");
 			$this->assertSame(

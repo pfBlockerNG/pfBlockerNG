@@ -782,6 +782,33 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
+		// Issue #2308: quarter-hour schedule master switch; migration maps the
+		// retired interval value before registry seeding.
+		'gen/pfb_scheduled_feed_updates' => [
+			'default'        => 'on',
+			'read_adapter'   => 'pfb_cfg_toggle_read',
+			'write_adapter'  => 'pfb_cfg_toggle_write',
+			'no_grandfather' => '#2308 upgrade migration maps pfb_interval',
+		],
+		'gen/pfb_schedule_weekday' => [
+			'default'        => '7',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
+		],
+		'gen/pfb_schedule_hour' => [
+			'default'        => '0',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
+		],
+		'gen/pfb_schedule_minute' => [
+			'default'        => '0',
+			'read_adapter'   => NULL,
+			'write_adapter'  => NULL,
+			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
+		],
+
 		// Cron start minute ('0'|'15'|'30'|'45'). Default '0'.
 		'gen/pfb_min' => [
 			'default'       => '0',
@@ -806,12 +833,12 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// Max daily download failure threshold ('0' = unlimited). Default '0'.
+		// Max daily download failure threshold ('0' = unlimited). Fresh default '3'.
 		'gen/skipfeed' => [
-			'default'       => '0',
+			'default'       => '3',
 			'read_adapter'  => NULL,
 			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
+			'grandfather'   => [PFB_GF_ABSENT => '0'],
 		],
 
 		// ADR-11: CSV of active aggregate alias types (e.g. 'Deny,Permit'). Default ''.
@@ -2491,6 +2518,172 @@ function pfb_settings_family_pre_uninstall(): void
 // Tests: tests/php/MigrationRegistryTest.php
 // ---------------------------------------------------------------------------
 
+/** Return one quarter-hour slot in the 00:00..06:45 fresh-install range. */
+function pfb_schedule_slot_seed(?callable $entropy = NULL): array
+{
+	$entropy ??= static fn (): int => random_int(0, 27);
+	$slot = $entropy();
+	if (!is_int($slot) || $slot < 0 || $slot > 27) {
+		throw new InvalidArgumentException('schedule slot entropy must select 0..27');
+	}
+	return [intdiv($slot, 4), ($slot % 4) * 15];
+}
+
+/** Parse a canonical unsigned decimal token in one bounded range. */
+function pfb_schedule_numeric_token(mixed $value, int $min, int $max): ?string
+{
+	if (is_int($value)) {
+		$raw = (string) $value;
+	} elseif (is_string($value)) {
+		$raw = $value;
+	} else {
+		return NULL;
+	}
+	if (!preg_match('/^(?:0|[1-9][0-9]*)$/D', $raw)) {
+		return NULL;
+	}
+	$number = (int) $raw;
+	return ($number >= $min && $number <= $max) ? (string) $number : NULL;
+}
+
+/** Parse the exact quarter-hour minute vocabulary. */
+function pfb_schedule_minute_token(mixed $value): ?string
+{
+	$token = pfb_schedule_numeric_token($value, 0, 45);
+	return $token !== NULL && in_array($token, ['0', '15', '30', '45'], TRUE) ? $token : NULL;
+}
+
+/** True when a dynamic group has at least one source row the runtime can process. */
+function pfb_schedule_group_active_rows(mixed $rows): bool
+{
+	if (!is_array($rows)) {
+		return FALSE;
+	}
+	foreach ($rows as $row) {
+		if (is_array($row) && !empty($row['url']) && (($row['state'] ?? NULL) !== 'Disabled')) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/** Issue #2308: seed canonical General schedule and dynamic group overrides. */
+function pfb_schedule_migrate(array $sections, ?callable $entropy = NULL): ?array
+{
+	$gen_path = 'installedpackages/pfblockerng/config/0';
+	$group_paths = [
+		'installedpackages/pfblockernglistsv4/config' => 'ipv4',
+		'installedpackages/pfblockernglistsv6/config' => 'ipv6',
+		'installedpackages/pfblockerngdnsbl/config'   => 'dnsbl',
+	];
+	$gen = $sections[$gen_path] ?? [];
+	$gen = is_array($gen) ? $gen : [];
+	$is_fresh = empty(pfb_gconfig_operator_view($gen));
+	$changed = FALSE;
+	$notice_keys = [];
+
+	if (!array_key_exists('pfb_scheduled_feed_updates', $gen)) {
+		$interval = $gen['pfb_interval'] ?? NULL;
+		if ($interval === 'Disabled') {
+			$gen['pfb_scheduled_feed_updates'] = '';
+		} elseif (is_string($interval) && in_array($interval, ['1', '2', '3', '4', '6', '8', '12', '24'], TRUE)) {
+			$gen['pfb_scheduled_feed_updates'] = 'on';
+		} else {
+			$gen['pfb_scheduled_feed_updates'] = 'on';
+			if (!$is_fresh || !array_key_exists('pfb_interval', $gen)) {
+				$notice_keys[] = 'pfb_interval';
+			}
+		}
+		$changed = TRUE;
+	}
+
+	if (!array_key_exists('pfb_schedule_weekday', $gen)) {
+		$gen['pfb_schedule_weekday'] = '7';
+		$changed = TRUE;
+	}
+
+	if (!array_key_exists('pfb_schedule_hour', $gen) || !array_key_exists('pfb_schedule_minute', $gen)) {
+		$legacy_hour = pfb_schedule_numeric_token($gen['pfb_dailystart'] ?? NULL, 0, 23);
+		$legacy_minute = pfb_schedule_minute_token($gen['pfb_min'] ?? NULL);
+		if (!$is_fresh && ($legacy_hour === NULL || $legacy_minute === NULL)
+			&& (array_key_exists('pfb_dailystart', $gen) || array_key_exists('pfb_min', $gen))) {
+			$notice_keys[] = 'pfb_dailystart';
+			$notice_keys[] = 'pfb_min';
+		}
+		if ($is_fresh || $legacy_hour === NULL || $legacy_minute === NULL) {
+			[$hour, $minute] = pfb_schedule_slot_seed($entropy);
+			$legacy_hour = (string) $hour;
+			$legacy_minute = (string) $minute;
+		}
+		if (!array_key_exists('pfb_schedule_hour', $gen)) {
+			$gen['pfb_schedule_hour'] = $legacy_hour;
+			$changed = TRUE;
+		}
+		if (!array_key_exists('pfb_schedule_minute', $gen)) {
+			$gen['pfb_schedule_minute'] = $legacy_minute;
+			$changed = TRUE;
+		}
+	}
+
+	if (!array_key_exists('skipfeed', $gen)) {
+		$gen['skipfeed'] = $is_fresh ? '3' : '0';
+		$changed = TRUE;
+	}
+	$sections[$gen_path] = $gen;
+	$general_hour = (string) ($gen['pfb_schedule_hour'] ?? '0');
+	$general_minute = (string) ($gen['pfb_schedule_minute'] ?? '0');
+
+	foreach ($group_paths as $path => $family) {
+		$groups = $sections[$path] ?? [];
+		if (!is_array($groups)) {
+			continue;
+		}
+		foreach ($groups as $index => $group) {
+			if (!is_array($group)) {
+				continue;
+			}
+			if (array_key_exists('schedule_override', $group)
+				&& array_key_exists('schedule_weekday', $group)
+				&& array_key_exists('schedule_hour', $group)
+				&& array_key_exists('schedule_minute', $group)) {
+				continue;
+			}
+			$action = $group['action'] ?? NULL;
+			$valid_action = pfb_group_action_valid($action, $family);
+			$active = $valid_action && $action !== 'Disabled'
+				&& (($group['cron'] ?? NULL) !== 'Never')
+				&& pfb_schedule_group_active_rows($group['row'] ?? NULL);
+			$dow = pfb_schedule_numeric_token($group['dow'] ?? NULL, 1, 7);
+			$weekly = (($group['cron'] ?? NULL) === 'Weekly');
+			if ($active && $weekly && $dow === NULL) {
+				$notice_keys[] = 'dow';
+			}
+			if (!array_key_exists('schedule_override', $group)) {
+				$group['schedule_override'] = ($active && $weekly && $dow !== NULL) ? 'on' : '';
+			}
+			if (!array_key_exists('schedule_weekday', $group)) {
+				$group['schedule_weekday'] = $dow ?? '7';
+			}
+			if (!array_key_exists('schedule_hour', $group)) {
+				$group['schedule_hour'] = $general_hour;
+			}
+			if (!array_key_exists('schedule_minute', $group)) {
+				$group['schedule_minute'] = $general_minute;
+			}
+			$groups[$index] = $group;
+			$changed = TRUE;
+		}
+		$sections[$path] = $groups;
+	}
+
+	if (!empty($notice_keys)) {
+		$notice_keys = array_values(array_unique($notice_keys));
+		sort($notice_keys);
+		file_notice('pfBlockerNG', 'pfBlockerNG schedule migration used safe defaults for keys: ' . implode(', ', $notice_keys), 'pfBlockerNG', '/pfblockerng/pfblockerng_general.php', 2);
+	}
+	return $changed ? $sections : NULL;
+}
+
 /**
  * pfb_migration_registry — the ordered list of upgrade migrations.
  *
@@ -2549,6 +2742,19 @@ function pfb_migration_registry(): array
 			'message' => 'pfBlockerNG: seeded legacy DNSBL control toggle (PFBL-03)',
 			'since'   => '3.2.0',
 		],
+		// issue #2308: one complete General + dynamic-group schedule image.
+		[
+			'id'       => 'issue2308-quarter-hour-schedule',
+			'sections' => [
+				'installedpackages/pfblockerng/config/0',
+				'installedpackages/pfblockernglistsv4/config',
+				'installedpackages/pfblockernglistsv6/config',
+				'installedpackages/pfblockerngdnsbl/config',
+			],
+			'apply'   => 'pfb_schedule_migrate',
+			'message' => 'pfBlockerNG: migrated quarter-hour feed schedule settings (issue #2308)',
+			'since'   => '4.0.0',
+		],
 	];
 }
 
@@ -2570,7 +2776,8 @@ function pfb_run_migrations(): void
 		if (isset($migration['sections'])) {
 			$blobs = [];
 			foreach ($migration['sections'] as $section) {
-				$blobs[$section] = PfbConfig::readSection($section);
+				$raw = config_get_path($section, NULL);
+				$blobs[$section] = $raw === NULL ? [] : $raw;
 			}
 			$result = ($migration['apply'])($blobs);
 			if ($result !== NULL) {
@@ -2578,7 +2785,11 @@ function pfb_run_migrations(): void
 					// issue #1895: upgrade migrations run with no web session in scope.
 					// issue #1921: RAW write-back keeps bystander values byte-identical so
 					// pfb_registry_pass() receives exact stored inputs for rename/grandfather decisions.
-					PfbConfig::writeSectionRawSystem($section, $data);
+					if (is_array($data)) {
+						PfbConfig::writeSectionRawSystem($section, $data);
+					} else {
+						config_set_path($section, $data);
+					}
 				}
 				write_config($migration['message']);
 			}
