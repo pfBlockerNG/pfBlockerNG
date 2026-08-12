@@ -4003,7 +4003,7 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $t
  * @param string $path Target JSON path.
  * @param array|callable $document Document or lazy read-modify-write producer.
  * @param callable $validator Validation callback for the staged decoded document.
- * @param array $io Test-only failure switches.
+ * @param array $io Test-only failure switches and pre-document callback.
  * @param float $timeout_s Bounded sidecar-lock budget.
  */
 function pfb_schedule_atomic_json_publish(
@@ -4023,6 +4023,9 @@ function pfb_schedule_atomic_json_publish(
 	}
 	$tmp = NULL;
 	try {
+		if (isset($io['before_document']) && is_callable($io['before_document'])) {
+			$io['before_document']();
+		}
 		if (is_callable($document)) {
 			$document = $document();
 		}
@@ -4126,20 +4129,41 @@ function pfb_due_ledger_cache_valid(mixed $document, ?string $expected_hash = NU
 	return TRUE;
 }
 
-function pfb_due_ledger_write_entry(
+function pfb_due_ledger_document_valid(mixed $document): bool
+{
+	if (!is_array($document)) {
+		return FALSE;
+	}
+	if (array_key_exists('_meta', $document)) {
+		return pfb_due_ledger_cache_valid($document);
+	}
+	foreach ($document as $key => $entry) {
+		if (!is_string($key) || $key === '' || !pfb_due_ledger_entry_valid($entry)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+function pfb_due_ledger_update_entry(
 	string $job_key,
-	array $entry,
+	callable $update,
 	string $ledger_dir,
 	array $io = [],
 	float $timeout_s = 5.0
 ): bool {
-	if ($job_key === '' || !pfb_due_ledger_entry_valid($entry)) {
+	if ($job_key === '') {
 		return FALSE;
 	}
 	$path = $ledger_dir . '/pfb_due_ledger.json';
 	return pfb_schedule_atomic_json_publish(
 		$path,
-		static function () use ($path, $job_key, $entry): array {
+		static function () use ($path, $job_key, $update, $ledger_dir, $timeout_s): array {
+			$unavailable = FALSE;
+			$current = pfb_due_ledger_read_entry($job_key, $ledger_dir, $timeout_s, $unavailable);
+			if ($unavailable) {
+				throw new RuntimeException('due-ledger entry unavailable');
+			}
 			$data = [];
 			if (is_file($path)) {
 				$raw = @file_get_contents($path);
@@ -4150,12 +4174,29 @@ function pfb_due_ledger_write_entry(
 					}
 				}
 			}
-			$data[$job_key] = $entry;
+			$data[$job_key] = $update($current);
 			return $data;
 		},
-		fn (mixed $value) => is_array($value)
-			&& array_key_exists($job_key, $value)
-			&& pfb_due_ledger_entry_valid($value[$job_key]),
+		static fn (mixed $value): bool => pfb_due_ledger_document_valid($value),
+		$io,
+		$timeout_s
+	);
+}
+
+function pfb_due_ledger_write_entry(
+	string $job_key,
+	array $entry,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	if ($job_key === '' || !pfb_due_ledger_entry_valid($entry)) {
+		return FALSE;
+	}
+	return pfb_due_ledger_update_entry(
+		$job_key,
+		static fn (?array $current): array => $entry,
+		$ledger_dir,
 		$io,
 		$timeout_s
 	);
@@ -4217,7 +4258,7 @@ function pfb_schedule_state_valid(mixed $state): bool
 		return FALSE;
 	}
 	foreach ($state['items'] as $id => $item) {
-		if (!is_string($id) || $id === '' || ctype_digit($id) || !is_array($item) || $item === '') {
+		if (!is_string($id) || $id === '' || is_numeric($id) || !is_array($item) || $item === '') {
 			return FALSE;
 		}
 		$allowed = ['last_successful_check', 'last_completed_occurrence', 'completion_outcome', 'pending_occurrence'];
@@ -4538,38 +4579,31 @@ function pfb_quiet_hours_in_window(int $now, string $window): bool
 /**
  * pfb_due_ledger_set_pending — mark a job as pending-apply (deferred by quiet-hours window).
  *
- * Reads the existing ledger entry and sets pending_apply=TRUE, then writes back atomically.
+ * Reads and updates the existing entry while holding the ledger sidecar lock.
  * If no entry exists, creates a "due-now" placeholder with pending_apply=TRUE.
  *
  * The pending flag is cleared implicitly when pfb_due_ledger_mark_ran() writes a clean
  * {last_run, next_due, jitter} entry (no pending_apply key).
  *
- * issue #1780: a lock-acquire expiry on the underlying read must ABORT
- * this write entirely -- falling through to the "absent" placeholder branch
- * would persist a ZEROED {last_run:0, next_due:0, jitter:0} entry over a REAL
- * (but momentarily unreadable) schedule, since write_entry()'s own unlocked
- * merge-read would pick the real entry back up off disk and stomp its
- * next_due/last_run to 0 with the placeholder.
- *
  * @param string $job_key    Job identifier (e.g. 'cron', 'dcc', 'bl').
  * @param string $ledger_dir Directory that contains pfb_due_ledger.json.
  * @param float  $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
+ * @param array  $io         Test-only publication controls.
  * @return void
  */
-function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0): void
+function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0, array $io = []): void
 {
-	$unavailable = FALSE;
-	$entry = pfb_due_ledger_read_entry($job_key, $ledger_dir, $timeout_s, $unavailable);
-	if ($unavailable) {
-		// The read already logged the expiry loudly -- abort, never persist a
-		// zeroed placeholder over a real entry we simply could not read this instant.
-		return;
-	}
-	if ($entry === NULL) {
-		$entry = ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
-	}
-	$entry['pending_apply'] = TRUE;
-	pfb_due_ledger_write_entry($job_key, $entry, $ledger_dir);
+	pfb_due_ledger_update_entry(
+		$job_key,
+		static function (?array $entry): array {
+			$entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
+			$entry['pending_apply'] = TRUE;
+			return $entry;
+		},
+		$ledger_dir,
+		$io,
+		$timeout_s
+	);
 }
 
 /**

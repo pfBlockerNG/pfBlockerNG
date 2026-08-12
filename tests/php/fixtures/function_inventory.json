@@ -3293,6 +3293,19 @@
             }
         ]
     },
+    "pfb_due_ledger_document_valid": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "document",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
     "pfb_due_ledger_entry_valid": {
         "returnsRef": false,
         "returnType": "bool",
@@ -3609,6 +3622,54 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "5.0"
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            }
+        ]
+    },
+    "pfb_due_ledger_update_entry": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "job_key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "update",
+                "byRef": false,
+                "variadic": false,
+                "type": "callable",
+                "default": null
+            },
+            {
+                "name": "ledger_dir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             },
             {
                 "name": "timeout_s",
