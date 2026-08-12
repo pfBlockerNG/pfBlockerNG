@@ -3998,36 +3998,278 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $t
 }
 
 /**
- * pfb_due_ledger_write_entry — atomically persist one job entry to the ledger.
+ * Publish validated schedule JSON through a same-directory staging rename.
  *
- * Reads the existing ledger (to preserve other jobs' entries), merges $entry
- * under $job_key, then writes to a .tmp file with LOCK_EX and renames to the
- * target (atomic on POSIX / FreeBSD same-filesystem rename).
- *
- * @param string $job_key     Job identifier.
- * @param array  $entry       {last_run: int, next_due: int, jitter: int}.
- * @param string $ledger_dir  Directory that contains pfb_due_ledger.json.
- * @return void
+ * @param string $path Target JSON path.
+ * @param array|callable $document Document or lazy read-modify-write producer.
+ * @param callable $validator Validation callback for the staged decoded document.
+ * @param array $io Test-only failure switches.
+ * @param float $timeout_s Bounded sidecar-lock budget.
  */
-function pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): void
-{
-	$path = $ledger_dir . '/pfb_due_ledger.json';
-	$tmp  = $path . '.tmp';
+function pfb_schedule_atomic_json_publish(
+	string $path,
+	array|callable $document,
+	callable $validator,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	$lock_path = $path . '.lock';
+	$lock_fp = @fopen($lock_path, 'c');
+	if ($lock_fp === FALSE || !pfb_flock_bounded($lock_fp, LOCK_EX, $timeout_s)) {
+		if (is_resource($lock_fp)) {
+			fclose($lock_fp);
+		}
+		return FALSE;
+	}
+	$tmp = NULL;
+	try {
+		if (is_callable($document)) {
+			$document = $document();
+		}
+		if (!is_array($document)) {
+			return FALSE;
+		}
+		$json = json_encode($document, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR);
+		if (!is_string($json)) {
+			return FALSE;
+		}
+		if (($io['fail_temp'] ?? FALSE) === TRUE) {
+			return FALSE;
+		}
+		$tmp = @tempnam(dirname($path), '.pfb_schedule.');
+		if ($tmp === FALSE) {
+			return FALSE;
+		}
+		if (($io['fail_write'] ?? FALSE) === TRUE) {
+			return FALSE;
+		}
+		$fp = @fopen($tmp, 'wb');
+		if ($fp === FALSE) {
+			return FALSE;
+		}
+		$written = 0;
+		$length = strlen($json);
+		while ($written < $length) {
+			$count = @fwrite($fp, substr($json, $written));
+			if ($count === FALSE || $count === 0) {
+				fclose($fp);
+				return FALSE;
+			}
+			$written += $count;
+		}
+		if (!@fflush($fp) || (function_exists('fsync') && !@fsync($fp))) {
+			fclose($fp);
+			return FALSE;
+		}
+		fclose($fp);
+		if (($io['fail_read'] ?? FALSE) === TRUE) {
+			return FALSE;
+		}
+		$staged = @file_get_contents($tmp);
+		if ($staged === FALSE || $staged !== $json) {
+			return FALSE;
+		}
+		$decoded = json_decode($staged, TRUE);
+		if (($io['fail_validate'] ?? FALSE) === TRUE || !$validator($decoded)) {
+			return FALSE;
+		}
+		if (($io['fail_rename'] ?? FALSE) === TRUE || !@rename($tmp, $path)) {
+			return FALSE;
+		}
+		$tmp = NULL;
+		return TRUE;
+	} catch (Throwable $error) {
+		return FALSE;
+	} finally {
+		if (is_string($tmp)) {
+			@unlink($tmp);
+		}
+		@flock($lock_fp, LOCK_UN);
+		fclose($lock_fp);
+	}
+}
 
-	// Merge with existing data (tolerate absent/corrupt: start with empty object).
-	$data = [];
-	if (is_file($path)) {
-		$raw = @file_get_contents($path);
-		if ($raw !== FALSE && $raw !== '') {
-			$decoded = json_decode($raw, TRUE);
-			if (is_array($decoded)) {
-				$data = $decoded;
+function pfb_due_ledger_entry_valid(mixed $entry): bool
+{
+	return is_array($entry)
+		&& isset($entry['last_run'], $entry['next_due'], $entry['jitter'])
+		&& is_int($entry['last_run'])
+		&& is_int($entry['next_due'])
+		&& is_int($entry['jitter'])
+		&& (!array_key_exists('pending_apply', $entry) || is_bool($entry['pending_apply']))
+		&& count(array_diff(array_keys($entry), ['last_run', 'next_due', 'jitter', 'pending_apply'])) === 0;
+}
+
+function pfb_due_ledger_cache_valid(mixed $document, ?string $expected_hash = NULL): bool
+{
+	if (!is_array($document)
+		|| !isset($document['_meta'])
+		|| !is_array($document['_meta'])
+		|| ($document['_meta']['schema'] ?? NULL) !== 1
+		|| !is_string($document['_meta']['config_hash'] ?? NULL)
+		|| !preg_match('/^[0-9a-f]{64}$/D', $document['_meta']['config_hash'])) {
+		return FALSE;
+	}
+	if ($expected_hash !== NULL && $document['_meta']['config_hash'] !== $expected_hash) {
+		return FALSE;
+	}
+	if (count(array_diff(array_keys($document['_meta']), ['schema', 'config_hash'])) !== 0) {
+		return FALSE;
+	}
+	foreach ($document as $key => $entry) {
+		if ($key === '_meta' || !is_string($key) || $key === '' || !pfb_due_ledger_entry_valid($entry)) {
+			if ($key !== '_meta') {
+				return FALSE;
 			}
 		}
 	}
-	$data[$job_key] = $entry;
-	file_put_contents($tmp, json_encode($data, JSON_PRETTY_PRINT), LOCK_EX);
-	rename($tmp, $path);
+	return TRUE;
+}
+
+function pfb_due_ledger_write_entry(
+	string $job_key,
+	array $entry,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	if ($job_key === '' || !pfb_due_ledger_entry_valid($entry)) {
+		return FALSE;
+	}
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	return pfb_schedule_atomic_json_publish(
+		$path,
+		static function () use ($path, $job_key, $entry): array {
+			$data = [];
+			if (is_file($path)) {
+				$raw = @file_get_contents($path);
+				if ($raw !== FALSE && $raw !== '') {
+					$decoded = json_decode($raw, TRUE);
+					if (is_array($decoded)) {
+						$data = $decoded;
+					}
+				}
+			}
+			$data[$job_key] = $entry;
+			return $data;
+		},
+		fn (mixed $value) => is_array($value)
+			&& array_key_exists($job_key, $value)
+			&& pfb_due_ledger_entry_valid($value[$job_key]),
+		$io,
+		$timeout_s
+	);
+}
+
+function pfb_due_ledger_read_cache(string $ledger_dir, string $config_hash, float $timeout_s = 5.0): ?array
+{
+	if (!preg_match('/^[0-9a-f]{64}$/D', $config_hash)) {
+		return NULL;
+	}
+	$path = $ledger_dir . '/pfb_due_ledger.json';
+	if (!is_file($path)) {
+		return NULL;
+	}
+	$fp = @fopen($path, 'r');
+	if ($fp === FALSE || !pfb_flock_bounded($fp, LOCK_SH, $timeout_s)) {
+		if (is_resource($fp)) {
+			fclose($fp);
+		}
+		return NULL;
+	}
+	$raw = stream_get_contents($fp);
+	flock($fp, LOCK_UN);
+	fclose($fp);
+	if (!is_string($raw) || $raw === '') {
+		return NULL;
+	}
+	$decoded = json_decode($raw, TRUE);
+	return pfb_due_ledger_cache_valid($decoded, $config_hash) ? $decoded : NULL;
+}
+
+function pfb_due_ledger_write_cache(
+	array $entries,
+	string $config_hash,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	if (!preg_match('/^[0-9a-f]{64}$/D', $config_hash)) {
+		return FALSE;
+	}
+	$document = ['_meta' => ['schema' => 1, 'config_hash' => $config_hash]] + $entries;
+	if (!pfb_due_ledger_cache_valid($document, $config_hash)) {
+		return FALSE;
+	}
+	return pfb_schedule_atomic_json_publish(
+		$ledger_dir . '/pfb_due_ledger.json',
+		$document,
+		static fn (mixed $value): bool => pfb_due_ledger_cache_valid($value, $config_hash),
+		$io,
+		$timeout_s
+	);
+}
+
+function pfb_schedule_state_valid(mixed $state): bool
+{
+	if (!is_array($state) || ($state['schema'] ?? NULL) !== 1 || !is_array($state['items'] ?? NULL)
+		|| count(array_diff(array_keys($state), ['schema', 'items'])) !== 0) {
+		return FALSE;
+	}
+	foreach ($state['items'] as $id => $item) {
+		if (!is_string($id) || $id === '' || ctype_digit($id) || !is_array($item) || $item === '') {
+			return FALSE;
+		}
+		$allowed = ['last_successful_check', 'last_completed_occurrence', 'completion_outcome', 'pending_occurrence'];
+		if (count(array_diff(array_keys($item), $allowed)) !== 0 || count($item) === 0) {
+			return FALSE;
+		}
+		foreach (['last_successful_check', 'last_completed_occurrence', 'pending_occurrence'] as $field) {
+			if (array_key_exists($field, $item) && (!is_int($item[$field]) || $item[$field] < 0)) {
+				return FALSE;
+			}
+		}
+		$has_occurrence = array_key_exists('last_completed_occurrence', $item);
+		$has_outcome = array_key_exists('completion_outcome', $item);
+		if ($has_occurrence !== $has_outcome || ($has_outcome && !in_array($item['completion_outcome'], ['success', 'retry-cap-reached'], TRUE))) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
+function pfb_schedule_state_read(string $ledger_dir, float $timeout_s = 5.0): ?array
+{
+	$empty = ['schema' => 1, 'items' => []];
+	$path = $ledger_dir . '/pfb_schedule_state.json';
+	if (!is_file($path)) {
+		return $empty;
+	}
+	$raw = @file_get_contents($path);
+	if ($raw === FALSE || $raw === '') {
+		return NULL;
+	}
+	$decoded = json_decode($raw, TRUE);
+	return pfb_schedule_state_valid($decoded) ? $decoded : NULL;
+}
+
+function pfb_schedule_state_write(
+	array $state,
+	string $ledger_dir,
+	array $io = [],
+	float $timeout_s = 5.0
+): bool {
+	if (!pfb_schedule_state_valid($state)) {
+		return FALSE;
+	}
+	$path = $ledger_dir . '/pfb_schedule_state.json';
+	return pfb_schedule_atomic_json_publish(
+		$path,
+		$state,
+		static fn (mixed $value): bool => pfb_schedule_state_valid($value),
+		$io,
+		$timeout_s
+	);
 }
 
 /**
