@@ -3507,6 +3507,155 @@ function pfb_flock_bounded($fp, int $operation, float $timeout_s, ?bool &$timed_
 // ---------------------------------------------------------------------------
 
 /**
+ * Return the first local quarter-hour occurrence strictly after a reference.
+ *
+ * The scan walks real instants, rather than constructing local timestamps, so
+ * nonexistent spring-forward slots are skipped and repeated fall-back slots
+ * remain observable.
+ */
+function pfb_schedule_next_occurrence(
+	string $cadence,
+	int    $weekday,
+	int    $hour,
+	int    $minute,
+	int    $reference
+): ?int {
+	$valid_cadences = [
+		'Never'    => 0,
+		'01hour'   => 1,
+		'02hours'  => 2,
+		'03hours'  => 3,
+		'04hours'  => 4,
+		'06hours'  => 6,
+		'08hours'  => 8,
+		'12hours'  => 12,
+		'EveryDay' => 0,
+		'Weekly'   => 0,
+	];
+	if (!array_key_exists($cadence, $valid_cadences)) {
+		throw new InvalidArgumentException('unsupported schedule cadence');
+	}
+	if ($weekday < 1 || $weekday > 7) {
+		throw new InvalidArgumentException('schedule weekday must be 1..7');
+	}
+	if ($hour < 0 || $hour > 23) {
+		throw new InvalidArgumentException('schedule hour must be 0..23');
+	}
+	if (!in_array($minute, [0, 15, 30, 45], TRUE)) {
+		throw new InvalidArgumentException('schedule minute must be 0, 15, 30, or 45');
+	}
+	if ($cadence === 'Never') {
+		return NULL;
+	}
+
+	$interval = max(1, $valid_cadences[$cadence]);
+	$limit = $reference + (8 * 86400);
+	$candidate = $reference + 1;
+	while ($candidate <= $limit) {
+		$parts = explode('/', date('N/G/i/s', $candidate));
+		if ($parts[3] === '00' && ((int) $parts[2] % 15) === 0) {
+			break;
+		}
+		$candidate++;
+	}
+	while ($candidate <= $limit) {
+		$parts = explode('/', date('N/G/i/s', $candidate));
+		$local_weekday = (int) $parts[0];
+		$local_hour = (int) $parts[1];
+		$local_minute = (int) $parts[2];
+		$matches = match ($cadence) {
+			'01hour' => $local_minute === $minute,
+			'02hours', '03hours', '04hours', '06hours', '08hours', '12hours'
+				=> $local_minute === $minute && (($local_hour - $hour) % $interval) === 0,
+			'EveryDay' => $local_hour === $hour && $local_minute === $minute,
+			'Weekly' => $local_weekday === $weekday && $local_hour === $hour && $local_minute === $minute,
+			default => FALSE,
+		};
+		if ($matches) {
+			return $candidate;
+		}
+		$candidate += 900;
+	}
+	return NULL;
+}
+
+/**
+ * Select due feeds and the earliest future wake from normalized schedules.
+ *
+ * This is pure: callers provide all group state and both clock readings.
+ */
+function pfb_schedule_plan(array $groups, array $default_schedule, ?int $since, int $now): array
+{
+	$validate_schedule = static function (mixed $schedule): void {
+		if (!is_array($schedule)
+			|| !array_key_exists('weekday', $schedule)
+			|| !array_key_exists('hour', $schedule)
+			|| !array_key_exists('minute', $schedule)
+			|| !is_int($schedule['weekday'])
+			|| !is_int($schedule['hour'])
+			|| !is_int($schedule['minute'])
+			|| $schedule['weekday'] < 1
+			|| $schedule['weekday'] > 7
+			|| $schedule['hour'] < 0
+			|| $schedule['hour'] > 23
+			|| !in_array($schedule['minute'], [0, 15, 30, 45], TRUE)) {
+			throw new InvalidArgumentException('malformed normalized schedule');
+		}
+	};
+	$validate_schedule($default_schedule);
+
+	$due = [];
+	$next_due = NULL;
+	foreach ($groups as $key => $group) {
+		if (!is_string($key) || $key === ''
+			|| !is_array($group)
+			|| !array_key_exists('cadence', $group)
+			|| !array_key_exists('enabled', $group)
+			|| !array_key_exists('has_active_rows', $group)
+			|| !array_key_exists('override', $group)
+			|| !is_string($group['cadence'])
+			|| !is_bool($group['enabled'])
+			|| !is_bool($group['has_active_rows'])) {
+			throw new InvalidArgumentException('malformed normalized feed group');
+		}
+		if ($group['override'] !== NULL) {
+			$validate_schedule($group['override']);
+		}
+		$effective = $group['override'] ?? $default_schedule;
+		$occurrence = pfb_schedule_next_occurrence(
+			$group['cadence'],
+			$effective['weekday'],
+			$effective['hour'],
+			$effective['minute'],
+			$now
+		);
+		$eligible = $group['enabled'] && $group['has_active_rows'] && $group['cadence'] !== 'Never';
+		if (!$eligible) {
+			continue;
+		}
+		if ($since === NULL) {
+			$due[] = $key;
+		} else {
+			$past = pfb_schedule_next_occurrence(
+				$group['cadence'],
+				$effective['weekday'],
+				$effective['hour'],
+				$effective['minute'],
+				$since
+			);
+			if ($past !== NULL && $past <= $now) {
+				$due[] = $key;
+			}
+		}
+		if ($occurrence !== NULL && ($next_due === NULL || $occurrence < $next_due)) {
+			$next_due = $occurrence;
+		}
+	}
+
+	return ['due' => $due, 'next_due' => $next_due];
+}
+
+/**
  * pfb_due_ledger_seeded_jitter — deterministic jitter offset for a job/seed pair.
  *
  * Returns a stable offset in [1, $max] for $max > 0, or 0 for $max === 0.
