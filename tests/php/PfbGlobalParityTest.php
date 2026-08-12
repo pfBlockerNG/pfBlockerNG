@@ -154,10 +154,8 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * skipfeed: OLD = $pfb['config']['skipfeed'] != '' ? ... : 0 = 0 when absent
-	 * (absent key = null; null == '' in PHP, so the else branch runs -> 0).
-	 * Via gateway: PfbConfig::read('gen/skipfeed') = '0' (registered default).
-	 * PARITY: '0' and 0 are equivalent for the downstream numeric comparisons.
+	 * Fresh installs now read the registered default '3'. The migration preserves
+	 * absent old-install storage as '0', matching its former unlimited behavior.
 	 */
 	public function testParitySkipfeedAbsentYieldsFreshDefaultThree(): void
 	{
