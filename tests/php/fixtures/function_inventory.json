@@ -9222,6 +9222,81 @@
             }
         ]
     },
+    "pfb_schedule_next_occurrence": {
+        "returnsRef": false,
+        "returnType": "?int",
+        "params": [
+            {
+                "name": "cadence",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "weekday",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "hour",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "minute",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "reference",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_schedule_plan": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "groups",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "default_schedule",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "since",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_select_reload_aliases": {
         "returnsRef": false,
         "returnType": "array",
