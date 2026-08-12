@@ -199,7 +199,31 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$result = pfb_schedule_plan($groups, $default, $since, $now, $this->scheduleTimezone);
 
 		$this->assertSame(['inherited', 'overridden'], $result['due']);
+		$this->assertSame([
+			'inherited' => $this->timestamp('2026-01-05 02:15:00'),
+			'overridden' => $this->timestamp('2026-01-05 02:30:00'),
+		], $result['occurrences']);
 		$this->assertSame($this->timestamp('2026-01-06 02:15:00'), $result['next_due']);
+	}
+
+	public function testSchedulePlanUsesIndependentCursorsForDueAlreadyCompletedAndFutureGroups(): void
+	{
+		$default = ['weekday' => 1, 'hour' => 4, 'minute' => 0];
+		$slot = $this->timestamp('2026-01-05 04:00:00');
+		$groups = [
+			'due' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL,
+				'last_completed_occurrence' => $slot - 1],
+			'already_completed' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL,
+				'last_completed_occurrence' => $slot],
+			'future_cursor' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL,
+				'last_completed_occurrence' => $slot + 1],
+		];
+
+		$result = pfb_schedule_plan($groups, $default, NULL, $slot, $this->scheduleTimezone);
+
+		$this->assertSame(['due'], $result['due']);
+		$this->assertSame(['due' => $slot], $result['occurrences']);
+		$this->assertSame($slot + 86400, $result['next_due']);
 	}
 
 	public function testSchedulePlanMissingSinceRunsEachEligibleGroupOnceAndFindsSharedWake(): void
@@ -215,6 +239,11 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$result = pfb_schedule_plan($groups, $default, NULL, $now, $this->scheduleTimezone);
 
 		$this->assertSame(['first', 'shared', 'weekly'], $result['due']);
+		$this->assertSame([
+			'first' => $now,
+			'shared' => $now,
+			'weekly' => $this->timestamp('2026-01-04 05:15:00'),
+		], $result['occurrences']);
 		$this->assertSame($this->timestamp('2026-01-05 05:00:00'), $result['next_due']);
 	}
 
@@ -223,7 +252,9 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$default = ['weekday' => 1, 'hour' => 4, 'minute' => 0];
 		$groups = ['feed' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL]];
 		$slot = $this->timestamp('2026-01-05 04:00:00');
-		$this->assertSame(['feed'], pfb_schedule_plan($groups, $default, $slot - 1, $slot, $this->scheduleTimezone)['due']);
+		$due = pfb_schedule_plan($groups, $default, $slot - 1, $slot, $this->scheduleTimezone);
+		$this->assertSame(['feed'], $due['due']);
+		$this->assertSame(['feed' => $slot], $due['occurrences']);
 		$this->assertSame([], pfb_schedule_plan($groups, $default, $slot, $slot, $this->scheduleTimezone)['due']);
 		$this->assertSame([], pfb_schedule_plan($groups, $default, $slot + 1, $slot, $this->scheduleTimezone)['due']);
 	}
@@ -237,7 +268,32 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$result = pfb_schedule_plan($groups, $default, $since, $now, $this->scheduleTimezone);
 
 		$this->assertSame(['feed'], $result['due'], 'five missed hourly slots must produce one due group');
+		$this->assertSame(['feed' => $this->timestamp('2026-01-05 05:00:00')], $result['occurrences']);
 		$this->assertSame($this->timestamp('2026-01-05 06:00:00'), $result['next_due']);
+
+		$replayedGroup = $groups['feed'];
+		$replayedGroup['last_completed_occurrence'] = $result['occurrences']['feed'];
+		$replayed = pfb_schedule_plan(
+			['feed' => $replayedGroup],
+			$default,
+			NULL,
+			$now,
+			$this->scheduleTimezone
+		);
+		$this->assertSame([], $replayed['due'], 'returned occurrence cursor must prevent replay');
+		$this->assertSame([], $replayed['occurrences']);
+	}
+
+	public function testSchedulePlanMissingCursorUsesLatestRealSlotBeforeNonSlotNow(): void
+	{
+		$default = ['weekday' => 1, 'hour' => 0, 'minute' => 0];
+		$groups = ['feed' => ['cadence' => '01hour', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL]];
+		$now = $this->timestamp('2026-01-05 05:07:00');
+
+		$result = pfb_schedule_plan($groups, $default, NULL, $now, $this->scheduleTimezone);
+
+		$this->assertSame(['feed'], $result['due']);
+		$this->assertSame(['feed' => $this->timestamp('2026-01-05 05:00:00')], $result['occurrences']);
 	}
 
 	public function testSchedulePlanPreservesFamilyKeysIsIdempotentAndTiesNextWake(): void
@@ -253,6 +309,11 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$second = pfb_schedule_plan($groups, $default, $slot - 1, $slot, $this->scheduleTimezone);
 
 		$this->assertSame(['ipv4_feed', 'ipv6_feed', 'dnsbl_feed'], $first['due']);
+		$this->assertSame([
+			'ipv4_feed' => $slot,
+			'ipv6_feed' => $slot,
+			'dnsbl_feed' => $slot,
+		], $first['occurrences']);
 		$this->assertSame($slot + 86400, $first['next_due']);
 		$this->assertSame($first, $second, 'identical pure inputs must produce identical plans');
 	}
@@ -267,7 +328,7 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		];
 		$result = pfb_schedule_plan($groups, $default, NULL, $this->timestamp('2026-01-05 04:00:00'), $this->scheduleTimezone);
 
-		$this->assertSame(['due' => [], 'next_due' => NULL], $result);
+		$this->assertSame(['due' => [], 'next_due' => NULL, 'occurrences' => []], $result);
 	}
 
 	public function testSchedulePlanRejectsMalformedNormalizedShapesWithoutCoercion(): void
@@ -284,6 +345,10 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 				'override' => ['weekday' => 1, 'hour' => '4', 'minute' => 0]]], $validDefault],
 			[['feed' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE,
 				'override' => ['weekday' => 1, 'hour' => 4]]], $validDefault],
+			[['feed' => $validGroup + ['last_completed_occurrence' => -1]], $validDefault],
+			[['feed' => $validGroup + ['last_completed_occurrence' => 1.5]], $validDefault],
+			[['feed' => $validGroup + ['last_completed_occurrence' => '1']], $validDefault],
+			[['feed' => $validGroup + ['unexpected' => TRUE]], $validDefault],
 			[['feed' => $validGroup], ['weekday' => 1, 'hour' => 4, 'minute' => 1]],
 		];
 

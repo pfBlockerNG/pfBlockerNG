@@ -3824,7 +3824,64 @@ function pfb_schedule_plan(
 	};
 	$validate_schedule($default_schedule);
 
+	$latest_occurrence = static function (
+		string $cadence,
+		array $schedule,
+		int $start,
+		int $upper_bound,
+		DateTimeZone $timezone
+	): ?int {
+		$occurrence = pfb_schedule_next_occurrence($cadence, $schedule['weekday'], $schedule['hour'], $schedule['minute'], $start, $timezone);
+		$latest = NULL;
+		while ($occurrence !== NULL && $occurrence <= $upper_bound) {
+			$latest = $occurrence;
+			$next_reference = $occurrence;
+			$occurrence = pfb_schedule_next_occurrence(
+				$cadence,
+				$schedule['weekday'],
+				$schedule['hour'],
+				$schedule['minute'],
+				$next_reference,
+				$timezone
+			);
+		}
+		return $latest;
+	};
+	$due_occurrence = static function (
+		string $cadence,
+		array $schedule,
+		?int $cursor,
+		int $now,
+		DateTimeZone $timezone
+	) use ($latest_occurrence): ?int {
+		if ($cursor === NULL) {
+			return $latest_occurrence($cadence, $schedule, $now - (15 * 86400) - 1, $now, $timezone);
+		}
+		$search_start = max($cursor, $now - (15 * 86400) - 1);
+		$occurrence = pfb_schedule_next_occurrence(
+			$cadence,
+			$schedule['weekday'],
+			$schedule['hour'],
+			$schedule['minute'],
+			$search_start,
+			$timezone
+		);
+		$latest = NULL;
+		while ($occurrence !== NULL && $occurrence <= $now) {
+			$latest = $occurrence;
+			$occurrence = pfb_schedule_next_occurrence(
+				$cadence,
+				$schedule['weekday'],
+				$schedule['hour'],
+				$schedule['minute'],
+				$latest,
+				$timezone
+			);
+		}
+		return $latest;
+	};
 	$due = [];
+	$occurrences = [];
 	$next_due = NULL;
 	foreach ($groups as $key => $group) {
 		if (!is_string($key) || $key === ''
@@ -3836,6 +3893,15 @@ function pfb_schedule_plan(
 			|| !is_string($group['cadence'])
 			|| !is_bool($group['enabled'])
 			|| !is_bool($group['has_active_rows'])) {
+			throw new InvalidArgumentException('malformed normalized feed group');
+		}
+		$allowed_group_keys = ['cadence', 'enabled', 'has_active_rows', 'override', 'last_completed_occurrence'];
+		if (array_diff_key($group, array_fill_keys($allowed_group_keys, TRUE)) !== []) {
+			throw new InvalidArgumentException('malformed normalized feed group');
+		}
+		if (array_key_exists('last_completed_occurrence', $group)
+			&& $group['last_completed_occurrence'] !== NULL
+			&& (!is_int($group['last_completed_occurrence']) || $group['last_completed_occurrence'] < 0)) {
 			throw new InvalidArgumentException('malformed normalized feed group');
 		}
 		if ($group['override'] !== NULL) {
@@ -3854,27 +3920,20 @@ function pfb_schedule_plan(
 		if (!$eligible) {
 			continue;
 		}
-		if ($since === NULL) {
+		$cursor = array_key_exists('last_completed_occurrence', $group)
+			? $group['last_completed_occurrence']
+			: $since;
+		$latest_due = $due_occurrence($group['cadence'], $effective, $cursor, $now, $timezone);
+		if ($latest_due !== NULL) {
 			$due[] = $key;
-		} else {
-			$past = pfb_schedule_next_occurrence(
-				$group['cadence'],
-				$effective['weekday'],
-				$effective['hour'],
-				$effective['minute'],
-				$since,
-				$timezone
-			);
-			if ($past !== NULL && $past <= $now) {
-				$due[] = $key;
-			}
+			$occurrences[$key] = $latest_due;
 		}
 		if ($occurrence !== NULL && ($next_due === NULL || $occurrence < $next_due)) {
 			$next_due = $occurrence;
 		}
 	}
 
-	return ['due' => $due, 'next_due' => $next_due];
+	return ['due' => $due, 'next_due' => $next_due, 'occurrences' => $occurrences];
 }
 
 /**
