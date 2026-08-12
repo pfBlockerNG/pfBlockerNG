@@ -2590,7 +2590,7 @@ function pfb_schedule_migrate(array $sections, ?callable $entropy = NULL): ?arra
 			$gen['pfb_scheduled_feed_updates'] = 'on';
 		} else {
 			$gen['pfb_scheduled_feed_updates'] = 'on';
-			if (!$is_fresh || !array_key_exists('pfb_interval', $gen)) {
+			if (!$is_fresh) {
 				$notice_keys[] = 'pfb_interval';
 			}
 		}
