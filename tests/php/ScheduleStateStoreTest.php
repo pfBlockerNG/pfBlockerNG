@@ -96,13 +96,19 @@ final class ScheduleStateStoreTest extends TestCase
 			$this->dir
 		));
 		$newer = ['last_run' => 100, 'next_due' => 200, 'jitter' => 0];
+		$competing_lock_blocked = FALSE;
 
 		pfb_due_ledger_set_pending('cron', $this->dir, 5.0, [
-			'before_document' => static function () use ($path, $newer): void {
+			'before_document' => static function () use ($path, $newer, &$competing_lock_blocked): void {
+				$competitor = fopen($path . '.lock', 'c');
+				$would_block = 0;
+				$competing_lock_blocked = !flock($competitor, LOCK_EX | LOCK_NB, $would_block) && $would_block === 1;
+				fclose($competitor);
 				file_put_contents($path, json_encode(['cron' => $newer]));
 			},
 		]);
 
+		$this->assertTrue($competing_lock_blocked, 'the whole entry update must hold the sidecar lock');
 		$this->assertSame($newer + ['pending_apply' => TRUE], pfb_due_ledger_read_entry('cron', $this->dir));
 	}
 
