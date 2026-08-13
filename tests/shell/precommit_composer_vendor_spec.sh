@@ -16,30 +16,26 @@ Describe '.githooks/pre-commit Composer vendor guard'
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitphpstub.XXXXXX")"
     checker_marker="$stubdir/checker-ran"
     php_marker="$stubdir/php-ran"
-    phpstan_marker="$stubdir/phpstan-ran"
     phpcs_marker="$stubdir/phpcs-ran"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
-    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpstan_marker" > "$repo/vendor/bin/phpstan"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpcs_marker" > "$repo/vendor/bin/phpcs"
-    chmod +x "$stubdir/php" "$repo/vendor/bin/phpstan" "$repo/vendor/bin/phpcs"
+    chmod +x "$stubdir/php" "$repo/vendor/bin/phpcs"
     PATH="$stubdir:$PATH"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }
   Before 'make_repo'
   After 'cleanup'
 
-  It 'fails closed before PHPStan and PHPCS when the checker is unavailable'
+  It 'fails closed before PHPCS when the checker is unavailable'
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 1
-    The output should not include '[pre-commit] phpstan'
     The output should not include '[pre-commit] phpcs'
     The stderr should include '[pre-commit] FAILED: composer vendor'
     Assert [ ! -e "$php_marker" ]
-    Assert [ ! -e "$phpstan_marker" ]
     Assert [ ! -e "$phpcs_marker" ]
   End
 
-  It 'runs every PHP analysis gate when the Composer vendor checker succeeds'
+  It 'runs every PHP style gate when the Composer vendor checker succeeds'
     for interpreter in python python3; do
       printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$checker_marker" > "$stubdir/$interpreter"
     done
@@ -47,11 +43,9 @@ Describe '.githooks/pre-commit Composer vendor guard'
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 0
     The output should include '[pre-commit] php -l'
-    The output should include '[pre-commit] phpstan'
     The output should include '[pre-commit] phpcs'
     Assert [ -e "$checker_marker" ]
     Assert [ -e "$php_marker" ]
-    Assert [ -e "$phpstan_marker" ]
     Assert [ -e "$phpcs_marker" ]
   End
 End

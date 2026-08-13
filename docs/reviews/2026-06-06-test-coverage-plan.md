@@ -38,7 +38,7 @@ branch**, and assert **before-state** in transition tests (per CLAUDE.md "Test c
   `composer install` once, then `vendor/bin/phpunit`.
 - **shellspec** (`tests/shell/`, `--shell sh`): `spec_helper.sh` puts `tests/shell/bin/` ahead of
   PATH so bare-name add-on binaries (`iprange`, …) hit deterministic shims; fixtures in
-  `tests/shell/fixtures/`. Gated in pre-commit + CI (`test.yml`). Run: `shellspec`.
+  `tests/shell/fixtures/`. Gated in CI (`test.yml`). Run locally: `shellspec`.
 - **pytest** (`tests/`): `conftest.py` copies Unbound injected globals onto `builtins` and
   resets the `pfb` dict + DBs per test; `stubs/python/unboundmodule.py` provides a recording
   `DNSMessage` (`DNSMessage.instances`) + permissive `_Struct` qstate/env. `make_qstate()` in

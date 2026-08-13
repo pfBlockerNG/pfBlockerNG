@@ -197,7 +197,7 @@ def test_php_staging_jobs_install_composer_before_committing() -> None:
 def test_php_staging_jobs_pin_php_from_the_version_matrix() -> None:
     """The hook's PHP gates run on a supported PHP, not on whatever the runner ships.
 
-    Scenario: .githooks/pre-commit runs php -l, PHPStan and PHPCS.
+    Scenario: .githooks/pre-commit runs php -l and PHPCS.
     Given a job that puts those gates in front of its own commit,
     when the runner image changes its default PHP,
     then the gates must still run on a version supported-versions.json ships --
