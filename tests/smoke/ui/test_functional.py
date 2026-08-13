@@ -744,7 +744,8 @@ def test_general_skipfeed_bogus_scalar_resets_to_default(
     The select-RESET negative exercising the is_array()/!array_key_exists arms.
     Save loop: ``if (is_array($_POST[$s_option])) $_POST[$s_option] = $s_default;``
     AND an ``elseif (!array_key_exists(...))`` that also coerces to the default 0.
-    A valid scalar '3' is a key of ``$options_skipfeed`` (0..6) -> stored '3'.
+    The valid scalar probe is a key of ``$options_skipfeed`` (0..6) and differs
+    from the stored value.
 
     HARNESS CAVEAT: ``WebUI.post`` overrides a single scalar field (dict[str,str]);
     it cannot emit the array-bracket form (``skipfeed[]=x``) that PHP parses as an
@@ -767,6 +768,7 @@ def test_general_skipfeed_bogus_scalar_resets_to_default(
         assert got == "0", f"bogus skipfeed should reset to default 0, got {got!r}"
     finally:
         webui.post(GENERAL_PAGE, {"skipfeed": original or "0"}, timeout=SAVE_TIMEOUT)
+        helpers.wait_no_active_pfb_task(vm)
 
 
 MARGIN_CFG = "installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct"
