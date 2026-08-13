@@ -1,12 +1,11 @@
 #!/bin/sh
-# Runs the project's fast linters / static-analysis gates before each commit and
+# Runs the project's fast lint, style, and policy gates before each commit and
 # blocks the commit on any failure. Mirrors the lint commands in CLAUDE.md and
 # .github/workflows/test.yml.
 #
 # Two deliberate scoping rules keep this hook fast:
-#   1. The UNIT SUITES are NOT run here (no `pytest`, no `phpunit`) — too slow for
-#      a per-commit gate. CI (test.yml) is the correctness gate for both suites;
-#      run `python -m pytest` / `vendor/bin/phpunit` yourself while iterating.
+#   1. Test suites and static analysis run in CI only — too slow for a per-commit
+#      gate. Run them yourself while iterating when useful.
 #   2. Each language's gates run ONLY when this commit stages a file of that type
 #      (a PHP-only commit doesn't pay for the markdown/python/shell linters, etc.).
 #
@@ -61,9 +60,6 @@ staged_md=0;  staged_has '\.md$'        && staged_md=1
 staged_php=0; staged_has '\.(php|inc)$' && staged_php=1
 staged_xml=0; staged_has '\.xml$'       && staged_xml=1
 staged_sh=0;  staged_has '\.sh$'        && staged_sh=1
-# Spec plumbing (helper, extensionless bin/ shims, fixtures) impacts every shellspec
-# run but need not end in .sh -- it must open the shell block on its own.
-staged_specplumb=0; staged_has '^tests/shell/(spec_helper\.sh|bin/|fixtures/)' && staged_specplumb=1
 staged_yaml=0; staged_has '\.ya?ml$'    && staged_yaml=1
 staged_agentcfg=0
 printf '%s\n' "$staged_all" | grep -qE \
@@ -94,20 +90,6 @@ if [ "$staged_py" = 1 ]; then
 	else
 		skip ruff
 	fi
-
-	# mypy: type-check the test suite (config + tests.* strictness in pyproject.toml).
-	mypy_bin=''
-	if [ -x .venv/bin/mypy ]; then
-		mypy_bin=.venv/bin/mypy
-	elif have mypy; then
-		mypy_bin=mypy
-	fi
-	if [ -n "$mypy_bin" ]; then
-		step 'mypy tests/'
-		"$mypy_bin" tests/ || failed 'mypy tests/'
-	else
-		skip mypy
-	fi
 fi
 
 # Python interpreter resolution (used by the URL-encoding check below).
@@ -131,7 +113,7 @@ if [ "$staged_md" = 1 ]; then
 fi
 
 # =============================== Shell (*.sh) =============================== #
-if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
+if [ "$staged_sh" = 1 ]; then
 	# Forbid bash shebangs. The repo is #!/bin/sh POSIX (the FreeBSD/pfSense target
 	# has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL tracked
 	# files, so it also covers tests/ (not lint-globbed below).
@@ -176,43 +158,6 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 			| xargs shellcheck --severity=info || failed 'shellcheck'
 	else
 		skip shellcheck
-	fi
-
-	# shellspec functional suite (gated on the tool, like shellcheck), scoped to the
-	# IMPACTED specs: staged spec files plus any spec that names a staged script's
-	# basename. The basename heuristic is blind to the pfb_source indirection, so a
-	# staged src/ shell script — or any staged spec-plumbing file (spec_helper, bin/,
-	# fixtures/) — runs the FULL suite instead. The full suite runs minutes (and an
-	# interrupted run can strand spec-mutated state); CI remains the full-suite hard gate.
-	# Run under dash when available: strict-POSIX ash sibling of FreeBSD
-	# /bin/sh (the appliance shell). bash-as-sh (macOS) masks divergences —
-	# e.g. a special-builtin redirection error aborts ash/dash but not bash.
-	if have shellspec; then
-		staged_shell=$(printf '%s\n' "$staged" | grep '\.sh$' || true)
-		if printf '%s\n' "$staged_shell" | grep -q '^src/' || [ "$staged_specplumb" = 1 ]; then
-			specs=$(ls tests/shell/*_spec.sh)
-		else
-			specs=$(printf '%s\n' "$staged_shell" | grep '^tests/shell/.*_spec\.sh$' || true)
-			for f in $(printf '%s\n' "$staged_shell" | grep -v '^tests/shell/'); do
-				specs="$specs
-$(grep -l -F "$(basename "$f")" tests/shell/*_spec.sh 2>/dev/null || true)"
-			done
-		fi
-		specs=$(printf '%s\n' "$specs" | grep -v '^$' | sort -u)
-		if [ -n "$specs" ]; then
-			step 'shellspec (impacted)'
-			if have dash; then
-				# shellcheck disable=SC2086 # specs is a newline list of repo paths
-				shellspec --shell "$(command -v dash)" $specs || failed 'shellspec (dash)'
-			else
-				# shellcheck disable=SC2086
-				shellspec $specs || failed 'shellspec'
-			fi
-		else
-			skip 'shellspec(no-impacted-specs)'
-		fi
-	else
-		skip shellspec
 	fi
 fi
 
@@ -316,9 +261,9 @@ if [ "$staged_php" = 1 ]; then
 	fi
 
 	# Composer PHP tools are unsafe against a missing, shared, or stale vendor tree.
-	# The guard is fail-closed and runs before every PHP analysis gate.
+	# The guard is fail-closed and runs before every PHP style gate.
 	if [ "$composer_vendor_ok" != 1 ]; then
-		printf '[pre-commit] Composer vendor check failed; skipping PHP analysis gates.\n' >&2
+		printf '[pre-commit] Composer vendor check failed; skipping PHP style gates.\n' >&2
 	else
 	# php -l syntax check (output shown only for files that fail).
 	if have php; then
@@ -330,17 +275,11 @@ if [ "$staged_php" = 1 ]; then
 		skip php
 	fi
 
-	# PHPStan (heavy; only when the Composer vendor tree is installed).
-	if [ -x vendor/bin/phpstan ]; then
-		step 'phpstan'
-		vendor/bin/phpstan analyse --no-progress --memory-limit=1G || failed 'phpstan'
-	fi
-
 	# PHPCS sniffs (only when the vendor tree is installed). Config auto-discovered
 	# from phpcs.xml.dist.
 	if [ -x vendor/bin/phpcs ]; then
 		step 'phpcs'
-		# issue #895: cap memory like the phpstan step above — phpcs tokenising a
+		# issue #895: cap memory because phpcs tokenising a
 		# large file (pfblockerng.inc ~19.5k lines) exhausts PHP's default 128M and
 		# aborts, which forces --no-verify and skips ALL gates. CI runs at
 		# memory_limit=-1 so it never OOMs there; this closes the local-only gap.

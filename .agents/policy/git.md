@@ -53,12 +53,12 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
 `git config core.hooksPath` not `.githooks`, agent runs it at session start
 (idempotent). Any GitHub Actions workflow that commits code runs it after checkout too.
 
-- **`pre-commit`** — fast linters/static-analysis, path-scoped to staged file types
-  (Python → ruff + `mypy tests/`; Markdown → markdownlint; shell → shebang gate + `sh -n` +
-  shellcheck + shellspec; PHP → `php -l` + PHPStan + PHPCS; URL-encoding check when
+- **`pre-commit`** — fast lint, style, and policy checks, path-scoped to staged file types
+  (Python → ruff; Markdown → markdownlint; shell → shebang gate + `sh -n` +
+  shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when
   `*.sh`/`*.md` staged). NOT unit suites — run `python3 -m pytest` yourself while
-  iterating; CI is hard gate. Missing tool = reported + skipped. `--no-verify` bypass
-  is for humans, not agents.
+  iterating; tests and static analysis run in CI only. Missing tool = reported + skipped.
+  `--no-verify` bypass is for humans, not agents.
 - **`prepare-commit-msg`** — first aborts agent commit (`CLAUDECODE=1` or
   `CODEX_THREAD_ID` set) in **primary checkout** (agents commit only in linked
   worktrees — issue #1262; state-checked via `--git-dir` vs `--git-common-dir`, never
