@@ -39,23 +39,22 @@ final class WizardScheduleResetTest extends TestCase
 		}
 
 		$saved_config = $GLOBALS['config'] ?? NULL;
-		$GLOBALS['config'] = ['installedpackages' => []];
-		$pfb_general_schedule = [
-			'pfb_scheduled_feed_updates' => '',
-			'pfb_schedule_weekday' => '4',
-			'pfb_schedule_hour' => '5',
-			'pfb_schedule_minute' => '45',
-			'skipfeed' => '0',
-		];
-		eval(substr($source, $start, $end - $start));
-		$GLOBALS['config'] = $saved_config;
+		foreach (['', 'on'] as $master) {
+			$GLOBALS['config'] = ['installedpackages' => []];
+			$pfb_general_schedule = [
+				'pfb_scheduled_feed_updates' => $master,
+				'pfb_schedule_weekday' => '4',
+				'pfb_schedule_hour' => '5',
+				'pfb_schedule_minute' => '45',
+				'skipfeed' => '0',
+			];
+			eval(substr($source, $start, $end - $start));
 
-		$this->assertSame([
-			'pfb_scheduled_feed_updates' => '',
-			'pfb_schedule_weekday' => '4',
-			'pfb_schedule_hour' => '5',
-			'pfb_schedule_minute' => '45',
-			'skipfeed' => '0',
-		], array_intersect_key($new_config['pfblockerng']['config'][0], $pfb_general_schedule));
+			$this->assertSame($pfb_general_schedule, array_intersect_key(
+				$new_config['pfblockerng']['config'][0],
+				$pfb_general_schedule
+			));
+		}
+		$GLOBALS['config'] = $saved_config;
 	}
 }
