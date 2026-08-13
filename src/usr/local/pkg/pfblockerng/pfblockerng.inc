@@ -910,7 +910,8 @@ function pfb_category_schedule_validate(
 		if (array_key_exists($key, $post) && is_array($post[$key])) {
 			$errors[] = ucfirst(str_replace('_', ' ', $key)) . ' is invalid.';
 		} elseif ($strict_inputs && array_key_exists($key, $post)
-			&& !($active && $cadence === '01hour' && $key === 'schedule_hour')) {
+			&& !($active && $cadence === '01hour' && $key === 'schedule_hour')
+			&& !($active && $cadence !== 'Weekly' && $key === 'schedule_weekday')) {
 			$valid = $key === 'schedule_weekday'
 				? $token($post[$key], 1, 7)
 				: ($key === 'schedule_hour' ? $token($post[$key], 0, 23) : $minute($post[$key]));

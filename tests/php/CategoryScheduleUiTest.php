@@ -127,6 +127,49 @@ final class CategoryScheduleUiTest extends TestCase
 		], $result['values']);
 	}
 
+	public static function dormantWeekdayMatrix(): array
+	{
+		return [
+			'01hour invalid submitted weekday preserves stored' => ['01hour', '22', '45', '8', '2', '2', '9'],
+			'02hours missing submitted weekday preserves stored' => ['02hours', '12', '0', NULL, '2', '2', '12'],
+			'EveryDay invalid stored weekday seeds General' => ['EveryDay', '18', '30', '8', '9', '4', '18'],
+		];
+	}
+
+	#[DataProvider('dormantWeekdayMatrix')]
+	public function testActiveNonWeeklyInvalidOrMissingWeekdaySeedsGeneralDefault(
+		string $cadence,
+		string $hour,
+		string $minute,
+		?string $weekday,
+		string $stored_weekday,
+		string $expected_weekday,
+		string $expected_hour,
+		): void {
+		$stored = $this->stored();
+		$stored['schedule_weekday'] = $stored_weekday;
+		$post = ['schedule_override' => 'on', 'schedule_hour' => $hour, 'schedule_minute' => $minute];
+		if ($weekday !== NULL) {
+			$post['schedule_weekday'] = $weekday;
+		}
+		$result = pfb_category_schedule_validate(
+			$post,
+			$stored,
+			$this->general(),
+			$cadence,
+			'Deny_Inbound',
+			TRUE
+		);
+
+		$this->assertSame([], $result['errors']);
+		$this->assertSame([
+			'schedule_override' => 'on',
+			'schedule_weekday' => $expected_weekday,
+			'schedule_hour' => $expected_hour,
+			'schedule_minute' => $minute,
+		], $result['values']);
+	}
+
 	public function testArrayAndNonCanonicalScheduleInputsRejectSave(): void
 	{
 		$result = pfb_category_schedule_validate(
