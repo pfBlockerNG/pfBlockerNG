@@ -269,7 +269,12 @@ def test_quarter_hour_scheduling_controls_and_apply_window(
     expect(weekday.locator("option")).to_have_count(7, timeout=JS_TIMEOUT_MS)
     expect(weekday.locator("option").first).to_have_attribute("value", "7", timeout=JS_TIMEOUT_MS)
     expect(hour.locator("option")).to_have_count(24, timeout=JS_TIMEOUT_MS)
-    expect(minute.locator("option")).to_have_values(["0", "15", "30", "45"], timeout=JS_TIMEOUT_MS)
+    assert minute.locator("option").evaluate_all("options => options.map(option => option.value)") == [
+        "0",
+        "15",
+        "30",
+        "45",
+    ]
 
     for retired in ("pfb_interval", "pfb_min", "pfb_hour", "pfb_dailystart"):
         expect(page.locator(f'[name="{retired}"]')).to_have_count(0, timeout=JS_TIMEOUT_MS)
