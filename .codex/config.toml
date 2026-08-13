@@ -1,6 +1,10 @@
 # Repository-scoped Codex defaults. This layer is loaded only after the project
 # is trusted; keep machine-specific authentication and notification settings in
 # ~/.codex/config.toml.
+sandbox_mode = "workspace-write"
+web_search = "indexed"
+model_verbosity = "low"
+model_reasoning_summary = "concise"
 [agents]
 max_threads = 4
 max_depth = 2
@@ -10,3 +14,6 @@ command = "sh"
 args = ["-c", '''root=$(git rev-parse --show-toplevel) && python3 -c "import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)" "$root/scripts/mcp-token-savior.sh" 096dda2b2c617df7aa3bb3f3aa6445017fb68e737677a0b7392f24168d95a885 && exec sh "$root/scripts/mcp-token-savior.sh"''']
 env = { TOKEN_SAVIOR_CLIENT = "codex" }
 startup_timeout_sec = 120
+
+[sandbox_workspace_write]
+network_access = true
