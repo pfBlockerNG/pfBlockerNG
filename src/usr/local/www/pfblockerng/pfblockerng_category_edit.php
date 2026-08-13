@@ -511,9 +511,9 @@ if ($_POST && isset($_POST['save'])) {
 	);
 	$pfb_schedule_active_rows = FALSE;
 	foreach ($_POST as $pfb_schedule_key => $pfb_schedule_value) {
-		if (str_starts_with((string) $pfb_schedule_key, 'state-')
-			&& $pfb_schedule_value !== 'Disabled'
-			&& !empty($_POST['url-' . substr((string) $pfb_schedule_key, 6)])) {
+		if (str_starts_with((string) $pfb_schedule_key, 'url-')
+			&& !empty($pfb_schedule_value)
+			&& ($_POST['state-' . substr((string) $pfb_schedule_key, 4)] ?? '') !== 'Disabled') {
 			$pfb_schedule_active_rows = TRUE;
 			break;
 		}

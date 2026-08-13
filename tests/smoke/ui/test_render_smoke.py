@@ -211,6 +211,7 @@ PAGE_TABLE: tuple[Page, ...] = (
         "/pfblockerng/pfblockerng_category_edit.php?type=ipv6",
         (
             "Advanced Tuneables",
+            "Suppression CIDR Limit",
             "Override Default Schedule",
             "schedule_override",
             "schedule_weekday",
