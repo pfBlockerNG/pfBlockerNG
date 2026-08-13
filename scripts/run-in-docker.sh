@@ -22,10 +22,8 @@
 # chmod-based permission tests (the same reason the PHPUnit permission cases guard
 # on posix_getuid). Running as the invoking user keeps those honest.
 #
-# KNOWN DIFFERENCES from a host run, all Linux-vs-macOS rather than bugs: the
-# process-group signal tests and one mtime race test fail in the container, and a
-# couple of platform-gated cases skip differently. CI grades on Linux, so the
-# container is the closer answer where they disagree.
+# Platform-gated cases may skip differently from a host run. CI grades on Linux,
+# so the container is the closer answer where they disagree.
 #
 # IT ALWAYS RUNS THE COMMAND. Every reason the container cannot be reached — docker
 # missing, daemon down, image absent and unpullable, a local build that fails, not even a
@@ -199,7 +197,7 @@ fi
 # Word-splitting tty_args/git_mount/PFB_DOCKER_ARGS is intentional — they are
 # argument lists, not single arguments.
 # shellcheck disable=SC2086
-exec docker run --rm ${tty_args} \
+exec docker run --rm --init ${tty_args} \
 	--user "$(id -u):$(id -g)" \
 	--env HOME=/tmp \
 	--env PFB_RUNNER=container \
