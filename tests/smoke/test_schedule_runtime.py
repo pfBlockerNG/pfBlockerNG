@@ -198,6 +198,7 @@ try {
         'item' => array(array('xml' => 'smoke', 'selected' => 'yes', 'title' => 'Smoke', 'feed' => '/var/db/pfblockerng/smoke_bl.txt')),
     ));
     write_config('pfBlockerNG smoke #2308: persisted runtime schedule');
+    pfb_global();
     @unlink($state_path);
     @unlink($cache_path);
     $out['regenerated'] = pfb_schedule_cache_regenerate();
