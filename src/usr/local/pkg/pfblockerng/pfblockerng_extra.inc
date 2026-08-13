@@ -2526,6 +2526,27 @@ function pfb_schedule_minute_token(mixed $value): ?string
 	return $token !== NULL && in_array($token, ['0', '15', '30', '45'], TRUE) ? $token : NULL;
 }
 
+// Accept only actions belonging to the group that stores them. Summary AJAX,
+// restored/HA config, and runtime consumers all share this exact boundary.
+function pfb_group_action_valid(mixed $action, string $gtype): bool {
+	if (!is_string($action)) {
+		return FALSE;
+	}
+	if ($gtype === 'dnsbl') {
+		return in_array($action, array('Disabled', 'unbound'), TRUE);
+	}
+	if (!in_array($gtype, array('ipv4', 'ipv6', 'geoip'), TRUE)) {
+		return FALSE;
+	}
+	return in_array($action, array(
+		'Disabled',
+		'Deny_Inbound', 'Deny_Outbound', 'Deny_Both',
+		'Permit_Inbound', 'Permit_Outbound', 'Permit_Both',
+		'Match_Inbound', 'Match_Outbound', 'Match_Both',
+		'Alias_Deny', 'Alias_Permit', 'Alias_Match', 'Alias_Native'
+	), TRUE);
+}
+
 /** True when a dynamic group has at least one source row the runtime can process. */
 function pfb_schedule_group_active_rows(mixed $rows): bool
 {
