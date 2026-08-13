@@ -199,6 +199,41 @@ def test_enabled_same_size_rewrite_with_restored_mtime_fails_closed(
     assert path.stat().st_mtime_ns == original.st_mtime_ns
 
 
+def test_enabled_rewrite_after_iteration_with_stable_metadata_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest = _manifest(tmp_path)
+    path = tmp_path / "pfb_py_top1m.txt"
+    path.write_bytes(b"old.example\n")
+    original = path.stat()
+    real_fstat = P.os.fstat
+    opened: os.stat_result | None = None
+    rewritten = False
+
+    def rewriting_fstat(fd: int) -> os.stat_result:
+        nonlocal opened, rewritten
+        current = real_fstat(fd)
+        if current.st_ino != original.st_ino:
+            return current
+        if opened is None:
+            opened = current
+        elif not rewritten:
+            rewrite_fd = os.open(path, os.O_WRONLY)
+            try:
+                os.pwrite(rewrite_fd, b"new.example\n", 0)
+            finally:
+                os.close(rewrite_fd)
+            os.utime(path, ns=(original.st_atime_ns, original.st_mtime_ns))
+            rewritten = True
+        return opened
+
+    monkeypatch.setattr(P.os, "fstat", rewriting_fstat)
+    assert P.dnsbl_build_from_manifest(str(manifest)) is None
+    assert rewritten
+    assert path.stat().st_size == original.st_size
+    assert path.stat().st_mtime_ns == original.st_mtime_ns
+
+
 def test_enabled_unlink_during_iteration_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     manifest = _manifest(tmp_path)
     path = tmp_path / "pfb_py_top1m.txt"

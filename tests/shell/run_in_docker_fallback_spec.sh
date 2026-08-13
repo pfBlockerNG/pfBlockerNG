@@ -85,6 +85,13 @@ STUB_EOF
     The stderr should not include 'running on the host'
   End
 
+  It 'uses an init process to reap orphaned grandchildren'
+    export STUB_INSPECT_RC=0
+    When call wrapper true
+    The status should be success
+    The output should include 'DOCKER_RUN --rm --init'
+  End
+
   It 'runs in the container when the image is absent but pulls'
     export STUB_INSPECT_RC=1 STUB_PULL_RC=0
     When call wrapper sh -c "echo ran > '${WORK}/host_ran'"

@@ -5400,11 +5400,11 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
                 opened.st_mtime_ns,
             ):
                 raise _DnsblGenerationError("TOP1M sidecar changed before reading: '{}'".format(path))
-            expected_digest = hashlib.sha256()
+            expected_digest = hashlib.md5()
             while chunk := os.read(handle.fileno(), 64 * 1024):
                 expected_digest.update(chunk)
             os.lseek(handle.fileno(), 0, os.SEEK_SET)
-            consumed_digest = hashlib.sha256()
+            consumed_digest = hashlib.md5()
             for raw_line in handle:
                 if isinstance(raw_line, str):
                     line_bytes = raw_line.encode("utf-8", errors="strict")
@@ -5416,6 +5416,10 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
                 yield line.strip()
             consumed = os.lseek(handle.fileno(), 0, os.SEEK_CUR)
             finished = os.fstat(handle.fileno())
+            final_digest = hashlib.md5()
+            os.lseek(handle.fileno(), 0, os.SEEK_SET)
+            while chunk := os.read(handle.fileno(), 64 * 1024):
+                final_digest.update(chunk)
             pathname = os.lstat(path)
             pathname_regular = stat.S_ISREG(pathname.st_mode)
             pathname_same = pathname_regular and (pathname.st_dev, pathname.st_ino) == (opened.st_dev, opened.st_ino)
@@ -5441,6 +5445,7 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
                     finished.st_mtime_ns,
                 )
                 or consumed_digest.digest() != expected_digest.digest()
+                or final_digest.digest() != expected_digest.digest()
                 or not (pathname_same or pathname_replaced)
                 or (fd_metadata_changed and not pathname_replaced)
             ):
