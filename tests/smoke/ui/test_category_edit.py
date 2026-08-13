@@ -228,6 +228,41 @@ def test_dnsbl_schedule_override_saves_and_reloads_canonical_values(
         _del_rowid(vm, CFG_DNSBL, rowid)
 
 
+@pytest.mark.parametrize("gtype", ["ipv4", "ipv6", "dnsbl"])
+def test_schedule_override_persists_for_every_group_family(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    gtype: str,
+) -> None:
+    """Canonical schedule override fields round-trip for IPv4, IPv6, and DNSBL groups."""
+    vm = smoke_vm
+    roots = {"ipv4": CFG_IPV4, "ipv6": CFG_IPV6, "dnsbl": CFG_DNSBL}
+    builders = {"ipv4": _ipv4_payload, "ipv6": _ipv6_payload, "dnsbl": _dnsbl_payload}
+    root = roots[gtype]
+    rowid = _free_rowid(vm, root)
+    payload = builders[gtype](
+        rowid,
+        f"smokesched{gtype}",
+        cron="Weekly",
+        schedule_override="on",
+        schedule_weekday="3",
+        schedule_hour="6",
+        schedule_minute="15",
+    )
+    base = f"{root}/{rowid}"
+    try:
+        _post_form(webui, payload)
+        for key, expected in {
+            "schedule_override": "on",
+            "schedule_weekday": "3",
+            "schedule_hour": "6",
+            "schedule_minute": "15",
+        }.items():
+            assert helpers.config_get(vm, f"{base}/{key}") == expected, f"{gtype} {key} did not persist"
+    finally:
+        _del_rowid(vm, root, rowid)
+
+
 # --------------------------------------------------------------------------- #
 # Negative SAVE: a bad aliasname aborts the whole save (config UNCHANGED).
 # --------------------------------------------------------------------------- #
