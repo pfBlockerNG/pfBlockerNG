@@ -178,9 +178,6 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 			if ($handle) {
 				@fclose($handle);
 			}
-			else {
-				$output_ok = FALSE;
-			}
 
 			if (empty($continent)) {
 				pfb_logger("Continent data [ {$cont} ] not found\n", 4);
