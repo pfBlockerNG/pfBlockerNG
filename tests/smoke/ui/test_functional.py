@@ -2006,9 +2006,12 @@ def test_force_mode_download_clears_validators(
         )
         assert not looks_like_login_page(resp.text), "force=download POST returned the login form (session lost)"
 
-        # AFTER: the .etag sidecar must be gone (handler cleared it).
-        after = vm.ssh("/bin/test", "-f", sidecar_etag)
-        assert after.returncode != 0, (
+        # AFTER: forcecheck is detached, so consume the sidecar-removal event instead of
+        # racing the child immediately after the POST returns.
+        assert helpers.wait_until(
+            lambda: vm.ssh("/bin/test", "-f", sidecar_etag).returncode != 0,
+            timeout=25.0,
+        ), (
             f"{sidecar_etag} still exists after force=download POST — "
             "pfb_force_clear_validators(clear_hashes=FALSE) was not called for scope=ip"
         )
@@ -2093,13 +2096,15 @@ def test_force_mode_both_clears_hash_sidecars(
         )
         assert not looks_like_login_page(resp.text), "force=both POST returned the login form (session lost)"
 
-        # AFTER: every sidecar (etag + hash) in BOTH dirs must be gone.
-        for path, _ in planted:
-            r = vm.ssh("/bin/test", "-f", path)
-            assert r.returncode != 0, (
-                f"{path} still exists after force=both/scope=both POST — "
-                "pfb_force_clear_validators(clear_hashes=TRUE) did not clear this in-scope orig dir"
-            )
+        # AFTER: forcecheck is detached, so consume the removal event instead of racing
+        # the child immediately after the POST returns.
+        assert helpers.wait_until(
+            lambda: all(vm.ssh("/bin/test", "-f", path).returncode != 0 for path, _ in planted),
+            timeout=25.0,
+        ), (
+            "sidecars still exist after force=both/scope=both POST — "
+            "pfb_force_clear_validators(clear_hashes=TRUE) did not clear every in-scope orig dir"
+        )
 
     finally:
         for path, _ in planted:
