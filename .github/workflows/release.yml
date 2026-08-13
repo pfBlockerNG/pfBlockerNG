@@ -1177,7 +1177,7 @@ jobs:
               "build_input_digest": "",
           }
           record["build_input_digest"] = build_input_digest(record)
-          Path("build-record.json").write_text(
+          Path(os.environ["RUNNER_TEMP"], "build-record.json").write_text(
               json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",
           )
@@ -1202,10 +1202,9 @@ jobs:
           EXTRA_PKGS:   ${{ toJson(matrix.extra_pkgs) }}
         run: |
           set -eu
-          # Place the run-keyed out dir under $GITHUB_WORKSPACE/out so the
-          # rename step below finds this leg's .pkg without any path remapping.
+          # Keep generated Ports and package trees outside the pinned source checkout.
           # Run-body export, not an env: map value (issue #2231).
-          export PFB_RUN_ROOT="$GITHUB_WORKSPACE/out"
+          export PFB_RUN_ROOT="$RUNNER_TEMP/pfb-runs"
           export LEG
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
@@ -1220,7 +1219,7 @@ jobs:
             --py-flavor  "$PY" \
             --php        "$PHP" \
             --pkgversion "$PORTVERSION" \
-            --build-record "$GITHUB_WORKSPACE/build-record.json")"
+            --build-record "$RUNNER_TEMP/build-record.json")"
 
           PKG_DIR="$(dirname "$PKG")"
           echo "Built for FreeBSD ${MAJOR}:"

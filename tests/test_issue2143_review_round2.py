@@ -36,6 +36,8 @@ def test_build_record_step_exports_ports_sha_to_the_python_child(tmp_path: Path)
     fake_git.chmod(0o755)
     workdir = tmp_path / "work"
     workdir.mkdir()
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
     completed = subprocess.run(
         ["sh", "-c", _build_record_script()],
         cwd=workdir,
@@ -44,6 +46,7 @@ def test_build_record_step_exports_ports_sha_to_the_python_child(tmp_path: Path)
             "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
             "PYTHONPATH": str(ROOT),
             "GITHUB_ENV": str(tmp_path / "github-env"),
+            "RUNNER_TEMP": str(runner_temp),
             "TAG": "v4.0.0",
             "CHANNEL": "stable",
             "SOURCE": "release/4.0",
@@ -58,7 +61,8 @@ def test_build_record_step_exports_ports_sha_to_the_python_child(tmp_path: Path)
         check=False,
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
-    record = json.loads((workdir / "build-record.json").read_text(encoding="utf-8"))
+    assert not (workdir / "build-record.json").exists()
+    record = json.loads((runner_temp / "build-record.json").read_text(encoding="utf-8"))
     assert record["freebsd_ports_sha"] == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 
