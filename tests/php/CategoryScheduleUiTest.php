@@ -10,6 +10,33 @@ final class CategoryScheduleUiTest extends TestCase
 {
 	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_category_edit.php';
 
+	private static function executeControllerScheduleGate(array $post): array
+	{
+		if (!function_exists('pfb_category_schedule_gate_oracle')) {
+			$source = php_strip_whitespace(self::PAGE);
+			if (!preg_match('/(\$pfb_schedule_result = pfb_category_schedule_validate\(.*?)(?=if \(!\$input_errors\) \{)/s', $source, $match)) {
+				throw new RuntimeException('category schedule controller gate not found');
+			}
+			eval(
+			'function pfb_category_schedule_gate_oracle(array $post): array {'
+			. ' $_POST = array_merge(['
+			. "'aliasname' => 'validname', 'action' => 'Disabled', 'gtype' => 'ipv4',"
+			. "'autoaddrnot_in' => '', 'autoaddrnot_out' => '', 'custom' => '', 'whois_convert' => '',"
+			. "'suppression_cidr' => 'Disabled', 'suppression_cidr_v6' => 'Disabled',"
+			. "'format-0' => 'auto', 'state-0' => 'Disabled', 'url-0' => '', 'header-0' => ''], \$post);"
+			. ' $gtype = "ipv4"; $type = "IP"; $input_errors = []; $write_count = 0;'
+			. ' $options_action = []; $options_suppression_cidr = []; $options_suppression_cidr_v6 = []; $line = 1;'
+			. ' $pfb_schedule_stored = []; $pfb_schedule_general_input = ['
+			. "'pfb_schedule_weekday' => '4', 'pfb_schedule_hour' => '6', 'pfb_schedule_minute' => '30'];"
+			. ' $pfb_schedule_active_rows = TRUE;'
+			. $match[1]
+			. ' if (!$input_errors) { $write_count++; }'
+			. " return ['errors' => \$input_errors, 'writes' => \$write_count]; }"
+		);
+		}
+		return pfb_category_schedule_gate_oracle($post);
+	}
+
 	private function general(): array
 	{
 		return [
@@ -84,12 +111,13 @@ final class CategoryScheduleUiTest extends TestCase
 	public static function cadenceMatrix(): array
 	{
 		return [
-			'01hour uses minute and dormant hour' => ['01hour', 'Deny_Inbound', TRUE, '22', '45', '9', '45', '2'],
-			'02hours uses hour and minute' => ['02hours', 'Deny_Inbound', TRUE, '12', '0', '12', '0', '2'],
-			'EveryDay uses hour and minute' => ['EveryDay', 'Deny_Inbound', TRUE, '18', '30', '18', '30', '2'],
-			'Never preserves stored components' => ['Never', 'Deny_Inbound', TRUE, '18', '30', '9', '15', '2'],
-			'Disabled preserves stored components' => ['02hours', 'Disabled', TRUE, '18', '30', '9', '15', '2'],
-			'No active rows preserves stored components' => ['02hours', 'Deny_Inbound', FALSE, '18', '30', '9', '15', '2'],
+			'01hour uses minute and submitted dormant weekday' => ['01hour', 'Deny_Inbound', TRUE, '22', '45', '9', '45', '6'],
+			'02hours uses hour and submitted dormant weekday' => ['02hours', 'Deny_Inbound', TRUE, '12', '0', '12', '0', '6'],
+			'EveryDay uses hour and submitted dormant weekday' => ['EveryDay', 'Deny_Inbound', TRUE, '18', '30', '18', '30', '6'],
+			'Never stages submitted components' => ['Never', 'Deny_Inbound', TRUE, '18', '30', '18', '30', '6'],
+			'Disabled stages submitted components' => ['02hours', 'Disabled', TRUE, '18', '30', '18', '30', '6'],
+			'No active rows stages submitted components' => ['02hours', 'Deny_Inbound', FALSE, '18', '30', '18', '30', '6'],
+			'Inactive Weekly stages all components' => ['Weekly', 'Disabled', TRUE, '18', '30', '18', '30', '6'],
 		];
 	}
 
@@ -130,9 +158,9 @@ final class CategoryScheduleUiTest extends TestCase
 	public static function dormantWeekdayMatrix(): array
 	{
 		return [
-			'01hour invalid submitted weekday preserves stored' => ['01hour', '22', '45', '8', '2', '2', '9'],
-			'02hours missing submitted weekday preserves stored' => ['02hours', '12', '0', NULL, '2', '2', '12'],
-			'EveryDay invalid stored weekday seeds General' => ['EveryDay', '18', '30', '8', '9', '4', '18'],
+			'01hour missing weekday uses stored' => ['01hour', '22', '45', NULL, '2', '2', '9', TRUE],
+			'02hours missing weekday uses stored' => ['02hours', '12', '0', NULL, '2', '2', '12', TRUE],
+			'EveryDay invalid weekday rejects direct POST' => ['EveryDay', '18', '30', '8', '2', '2', '18', FALSE],
 		];
 	}
 
@@ -145,6 +173,7 @@ final class CategoryScheduleUiTest extends TestCase
 		string $stored_weekday,
 		string $expected_weekday,
 		string $expected_hour,
+		bool $valid,
 		): void {
 		$stored = $this->stored();
 		$stored['schedule_weekday'] = $stored_weekday;
@@ -161,6 +190,10 @@ final class CategoryScheduleUiTest extends TestCase
 			TRUE
 		);
 
+		if (!$valid) {
+			$this->assertNotEmpty($result['errors']);
+			return;
+		}
 		$this->assertSame([], $result['errors']);
 		$this->assertSame([
 			'schedule_override' => 'on',
@@ -232,7 +265,28 @@ final class CategoryScheduleUiTest extends TestCase
 		$this->assertNotFalse($gate);
 		$this->assertNotFalse($write);
 		$this->assertLessThan($write, $gate);
-		$this->assertStringContainsString('$pfb_schedule_result[\'errors\']', substr($source, $validate, $gate - $validate));
+		$validation_window = substr($source, $validate, $gate - $validate + 24);
+		$this->assertStringContainsString('$pfb_schedule_result[\'errors\']', $validation_window);
+		$this->assertStringNotContainsString('$input_errors = array ();', $validation_window);
+	}
+
+	public function testInvalidOverrideControllerGateDoesNotMutateOrWrite(): void
+	{
+		$GLOBALS['config'] = ['installedpackages' => ['pfblockernglistsv4' => ['config' => [['aliasname' => 'before']]]]];
+		$before = $GLOBALS['config'];
+		$result = self::executeControllerScheduleGate([
+			'schedule_override' => 'on', 'schedule_weekday' => '8', 'schedule_hour' => '24', 'schedule_minute' => '5',
+		]);
+		$this->assertNotEmpty($result['errors']);
+		$this->assertSame(0, $result['writes']);
+		$this->assertSame($before, $GLOBALS['config']);
+	}
+
+	public function testAbsentStateWithNonEmptyUrlCountsAsActiveRow(): void
+	{
+		$source = php_strip_whitespace(self::PAGE);
+		$this->assertStringContainsString("str_starts_with((string) \$pfb_schedule_key, 'url-')", $source);
+		$this->assertStringContainsString("\$_POST['state-' . substr((string) \$pfb_schedule_key, 4)] ?? ''", $source);
 	}
 
 	public function testCandidateFailureIsNonDestructiveAndWarningNamesWorkaround(): void
@@ -263,5 +317,50 @@ final class CategoryScheduleUiTest extends TestCase
 		$this->assertStringContainsString('settings remain saved', $source);
 		$this->assertStringContainsString('likely a package bug', $source);
 		$this->assertStringContainsString('manual updates remain available', $source);
+	}
+
+	public function testCandidateSuccessUsesPrivateDirectoryAndRejectsInvalidTimezoneWithoutWarning(): void
+	{
+		$model = pfb_schedule_runtime_model([
+			'pfb_scheduled_feed_updates' => '', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '0', 'pfb_schedule_minute' => '0',
+		], ['ipv4' => [], 'ipv6' => [], 'dnsbl' => []]);
+		$this->assertNotNull($model);
+		$active = sys_get_temp_dir() . '/pfb_active_' . bin2hex(random_bytes(4));
+		mkdir($active, 0700, TRUE);
+		$sentinel = '{"active":"must remain byte-identical"}';
+		file_put_contents($active . '/pfb_due_ledger.json', $sentinel);
+		$before_candidates = glob(sys_get_temp_dir() . '/pfb_sched_*') ?: [];
+		set_error_handler(static function (): bool { throw new RuntimeException('unexpected warning'); });
+		try {
+			$this->assertTrue(pfb_schedule_cache_candidate_validate($model, ['schema' => 1, 'items' => []], 'UTC', time(), ['active_dir' => $active]));
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame($sentinel, file_get_contents($active . '/pfb_due_ledger.json'));
+		$this->assertSame($before_candidates, glob(sys_get_temp_dir() . '/pfb_sched_*') ?: []);
+		$warnings = [];
+		set_error_handler(static function (int $severity, string $message) use (&$warnings): bool { $warnings[] = $message; return TRUE; });
+		try {
+			$this->assertFalse(pfb_schedule_cache_candidate_validate($model, ['schema' => 1, 'items' => []], ['bad'], time()));
+		} finally {
+			restore_error_handler();
+		}
+		$this->assertSame([], $warnings);
+		@unlink($active . '/pfb_due_ledger.json');
+		@rmdir($active);
+	}
+
+	public function testCandidateExtremeStateReturnsFalseWithoutLeakingTemporaryArtifacts(): void
+	{
+		$group = ['action' => 'Deny_Inbound', 'cron' => 'EveryDay', 'schedule_override' => '', 'schedule_weekday' => '1', 'schedule_hour' => '4', 'schedule_minute' => '30', 'row' => [['header' => 'feed', 'url' => 'https://192.0.2.1/feed', 'state' => 'Enabled']]];
+		$model = pfb_schedule_runtime_model(
+			['pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '2', 'pfb_schedule_minute' => '15'],
+			['ipv4' => [$group], 'ipv6' => [], 'dnsbl' => []]
+		);
+		$this->assertNotNull($model);
+		$before = glob(sys_get_temp_dir() . '/pfb_sched_*') ?: [];
+		$state = ['schema' => 1, 'items' => ['ipv4:feed_v4' => ['last_completed_occurrence' => PHP_INT_MAX]]];
+		$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time()));
+		$this->assertSame($before, glob(sys_get_temp_dir() . '/pfb_sched_*') ?: []);
 	}
 }

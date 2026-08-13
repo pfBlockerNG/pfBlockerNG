@@ -910,8 +910,7 @@ function pfb_category_schedule_validate(
 		if (array_key_exists($key, $post) && is_array($post[$key])) {
 			$errors[] = ucfirst(str_replace('_', ' ', $key)) . ' is invalid.';
 		} elseif ($strict_inputs && array_key_exists($key, $post)
-			&& !($active && $cadence === '01hour' && $key === 'schedule_hour')
-			&& !($active && $cadence !== 'Weekly' && $key === 'schedule_weekday')) {
+			&& !($active && $cadence === '01hour' && $key === 'schedule_hour')) {
 			$valid = $key === 'schedule_weekday'
 				? $token($post[$key], 1, 7)
 				: ($key === 'schedule_hour' ? $token($post[$key], 0, 23) : $minute($post[$key]));
@@ -940,18 +939,16 @@ function pfb_category_schedule_validate(
 		&& ($hour === NULL || $minute_value === NULL)) {
 		$errors[] = 'Schedule requires a valid hour and minute.';
 	} elseif (!$active) {
-		$weekday = $stored_weekday;
-		$hour = $stored_hour;
-		$minute_value = $stored_minute;
+		$weekday ??= $stored_weekday;
+		$hour ??= $stored_hour;
+		$minute_value ??= $stored_minute;
 	}
 	if ($errors !== []) {
 		return ['errors' => $errors, 'values' => []];
 	}
 	$values['schedule_hour'] = $hour ?? $stored_hour;
 	$values['schedule_minute'] = $minute_value ?? $stored_minute;
-	if ($cadence === 'Weekly') {
-		$values['schedule_weekday'] = $weekday ?? $stored_weekday;
-	}
+	$values['schedule_weekday'] = $weekday ?? $stored_weekday;
 	if ($cadence === '01hour') {
 		$values['schedule_hour'] = $stored_hour;
 	}

@@ -5028,8 +5028,11 @@ function pfb_schedule_cache_candidate_validate(
 	if (!$model || !$state) {
 		return FALSE;
 	}
+	if (!($timezone instanceof DateTimeZone) && !is_string($timezone)) {
+		return FALSE;
+	}
 	try {
-		$timezone = $timezone instanceof DateTimeZone ? $timezone : new DateTimeZone((string) $timezone);
+		$timezone = $timezone instanceof DateTimeZone ? $timezone : new DateTimeZone($timezone);
 	} catch (Throwable) {
 		return FALSE;
 	}
@@ -5041,16 +5044,23 @@ function pfb_schedule_cache_candidate_validate(
 			$candidate_dir = '';
 		}
 	}
-	$ok = $candidate_dir !== ''
-		&& pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir, $io)
-		&& pfb_due_ledger_read_cache($candidate_dir, $model['config_hash']) !== NULL;
-	if ($candidate_dir !== '') {
-		foreach (scandir($candidate_dir) ?: [] as $artifact) {
-			if ($artifact !== '.' && $artifact !== '..') {
-				@unlink("{$candidate_dir}/{$artifact}");
+	$ok = FALSE;
+	try {
+		$active_dir = is_string($io['active_dir'] ?? NULL) ? rtrim($io['active_dir'], '/') : '';
+		$ok = $candidate_dir !== '' && ($active_dir === '' || $candidate_dir !== $active_dir)
+			&& pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir, $io)
+			&& pfb_due_ledger_read_cache($candidate_dir, $model['config_hash']) !== NULL;
+	} catch (Throwable) {
+		$ok = FALSE;
+	} finally {
+		if ($candidate_dir !== '') {
+			foreach (scandir($candidate_dir) ?: [] as $artifact) {
+				if ($artifact !== '.' && $artifact !== '..') {
+					@unlink("{$candidate_dir}/{$artifact}");
+				}
 			}
+			@rmdir($candidate_dir);
 		}
-		@rmdir($candidate_dir);
 	}
 	return $ok;
 }

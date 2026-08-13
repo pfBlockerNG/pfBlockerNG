@@ -149,7 +149,7 @@ def test_schedule_override_toggle_and_weekly_cadence_controls(
     _shot(page, screenshot_dir, "schedule_override_before")
 
     # FLIP ON: hourly controls enable; weekday remains dormant until Weekly.
-    override.evaluate("el => el.click()")
+    override.check()
     expect(override).to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(hour).to_be_enabled(timeout=JS_TIMEOUT_MS)
     expect(minute).to_be_enabled(timeout=JS_TIMEOUT_MS)
@@ -162,10 +162,11 @@ def test_schedule_override_toggle_and_weekly_cadence_controls(
     weekday.select_option("3")
     cadence.select_option("02hours")
     expect(weekday).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    assert weekday.input_value() == "3"
     _shot(page, screenshot_dir, "schedule_override_weekly_then_hourly")
 
     # FLIP OFF: all override controls disable again without losing selected values.
-    override.evaluate("el => el.click()")
+    override.uncheck()
     expect(override).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(hour).to_be_disabled(timeout=JS_TIMEOUT_MS)
     expect(minute).to_be_disabled(timeout=JS_TIMEOUT_MS)
@@ -574,7 +575,6 @@ def _ipv4_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str
         "description": "smoke alias-type test",
         "action": "Deny_Both",
         "cron": "Never",
-        "dow": "",
         "sort": "sort",
         "aliaslog": "enabled",
         "stateremoval": "enabled",
