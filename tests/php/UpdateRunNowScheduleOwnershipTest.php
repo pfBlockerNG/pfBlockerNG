@@ -100,6 +100,38 @@ final class UpdateRunNowScheduleOwnershipTest extends TestCase
 		$this->assertCount(1, config_get_path('cron/item', []), 'Force Check must not remove the fixed recovery tick');
 	}
 
+	public function testHealthyCronTickIsNotReportedMissingWithoutSuppression(): void
+	{
+		$pfb = $GLOBALS['pfb'];
+		$pfb['enable'] = PfbToggle::On;
+		$command = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$pfb['log']} 2>&1";
+		config_set_path('cron/item', [[
+			'command' => $command,
+			'minute' => '*/15',
+			'hour' => '*',
+			'mday' => '*',
+			'wday' => '*',
+		]]);
+		$this->assertFalse(pfb_cron_disabled());
+		$this->assertTrue(pfblockerng_cron_exists($command, '*/15', '*', '*', '*'));
+
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');
+		$this->assertIsString($source);
+		$start = strpos($source, '$pfb_tick_min = 15;');
+		$end = strpos($source, "\n\$status = 'NEXT Scheduled CRON Event", $start);
+		$this->assertNotFalse($start);
+		$this->assertNotFalse($end);
+		eval(substr($source, $start, $end - $start));
+
+		$this->assertStringNotContainsString('Missing cron task', $cronreal);
+		$this->assertNotSame('--', $nextcron);
+
+		config_set_path('cron/item', []);
+		eval(substr($source, $start, $end - $start));
+		$this->assertSame(' [ Missing cron task ]', $cronreal);
+		$this->assertSame('--', $nextcron);
+	}
+
 	public function testDetachedCliVerbsPropagateLockedProcessFailure(): void
 	{
 		$source = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');

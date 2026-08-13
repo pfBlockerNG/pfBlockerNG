@@ -748,9 +748,8 @@ def test_update_page_cron_status_reports_harness_disable_flag(
     """The Update page's cron-status line names the harness's .pfb_cron_disable sentinel (#1204).
 
     Read-only (no config write) — the flag is deploy()'s always-on harness state, so
-    this needs no ``ui_e2e`` isolation. Pairs with the flag-absent test below (branch
-    coverage): together they prove the flag outranks the enabled/missing-cron arms
-    of the cron-status line, not just that SOME text renders.
+    this needs no ``ui_e2e`` isolation. The flag-absent healthy-cron branch is pinned
+    off-appliance by UpdateRunNowScheduleOwnershipTest.
 
     Given the harness flag present (deploy()'s default state),
     When GET pfblockerng_update.php,
