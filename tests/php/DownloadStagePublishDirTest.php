@@ -260,6 +260,21 @@ final class DownloadStagePublishDirTest extends TestCase
 		$this->assertSame("last-good\n", file_get_contents("{$target}/cat_ads"));
 	}
 
+	/** Failed rollback must retain the deterministic backup for the next recovery pass. */
+	public function testFailedSwapRoutesRollbackThroughRecoveryHelper(): void
+	{
+		$reflection = new ReflectionFunction('pfb_stage_publish_dir');
+		$source = file(self::INC);
+		$this->assertNotFalse($source);
+		$scope = implode('', array_slice($source, $reflection->getStartLine() - 1,
+			$reflection->getEndLine() - $reflection->getStartLine() + 1));
+
+		$this->assertStringContainsString('pfb_stage_publish_dir_recover(dirname($target));', $scope,
+			'a failed swap must use the recovery path whose obstruction case preserves the backup');
+		$this->assertStringNotContainsString('@rename($backup, $target)', $scope,
+			'a one-shot rollback cannot prove the backup remains recoverable when restore fails');
+	}
+
 	/** Staging beside the target is what makes the publication a same-filesystem rename. */
 	public function testStagedDirectorySitsBesideTheTargetAndIsNotTheTarget(): void
 	{
