@@ -31,6 +31,26 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.ui_e2e
 
 _POST_TIMEOUT = 120.0
+_GENERAL_PAGE = "/pfblockerng/pfblockerng_general.php"
+_GENERAL_CONFIG = "installedpackages/pfblockerng/config/0"
+_GENERAL_ARRAY_ERRORS = {
+    "pfb_scheduled_feed_updates": "Scheduled Feed Updates is invalid.",
+    "pfb_schedule_weekday": "Schedule weekday is invalid.",
+    "pfb_schedule_hour": "Schedule hour is invalid.",
+    "pfb_schedule_minute": "Schedule minute is invalid.",
+    "pfb_quiet_hours_enabled": "Automatic Apply Window is invalid.",
+    "pfb_quiet_hours_start": "Automatic Apply Window endpoints must be quarter-hour times.",
+    "pfb_quiet_hours_end": "Automatic Apply Window endpoints must be quarter-hour times.",
+}
+
+
+def _general_config_token(smoke_vm: helpers.SmokeVM) -> str:
+    result = helpers.php_eval(
+        smoke_vm,
+        f"echo base64_encode(serialize(config_get_path({helpers._php_str(_GENERAL_CONFIG)}, array())));",
+    )
+    assert result.returncode == 0, f"General config snapshot failed: {result.stderr!r}"
+    return result.stdout.strip()
 
 
 def _post_with_array_field(
@@ -58,6 +78,7 @@ def _post_with_array_field(
     """
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
+    general_before = _general_config_token(smoke_vm) if page == _GENERAL_PAGE else None
 
     got = webui.get(page)
     assert got.status_code == 200, f"GET {page} -> HTTP {got.status_code}"
@@ -77,6 +98,15 @@ def _post_with_array_field(
         "(expected a graceful validation reject, not a TypeError 500)"
     )
     assert not looks_like_login_page(resp.text), f"POST {page} bounced to the login form"
+    if general_before is not None:
+        expected_error = _GENERAL_ARRAY_ERRORS[array_field]
+        assert expected_error in resp.text, (
+            f"POST {page} with {array_field}[]=crafted did not render {expected_error!r}"
+        )
+        general_after = _general_config_token(smoke_vm)
+        assert general_after == general_before, (
+            f"POST {page} with {array_field}[]=crafted changed the General config section"
+        )
     guard.assert_no_growth()
 
 

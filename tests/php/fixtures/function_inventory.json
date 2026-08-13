@@ -4725,6 +4725,26 @@
             }
         ]
     },
+    "pfb_general_schedule_save_redirect": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "cache_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "failure_redirect",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/pfblockerng/pfblockerng_general.php?schcache=failed'"
+            }
+        ]
+    },
     "pfb_general_schedule_validate": {
         "returnsRef": false,
         "returnType": "array",
@@ -9820,6 +9840,13 @@
                 "variadic": false,
                 "type": "DateTimeZone",
                 "default": null
+            },
+            {
+                "name": "next_occurrence",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },

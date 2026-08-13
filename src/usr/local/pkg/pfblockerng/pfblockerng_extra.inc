@@ -3843,9 +3843,18 @@ function pfb_schedule_plan(
 	array $default_schedule,
 	?int $since,
 	int $now,
-	DateTimeZone $timezone
+	DateTimeZone $timezone,
+	?callable $next_occurrence = NULL
 ): array
 {
+	$next_occurrence ??= static fn (
+		string $cadence,
+		int $weekday,
+		int $hour,
+		int $minute,
+		int $reference,
+		DateTimeZone $zone
+	): ?int => pfb_schedule_next_occurrence($cadence, $weekday, $hour, $minute, $reference, $zone);
 	$validate_schedule = static function (mixed $schedule): void {
 		if (!is_array($schedule)
 			|| !array_key_exists('weekday', $schedule)
@@ -3869,14 +3878,15 @@ function pfb_schedule_plan(
 		array $schedule,
 		int $start,
 		int $upper_bound,
-		DateTimeZone $timezone
+		DateTimeZone $timezone,
+		callable $next_occurrence
 	): ?int {
-		$occurrence = pfb_schedule_next_occurrence($cadence, $schedule['weekday'], $schedule['hour'], $schedule['minute'], $start, $timezone);
+		$occurrence = $next_occurrence($cadence, $schedule['weekday'], $schedule['hour'], $schedule['minute'], $start, $timezone);
 		$latest = NULL;
 		while ($occurrence !== NULL && $occurrence <= $upper_bound) {
 			$latest = $occurrence;
 			$next_reference = $occurrence;
-			$occurrence = pfb_schedule_next_occurrence(
+			$occurrence = $next_occurrence(
 				$cadence,
 				$schedule['weekday'],
 				$schedule['hour'],
@@ -3892,13 +3902,14 @@ function pfb_schedule_plan(
 		array $schedule,
 		?int $cursor,
 		int $now,
-		DateTimeZone $timezone
+		DateTimeZone $timezone,
+		callable $next_occurrence
 	) use ($latest_occurrence): ?int {
 		if ($cursor === NULL) {
-			return $latest_occurrence($cadence, $schedule, $now - (15 * 86400) - 1, $now, $timezone);
+			return $latest_occurrence($cadence, $schedule, $now - (15 * 86400) - 1, $now, $timezone, $next_occurrence);
 		}
 		$search_start = max($cursor, $now - (15 * 86400) - 1);
-		$occurrence = pfb_schedule_next_occurrence(
+		$occurrence = $next_occurrence(
 			$cadence,
 			$schedule['weekday'],
 			$schedule['hour'],
@@ -3909,7 +3920,7 @@ function pfb_schedule_plan(
 		$latest = NULL;
 		while ($occurrence !== NULL && $occurrence <= $now) {
 			$latest = $occurrence;
-			$occurrence = pfb_schedule_next_occurrence(
+			$occurrence = $next_occurrence(
 				$cadence,
 				$schedule['weekday'],
 				$schedule['hour'],
@@ -3954,7 +3965,7 @@ function pfb_schedule_plan(
 			$group['cadence'], $effective['weekday'], $effective['hour'], $effective['minute'],
 		]);
 		if (!array_key_exists($schedule_key, $next_cache)) {
-			$next_cache[$schedule_key] = pfb_schedule_next_occurrence(
+			$next_cache[$schedule_key] = $next_occurrence(
 				$group['cadence'],
 				$effective['weekday'],
 				$effective['hour'],
@@ -3973,7 +3984,9 @@ function pfb_schedule_plan(
 			: $since;
 		$due_key = $schedule_key . ':' . ($cursor === NULL ? 'none' : $cursor);
 		if (!array_key_exists($due_key, $due_cache)) {
-			$due_cache[$due_key] = $due_occurrence($group['cadence'], $effective, $cursor, $now, $timezone);
+			$due_cache[$due_key] = $due_occurrence(
+				$group['cadence'], $effective, $cursor, $now, $timezone, $next_occurrence
+			);
 		}
 		$latest_due = $due_cache[$due_key];
 		if ($latest_due !== NULL) {
@@ -4994,6 +5007,14 @@ function pfb_schedule_cache_refresh(
 		$io,
 		$timeout_s
 	);
+}
+
+function pfb_general_schedule_save_redirect(
+	bool $cache_ok,
+	string $failure_redirect = '/pfblockerng/pfblockerng_general.php?schcache=failed'
+): string
+{
+	return $cache_ok ? '/pfblockerng/pfblockerng_general.php' : $failure_redirect;
 }
 
 /** Regenerate the disposable schedule cache without starting update work. */
