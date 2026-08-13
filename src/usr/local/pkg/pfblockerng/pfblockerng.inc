@@ -905,10 +905,12 @@ function pfb_category_schedule_validate(
 	$strict_inputs = !is_string($post['schedule_override'] ?? NULL)
 		|| !in_array($post['schedule_override'] ?? NULL, ['', 'on'], TRUE)
 		|| $override === 'on';
+	$active = $has_active_rows && $action !== 'Disabled' && $cadence !== 'Never';
 	foreach (['schedule_weekday', 'schedule_hour', 'schedule_minute'] as $key) {
 		if (array_key_exists($key, $post) && is_array($post[$key])) {
 			$errors[] = ucfirst(str_replace('_', ' ', $key)) . ' is invalid.';
-		} elseif ($strict_inputs && array_key_exists($key, $post)) {
+		} elseif ($strict_inputs && array_key_exists($key, $post)
+			&& !($active && $cadence === '01hour' && $key === 'schedule_hour')) {
 			$valid = $key === 'schedule_weekday'
 				? $token($post[$key], 1, 7)
 				: ($key === 'schedule_hour' ? $token($post[$key], 0, 23) : $minute($post[$key]));
@@ -929,12 +931,15 @@ function pfb_category_schedule_validate(
 	$weekday = $token($post['schedule_weekday'] ?? NULL, 1, 7);
 	$hour = $token($post['schedule_hour'] ?? NULL, 0, 23);
 	$minute_value = $minute($post['schedule_minute'] ?? NULL);
-	$active = $has_active_rows && $action !== 'Disabled' && $cadence !== 'Never';
 	if ($cadence === 'Weekly' && ($weekday === NULL || $hour === NULL || $minute_value === NULL)) {
 		$errors[] = 'Weekly schedule requires a valid weekday, hour, and minute.';
-	} elseif ($active && $cadence !== 'Weekly' && ($hour === NULL || $minute_value === NULL)) {
+	} elseif ($active && $cadence === '01hour' && $minute_value === NULL) {
+		$errors[] = 'Hourly schedule requires a valid minute.';
+	} elseif ($active && $cadence !== 'Weekly' && $cadence !== '01hour'
+		&& ($hour === NULL || $minute_value === NULL)) {
 		$errors[] = 'Schedule requires a valid hour and minute.';
-	} elseif (!$active && ($hour === NULL || $minute_value === NULL)) {
+	} elseif (!$active) {
+		$weekday = $stored_weekday;
 		$hour = $stored_hour;
 		$minute_value = $stored_minute;
 	}
@@ -945,8 +950,9 @@ function pfb_category_schedule_validate(
 	$values['schedule_minute'] = $minute_value ?? $stored_minute;
 	if ($cadence === 'Weekly') {
 		$values['schedule_weekday'] = $weekday ?? $stored_weekday;
-	} elseif ($weekday !== NULL) {
-		$values['schedule_weekday'] = $weekday;
+	}
+	if ($cadence === '01hour') {
+		$values['schedule_hour'] = $stored_hour;
 	}
 	return ['errors' => [], 'values' => $values];
 }

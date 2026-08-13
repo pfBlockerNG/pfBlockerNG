@@ -9600,6 +9600,13 @@
                 "variadic": false,
                 "type": "?int",
                 "default": "NULL"
+            },
+            {
+                "name": "io",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },

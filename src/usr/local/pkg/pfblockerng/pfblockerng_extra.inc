@@ -5022,7 +5022,8 @@ function pfb_schedule_cache_candidate_validate(
 	?array $model,
 	?array $state,
 	mixed $timezone,
-	?int $now = NULL
+	?int $now = NULL,
+	array $io = []
 ): bool {
 	if (!$model || !$state) {
 		return FALSE;
@@ -5041,7 +5042,7 @@ function pfb_schedule_cache_candidate_validate(
 		}
 	}
 	$ok = $candidate_dir !== ''
-		&& pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir)
+		&& pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir, $io)
 		&& pfb_due_ledger_read_cache($candidate_dir, $model['config_hash']) !== NULL;
 	if ($candidate_dir !== '') {
 		foreach (scandir($candidate_dir) ?: [] as $artifact) {
