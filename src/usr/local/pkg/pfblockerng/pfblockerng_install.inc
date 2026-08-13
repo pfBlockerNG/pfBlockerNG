@@ -727,6 +727,7 @@ if ($ufound) {
 // Upgrade EasyList to new Format
 update_status(" Upgrading previous EasyLists to new format...");
 $ufound = FALSE;
+$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 
 if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))) {
 
@@ -769,7 +770,12 @@ if (!empty(PfbConfig::readSection('installedpackages/pfblockerngdnsbleasylist'))
 	if ($ufound) {
 		$add['action']	= $ex_easylists['action'];
 		$add['cron']	= $ex_easylists['cron'];
-		$add['dow']	= $ex_easylists['dow'];
+		$pfb_easylist_weekday = pfb_schedule_numeric_token($ex_easylists['dow'] ?? NULL, 1, 7);
+		$add['schedule_override'] = ($add['cron'] === 'Weekly' && $pfb_easylist_weekday !== NULL) ? 'on' : '';
+		$add['schedule_weekday'] = $pfb_easylist_weekday
+			?? pfb_schedule_numeric_token($pfb_general_schedule['pfb_schedule_weekday'] ?? NULL, 1, 7) ?? '7';
+		$add['schedule_hour'] = pfb_schedule_numeric_token($pfb_general_schedule['pfb_schedule_hour'] ?? NULL, 0, 23) ?? '0';
+		$add['schedule_minute'] = pfb_schedule_minute_token($pfb_general_schedule['pfb_schedule_minute'] ?? NULL) ?? '0';
 		$add['logging']	= $ex_easylists['logging'];
 		$add['order']	= $ex_easylists['order'];
 
