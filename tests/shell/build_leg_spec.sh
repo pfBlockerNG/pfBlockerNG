@@ -7,9 +7,8 @@
 #   Assert each build-site's old direct args are reproduced; prove the amendment-1
 #   stdout contract (git chatter does not leak); prove run-keying.
 #
-# Layer (b): real-build byte/manifest parity (heavier; needs a real ports tree +
-#   zstd).  Scaffolded below and explicitly marked skip — not run in the fast PR
-#   suite.  See handoff (RESULTS/03_Results.txt) for the gating rationale.
+# Real Ports parity lives in build_leg_ports_parity_env.sh so the default suite stays
+# deterministic and never reports environment-dependent examples as skipped.
 
 Describe 'build-leg.sh'
   SCRIPT="${PFB_ROOT}/scripts/build-leg.sh"
@@ -408,34 +407,4 @@ SHEOF
     End
   End
 
-  # ── Layer (b): real-build byte/manifest parity ───────────────────────────
-  #
-  # Requires: a real FreeBSD-ports clone at a fixed commit + python3 + zstd.
-  # Not run in the fast PR suite (too slow; network dependency).
-  # To run manually on a box with the ports tree available:
-  #   REAL_PORTS_DIR=<path-to-ports> shellspec tests/shell/build_leg_spec.sh \
-  #     --example "real-build parity"
-  #
-  # SMOKE leg (no created= annotation → reproducible):
-  #   Build OLD way (verbatim pre-rewire commands) → PKG_OLD
-  #   Build NEW way (build-leg.sh, same inputs)    → PKG_NEW
-  #   cmp -s PKG_OLD PKG_NEW  (byte-for-byte identical)
-  #
-  # RELEASE leg (created= is nondeterministic):
-  #   Build OLD way → PKG_OLD; build NEW way → PKG_NEW
-  #   Extract +MANIFEST from both via: zstd -dc "$PKG" | tar -xO +MANIFEST
-  #   Normalize with jq: del(.annotations.created) + strip created= from comment
-  #   Assert normalized manifests identical (name, version, arch, ABI, files,
-  #   RUN_DEPENDS, commit= annotation all match).
-  Describe 'real-build parity (layer b — heavier, skipped in fast suite)'
-    Skip "requires a real ports tree and zstd; run manually with REAL_PORTS_DIR set"
-
-    It 'smoke leg: build-leg.sh produces a byte-identical .pkg to the pre-rewire direct call'
-      pending
-    End
-
-    It 'release leg: build-leg.sh manifest is identical to pre-rewire modulo created= annotation'
-      pending
-    End
-  End
 End

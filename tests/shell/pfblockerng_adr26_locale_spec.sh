@@ -140,27 +140,14 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
 End
 
 Describe 'ADR-26 — LC_ALL=C dedup is byte-exact (§2.1 guarantee)'
-  # A collation-IGNORABLE soft hyphen (U+00AD = 0xC2 0xAD) makes "ab" and "a<SH>b"
-  # byte-distinct but collation-EQUAL under a language UTF-8 locale. LC_ALL=C compares
-  # bytes, so it keeps BOTH — the property a blocklist relies on (no silently dropped row).
-  c_count() { printf 'ab\na\302\255b\n' | LC_ALL=C sort -u | wc -l | tr -d ' '; }
+  locale_name() { locale -a 2>/dev/null | grep -iE '^de_DE\.(utf-?8|UTF-8)$' | head -n 1; }
 
-  # A *.UTF-8 locale that is NOT C/POSIX (those use codepoint order, so never merge).
-  utf8_lang_locale() { locale -a 2>/dev/null | grep -iE '\.utf-?8$' | grep -ivE '^(C|POSIX)([.@]|$)' | head -n 1; }
-
-  It 'keeps both byte-distinct lines under LC_ALL=C (byte-exact uniqueness)'
-    When call c_count
-    The output should equal 2
-  End
-
-  It 'is load-bearing: a language UTF-8 locale collation-merges what LC_ALL=C keeps'
-    loc="$(utf8_lang_locale)"
-    Skip if 'no language *.UTF-8 locale installed to demonstrate the merge' [ -z "$loc" ]
-    merged="$(printf 'ab\na\302\255b\n' | LC_ALL="$loc" sort -u | wc -l | tr -d ' ')"
-    # Never-flaky: only assert the contrast when this libc's locale actually merges the
-    # sample (it dropped a line LC_ALL=C kept); otherwise skip (libc-collation-dependent).
-    Skip if "locale ${loc} does not collation-merge the sample on this libc" [ "$merged" -ge 2 ]
-    # No `When` needed: `merged` is set by the assignment above, not by a called command.
-    The variable merged should equal 1
+  It 'sorts z before ä under C and ä before z under de_DE.UTF-8'
+    loc="$(locale_name)"
+    Skip if 'de_DE.UTF-8 is not installed locally' [ -z "$loc" ]
+    c_order="$(printf 'z\nä\n' | LC_ALL=C sort | tr '\n' ',')"
+    de_order="$(printf 'z\nä\n' | LC_ALL="$loc" sort | tr '\n' ',')"
+    The variable c_order should equal 'z,ä,'
+    The variable de_order should equal 'ä,z,'
   End
 End

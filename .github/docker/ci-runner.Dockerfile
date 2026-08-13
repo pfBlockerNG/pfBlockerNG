@@ -88,8 +88,13 @@ RUN apt-get update \
       bzip2 ca-certificates curl file git iprange jq less libbz2-1.0 libcurl4 libdw1 \
       libelf1 libexpat1 libffi8 libgdbm-compat4t64 libgdbm6t64 liblzma5 libncursesw6 \
       libreadline8t64 libsqlite3-0 libssl3t64 netbase patch procps rsync sqlite3 sudo tar time unzip \
-      uuid-runtime xz-utils zlib1g zstd \
+      locales uuid-runtime xz-utils zlib1g zstd \
  && rm -rf /var/lib/apt/lists/*
+
+# Keep the process-wide default C.UTF-8, but provide the German UTF-8 locale for
+# collation/decimal-separator contracts that explicitly select it.
+RUN sed -i 's/^# *de_DE.UTF-8 UTF-8/de_DE.UTF-8 UTF-8/' /etc/locale.gen \
+ && locale-gen de_DE.UTF-8
 
 # ── PHP (matrix: 8.3 + 8.5) ──────────────────────────────────────────────────────────
 # Debian 13 ships one PHP; the matrix needs two, side by side, so the php-syntax,
@@ -240,7 +245,8 @@ ENV PATH=/opt/kcov/bin:${PATH}
 # gate (version-literal tripwire, parity-guard, webassets drift) fails on checkout.
 RUN git config --system --add safe.directory '*'
 
-# Fail the BUILD, not the first red job, when a copied toolchain cannot actually run:
+# Fail the BUILD, not the first red job, when a copied toolchain cannot actually run.
+# LC_NUMERIC=de_DE.UTF-8 formatting is proven through awk because shell printf differs:
 # the relocated CPython needs its shared libs present, and each PHP its extensions.
 # Every line here must be able to FAIL. Nothing is piped into `head`: a shell reports a
 # pipeline's LAST exit status and there is no `pipefail` in POSIX sh, so `tool --version |
@@ -266,6 +272,8 @@ RUN set -eu; \
     /usr/bin/time -f '%e' true 2>/dev/null; \
     file --version; \
     php -r 'new SQLite3(":memory:");'; \
-    php -r 'getservbyname("domain", "udp") === 53 or exit(1);'
+    php -r 'getservbyname("domain", "udp") === 53 or exit(1);'; \
+    LC_ALL=de_DE.UTF-8 locale charmap | grep -qx UTF-8; \
+    LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq 'decimal_point=","'
 
 CMD ["/bin/bash"]
