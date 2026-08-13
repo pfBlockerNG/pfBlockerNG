@@ -109,7 +109,7 @@ jobs:
     name: Pin the release commit
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -481,7 +481,7 @@ jobs:
     name: Read version matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -597,7 +597,7 @@ jobs:
     name: Resolve build stamp (created + commit)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -657,7 +657,7 @@ jobs:
     name: Create + push the release tag (verified build only)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -734,7 +734,7 @@ jobs:
     name: Create draft GitHub Release
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1070,7 +1070,7 @@ jobs:
     name: "build .pkg — ${{ matrix.variant }} ${{ matrix.pfsense_version }}"
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1316,7 +1316,7 @@ jobs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1398,7 +1398,7 @@ jobs:
     name: Health-check the drafted Release
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -1541,7 +1541,7 @@ jobs:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

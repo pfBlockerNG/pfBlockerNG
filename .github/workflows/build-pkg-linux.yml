@@ -122,7 +122,7 @@ jobs:
     name: build pfBlockerNG .pkg (portable, Linux)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -184,7 +184,13 @@ jobs:
             --abi        "$ABI" \
             --py-flavor  "$PY_FLAVOR" \
             --php        "$PHP_VERSION")"
-          echo "pkg_dir=$(dirname "$PKG")" >> "$GITHUB_OUTPUT"
+          {
+            echo "ports_dir=${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            # build-leg.sh defaults the recipe variant to CE; expose that resolved
+            # value to the parity examples instead of repeating target facts there.
+            echo "variant=CE"
+            echo "pkg_dir=$(dirname "$PKG")"
+          } >> "$GITHUB_OUTPUT"
           ls -l "$(dirname "$PKG")"
 
           FREEBSD_MAJOR="$(printf '%s' "$ABI" | cut -d: -f2)"
@@ -234,6 +240,24 @@ jobs:
           # release.yml or a single-invocation caller) falls back to the plain
           # per-major name.
           echo "dep_artifact_name=${DEP_ARTIFACT_NAME:-pfBlockerNG-deppkgs-fbsd${FREEBSD_MAJOR}}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify direct portable-builder parity
+        # The selected file is deliberately outside the default *_spec.sh glob;
+        # --fail-no-examples makes a typo in either path or tag fail this build.
+        env:
+          REAL_PORTS_DIR: ${{ steps.build.outputs.ports_dir }}
+          PARITY_CHANNEL: ${{ inputs.channel }}
+          PARITY_VARIANT: ${{ steps.build.outputs.variant }}
+          PARITY_ABI: ${{ inputs.abi }}
+          PARITY_PY_FLAVOR: ${{ inputs.py_flavor }}
+          PARITY_PHP: ${{ inputs.php_version }}
+        run: |
+          set -eu
+          DASH="$(command -v dash 2>/dev/null || true)"
+          [ -n "$DASH" ] || { echo 'dash is required for Ports parity' >&2; exit 1; }
+          shellspec --shell "$DASH" \
+            --pattern 'tests/shell/build_leg_ports_parity_env.sh' \
+            --tag env:ports --fail-no-examples
 
       - name: Upload package
         if: always()

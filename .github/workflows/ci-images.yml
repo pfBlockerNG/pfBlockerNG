@@ -334,6 +334,9 @@ jobs:
           TAG: ${{ needs.preflight.outputs.tag }}
           ARCH: ${{ matrix.arch }}
         run: |
+          # The locale-key probe avoids nested shell quoting while proving both the
+          # UTF-8 charmap and comma decimal separator in the runtime image.
+          # shellcheck disable=SC1083,SC2026
           docker run --rm "${IMAGE_REPO}/ci-runner:${TAG}-${ARCH}" sh -c '
             uname -m
             python3 --version; php8.3 -v | head -n1; php8.5 -v | head -n1
@@ -342,9 +345,18 @@ jobs:
             echo "shellspec $(shellspec --version)"
             echo "actionlint $(actionlint -version | head -n1)"
             gh --version | head -n1
-            kcov --version'
+            kcov --version
+            locale -a | grep -Eqi "^de_DE\\.utf-?8$"
+            test "$(LC_ALL=de_DE.UTF-8 locale charmap)" = UTF-8
+            # LC_NUMERIC=de_DE.UTF-8 is asserted via locale -k below.
+            LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq "decimal_point=\",\""'
+          # shellcheck disable=SC1083,SC2026
           docker run --rm "${IMAGE_REPO}/ci-runner-vm:${TAG}-${ARCH}" sh -c '
-            qemu-system-x86_64 --version | head -n1; oras version | head -n2'
+            qemu-system-x86_64 --version | head -n1; oras version | head -n2
+            locale -a | grep -Eqi "^de_DE\\.utf-?8$"
+            test "$(LC_ALL=de_DE.UTF-8 locale charmap)" = UTF-8
+            # LC_NUMERIC=de_DE.UTF-8 is asserted via locale -k below.
+            LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq "decimal_point=\",\""'
 
       - name: Push this architecture
         if: needs.preflight.outputs.publish == 'true'

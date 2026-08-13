@@ -30,7 +30,7 @@ jobs:
     name: Publish the pkg catalogue
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:7
+      image: ghcr.io/pfblockerng/ci-runner:8
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

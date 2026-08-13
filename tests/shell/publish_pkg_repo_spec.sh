@@ -18,6 +18,16 @@
 Describe 'publish-pkg-repo.sh'
   script="${PFB_ROOT}/scripts/publish-pkg-repo.sh"
 
+  # ShellSpec's bash/kcov runner reports the shell's `set -u` missing-variable
+  # status as 1; dash reports 2. POSIX only promises nonzero, so pin the
+  # shell-specific diagnostic while keeping the behavioural failure invariant.
+  missing_env_status() {
+    case "${SHELLSPEC_SHELL##*/}" in
+      bash|ksh|zsh) echo 1 ;;
+      *) echo 2 ;;
+    esac
+  }
+
   setup() {
     scrub_git_env
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pubpkgrepo.XXXXXX")"
@@ -590,7 +600,7 @@ HOOK
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
-    The status should equal 2
+    The status should equal "$(missing_env_status)"
     The stderr should include 'HANDOFF_FILE is required'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -602,7 +612,7 @@ HOOK
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
-    The status should equal 2
+    The status should equal "$(missing_env_status)"
     The stderr should include 'RESULTS_DIR is required'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -614,7 +624,7 @@ HOOK
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
-    The status should equal 2
+    The status should equal "$(missing_env_status)"
     The stderr should include 'SOURCE_RUN_ID is required'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
