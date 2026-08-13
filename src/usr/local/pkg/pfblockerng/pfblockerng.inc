@@ -4181,6 +4181,34 @@ function pfb_stage_publish(string $target, callable $extract): bool {
 	return TRUE;
 }
 
+/** Remove one directory tree without treating its literal path as a glob. */
+function pfb_stage_publish_dir_remove(string $path): bool {
+	if (!is_dir($path) || is_link($path)) {
+		return FALSE;
+	}
+	if (is_executable('/bin/chflags')) {
+		exec('/bin/chflags -R 0 ' . escapeshellarg($path) . ' 2>/dev/null');
+	}
+	try {
+		$iterator = new RecursiveIteratorIterator(
+			new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
+			RecursiveIteratorIterator::CHILD_FIRST
+		);
+		foreach ($iterator as $entry) {
+			$entry_path = $entry->getPathname();
+			$removed = $entry->isDir() && !$entry->isLink()
+				? @rmdir($entry_path)
+				: @unlink($entry_path);
+			if (!$removed && (file_exists($entry_path) || is_link($entry_path))) {
+				return FALSE;
+			}
+		}
+	} catch (UnexpectedValueException) {
+		return FALSE;
+	}
+	return @rmdir($path) || !is_dir($path);
+}
+
 /** Recover deterministic directory backups left by an interrupted publication. */
 function pfb_stage_publish_dir_recover(string $directory): bool {
 	$entries = @scandir($directory);
@@ -4188,6 +4216,7 @@ function pfb_stage_publish_dir_recover(string $directory): bool {
 		return FALSE;
 	}
 	$prefix = '.pfbstagebak2_';
+	$success = TRUE;
 	foreach ($entries as $entry) {
 		if ($entry === '.' || $entry === '..' || !str_starts_with($entry, $prefix)) {
 			continue;
@@ -4203,18 +4232,19 @@ function pfb_stage_publish_dir_recover(string $directory): bool {
 		$target = "{$directory}/{$suffix}";
 		if (file_exists($target) || is_link($target)) {
 			if (!is_dir($target) || is_link($target)) {
-				return FALSE;
+				$success = FALSE;
+				continue;
 			}
-			if (!rmdir_recursive($backup) && is_dir($backup)) {
-				return FALSE;
+			if (!pfb_stage_publish_dir_remove($backup)) {
+				$success = FALSE;
 			}
 			continue;
 		}
 		if (!@rename($backup, $target)) {
-			return FALSE;
+			$success = FALSE;
 		}
 	}
-	return TRUE;
+	return $success;
 }
 
 /**
@@ -4246,6 +4276,10 @@ function pfb_stage_publish_dir(string $target, callable $extract): bool {
 	// rename() cannot replace a non-empty directory, so the previous publication moves
 	// aside first and is restored if the swap does not complete.
 	$backup = NULL;
+	if (is_link($target) || (file_exists($target) && !is_dir($target))) {
+		rmdir_recursive($staged);
+		return FALSE;
+	}
 	if (is_dir($target)) {
 		$backup = dirname($target) . '/.pfbstagebak2_' . basename($target);
 		if (file_exists($backup) || is_link($backup) || !@rename($target, $backup)) {
@@ -4260,8 +4294,8 @@ function pfb_stage_publish_dir(string $target, callable $extract): bool {
 		rmdir_recursive($staged);
 		return FALSE;
 	}
-	if ($backup !== NULL) {
-		rmdir_recursive($backup);
+	if ($backup !== NULL && !pfb_stage_publish_dir_remove($backup)) {
+		return FALSE;
 	}
 	return TRUE;
 }

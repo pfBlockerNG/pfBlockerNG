@@ -202,6 +202,55 @@ final class DownloadStagePublishDirTest extends TestCase
 		$this->assertSame("last-good\n", file_get_contents("{$backup}/cat_ads"));
 	}
 
+	public function testRecoveryContinuesAfterAnObstructedMarker(): void
+	{
+		$blocked = "{$this->dir}/a";
+		$blockedBackup = $this->backupPath($blocked);
+		$recoverable = "{$this->dir}/z";
+		$recoverableBackup = $this->backupPath($recoverable);
+		$this->assertNotFalse(file_put_contents($blocked, 'occupied'));
+		$this->assertTrue(mkdir($blockedBackup, 0755));
+		$this->assertTrue(mkdir($recoverableBackup, 0755));
+		$this->assertNotFalse(file_put_contents("{$recoverableBackup}/cat_ads", "last-good\n"));
+
+		$this->assertFalse(pfb_stage_publish_dir_recover($this->dir));
+		$this->assertDirectoryExists($blockedBackup);
+		$this->assertSame("last-good\n", file_get_contents("{$recoverable}/cat_ads"));
+		$this->assertDirectoryDoesNotExist($recoverableBackup);
+	}
+
+	public function testBackupCleanupTreatsMetacharactersLiterally(): void
+	{
+		$backup = "{$this->dir}/.pfbstagebak2_category[ab]";
+		$sibling = "{$this->dir}/.pfbstagebak2_categorya";
+		$this->assertTrue(mkdir($backup, 0755));
+		$this->assertTrue(mkdir($sibling, 0755));
+		$this->assertNotFalse(file_put_contents("{$backup}/old", 'old'));
+		$this->assertNotFalse(file_put_contents("{$sibling}/keep", 'keep'));
+
+		$this->assertTrue(pfb_stage_publish_dir_remove($backup));
+		$this->assertDirectoryDoesNotExist($backup);
+		$this->assertSame('keep', file_get_contents("{$sibling}/keep"));
+	}
+
+	public function testPublicationRejectsSymlinkTargetWithoutTouchingReferent(): void
+	{
+		$target = "{$this->dir}/category";
+		$referent = "{$this->dir}/referent";
+		$this->assertTrue(mkdir($referent, 0755));
+		$this->assertNotFalse(file_put_contents("{$referent}/keep", 'keep'));
+		$this->assertTrue(symlink($referent, $target));
+
+		$this->assertFalse(pfb_stage_publish_dir($target, static function (string $staged): int {
+			file_put_contents("{$staged}/fresh", 'fresh');
+			return 0;
+		}));
+
+		$this->assertTrue(is_link($target));
+		$this->assertSame('keep', file_get_contents("{$referent}/keep"));
+		$this->assertFileDoesNotExist("{$referent}/fresh");
+	}
+
 	public function testDeterministicBackupRoundTripsTargetWithShellCharacters(): void
 	{
 		$target = "{$this->dir}/category ; [literal]";
@@ -273,6 +322,8 @@ final class DownloadStagePublishDirTest extends TestCase
 			'a failed swap must use the recovery path whose obstruction case preserves the backup');
 		$this->assertStringNotContainsString('@rename($backup, $target)', $scope,
 			'a one-shot rollback cannot prove the backup remains recoverable when restore fails');
+		$this->assertStringContainsString('if ($backup !== NULL && !pfb_stage_publish_dir_remove($backup))', $scope,
+			'a successful publication must fail if the previous generation cannot be removed');
 	}
 
 	/** Staging beside the target is what makes the publication a same-filesystem rename. */
@@ -360,7 +411,7 @@ final class DownloadStagePublishDirTest extends TestCase
 		$source = file_get_contents(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
 		$this->assertNotFalse($source);
 		$lock = strpos($source, "if (!pfb_feed_pass_begin('sync')) {");
-		$recovery = strpos($source, 'pfb_stage_publish_dir_recover($pfb[\'dbdir\'])');
+		$recovery = strpos($source, 'if (!pfb_stage_publish_dir_recover($pfb[\'dbdir\'])) {');
 		$boot = strpos($source, 'if (is_platform_booting() || $g[\'pfblockerng_install\']) {');
 		$this->assertNotFalse($lock);
 		$this->assertNotFalse($recovery);
