@@ -1874,21 +1874,16 @@ def test_update_runnow_does_not_publish_schedule_cache(
             helpers.set_package_enabled(vm, False)
 
 
-def test_update_page_cron_status_reports_scheduled_tick(
+def test_update_page_cron_status_reports_permanent_suppression_with_tick_installed(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Cron Status reports the scheduled tick, NOT "[ Missing cron task ]".
+    """Cron Status reports permanent smoke suppression with the fixed tick installed.
 
-    ADR-43 installs ONE fixed ``*/15`` cron tick whenever pfBlockerNG is
-    enabled. The Update page previously probed the crontab with the legacy
-    interval/min/24hour signature, which never matches that tick, so it falsely
-    rendered "[ Missing cron task ]" and a time derived from the feed cadence. This
-    pins the fix: with the tick installed, the page must report the next-tick
-    wall-clock time and time-remaining instead.
-
-    issue #1204 renamed the installed verb to ``cron-tick`` and added the harness's
-    always-on ``.pfb_cron_disable`` sentinel (:func:`~tests.smoke.helpers.deploy`).
+    ADR-43 installs one fixed ``*/15`` cron tick whenever pfBlockerNG is enabled.
+    Issue #1204 added the harness's always-on ``.pfb_cron_disable`` sentinel. The
+    no-sentinel healthy-cron status is pinned off-appliance by
+    UpdateRunNowScheduleOwnershipTest.
 
     Scenario:
       Given pfBlockerNG is enabled and a full reload has installed the cron-tick cron,
@@ -1898,8 +1893,6 @@ def test_update_page_cron_status_reports_scheduled_tick(
       When the Update page is rendered,
       Then the Cron Status reports the permanent smoke suppression.
 
-    Red→green: before the fix, pfblockerng_cron_exists() was called with the legacy
-    minute/hour fields, so this asserted body still contained "[ Missing cron task ]".
     """
     vm = smoke_vm
     flag = helpers.PFB_CRON_DISABLE_PATH
