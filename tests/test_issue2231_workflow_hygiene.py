@@ -140,10 +140,8 @@ def test_workflows_pin_the_current_ci_runner_series() -> None:
     read as green.
 
     The series lives in the trailing `/pfblockerng/ci-runner(-vm)?:N` path
-    segment regardless of what prefixes it: a bare `ghcr.io/...` ref (hosted
-    jobs) or the `${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/...` expression
-    (self-hosted jobs) both name the same series the same way. The floor
-    assertion below trips if a regex change stops matching either form."""
+    segment. The floor assertion below trips if a regex change stops matching
+    the workflow refs."""
     version = int((ROOT / ".github/docker/VERSION").read_text(encoding="utf-8").strip())
     offenders: list[str] = []
     refs_found = 0

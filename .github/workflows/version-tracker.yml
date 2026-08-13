@@ -269,17 +269,14 @@ jobs:
   # 'tracker-probe-disabled', or remove this job entirely.
   reconcile:
     name: Daily image reconcile (box as source of truth)
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:7
+      image: ghcr.io/pfblockerng/ci-runner-vm:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
-      # to container -- or qemu silently falls back to TCG and the leg times out instead
-      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
-      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
-      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      # Pass KVM into the container explicitly or qemu silently falls back to TCG.
+      # The sysctl lets the non-root mock DNS bind :53 inside its namespace.
       options: --init --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     # No `needs:` — the job resolves its own matrix (issue #1839), so an
     # unrelated read-matrix failure must not skip the reconcile.

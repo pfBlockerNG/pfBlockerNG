@@ -365,25 +365,16 @@ jobs:
     # field / release_gate off (PR gate, nightly, bare dispatch) = "true" = the hard
     # veto, unchanged. The predicate itself lives in scripts/resolve-legs.sh.
     continue-on-error: ${{ matrix.release_blocking == 'false' }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:7
+      image: ghcr.io/pfblockerng/ci-runner-vm:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
-      # to container -- or qemu silently falls back to TCG and the leg times out instead
-      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
-      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
-      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      # Pass KVM into the container explicitly or qemu silently falls back to TCG.
+      # The sysctl lets the non-root mock DNS bind :53 inside its namespace.
       options: --init --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
-    # issue #2246: host env does not reach a GHA container job -- the repo
-    # variable is the only channel scripts/resolve-legs.sh's LAN-registry
-    # routing (image-ref/digest/pull) has to detect the LAN zot cache.
-    env:
-      PFB_LAN_REGISTRY: ${{ vars.PFB_LAN_REGISTRY }}
-
     strategy:
       # One leg's failure must NOT cancel the others — each (tier x version) is
       # an independent, separately-re-runnable job (C1).
@@ -417,9 +408,8 @@ jobs:
           echo "tier ${TIER} -> marker ${MARKER}"
 
       - name: Assert KVM acceleration is available
-        # The container gets /dev/kvm via `--device`; the old udev rule that made it
-        # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
-        # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # The container gets /dev/kvm via `--device`. Assert rather than log:
+        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
         # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
@@ -482,28 +472,14 @@ jobs:
           # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
           sh scripts/resolve-legs.sh digest "$IMAGE_REF"
 
-      # issue #2246: actions/cache is the GitHub-hosted FALLBACK path only —
-      # skipped whenever the LAN zot cache is active (PFB_LAN_REGISTRY set in
-      # the job env above): zot already serves the same bytes at LAN speed, so
-      # a WAN round-trip to GitHub's own cache backend on top of that would be
-      # strictly worse, never faster. An unset repo variable compares equal to
-      # '' in the `if:` expression below, so this defaults ON for a plain
-      # GitHub-hosted run (no PFB_LAN_REGISTRY var) and OFF on the self-hosted
-      # fleet (var set).
       - name: Restore cached pfSense image
         id: pfcache
-        if: ${{ vars.PFB_LAN_REGISTRY == '' }}
         uses: actions/cache/restore@v5
         with:
           path: image
           key: pfsense-img-${{ steps.digest.outputs.k }}
 
-      # When the restore step above is skipped (LAN mode), its outputs are
-      # empty, so cache-hit != 'true' holds and this always pulls. When the
-      # fallback cache is active, this pulls only on a cache miss, exactly as
-      # before. Either way the pull itself routes through
-      # scripts/resolve-legs.sh pull, which picks up PFB_ORAS_FLAGS/login
-      # skip for the LAN case internally.
+      # Pull only on a cache miss.
       - name: Pull pfSense image (by digest)
         if: steps.pfcache.outputs.cache-hit != 'true'
         env:
@@ -515,9 +491,8 @@ jobs:
 
       # Save right after the pull (before the run) so the image is cached even if
       # a later step fails. Key = the resolved digest, so it never serves stale.
-      # LAN-gated the same as the restore step above.
       - name: Save pfSense image to cache
-        if: ${{ vars.PFB_LAN_REGISTRY == '' && steps.pfcache.outputs.cache-hit != 'true' }}
+        if: steps.pfcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: image

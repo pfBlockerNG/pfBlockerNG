@@ -215,17 +215,14 @@ jobs:
     name: Upgrade pfSense ${{ matrix.label }} Smoke Image
     needs: plan
     if: ${{ needs.plan.outputs.count != '0' }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:7
+      image: ghcr.io/pfblockerng/ci-runner-vm:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
-      # to container -- or qemu silently falls back to TCG and the leg times out instead
-      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
-      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
-      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      # Pass KVM into the container explicitly or qemu silently falls back to TCG.
+      # The sysctl lets the non-root mock DNS bind :53 inside its namespace.
       options: --init --device /dev/kvm --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 120
     permissions:
@@ -243,9 +240,8 @@ jobs:
           fetch-depth: 0              # reach the ci-metadata orphan ref
 
       - name: Assert KVM acceleration is available
-        # The container gets /dev/kvm via `--device`; the old udev rule that made it
-        # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
-        # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # The container gets /dev/kvm via `--device`. Assert rather than log:
+        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
         # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
