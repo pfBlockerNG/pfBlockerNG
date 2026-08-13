@@ -3031,10 +3031,8 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
     a tar extraction failure left ``$retval == 0``: the (empty) ``.orig`` file passed the
     inner-content MIME gate (an empty file probes as the allow-listed ``inode/x-empty``)
     and the feed imported as a silent, member-less "empty feed" with NO error logged.
-    This test FAILS on pre-fix code for exactly that reason -- no extraction-failure
-    line ever appears. The fix (``set -o pipefail``) makes ``$retval`` reflect ``tar``'s
-    real exit status. The staged-publish path then rejects the candidate and logs its
-    precise ``zip publish failed`` marker before returning.
+    A non-zero extraction status prevents publication. The staged-publish path logs
+    the precise ``zip publish failed`` marker before returning.
 
     Fixture: a valid single-member DEFLATE zip with one byte flipped a few bytes into
     the compressed data stream (past the 30-byte local file header + filename). The
