@@ -297,9 +297,12 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
 12. `PfbConfig` registry, adapter, inventory, grandfathering, and registered-path sniff tests cover
     every new General field; dynamic group fields remain foreign and round-trip unchanged outside
     their explicit migration/save paths.
-13. General UI changes carry Tier-A render coverage and Tier-B browser coverage for control
-    presence, placement, enable/disable behavior, validation errors, save/reload persistence, the
-    existing privilege gate, and cache-failure warnings. Feed-group override UI remains deferred.
+13. General and feed-group UI changes carry Tier-A render coverage and Tier-B browser coverage
+    for control presence, placement, enable/disable behavior, validation errors, save/reload
+    persistence, the existing privilege gate, and cache-failure warnings. Feed-group override
+    controls are present for IPv4, IPv6, and DNSBL detailed editors. A failed disposable
+    schedule-cache candidate leaves the saved configuration and active cache unchanged, reports
+    a likely package bug, and directs operators to manual updates as a temporary workaround.
 14. Focused live smoke proves fresh-install seed persistence, one genuine legacy migration,
     inherited and overridden hourly/daily/weekly dispatch, shared-slot Extras ordering,
     once-only downtime catch-up, cache regeneration, and pending apply-window behavior on selected

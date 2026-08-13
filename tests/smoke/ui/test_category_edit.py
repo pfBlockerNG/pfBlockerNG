@@ -131,6 +131,10 @@ def _dnsbl_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, st
         "action": "unbound",
         "cron": "Never",
         "dow": "",
+        "schedule_override": "",
+        "schedule_weekday": "7",
+        "schedule_hour": "0",
+        "schedule_minute": "0",
         "sort": "sort",
         "order": "default",
         "logging": "enabled",
@@ -184,6 +188,42 @@ def test_dnsbl_alias_full_save_persists_key_nodes(
         assert helpers.config_get(vm, f"{base}/action") == "unbound", "action not persisted by the save"
         assert helpers.config_get(vm, f"{base}/logging") == "enabled", "logging not persisted by the save"
         assert helpers.config_get(vm, f"{base}/row/0/state") == "Disabled", "source row state not persisted"
+    finally:
+        _del_rowid(vm, CFG_DNSBL, rowid)
+
+
+def test_dnsbl_schedule_override_saves_and_reloads_canonical_values(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """A Weekly feed-group override persists all components and round-trips in the form."""
+    vm = smoke_vm
+    rowid = _free_rowid(vm, CFG_DNSBL)
+    base = f"{CFG_DNSBL}/{rowid}"
+    payload = _dnsbl_payload(
+        rowid,
+        "smokeschedule",
+        cron="Weekly",
+        schedule_override="on",
+        schedule_weekday="3",
+        schedule_hour="6",
+        schedule_minute="15",
+    )
+    try:
+        _post_form(webui, payload)
+        assert helpers.config_get(vm, f"{base}/schedule_override") == "on"
+        assert helpers.config_get(vm, f"{base}/schedule_weekday") == "3"
+        assert helpers.config_get(vm, f"{base}/schedule_hour") == "6"
+        assert helpers.config_get(vm, f"{base}/schedule_minute") == "15"
+
+        reload_resp = webui.get(CATEGORY_PAGE, params={"type": "dnsbl", "rowid": str(rowid)})
+        assert not looks_like_login_page(reload_resp.text), "category reload returned the login form"
+        body = reload_resp.text
+        override_tag = _input_tag(body, "schedule_override")
+        assert "checked" in override_tag, "reloaded schedule override did not render checked"
+        assert _option_selected(body, "3"), "reloaded schedule weekday did not render selected"
+        assert _option_selected(body, "6"), "reloaded schedule hour did not render selected"
+        assert _option_selected(body, "15"), "reloaded schedule minute did not render selected"
     finally:
         _del_rowid(vm, CFG_DNSBL, rowid)
 
@@ -540,6 +580,10 @@ def _ipv4_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str
         "action": "Deny_Both",
         "cron": "Never",
         "dow": "",
+        "schedule_override": "",
+        "schedule_weekday": "7",
+        "schedule_hour": "0",
+        "schedule_minute": "0",
         "sort": "sort",
         "aliaslog": "enabled",
         "stateremoval": "enabled",
@@ -1007,6 +1051,10 @@ def _ipv6_payload(rowid: int, aliasname: str, **overrides: str) -> dict[str, str
         "action": "Deny_Both",
         "cron": "Never",
         "dow": "",
+        "schedule_override": "",
+        "schedule_weekday": "7",
+        "schedule_hour": "0",
+        "schedule_minute": "0",
         "sort": "sort",
         "aliaslog": "enabled",
         "stateremoval": "enabled",

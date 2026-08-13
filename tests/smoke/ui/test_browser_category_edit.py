@@ -119,6 +119,58 @@ def _shot(page: Page, screenshot_dir: Path, name: str) -> None:
     page.screenshot(path=str(screenshot_dir / f"{name}.png"), full_page=True)
 
 
+def test_schedule_override_toggle_and_weekly_cadence_controls(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """Feed-group schedule controls toggle and expose weekday only for Weekly.
+
+    The same editor is used by IPv4, IPv6, and DNSBL families; Tier-A render
+    probes cover each family while this Tier-B interaction proves the browser
+    state transitions and cadence-dependent weekday control.
+    """
+    page = browser_page
+    _open(page, webui, ADVANCED_IP_EDITOR)
+
+    override = page.locator("#schedule_override")
+    weekday = page.locator("#schedule_weekday")
+    hour = page.locator("#schedule_hour")
+    minute = page.locator("#schedule_minute")
+    cadence = page.locator("#cron")
+    for control in (override, weekday, hour, minute, cadence):
+        expect(control).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    # BEFORE: inherited schedule is read-only in the editor.
+    expect(override).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(hour).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    expect(minute).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    expect(weekday).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "schedule_override_before")
+
+    # FLIP ON: hourly controls enable; weekday remains dormant until Weekly.
+    override.evaluate("el => el.click()")
+    expect(override).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(hour).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    expect(minute).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    expect(weekday).to_be_disabled(timeout=JS_TIMEOUT_MS)
+
+    # CHANGE cadence to Weekly: weekday becomes editable; return to hourly and
+    # prove the dormant weekday is disabled again before saving.
+    cadence.select_option("Weekly")
+    expect(weekday).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    weekday.select_option("3")
+    cadence.select_option("02hours")
+    expect(weekday).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "schedule_override_weekly_then_hourly")
+
+    # FLIP OFF: all override controls disable again without losing selected values.
+    override.evaluate("el => el.click()")
+    expect(override).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(hour).to_be_disabled(timeout=JS_TIMEOUT_MS)
+    expect(minute).to_be_disabled(timeout=JS_TIMEOUT_MS)
+
+
 def test_enable_change_out_toggle_disables_then_enables_targets(
     browser_page: Page,
     webui: WebUI,

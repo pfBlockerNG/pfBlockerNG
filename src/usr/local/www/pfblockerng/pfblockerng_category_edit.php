@@ -408,7 +408,14 @@ $options_cron			= [	'Never' => 'Never', '01hour' => 'Every hour', '02hours' => '
 					'04hours' => 'Every 4 hours', '06hours' => 'Every 6 hours', '08hours' => 'Every 8 hours',
 					'12hours' => 'Every 12 hours', 'EveryDay' => 'Once a day', 'Weekly' => 'Weekly' ];
 
-$options_dow			= [	'1' => 'Monday', '2' => 'Tuesday', '3' => 'Wednesday', '4' => 'Thursday', '5' => 'Friday', '6' => 'Saturday', '7' => 'Sunday' ];
+$options_schedule_weekday = [	'1' => 'Monday', '2' => 'Tuesday', '3' => 'Wednesday', '4' => 'Thursday', '5' => 'Friday', '6' => 'Saturday', '7' => 'Sunday' ];
+$options_schedule_hour = array_combine(array_map('strval', range(0, 23)), range(0, 23));
+$options_schedule_minute = [ '0' => '00', '15' => '15', '30' => '30', '45' => '45' ];
+$pfb_schedule_general = [
+	'pfb_schedule_weekday' => (string) PfbConfig::read('gen/pfb_schedule_weekday'),
+	'pfb_schedule_hour' => (string) PfbConfig::read('gen/pfb_schedule_hour'),
+	'pfb_schedule_minute' => (string) PfbConfig::read('gen/pfb_schedule_minute'),
+];
 $options_sort			= [	'sort' => 'Enable auto-sort', 'no-sort' => 'Disable auto-sort' ];
 $options_aliaslog		= [	'enabled' => 'Enabled', 'disabled' => 'Disabled' ];
 $options_stateremoval		= [	'enabled' => 'Enabled', 'disabled' => 'Disabled' ];
@@ -495,10 +502,45 @@ if ($_POST && isset($_POST['save'])) {
 		}
 	}
 
+	$pfb_schedule_context = get_defined_vars();
+	$pfb_schedule_conf_type = (string) ($pfb_schedule_context['conf_type'] ?? '');
+	$pfb_schedule_row_id = (string) ($pfb_schedule_context['rowid'] ?? '0');
+	$pfb_schedule_stored = config_get_path(
+		'installedpackages/' . $pfb_schedule_conf_type . '/config/' . $pfb_schedule_row_id,
+		[]
+	);
+	$pfb_schedule_active_rows = FALSE;
+	foreach ($_POST as $pfb_schedule_key => $pfb_schedule_value) {
+		if (str_starts_with((string) $pfb_schedule_key, 'state-')
+			&& $pfb_schedule_value !== 'Disabled'
+			&& !empty($_POST['url-' . substr((string) $pfb_schedule_key, 6)])) {
+			$pfb_schedule_active_rows = TRUE;
+			break;
+		}
+	}
+	$pfb_schedule_general_input = is_array($pfb_schedule_context['pfb_schedule_general'] ?? NULL)
+		? $pfb_schedule_context['pfb_schedule_general']
+		: [
+			'pfb_schedule_weekday' => '7',
+			'pfb_schedule_hour' => '0',
+			'pfb_schedule_minute' => '0',
+		];
+	$pfb_schedule_result = pfb_category_schedule_validate(
+		$_POST,
+		is_array($pfb_schedule_stored) ? $pfb_schedule_stored : [],
+		$pfb_schedule_general_input,
+		(string) ($_POST['cron'] ?? 'Never'),
+		(string) ($_POST['action'] ?? 'Disabled'),
+		$pfb_schedule_active_rows
+	);
+	$input_errors = array_merge($input_errors, $pfb_schedule_result['errors']);
+	if ($pfb_schedule_result['errors'] === []) {
+		$_POST = array_merge($_POST, $pfb_schedule_result['values']);
+	}
+
 	// Validate Select field options
 	$select_options = array(	'action'		=> 'Disabled',
 					'cron'			=> 'Never',
-					'dow'			=> '',
 					'sort'			=> 'sort',
 					'aliaslog'		=> 'enabled',
 					'stateremoval'		=> 'enabled',
@@ -804,7 +846,11 @@ if ($_POST && isset($_POST['save'])) {
 
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/action", $_POST['action'] ?: 'Disabled');
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/cron", $_POST['cron'] ?: 'Never');
-		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/dow", $_POST['dow'] ?: '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_override", $_POST['schedule_override'] ?? '');
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_weekday", $_POST['schedule_weekday']);
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_hour", $_POST['schedule_hour']);
+		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/schedule_minute", $_POST['schedule_minute']);
+		config_del_path("installedpackages/{$conf_type}/config/{$rowid}/dow");
 		config_set_path("installedpackages/{$conf_type}/config/{$rowid}/sort", $_POST['sort'] ?: 'sort');
 
 		// issue #1723: already sanitized by the ingestion prologue above -- plain read.
@@ -899,8 +945,13 @@ if ($_POST && isset($_POST['save'])) {
 		$name = config_get_path("installedpackages/{$conf_type}/config/{$rowid}/aliasname") ?: 'Unknown';
 		$savemsg = "Saved [ Type:{$type}, Name:{$name} ] configuration";
 		write_config("pfBlockerNG: {$savemsg}");
+		$runtime_model = pfb_schedule_runtime_config();
+		$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+		$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
+		$cache_ok = pfb_schedule_cache_candidate_validate($runtime_model, $runtime_state, $runtime_timezone);
 		pfb_mark_pending_changes();	// applies on the next Update, not on save
-		header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}");
+		$failure = $cache_ok ? '' : '&schcache=failed';
+		header("Location: /pfblockerng/pfblockerng_category_edit.php?type={$gtype}&rowid={$rowid}&savemsg={$savemsg}{$failure}");
 		exit;
 	}
 	else {
@@ -932,8 +983,21 @@ else {
 	$pconfig['description']			= $rowdata[$rowid]['description'] ?? '';
 	$pconfig['action']			= $rowdata[$rowid]['action'] ?? 'Disabled';
 	$pconfig['cron']			= $rowdata[$rowid]['cron'] ?? 'Never';
-	$pconfig['dow']				= $rowdata[$rowid]['dow'] ?? '';
 	$pconfig['sort']			= $rowdata[$rowid]['sort'] ?? 'sort';
+	$pfb_schedule_row = is_array($rowdata[$rowid] ?? NULL) ? $rowdata[$rowid] : [];
+	$pfb_schedule_seed = pfb_category_schedule_validate(
+		['schedule_override' => ''],
+		$pfb_schedule_row,
+		$pfb_schedule_general,
+		(string) ($pfb_schedule_row['cron'] ?? 'Never'),
+		(string) ($pfb_schedule_row['action'] ?? 'Disabled'),
+		!empty($pfb_schedule_row['row'])
+	);
+	$pconfig['schedule_override'] = in_array($pfb_schedule_row['schedule_override'] ?? '', ['', 'on'], TRUE)
+		? ($pfb_schedule_row['schedule_override'] ?? '') : '';
+	$pconfig['schedule_weekday'] = $pfb_schedule_seed['values']['schedule_weekday'] ?? $pfb_schedule_general['pfb_schedule_weekday'];
+	$pconfig['schedule_hour'] = $pfb_schedule_seed['values']['schedule_hour'] ?? $pfb_schedule_general['pfb_schedule_hour'];
+	$pconfig['schedule_minute'] = $pfb_schedule_seed['values']['schedule_minute'] ?? $pfb_schedule_general['pfb_schedule_minute'];
 
 	$pconfig['srcint']			= $rowdata[$rowid]['srcint'] ?? '';
 	$pconfig['script_pre']			= $rowdata[$rowid]['script_pre'] ?? '';
@@ -1024,6 +1088,10 @@ if (isset($savemsg)) {
 if (isset($_REQUEST['savemsg']) && is_string($_REQUEST['savemsg'])) {
 	$savemsg = htmlspecialchars($_REQUEST['savemsg']);
 	print_info_box($savemsg);
+}
+
+if (($_GET['schcache'] ?? '') === 'failed') {
+	print_info_box('Settings remain saved, but schedule-cache candidate generation failed. This is likely a package bug; manual updates remain available as a temporary workaround.', 'warning');
 }
 
 $form = new Form("Save {$type} Settings");
@@ -1447,14 +1515,30 @@ $section->addInput(new Form_Select(
 		. 'Select how often List files will be downloaded. <strong>This must be within the Cron Interval/Start Hour settings.</strong>')
   ->setAttribute('style', 'width: auto');
 
-$section->addInput(new Form_Select(
-	'dow',
-	'Weekly (Day of Week)',
-	$pconfig['dow'],
-	$options_dow
-))->setHelp('Default: <strong>Monday</strong><br />Select the \'Weekly\' ( Day of the Week ) to Update <br />'
-		. 'This is only required for the \'Weekly\' Frequency Selection. The 24 Hour Download \'Time\' will be used.')
-  ->setAttribute('style', 'width: auto');
+$section->addInput(new Form_Checkbox(
+	'schedule_override',
+	'Override Default Schedule',
+	'Enable',
+	$pconfig['schedule_override'] === 'on',
+	'on'
+))->setHelp('Use a custom schedule for this feed group. The General-page schedule remains the default.')
+	  ->setAttribute('data-pfb-schedule-override', 'true');
+
+$schedule_group = new Form_Group('Schedule');
+$schedule_weekday = new Form_Select('schedule_weekday', 'Weekday', $pconfig['schedule_weekday'], $options_schedule_weekday);
+$schedule_hour = new Form_Select('schedule_hour', 'Hour', $pconfig['schedule_hour'], $options_schedule_hour);
+$schedule_minute = new Form_Select('schedule_minute', 'Minute', $pconfig['schedule_minute'], $options_schedule_minute);
+if ($pconfig['schedule_override'] !== 'on' || $pconfig['cron'] !== 'Weekly') {
+	$schedule_weekday->setAttribute('disabled', 'disabled');
+}
+if ($pconfig['schedule_override'] !== 'on') {
+	$schedule_hour->setAttribute('disabled', 'disabled');
+	$schedule_minute->setAttribute('disabled', 'disabled');
+}
+$schedule_group->add($schedule_weekday)->setWidth(3);
+$schedule_group->add($schedule_hour)->setWidth(2);
+$schedule_group->add($schedule_minute)->setWidth(2);
+$section->add($schedule_group);
 
 $section->addInput(new Form_Select(
 	'sort',
@@ -1797,6 +1881,17 @@ else if (gtype == 'dnsbl') {
 // 'custom' textarea renders in every sort mode and for new groups (no rowid).
 events.push(function() {
 <?=$pfb_category_editor['mount']?>
+});
+
+events.push(function() {
+	function syncScheduleControls() {
+		var enabled = $('#schedule_override').is(':checked');
+		var weekly = $('#cron').val() === 'Weekly';
+		$('#schedule_hour, #schedule_minute').prop('disabled', !enabled);
+		$('#schedule_weekday').prop('disabled', !enabled || !weekly);
+	}
+	$('#schedule_override, #cron').on('change', syncScheduleControls);
+	syncScheduleControls();
 });
 
 <?php if (($rowdata[$rowid]['sort'] ?? '') == 'no-sort') { ?>

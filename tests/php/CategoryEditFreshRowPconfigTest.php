@@ -48,6 +48,9 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			eval(
 				'function pfb_category_oracle_fresh_pconfig(array $rowdata, $rowid, string $gtype): array {'
 				. ' $pconfig = array();'
+				. ' $pfb_schedule_general = array('
+				. ' "pfb_schedule_weekday" => "7", "pfb_schedule_hour" => "0", "pfb_schedule_minute" => "0"'
+				. ' );'
 				. $m[1]
 				. ' return $pconfig; }'
 			);
@@ -103,7 +106,10 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		$this->assertSame('Permit_Outbound', $pconfig['action']);
 
 		// Every absent key falls back to its save-path default (:743-790).
-		$this->assertSame('', $pconfig['dow']);
+		$this->assertSame('', $pconfig['schedule_override']);
+		$this->assertSame('7', $pconfig['schedule_weekday']);
+		$this->assertSame('0', $pconfig['schedule_hour']);
+		$this->assertSame('0', $pconfig['schedule_minute']);
 		$this->assertSame('sort', $pconfig['sort']);
 		$this->assertSame('', $pconfig['srcint']);
 		$this->assertSame('', $pconfig['script_pre']);
@@ -152,7 +158,10 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		// 'action' is absent on this branch -- proves the common (pre-$gtype-if)
 		// guard fires regardless of which branch below it runs.
 		$this->assertSame('Disabled', $pconfig['action']);
-		$this->assertSame('', $pconfig['dow']);
+		$this->assertSame('', $pconfig['schedule_override']);
+		$this->assertSame('7', $pconfig['schedule_weekday']);
+		$this->assertSame('0', $pconfig['schedule_hour']);
+		$this->assertSame('0', $pconfig['schedule_minute']);
 		$this->assertSame('sort', $pconfig['sort']);
 		$this->assertSame('', $pconfig['srcint']);
 		$this->assertSame('', $pconfig['script_pre']);
@@ -177,7 +186,10 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			'description'          => 'Existing desc',
 			'action'               => 'Deny_Both',
 			'cron'                 => 'Weekly',
-			'dow'                  => '3',
+			'schedule_override'   => 'on',
+			'schedule_weekday'    => '3',
+			'schedule_hour'       => '4',
+			'schedule_minute'     => '15',
 			'sort'                 => 'no-sort',
 			'srcint'               => 'igb0',
 			'script_pre'           => 'ip_pre_x.sh',
@@ -230,7 +242,10 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 			'description'  => 'Existing dnsbl desc',
 			'action'       => 'unbound',
 			'cron'         => '01hour',
-			'dow'          => '5',
+			'schedule_override' => 'on',
+			'schedule_weekday' => '5',
+			'schedule_hour' => '6',
+			'schedule_minute' => '30',
 			'sort'         => 'sort',
 			'srcint'       => 'wan',
 			'script_pre'   => 'dnsbl_pre_x.py',
