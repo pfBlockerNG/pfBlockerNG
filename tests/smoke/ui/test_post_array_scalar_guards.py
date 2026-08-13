@@ -78,7 +78,7 @@ def _post_with_array_field(
     """
     guard = PhpErrorLogGuard(smoke_vm)
     guard.snapshot()
-    general_before = _general_config_token(smoke_vm) if page == _GENERAL_PAGE else None
+    general_before = _general_config_token(smoke_vm) if array_field in _GENERAL_ARRAY_ERRORS else None
 
     got = webui.get(page)
     assert got.status_code == 200, f"GET {page} -> HTTP {got.status_code}"
