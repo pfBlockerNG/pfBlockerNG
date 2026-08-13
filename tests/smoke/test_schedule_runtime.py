@@ -201,9 +201,9 @@ try {
     @unlink($state_path);
     @unlink($cache_path);
     $out['regenerated'] = pfb_schedule_cache_regenerate();
-	$fixed_next = time() + 3600;
-	pfb_due_ledger_write_entry('ss_refresh', array('last_run' => time(), 'next_due' => $fixed_next, 'jitter' => 0), $pfb['dbdir']);
-	pfb_due_ledger_write_entry('apply_reconcile', array('last_run' => time(), 'next_due' => $fixed_next, 'jitter' => 0), $pfb['dbdir']);
+    $fixed_next = time() + 3600;
+    pfb_due_ledger_write_entry('ss_refresh', array('last_run' => time(), 'next_due' => $fixed_next, 'jitter' => 0), $pfb['dbdir']);
+    pfb_due_ledger_write_entry('apply_reconcile', array('last_run' => time(), 'next_due' => $fixed_next, 'jitter' => 0), $pfb['dbdir']);
     $far_past = time() - (15 * 86400);
     $out['far_past_seeded'] = pfb_due_ledger_update_entry(
         'cron',

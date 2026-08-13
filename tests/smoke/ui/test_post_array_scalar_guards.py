@@ -14,6 +14,7 @@ bounce, and NOT ONE new byte in any candidate ``php_error.log``.
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
@@ -47,10 +48,19 @@ _GENERAL_ARRAY_ERRORS = {
 def _general_config_token(smoke_vm: helpers.SmokeVM) -> str:
     result = helpers.php_eval(
         smoke_vm,
-        f"echo base64_encode(serialize(config_get_path({helpers._php_str(_GENERAL_CONFIG)}, array())));",
+        "echo '__PFB_GENERAL_CONFIG_BEGIN__'"
+        f" . hash('sha256', serialize(config_get_path({helpers._php_str(_GENERAL_CONFIG)}, array())))"
+        " . '__PFB_GENERAL_CONFIG_END__';",
     )
     assert result.returncode == 0, f"General config snapshot failed: {result.stderr!r}"
-    return result.stdout.strip()
+    match = re.search(
+        r"__PFB_GENERAL_CONFIG_BEGIN__([0-9a-f]{64})__PFB_GENERAL_CONFIG_END__",
+        result.stdout,
+    )
+    assert match is not None, (
+        f"General config snapshot sentinel missing: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    return match.group(1)
 
 
 def _post_with_array_field(

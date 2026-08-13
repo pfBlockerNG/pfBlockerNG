@@ -91,11 +91,7 @@ final class ScheduleRuntimeModelTest extends TestCase
 			[$this->group('Deny_Inbound', 'EveryDay', [$this->row('one'), $this->row('two')])],
 			[$this->group('Permit_Both', '02hours', [$this->row('six')])],
 		);
-		$reordered = $this->sections(
-			[$base['ipv4'][0]['row'][1], $base['ipv4'][0]['row'][0]],
-			$base['ipv6']
-		);
-		$reordered['ipv4'] = [$base['ipv4'][0]];
+		$reordered = $base;
 		$reordered['ipv4'][0]['row'] = [$base['ipv4'][0]['row'][1], $base['ipv4'][0]['row'][0]];
 		$first = pfb_schedule_runtime_model($this->general(), $base);
 		$second = pfb_schedule_runtime_model($this->general(), $reordered);

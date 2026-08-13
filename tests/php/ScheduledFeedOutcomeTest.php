@@ -23,10 +23,7 @@ final class ScheduledFeedOutcomeTest extends TestCase
 	protected function tearDown(): void
 	{
 		$GLOBALS['pfb'] = $this->originalPfb;
-		foreach (glob($this->dir . '/*') ?: [] as $path) {
-			@unlink($path);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	public function testSuccessfulUnchangedLocalSourceReturnsSuccessTerminal(): void

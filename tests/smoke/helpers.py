@@ -1159,6 +1159,7 @@ def pin_cron_due(vm: SmokeVM) -> int:
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
+        "pfb_global();\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
         "$g['pfb_scheduled_feed_updates'] = 'on';\n"
@@ -3407,6 +3408,7 @@ _BASELINE_GLOBAL_KEYS = (
     "pfb_schedule_weekday",
     "pfb_schedule_hour",
     "pfb_schedule_minute",
+    "skipfeed",
     "pfb_agg_types",
     "pfb_quiet_hours",
     # Retired scheduler knob: stale raw XML is cleaned between smoke cases, never read.

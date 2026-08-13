@@ -673,7 +673,16 @@ final class Top1mDccDetectorTest extends TestCase
 		$this->assertIsString($source);
 		$this->assertStringContainsString('pfblockerng.php dc scheduled', $source);
 		$this->assertStringContainsString('$maxmind_status);', $source);
-		$this->assertStringContainsString('$maxmind_status !== 0 || !pfb_geoip_generation_ready()', $source);
+		$this->assertStringContainsString('!in_array($maxmind_status, [0, 2], TRUE) || !pfb_geoip_generation_ready()', $source);
+	}
+
+	public function testUnrelatedExtrasFailureDoesNotBlockMaxmindConversion(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
+		$this->assertIsString($source);
+		$this->assertStringContainsString("if (\$feed['type'] == 'geoip')", $source);
+		$this->assertStringContainsString("\$pfb['maxmind_feed_error'] = TRUE;", $source);
+		$this->assertStringContainsString("if (empty(\$pfb['maxmind_feed_error']))", $source);
 	}
 
 	private static function loadWwwDccHelpers(): void

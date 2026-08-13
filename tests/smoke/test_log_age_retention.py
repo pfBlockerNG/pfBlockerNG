@@ -79,8 +79,8 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     infrastructure, only ``enable_cb=on`` (so the tick body executes) and every tick in
     this module being idle-only, so ``pfb_log_mgmt()`` runs on every ``tick`` call below.
 
-    The helper clears any legacy manual pending marker, marks every configured schedule
-    identity completed at the current instant, and publishes the matching runtime cache.
+    The helper marks every configured schedule identity completed at the current instant,
+    publishes the matching runtime cache, and writes a future-dated cron entry.
     The next tick is therefore maintenance-only without relying on retired cron knobs.
     """
     if not os.environ.get("SMOKE_PKG"):
@@ -129,7 +129,9 @@ def _prime_idle_schedule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Publish completed schedule state and a matching future runtime cache."""
     snippet = (
         f"require_once('{_PFB_EXTRA_INC}');"
+        "pfb_global();"
         "$now = time();"
+        "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';"
         "$model = pfb_schedule_runtime_config();"
         "$state = array('schema' => 1, 'items' => array());"
         "foreach (($model['entries'] ?? array()) as $id => $entry) {"
@@ -141,7 +143,7 @@ def _prime_idle_schedule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         "    );"
         "  }"
         "}"
-        f"$ok = $model !== NULL && pfb_schedule_state_write($state, '/usr/local/etc')"
+        "$ok = $model !== NULL && pfb_schedule_state_write($state, $state_dir)"
         f" && pfb_schedule_cache_refresh($model, $state, $now, "
         f"new DateTimeZone(date_default_timezone_get()), {h._php_str(PFB_DBDIR)});"
         "$ok = $ok && pfb_due_ledger_write_entry('cron', "

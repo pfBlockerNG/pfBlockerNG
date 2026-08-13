@@ -232,11 +232,11 @@ final class ListScriptExitStatusTest extends TestCase
 	public function testEachFeedFamilyDispatchesEveryScriptStageOnce(): void
 	{
 		$source      = php_strip_whitespace(self::APPLY);
-		$dnsbl_pre   = $this->applyScope($source, 'if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', 'pfb_dnsbl_script_failure_continue($alias,');
+		$dnsbl_pre   = $this->applyScope($source, 'if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {', 'pfb_dnsbl_script_failure_continue($alias,');
 		$dnsbl_loop  = 'if (($dhandle = @fopen("{$pfbfolder}/{$header}.bk", \'w\')) !== FALSE) {';
 		$dnsbl_end   = 'if (!empty($domain_data)) {';
 		$dnsbl_stage = $this->applyScope($source, $dnsbl_loop, $dnsbl_end);
-		$dnsbl_post  = $this->applyScope($source, 'if ($pfb_dnsbl_script_post && is_file("{$pfb_dnsbl_script_post}")) {', 'if (isset($csvline)) {');
+		$dnsbl_post  = $this->applyScope($source, 'if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {', 'if (isset($csvline)) {');
 		$ip_pre      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', 'pfb_ip_script_failure_continue($alias,');
 		$ip_stage    = $this->applyScope($source, '$file_chk = pfb_ip_script_probe_staged(', 'if (!$custom && $file_chk == 0) {');
 		$ip_post     = $this->applyScope($source, 'if ($pfb_script_post && is_file("{$pfb_script_post}")) {', '$file_chk = pfb_ip_script_probe_staged(');
@@ -245,7 +245,7 @@ final class ListScriptExitStatusTest extends TestCase
 		$dnsbl_cleanup = 'pfb_list_script_cleanup_staged($pfb_parse_path, $pfb_staged_path, "{$file_dwn}.pre");';
 		$this->assertSame(1, substr_count($dnsbl_stage, $dnsbl_cleanup), 'DNSBL staged input cleanup must stay in its loop');
 		$this->assertStringContainsString('"{$file_dwn}.pre"', $dnsbl_stage, 'DNSBL staged seam must receive its known cleanup path');
-		$this->assertSame(1, substr_count($dnsbl_post, 'pfb_list_script_exec($pfb_dnsbl_script_post, $list[\'script_post\'], \'post\''), 'DNSBL post-script dispatch must stay in its loop');
+		$this->assertSame(1, substr_count($dnsbl_post, 'pfb_list_script_exec($pfb_row_script_post, $list[\'script_post\'], \'post\''), 'DNSBL post-script dispatch must stay in its loop');
 		$this->assertSame(1, substr_count($ip_pre, 'pfb_list_pre_script_run($pfb_norm[\'path\']'), 'IP pre-script dispatch must stay in its loop');
 		$this->assertSame(1, substr_count($ip_stage, 'pfb_ip_script_probe_staged('), 'IP staged input must be probed once');
 		$this->assertStringContainsString('"{$file_dwn}.pre"', $ip_stage, 'IP staged seam must receive its known cleanup path');

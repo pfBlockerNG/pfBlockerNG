@@ -24,10 +24,7 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 	{
 		$GLOBALS['pfb'] = $this->originalPfb;
 		$GLOBALS['config'] = $this->originalConfig;
-		foreach (glob($this->dir . '/*') ?: [] as $path) {
-			@unlink($path);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	private function general(string $master = ''): array

@@ -267,9 +267,9 @@ $schedule_state = pfb_schedule_state_read((string) ($pfb['schedule_state_dir'] ?
 if (is_array($schedule_state)) {
 	foreach (['extra:dcc' => &$ledger_dcc, 'extra:bl' => &$ledger_bl] as $id => &$entry) {
 		$item = $schedule_state['items'][$id] ?? NULL;
-		if (is_array($item)) {
+		if (is_array($item) && (isset($item['last_successful_check']) || isset($item['last_completed_occurrence']))) {
 			$entry ??= [];
-			$entry['last_run'] = $item['last_successful_check'] ?? $item['last_completed_occurrence'] ?? 0;
+			$entry['last_run'] = $item['last_successful_check'] ?? $item['last_completed_occurrence'];
 		}
 	}
 	unset($entry);

@@ -332,7 +332,8 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
     password = uuid.uuid4().hex
 
     orig_software_state = helpers.config_get_state(vm, SOFTWARE_CHECK_CFG)
-    orig_margin = helpers.config_get(vm, MARGIN_CFG)
+    orig_margin_state = helpers.config_get_state(vm, MARGIN_CFG)
+    orig_margin = orig_margin_state[1] if orig_margin_state[0] else ""
     orig_nextuid = helpers.config_get(vm, "system/nextuid")
 
     user_created = False
@@ -414,7 +415,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         # Field restores run BEFORE the user delete: a raised delete must never skip
         # putting the box's config back the way it was.
         helpers.config_restore_state(vm, SOFTWARE_CHECK_CFG, orig_software_state)
-        _set_config_value(vm, MARGIN_CFG, orig_margin)
+        helpers.config_restore_state(vm, MARGIN_CFG, orig_margin_state)
         if user_created:
             _delete_scoped_user(vm, username, orig_nextuid)
 

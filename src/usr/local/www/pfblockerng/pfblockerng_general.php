@@ -265,8 +265,11 @@ if ($_POST) {
 				&& pfb_schedule_cache_refresh($runtime_model, $runtime_state, time(), $runtime_timezone, $candidate_dir)
 				&& pfb_due_ledger_read_cache($candidate_dir, $runtime_model['config_hash']) !== NULL;
 			if ($candidate_dir !== '') {
-				@unlink($candidate_dir . '/pfb_due_ledger.json');
-				@unlink($candidate_dir . '/pfb_due_ledger.json.lock');
+				foreach (scandir($candidate_dir) ?: [] as $candidate_artifact) {
+					if ($candidate_artifact !== '.' && $candidate_artifact !== '..') {
+						@unlink("{$candidate_dir}/{$candidate_artifact}");
+					}
+				}
 				@rmdir($candidate_dir);
 			}
 			$pfb['save'] = TRUE;
@@ -288,7 +291,7 @@ if ($input_errors) {
 	print_input_errors($input_errors);
 }
 if ($schedule_cache_failed) {
-	print_info_box('Settings were saved, but schedule-cache generation failed. This is likely a bug; please report it.', 'warning');
+	print_info_box(gettext('Settings were saved, but schedule-cache generation failed. This is likely a bug; please report it.'), 'warning');
 }
 
 // Load Wizard on new installations only

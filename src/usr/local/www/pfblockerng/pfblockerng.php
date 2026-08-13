@@ -343,10 +343,10 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			// Download Database updates
 			$extras_ok = pfblockerng_download_extras(600, $logtype);
 			$top1m_changed = pfb_top1m_dispatch_if_changed($extras_ok, !$scheduled);
-			if ($extras_ok) {
+			if (empty($pfb['maxmind_feed_error'])) {
 				// Proceed with conversion of MaxMind files on download success
 				if (empty($pfb['cc']) || !empty($pfb['maxmind_key']) || !empty($pfb['maxmind_account'])) {
-						$extras_ok = pfblockerng_uc_countries('/usr/local/www/pfblockerng');
+						$extras_ok = pfblockerng_uc_countries('/usr/local/www/pfblockerng') && $extras_ok;
 				}
 			}
 			$dcc_changed = $top1m_changed || file_exists("{$pfb['dbdir']}/geoip.update");
@@ -510,6 +510,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 	$pfb_return	= '';
 	$pfb_error	= FALSE;
 	$pfb['top1m_changed'] = FALSE;
+	$pfb['maxmind_feed_error'] = FALSE;
 
 	$logtype = 3;
 	if ($type == 4) {
@@ -625,9 +626,11 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 			$log = "\nFailed to Download {$feed['file']}\n";
 			pfb_logger("{$log}", $logtype);
 
-			// On Extras update (MaxMind and TOP1M), if error found when downloading MaxMind Country database
-			// return error to update process
+			// Report aggregate Extras failure, but only GeoIP failure blocks country conversion.
 			$pfb_error = TRUE;
+			if ($feed['type'] == 'geoip') {
+				$pfb['maxmind_feed_error'] = TRUE;
+			}
 
 			if ($type == 'blacklist') {
 				$pfb_return .= "\t{$feed['name']} ... Failed\n";
@@ -1328,10 +1331,12 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 	$pfb['geoip_isos'] = $live_geoip_isos;
 	$backup_root = "{$live_ccdir}.old.{$generation}";
 	$backup_ccdir = "{$backup_root}/countries";
-	$backup_output_root = "{$backup_root}/ui";
+	$backup_output_root = $stage_output_root === NULL ? NULL : "{$output_root}.old.{$generation}";
 	$swap_sentinel = "{$live_ccdir}/.pfb_generation_swapping";
 	safe_mkdir($backup_ccdir, 0755);
-	safe_mkdir($backup_output_root, 0755);
+	if ($backup_output_root !== NULL) {
+		safe_mkdir($backup_output_root, 0755);
+	}
 	safe_mkdir($live_ccdir, 0755);
 	$original_country_files = [];
 	foreach (glob("{$live_ccdir}/*") ?: [] as $live_file) {
@@ -1341,6 +1346,9 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 			if (!@copy($live_file, "{$backup_ccdir}/{$name}")) {
 				$discard_generation();
 				rmdir_recursive($backup_root);
+				if ($backup_output_root !== NULL) {
+					rmdir_recursive($backup_output_root);
+				}
 				return FALSE;
 			}
 		}
@@ -1349,11 +1357,17 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 	if ($had_geoip_isos && !@copy($live_geoip_isos, "{$backup_root}/geoip_isos")) {
 		$discard_generation();
 		rmdir_recursive($backup_root);
+		if ($backup_output_root !== NULL) {
+			rmdir_recursive($backup_output_root);
+		}
 		return FALSE;
 	}
 	if (@file_put_contents($swap_sentinel, $generation, LOCK_EX) === FALSE) {
 		$discard_generation();
 		rmdir_recursive($backup_root);
+		if ($backup_output_root !== NULL) {
+			rmdir_recursive($backup_output_root);
+		}
 		return FALSE;
 	}
 	$published_country_files = [];
@@ -1408,6 +1422,9 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 		}
 		$discard_generation();
 		rmdir_recursive($backup_root);
+		if ($backup_output_root !== NULL) {
+			rmdir_recursive($backup_output_root);
+		}
 		unlink_if_exists($swap_sentinel);
 		return FALSE;
 	}
@@ -1418,6 +1435,9 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 	}
 	$discard_generation();
 	rmdir_recursive($backup_root);
+	if ($backup_output_root !== NULL) {
+		rmdir_recursive($backup_output_root);
+	}
 	unlink_if_exists($swap_sentinel);
 	return TRUE;
 }
