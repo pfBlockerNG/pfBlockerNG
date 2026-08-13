@@ -333,7 +333,25 @@ pfb_switch_branch() {
     fi
 
     log "branch switch confirmed — refreshing pkg catalogue (pkg update -f)"
-    ssh_guest 'pkg update -f' 2>&1 | tee "${_psb_log_dir}/pkg-update-branch.log" || true
+    _psb_pkg_log="${_psb_log_dir}/pkg-update-branch.log"
+    true > "$_psb_pkg_log"
+    _psb_try=1
+    while true; do
+        _psb_rc=0
+        _psb_out=$(ssh_guest 'pkg update -f' 2>&1) || _psb_rc=$?
+        printf '%s\n' "$_psb_out" | tee -a "$_psb_pkg_log"
+        [ "$_psb_rc" -eq 0 ] && return 0
+        case "$_psb_out" in
+            *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
+            *) die "pkg catalogue refresh failed after branch switch (see $_psb_pkg_log)" ;;
+        esac
+        if [ "$_psb_try" -ge "${PKG_LOCK_RETRIES:-12}" ]; then
+            die "pkg catalogue refresh still locked after ${PKG_LOCK_RETRIES:-12} attempts (see $_psb_pkg_log)"
+        fi
+        warn "pkg catalogue refresh: pkg database locked; retry ${_psb_try}/${PKG_LOCK_RETRIES:-12} in ${PKG_LOCK_INTERVAL:-5}s"
+        _psb_try=$((_psb_try + 1))
+        sleep "${PKG_LOCK_INTERVAL:-5}"
+    done
 }
 # pfb_switch_branch END
 
