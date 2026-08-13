@@ -2441,6 +2441,16 @@ def test_wizard_uses_legacy_feed_catalog() -> None:
     assert "PfbRegistry::" not in source
 
 
+def test_wizard_schedule_producer_is_canonical() -> None:
+    """Issue #2316: the shipped wizard emits only canonical schedule fields."""
+    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/wizards/pfblockerng_wizard.inc"
+    source = source_path.read_text(encoding="utf-8")
+
+    for schedule_field in ("schedule_override", "schedule_weekday", "schedule_hour", "schedule_minute"):
+        assert f"$add['{schedule_field}']" in source
+    assert "$add['dow']" not in source
+
+
 # ADR-23: the setup wizard's DNSBL step now surfaces ADR-13's pfb_dnsvip_auto auto-VIP
 # toggle. Core wizard.php renders ONE step per GET, indexed by a 0-based `stepid` (verified
 # against pfSense upstream wizard.php: `$stepid` defaults to "0" and indexes $pkg['step']

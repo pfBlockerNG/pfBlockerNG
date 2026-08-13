@@ -184,7 +184,7 @@ function step4_submitphpaction() {
 	$new_config = config_get_path('installedpackages');
 	$new_config['pfblockerng']['config'][0]['enable_cb']				= 'on';
 	$new_config['pfblockerng']['config'][0]['pfb_keep']				= 'on';
-	$new_config['pfblockerng']['config'][0]['pfb_scheduled_feed_updates']	= ($pfb_general_schedule['pfb_scheduled_feed_updates'] ?? 'on') === '' ? '' : 'on';
+	$new_config['pfblockerng']['config'][0]['pfb_scheduled_feed_updates']	= pfb_cfg_toggle_write(pfb_cfg_toggle_read($pfb_general_schedule['pfb_scheduled_feed_updates'] ?? 'on'));
 	$new_config['pfblockerng']['config'][0]['pfb_schedule_weekday']		= pfb_schedule_numeric_token($pfb_general_schedule['pfb_schedule_weekday'] ?? NULL, 1, 7) ?? '7';
 	$new_config['pfblockerng']['config'][0]['pfb_schedule_hour']		= pfb_schedule_numeric_token($pfb_general_schedule['pfb_schedule_hour'] ?? NULL, 0, 23) ?? '0';
 	$new_config['pfblockerng']['config'][0]['pfb_schedule_minute']		= pfb_schedule_minute_token($pfb_general_schedule['pfb_schedule_minute'] ?? NULL) ?? '0';
