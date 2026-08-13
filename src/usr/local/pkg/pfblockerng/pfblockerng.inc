@@ -4181,6 +4181,42 @@ function pfb_stage_publish(string $target, callable $extract): bool {
 	return TRUE;
 }
 
+/** Recover deterministic directory backups left by an interrupted publication. */
+function pfb_stage_publish_dir_recover(string $directory): bool {
+	$entries = @scandir($directory);
+	if ($entries === FALSE) {
+		return FALSE;
+	}
+	$prefix = '.pfbstagebak2_';
+	foreach ($entries as $entry) {
+		if ($entry === '.' || $entry === '..' || !str_starts_with($entry, $prefix)) {
+			continue;
+		}
+		$suffix = substr($entry, strlen($prefix));
+		if ($suffix === '') {
+			continue;
+		}
+		$backup = "{$directory}/{$entry}";
+		if (!is_dir($backup) || is_link($backup)) {
+			continue;
+		}
+		$target = "{$directory}/{$suffix}";
+		if (file_exists($target) || is_link($target)) {
+			if (!is_dir($target) || is_link($target)) {
+				return FALSE;
+			}
+			if (!rmdir_recursive($backup) && is_dir($backup)) {
+				return FALSE;
+			}
+			continue;
+		}
+		if (!@rename($backup, $target)) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
+
 /**
  * Publish a directory extraction atomically. $extract writes into an empty staging
  * directory beside $target and returns its exit code; $target is replaced only once
@@ -4190,6 +4226,9 @@ function pfb_stage_publish(string $target, callable $extract): bool {
  * @param callable(string):int $extract
  */
 function pfb_stage_publish_dir(string $target, callable $extract): bool {
+	if (!pfb_stage_publish_dir_recover(dirname($target))) {
+		return FALSE;
+	}
 	$staged = @tempnam(dirname($target), '.pfbstagedir_');
 	if ($staged === FALSE) {
 		return FALSE;
@@ -4208,8 +4247,8 @@ function pfb_stage_publish_dir(string $target, callable $extract): bool {
 	// aside first and is restored if the swap does not complete.
 	$backup = NULL;
 	if (is_dir($target)) {
-		$backup = @tempnam(dirname($target), '.pfbstagebak_');
-		if ($backup === FALSE || !@unlink($backup) || !@rename($target, $backup)) {
+		$backup = dirname($target) . '/.pfbstagebak2_' . basename($target);
+		if (file_exists($backup) || is_link($backup) || !@rename($target, $backup)) {
 			rmdir_recursive($staged);
 			return FALSE;
 		}

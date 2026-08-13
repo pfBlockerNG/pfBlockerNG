@@ -676,6 +676,16 @@ function sync_package_pfblockerng($cron=''): bool {
 		}
 		return FALSE;
 	}
+	if (!pfb_stage_publish_dir_recover($pfb['dbdir'])) {
+		pfb_mark_pending_changes();
+		if ($pfb_feed_pass_owner) {
+			pfb_feed_pass_release();
+		}
+		if ($pfb_dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		return FALSE;
+	}
 	if (!pfb_geoip_generation_ready()) {
 		pfb_mark_pending_changes();
 		if ($pfb_feed_pass_owner) {
