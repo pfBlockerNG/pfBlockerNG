@@ -21,12 +21,32 @@ final class WizardScheduleResetTest extends TestCase
 	public function testWizardCapturesScheduleBeforeRemovingPackageConfig(): void
 	{
 		$source = self::source();
-		$capture = strpos($source, "\$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');");
-		$remove = strpos($source, 'pfb_remove_config_settings();');
+		$capture = strpos($source, "\t\$pfb_general_schedule = PfbConfig::readSection('installedpackages/pfblockerng/config/0');");
+		$remove = $capture === FALSE ? FALSE : strpos($source, "\n\tpfb_remove_config_settings();", $capture);
+		if ($capture === FALSE || $remove === FALSE) {
+			throw new RuntimeException('test bootstrap: wizard capture/reset region not found');
+		}
 
-		$this->assertNotFalse($capture, 'wizard must capture the persisted Default Schedule');
-		$this->assertNotFalse($remove, 'wizard config-removal call must remain present');
-		$this->assertLessThan($remove, $capture, 'Default Schedule must be captured before the wizard removes package config');
+		$expected = [
+			'pfb_scheduled_feed_updates' => '',
+			'pfb_schedule_weekday' => '4',
+			'pfb_schedule_hour' => '5',
+			'pfb_schedule_minute' => '45',
+			'skipfeed' => '0',
+		];
+		$saved_config = $GLOBALS['config'] ?? NULL;
+		try {
+			$GLOBALS['config'] = ['installedpackages' => [
+				'pfblockerng' => ['config' => [$expected]],
+				'pfblockernglistsv4' => ['config' => [['aliasname' => 'removed']]],
+			]];
+			eval(substr($source, $capture, $remove + strlen("\n\tpfb_remove_config_settings();") - $capture));
+
+			$this->assertSame($expected, $pfb_general_schedule);
+			$this->assertSame([], config_get_path('installedpackages', []));
+		} finally {
+			$GLOBALS['config'] = $saved_config;
+		}
 	}
 
 	public function testWizardResetPersistsCanonicalGeneralSchedule(): void
