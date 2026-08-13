@@ -484,6 +484,49 @@ def test_attach_pkgs_downloads_every_leg_by_pattern_with_merge() -> None:
     assert "merge-multiple: true" in step_text, step_text
 
 
+def test_attach_pkgs_upload_step_runs_under_posix_sh(tmp_path: Path) -> None:
+    script = _step_run_script(_step(_jobs(RELEASE_WORKFLOW)["attach-pkgs"], "Append .pkg files"))
+    assert "read -r -d" not in script
+    pkg_dir = tmp_path / "pkgs" / "CE row;safe"
+    pkg_dir.mkdir(parents=True)
+    packages = [pkg_dir / "first package.pkg", pkg_dir / "second.pkg"]
+    for package in packages:
+        package.touch()
+
+    fake_bin = tmp_path / "fake bin"
+    fake_bin.mkdir()
+    fake_gh = fake_bin / "gh"
+    fake_gh.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" >> "$UPLOAD_LOG"\n', encoding="utf-8")
+    fake_gh.chmod(0o755)
+    upload_log = tmp_path / "uploads"
+    env = os.environ | {
+        "GH_TOKEN": "test-token",
+        "TAG": "v4.0.0.a1",
+        "UPLOAD_LOG": str(upload_log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    completed = subprocess.run(
+        ["dash", "-c", script],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    args = upload_log.read_bytes().split(b"\0")[:-1]
+    calls = {tuple(args[offset : offset + 5]) for offset in range(0, len(args), 5)}
+    assert calls == {
+        (b"release", b"upload", b"v4.0.0.a1", os.fsencode(package.relative_to(tmp_path)), b"--clobber")
+        for package in packages
+    }
+
+    fake_gh.write_text("#!/bin/sh\nexit 7\n", encoding="utf-8")
+    failed = subprocess.run(["dash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert failed.returncode != 0, failed.stdout + failed.stderr
+
+
 # --------------------------------------------------------------------------- #
 # ui-suite / smoke-suite: re-enabled, gated on build-pkgs-portable, exact prefix
 # --------------------------------------------------------------------------- #
