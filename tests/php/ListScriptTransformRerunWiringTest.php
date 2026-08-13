@@ -112,4 +112,20 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 			$code
 		), 'IP normalization fast path must receive the seam effect');
 	}
+
+	public function testDnsblSiblingRowsRestoreGroupScriptsBeforeSelection(): void
+	{
+		$code = php_strip_whitespace(
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
+		);
+		$this->assertIsString($code);
+		$this->assertMatchesRegularExpression(
+			'/foreach\s*\(\$list\[\x27row\x27\]\s+as\s+\$key\s*=>\s*\$row\)\s*\{\s*'
+			. '\$pfb_row_script_pre\s*=\s*\$pfb_dnsbl_script_pre;\s*'
+			. '\$pfb_row_script_post\s*=\s*\$pfb_dnsbl_script_post;\s*'
+			. 'if\s*\(!empty\(\$row\[\x27url\x27\]\)\s*&&\s*\$row\[\x27state\x27\]\s*!=\s*\x27Disabled\x27\)/',
+			$code,
+			'Each sibling row must restore group scripts before an unselected row can continue.'
+		);
+	}
 }

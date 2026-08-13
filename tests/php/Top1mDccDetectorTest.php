@@ -680,8 +680,13 @@ final class Top1mDccDetectorTest extends TestCase
 	{
 		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
 		$this->assertIsString($source);
-		$this->assertStringContainsString("if (\$feed['type'] == 'geoip')", $source);
-		$this->assertStringContainsString("\$pfb['maxmind_feed_error'] = TRUE;", $source);
+		$this->assertSame(1, substr_count($source, "\$pfb['maxmind_feed_error'] = TRUE;"));
+		$this->assertMatchesRegularExpression(
+			'/if\s*\(\$feed\[\x27type\x27\]\s*==\s*\x27geoip\x27\)\s*\{\s*'
+			. '\$pfb\[\x27maxmind_feed_error\x27\]\s*=\s*TRUE;\s*\}/',
+			$source,
+			'Only a failed GeoIP feed may block MaxMind conversion.'
+		);
 		$this->assertStringContainsString("if (empty(\$pfb['maxmind_feed_error']))", $source);
 	}
 

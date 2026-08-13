@@ -205,6 +205,20 @@ final class GeoipPackageGenerationCoverageTest extends TestCase
 		$this->assertStringContainsString('pfb_geoip_doc_link()', $this->page('Africa'));
 	}
 
+	public function testInstallerReportsBothGeneratorFailures(): void
+	{
+		$this->assertMatchesRegularExpression(
+			'/if\s*\(pfblockerng_get_countries\(\)\)\s*\{\s*update_status\(" done\."\);\s*'
+			. '\}\s*else\s*\{\s*update_status\(" failed\."\);\s*\}/',
+			self::$installSource
+		);
+		$this->assertMatchesRegularExpression(
+			'/if\s*\(pfb_build_reputation_tab\(\)\)\s*\{\s*update_status\(" done\."\);\s*'
+			. '\}\s*else\s*\{\s*update_status\(" failed\."\);\s*\}/',
+			self::$installSource
+		);
+	}
+
 	private function generateWithoutWarnings(): void
 	{
 		$warnings = [];

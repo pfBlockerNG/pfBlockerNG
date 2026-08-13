@@ -11522,6 +11522,19 @@ function pfb_ip_render_attribution(array $fields): array {
 	global $pfb;
 
 	$rq = pfb_ip_render_query($fields);
+	if ($rq['pfb_geoip'] && !pfb_geoip_generation_ready()) {
+		return array(
+			'host' => $rq['host'],
+			'hostname' => $rq['hostname'],
+			'pfb_geoip' => TRUE,
+			'field15' => $rq['field15'],
+			'mask' => '',
+			'feed_new' => 'Not listed!',
+			'eval_new' => 'Not listed!',
+			'alias_new' => '',
+			'pfb_matchtitle' => 'This IP is not currently listed!',
+		);
+	}
 	$memos = &pfb_ip_render_memos();
 	$mask = '';
 	if ($fields[4] == 4) {
@@ -11710,7 +11723,11 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 	foreach ($hosts as $host) {
 		$out[$host] = array('Unknown', 'Unknown');
 	}
-	if (empty($hosts) || ($geoip && !pfb_geoip_generation_ready())) {
+	if (empty($hosts)) {
+		return $out;
+	}
+	if ($geoip && !pfb_geoip_generation_ready()) {
+		$grep_failed = array_fill_keys($hosts, TRUE);
 		return $out;
 	}
 
@@ -11817,11 +11834,21 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 // most one grep pass per distinct group. Seeds pfb_ip_render_memos() —
 // pfb_ip_render_attribution() consults the same stores, falling back to a per-row exec for
 // anything unseeded.
-// $rows: one entry per buffered, filter-accepted row — 'host', 'folder', 'eval_ip_raw',
-// 'validate_file_cmd'/'validate_cmd' from pfb_ip_render_query() (both NULL when unused).
+// $rows: one entry per buffered, filter-accepted row — 'host', 'folder', 'pfb_geoip',
+// 'eval_ip_raw', and 'validate_file_cmd'/'validate_cmd' from pfb_ip_render_query().
 function pfb_ip_prefetch(array $rows): void {
 	global $pfb;
 
+	$geoip_ready = TRUE;
+	foreach ($rows as $row) {
+		if (!empty($row['pfb_geoip'])) {
+			$geoip_ready = pfb_geoip_generation_ready();
+			break;
+		}
+	}
+	$rows = array_values(array_filter($rows, static function (array $row) use ($geoip_ready): bool {
+		return empty($row['pfb_geoip']) || $geoip_ready;
+	}));
 	if (empty($rows)) {
 		return;
 	}
@@ -16296,6 +16323,7 @@ function pfb_daemon_filterlog() {
 						if (isset($pfb['continent_list'][$geoip_validate])) {
 							$geoip_folder = TRUE;
 						}
+						$geoip_deferred = $geoip_folder && !pfb_geoip_generation_ready();
 						$pfb_query = find_reported_header($host, $folder, $geoip_folder);
 
 						// Report specific ET IQRisk details
@@ -16331,27 +16359,29 @@ function pfb_daemon_filterlog() {
 							$resolved_host = 'Unknown';
 						}
 
-						// Save entry to IP cache
-						$db_update = "INSERT into ipcache ( host, q0, q1, geoip, resolved_host ) VALUES ( :host, :q0, :q1, :geoip, :resolved_host )";
-						$db_handle = pfb_open_sqlite(7, 'Add to IP cache');
-						if ($db_handle) {
-							$pfb_host	= pfb_filter($host, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-							$pfb_query[0]	= pfb_filter($pfb_query[0], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-							$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-							$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
-							$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
+						// Save entry to IP cache only when attribution was not deferred by a GeoIP swap.
+						if (!$geoip_deferred) {
+							$db_update = "INSERT into ipcache ( host, q0, q1, geoip, resolved_host ) VALUES ( :host, :q0, :q1, :geoip, :resolved_host )";
+							$db_handle = pfb_open_sqlite(7, 'Add to IP cache');
+							if ($db_handle) {
+								$pfb_host	= pfb_filter($host, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+								$pfb_query[0]	= pfb_filter($pfb_query[0], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+								$pfb_query[1]	= pfb_filter($pfb_query[1], PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+								$geoip		= pfb_filter($geoip, PFB_FILTER_HTML, 'pfb_daemon_filterlog');
+								$resolved_host	= pfb_filter($resolved_host, PFB_FILTER_HOSTNAME, 'pfb_daemon_filterlog', 'Unknown');
 
-							$stmt = $db_handle->prepare($db_update);
-							if ($stmt) {
-								$stmt->bindValue(':host', $host, SQLITE3_TEXT);
-								$stmt->bindValue(':q0', $pfb_query[0], SQLITE3_TEXT);
-								$stmt->bindValue(':q1', $pfb_query[1], SQLITE3_TEXT);
-								$stmt->bindValue(':geoip', $geoip, SQLITE3_TEXT);
-								$stmt->bindValue(':resolved_host', $resolved_host, SQLITE3_TEXT);
-								$stmt->execute();
+								$stmt = $db_handle->prepare($db_update);
+								if ($stmt) {
+									$stmt->bindValue(':host', $host, SQLITE3_TEXT);
+									$stmt->bindValue(':q0', $pfb_query[0], SQLITE3_TEXT);
+									$stmt->bindValue(':q1', $pfb_query[1], SQLITE3_TEXT);
+									$stmt->bindValue(':geoip', $geoip, SQLITE3_TEXT);
+									$stmt->bindValue(':resolved_host', $resolved_host, SQLITE3_TEXT);
+									$stmt->execute();
+								}
 							}
+							pfb_close_sqlite($db_handle);
 						}
-						pfb_close_sqlite($db_handle);
 					}
 
 					// Use cached entries

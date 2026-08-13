@@ -1390,11 +1390,11 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 		foreach (glob("{$stage_output_root}/*") ?: [] as $stage_file) {
 			if (is_file($stage_file)) {
 				$name = basename($stage_file);
-				$published_output_files[$name] = TRUE;
 				if (is_file("{$output_root}/{$name}") && !@copy("{$output_root}/{$name}", "{$backup_output_root}/{$name}")) {
 					$publish_ok = FALSE;
 					break;
 				}
+				$published_output_files[$name] = TRUE;
 				if (!@rename($stage_file, "{$output_root}/{$name}")) {
 					$publish_ok = FALSE;
 					break;
