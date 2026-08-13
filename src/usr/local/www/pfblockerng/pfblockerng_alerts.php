@@ -4423,6 +4423,7 @@ if (!$alert_summary):
 					$ip_prefetch_rows[] = array(
 						'host'			=> $ip_rq['host'],
 						'folder'		=> $ip_rq['folder'],
+						'pfb_geoip'		=> $ip_rq['pfb_geoip'],
 						'validate_file_cmd'	=> $ip_rq['validate_file_cmd'],
 						'validate_cmd'		=> $ip_rq['validate_cmd'],
 						'eval_ip_raw'		=> $ip_copy[14],

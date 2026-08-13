@@ -160,6 +160,18 @@ final class GeneralScheduleUiTest extends TestCase
 			'settings-save sync must not regenerate or replace the active cache');
 	}
 
+	public function testSaveRemovesEveryDisposableCandidateArtifact(): void
+	{
+		$source = php_strip_whitespace(self::GENERAL_PAGE);
+		$this->assertMatchesRegularExpression(
+			'/foreach\s*\(scandir\(\$candidate_dir\)\s*\?:\s*\[\]\s+as\s+\$candidate_artifact\)\s*\{\s*'
+			. 'if\s*\(\$candidate_artifact\s*!==\s*\x27\.\x27\s*&&\s*\$candidate_artifact\s*!==\s*\x27\.\.\x27\)\s*\{\s*'
+			. '@unlink\("\{\$candidate_dir\}\/\{\$candidate_artifact\}"\);/',
+			$source,
+			'Candidate cleanup must not assume the publisher created only two filenames.'
+		);
+	}
+
 	public function testAuthorizationRemainsGatewayBound(): void
 	{
 		$source = php_strip_whitespace(self::GENERAL_PAGE);
