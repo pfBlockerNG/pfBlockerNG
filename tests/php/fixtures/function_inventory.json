@@ -10671,6 +10671,19 @@
             }
         ]
     },
+    "pfb_stage_publish_dir_recover": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "directory",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_stdout_is_terminal": {
         "returnsRef": false,
         "returnType": "bool",
