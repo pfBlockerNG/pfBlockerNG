@@ -29,7 +29,7 @@ final class ScheduleProducerCanonicalizationTest extends TestCase
 		return substr($source, $start_offset, $end_offset - $start_offset);
 	}
 
-	private function easyListGroup(string $cron, mixed $dow): array
+	private function easyListGroup(string $cron, mixed $dow, array $general = self::GENERAL): array
 	{
 		$add = [
 			'row' => [['header' => 'easy', 'url' => 'https://example.test/easy', 'state' => 'Enabled']],
@@ -37,7 +37,7 @@ final class ScheduleProducerCanonicalizationTest extends TestCase
 		$ex_easylists = [
 			'action' => 'unbound', 'cron' => $cron, 'dow' => $dow, 'logging' => 'enabled', 'order' => 'default',
 		];
-		$pfb_general_schedule = self::GENERAL;
+		$pfb_general_schedule = $general;
 		eval(self::sourceRegion(
 			'/src/usr/local/pkg/pfblockerng/pfblockerng_install.inc',
 			'// Upgrade EasyList to new Format',
@@ -47,12 +47,12 @@ final class ScheduleProducerCanonicalizationTest extends TestCase
 		return $add;
 	}
 
-	private function wizardGroup(string $key): array
+	private function wizardGroup(string $key, array $general = self::GENERAL): array
 	{
 		$add = [
 			'row' => [['header' => 'wizard', 'url' => 'https://example.test/wizard', 'state' => 'Enabled']],
 		];
-		$pfb_general_schedule = self::GENERAL;
+		$pfb_general_schedule = $general;
 		eval(self::sourceRegion(
 			'/src/usr/local/www/wizards/pfblockerng_wizard.inc',
 			'// Selected Alias/Groups to add to default installation',
@@ -126,5 +126,21 @@ final class ScheduleProducerCanonicalizationTest extends TestCase
 		$this->assertArrayHasKey('dnsbl:wizard', $model['entries']);
 		$this->assertNull($model['entries']['ipv4:wizard_v4']['override']);
 		$this->assertNull($model['entries']['dnsbl:wizard']['override']);
+	}
+
+	public function testProducerFallbacksCanonicalizeInvalidGeneralTokens(): void
+	{
+		$invalid = [
+			'pfb_schedule_weekday' => ['bad'],
+			'pfb_schedule_hour' => '24',
+			'pfb_schedule_minute' => '14',
+		];
+		$expected = [
+			'schedule_override' => '', 'schedule_weekday' => '7',
+			'schedule_hour' => '0', 'schedule_minute' => '0',
+		];
+
+		$this->assertSame($expected, $this->schedule($this->easyListGroup('EveryDay', ['bad'], $invalid)));
+		$this->assertSame($expected, $this->schedule($this->wizardGroup('pfblockernglistsv4', $invalid)));
 	}
 }
