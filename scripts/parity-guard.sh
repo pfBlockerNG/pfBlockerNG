@@ -73,8 +73,7 @@ find "$WORKFLOWS" \( -name '*.yml' -o -name '*.yaml' \) -print | LC_ALL=C sort \
         esac
         # Rule 3: an inline-derived arg to build-leg.sh — $( or backtick AFTER the
         # build-leg.sh token. Take the substring after the FIRST build-leg.sh
-        # occurrence so the legit capture wrapper's $( (which precedes the token)
-        # is not flagged.
+        # occurrence so an earlier command substitution is not flagged.
         case "$STRIPPED" in
             *build-leg.sh*)
                 AFTER="${STRIPPED#*build-leg.sh}"

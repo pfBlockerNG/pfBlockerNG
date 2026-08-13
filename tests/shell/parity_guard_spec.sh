@@ -79,8 +79,8 @@ EOF
   }
 
   # inline_derived_arg: feeds build-leg.sh a $(...)-derived arg — Rule 3 violation.
-  # The $( comes AFTER the build-leg.sh token (the evasion); the capture wrapper's
-  # own $( precedes the token and is legit.
+  # The $( comes AFTER the build-leg.sh token (the evasion); an earlier command
+  # substitution remains legitimate.
   write_inline_derived_arg() {
     cat > "${WFDIR}/inline-derived.yml" << 'EOF'
 name: Inline Derived

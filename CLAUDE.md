@@ -25,7 +25,3 @@
   orchestrator perform on itself not independent, so skipping spawn voids
   gate rather than playing safe. Covers only spawns procedure NAMES; where one
   merely *permits* delegation, standing directive holds and you ask first.
-- Code lookup: prefer `mcp__token-savior-recall__` MCP tools (`search_codebase`,
-  `find_symbol`, `get_function_source`, `get_call_chain`; load via ToolSearch) over raw
-  Grep/Read whole-file dumps when locating symbol or reading single function/class
-  body; fall back to Grep/Read only for files index not cover.

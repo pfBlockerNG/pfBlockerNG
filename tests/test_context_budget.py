@@ -576,9 +576,9 @@ def test_indirect_quoted_compound_script_ref_still_detected(tmp_path: Path) -> N
 
 def test_indirect_delegating_helper_without_literal_still_detected(tmp_path: Path) -> None:
     # A helper that delegates emission to another module
-    # (`exec "$PY" -m "pkg.hooks.$1"`, the live ts-hook.sh shape) carries no
-    # "additionalContext" literal itself — the substring-only check would
-    # otherwise miss it entirely and never require registration (#1501).
+    # (`exec "$PY" -m "pkg.hooks.$1"`) carries no "additionalContext" literal
+    # itself — the substring-only check would otherwise miss it entirely and
+    # never require registration (#1501).
     root = _indirect_root(tmp_path, "sh scripts/delegate.sh")
     _write(root, "scripts/delegate.sh", '#!/bin/sh\nexec "$PY" -m "pkg.hooks.$1"\n')
     violations = ccb.check_indirect_producers(root)
@@ -623,13 +623,6 @@ def test_indirect_registered_script_at_other_event_fails_closed(tmp_path: Path) 
     _write(root, ".claude/hooks/session-branch-sync.sh", "#!/bin/sh\nprintf '%s' 'additionalContext payload'\n")
     violations = ccb.check_indirect_producers(root)
     assert len(violations) == 1 and "cannot validate" in violations[0], violations
-
-
-def test_indirect_registered_producer_compound_command_clean(tmp_path: Path) -> None:
-    command = 'cd "${CLAUDE_PROJECT_DIR:-.}" && sh scripts/ts-hook.sh capture || true'
-    root = _indirect_root(tmp_path, command, event="PostToolUse")
-    _write(root, "scripts/ts-hook.sh", "REPORT_KEY = 'additionalContext'\n")
-    assert ccb.check_indirect_producers(root) == []
 
 
 def test_indirect_no_script_reference_command_clean(tmp_path: Path) -> None:
@@ -770,7 +763,6 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
         "tests/smoke/CLAUDE.md",
         ".claude/rules/smoke.md",
         ".claude/hooks/statusline.sh",
-        "scripts/ts-hook.sh",
     ],
 )
 def test_touches_context_surface_true(rel: str) -> None:

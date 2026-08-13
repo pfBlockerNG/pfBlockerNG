@@ -1,12 +1,13 @@
-"""Cross-agent mode, Token Savior, and skill-plugin wiring."""
+"""Cross-agent mode and skill-plugin wiring."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-MODES = ("PONYTAIL", "CAVEMAN", "TOKEN-SAVIOR")
+MODES = ("PONYTAIL", "CAVEMAN")
 
 
 def _commands(path: str, event: str) -> str:
@@ -16,7 +17,7 @@ def _commands(path: str, event: str) -> str:
     )
 
 
-def test_modes_and_token_savior_reach_every_agent_start() -> None:
+def test_modes_reach_every_agent_start() -> None:
     for path in (".claude/settings.json", ".codex/hooks.json"):
         for event in ("SessionStart", "SubagentStart"):
             commands = _commands(path, event)
@@ -24,15 +25,20 @@ def test_modes_and_token_savior_reach_every_agent_start() -> None:
             assert not missing, f"{path} {event} missing {missing}"
 
 
-def test_token_savior_hooks_preserve_upstream_opt_in_defaults() -> None:
-    for path in (".claude/settings.json", ".codex/hooks.json"):
-        config = json.loads((ROOT / path).read_text(encoding="utf-8"))
-        commands = json.dumps(config.get("hooks", {}).get("PostToolUse", []))
-        assert "tool_capture_hook" in commands, f"{path} lost Token Savior lifecycle wiring"
-
-        serialized = json.dumps(config)
-        for variable in ("TS_BASH_COMPACT", "TS_BASH_REWRITE", "TS_CAPTURE_DISABLED"):
-            assert variable not in serialized, f"{path} overrides opt-in {variable}"
+def test_codex_repository_hook_integrity_pins_match() -> None:
+    config = json.loads((ROOT / ".codex/hooks.json").read_text(encoding="utf-8"))
+    commands = [
+        hook["command"]
+        for groups in config["hooks"].values()
+        for group in groups
+        for hook in group["hooks"]
+        if "command" in hook
+    ]
+    for relative in (".claude/hooks/session-branch-sync.sh", "scripts/claude-bash-guard.sh"):
+        digest = hashlib.sha256((ROOT / relative).read_bytes()).hexdigest()
+        matches = [command for command in commands if relative in command]
+        assert len(matches) == 1, f"expected one Codex hook command for {relative}"
+        assert digest in matches[0], f"stale Codex hook hash for {relative}"
 
 
 def test_copilot_client_detection_needs_nothing_installed() -> None:

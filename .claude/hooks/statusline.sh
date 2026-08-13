@@ -1,6 +1,6 @@
 #!/bin/sh
 # statusline.sh — the repo statusline chain: ponytail + caveman mode badges (vendored
-# plugin scripts), then the caveman/TS savings badges. STATUSLINE_SAVINGS_WINDOW
+# plugin scripts), then the caveman savings badge. STATUSLINE_SAVINGS_WINDOW
 # (default 24h; off|0|lifetime = lifetime totals) makes every savings number a rolling
 # delta via statusline-rolling.sh. CAVEMAN_STATUSLINE_INLINE (default 1) folds caveman's
 # number into the badge — `[CAVEMAN 252k↓]`; 0 keeps the plugin-style ` ⛏ 252k` suffix
@@ -37,5 +37,3 @@ else
 		fi
 	fi
 fi
-
-sh "$d/hooks/ts-statusline.sh"
