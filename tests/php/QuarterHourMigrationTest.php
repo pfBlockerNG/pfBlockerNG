@@ -32,6 +32,53 @@ final class QuarterHourMigrationTest extends TestCase
 		));
 	}
 
+	public function testScheduleMigrationWorksWhenExtraModuleIsLoadedStandalone(): void
+	{
+		$extra = var_export(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc', TRUE);
+		$script = <<<PHP
+require {$extra};
+\$gen = 'installedpackages/pfblockerng/config/0';
+\$v4 = 'installedpackages/pfblockernglistsv4/config';
+\$v6 = 'installedpackages/pfblockernglistsv6/config';
+\$dns = 'installedpackages/pfblockerngdnsbl/config';
+\$migrated = pfb_schedule_migrate([
+	\$gen => [
+		'enable_cb' => 'on',
+		'pfb_scheduled_feed_updates' => 'on',
+		'pfb_schedule_weekday' => '7',
+		'pfb_schedule_hour' => '6',
+		'pfb_schedule_minute' => '45',
+		'skipfeed' => '0',
+	],
+	\$v4 => [[
+		'action' => 'Deny_Inbound',
+		'cron' => 'Weekly',
+		'dow' => '3',
+		'row' => [['url' => 'https://example.test', 'state' => 'Enabled']],
+	]],
+	\$v6 => [],
+	\$dns => [],
+], static fn (): int => 0);
+echo json_encode(\$migrated[\$v4][0], JSON_THROW_ON_ERROR);
+PHP;
+		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
+		$this->assertIsResource($process);
+		$stdout = stream_get_contents($pipes[1]);
+		$stderr = stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$status = proc_close($process);
+
+		$this->assertSame(0, $status, (string) $stderr);
+		$group = json_decode((string) $stdout, TRUE, flags: JSON_THROW_ON_ERROR);
+		$this->assertSame('on', $group['schedule_override']);
+		$this->assertSame('3', $group['schedule_weekday']);
+		$this->assertSame('6', $group['schedule_hour']);
+		$this->assertSame('45', $group['schedule_minute']);
+		$this->assertArrayNotHasKey('dow', $group);
+	}
+
 	public function testRegistryAddsCanonicalScheduleFieldsAndFreshSkipfeedDefault(): void
 	{
 		$registry = pfb_cfg_registry();

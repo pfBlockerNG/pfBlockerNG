@@ -792,27 +792,6 @@ function pfb_valid_vtype($vtype) {
 	return ($vtype === '_v4' || $vtype === '_v6');
 }
 
-// Accept only actions belonging to the group that stores them. Summary AJAX,
-// restored/HA config, and runtime consumers all share this exact boundary.
-function pfb_group_action_valid(mixed $action, string $gtype): bool {
-	if (!is_string($action)) {
-		return FALSE;
-	}
-	if ($gtype === 'dnsbl') {
-		return in_array($action, array('Disabled', 'unbound'), TRUE);
-	}
-	if (!in_array($gtype, array('ipv4', 'ipv6', 'geoip'), TRUE)) {
-		return FALSE;
-	}
-	return in_array($action, array(
-		'Disabled',
-		'Deny_Inbound', 'Deny_Outbound', 'Deny_Both',
-		'Permit_Inbound', 'Permit_Outbound', 'Permit_Both',
-		'Match_Inbound', 'Match_Outbound', 'Match_Both',
-		'Alias_Deny', 'Alias_Permit', 'Alias_Match', 'Alias_Native'
-	), TRUE);
-}
-
 /** Validate the General-page quarter-hour schedule and optional apply window. */
 function pfb_general_schedule_validate(array $post): array
 {
