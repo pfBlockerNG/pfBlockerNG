@@ -983,14 +983,17 @@ else {
 	$pconfig['description']			= $rowdata[$rowid]['description'] ?? '';
 	$pconfig['action']			= is_string($rowdata[$rowid]['action'] ?? NULL)
 				? $rowdata[$rowid]['action'] : 'Disabled';
-	$pconfig['cron']			= $rowdata[$rowid]['cron'] ?? 'Never';
+	$pfb_schedule_cron = $rowdata[$rowid]['cron'] ?? NULL;
+	$pconfig['cron']			= is_string($pfb_schedule_cron)
+				&& in_array($pfb_schedule_cron, ['Never', '01hour', '02hours', '03hours', '04hours', '06hours', '08hours', '12hours', 'EveryDay', 'Weekly'], TRUE)
+				? $pfb_schedule_cron : 'Never';
 	$pconfig['sort']			= $rowdata[$rowid]['sort'] ?? 'sort';
 	$pfb_schedule_row = is_array($rowdata[$rowid] ?? NULL) ? $rowdata[$rowid] : [];
 	$pfb_schedule_seed = pfb_category_schedule_validate(
 		['schedule_override' => ''],
 		$pfb_schedule_row,
 		$pfb_schedule_general,
-		(string) ($pfb_schedule_row['cron'] ?? 'Never'),
+		$pconfig['cron'],
 		$pconfig['action'],
 		!empty($pfb_schedule_row['row'])
 	);

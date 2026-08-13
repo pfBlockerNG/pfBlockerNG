@@ -189,6 +189,23 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		$this->assertSame('Disabled', $pconfig['action']);
 	}
 
+	public function testStoredCronFailsClosedWithoutStringWarningAndValidCronSurvives(): void
+	{
+		$pconfig = $this->runExpectingNoDiagnostics([4 => [
+			'aliasname' => 'hostile-cron',
+			'description' => 'array cron',
+			'cron' => ['Weekly'],
+		]], 4, 'dnsbl');
+		$this->assertSame('Never', $pconfig['cron']);
+
+		$pconfig = $this->runExpectingNoDiagnostics([4 => [
+			'aliasname' => 'valid-cron',
+			'description' => 'canonical cron',
+			'cron' => 'Weekly',
+		]], 4, 'dnsbl');
+		$this->assertSame('Weekly', $pconfig['cron']);
+	}
+
 	// --- Axis 2: populated-key, gtype=ipv4 -- guards are no-ops ---------------
 
 	public function testExistingIpv4RowWithEveryKeyPresentPassesValuesThroughUnchanged(): void
