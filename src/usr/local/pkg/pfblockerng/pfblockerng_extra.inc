@@ -2547,6 +2547,12 @@ function pfb_group_action_valid(mixed $action, string $gtype): bool {
 	), TRUE);
 }
 
+/** Consumers must not read a GeoIP generation interrupted during publication. */
+function pfb_geoip_generation_ready(): bool {
+	global $pfb;
+	return empty($pfb['ccdir']) || !is_file($pfb['ccdir'] . '/.pfb_generation_swapping');
+}
+
 /** True when a dynamic group has at least one source row the runtime can process. */
 function pfb_schedule_group_active_rows(mixed $rows): bool
 {
