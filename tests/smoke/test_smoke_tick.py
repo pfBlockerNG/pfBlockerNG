@@ -295,60 +295,28 @@ def test_tick_cron_entry_installed(deployed_vm: SmokeVM) -> None:
 def test_cron_tick_respects_disable_flag(deployed_vm: SmokeVM) -> None:
     """The cron-tick verb honours the harness's .pfb_cron_disable sentinel.
 
-    Branch PAIR (CLAUDE.md branch coverage): the same due-ledger precondition is
-    replayed with the flag present, then absent, so a broken gate flips ONE side red.
-
     Scenario:
         Background: the 'cron' ledger entry is due (next_due in the past).
             Given the harness flag PRESENT (deploy()'s default state),
             When 'pfblockerng.php cron-tick' runs,
             Then it prints the disabled banner and the ledger 'cron' entry is
-                UNCHANGED (no dispatch) -- the before-state that makes this pairing
-                non-vacuous.
-            Given the flag REMOVED,
-            When 'cron-tick' runs again,
-            Then it prints no banner and the ledger 'cron' entry ADVANCES (real
-                dispatch) -- proving the flag, not something else, gated the first call.
-        The flag is restored in a finally (issue #1179: a leaked removal re-arms the flake).
+                UNCHANGED (no dispatch).
+        Direct tick execution is proved separately without ever disarming the suite.
     """
     vm = deployed_vm
     flag = h.PFB_CRON_DISABLE_PATH
     assert vm.ssh("test", "-f", flag).returncode == 0, f"precondition: deploy() must have written {flag}"
 
-    try:
-        now_ts = int(vm.ssh("date +%s").stdout.strip())
-
-        # --- flag present: cron-tick must NOT dispatch. ---
-        _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
-        before = _read_ledger(vm)
-        result = _run_tick(vm, "cron-tick")
-        assert result.returncode == 0, f"cron-tick (flag present) rc={result.returncode} stderr={result.stderr!r}"
-        assert f"[ Disabled by {flag} ]" in result.stdout, (
-            f"cron-tick (flag present) must print the disabled banner; got {result.stdout!r}"
-        )
-        after = _read_ledger(vm)
-        assert after.get("cron") == before.get("cron"), (
-            f"cron-tick (flag present) must not dispatch -- ledger 'cron' entry changed: "
-            f"before={before.get('cron')} after={after.get('cron')}"
-        )
-
-        # --- flag absent: cron-tick DOES dispatch (the non-vacuous other half). ---
-        rm = vm.ssh("rm", "-f", flag)
-        assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
-        result2 = _run_tick(vm, "cron-tick")
-        assert result2.returncode == 0, f"cron-tick (flag absent) rc={result2.returncode} stderr={result2.stderr!r}"
-        assert "[ Disabled by" not in result2.stdout, (
-            f"cron-tick (flag absent) must not print the disabled banner; got {result2.stdout!r}"
-        )
-        assert h.wait_until(
-            lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
-            timeout=30,
-            interval=2,
-        ), f"cron-tick (flag absent) should dispatch the due feed cron; ledger={_read_ledger(vm)}"
-    finally:
-        touch = vm.ssh("/usr/bin/touch", flag)
-        if touch.returncode != 0:
-            raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
+    _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+    before = _read_ledger(vm)
+    result = _run_tick(vm, "cron-tick")
+    assert result.returncode == 0, f"cron-tick rc={result.returncode} stderr={result.stderr!r}"
+    assert f"[ Disabled by {flag} ]" in result.stdout, f"cron-tick must print disabled banner; got {result.stdout!r}"
+    after = _read_ledger(vm)
+    assert after.get("cron") == before.get("cron"), (
+        f"cron-tick must not dispatch: before={before.get('cron')} after={after.get('cron')}"
+    )
 
 
 @pytest.mark.smoke

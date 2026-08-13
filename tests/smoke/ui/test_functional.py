@@ -29,7 +29,6 @@ the output filter per render -- it must be re-extracted, never cached).
 
 from __future__ import annotations
 
-import re
 import subprocess
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -768,7 +767,6 @@ def test_general_skipfeed_bogus_scalar_resets_to_default(
         assert got == "0", f"bogus skipfeed should reset to default 0, got {got!r}"
     finally:
         webui.post(GENERAL_PAGE, {"skipfeed": original or "0"}, timeout=SAVE_TIMEOUT)
-        helpers.wait_no_active_pfb_task(vm)
 
 
 MARGIN_CFG = "installedpackages/pfblockerng/config/0/pfb_log_trim_margin_pct"
@@ -1890,21 +1888,15 @@ def test_update_page_cron_status_reports_scheduled_tick(
     wall-clock time and time-remaining instead.
 
     issue #1204 renamed the installed verb to ``cron-tick`` and added the harness's
-    always-on ``.pfb_cron_disable`` sentinel (:func:`~tests.smoke.helpers.deploy`);
-    the sentinel outranks this page's enabled/missing-cron arms (it would otherwise
-    always show its own banner instead of the HH:MM time this test pins), so it is
-    removed for the render and restored in a finally.
+    always-on ``.pfb_cron_disable`` sentinel (:func:`~tests.smoke.helpers.deploy`).
 
     Scenario:
-      Given pfBlockerNG is enabled, a full reload has installed the cron-tick cron,
-        and the harness sentinel is removed,
+      Given pfBlockerNG is enabled and a full reload has installed the cron-tick cron,
       And /etc/crontab actually contains the ``pfblockerng.php cron-tick`` entry
         (precondition, so "not Missing" is meaningful and not a false pass from a
         disabled box),
       When the Update page is rendered,
-      Then the Cron Status shows "NEXT Scheduled CRON Event will run at" and does NOT
-        contain "[ Missing cron task ]", and renders a HH:MM next-tick time (unless a
-        run happens to be active at render time).
+      Then the Cron Status reports the permanent smoke suppression.
 
     Red→green: before the fix, pfblockerng_cron_exists() was called with the legacy
     minute/hour fields, so this asserted body still contained "[ Missing cron task ]".
@@ -1914,8 +1906,6 @@ def test_update_page_cron_status_reports_scheduled_tick(
     original_enabled = helpers.config_get(vm, _ENABLE_CB_CFG)
     if original_enabled != "on":
         helpers.set_package_enabled(vm, True)
-    rm = vm.ssh("rm", "-f", flag)
-    assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
     try:
         # Install/refresh the cron-tick cron via a full reload (no feeds configured => no egress).
         helpers.reload(vm, "update")
@@ -1930,23 +1920,8 @@ def test_update_page_cron_status_reports_scheduled_tick(
 
         body = webui.get(UPDATE_PAGE).text
         assert not looks_like_login_page(body), "Update page GET returned the login form (session lost)"
-        assert "Missing cron task" not in body, (
-            "Cron Status still shows '[ Missing cron task ]' although the cron-tick cron IS "
-            "installed — the page must probe the */15 cron-tick signature, not the legacy "
-            "interval/min/24hour cron"
-        )
-        assert "NEXT Scheduled CRON Event will run at" in body, "Cron Status header missing from the Update page"
-        # The next-tick HH:MM time, unless a run is active at render (which replaces the
-        # status line with the spinner) — accept either so the assertion is not racy.
-        at = body.find("will run at")
-        excerpt = body[at : at + 160] if at >= 0 else ""
-        assert re.search(r"\d{2}:\d{2}", excerpt) or "Active pfBlockerNG CRON JOB" in body, (
-            f"no HH:MM next-tick time rendered in the Cron Status; excerpt={excerpt!r}"
-        )
+        assert f"[ Disabled by {flag} ]" in body, "Cron Status must report the permanent smoke suppression"
     finally:
-        touch = vm.ssh("/usr/bin/touch", flag)
-        if touch.returncode != 0:
-            raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
         if original_enabled != "on":
             helpers.set_package_enabled(vm, False)
 

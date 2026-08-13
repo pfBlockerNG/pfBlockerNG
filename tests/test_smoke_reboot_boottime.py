@@ -49,6 +49,8 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
                 return subprocess.CompletedProcess(remote, 0, value, "")
             if command == "/sbin/reboot":
                 return subprocess.CompletedProcess(remote, 0, "", "")
+            if command == f"/bin/test -f {helpers.PFB_CRON_DISABLE_PATH}":
+                return subprocess.CompletedProcess(remote, 0, "", "")
             raise AssertionError(f"unexpected ssh command: {command}")
 
     fake_vm = FakeVM()
@@ -64,8 +66,11 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(helpers, "wait_boot_complete", lambda vm: None)
     monkeypatch.setattr(helpers, "wait_unbound_ready", lambda vm: None)
+    cron_guards: list[object] = []
+    monkeypatch.setattr(helpers, "_write_cron_disable_flag", lambda vm: cron_guards.append(vm))
 
     helpers.reboot_vm(vm, timeout=5)
 
     assert ready_calls
     assert fake_vm.boottime_reads == 4
+    assert cron_guards == [vm]
