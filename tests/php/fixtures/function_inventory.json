@@ -1233,19 +1233,6 @@
         "returnType": null,
         "params": []
     },
-    "pfb_cron_base_hour": {
-        "returnsRef": false,
-        "returnType": null,
-        "params": [
-            {
-                "name": "freq",
-                "byRef": false,
-                "variadic": false,
-                "type": null,
-                "default": null
-            }
-        ]
-    },
     "pfb_cron_disable_path": {
         "returnsRef": false,
         "returnType": "string",

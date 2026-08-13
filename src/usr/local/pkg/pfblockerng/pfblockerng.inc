@@ -7251,65 +7251,6 @@ function pfblockerng_configure_tick_cron(
 }
 
 
-// Calculate the cron task base hour setting
-function pfb_cron_base_hour($freq) {
-	global $pfb;
-
-	switch($freq) {
-		case 'Disabled':
-		case 1:
-		case '01hour':
-			$j = 23; $k = 1;
-			break;
-		case 2:
-		case '02hours':
-			$j = 11; $k = 2;
-			break;
-		case 3:
-		case '03hours':
-			$j = 7; $k = 3;
-			break;
-		case 4:
-		case '04hours':
-			$j = 5; $k = 4;
-			break;
-		case 6:
-		case '06hours':
-			$j = 3; $k = 6;
-			break;
-		case 8:
-		case '08hours':
-			$j = 2; $k = 8;
-			break;
-		case 12:
-		case '12hours':
-			$j = 1; $k = 12;
-			break;
-		case 24:
-			return array($pfb['24hour']);
-			break;
-		default:
-			$pfb['interval'] = 1;
-			return [];
-	}
-
-	$shour	= intval(substr($pfb['hour'], 0, 2));
-	$sch	= strval($shour);
-
-	for ($i=0; $i < $j; $i++) {
-		$shour += $k;
-		if ($shour >= 24) {
-			$shour -= 24;
-		}
-		$sch .= ',' . strval($shour);
-	}
-
-	$sch = explode(',', $sch);
-	sort($sch);
-	return $sch;
-}
-
-
 // Collect 'gateway(s)' and 'gateway group(s)' for Adv. In/Outbound customizations
 function pfb_get_gateways() {
 	$gateway = array();
