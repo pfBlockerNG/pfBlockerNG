@@ -4255,7 +4255,7 @@ function pfb_stage_publish_dir(string $target, callable $extract): bool {
 	}
 	if (!@rename($staged, $target)) {
 		if ($backup !== NULL) {
-			@rename($backup, $target);
+			pfb_stage_publish_dir_recover(dirname($target));
 		}
 		rmdir_recursive($staged);
 		return FALSE;
