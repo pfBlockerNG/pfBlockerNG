@@ -71,12 +71,42 @@ PHP;
 		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
 		$this->assertIsResource($process);
-		$stdout = stream_get_contents($pipes[1]);
-		$stderr = stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$status = proc_close($process);
+		stream_set_blocking($pipes[1], FALSE);
+		stream_set_blocking($pipes[2], FALSE);
+		$stdout = '';
+		$stderr = '';
+		$process_status = ['running' => TRUE, 'exitcode' => -1];
+		$timed_out = FALSE;
+		$close_status = -1;
+		try {
+			$deadline = hrtime(TRUE) + 5_000_000_000;
+			do {
+				$stdout .= stream_get_contents($pipes[1]);
+				$stderr .= stream_get_contents($pipes[2]);
+				$process_status = proc_get_status($process);
+				if (!$process_status['running']) {
+					break;
+				}
+				usleep(10000);
+			} while (hrtime(TRUE) < $deadline);
+			$timed_out = $process_status['running'];
+			if ($timed_out) {
+				proc_terminate($process);
+				usleep(50000);
+				if (proc_get_status($process)['running']) {
+					proc_terminate($process, 9);
+				}
+			}
+		} finally {
+			$stdout .= stream_get_contents($pipes[1]);
+			$stderr .= stream_get_contents($pipes[2]);
+			fclose($pipes[1]);
+			fclose($pipes[2]);
+			$close_status = proc_close($process);
+		}
+		$status = $process_status['exitcode'] !== -1 ? $process_status['exitcode'] : $close_status;
 
+		$this->assertFalse($timed_out, 'standalone schedule child exceeded the 5-second hard deadline');
 		$this->assertSame(0, $status, (string) $stderr);
 		$output = json_decode((string) $stdout, TRUE, flags: JSON_THROW_ON_ERROR);
 		$group = $output['group'];
