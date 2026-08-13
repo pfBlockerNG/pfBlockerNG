@@ -33,23 +33,6 @@ def test_ports_parity_examples_are_isolated_and_explicitly_routed() -> None:
     assert "${PFB_RUN_ROOT}/${RUN_ID}/ports" in workflow
 
 
-def test_eperm_example_isolated_and_host_pid_nonroot_job() -> None:
-    default = _read("tests/shell/mcp_token_savior_spec.sh")
-    eperm_path = ROOT / "tests/shell/mcp_token_savior_eperm_env.sh"
-    eperm = eperm_path.read_text(encoding="utf-8") if eperm_path.exists() else ""
-    workflow = _read(".github/workflows/test.yml")
-
-    assert "EPERM" not in default
-    assert eperm_path.exists() and eperm
-    assert "env:eperm" in eperm
-    assert "Skip" not in eperm
-    assert "--pid=host" in workflow
-    assert "--user 1001:1001" in workflow
-    assert "mcp_token_savior_eperm_env.sh" in workflow
-    assert "--fail-no-examples" in workflow
-    assert re.search(r"all-tests-passed:[\s\S]*needs: \[[^\]]*eperm", workflow)
-
-
 def test_kcov_coverage_selectors_are_focused() -> None:
     workflow = _read(".github/workflows/test.yml")
     match = re.search(r"shellspec --kcov --shell bash(?P<body>[\s\S]*?)(?:\n\s*else|\n\s*fi)", workflow)

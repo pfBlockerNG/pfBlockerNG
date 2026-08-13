@@ -49,18 +49,17 @@ symlink; provider-specific runtime change stays in that provider's adapter.
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
-| Session and delegate activation | `.codex/hooks.json` | Runs branch synchronization and injects ponytail + caveman plus the Token Savior recall preference on startup/resume/clear/compact and every sub-agent start. |
-| Token Savior MCP and capture hook | `.codex/config.toml` plus `.codex/hooks.json` | Uses the same pinned upstream Token Savior launcher and capture wrapper as Claude, with the client label set to `codex`; Bash compaction and rewriting retain upstream's opt-in defaults. |
+| Session and delegate activation | `.codex/hooks.json` | Runs branch synchronization and injects ponytail + caveman on startup/resume/clear/compact and every sub-agent start. |
 | Ponytail and Caveman | Plugin + repository hooks | Ponytail ships as the local Codex plugin; repository hooks guarantee both modes for root sessions and sub-agents. |
 
 Shared Git hooks recognize both `CLAUDECODE=1` and Codex's
 `CODEX_THREAD_ID`. Primary-checkout commits and unfetched-history rewrites
 blocked for either agent runtime.
 
-Codex command-hook and MCP commands pin SHA-256 of every repository script
+Codex command-hook commands pin SHA-256 of every repository script
 they execute. Changing target script therefore changes trusted hook
 definition; unreviewed branch cannot keep already-trusted command string
-while replacing its implementation. ShellSpec config check prevents
+while replacing its implementation. Cross-agent config tests prevent
 legitimate edits from leaving stale pins.
 
 ## Worktrees, shallow history, and resume
@@ -99,10 +98,8 @@ worktree coherent (preferably committed) before closing CLI, then
 2. Inspect and trust project hooks with `/hooks`; changed command hooks skipped
    until their new definitions reviewed.
 3. Use `/skills` to verify `.agents/skills` entries discovered.
-4. Use `/mcp` to verify `token-savior-recall` running. Its shared launcher
-   installs repository-pinned upstream release into per-user cache on first start.
-5. Use `/agent` or delegation request to select project roles.
-6. Run `sh scripts/agent/check-agent-config-parity.sh` for explicit inventory
+4. Use `/agent` or delegation request to select project roles.
+5. Run `sh scripts/agent/check-agent-config-parity.sh` for explicit inventory
    audit; routine commits run it automatically when relevant config changes.
 
 Keep personal model, provider, auth, notification, connector, and

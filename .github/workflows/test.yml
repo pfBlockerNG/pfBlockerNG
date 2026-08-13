@@ -441,32 +441,6 @@ jobs:
           path: coverage/
           if-no-files-found: warn
 
-  shell-eperm:
-    name: shellspec (EPERM host PID)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Log in to GHCR
-        env:
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GHCR_USER: ${{ github.actor }}
-        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
-
-      - name: Run EPERM ShellSpec in host PID namespace
-        run: |
-          set -eu
-          docker pull ghcr.io/pfblockerng/ci-runner:8
-          docker run --rm --pid=host --user 1001:1001 \
-            -v "$GITHUB_WORKSPACE:/workspace" -w /workspace \
-            ghcr.io/pfblockerng/ci-runner:8 \
-            shellspec --shell dash \
-              --pattern 'tests/shell/mcp_token_savior_eperm_env.sh' \
-              --tag env:eperm --fail-no-examples
-
   php-syntax:
     name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
     needs: read-matrix
@@ -969,7 +943,7 @@ jobs:
     # The ADR-14 UI suite (`ui-suite`) IS folded in: it is skipped (== pass) on an
     # unlabeled PR / push, and only a `ui-tests`-labeled PR whose UI suite FAILS
     # blocks here — that is how the opt-in label gates a merge.
-    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, shell-eperm, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
+    needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:8
@@ -1011,10 +985,6 @@ jobs:
           fi
           if [ "${{ needs.shell-tests.result }}" != "success" ]; then
             echo "shellspec shell tests failed or were cancelled."
-            exit 1
-          fi
-          if [ "${{ needs.shell-eperm.result }}" != "success" ]; then
-            echo "EPERM host-PID shellspec test failed or was cancelled."
             exit 1
           fi
           if [ "${{ needs.php-syntax.result }}" != "success" ]; then

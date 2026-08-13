@@ -1,9 +1,7 @@
 {
   "env": {
-    "SHELL": "bash",
-    "MCP_TIMEOUT": "120000"
+    "SHELL": "bash"
   },
-  "enableAllProjectMcpServers": true,
   "statusLine": {
     "type": "command",
     "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/statusline.sh\""
@@ -54,18 +52,6 @@
         ]
       }
     ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash|WebFetch|Read|Grep|mcp__playwright__.*|mcp__token-savior-recall__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "sh \"${CLAUDE_PROJECT_DIR:-.}/scripts/ts-hook.sh\" tool_capture_hook",
-            "timeout": 5000
-          }
-        ]
-      }
-    ],
     "Stop": [
       {
         "hooks": [
@@ -89,7 +75,7 @@
           },
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"MANDATORY: AGENTS.md is the canonical agent bootstrap of this repo (CLAUDE.md is the thin Claude adapter importing it) — follow it, especially Working principles (investigate, do not assume; confirm genuine forks) and the never-list. The .agents/policy/ and .agents/context/ files and the docs/misc/ annexes are POLICY, binding like the bootstrap itself; read the relevant file whenever a routing-table trigger matches the task. Activate PONYTAIL full (laziest working solution) and CAVEMAN full (terse, no filler, full technical accuracy). TOKEN-SAVIOR MCP stays active for code recall: prefer mcp__token-savior-recall__ symbol/search tools over raw whole-file Grep/Read. Bash compaction and rewriting remain opt-in. This step CANNOT be skipped. Exception for external or public-facing text and documentation (GitHub issue and PR/MR comments, PR bodies, commit messages, docs): stay concise and to the point but use normal professional grammar, toning the caveman style down. Org rule: in ANY pfBlockerNG-org repository, the pfBlockerNG/pfBlockerNG canonical bootstrap (AGENTS.md) and its project plus user settings are the default way of working unless that repo overrides a rule in its own canonical policy file; the pfBlockerNG-package-specific mechanics and language or runtime specifics do not carry over.\"}}'"
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"MANDATORY: AGENTS.md is the canonical agent bootstrap of this repo (CLAUDE.md is the thin Claude adapter importing it) — follow it, especially Working principles (investigate, do not assume; confirm genuine forks) and the never-list. The .agents/policy/ and .agents/context/ files and the docs/misc/ annexes are POLICY, binding like the bootstrap itself; read the relevant file whenever a routing-table trigger matches the task. Activate PONYTAIL full (laziest working solution) and CAVEMAN full (terse, no filler, full technical accuracy). This step CANNOT be skipped. Exception for external or public-facing text and documentation (GitHub issue and PR/MR comments, PR bodies, commit messages, docs): stay concise and to the point but use normal professional grammar, toning the caveman style down. Org rule: in ANY pfBlockerNG-org repository, the pfBlockerNG/pfBlockerNG canonical bootstrap (AGENTS.md) and its project plus user settings are the default way of working unless that repo overrides a rule in its own canonical policy file; the pfBlockerNG-package-specific mechanics and language or runtime specifics do not carry over.\"}}'"
           }
         ]
       }
@@ -99,7 +85,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"DELEGATE MODES (repo policy, injected into every subagent): (1) PONYTAIL full — build the laziest working solution: YAGNI, reuse what already exists in this codebase, stdlib/native before dependencies, shortest correct diff; never simplify away input validation, error handling, security, tests, or anything the brief explicitly requires. EXCEPTION: if your task is review/verification only, ponytail does not govern it — you build nothing; hunt with full thoroughness. (2) CAVEMAN full — write your report/handoff terse: drop articles, filler, hedging; fragments OK. (3) WORKTREE BASE CHECK — before your first edit, git fetch origin and confirm your worktree is cut from the intended base (default origin/devel): a fresh worktree where git rev-list --count HEAD..origin/devel is nonzero was cut from a wrong or stale branch — rebase onto or re-cut from the true base before working, and record it in your handoff. (4) TOKEN-SAVIOR MCP — load the mcp__token-savior-recall__ tools via ToolSearch and prefer them over raw Grep/Read whole-file dumps when locating symbols or reading a single function/class body. (5) ROLE ROUTING — load only the bootstrap routing-table rows your task touches plus your role floor; do not read policy docs outside them. VERBATIM EVIDENCE RULE: pasted command outputs, test results, red->green runs, error strings, and code stay byte-exact and complete — caveman compresses connective prose only. Fill EVERY required handoff/output field; a missing field is a gate failure. Public-facing text (PR/issue comments, commit messages, docs) uses normal professional grammar. These modes govern style and scope, never rigor: run every gate, paste real outputs.\"}}'"
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"DELEGATE MODES (repo policy, injected into every subagent): (1) PONYTAIL full — build the laziest working solution: YAGNI, reuse what already exists in this codebase, stdlib/native before dependencies, shortest correct diff; never simplify away input validation, error handling, security, tests, or anything the brief explicitly requires. EXCEPTION: if your task is review/verification only, ponytail does not govern it — you build nothing; hunt with full thoroughness. (2) CAVEMAN full — write your report/handoff terse: drop articles, filler, hedging; fragments OK. (3) WORKTREE BASE CHECK — before your first edit, git fetch origin and confirm your worktree is cut from the intended base (default origin/devel): a fresh worktree where git rev-list --count HEAD..origin/devel is nonzero was cut from a wrong or stale branch — rebase onto or re-cut from the true base before working, and record it in your handoff. (4) ROLE ROUTING — load only the bootstrap routing-table rows your task touches plus your role floor; do not read policy docs outside them. VERBATIM EVIDENCE RULE: pasted command outputs, test results, red->green runs, error strings, and code stay byte-exact and complete — caveman compresses connective prose only. Fill EVERY required handoff/output field; a missing field is a gate failure. Public-facing text (PR/issue comments, commit messages, docs) uses normal professional grammar. These modes govern style and scope, never rigor: run every gate, paste real outputs.\"}}'"
           }
         ]
       }

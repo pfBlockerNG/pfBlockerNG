@@ -88,11 +88,8 @@ SETTINGS = ".claude/settings.json"
 # Registered (event, script) hook helpers whose additionalContext is a RUNTIME-computed
 # diagnostic — no static payload exists to budget/parity-check. Any unregistered helper
 # that could emit a capsule fails closed (inline as canonical `echo '<JSON>'` or register).
-# ts-hook.sh delegates to a token-savior module (`exec "$py" -m "token_savior.hooks.$1"`)
-# that emits a runtime additionalContext diagnostic — a known, first-party delegatee.
 DYNAMIC_CAPSULE_PRODUCERS = {
     ("SessionStart", ".claude/hooks/session-branch-sync.sh"),
-    ("PostToolUse", "scripts/ts-hook.sh"),
 }
 
 # Helper scripts must live under these roots: both are trigger surfaces
@@ -104,7 +101,7 @@ _PROJECT_DIR_PREFIXES = ("${CLAUDE_PROJECT_DIR:-.}/", "${CLAUDE_PROJECT_DIR}/")
 # read (a POSIX shell `exec` re-invocation, a `subprocess` call, an `os.exec*`/
 # `os.system` call) is exactly as unverifiable as one that contains the
 # `additionalContext` literal directly — the delegation-mediated bypass #1501's
-# own fix would otherwise still miss (e.g. `exec "$py" -m "token_savior.hooks.$1"`).
+# own fix would otherwise still miss.
 _DELEGATES_RE = re.compile(r"(?m)^\s*exec\b|\bsubprocess\.\w+\(|\bos\.exec\w*\(|\bos\.system\(")
 
 # Helper-dir-rooted path candidates in a raw hook command. Suffix-gated

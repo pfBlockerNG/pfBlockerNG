@@ -46,10 +46,9 @@ constraint on ALL direct work: session context usage ≤ 50% — past 50% sessio
   specs and tickets (#1389); implemented ADRs stay immutable historical records. Retired
   ADR-phase orchestration (`/adr-phase`, `phase-step`) live on only in those records.
 - **Mode propagation to delegates is mechanical** — `SubagentStart` hook
-  (`.claude/settings.json` / `.codex/hooks.json`) inject ponytail + caveman capsule and Token
-  Savior recall preference into every spawned sub-agent; capsule itself carry rules (reviewer
-  carve-out; "terse prose, verbatim evidence"). Briefs add mode line only for non-default
-  level (e.g. `ultra`).
+  (`.claude/settings.json` / `.codex/hooks.json`) inject ponytail + caveman capsule into every
+  spawned sub-agent; capsule itself carry rules (reviewer carve-out; "terse prose, verbatim
+  evidence"). Briefs add mode line only for non-default level (e.g. `ultra`).
 - **Small tier follow every directive of canonical policy (AGENTS.md + its routed files).**
   Implementer cheaper, not exempt.
 - **Run at effort xhigh or better** — session default in `.claude/settings.json`

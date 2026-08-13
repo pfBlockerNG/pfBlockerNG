@@ -12,7 +12,7 @@
           },
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"SESSION MODES: PONYTAIL full — YAGNI, reuse existing code, stdlib/native first, shortest correct diff; review-only tasks stay fully thorough. CAVEMAN full — terse connective prose, exact technical content and evidence. TOKEN-SAVIOR MCP — prefer mcp__token-savior-recall__ symbol/search tools over raw whole-file reads. Bash compaction and rewriting remain opt-in. Public-facing text and documentation use normal professional grammar.\"}}'",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"SESSION MODES: PONYTAIL full — YAGNI, reuse existing code, stdlib/native first, shortest correct diff; review-only tasks stay fully thorough. CAVEMAN full — terse connective prose, exact technical content and evidence. Public-facing text and documentation use normal professional grammar.\"}}'",
             "timeout": 5,
             "statusMessage": "Loading agent modes"
           }
@@ -24,7 +24,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"DELEGATE MODES: PONYTAIL full — YAGNI, reuse existing code, stdlib/native first, shortest correct diff; review-only tasks stay fully thorough. CAVEMAN full — terse handoff prose, exact technical content and evidence. TOKEN-SAVIOR MCP — prefer mcp__token-savior-recall__ symbol/search tools over raw whole-file reads. Bash compaction and rewriting remain opt-in. Follow AGENTS.md and every routed policy file required by the brief. Public-facing text and documentation use normal professional grammar.\"}}'",
+            "command": "echo '{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"DELEGATE MODES: PONYTAIL full — YAGNI, reuse existing code, stdlib/native first, shortest correct diff; review-only tasks stay fully thorough. CAVEMAN full — terse handoff prose, exact technical content and evidence. Follow AGENTS.md and every routed policy file required by the brief. Public-facing text and documentation use normal professional grammar.\"}}'",
             "timeout": 5,
             "statusMessage": "Loading delegate modes"
           }
@@ -40,19 +40,6 @@
             "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/claude-bash-guard.sh\" 0ef35542a4a8deeb8bdfd039dee4a7ecfe5512af9ab7faab46b5f43f63678705 && exec sh \"$root/scripts/claude-bash-guard.sh\"",
             "timeout": 10,
             "statusMessage": "Checking repository Git policy"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "^(Bash|mcp__playwright__.*|mcp__token-savior-recall__.*)$",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "root=$(git rev-parse --show-toplevel) && python3 -c \"import hashlib,sys; p,e=sys.argv[1:]; a=hashlib.sha256(open(p,'rb').read()).hexdigest(); print(f'codex-hook-integrity: {p} hash {a}, expected {e}',file=sys.stderr) if a != e else None; sys.exit(a != e)\" \"$root/scripts/ts-hook.sh\" 2733b294cee5645fa028c2d93ecb8fc2d56dfe5e8a42e6091e37974defd19a03 && exec sh \"$root/scripts/ts-hook.sh\" tool_capture_hook",
-            "timeout": 5,
-            "statusMessage": "Capturing large tool output with Token Savior"
           }
         ]
       }
