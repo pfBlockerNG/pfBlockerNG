@@ -1376,7 +1376,7 @@ jobs:
           # artifact, and merge-multiple downloads them all flat under pkgs/ --
           # a non-recursive pkgs/*.pkg glob would already find them, but find
           # -type f is used here (and above) to stay robust either way.
-          find pkgs -type f -name "*.pkg" -print0 | while IFS= read -r -d '' f; do
+          find pkgs -type f -name "*.pkg" -print | while IFS= read -r f; do
             echo "Uploading: $(basename "$f")"
             gh release upload "$TAG" "$f" --clobber
           done
