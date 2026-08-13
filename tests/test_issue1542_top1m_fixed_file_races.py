@@ -200,7 +200,7 @@ def test_enabled_same_size_rewrite_with_restored_mtime_fails_closed(
 
 
 def test_enabled_rewrite_after_iteration_with_stable_metadata_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     manifest = _manifest(tmp_path)
     path = tmp_path / "pfb_py_top1m.txt"
@@ -229,6 +229,7 @@ def test_enabled_rewrite_after_iteration_with_stable_metadata_fails_closed(
 
     monkeypatch.setattr(P.os, "fstat", rewriting_fstat)
     assert P.dnsbl_build_from_manifest(str(manifest)) is None
+    assert "TOP1M sidecar changed while reading" in capsys.readouterr().err
     assert rewritten
     assert path.stat().st_size == original.st_size
     assert path.stat().st_mtime_ns == original.st_mtime_ns
