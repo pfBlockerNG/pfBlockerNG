@@ -181,8 +181,8 @@ final class GeoipPackageGenerationCoverageTest extends TestCase
 	 */
 	public function testInstallerDispatchesCountryAndReputationGenerators(): void
 	{
-		$countries = strpos(self::$installSource, 'pfblockerng_get_countries();');
-		$reputation = strpos(self::$installSource, 'pfb_build_reputation_tab();');
+		$countries = strpos(self::$installSource, 'if (pfblockerng_get_countries())');
+		$reputation = strpos(self::$installSource, 'if (pfb_build_reputation_tab())');
 		$this->assertNotFalse($countries, 'install.inc must dispatch country-page generation');
 		$this->assertNotFalse($reputation, 'install.inc must dispatch reputation-page generation');
 		$this->assertLessThan($reputation, $countries);

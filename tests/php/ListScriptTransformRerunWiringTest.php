@@ -86,7 +86,7 @@ final class ListScriptTransformRerunWiringTest extends TestCase
 
 		$this->assertSame(1, preg_match(
 			'/\$pfb_dnsbl_reuse_decision\s*=\s*pfb_dnsbl_script_reuse_decision\(\s*'
-			. '\$pfb_dnsbl_verbatim_reuse,\s*\$pfb_dnsbl_script_pre,\s*\$pfb_dnsbl_script_post,\s*'
+			. '\$pfb_dnsbl_verbatim_reuse,\s*\$pfb_row_script_pre,\s*\$pfb_row_script_post,\s*'
 			. '"\{\$pfborig\}\/\{\$header\}\.orig"\);\s*\$pfb_dnsbl_user_script\s*=\s*'
 			. '\$pfb_dnsbl_reuse_decision\[\x27has_user_script\x27\];/',
 			$code

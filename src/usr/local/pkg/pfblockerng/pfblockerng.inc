@@ -11283,6 +11283,9 @@ function ip_explode($ip) {
 // Determine the header which Alerted an IP address and return the header name
 function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 	global $pfb;
+	if ($geoip && !pfb_geoip_generation_ready()) {
+		return array('Unknown', 'Unknown');
+	}
 
 	// Find exact IP match
 	$q_ip = pfb_ip_exact_entry_pattern($ip);
@@ -11707,7 +11710,7 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 	foreach ($hosts as $host) {
 		$out[$host] = array('Unknown', 'Unknown');
 	}
-	if (empty($hosts)) {
+	if (empty($hosts) || ($geoip && !pfb_geoip_generation_ready())) {
 		return $out;
 	}
 

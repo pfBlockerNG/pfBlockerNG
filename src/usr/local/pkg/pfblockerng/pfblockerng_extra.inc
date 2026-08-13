@@ -5103,11 +5103,15 @@ function pfb_schedule_cache_regenerate(): bool
 /** Hold scheduler and feed locks through a standalone Extras process. */
 function pfb_extras_process_begin(): bool
 {
+	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
+		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 	if (!pfb_schedule_dispatch_begin()) {
 		return FALSE;
 	}
 	if (!pfb_feed_pass_begin('extras')) {
-		pfb_schedule_dispatch_release();
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
 		return FALSE;
 	}
 	return TRUE;

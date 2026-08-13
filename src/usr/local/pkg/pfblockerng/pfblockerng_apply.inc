@@ -1955,6 +1955,8 @@ function sync_package_pfblockerng($cron=''): bool {
 						$pfb_dnsbl_script_post = pfb_resolve_list_script($list['script_post']);
 					}
 					foreach ($list['row'] as $key => $row) {
+						$pfb_row_script_pre  = $pfb_dnsbl_script_pre;
+						$pfb_row_script_post = $pfb_dnsbl_script_post;
 						if (!empty($row['url']) && $row['state'] != 'Disabled') {
 
 							// Empty header field validation check
@@ -2027,7 +2029,7 @@ function sync_package_pfblockerng($cron=''): bool {
 							$staging_current_generation = pfb_dnsbl_staging_is_current_generation(
 								pfb_dnsbl_staging_first_line("{$pfbfolder}/{$header}.txt"));
 							if (!$scheduled_selected) {
-								$pfb_dnsbl_script_pre = $pfb_dnsbl_script_post = FALSE;
+								$pfb_row_script_pre = $pfb_row_script_post = FALSE;
 								$staging_current_generation = TRUE;
 							}
 
@@ -2046,7 +2048,7 @@ function sync_package_pfblockerng($cron=''): bool {
 								$reuse_unset,
 								$staging_current_generation);
 							$pfb_dnsbl_reuse_decision = pfb_dnsbl_script_reuse_decision(
-								$pfb_dnsbl_verbatim_reuse, $pfb_dnsbl_script_pre, $pfb_dnsbl_script_post,
+								$pfb_dnsbl_verbatim_reuse, $pfb_row_script_pre, $pfb_row_script_post,
 								"{$pfborig}/{$header}.orig");
 							$pfb_dnsbl_user_script = $pfb_dnsbl_reuse_decision['has_user_script'];
 							$pfb_dnsbl_script_reparse = $pfb_dnsbl_reuse_decision['reparse'];
@@ -2219,10 +2221,10 @@ function sync_package_pfblockerng($cron=''): bool {
 								// last known-good staging and the '.update' marker for retry.
 								$pfb_parse_path = $pfb_norm['path'];
 								$pfb_staged_path = NULL;
-								if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {
+								if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {
 									pfb_logger("\nExecuting pre-script: {$list['script_pre']}\n", 1);
 									$pfb_pre = pfb_list_pre_script_run($pfb_norm['path'], "{$file_dwn}.pre",
-									    $pfb_dnsbl_script_pre, $list['script_pre'], $header,
+									    $pfb_row_script_pre, $list['script_pre'], $header,
 									    escapeshellarg("{$file_dwn}.pre") . " dnsbl {$elog}");
 									if (!$pfb_pre['ok']) {
 										// issue #1958: pre-script failure genuinely served last-known-good --
@@ -2500,10 +2502,10 @@ function sync_package_pfblockerng($cron=''): bool {
 								// issue #1926: DNSBL post-script runs on a throwaway copy of the
 								// download — nothing downstream re-parses it (same observable as
 								// the IP loop, which discards post-script edits via restore).
-								if ($pfb_dnsbl_script_post && is_file("{$pfb_dnsbl_script_post}")) {
+								if ($pfb_row_script_post && is_file("{$pfb_row_script_post}")) {
 									pfb_logger("\nExecuting post-script: {$list['script_post']}\n", 1);
 									if (@copy("{$file_dwn}.orig", "{$file_dwn}.post")) {
-										pfb_list_script_exec($pfb_dnsbl_script_post, $list['script_post'], 'post', $header,
+									pfb_list_script_exec($pfb_row_script_post, $list['script_post'], 'post', $header,
 										    escapeshellarg("{$file_dwn}.post") . " dnsbl {$elog}");
 										unlink_if_exists("{$file_dwn}.post");
 									} else {
@@ -3218,7 +3220,7 @@ function sync_package_pfblockerng($cron=''): bool {
 				$log = "\nMaxMind Database downloading and processing ( approx 4MB ) ... Please wait ...\n";
 				pfb_logger("{$log}", 1);
 				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dc scheduled >> {$pfb['log']} 2>&1", $maxmind_output, $maxmind_status);
-				if ($maxmind_status !== 0 || !pfb_geoip_generation_ready()) {
+				if (!in_array($maxmind_status, [0, 2], TRUE) || !pfb_geoip_generation_ready()) {
 					pfb_mark_pending_changes();
 					pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
 					pfb_logger("MaxMind processing failed; update deferred.\n", 2);

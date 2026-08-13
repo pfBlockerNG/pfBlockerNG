@@ -1724,7 +1724,7 @@ if ($gtype == 'ipv4' || $gtype == 'ipv6') {
 
 	// Collect list of GeoIP ISOs for Source field lookup
 	$geoip_isos = '';
-	if (file_exists("{$pfb['geoip_isos']}")) {
+	if (pfb_geoip_generation_ready() && file_exists("{$pfb['geoip_isos']}")) {
 		$geoip_isos = trim(@file_get_contents("{$pfb['geoip_isos']}"));
 	}
 }

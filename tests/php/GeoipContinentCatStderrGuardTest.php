@@ -169,7 +169,6 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 		$GLOBALS['pfb']['ccdir'] = $this->dir . '/live';
 		mkdir($GLOBALS['pfb']['ccdir'], 0700);
 		file_put_contents($GLOBALS['pfb']['ccdir'] . '/.pfb_generation_swapping', 'pending');
-
 		try {
 			$this->assertFalse(pfb_geoip_generation_ready());
 			unlink($GLOBALS['pfb']['ccdir'] . '/.pfb_generation_swapping');
@@ -177,6 +176,49 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 		} finally {
 			$GLOBALS['pfb'] = $oldPfb;
 		}
+	}
+
+	public function testInterruptedSwapBlocksGeoipLookupReaders(): void
+	{
+		$oldPfb = $GLOBALS['pfb'];
+		$GLOBALS['pfb']['ccdir'] = $this->dir . '/live';
+		mkdir($GLOBALS['pfb']['ccdir'], 0700);
+		file_put_contents($GLOBALS['pfb']['ccdir'] . '/.pfb_generation_swapping', 'pending');
+		$invoked = $this->dir . '/geoip-reader-invoked';
+		$grep = $this->dir . '/geoip-reader-grep';
+		file_put_contents($grep, "#!/bin/sh\ntouch " . escapeshellarg($invoked) . "\nexit 1\n");
+		chmod($grep, 0700);
+		$GLOBALS['pfb']['grep'] = $grep;
+
+		try {
+			$this->assertSame(['Unknown', 'Unknown'], find_reported_header('192.0.2.1', '/dev/null', TRUE));
+			$this->assertSame(
+				['192.0.2.1' => ['Unknown', 'Unknown']],
+				pfb_find_reported_headers(['192.0.2.1'], '/dev/null', TRUE)
+			);
+			$this->assertFileDoesNotExist($invoked, 'GeoIP readers must not execute during publication.');
+		} finally {
+			$GLOBALS['pfb'] = $oldPfb;
+		}
+		$category = file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
+		);
+		$this->assertIsString($category);
+		$this->assertStringContainsString(
+			'if (pfb_geoip_generation_ready() && file_exists("{$pfb[\'geoip_isos\']}"))',
+			$category
+		);
+	}
+
+	public function testUiRollbackBackupLivesBesideUiPublication(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
+		$this->assertIsString($source);
+		$this->assertStringContainsString(
+			'$backup_output_root = $stage_output_root === NULL ? NULL : "{$output_root}.old.{$generation}";',
+			$source
+		);
+		$this->assertStringNotContainsString('$backup_output_root = "{$backup_root}/ui";', $source);
 	}
 
 	private function catFixture(string $body): string

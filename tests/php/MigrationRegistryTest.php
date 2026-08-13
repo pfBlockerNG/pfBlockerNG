@@ -319,9 +319,9 @@ final class MigrationRegistryTest extends TestCase
 	 * Scenario: fresh install — no sections exist.
 	 *   Given no config at all.
 	 *   When pfb_run_migrations() runs.
-	 *   Then no write_config() is called and no config paths are created.
+	 *   Then the canonical General schedule is seeded in one write.
 	 */
-	public function testDriverFreshInstallIsNoOp(): void
+	public function testDriverFreshInstallSeedsCanonicalSchedule(): void
 	{
 		// Before: config is empty.
 		$this->assertSame([], config_get_path(self::DNSBL_SECTION, []));

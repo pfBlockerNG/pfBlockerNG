@@ -119,4 +119,14 @@ final class UpdateRunNowScheduleOwnershipTest extends TestCase
 		$this->assertNotFalse($clear);
 		$this->assertGreaterThan($lock, $clear);
 	}
+
+	public function testDurableStateWithoutTimestampsPreservesCachedLastRun(): void
+	{
+		$page = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_update.php');
+		$this->assertStringContainsString(
+			"is_array(\$item) && (isset(\$item['last_successful_check']) || isset(\$item['last_completed_occurrence']))",
+			$page
+		);
+		$this->assertStringNotContainsString("\$item['last_completed_occurrence']??0", $page);
+	}
 }

@@ -86,12 +86,13 @@ final class GeneralScheduleUiTest extends TestCase
 			$source
 		);
 		$group = strpos($source, "new Form_Group('Default Schedule')");
+		$this->assertNotFalse($group);
 		$help = strpos($source, 'Default local-time schedule for feed groups and calendar-scheduled Extras.', $group);
 		$next = strpos($source, "new Form_Checkbox('pfb_quiet_hours_enabled'", $group);
-		$this->assertNotFalse($group);
 		$this->assertNotFalse($help);
 		$this->assertNotFalse($next);
 		$this->assertLessThan($next, $help, 'Default Schedule help must render inside its control group.');
+		$this->assertStringContainsString("print_info_box(gettext('Settings were saved, but schedule-cache generation failed.", $source);
 	}
 
 	public function testSaveWritesConfigBeforeRefreshingScheduleCacheAndRedirectsOnFailure(): void
@@ -138,7 +139,7 @@ final class GeneralScheduleUiTest extends TestCase
 			@unlink($candidate . '/pfb_due_ledger.json.lock');
 			@rmdir($candidate);
 		}
-		$this->assertStringContainsString('pfb_general_schedule_save_redirect',
+		$this->assertStringContainsString('pfb_general_schedule_save_redirect( $cache_ok,',
 			php_strip_whitespace(self::GENERAL_PAGE));
 	}
 

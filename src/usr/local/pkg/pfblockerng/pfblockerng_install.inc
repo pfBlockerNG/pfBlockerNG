@@ -128,8 +128,11 @@ if (empty($pfb['maxmind_key'])) {
 elseif (pfb_geoip_generation_ready()) {
 	// Update any PHP changes to GeoIP Tabs
 	update_status("\nRebuilding GeoIP tabs...");
-	pfblockerng_get_countries();
-	update_status(" done.");
+	if (pfblockerng_get_countries()) {
+		update_status(" done.");
+	} else {
+		update_status(" failed.");
+	}
 }
 else {
 	update_status("\nGeoIP tab rebuild deferred until the interrupted GeoIP refresh is retried.\n");
@@ -138,8 +141,11 @@ else {
 // Create Reputation tab
 if (!file_exists('/usr/local/www/pfblockerng/pfblockerng_reputation.php') || empty($pfb['maxmind_key'])) {
 	update_status("\nRebuild Reputation tab...");
-	pfb_build_reputation_tab();
-	update_status(" done.");
+	if (pfb_build_reputation_tab()) {
+		update_status(" done.");
+	} else {
+		update_status(" failed.");
+	}
 }
 
 $widgets = config_get_path('widgets/sequence'); // foreign key — out of ADR-29 gateway scope

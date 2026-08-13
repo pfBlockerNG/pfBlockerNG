@@ -193,7 +193,7 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 	public function testEachFamilyBindsFailureContinueAndCloseOnce(): void
 	{
 		$source       = php_strip_whitespace(self::APPLY);
-		$dnsbl_cont   = $this->applyScope($source, 'if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',");
+		$dnsbl_cont   = $this->applyScope($source, 'if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',");
 		$dnsbl_close  = $this->applyScope($source, "pfb_download_ledger_close_if_clean('dnsbl',", "if (\$pfb['aliasupdate']) {");
 		$ip_cont      = $this->applyScope($source, 'if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', "pfb_download_ledger_close_if_clean('ip',");
 		$ip_close     = $this->applyScope($source, "pfb_download_ledger_close_if_clean('ip',", 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");');
@@ -204,7 +204,7 @@ final class ListScriptFailureLedgerWiringTest extends TestCase
 		$this->assertSame(1, substr_count($ip_close, 'pfb_ip_script_failure_close($alias,'), 'IP failure close must stay at alias-pass end');
 
 		foreach ([
-			['if ($pfb_dnsbl_script_pre && is_file("{$pfb_dnsbl_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',", 'pfb_dnsbl_script_failure_continue($alias,'],
+			['if ($pfb_row_script_pre && is_file("{$pfb_row_script_pre}")) {', "pfb_download_ledger_close_if_clean('dnsbl',", 'pfb_dnsbl_script_failure_continue($alias,'],
 			["pfb_download_ledger_close_if_clean('dnsbl',", "if (\$pfb['aliasupdate']) {", 'pfb_dnsbl_script_failure_close($alias,'],
 			['if ($pfb_script_pre && is_file("{$pfb_script_pre}")) {', "pfb_download_ledger_close_if_clean('ip',", 'pfb_ip_script_failure_continue($alias,'],
 			["pfb_download_ledger_close_if_clean('ip',", 'unlink_if_exists("{$pfb[\'dbdir\']}/geoip.update");', 'pfb_ip_script_failure_close($alias,'],

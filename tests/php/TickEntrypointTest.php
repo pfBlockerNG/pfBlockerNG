@@ -533,7 +533,15 @@ final class TickEntrypointTest extends TestCase
 			'a pfblockerng.php worker owned by this PHPUnit run leaked from an earlier test');
 
 		// Act.
-		pfblockerng_tick($psLines);
+		$manualRuns = 0;
+		pfblockerng_tick(
+			ps_lines: $psLines,
+			manual_runner: static function () use (&$manualRuns): bool {
+				$manualRuns++;
+				return TRUE;
+			}
+		);
+		$this->assertSame(0, $manualRuns, 'future non-pending cron entry must not dispatch');
 
 		// After: log maintenance ran anyway.
 		clearstatcache(TRUE, $logPath);
@@ -752,7 +760,7 @@ final class TickEntrypointTest extends TestCase
 	 *   pfb_update_pass_running()'s regex (a tiny `/bin/sh <sandbox>/pfblockerng.php
 	 *   dcc` sleeper -- proven live via the ps scan itself, not an injected array).
 	 *   And   the same 5-line 'log' / log_max_log=3 seeding as Case A.
-	 *   And   cron/dcc/bl ledger entries all future-dated (no real dispatch of
+	 *   And   the runtime schedule cache is future-dated (no real dispatch of
 	 *         pfblockerng_tick()'s own jobs this tick -- isolates to the stray
 	 *         process's effect on the gate).
 	 *   When  pfblockerng_tick() is called.
