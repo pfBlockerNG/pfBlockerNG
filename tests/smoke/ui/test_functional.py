@@ -751,15 +751,15 @@ def test_general_skipfeed_bogus_scalar_resets_to_default(
     array, so the is_array arm cannot be hit through this client. We therefore use
     the equivalent bogus SCALAR '99' (not a key 0..6), which hits the
     ``!array_key_exists`` arm and also coerces to the default 0 -- same observable
-    reset to 0 (NOT '99'). The valid probe is '3' because the default 0 is falsy
-    and would be stored as 0 even when "valid" via the trailing ``?:0``.
+    reset to 0 (NOT '99'). The valid probe differs from the stored value and is
+    nonzero because the default 0 is falsy via the trailing ``?:0``.
     """
     vm = smoke_vm
     cfg = "installedpackages/pfblockerng/config/0/skipfeed"
     original = helpers.config_get(vm, cfg)
+    valid = "2" if original == "3" else "3"
     try:
-        assert original != "3", f"skipfeed already '3' before the valid POST (original={original!r})"
-        assert _post_and_confirm_general(webui, vm, {"skipfeed": "3"}, cfg) == "3"
+        assert _post_and_confirm_general(webui, vm, {"skipfeed": valid}, cfg) == valid
         # Restore (the default 0 is the safe baseline; original may be '' on a fresh box).
         _post_and_confirm_general(webui, vm, {"skipfeed": original or "0"}, cfg)
         # BOGUS scalar '99' is not a key -> coerced to the default 0.
