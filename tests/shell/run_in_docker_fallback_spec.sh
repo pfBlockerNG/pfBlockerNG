@@ -90,6 +90,7 @@ STUB_EOF
     When call wrapper true
     The status should be success
     The output should include 'DOCKER_RUN --rm --init'
+    The output should include 'ci-runner:8 true'
   End
 
   It 'runs in the container when the image is absent but pulls'
