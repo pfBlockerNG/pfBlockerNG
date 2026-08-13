@@ -108,6 +108,40 @@ final class GeneralScheduleUiTest extends TestCase
 		$this->assertLessThan($cache, $write, 'config must be persisted before cache publication');
 	}
 
+	public function testCandidateFailureSelectsVisibleFailureRedirect(): void
+	{
+		$model = pfb_schedule_runtime_model([
+			'pfb_scheduled_feed_updates' => '',
+			'pfb_schedule_weekday' => '7',
+			'pfb_schedule_hour' => '0',
+			'pfb_schedule_minute' => '0',
+		], ['ipv4' => [], 'ipv6' => [], 'dnsbl' => []]);
+		$this->assertNotNull($model);
+		$candidate = sys_get_temp_dir() . '/pfb_schedule_candidate_' . uniqid('', TRUE);
+		mkdir($candidate, 0700, TRUE);
+
+		try {
+			$this->assertFalse(pfb_schedule_cache_refresh(
+				$model,
+				['schema' => 1, 'items' => []],
+				time(),
+				new DateTimeZone('UTC'),
+				$candidate,
+				['fail_rename' => TRUE]
+			));
+			$this->assertSame('/pfblockerng/pfblockerng_general.php?schcache=failed',
+				pfb_general_schedule_save_redirect(FALSE));
+			$this->assertSame('/pfblockerng/pfblockerng_general.php',
+				pfb_general_schedule_save_redirect(TRUE));
+		} finally {
+			@unlink($candidate . '/pfb_due_ledger.json');
+			@unlink($candidate . '/pfb_due_ledger.json.lock');
+			@rmdir($candidate);
+		}
+		$this->assertStringContainsString('pfb_general_schedule_save_redirect',
+			php_strip_whitespace(self::GENERAL_PAGE));
+	}
+
 	public function testSaveStagesCandidateWithoutPublishingActiveCache(): void
 	{
 		$source = php_strip_whitespace(self::GENERAL_PAGE);

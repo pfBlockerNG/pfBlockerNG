@@ -299,18 +299,56 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 	public function testColdHourlyPlanMemoizesIdenticalFleetSchedules(): void
 	{
 		$default = ['weekday' => 1, 'hour' => 0, 'minute' => 0];
+		$nextOccurrence = static function (
+			string $cadence,
+			int $weekday,
+			int $hour,
+			int $minute,
+			int $reference,
+			DateTimeZone $timezone,
+			int &$calls
+		): ?int {
+			$calls++;
+			return pfb_schedule_next_occurrence($cadence, $weekday, $hour, $minute, $reference, $timezone);
+		};
+		$one = ['feed_0' => [
+			'cadence' => '01hour', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL,
+		]];
+		$singleCalls = 0;
+		pfb_schedule_plan(
+			$one,
+			$default,
+			NULL,
+			$this->timestamp('2026-01-05 05:07:00'),
+			$this->scheduleTimezone,
+			static function (string $cadence, int $weekday, int $hour, int $minute, int $reference, DateTimeZone $timezone)
+				use (&$singleCalls, $nextOccurrence): ?int {
+				return $nextOccurrence($cadence, $weekday, $hour, $minute, $reference, $timezone, $singleCalls);
+			}
+		);
 		$groups = [];
 		for ($i = 0; $i < 5000; $i++) {
 			$groups["feed_{$i}"] = [
 				'cadence' => '01hour', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL,
 			];
 		}
-		$started = microtime(TRUE);
-		$result = pfb_schedule_plan($groups, $default, NULL, $this->timestamp('2026-01-05 05:07:00'), $this->scheduleTimezone);
+		$fleetCalls = 0;
+		$result = pfb_schedule_plan(
+			$groups,
+			$default,
+			NULL,
+			$this->timestamp('2026-01-05 05:07:00'),
+			$this->scheduleTimezone,
+			static function (string $cadence, int $weekday, int $hour, int $minute, int $reference, DateTimeZone $timezone)
+				use (&$fleetCalls, $nextOccurrence): ?int {
+				return $nextOccurrence($cadence, $weekday, $hour, $minute, $reference, $timezone, $fleetCalls);
+			}
+		);
 
 		$this->assertCount(5000, $result['due']);
-		$this->assertLessThan(1.0, microtime(TRUE) - $started,
-			'A cold-start plan must not enumerate every missed occurrence for every feed.');
+		$this->assertGreaterThan(0, $singleCalls);
+		$this->assertSame($singleCalls, $fleetCalls,
+			'identical schedules must share next/due occurrence resolution');
 	}
 
 	public function testSchedulePlanPreservesFamilyKeysIsIdempotentAndTiesNextWake(): void

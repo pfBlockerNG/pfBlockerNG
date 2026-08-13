@@ -36,9 +36,13 @@ use PHPUnit\Framework\TestCase;
 final class CfgWriteAuthorizationTest extends TestCase
 {
 	private const GEN = 'installedpackages/pfblockerng/config/0';
+	private bool $hadConfig = FALSE;
+	private mixed $originalConfig = NULL;
 
 	protected function setUp(): void
 	{
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
 		$GLOBALS['config'] = [];
 		unset($GLOBALS['pfb_test_allowed_pages']);
 	}
@@ -46,6 +50,11 @@ final class CfgWriteAuthorizationTest extends TestCase
 	protected function tearDown(): void
 	{
 		unset($GLOBALS['pfb_test_allowed_pages']);
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 	}
 
 	// -----------------------------------------------------------------------

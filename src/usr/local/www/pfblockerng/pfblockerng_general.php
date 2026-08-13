@@ -271,12 +271,9 @@ if ($_POST) {
 			}
 			$pfb['save'] = TRUE;
 			sync_package_pfblockerng();
-			if (!$cache_ok) {
-				header('Location: /pfblockerng/pfblockerng_general.php?schcache=failed');
-				exit;
-			}
-
-			header('Location: /pfblockerng/pfblockerng_general.php');
+			header('Location: ' . pfb_general_schedule_save_redirect(
+				$cache_ok, '/pfblockerng/pfblockerng_general.php?schcache=failed'
+			));
 			exit;
 		}
 	}
