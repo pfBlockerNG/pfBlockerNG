@@ -214,6 +214,39 @@ final class CategoryScheduleUiTest extends TestCase
 		$this->assertSame([], $result['values']);
 	}
 
+	public static function hourlyDormantHourMatrix(): array
+	{
+		return [
+			'missing dormant hour preserves stored value' => [NULL, TRUE],
+			'out of range dormant hour rejects direct POST' => ['24', FALSE],
+			'non-numeric dormant hour rejects direct POST' => ['bad', FALSE],
+			'array dormant hour rejects direct POST' => [['24'], FALSE],
+		];
+	}
+
+	#[DataProvider('hourlyDormantHourMatrix')]
+	public function testActiveHourlyDormantHourMissingOrInvalid(mixed $hour, bool $valid): void
+	{
+		$post = ['schedule_override' => 'on', 'schedule_minute' => '45'];
+		if ($hour !== NULL) {
+			$post['schedule_hour'] = $hour;
+		}
+		$result = pfb_category_schedule_validate(
+			$post,
+			$this->stored(),
+			$this->general(),
+			'01hour',
+			'Deny_Inbound',
+			TRUE
+		);
+		if (!$valid) {
+			$this->assertNotEmpty($result['errors']);
+			return;
+		}
+		$this->assertSame([], $result['errors']);
+		$this->assertSame('9', $result['values']['schedule_hour']);
+	}
+
 	public function testCategoryEditorRendersCanonicalControlsForAllFamiliesAndRetiresDow(): void
 	{
 		$source = php_strip_whitespace(self::PAGE);
@@ -359,7 +392,11 @@ final class CategoryScheduleUiTest extends TestCase
 		);
 		$this->assertNotNull($model);
 		$before = glob(sys_get_temp_dir() . '/pfb_sched_*') ?: [];
-		$state = ['schema' => 1, 'items' => ['ipv4:feed_v4' => ['last_completed_occurrence' => PHP_INT_MAX]]];
+		$state = ['schema' => 1, 'items' => ['ipv4:feed_v4' => [
+			'last_completed_occurrence' => PHP_INT_MAX,
+			'completion_outcome' => 'success',
+		]]];
+		$this->assertTrue(pfb_schedule_state_valid($state));
 		$this->assertFalse(pfb_schedule_cache_candidate_validate($model, $state, 'UTC', time()));
 		$this->assertSame($before, glob(sys_get_temp_dir() . '/pfb_sched_*') ?: []);
 	}
