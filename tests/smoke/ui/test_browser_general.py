@@ -267,7 +267,7 @@ def test_quarter_hour_scheduling_controls_and_apply_window(
     minute = page.locator('select[name="pfb_schedule_minute"]')
     expect(weekday).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(weekday.locator("option")).to_have_count(7, timeout=JS_TIMEOUT_MS)
-    expect(weekday.locator("option").first).to_have_value("7", timeout=JS_TIMEOUT_MS)
+    expect(weekday.locator("option").first).to_have_attribute("value", "7", timeout=JS_TIMEOUT_MS)
     expect(hour.locator("option")).to_have_count(24, timeout=JS_TIMEOUT_MS)
     expect(minute.locator("option")).to_have_values(["0", "15", "30", "45"], timeout=JS_TIMEOUT_MS)
 
