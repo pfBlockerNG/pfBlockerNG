@@ -779,14 +779,6 @@ function pfb_cfg_registry(): array
 			'grandfather'   => [PFB_GF_ABSENT => 'on'],
 		],
 
-		// Update interval: numeric hour string | 'Disabled'. Default '1'.
-		'gen/pfb_interval' => [
-			'default'       => '1',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
-
 		// Issue #2308: quarter-hour schedule master switch; migration maps the
 		// retired interval value before registry seeding.
 		'gen/pfb_scheduled_feed_updates' => [
@@ -812,30 +804,6 @@ function pfb_cfg_registry(): array
 			'read_adapter'   => NULL,
 			'write_adapter'  => NULL,
 			'no_grandfather' => '#2308 upgrade migration maps legacy schedule controls',
-		],
-
-		// Cron start minute ('0'|'15'|'30'|'45'). Default '0'.
-		'gen/pfb_min' => [
-			'default'       => '0',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
-
-		// Cron start hour (0-23 as string). Default '0'.
-		'gen/pfb_hour' => [
-			'default'       => '0',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
-		],
-
-		// Once-a-day start hour (0-23 as string). Default '0'.
-		'gen/pfb_dailystart' => [
-			'default'       => '0',
-			'read_adapter'  => NULL,
-			'write_adapter' => NULL,
-			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
 		// Max daily download failure threshold ('0' = unlimited). Fresh default '3'.
@@ -2584,6 +2552,9 @@ function pfb_schedule_migrate(array $sections, ?callable $entropy = NULL): ?arra
 	$gen = $sections[$gen_path] ?? [];
 	$gen = is_array($gen) ? $gen : [];
 	$is_fresh = empty(pfb_gconfig_operator_view($gen));
+	$has_canonical_schedule = array_key_exists('pfb_schedule_weekday', $gen)
+		|| array_key_exists('pfb_schedule_hour', $gen)
+		|| array_key_exists('pfb_schedule_minute', $gen);
 	$changed = FALSE;
 	$notice_keys = [];
 
@@ -2606,35 +2577,67 @@ function pfb_schedule_migrate(array $sections, ?callable $entropy = NULL): ?arra
 		$gen['pfb_schedule_weekday'] = '7';
 		$changed = TRUE;
 	}
+	if (pfb_schedule_numeric_token($gen['pfb_schedule_weekday'] ?? NULL, 1, 7) === NULL) {
+		$gen['pfb_schedule_weekday'] = '7';
+		$notice_keys[] = 'pfb_schedule_weekday';
+		$changed = TRUE;
+	}
 
 	if (!array_key_exists('pfb_schedule_hour', $gen) || !array_key_exists('pfb_schedule_minute', $gen)) {
-		$legacy_hour = pfb_schedule_numeric_token($gen['pfb_dailystart'] ?? NULL, 0, 23);
-		$legacy_minute = pfb_schedule_minute_token($gen['pfb_min'] ?? NULL);
-		if (!$is_fresh && ($legacy_hour === NULL || $legacy_minute === NULL)
-			&& (array_key_exists('pfb_dailystart', $gen) || array_key_exists('pfb_min', $gen))) {
-			$notice_keys[] = 'pfb_dailystart';
-			$notice_keys[] = 'pfb_min';
-		}
-		if ($is_fresh || $legacy_hour === NULL || $legacy_minute === NULL) {
-			[$hour, $minute] = pfb_schedule_slot_seed($entropy);
-			$legacy_hour = (string) $hour;
-			$legacy_minute = (string) $minute;
+		$legacy_hour = '0';
+		$legacy_minute = '0';
+		if (!$has_canonical_schedule) {
+			$legacy_hour = pfb_schedule_numeric_token($gen['pfb_dailystart'] ?? NULL, 0, 23);
+			$legacy_minute = pfb_schedule_minute_token($gen['pfb_min'] ?? NULL);
+			if (!$is_fresh && ($legacy_hour === NULL || $legacy_minute === NULL)
+				&& (array_key_exists('pfb_dailystart', $gen) || array_key_exists('pfb_min', $gen))) {
+				$notice_keys[] = 'pfb_dailystart';
+				$notice_keys[] = 'pfb_min';
+			}
+			if ($is_fresh || $legacy_hour === NULL || $legacy_minute === NULL) {
+				[$hour, $minute] = pfb_schedule_slot_seed($entropy);
+				$legacy_hour = (string) $hour;
+				$legacy_minute = (string) $minute;
+			}
 		}
 		if (!array_key_exists('pfb_schedule_hour', $gen)) {
 			$gen['pfb_schedule_hour'] = $legacy_hour;
+			if ($has_canonical_schedule) {
+				$notice_keys[] = 'pfb_schedule_hour';
+			}
 			$changed = TRUE;
 		}
 		if (!array_key_exists('pfb_schedule_minute', $gen)) {
 			$gen['pfb_schedule_minute'] = $legacy_minute;
+			if ($has_canonical_schedule) {
+				$notice_keys[] = 'pfb_schedule_minute';
+			}
 			$changed = TRUE;
 		}
+	}
+	if (pfb_schedule_numeric_token($gen['pfb_schedule_hour'] ?? NULL, 0, 23) === NULL) {
+		$gen['pfb_schedule_hour'] = '0';
+		$notice_keys[] = 'pfb_schedule_hour';
+		$changed = TRUE;
+	}
+	if (pfb_schedule_minute_token($gen['pfb_schedule_minute'] ?? NULL) === NULL) {
+		$gen['pfb_schedule_minute'] = '0';
+		$notice_keys[] = 'pfb_schedule_minute';
+		$changed = TRUE;
 	}
 
 	if (!array_key_exists('skipfeed', $gen)) {
 		$gen['skipfeed'] = $is_fresh ? '3' : '0';
 		$changed = TRUE;
 	}
+	foreach (['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'] as $legacy_key) {
+		if (array_key_exists($legacy_key, $gen)) {
+			unset($gen[$legacy_key]);
+			$changed = TRUE;
+		}
+	}
 	$sections[$gen_path] = $gen;
+	$general_weekday = (string) ($gen['pfb_schedule_weekday'] ?? '7');
 	$general_hour = (string) ($gen['pfb_schedule_hour'] ?? '0');
 	$general_minute = (string) ($gen['pfb_schedule_minute'] ?? '0');
 
@@ -2647,36 +2650,61 @@ function pfb_schedule_migrate(array $sections, ?callable $entropy = NULL): ?arra
 			if (!is_array($group)) {
 				continue;
 			}
-			if (array_key_exists('schedule_override', $group)
+			$canonical = array_key_exists('schedule_override', $group)
 				&& array_key_exists('schedule_weekday', $group)
 				&& array_key_exists('schedule_hour', $group)
-				&& array_key_exists('schedule_minute', $group)) {
-				continue;
-			}
-			$action = $group['action'] ?? NULL;
-			$valid_action = pfb_group_action_valid($action, $family);
-			$active = $valid_action && $action !== 'Disabled'
-				&& (($group['cron'] ?? NULL) !== 'Never')
-				&& pfb_schedule_group_active_rows($group['row'] ?? NULL);
-			$dow = pfb_schedule_numeric_token($group['dow'] ?? NULL, 1, 7);
+				&& array_key_exists('schedule_minute', $group);
 			$weekly = (($group['cron'] ?? NULL) === 'Weekly');
-			if ($active && $weekly && $dow === NULL) {
-				$notice_keys[] = 'dow';
+			if (!$canonical) {
+				$action = $group['action'] ?? NULL;
+				$valid_action = pfb_group_action_valid($action, $family);
+				$active = $valid_action && $action !== 'Disabled'
+					&& (($group['cron'] ?? NULL) !== 'Never')
+					&& pfb_schedule_group_active_rows($group['row'] ?? NULL);
+				$dow = pfb_schedule_numeric_token($group['dow'] ?? NULL, 1, 7);
+				if ($active && $weekly && $dow === NULL) {
+					$notice_keys[] = 'dow';
+				}
+				if (!array_key_exists('schedule_override', $group)) {
+					$group['schedule_override'] = ($active && $weekly && $dow !== NULL) ? 'on' : '';
+				}
+				if (!array_key_exists('schedule_weekday', $group)) {
+					$group['schedule_weekday'] = $dow ?? '7';
+				}
+				if (!array_key_exists('schedule_hour', $group)) {
+					$group['schedule_hour'] = $general_hour;
+				}
+				if (!array_key_exists('schedule_minute', $group)) {
+					$group['schedule_minute'] = $general_minute;
+				}
+				$changed = TRUE;
 			}
-			if (!array_key_exists('schedule_override', $group)) {
-				$group['schedule_override'] = ($active && $weekly && $dow !== NULL) ? 'on' : '';
+			$fallbacks = [
+				'schedule_weekday' => pfb_schedule_numeric_token($group['schedule_weekday'] ?? NULL, 1, 7) === NULL
+					? ($weekly ? '7' : $general_weekday) : NULL,
+				'schedule_hour' => pfb_schedule_numeric_token($group['schedule_hour'] ?? NULL, 0, 23) === NULL
+					? $general_hour : NULL,
+				'schedule_minute' => pfb_schedule_minute_token($group['schedule_minute'] ?? NULL) === NULL
+					? $general_minute : NULL,
+			];
+			if (!is_string($group['schedule_override'] ?? NULL)
+				|| !in_array($group['schedule_override'], ['on', ''], TRUE)) {
+				$group['schedule_override'] = '';
+				$notice_keys[] = 'schedule_override';
+				$changed = TRUE;
 			}
-			if (!array_key_exists('schedule_weekday', $group)) {
-				$group['schedule_weekday'] = $dow ?? '7';
+			foreach ($fallbacks as $key => $fallback) {
+				if ($fallback !== NULL) {
+					$group[$key] = $fallback;
+					$notice_keys[] = $key;
+					$changed = TRUE;
+				}
 			}
-			if (!array_key_exists('schedule_hour', $group)) {
-				$group['schedule_hour'] = $general_hour;
-			}
-			if (!array_key_exists('schedule_minute', $group)) {
-				$group['schedule_minute'] = $general_minute;
+			if (array_key_exists('dow', $group)) {
+				unset($group['dow']);
+				$changed = TRUE;
 			}
 			$groups[$index] = $group;
-			$changed = TRUE;
 		}
 		$sections[$path] = $groups;
 	}
@@ -3768,7 +3796,14 @@ function pfb_schedule_next_occurrence(
 	$interval = max(1, $valid_cadences[$cadence]);
 	$limit = $reference + (15 * 86400);
 	$candidate = $reference + 1;
-	while ($candidate <= $limit) {
+	$local = (new DateTimeImmutable('@' . $candidate))->setTimezone($timezone);
+	$seconds_into_quarter = (((int) $local->format('i') % 15) * 60) + (int) $local->format('s');
+	if ($seconds_into_quarter !== 0) {
+		$candidate += 900 - $seconds_into_quarter;
+	}
+	// Historical timezone offsets can include seconds. Keep a bounded fallback for them.
+	$alignment_limit = min($limit, $candidate + 900);
+	while ($candidate <= $alignment_limit) {
 		$local = (new DateTimeImmutable('@' . $candidate))->setTimezone($timezone);
 		$parts = explode('/', $local->format('N/G/i/s'));
 		if ($parts[3] === '00' && ((int) $parts[2] % 15) === 0) {
@@ -3888,6 +3923,8 @@ function pfb_schedule_plan(
 	$due = [];
 	$occurrences = [];
 	$next_due = NULL;
+	$next_cache = [];
+	$due_cache = [];
 	foreach ($groups as $key => $group) {
 		if (!is_string($key) || $key === ''
 			|| !is_array($group)
@@ -3913,14 +3950,20 @@ function pfb_schedule_plan(
 			$validate_schedule($group['override']);
 		}
 		$effective = $group['override'] ?? $default_schedule;
-		$occurrence = pfb_schedule_next_occurrence(
-			$group['cadence'],
-			$effective['weekday'],
-			$effective['hour'],
-			$effective['minute'],
-			$now,
-			$timezone
-		);
+		$schedule_key = implode(':', [
+			$group['cadence'], $effective['weekday'], $effective['hour'], $effective['minute'],
+		]);
+		if (!array_key_exists($schedule_key, $next_cache)) {
+			$next_cache[$schedule_key] = pfb_schedule_next_occurrence(
+				$group['cadence'],
+				$effective['weekday'],
+				$effective['hour'],
+				$effective['minute'],
+				$now,
+				$timezone
+			);
+		}
+		$occurrence = $next_cache[$schedule_key];
 		$eligible = $group['enabled'] && $group['has_active_rows'] && $group['cadence'] !== 'Never';
 		if (!$eligible) {
 			continue;
@@ -3928,7 +3971,11 @@ function pfb_schedule_plan(
 		$cursor = array_key_exists('last_completed_occurrence', $group)
 			? $group['last_completed_occurrence']
 			: $since;
-		$latest_due = $due_occurrence($group['cadence'], $effective, $cursor, $now, $timezone);
+		$due_key = $schedule_key . ':' . ($cursor === NULL ? 'none' : $cursor);
+		if (!array_key_exists($due_key, $due_cache)) {
+			$due_cache[$due_key] = $due_occurrence($group['cadence'], $effective, $cursor, $now, $timezone);
+		}
+		$latest_due = $due_cache[$due_key];
 		if ($latest_due !== NULL) {
 			$due[] = $key;
 			$occurrences[$key] = $latest_due;
@@ -4051,11 +4098,7 @@ function pfb_due_ledger_read_entry(string $job_key, string $ledger_dir, float $t
 	if (!is_array($entry)) {
 		return NULL;	// key absent
 	}
-	// Validate structure: all three integer fields must be present.
-	if (!isset($entry['last_run'], $entry['next_due'], $entry['jitter'])
-		|| !is_int($entry['last_run'])
-		|| !is_int($entry['next_due'])
-		|| !is_int($entry['jitter'])) {
+	if (!pfb_due_ledger_entry_valid($entry)) {
 		return NULL;	// malformed entry — fail-safe
 	}
 	return $entry;
@@ -4325,16 +4368,20 @@ function pfb_schedule_state_valid(mixed $state): bool
 		if (!is_string($id) || $id === '' || is_numeric($id) || !is_array($item) || $item === '') {
 			return FALSE;
 		}
-		$allowed = ['last_successful_check', 'last_completed_occurrence', 'completion_outcome', 'pending_occurrence', 'pending_dispatch_at'];
+		$allowed = [
+			'last_successful_check', 'last_completed_occurrence', 'completion_outcome',
+			'pending_occurrence', 'pending_attempted',
+		];
 		if (count(array_diff(array_keys($item), $allowed)) !== 0 || count($item) === 0) {
 			return FALSE;
 		}
-		foreach (['last_successful_check', 'last_completed_occurrence', 'pending_occurrence', 'pending_dispatch_at'] as $field) {
+		foreach (['last_successful_check', 'last_completed_occurrence', 'pending_occurrence'] as $field) {
 			if (array_key_exists($field, $item) && (!is_int($item[$field]) || $item[$field] < 0)) {
 				return FALSE;
 			}
 		}
-		if (array_key_exists('pending_dispatch_at', $item) && !array_key_exists('pending_occurrence', $item)) {
+		if (array_key_exists('pending_attempted', $item)
+			&& ($item['pending_attempted'] !== TRUE || !array_key_exists('pending_occurrence', $item))) {
 			return FALSE;
 		}
 		$has_occurrence = array_key_exists('last_completed_occurrence', $item);
@@ -4403,7 +4450,7 @@ function pfb_schedule_runtime_hash_projection(array $model): array
 }
 
 /** Build the strict, secret-free schedule image consumed by the tick planner. */
-function pfb_schedule_runtime_model(array $general, array $sections): ?array
+function pfb_schedule_runtime_model(array $general, array $sections, array $extras = []): ?array
 {
 	$token = static function (mixed $value, int $min, int $max): ?int {
 		if (!is_string($value) || !preg_match('/^(?:0|[1-9][0-9]*)$/D', $value)) {
@@ -4460,6 +4507,9 @@ function pfb_schedule_runtime_model(array $general, array $sections): ?array
 			if (!is_string($group['action'])) {
 				return NULL;
 			}
+			if (array_key_exists('srcint', $group) && !is_string($group['srcint'])) {
+				return NULL;
+			}
 			$override_token = $group['schedule_override'] ?? '';
 			if (!is_string($override_token) || !in_array($override_token, ['on', ''], TRUE)) {
 				return NULL;
@@ -4477,6 +4527,9 @@ function pfb_schedule_runtime_model(array $general, array $sections): ?array
 				&& $group['cron'] !== 'Never';
 			foreach ($group['row'] as $row) {
 				if (!is_array($row)) {
+					return NULL;
+				}
+				if (array_key_exists('format', $row) && !is_string($row['format'])) {
 					return NULL;
 				}
 				if (array_key_exists('url', $row) && !is_string($row['url'])) {
@@ -4517,6 +4570,36 @@ function pfb_schedule_runtime_model(array $general, array $sections): ?array
 			}
 		}
 	}
+	if ($extras !== []) {
+		if (!array_key_exists('dcc', $extras) || !is_bool($extras['dcc'])) {
+			return NULL;
+		}
+		$entries['extra:dcc'] = [
+			'cadence' => 'EveryDay',
+			'enabled' => $extras['dcc'],
+			'has_active_rows' => TRUE,
+			'override' => NULL,
+		];
+		$bl = $extras['bl'] ?? NULL;
+		if (!is_array($bl)
+			|| !is_bool($bl['enabled'] ?? NULL)
+			|| !is_string($bl['cadence'] ?? NULL)
+			|| !in_array($bl['cadence'], ['EveryDay', 'Weekly'], TRUE)) {
+			return NULL;
+		}
+		$entries['extra:bl'] = [
+			'cadence' => $bl['cadence'],
+			'enabled' => $bl['enabled'],
+			'has_active_rows' => TRUE,
+			'override' => NULL,
+		];
+		$hash_projection['entries']['extra:dcc'] = [
+			'cadence' => 'EveryDay', 'enabled' => $extras['dcc'], 'override' => NULL,
+		];
+		$hash_projection['entries']['extra:bl'] = [
+			'cadence' => $bl['cadence'], 'enabled' => $bl['enabled'], 'override' => NULL,
+		];
+	}
 	ksort($hash_projection['entries'], SORT_STRING);
 	$encoded = json_encode($hash_projection, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
 	return [
@@ -4545,7 +4628,50 @@ function pfb_schedule_runtime_config(): ?array
 		'ipv6'  => PfbConfig::readSection('installedpackages/pfblockernglistsv6/config'),
 		'dnsbl' => PfbConfig::readSection('installedpackages/pfblockerngdnsbl/config'),
 	];
-	return pfb_schedule_runtime_model($general, $sections);
+	$blacklist = PfbConfig::readSection('installedpackages/pfblockerngblacklist');
+	$blacklist_frequency = $blacklist['blacklist_freq'] ?? 'Never';
+	$blacklist_selected = $blacklist['blacklist_selected'] ?? '';
+	if (!is_string($blacklist_selected)
+		|| ($blacklist_selected !== ''
+			&& pfb_filter($blacklist_selected, PFB_FILTER_CSV, 'Schedule blacklist selection') !== $blacklist_selected)) {
+		return NULL;
+	}
+	$selected = array_flip(explode(',', $blacklist_selected));
+	if (is_array($blacklist['item'] ?? NULL)) {
+		foreach ($blacklist['item'] as $item) {
+			$xml = $item['xml'] ?? NULL;
+			if (!is_array($item)
+				|| !is_string($xml) || $xml === '' || str_contains($xml, ',')
+				|| pfb_filter($xml, PFB_FILTER_CSV, 'Schedule blacklist identity') !== $xml
+				|| !is_string($item['title'] ?? NULL)
+				|| !is_string($item['feed'] ?? NULL)) {
+				return NULL;
+			}
+		}
+	}
+	$bl_enabled = !empty($blacklist['blacklist_enable'])
+		&& $blacklist['blacklist_enable'] !== 'Disable'
+		&& is_array($blacklist['item'] ?? NULL);
+	if ($bl_enabled) {
+		$bl_enabled = FALSE;
+		foreach ($blacklist['item'] as $item) {
+			if (isset($selected[$item['xml']]) && !empty($item['selected'])
+				&& $item['title'] !== 'Shallalist' && $item['feed'] !== '') {
+				$bl_enabled = TRUE;
+				break;
+			}
+		}
+	}
+	if (!in_array($blacklist_frequency, ['EveryDay', 'Weekly'], TRUE)) {
+		$bl_enabled = FALSE;
+	}
+	return pfb_schedule_runtime_model($general, $sections, [
+		'dcc' => TRUE,
+		'bl' => [
+			'enabled' => $bl_enabled,
+			'cadence' => $blacklist_frequency === 'Weekly' ? 'Weekly' : 'EveryDay',
+		],
+	]);
 }
 
 function pfb_schedule_state_update(
@@ -4637,6 +4763,9 @@ function pfb_schedule_feed_selected(string $family, string $header): bool
 	if (empty($pfb['scheduled_runtime_cron'])) {
 		return TRUE;
 	}
+	if (in_array($header, ['DNSBLIP_v4', 'DNSBLIP_v6'], TRUE)) {
+		return TRUE;
+	}
 	$id = pfb_schedule_feed_id($family, $header);
 	return $id !== NULL && isset($pfb['scheduled_selected_ids'][$id]);
 }
@@ -4647,15 +4776,20 @@ function pfb_schedule_state_record_outcome(
 	PfbScheduleTerminalResult $outcome,
 	string $ledger_dir,
 	?int $now = NULL,
-	array $io = []
+	array $io = [],
+	?int $expected_occurrence = NULL
 ): bool {
-	if (!preg_match('/^(?:ipv4:[A-Za-z0-9_]+_v4|ipv6:[A-Za-z0-9_]+_v6|dnsbl:[A-Za-z0-9_]+)$/D', $id)) {
+	if (!preg_match('/^(?:ipv4:[A-Za-z0-9_]+_v4|ipv6:[A-Za-z0-9_]+_v6|dnsbl:[A-Za-z0-9_]+|extra:(?:dcc|bl))$/D', $id)) {
 		return FALSE;
 	}
 	$now ??= time();
 	$ok = pfb_schedule_state_update(
-		static function (array $state) use ($id, $outcome, $now): array {
+		static function (array $state) use ($id, $outcome, $now, $expected_occurrence): array {
 			$item = $state['items'][$id] ?? [];
+			if ($expected_occurrence !== NULL
+				&& (($item['pending_occurrence'] ?? NULL) !== $expected_occurrence)) {
+				return $state;
+			}
 			if ($outcome === PfbScheduleTerminalResult::RetryCapReached
 			    && !array_key_exists('pending_occurrence', $item)) {
 				return $state;
@@ -4666,7 +4800,7 @@ function pfb_schedule_state_record_outcome(
 			if (array_key_exists('pending_occurrence', $item)) {
 				$item['last_completed_occurrence'] = $item['pending_occurrence'];
 				$item['completion_outcome'] = $outcome->value;
-				unset($item['pending_occurrence'], $item['pending_dispatch_at']);
+				unset($item['pending_occurrence'], $item['pending_attempted']);
 			}
 			$state['items'][$id] = $item;
 			return $state;
@@ -4699,7 +4833,8 @@ function pfb_schedule_runtime_model_valid(mixed $model): bool
 	foreach ($model['entries'] as $id => $entry) {
 		$valid_id = preg_match('/^ipv4:[A-Za-z0-9_]+_v4$/D', (string) $id)
 			|| preg_match('/^ipv6:[A-Za-z0-9_]+_v6$/D', (string) $id)
-			|| preg_match('/^dnsbl:[A-Za-z0-9_]+$/D', (string) $id);
+			|| preg_match('/^dnsbl:[A-Za-z0-9_]+$/D', (string) $id)
+			|| preg_match('/^extra:(?:dcc|bl)$/D', (string) $id);
 		if (!is_string($id) || !$valid_id || !is_array($entry)
 			|| count(array_diff(array_keys($entry), ['cadence', 'enabled', 'has_active_rows', 'override'])) !== 0
 			|| count(array_diff(['cadence', 'enabled', 'has_active_rows', 'override'], array_keys($entry))) !== 0
@@ -4736,18 +4871,82 @@ function pfb_schedule_cache_refresh(
 	if (!pfb_schedule_runtime_model_valid($model) || !pfb_schedule_state_valid($state)) {
 		return FALSE;
 	}
-	$groups = $model['entries'];
+	$groups = array_filter(
+		$model['entries'],
+		static fn (mixed $_entry, string $id): bool => !str_starts_with($id, 'extra:'),
+		ARRAY_FILTER_USE_BOTH
+	);
 	foreach ($groups as $id => &$entry) {
 		$item = $state['items'][$id] ?? NULL;
 		if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
 			$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
 		}
+		if (is_array($item) && ($item['pending_attempted'] ?? FALSE) === TRUE
+			&& is_int($item['pending_occurrence'] ?? NULL)
+			&& (!array_key_exists('last_completed_occurrence', $entry)
+				|| $item['pending_occurrence'] > $entry['last_completed_occurrence'])) {
+			$entry['last_completed_occurrence'] = $item['pending_occurrence'];
+		}
 	}
 	unset($entry);
 	$plan = pfb_schedule_plan($groups, $model['default'], NULL, $now, $timezone);
+	$extra_groups = array_filter(
+		$model['entries'],
+		static fn (mixed $_entry, string $id): bool => str_starts_with($id, 'extra:'),
+		ARRAY_FILTER_USE_BOTH
+	);
+	foreach ($extra_groups as $id => &$entry) {
+		$item = $state['items'][$id] ?? NULL;
+		if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
+			$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
+		}
+		if (is_array($item) && is_int($item['pending_occurrence'] ?? NULL)
+			&& (!array_key_exists('last_completed_occurrence', $entry)
+				|| $item['pending_occurrence'] > $entry['last_completed_occurrence'])) {
+			$entry['last_completed_occurrence'] = $item['pending_occurrence'];
+		}
+	}
+	unset($entry);
+	$extra_plan = pfb_schedule_plan($extra_groups, $model['default'], NULL, $now, $timezone);
+	$extra_due = array_fill_keys($extra_plan['due'], TRUE);
+	$extra_entries = [];
+	foreach ($extra_groups as $id => $entry) {
+		if (!$entry['enabled']) {
+			continue;
+		}
+		$item = $state['items'][$id] ?? [];
+		$pending_attempted = ($item['pending_attempted'] ?? FALSE) === TRUE;
+		$reference = $pending_attempted && is_int($item['pending_occurrence'] ?? NULL)
+			? max($now, $item['pending_occurrence']) : $now;
+		$next_due = is_int($item['pending_occurrence'] ?? NULL) && !$pending_attempted
+			? $now
+			: (isset($extra_due[$id])
+			? $now
+			: pfb_schedule_next_occurrence(
+				$entry['cadence'],
+				$model['default']['weekday'],
+				$model['default']['hour'],
+				$model['default']['minute'],
+				$reference,
+				$timezone
+			));
+		if ($next_due !== NULL) {
+			$last_run = $item['last_successful_check'] ?? $item['last_completed_occurrence'] ?? 0;
+			$extra_entries[$id] = ['last_run' => $last_run, 'next_due' => $next_due, 'jitter' => 0];
+		}
+	}
+	$cron_last_run = 0;
+	foreach ($groups as $id => $entry) {
+		if (!$entry['enabled']) {
+			continue;
+		}
+		$item = $state['items'][$id] ?? [];
+		$cron_last_run = max($cron_last_run, $item['last_successful_check'] ?? $item['last_completed_occurrence'] ?? 0);
+	}
 	$pending = FALSE;
-	foreach ($model['entries'] as $id => $_entry) {
-		if (array_key_exists($id, $state['items']) && array_key_exists('pending_occurrence', $state['items'][$id])) {
+	foreach ($groups as $id => $entry) {
+		if ($entry['enabled'] && array_key_exists($id, $state['items'])
+			&& array_key_exists('pending_occurrence', $state['items'][$id])) {
 			$pending = TRUE;
 			break;
 		}
@@ -4755,7 +4954,8 @@ function pfb_schedule_cache_refresh(
 	$due = $pending || $plan['due'] !== [];
 	$next_due = $due ? $now : $plan['next_due'];
 	$path = $ledger_dir . '/pfb_due_ledger.json';
-	$document = static function () use ($path, $next_due, $now, $model): array {
+	$has_extras = array_key_exists('extra:dcc', $model['entries']) || array_key_exists('extra:bl', $model['entries']);
+	$document = static function () use ($path, $next_due, $cron_last_run, $model, $extra_entries, $has_extras): array {
 		$existing = [];
 		$pending_apply = FALSE;
 		$pending_entry = NULL;
@@ -4767,16 +4967,23 @@ function pfb_schedule_cache_refresh(
 					&& (($decoded['cron']['pending_apply'] ?? FALSE) === TRUE);
 				$pending_entry = $pending_apply ? $decoded['cron'] : NULL;
 				foreach ($decoded as $key => $value) {
-					if ($key !== '_meta' && $key !== 'cron') {
+					if ($key !== '_meta' && $key !== 'cron'
+						&& (!$has_extras || !in_array($key, ['dcc', 'bl'], TRUE))) {
 						$existing[$key] = $value;
 					}
 				}
 			}
 		}
-		if ($pending_entry !== NULL) {
+		foreach ($extra_entries as $key => $value) {
+			$existing[$key] = $value;
+		}
+		if ($model['scheduled'] && $next_due !== NULL) {
+			$existing['cron'] = ['last_run' => $cron_last_run, 'next_due' => $next_due, 'jitter' => 0];
+			if ($pending_apply) {
+				$existing['cron']['pending_apply'] = TRUE;
+			}
+		} elseif ($pending_entry !== NULL) {
 			$existing['cron'] = $pending_entry;
-		} elseif ($next_due !== NULL) {
-			$existing['cron'] = ['last_run' => $now, 'next_due' => $next_due, 'jitter' => 0];
 		}
 		return ['_meta' => ['schema' => 1, 'config_hash' => $model['config_hash']]] + $existing;
 	};
@@ -4787,6 +4994,102 @@ function pfb_schedule_cache_refresh(
 		$io,
 		$timeout_s
 	);
+}
+
+/** Regenerate the disposable schedule cache without starting update work. */
+function pfb_schedule_cache_refresh_locked(): bool
+{
+	global $pfb;
+	try {
+		$state_dir = (string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+		$model = pfb_schedule_runtime_config();
+		$state = pfb_schedule_state_read($state_dir);
+		$timezone = new DateTimeZone(date_default_timezone_get());
+		return $model !== NULL && $state !== NULL
+			&& pfb_schedule_cache_refresh($model, $state, time(), $timezone, $pfb['dbdir']);
+	} catch (Throwable) {
+		return FALSE;
+	}
+}
+
+/** Acquire the scheduler dispatcher lock, reusing this process's existing hold. */
+function pfb_schedule_dispatch_begin(float $timeout_s = 0.1): bool
+{
+	global $pfb;
+	if (isset($GLOBALS['pfb_schedule_dispatch_lock'])
+		&& is_resource($GLOBALS['pfb_schedule_dispatch_lock'])) {
+		return TRUE;
+	}
+	$state_dir = (string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+	$lock = @fopen($state_dir . '/pfb_schedule_dispatch.lock', 'c');
+	if (!is_resource($lock) || !pfb_flock_bounded($lock, LOCK_EX, $timeout_s)) {
+		if (is_resource($lock)) {
+			@fclose($lock);
+		}
+		return FALSE;
+	}
+	$GLOBALS['pfb_schedule_dispatch_lock'] = $lock;
+	if (empty($GLOBALS['pfb_schedule_dispatch_shutdown_registered'])) {
+		register_shutdown_function('pfb_schedule_dispatch_release');
+		$GLOBALS['pfb_schedule_dispatch_shutdown_registered'] = TRUE;
+	}
+	return TRUE;
+}
+
+/** Release this process's scheduler dispatcher lock. */
+function pfb_schedule_dispatch_release(): void
+{
+	if (!isset($GLOBALS['pfb_schedule_dispatch_lock'])
+		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock'])) {
+		return;
+	}
+	@flock($GLOBALS['pfb_schedule_dispatch_lock'], LOCK_UN);
+	@fclose($GLOBALS['pfb_schedule_dispatch_lock']);
+	unset($GLOBALS['pfb_schedule_dispatch_lock']);
+}
+
+/** Regenerate the disposable schedule cache without starting update work. */
+function pfb_schedule_cache_regenerate(): bool
+{
+	global $pfb;
+	$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
+		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
+	if (!pfb_schedule_dispatch_begin()) {
+		return FALSE;
+	}
+	$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
+		|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
+	if (!pfb_feed_pass_begin('schedule-cache')) {
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		return FALSE;
+	}
+	try {
+		return pfb_schedule_cache_refresh_locked();
+	} catch (Throwable) {
+		return FALSE;
+	} finally {
+		if ($feed_pass_owner) {
+			pfb_feed_pass_release();
+		}
+		if ($dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+	}
+}
+
+/** Hold scheduler and feed locks through a standalone Extras process. */
+function pfb_extras_process_begin(): bool
+{
+	if (!pfb_schedule_dispatch_begin()) {
+		return FALSE;
+	}
+	if (!pfb_feed_pass_begin('extras')) {
+		pfb_schedule_dispatch_release();
+		return FALSE;
+	}
+	return TRUE;
 }
 
 /**
@@ -4977,16 +5280,16 @@ function pfb_tick_seed(): string
 /**
  * pfb_tick_due_jobs — which scheduled jobs are due this tick?
  *
- * Delegates to the due-ledger API for each job. The $now, $seed, and
- * $dbdir are injectable so PHPUnit can verify cadence without filesystem or
- * wall-clock dependencies. SafeSearch and apply reconciliation have their own zero-jitter 900-second entries.
+ * Delegates to the due-ledger API for feed cron, SafeSearch, and apply reconciliation.
+ * The $now, $seed, and $dbdir are injectable so PHPUnit can verify cadence without
+ * filesystem or wall-clock dependencies; all three entries use zero jitter.
  *
  * @param int    $now            Current epoch timestamp.
  * @param string $seed           Per-install seed for seeded_jitter.
  * @param string $dbdir          Ledger directory (live = $pfb['dbdir']).
  * @param int    $cron_interval  Feed cron interval in seconds.
- * @param int    $bl_interval    Blacklist interval in seconds (86400 or 604800).
- * @return array<string,bool>    Map: job_key => TRUE when due.
+ * @param int    $bl_interval    Retained for caller compatibility; calendar BL ignores it.
+ * @return array<string,bool>    Map of feed/apply job keys to due flags.
  */
 function pfb_tick_due_jobs(
 	int    $now,
@@ -4995,16 +5298,71 @@ function pfb_tick_due_jobs(
 	int    $cron_interval,
 	int    $bl_interval
 ): array {
-	$jitter_max = 23 * 3600;	// 82800 s mirrors the old rand(0,23)*3600 spread
 	$ss_refresh_due = pfb_due_ledger_is_due('ss_refresh', 900, $now, $seed, 0, $dbdir);
 
 	return [
 		'cron'       => pfb_due_ledger_is_due('cron',       $cron_interval, $now, $seed, 0,          $dbdir),
-		'dcc'        => pfb_due_ledger_is_due('dcc',        86400,          $now, $seed, $jitter_max, $dbdir),
-		'bl'         => pfb_due_ledger_is_due('bl',         $bl_interval,   $now, $seed, $jitter_max, $dbdir),
 		'ss_refresh' => $ss_refresh_due,
 		'apply_reconcile' => pfb_due_ledger_is_due('apply_reconcile', 900, $now, $seed, 0, $dbdir),
 	];
+}
+
+/** Return due synthetic Extras entries, advancing only at scheduled occurrences. */
+function pfb_schedule_extra_plan(array $model, array $state, int $now, DateTimeZone $timezone, ?array $cache = NULL): array
+{
+	$groups = array_filter(
+		$model['entries'],
+		static fn (mixed $_entry, string $id): bool => str_starts_with($id, 'extra:'),
+		ARRAY_FILTER_USE_BOTH
+	);
+	foreach ($groups as $id => &$entry) {
+		$item = $state['items'][$id] ?? NULL;
+		if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
+			$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
+		}
+	}
+	unset($entry);
+	$plan = pfb_schedule_plan($groups, $model['default'], NULL, $now, $timezone);
+	$due = [];
+	if ($cache !== NULL) {
+		$planner_due = array_fill_keys($plan['due'], TRUE);
+		foreach ($groups as $id => $_entry) {
+			$item = $state['items'][$id] ?? [];
+			$unattempted = is_int($item['pending_occurrence'] ?? NULL)
+				&& ($item['pending_attempted'] ?? FALSE) !== TRUE;
+			if (($unattempted || isset($planner_due[$id]))
+				&& is_array($cache[$id] ?? NULL)
+				&& ($cache[$id]['next_due'] ?? PHP_INT_MAX) <= $now) {
+				$due[$id] = TRUE;
+			}
+		}
+	} else {
+		$due = array_fill_keys($plan['due'], TRUE);
+	}
+	if (($groups['extra:dcc']['enabled'] ?? FALSE) && !pfb_geoip_generation_ready()) {
+		$due['extra:dcc'] = TRUE;
+	}
+	return ['due' => array_keys($due), 'occurrences' => $plan['occurrences']];
+}
+
+/** Foreground production runner used while the dispatch lock is held. */
+function pfb_schedule_extra_run(string $job, string $argument = '', bool &$changed = FALSE): bool
+{
+	global $pfb;
+	$command = "{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php {$job}";
+	if ($job === 'dcc') {
+		$command .= ' scheduled';
+	} elseif ($job === 'bl') {
+		$command .= ' scheduled';
+	}
+	if ($argument !== '') {
+		$command .= ' ' . escapeshellarg($argument);
+	}
+	$command .= " >> {$pfb['extraslog']} 2>&1";
+	$status = 1;
+	exec($command, $output, $status);
+	$changed = $status === 2 || $status === 3;
+	return $status === 0 || $status === 2;
 }
 
 // ---------------------------------------------------------------------------
@@ -5065,11 +5423,11 @@ function pfb_quiet_hours_in_window(int $now, string $window): bool
  * @param string $ledger_dir Directory that contains pfb_due_ledger.json.
  * @param float  $timeout_s  Bounded lock-acquire budget in seconds (issue #1780; injectable for tests).
  * @param array  $io         Test-only publication controls.
- * @return void
+ * @return bool              TRUE only when the durable marker was published.
  */
-function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0, array $io = []): void
+function pfb_due_ledger_set_pending(string $job_key, string $ledger_dir, float $timeout_s = 5.0, array $io = []): bool
 {
-	pfb_due_ledger_update_entry(
+	return pfb_due_ledger_update_entry(
 		$job_key,
 		static function (?array $entry): array {
 			$entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
@@ -5109,10 +5467,9 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
 /**
  * pfblockerng_tick — ADR-43: apply-on-change due-ledger tick dispatcher.
  *
- * Reads the ledger and handles both cadence advancement and separate-process dispatch via
- * exec() for each due job (feeds, dcc, bl). SafeSearch and apply reconciliation run when
- * their own due-ledger entries are due; scheduled log maintenance (pfb_log_mgmt) runs only
- * on an idle tick (see below).
+ * Reads the runtime schedule and handles synchronous Extras before separate-process feed
+ * dispatch. SafeSearch and apply reconciliation run when their own due-ledger entries are due;
+ * scheduled log maintenance (pfb_log_mgmt) runs only on an idle tick (see below).
  *
  * Lives here (not in the www/ dispatcher script) rather than the reverse so the
  * PHPUnit bootstrap can load and call the real entrypoint off-appliance: the www
@@ -5128,17 +5485,12 @@ function pfb_due_ledger_is_pending(string $job_key, string $ledger_dir, float $t
  * Optional apply window (pfb_quiet_hours): manual pending_apply dispatch stays deferred
  * outside the window; scheduled feed checks remain driven by the runtime cache.
  *
- * Fixed-job cadence remains seeded from existing Extras settings:
- *   dcc : 86400 s daily; bl : 86400 or 604800 s, both with stable install jitter.
+ * Calendar Extras use the General schedule directly: dcc is daily, and bl is daily or weekly;
+ * neither job has independent jitter.
  *
- * Scheduled log maintenance (pfb_log_mgmt) runs at the end of every tick, independent of
- * scheduled feed checks (issue #573: log maintenance no longer rides the tail of
- * pfblockerng_sync_cron()) -- but ONLY on an IDLE tick: skipped when this tick just
- * dispatched an update pass (cron/dcc/bl) or one from an earlier tick is still running
- * (pfb_update_pass_running()). Both dispatch and a backgrounded pass append to
- * $pfb['log']/$pfb['extraslog'] for potentially minutes; pfb_log_mgmt()'s
- * tail-to-temp-then-cat-over trim is a read/truncate/rewrite window that would lose any
- * lines the concurrent writer appends during it.
+ * Scheduled log maintenance (pfb_log_mgmt) runs after synchronous scheduled work finishes.
+ * It remains deferred while a manual background pass or an earlier pass is still running,
+ * because pfb_log_mgmt() rewrites the same logs those processes append to.
  *
  * $ps_lines is injectable for hermetic off-appliance tests; NULL preserves the
  * appliance's host process-table scan. $ss_refresh is an optional test seam; NULL calls
@@ -5153,7 +5505,10 @@ function pfblockerng_tick(
 	float $ss_lock_timeout = 5.0,
 	?callable $apply_reconcile = NULL,
 	?callable $apply_lock_opener = NULL,
-	float $apply_lock_timeout = 5.0
+	float $apply_lock_timeout = 5.0,
+	?callable $extra_runner = NULL,
+	?callable $feed_runner = NULL,
+	?callable $manual_runner = NULL
 ): void
 {
 	global $pfb;
@@ -5163,6 +5518,7 @@ function pfblockerng_tick(
 	$dbdir = $pfb['dbdir'];
 	$runtime_model = NULL;
 	$runtime_state = NULL;
+	$runtime_cache = NULL;
 	$runtime_ready = FALSE;
 	$cache_ready = FALSE;
 	$state_dir = (string) ($pfb['schedule_state_dir'] ?? '/usr/local/etc');
@@ -5179,34 +5535,38 @@ function pfblockerng_tick(
 		$runtime_state = pfb_schedule_state_read($state_dir);
 		$runtime_ready = $runtime_model !== NULL && $runtime_state !== NULL;
 		if ($runtime_ready) {
-			try {
-				$cache_ready = pfb_schedule_cache_refresh(
-					$runtime_model,
-					$runtime_state,
-					$now,
-					$timezone,
-					$dbdir,
-					is_array($pfb['schedule_cache_io'] ?? NULL) ? $pfb['schedule_cache_io'] : []
-				);
-			} catch (Throwable) {
-				$cache_ready = FALSE;
+			$runtime_cache = pfb_due_ledger_read_cache($dbdir, $runtime_model['config_hash'], 5.0);
+			if ($runtime_cache !== NULL) {
+				$feed_wakeup_expected = FALSE;
+				foreach ($runtime_model['entries'] as $id => $entry) {
+					if (str_starts_with($id, 'extra:')) {
+						if ($entry['enabled'] && !array_key_exists($id, $runtime_cache)) {
+							$runtime_cache = NULL;
+							break;
+						}
+						continue;
+					}
+					$feed_wakeup_expected = $feed_wakeup_expected || ($entry['enabled'] && $entry['has_active_rows']);
+				}
+				if ($runtime_cache !== NULL && $runtime_model['scheduled'] && $feed_wakeup_expected
+					&& !array_key_exists('cron', $runtime_cache)) {
+					$runtime_cache = NULL;
+				}
 			}
+			$cache_ready = $runtime_cache !== NULL;
 		}
 	}
 	if (!$runtime_ready || !$cache_ready) {
 		logger(LOG_NOTICE, localize_text('Tick: scheduled feed runtime unavailable; cron selection suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 	}
-	// Set TRUE by any branch below that actually dispatches (exec()s) an update pass
-	// this tick -- gates the log-maintenance race guard at the tail of this function.
+	// Set only when this tick backgrounds a manual pass that can still be writing logs.
 	$dispatched = FALSE;
 
-	$bl_secs = 86400;
-	if (!empty($pfb['blconfig']['blacklist_freq']) && $pfb['blconfig']['blacklist_freq'] === 'Weekly') {
-		$bl_secs = 604800;
-	}
-
 	// --- Due check ---
-	$due = pfb_tick_due_jobs($now, $seed, $dbdir, 0, $bl_secs);
+	$due = pfb_tick_due_jobs($now, $seed, $dbdir, 0, 0);
+	$extra_plan = ($runtime_ready && $runtime_model !== NULL && $timezone instanceof DateTimeZone)
+		? pfb_schedule_extra_plan($runtime_model, $runtime_state, $now, $timezone, $runtime_cache)
+		: ['due' => [], 'occurrences' => []];
 
 	// --- Apply-on-change window (ADR-43) ---
 	// Empty window = apply immediately (default). Non-empty = defer outside window.
@@ -5215,15 +5575,6 @@ function pfblockerng_tick(
 
 	// --- Dispatch manual pending apply and scheduled runtime work ---
 
-	// Scheduled feed cron: dispatch the `cron` verb (-> pfblockerng_sync_cron), NOT pfb_trigger
-	// directly. pfblockerng_sync_cron applies each feed's per-list Update Frequency
-	// ($list['cron']: EveryDay/Weekly/NNhour) before its final sync_package_pfblockerng('cron'),
-	// and runs the ADR-19 software-update check at the end -- both of which a bare
-	// `pfb_trigger scope=both` skips (it would poll every feed every tick and never
-	// run the once-per-pass update check). Apply-on-change still happens via ADR-40
-	// (IP) + ADR-10 (DNSBL) inside that final sync. Backgrounded so the tick stays
-	// fast. The scheduled log trim no longer rides this dispatch (issue #573) --
-	// see pfb_log_mgmt() at the end of this function.
 	// The legacy ledger is consulted only for pending manual apply. Scheduled
 	// selection uses the refreshed runtime cache and durable schedule state.
 	$cron_unavailable = FALSE;
@@ -5231,110 +5582,85 @@ function pfblockerng_tick(
 	$cron_pending = FALSE;
 	$cron_due = FALSE;
 	$legacy_cron = pfb_due_ledger_read_entry('cron', $dbdir, 5.0, $cron_unavailable);
-	if (!$cron_unavailable && is_array($legacy_cron) && !empty($legacy_cron['pending_apply'])) {
+	if (!$cron_unavailable && is_array($legacy_cron) && (($legacy_cron['pending_apply'] ?? FALSE) === TRUE)) {
 		$cron_entry = $legacy_cron;
 		$cron_pending = TRUE;
 	}
+	if (pfb_pending_changes()) {
+		$cron_pending = TRUE;
+		$cron_entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => TRUE];
+	}
 	if ($runtime_ready && $cache_ready && $runtime_model !== NULL) {
 		$cache = pfb_due_ledger_read_cache($dbdir, $runtime_model['config_hash'], 5.0);
+		$schedule_entry = is_array($cache['cron'] ?? NULL) ? $cache['cron'] : NULL;
 		if (!$cron_pending) {
-			$cron_entry = is_array($cache['cron'] ?? NULL) ? $cache['cron'] : NULL;
+			$cron_entry = $schedule_entry;
 			$cron_pending = is_array($cron_entry) && !empty($cron_entry['pending_apply']);
 		}
-		$cron_due = is_array($cron_entry)
-			&& (($cron_entry['next_due'] ?? PHP_INT_MAX) <= $now || $cron_pending);
+		$cron_due = is_array($schedule_entry) && (($schedule_entry['next_due'] ?? PHP_INT_MAX) <= $now);
+	}
+	$enabled_fail_headers = [];
+	if ($runtime_model !== NULL) {
+		foreach ($runtime_model['entries'] as $id => $entry) {
+			if ($entry['enabled'] && !str_starts_with($id, 'extra:')) {
+				$enabled_fail_headers[substr($id, strpos($id, ':') + 1)] = TRUE;
+			}
+		}
+	}
+	$fail_due = FALSE;
+	foreach (['denydir', 'permitdir', 'matchdir', 'nativedir', 'dnsdir'] as $folder_key) {
+		if (!empty($pfb[$folder_key])) {
+			foreach (glob($pfb[$folder_key] . '/*.fail') ?: [] as $fail_file) {
+				if (isset($enabled_fail_headers[basename($fail_file, '.fail')])) {
+					$fail_due = TRUE;
+					break 2;
+				}
+			}
+		}
 	}
 	$scheduled_due = $runtime_ready && $cache_ready && $runtime_model !== NULL
-		&& $runtime_model['scheduled'] && $cron_due && !$cron_pending;
-	$dispatch_lock = NULL;
-	if ($scheduled_due) {
-		$dispatch_lock = @fopen($state_dir . '/pfb_schedule_dispatch.lock', 'c');
-		$dispatch_lock_ok = is_resource($dispatch_lock)
-			&& pfb_flock_bounded($dispatch_lock, LOCK_EX, 0.1);
-		if (!$dispatch_lock_ok) {
-			if (is_resource($dispatch_lock)) {
-				@fclose($dispatch_lock);
+		&& $runtime_model['scheduled'] && $cron_due;
+	$scheduled_due = $scheduled_due || ($runtime_ready && $runtime_model !== NULL
+		&& $runtime_model['scheduled'] && $fail_due);
+	$runtime_pending = FALSE;
+	if ($runtime_ready && $runtime_model !== NULL && is_array($runtime_state)) {
+		foreach ($runtime_model['entries'] as $id => $entry) {
+			if ($entry['enabled'] && !str_starts_with($id, 'extra:')
+				&& is_int($runtime_state['items'][$id]['pending_occurrence'] ?? NULL)) {
+				$runtime_pending = TRUE;
+				break;
 			}
-			$dispatch_lock = NULL;
-			$scheduled_due = FALSE;
-			logger(LOG_INFO, localize_text('Tick: scheduled feed deferred (another tick is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-		} else {
-			$runtime_model = pfb_schedule_runtime_config();
-			$runtime_state = pfb_schedule_state_read($state_dir);
-			$runtime_ready = $runtime_model !== NULL && $runtime_state !== NULL;
-			$cache_ready = $runtime_ready && pfb_schedule_cache_refresh(
-				$runtime_model,
-				$runtime_state,
-				$now,
-				$timezone,
-				$dbdir,
-				is_array($pfb['schedule_cache_io'] ?? NULL) ? $pfb['schedule_cache_io'] : []
-			);
-			$cache = $runtime_ready && $cache_ready && $runtime_model !== NULL
-				? pfb_due_ledger_read_cache($dbdir, $runtime_model['config_hash'], 5.0) : NULL;
-			$cron_entry = is_array($cache['cron'] ?? NULL) ? $cache['cron'] : NULL;
-			$cron_pending = is_array($cron_entry) && !empty($cron_entry['pending_apply']);
-			$cron_due = is_array($cron_entry)
-				&& (($cron_entry['next_due'] ?? PHP_INT_MAX) <= $now || $cron_pending);
-			$scheduled_due = $runtime_ready && $cache_ready && $runtime_model['scheduled']
-				&& $cron_due && !$cron_pending;
 		}
 	}
-	if (!$cron_unavailable && ($scheduled_due || $cron_pending)) {
-		if ($cron_pending && $in_win && pfb_feed_pass_busy()) {
-			// issue #1175: a running feed pass would race the shared recompute staging --
-			// defer via pending so the NEXT tick retries. busy() is advisory only: the
-			// child's atomic begin() may still lose a dispatcher race and skip one cycle.
-			logger(LOG_INFO, localize_text('Tick: feed cron deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('cron', $dbdir);
-		} elseif ($in_win && $cron_pending) {
-			logger(LOG_NOTICE, localize_text('Tick: dispatching pending manual apply.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			unset($cron_entry['pending_apply']);
-			if (!pfb_due_ledger_write_entry('cron', $cron_entry, $dbdir)) {
-				logger(LOG_NOTICE, localize_text('Tick: pending manual apply ledger update failed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			} else {
-				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=manual >> {$pfb['runlog']} 2>&1 &");
-				$dispatched = TRUE;
+	$extras_due = $runtime_ready && $extra_plan['due'] !== [];
+	$manual_due = !$cron_unavailable && $cron_pending && $in_win;
+
+	if (!$cron_unavailable && $cron_pending && !$in_win) {
+			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
+
+	// Active schedule cache and durable markers have one owner: the scheduled process.
+	// Hold both locks through Extras, feed checks, apply work, and final cache publication.
+	if ($manual_due || $scheduled_due || $extras_due || $runtime_pending || ($runtime_ready && !$cache_ready)) {
+		$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
+			|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
+		$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
+			|| !is_resource($GLOBALS['pfb_feed_pass_lock']);
+		if (!pfb_schedule_dispatch_begin()) {
+			logger(LOG_INFO, localize_text('Tick: scheduled work deferred (another tick is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+		} elseif (!pfb_feed_pass_begin('scheduled')) {
+			logger(LOG_INFO, localize_text('Tick: scheduled work deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
+			if ($dispatch_owner) {
+				pfb_schedule_dispatch_release();
 			}
-		} elseif ($scheduled_due) {
-			$groups = $runtime_model['entries'];
-			foreach ($groups as $id => &$entry) {
-				$item = $runtime_state['items'][$id] ?? NULL;
-				if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
-					$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
-				}
-			}
-			unset($entry);
-			$plan = pfb_schedule_plan($groups, $runtime_model['default'], NULL, $now, $timezone);
-			$state_published = TRUE;
-			if ($plan['occurrences'] !== []) {
-				$state_published = pfb_schedule_state_set_pending(
-					$plan['occurrences'],
-					$state_dir,
-					is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
-				);
-			}
-			if ($state_published) {
+		} else {
+			try {
+				do {
+				$dcc_changed = FALSE;
+				$runtime_model = pfb_schedule_runtime_config();
 				$runtime_state = pfb_schedule_state_read($state_dir);
-				$state_published = $runtime_state !== NULL;
-			}
-			$pending_exists = FALSE;
-			$recent_pending = FALSE;
-			if ($state_published) {
-				foreach ($runtime_model['entries'] as $id => $_entry) {
-					$item = $runtime_state['items'][$id] ?? NULL;
-					if (is_array($item) && array_key_exists('pending_occurrence', $item)) {
-						$pending_exists = TRUE;
-						if (array_key_exists('pending_dispatch_at', $item)
-							&& $item['pending_dispatch_at'] > $now - 900) {
-							$recent_pending = TRUE;
-						}
-					}
-				}
-			}
-			$cache_published = FALSE;
-			if ($state_published) {
-				$cache_published = pfb_schedule_cache_refresh(
+				$runtime_ready = $runtime_model !== NULL && $runtime_state !== NULL;
+				$cache_ready = $runtime_ready && pfb_schedule_cache_refresh(
 					$runtime_model,
 					$runtime_state,
 					$now,
@@ -5342,93 +5668,176 @@ function pfblockerng_tick(
 					$dbdir,
 					is_array($pfb['schedule_cache_io'] ?? NULL) ? $pfb['schedule_cache_io'] : []
 				);
-			}
-			if (!$cache_published) {
-				logger(LOG_NOTICE, localize_text('Tick: scheduled feed reservation failed; cron suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			} elseif ($recent_pending) {
-				logger(LOG_INFO, localize_text('Tick: scheduled feed dispatch already reserved; waiting for completion.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			} elseif ($pending_exists && pfb_feed_pass_busy()) {
-				logger(LOG_INFO, localize_text('Tick: scheduled feed deferred (another feed pass is running).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			} elseif ($pending_exists) {
-				$dispatch_ids = [];
-				foreach ($runtime_model['entries'] as $id => $_entry) {
+				$runtime_cache = $runtime_ready && $cache_ready
+					? pfb_due_ledger_read_cache($dbdir, $runtime_model['config_hash'], 5.0) : NULL;
+				if (!$runtime_ready || !$cache_ready || !is_array($runtime_cache)) {
+					logger(LOG_NOTICE, localize_text('Tick: schedule-cache generation failed; scheduled work suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+					break;
+				}
+
+				$extra_plan = pfb_schedule_extra_plan($runtime_model, $runtime_state, $now, $timezone, $runtime_cache);
+				$groups = array_filter(
+					$runtime_model['entries'],
+					static fn (mixed $_entry, string $id): bool => !str_starts_with($id, 'extra:'),
+					ARRAY_FILTER_USE_BOTH
+				);
+				foreach ($groups as $id => &$entry) {
 					$item = $runtime_state['items'][$id] ?? NULL;
-					if (is_array($item) && array_key_exists('pending_occurrence', $item)) {
-						$dispatch_ids[$id] = TRUE;
+					if (is_array($item) && array_key_exists('last_completed_occurrence', $item)) {
+						$entry['last_completed_occurrence'] = $item['last_completed_occurrence'];
 					}
 				}
-				$marked_any = FALSE;
-				$marked = pfb_schedule_state_update(
-					static function (array $state) use ($dispatch_ids, $now, &$marked_any): array {
-						foreach (array_keys($dispatch_ids) as $id) {
-							if (array_key_exists($id, $state['items']) && array_key_exists('pending_occurrence', $state['items'][$id])) {
-								$state['items'][$id]['pending_dispatch_at'] = $now;
-								$marked_any = TRUE;
-							}
-						}
-						return $state;
-					},
+				unset($entry);
+				$feed_plan = $runtime_model['scheduled']
+					? pfb_schedule_plan($groups, $runtime_model['default'], NULL, $now, $timezone)
+					: ['due' => [], 'occurrences' => []];
+				$occurrences = $extra_plan['occurrences'] + $feed_plan['occurrences'];
+				$state_published = $occurrences === [] || pfb_schedule_state_set_pending(
+					$occurrences,
 					$state_dir,
 					is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
 				);
-				if (!$marked || !$marked_any) {
-					logger(LOG_NOTICE, localize_text('Tick: scheduled dispatch reservation failed; cron suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-				} else {
-					logger(LOG_NOTICE, localize_text('Tick: dispatching feed cron.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-					exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php cron >> {$pfb['runlog']} 2>&1 &");
+				if ($state_published && $occurrences !== []) {
+					$state_published = pfb_schedule_state_update(
+						static function (array $state) use ($occurrences): array {
+							foreach ($occurrences as $id => $occurrence) {
+								$item = $state['items'][$id] ?? [];
+								if (($item['pending_occurrence'] ?? -1) < $occurrence) {
+									$item['pending_occurrence'] = $occurrence;
+									unset($item['pending_attempted']);
+									$state['items'][$id] = $item;
+								}
+							}
+							return $state;
+						},
+						$state_dir,
+						is_array($pfb['schedule_state_io'] ?? NULL) ? $pfb['schedule_state_io'] : []
+					);
+				}
+				$runtime_state = $state_published ? pfb_schedule_state_read($state_dir) : NULL;
+				if (!is_array($runtime_state)) {
+					logger(LOG_NOTICE, localize_text('Tick: scheduled work reservation failed; pass suppressed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+					break;
+				}
+
+				$extra_ids = array_fill_keys($extra_plan['due'], TRUE);
+				$runner = $extra_runner ?? static function (string $job, string $argument = '', bool &$changed = FALSE): bool {
+					return pfb_schedule_extra_run($job, $argument, $changed);
+				};
+				foreach (['extra:dcc', 'extra:bl'] as $id) {
+					if (!isset($extra_ids[$id])) {
+						continue;
+					}
+					$argument = '';
+					if ($id === 'extra:bl') {
+						$blconfig = PfbConfig::readSection('installedpackages/pfblockerngblacklist');
+						$selected = array_flip(explode(',', (string) ($blconfig['blacklist_selected'] ?? '')));
+						$names = [];
+						foreach (($blconfig['item'] ?? []) as $item) {
+							if (is_array($item) && isset($selected[$item['xml'] ?? '']) && !empty($item['selected'])) {
+								$names[] = $item['xml'];
+							}
+						}
+						$argument = pfb_filter(implode(',', $names), PFB_FILTER_CSV, 'Tick bl dispatch');
+						if ($pfb['enable'] !== PfbToggle::On || $argument === '') {
+							continue;
+						}
+					}
+					try {
+						$changed = FALSE;
+						$ok = $runner($id === 'extra:dcc' ? 'dcc' : 'bl', $argument, $changed);
+						$dcc_changed = $dcc_changed || ($id === 'extra:dcc' && $changed);
+					} catch (Throwable $error) {
+						$ok = FALSE;
+						logger(LOG_WARNING, localize_text("Scheduled Extra failed [ {$id} ]: {$error->getMessage()}"), LOG_PREFIX_PKG_PFBLOCKERNG);
+					}
+					$occurrence = $runtime_state['items'][$id]['pending_occurrence'] ?? NULL;
+					if ($ok && is_int($occurrence)) {
+						pfb_schedule_state_record_outcome($id, PfbScheduleTerminalResult::Success, $state_dir, $now, [], $occurrence);
+					} elseif (!$ok && is_int($occurrence)) {
+						pfb_schedule_state_update(
+							static function (array $state) use ($id, $occurrence): array {
+								if (($state['items'][$id]['pending_occurrence'] ?? NULL) === $occurrence) {
+									$state['items'][$id]['pending_attempted'] = TRUE;
+								}
+								return $state;
+							},
+							$state_dir
+						);
+					}
+				}
+				if (!pfb_geoip_generation_ready()) {
+					pfb_mark_pending_changes();
+					pfb_due_ledger_set_pending('cron', $dbdir);
+					break;
+				}
+				if ($manual_due) {
+					logger(LOG_NOTICE, localize_text('Tick: dispatching pending manual apply.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+					unset($cron_entry['pending_apply']);
+					if (!pfb_due_ledger_write_entry('cron', $cron_entry, $dbdir)) {
+						logger(LOG_NOTICE, localize_text('Tick: pending manual apply ledger update failed.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+						break;
+					}
+					$manual = $manual_runner ?? static function (): bool {
+						return sync_package_pfblockerng(['scope' => 'both', 'force' => FALSE, 'trigger' => 'manual']);
+					};
 					$dispatched = TRUE;
+					if (!$manual()) {
+						pfb_mark_pending_changes();
+						pfb_due_ledger_set_pending('cron', $dbdir);
+						break;
+					}
+				}
+
+				$runtime_state = pfb_schedule_state_read($state_dir);
+				$feed_due = FALSE;
+				if (is_array($runtime_state) && $runtime_model['scheduled']) {
+					foreach ($groups as $id => $entry) {
+						if ($entry['enabled'] && array_key_exists('pending_occurrence', $runtime_state['items'][$id] ?? [])) {
+							$feed_due = TRUE;
+							break;
+						}
+					}
+				}
+				$feed_due = $feed_due || $fail_due;
+				if ($dcc_changed && !$in_win) {
+					pfb_mark_pending_changes();
+					pfb_due_ledger_set_pending('cron', $dbdir);
+				}
+				if ($feed_due) {
+					logger(LOG_NOTICE, localize_text('Tick: running scheduled feed pass.'), LOG_PREFIX_PKG_PFBLOCKERNG);
+					try {
+						$pending_change = $dcc_changed || ($cron_pending && !$manual_due);
+						($feed_runner ?? static fn (bool $pending_change): bool => pfblockerng_sync_cron(FALSE, 'both', $pending_change))($pending_change);
+					} catch (Throwable $error) {
+						logger(LOG_WARNING, localize_text("Scheduled feed pass failed: {$error->getMessage()}"), LOG_PREFIX_PKG_PFBLOCKERNG);
+					}
+				}
+				if ($dcc_changed && $in_win && !$feed_due && !$manual_due) {
+					$apply = $manual_runner ?? static fn (): bool => sync_package_pfblockerng([
+						'scope' => 'both', 'force' => FALSE, 'trigger' => 'cron',
+					]);
+					if (!$apply()) {
+						pfb_mark_pending_changes();
+						pfb_due_ledger_set_pending('cron', $dbdir);
+					}
+				}
+
+				$runtime_state = pfb_schedule_state_read($state_dir);
+				if (is_array($runtime_state)) {
+					pfb_schedule_cache_refresh($runtime_model, $runtime_state, $now, $timezone, $dbdir);
+				}
+				} while (FALSE);
+			} finally {
+				if ($feed_pass_owner) {
+					pfb_feed_pass_release();
+				}
+				if ($dispatch_owner) {
+					pfb_schedule_dispatch_release();
 				}
 			}
-		} elseif ($cron_pending) {
-			logger(LOG_INFO, localize_text('Tick: feed cron deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('cron', $dbdir);
 		}
 	}
-	if (is_resource($dispatch_lock)) {
-		@flock($dispatch_lock, LOCK_UN);
-		@fclose($dispatch_lock);
-	}
-	// MaxMind/TOP1M/ASN: daily, jittered.
-	if ($due['dcc'] || pfb_due_ledger_is_pending('dcc', $dbdir)) {
-		if ($in_win) {
-			logger(LOG_NOTICE, localize_text('Tick: dispatching dcc.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php dcc >> {$pfb['extraslog']} 2>&1 &");
-			pfb_due_ledger_mark_ran('dcc', 86400, $now, $seed, 23 * 3600, $dbdir);
-			$dispatched = TRUE;
-		} else {
-			logger(LOG_INFO, localize_text('Tick: dcc deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('dcc', $dbdir);
-		}
-	}
-
-	// Blacklist: daily or weekly, jittered. Build bl_string from blconfig.
-	if (($due['bl'] || pfb_due_ledger_is_pending('bl', $dbdir)) && $pfb['enable'] === PfbToggle::On &&
-	    !empty($pfb['blconfig']) &&
-	    !empty($pfb['blconfig']['blacklist_enable']) && $pfb['blconfig']['blacklist_enable'] != 'Disable' &&
-	    !empty($pfb['blconfig']['blacklist_selected']) && isset($pfb['blconfig']['item'])) {
-
-		if ($in_win) {
-			$bl_str = '';
-			$bl_sel = array_flip(explode(',', $pfb['blconfig']['blacklist_selected'])) ?: [];
-			foreach ($pfb['blconfig']['item'] as $bl_item) {
-				if (isset($bl_sel[$bl_item['xml']]) && !empty($bl_item['selected'])) {
-					$bl_str .= ",{$bl_item['xml']}";
-				}
-			}
-			$bl_str = pfb_filter(ltrim($bl_str, ','), PFB_FILTER_CSV, 'Tick bl dispatch');
-
-			if (!empty($bl_str)) {
-				logger(LOG_NOTICE, localize_text('Tick: dispatching bl.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-				exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php bl " . escapeshellarg($bl_str) . " >> {$pfb['extraslog']} 2>&1 &");
-				pfb_due_ledger_mark_ran('bl', $bl_secs, $now, $seed, 23 * 3600, $dbdir);
-				$dispatched = TRUE;
-			}
-		} else {
-			logger(LOG_INFO, localize_text('Tick: bl deferred (outside apply window).'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfb_due_ledger_set_pending('bl', $dbdir);
-		}
-	}
-
 	// SafeSearch CNAME freshness: independent 900-second due-ledger cadence.
 	if ($due['ss_refresh']) {
 		$ss_lock_path = "{$dbdir}/pfb_ss_refresh.lock";
@@ -5511,11 +5920,10 @@ function pfblockerng_tick(
 		}
 	}
 
-	// Scheduled log maintenance (issue #573): runs on every IDLE tick, independent of
-	// the feed-cron gate above -- pfb_interval='Disabled' must not silently stop log
-	// upkeep. pfb_log_mgmt() self-gates by its own configured per-log line/age caps, so
-	// calling it every idle tick is safe: most calls are a no-op. Skipped when THIS tick
-	// dispatched an update pass ($dispatched) or an earlier one is still running
+	// Scheduled log maintenance (issue #573) runs after synchronous scheduled work.
+	// pfb_log_mgmt() self-gates by its configured per-log line/age caps, so most calls
+	// are a no-op. It is skipped when THIS tick backgrounded a manual pass ($dispatched)
+	// or an earlier pass is still running
 	// (pfb_update_pass_running()) -- both append to the same log files pfb_log_mgmt()'s
 	// tail-to-temp-then-cat-over trim reads/truncates/rewrites, and racing that window
 	// against a live writer loses whatever it appends meanwhile.

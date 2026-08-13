@@ -24,7 +24,7 @@ feature is purely log-file + config I/O, not DNSBL — mirrors the retired ADR-3
 Driven via the ``tick`` verb (``pfblockerng_tick()`` -> ``pfb_log_mgmt()``, the only
 path that runs log maintenance, and only on an IDLE tick — see
 ``pfb_update_pass_running()`` in ``pfblockerng.inc``). The ``deployed_vm`` fixture
-makes every tick idle-only (Disabled feed cron + not-due dcc/bl).
+primes every scheduled item as completed so its next occurrence is in the future.
 """
 
 from __future__ import annotations
@@ -79,28 +79,15 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     infrastructure, only ``enable_cb=on`` (so the tick body executes) and every tick in
     this module being idle-only, so ``pfb_log_mgmt()`` runs on every ``tick`` call below.
 
-    "Idle-only" needs BOTH halves of ``pfblockerng_tick()``'s log-maintenance gate
-    (``pfblockerng_extra.inc``) held open, not just the ``pfb_update_pass_running()``
-    half: ``Disabled`` feed cron + not-due ``dcc``/``bl`` looks sufficient, but a
-    PENDING manual apply (``pfb_due_ledger_set_pending('cron')``) bypasses
-    ``$cron_disabled`` entirely (``(!$cron_disabled && $due['cron']) || $cron_pending``)
-    and sets ``$dispatched`` -- issue #1769: ``h.deploy()``'s package reinstall can lose
-    the install-time feed pass's ``pfb_feed_pass_begin()`` race, which leaves exactly
-    such a pending 'cron' entry behind. Seeding a future, non-pending entry for 'cron'
-    too (alongside the existing 'dcc'/'bl' seeds) closes that gate as well, so every
-    tick in this module is genuinely idle -- see ``TickEntrypointTest::
-    testPendingCronApplyBypassesDisabledIntervalAndSkipsLogMaintenance`` /
-    ``testDisabledIntervalWithFutureSeededCronStaysIdleAndRunsLogMaintenance`` for the
-    PHPUnit-pinned mechanism this fixture relies on.
+    The helper clears any legacy manual pending marker, marks every configured schedule
+    identity completed at the current instant, and publishes the matching runtime cache.
+    The next tick is therefore maintenance-only without relying on retired cron knobs.
     """
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
     _set_enable_cb(smoke_vm)
-    _set_pfb_interval_disabled(smoke_vm)
-    _seed_future_ledger_entry(smoke_vm, "cron")
-    _seed_future_ledger_entry(smoke_vm, "dcc")
-    _seed_future_ledger_entry(smoke_vm, "bl")
+    _prime_idle_schedule(smoke_vm)
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_LOGDIR, timeout=30)
     smoke_vm.ssh("/bin/mkdir", "-p", PFB_DBDIR, timeout=30)
     try:
@@ -138,47 +125,34 @@ def _set_enable_cb(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         raise RuntimeError(f"_set_enable_cb failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _set_pfb_interval_disabled(vm: SmokeVM, *, timeout: float = 60.0) -> None:
-    """Set pfb_interval='Disabled' so the tick's feed-cron branch never dispatches.
-
-    Part of making every tick in this module idle-only (see the ``deployed_vm`` fixture
-    docstring) — this is also the setting issue #573 fixed (log maintenance used to
-    silently stop with a Disabled Update Frequency).
-    """
-    snippet = (
-        f"$g = config_get_path({h._php_str(CFG_GENERAL)}, array());\n"
-        "$g['pfb_interval'] = 'Disabled';\n"
-        f"config_set_path({h._php_str(CFG_GENERAL)}, $g);\n"
-        "write_config('pfBlockerNG smoke: pfb_interval Disabled');\n"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_set_pfb_interval_disabled failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
-
-
-def _seed_future_ledger_entry(vm: SmokeVM, job_key: str, *, timeout: float = 60.0) -> None:
-    """Seed a due-ledger entry for ``job_key`` whose next_due is far in the future.
-
-    Drives the box via PHP (CLAUDE.md hard constraint: no appliance python) —
-    ``pfb_due_ledger_write_entry()`` is the package's own ledger writer. Keeps
-    'dcc'/'bl' from dispatching on the 'tick' verb so every tick in this module is
-    maintenance-only.
-    """
+def _prime_idle_schedule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Publish completed schedule state and a matching future runtime cache."""
     snippet = (
         f"require_once('{_PFB_EXTRA_INC}');"
-        f"pfb_due_ledger_write_entry({h._php_str(job_key)}, array("
-        "'last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0"
-        f"), {h._php_str(PFB_DBDIR)});"
+        "$now = time();"
+        "$model = pfb_schedule_runtime_config();"
+        "$state = array('schema' => 1, 'items' => array());"
+        "foreach (($model['entries'] ?? array()) as $id => $entry) {"
+        "  if (!empty($entry['enabled'])) {"
+        "    $state['items'][$id] = array("
+        "      'last_successful_check' => $now,"
+        "      'last_completed_occurrence' => $now,"
+        "      'completion_outcome' => 'success'"
+        "    );"
+        "  }"
+        "}"
+        f"$ok = $model !== NULL && pfb_schedule_state_write($state, '/usr/local/etc')"
+        f" && pfb_schedule_cache_refresh($model, $state, $now, "
+        f"new DateTimeZone(date_default_timezone_get()), {h._php_str(PFB_DBDIR)});"
+        "$ok = $ok && pfb_due_ledger_write_entry('cron', "
+        "array('last_run' => $now, 'next_due' => $now + 86400, 'jitter' => 0), "
+        f"{h._php_str(PFB_DBDIR)});"
+        "if (!$ok) { exit(1); }"
         "echo 'OK';"
     )
     result = h.php_eval(vm, snippet, timeout=timeout)
     if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_seed_future_ledger_entry({job_key!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
+        raise RuntimeError(f"_prime_idle_schedule failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def _set_log_max_days(vm: SmokeVM, values: dict[str, str], *, timeout: float = 60.0) -> None:

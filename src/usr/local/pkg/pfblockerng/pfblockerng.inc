@@ -813,6 +813,59 @@ function pfb_group_action_valid(mixed $action, string $gtype): bool {
 	), TRUE);
 }
 
+/** Validate the General-page quarter-hour schedule and optional apply window. */
+function pfb_general_schedule_validate(array $post): array
+{
+	$errors = [];
+	$values = [];
+	$scalar_set = static function (string $key, array $allowed, string $label) use (&$errors, &$values, $post): void {
+		$value = $post[$key] ?? NULL;
+		if ($value === NULL) {
+			$errors[] = "{$label} is required.";
+			return;
+		}
+		if (!is_string($value) || !in_array($value, $allowed, TRUE)) {
+			$errors[] = "{$label} is invalid.";
+			return;
+		}
+		$values[$key] = $value;
+	};
+
+	$scheduled = $post['pfb_scheduled_feed_updates'] ?? '';
+	if (is_array($scheduled) || !in_array($scheduled, ['', 'on'], TRUE)) {
+		$errors[] = 'Scheduled Feed Updates is invalid.';
+	} else {
+		$values['pfb_scheduled_feed_updates'] = $scheduled;
+	}
+	$scalar_set('pfb_schedule_weekday', ['1', '2', '3', '4', '5', '6', '7'], 'Schedule weekday');
+	$scalar_set('pfb_schedule_hour', array_map('strval', range(0, 23)), 'Schedule hour');
+	$scalar_set('pfb_schedule_minute', ['0', '15', '30', '45'], 'Schedule minute');
+
+	$window_enabled = $post['pfb_quiet_hours_enabled'] ?? '';
+	if (is_array($window_enabled) || !in_array($window_enabled, ['', 'on'], TRUE)) {
+		$errors[] = 'Automatic Apply Window is invalid.';
+		$window_enabled = '';
+	}
+	if ($window_enabled === 'on') {
+		$start = $post['pfb_quiet_hours_start'] ?? NULL;
+		$end = $post['pfb_quiet_hours_end'] ?? NULL;
+		$time_valid = static function (mixed $value): bool {
+			return is_string($value) && preg_match('/^(?:[01][0-9]|2[0-3]):(?:00|15|30|45)$/D', $value) === 1;
+		};
+		if (!$time_valid($start) || !$time_valid($end)) {
+			$errors[] = 'Automatic Apply Window endpoints must be quarter-hour times.';
+		} elseif ($start === $end) {
+			$errors[] = 'Automatic Apply Window endpoints must differ.';
+		} else {
+			$values['pfb_quiet_hours'] = $start . '-' . $end;
+		}
+	} else {
+		$values['pfb_quiet_hours'] = '';
+	}
+
+	return ['errors' => $errors, 'values' => $errors === [] ? $values : []];
+}
+
 // DNSBL-IP is an IP group even though its setting lives on the DNSBL page.
 // Invalid persisted/HA values fail closed before any autorule, path, or alias use.
 function pfb_dnsblip_action_value(mixed $action): string {
@@ -3059,7 +3112,6 @@ function pfb_global() {
 
 	$pfb['enable']		= PfbConfig::read('gen/enable_cb');		// Enable/Disable of pfBlockerNG
 	$pfb['keep']		= PfbConfig::read('gen/pfb_keep');		// Keep blocklists on pfBlockerNG Disable (default ON via registry; #281)
-	$pfb['interval']	= PfbConfig::read('gen/pfb_interval')	?: '1';	// Hour cycle for scheduler
 
 	// ADR-11: opt-in per-type aggregate ("Uber") aliases. CSV scalar of the action types
 	// to aggregate (subset of Deny/Permit/Match/Native), default NONE -> [] -> no-op pass.
@@ -3067,23 +3119,6 @@ function pfb_global() {
 	$pfb['agg_types']	= array_values(array_intersect(
 					array('Deny', 'Permit', 'Match', 'Native'),
 					array_filter(explode(',', PfbConfig::read('gen/pfb_agg_types')))));
-
-	// Validate Cron settings
-	if (!is_numeric($pfb['interval'])) {
-		$pfb['interval'] = '1';
-	}
-        foreach (array( 'pfb_min'		=> 'min',			// User defined CRON start minute
-			'pfb_hour'		=> 'hour',			// Start hour of the scheduler
-			'pfb_dailystart'	=> '24hour'			// Start hour of the 'Once a day' schedule
-		) as $conf_value => $pfb_value) {
-
-		$pfb_variable = $pfb['config'][$conf_value] ?: '0';
-		if (!is_numeric($pfb_variable)) {
-			$pfb[$pfb_value] = '0';
-		} else {
-			$pfb[$pfb_value] = $pfb_variable;
-		}
-	}
 
 	$pfb['supp']		= PfbConfig::read('ip/suppression');					// Enable Suppression (default on, issue #1907)
 	$pfb['cc']		= $pfb['ipconfig']['database_cc'] ?? '';		// Disable Country database CRON updates
@@ -3986,6 +4021,12 @@ function pfb_geoip_append_iso_data(
 	return TRUE;
 }
 
+/** Consumers must not read a GeoIP generation interrupted during publication. */
+function pfb_geoip_generation_ready(): bool {
+	global $pfb;
+	return empty($pfb['ccdir']) || !is_file($pfb['ccdir'] . '/.pfb_generation_swapping');
+}
+
 function pfb_download_extraction_succeeded(int $retval): bool {
 	return $retval === 0;
 }
@@ -4325,7 +4366,7 @@ function pfb_logger($log, $logtype) {
 		// Print to screen and Extras log
 		case 4:
 			$extras_out = pfb_logger_format_for_target($pfb['extraslog'], $log, $lead, $now);
-			if (!$g['pfblockerng_install'] && !$pfb['extras_update']) {
+			if (empty($g['pfblockerng_install']) && empty($pfb['extras_update'])) {
 				print "{$extras_out}";
 			}
 			@file_put_contents("{$pfb['extraslog']}", "{$extras_out}", FILE_APPEND);
@@ -7176,11 +7217,20 @@ function pfblockerng_cron_exists($pfb_cmd, $pfb_min, $pfb_hour, $pfb_mday, $pfb_
 
 // issue #1204: extracted from sync_package_pfblockerng() so PHPUnit can pin the
 // tick cron's install/teardown behaviour without driving the whole sync pass.
-function pfblockerng_configure_tick_cron(bool $enabled, string $log): void {
+function pfblockerng_configure_tick_cron(
+	bool $enabled,
+	string $log,
+	?callable $regenerate = NULL,
+	bool $regenerate_cache = TRUE
+): void {
 	$pfb_tick_min = '*/15';
 	$pfb_tick_cmd = "/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php cron-tick >> {$log} 2>&1";
 
 	if ($enabled) {
+		$regenerate ??= function_exists('pfb_schedule_cache_regenerate') ? 'pfb_schedule_cache_regenerate' : NULL;
+		if ($regenerate_cache && $regenerate !== NULL) {
+			$regenerate();
+		}
 		if (!pfblockerng_cron_exists($pfb_tick_cmd, $pfb_tick_min, '*', '*', '*')) {
 			install_cron_job('pfblockerng.php cron-tick', FALSE);	// remove stale cron-tick (interval changed)
 			install_cron_job('pfblockerng.php tick', FALSE);	// remove legacy pre-#1204 entry
@@ -17105,10 +17155,12 @@ function pfb_dnsbl_lastevent($p_group, $p_entry, $p_details) {
 // is running -- including a cron tick this page never launched, so it must scan ps rather
 // than rely on a per-run pidfile. (The Run-Now livetail tracks its OWN dispatched process
 // by pidfile via isvalidpid() -- a narrower check; this ps scan is the broad one the guard needs.)
-function pfb_feed_task_running(): bool {
-	$result_ps = array();
-	exec('/bin/ps -wax', $result_ps);
-	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron-tick|cron|update|pfb_trigger|tick|forcecheck)/', $result_ps);
+function pfb_feed_task_running(?array $ps_lines = NULL): bool {
+	if ($ps_lines === NULL) {
+		$ps_lines = [];
+		exec('/bin/ps -wax', $ps_lines);
+	}
+	return (bool) preg_grep('/pfblockerng[.]php\s+?(cron-tick|cron|update(ip|dnsbl)?|pfb_trigger|tick|forcecheck|dc|dcc|bu|uc|gc|ugc|al|asn|asn_shell|bl|bls)(?![-\w])/', $ps_lines);
 }
 
 

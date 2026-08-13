@@ -139,9 +139,6 @@ final class ScheduleStateStoreTest extends TestCase
 			['schema' => 1, 'items' => ['1' => ['pending_occurrence' => 0]]],
 			['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => -1]]],
 			['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1.5]]],
-			['schema' => 1, 'items' => ['feed' => ['pending_dispatch_at' => -1]]],
-			['schema' => 1, 'items' => ['feed' => ['pending_dispatch_at' => 1.5, 'pending_occurrence' => 0]]],
-			['schema' => 1, 'items' => ['feed' => ['pending_dispatch_at' => 1]]],
 			['schema' => 1, 'items' => ['feed' => ['last_completed_occurrence' => 1]]],
 			['schema' => 1, 'items' => ['feed' => ['last_completed_occurrence' => 1, 'completion_outcome' => 'bad']]],
 			['schema' => 1, 'items' => ['feed' => ['last_completed_occurrence' => 1, 'completion_outcome' => 'success', 'pending_occurrence' => 1]]],
@@ -222,11 +219,11 @@ final class ScheduleStateStoreTest extends TestCase
 
 	public function testPendingOccurrenceRemainsStableUntilTerminalOutcome(): void
 	{
-		$state = ['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1, 'pending_dispatch_at' => 2]]];
+		$state = ['schema' => 1, 'items' => ['feed' => ['pending_occurrence' => 1]]];
 		$this->assertTrue(pfb_schedule_state_write($state, $this->dir));
 		$this->assertTrue(pfb_schedule_state_set_pending(['feed' => 3], $this->dir));
 		$this->assertSame(
-			['pending_occurrence' => 1, 'pending_dispatch_at' => 2],
+			['pending_occurrence' => 1],
 			pfb_schedule_state_read($this->dir)['items']['feed'],
 			'a late worker must never complete an occurrence that replaced the one it was dispatched for'
 		);

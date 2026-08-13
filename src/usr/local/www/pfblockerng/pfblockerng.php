@@ -100,8 +100,8 @@ if (isset($argv[1])) {
 		pfblockerng_ss_refresh();
 		exit;
 	}
-	// ADR-43: due-ledger trigger-tick. Reads the ledger, dispatches each job
-	// that is due (feeds, dcc, bl), then runs due SafeSearch refresh work (cheap).
+	// ADR-43: due-ledger trigger-tick. Reads the ledger, dispatches due Extras and feeds,
+	// then runs due SafeSearch refresh work (cheap).
 	elseif ($argv[1] == 'tick') {
 		pfblockerng_tick();
 		exit;
@@ -199,16 +199,17 @@ $pfb['extras'][4]['type']       = 'asn';
 $next_key = $next_key_start = 5;
 
 if (isset($argv[1]) && ($argv[1] == 'bl' || $argv[1] == 'bls')) {
+	$bl_arg = (($argv[2] ?? '') === 'scheduled') ? ($argv[3] ?? '') : ($argv[2] ?? '');
 
-	if (empty(pfb_filter($argv[2], PFB_FILTER_CSV, 'php'))) {
-		$argv[2] = '';
+	if (empty(pfb_filter($bl_arg, PFB_FILTER_CSV, 'php'))) {
+		$bl_arg = '';
 	}
 
-	if (!empty($argv[2]) && $pfb['blconfig'] &&
+	if (!empty($bl_arg) && $pfb['blconfig'] &&
 	    !empty($pfb['blconfig']['blacklist_selected']) &&
 	    isset($pfb['blconfig']['item'])) {
 
-		$selected = array_flip(explode(',', $argv[2])) ?: array();
+		$selected = array_flip(explode(',', $bl_arg)) ?: array();
 		foreach ($pfb['blconfig']['item'] as $item) {
 
 			// Temporarily Discontinue Shallalist
@@ -251,15 +252,12 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 	switch($argv[1]) {
 		case 'cron':		// Sync 'cron'
 			logger(LOG_NOTICE, localize_text('Starting cron process.'), LOG_PREFIX_PKG_PFBLOCKERNG);
-			pfblockerng_sync_cron();
-			break;
+			exit(pfblockerng_sync_cron() ? 0 : 1);
 		case 'updateip':	// Sync 'Force Reload IP only' [DEPRECATED — use pfb_trigger scope=ip force=true trigger=force]
 		case 'updatednsbl':	// Sync 'Force Reload DNSBL only' [DEPRECATED — use pfb_trigger scope=dnsbl force=true trigger=force]
-			sync_package_pfblockerng($argv[1]);	// deprecation warning logged inside sync_package_pfblockerng
-			break;
+			exit(sync_package_pfblockerng($argv[1]) ? 0 : 1);	// deprecation warning logged inside sync_package_pfblockerng
 		case 'update':		// Sync 'Force update' [DEPRECATED — use pfb_trigger scope=both force=false trigger=manual]
-			sync_package_pfblockerng('update');	// deprecation warning logged inside sync_package_pfblockerng
-			break;
+			exit(sync_package_pfblockerng('update') ? 0 : 1);	// deprecation warning logged inside sync_package_pfblockerng
 		case 'pfb_trigger':	// ADR-43: explicit {scope, force, trigger} API
 			// Usage: pfblockerng.php pfb_trigger scope=<both|ip|dnsbl> force=<true|false> trigger=<cron|manual|force>
 			$pfb_tscope   = 'both';
@@ -284,16 +282,18 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 				pfb_logger("pfb_trigger: unknown trigger={$pfb_ttrigger} ignored — defaulting to 'manual'\n", 1);
 				$pfb_ttrigger = 'manual';
 			}
-			sync_package_pfblockerng(array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger));
-			break;
+			exit(sync_package_pfblockerng(array('scope' => $pfb_tscope, 'force' => $pfb_tforce, 'trigger' => $pfb_ttrigger)) ? 0 : 1);
 		case 'forcecheck':	// On-demand detector: bypass hour-gate, run pfb_update_check for all in-scope feeds.
 			// Usage: pfblockerng.php forcecheck scope=<both|ip|dnsbl>
 			// Validators (and optionally hashes) must be cleared by the caller before dispatching
 			// this verb so the detector re-fetches and re-evaluates feed content.
 			$pfb_fcscope = 'both';
+			$pfb_fchashes = FALSE;
 			foreach (array_slice($argv, 2) as $pfb_fcarg) {
 				if (str_starts_with($pfb_fcarg, 'scope=')) {
 					$pfb_fcscope = substr($pfb_fcarg, 6);
+				} elseif ($pfb_fcarg === 'hashes=true') {
+					$pfb_fchashes = TRUE;
 				}
 			}
 			if (!in_array($pfb_fcscope, array('ip', 'dnsbl', 'both'), TRUE)) {
@@ -301,10 +301,13 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 				$pfb_fcscope = 'both';
 			}
 			pfb_logger("\n [ Force check - scope={$pfb_fcscope} ]\n", 1);
-			pfblockerng_sync_cron(TRUE, $pfb_fcscope);
-			break;
+			exit(pfblockerng_sync_cron(TRUE, $pfb_fcscope, FALSE, $pfb_fchashes) ? 0 : 1);
 		case 'dc':		// Update Extras - MaxMind/TOP1M/ASN database files
 		case 'dcc':
+			$scheduled = ($argv[2] ?? '') === 'scheduled';
+			if (!$scheduled && !pfb_extras_process_begin()) {
+				exit(1);
+			}
 
 			// 'dcc' called via Cron job
 			if ($argv[1] == 'dcc') {
@@ -339,17 +342,21 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 
 			// Download Database updates
 			$extras_ok = pfblockerng_download_extras(600, $logtype);
-			pfb_top1m_dispatch_if_changed($extras_ok);
+			$top1m_changed = pfb_top1m_dispatch_if_changed($extras_ok, !$scheduled);
 			if ($extras_ok) {
 				// Proceed with conversion of MaxMind files on download success
 				if (empty($pfb['cc']) || !empty($pfb['maxmind_key']) || !empty($pfb['maxmind_account'])) {
-					if (pfblockerng_uc_countries()) {
-						pfblockerng_get_countries();
-					}
+						$extras_ok = pfblockerng_uc_countries('/usr/local/www/pfblockerng');
 				}
 			}
+			$dcc_changed = $top1m_changed || file_exists("{$pfb['dbdir']}/geoip.update");
+			exit(!$extras_ok ? ($scheduled && $dcc_changed ? 3 : 1) : ($scheduled && $dcc_changed ? 2 : 0));
 			break;
 		case 'bu':		// Update MaxMind binary database files only.
+			$scheduled = ($argv[2] ?? '') === 'scheduled';
+			if (!$scheduled && !pfb_extras_process_begin()) {
+				exit(1);
+			}
 			// Remove MaxMind updates if Key or Account not defined
 			if (empty($pfb['maxmind_key']) || empty($pfb['maxmind_account'])) {
 				pfb_logger("\nTerminating MaxMind download due to invalid Account or Key", 2);
@@ -360,11 +367,19 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			pfblockerng_download_extras(600, 3);
 			break;
 		case 'al':		// Update TOP1M database only.
+			$scheduled = ($argv[2] ?? '') === 'scheduled';
+			if (!$scheduled && !pfb_extras_process_begin()) {
+				exit(1);
+			}
 			unset($pfb['extras'][0], $pfb['extras'][1], $pfb['extras'][3], $pfb['extras'][4]); // Remove MaxMind GeoIP mmdb, CSV and ASN
 			pfblockerng_download_extras(600, 3);
 			break;
 		case 'asn':		// Update ASN database only
 		case 'asn_shell':
+			$scheduled = ($argv[2] ?? '') === 'scheduled';
+			if (!$scheduled && !pfb_extras_process_begin()) {
+				exit(1);
+			}
 			// Skip ASN update, if disabled or Token not defined
 			if (empty($pfb['asn_token'])) {
 				$asn_log = "\n  ASN Token not defined. Terminating Download. ";
@@ -381,6 +396,10 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 			break;
 		case 'bl':		// Update DNSBL Category database(s) only.
 		case 'bls':
+			$scheduled = ($argv[2] ?? '') === 'scheduled';
+			if (!$scheduled && !pfb_extras_process_begin()) {
+				exit(1);
+			}
 			// Exit if no Blacklist Extra found
 			if (empty($pfb['extras'][$next_key_start])) {
 				break;
@@ -389,22 +408,32 @@ if (isset($argv[1]) && in_array($argv[1], array('update', 'updateip', 'updatedns
 
 			// 'bls' called via 'Force Update|Reload'
 			if ($argv[1] == 'bls') {
-				$pfb_return = pfblockerng_download_extras(600, 'blacklist');
-				return $pfb_return;
+				$extras_ok = pfblockerng_download_extras(600, 'blacklist');
+				exit($extras_ok ? 0 : 1);
 			}
 			else {
-				pfblockerng_download_extras(600, 3);
+				$extras_ok = pfblockerng_download_extras(600, 3);
+				exit($extras_ok ? 0 : 1);
 			}
 			break;
 		case 'uc':		// Update MaxMind ISO files from local database files.
-			pfblockerng_uc_countries();
+			if (!pfb_extras_process_begin()) {
+				exit(1);
+			}
+			exit(pfblockerng_uc_countries() ? 0 : 1);
 			break;
 		case 'gc':		// Update Continent XML files.
-			pfblockerng_get_countries();
+			if (!pfb_extras_process_begin()) {
+				exit(1);
+			}
+			exit(pfblockerng_get_countries() ? 0 : 1);
 			break;
 		case 'ugc':
-			if (pfblockerng_uc_countries()) {
-				pfblockerng_get_countries();
+			if (!pfb_extras_process_begin()) {
+				exit(1);
+			}
+			if (!pfblockerng_uc_countries('/usr/local/www/pfblockerng')) {
+				exit(1);
 			}
 
 			if (!empty($argv[2]) && !empty($argv[3])) {
@@ -460,13 +489,15 @@ function pfb_top1m_detector_decision(
 	return pfb_top1m_probe_decision($probe_ok, $http_status, $body_hash, $persisted_hash);
 }
 
-function pfb_top1m_dispatch_if_changed($extras_ok) {
+function pfb_top1m_dispatch_if_changed($extras_ok, bool $dispatch = TRUE) {
 	global $argv, $pfb;
 	if (($argv[1] ?? '') !== 'dcc' || empty($pfb['top1m_changed']) || !empty($pfb['top1m_dispatch_done'])) {
 		return FALSE;
 	}
 	$pfb['top1m_dispatch_done'] = TRUE;
-	exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
+	if ($dispatch) {
+		exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=dnsbl force=false trigger=cron >> {$pfb['runlog']} 2>&1 &");
+	}
 	return TRUE;
 }
 
@@ -596,9 +627,7 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 
 			// On Extras update (MaxMind and TOP1M), if error found when downloading MaxMind Country database
 			// return error to update process
-			if ($feed['file_dwn'] == 'GeoLite2-Country-CSV.zip') {
-				$pfb_error = TRUE;
-			}
+			$pfb_error = TRUE;
 
 			if ($type == 'blacklist') {
 				$pfb_return .= "\t{$feed['name']} ... Failed\n";
@@ -626,13 +655,12 @@ function pfblockerng_download_extras($timeout=600, $type='') {
 
 	if ($type == 'blacklist') {
 		print "{$pfb_return}";
-	} else {
-		return !$pfb_error;
 	}
+	return !$pfb_error;
 }
 
 // Function to process the downloaded MaxMind database and format into Continent txt files.
-function pfblockerng_uc_countries() {
+function pfblockerng_uc_countries(?string $output_root = NULL) {
 	global $g, $pfb;
 
 	// Create folders if not exist
@@ -648,8 +676,37 @@ function pfblockerng_uc_countries() {
 	if (!file_exists($maxmind_cont)) {
 		$log = " [ MAXMIND UPDATE FAIL, Language File Missing, using previous Country code database ]\n";
 		pfb_logger("{$log}", 4); 
-		return;
+		return FALSE;
 	}
+
+	// Build a complete private generation before replacing the live last-known-good data.
+	$live_ccdir = $pfb['ccdir'];
+	$live_geoip_isos = $pfb['geoip_isos'];
+	$generation = getmypid() . '.' . bin2hex(random_bytes(4));
+	$stage_ccdir = "{$live_ccdir}.new.{$generation}";
+	$stage_geoip_isos = "{$live_geoip_isos}.new.{$generation}";
+	$stage_output_root = $output_root === NULL ? NULL : "{$output_root}.new.{$generation}";
+	$discard_generation = static function () use (
+		&$pfb, $live_ccdir, $live_geoip_isos, $stage_ccdir, $stage_geoip_isos, $stage_output_root
+	): void {
+		$pfb['ccdir'] = $live_ccdir;
+		$pfb['geoip_isos'] = $live_geoip_isos;
+		rmdir_recursive($stage_ccdir);
+		unlink_if_exists($stage_geoip_isos);
+		if ($stage_output_root !== NULL) {
+			rmdir_recursive($stage_output_root);
+		}
+	};
+	rmdir_recursive($stage_ccdir);
+	unlink_if_exists($stage_geoip_isos);
+	safe_mkdir($stage_ccdir, 0755);
+	if ($stage_output_root !== NULL && !@mkdir($stage_output_root, 0755, TRUE)) {
+		$discard_generation();
+		return FALSE;
+	}
+	$pfb['ccdir'] = $stage_ccdir;
+	$pfb['geoip_isos'] = $stage_geoip_isos;
+	$generation_ok = TRUE;
 
 	// Save Date/Time stamp to MaxMind version file
 	$local_tds	 = @gmdate('Y-m-d H:i:s', pfb_file_mtime($maxmind_cont));
@@ -707,6 +764,9 @@ function pfblockerng_uc_countries() {
 		if ($handle) {
 			@fclose($handle);
 		}
+	}
+	else {
+		$generation_ok = FALSE;
 	}
 
 	// Add 'Proxy and Satellite' geoname_ids
@@ -1195,10 +1255,11 @@ function pfblockerng_uc_countries() {
 											$iso_header = pfb_geoip_networks_header($iso_file, $geoip['name'], $geoip_id, $iso);
 											@file_put_contents($pfb_file, $iso_header, FILE_APPEND | LOCK_EX);
 
-											// Concat ISO Networks to Continent file
-											if (!pfb_geoip_append_iso_data($pfb['cat'], $iso_file, $pfb_file, $pfb['ccdir_tmp'], $iso, $type)) {
-												return FALSE;
-											}
+										// Concat ISO Networks to Continent file
+										if (!pfb_geoip_append_iso_data($pfb['cat'], $iso_file, $pfb_file, $pfb['ccdir_tmp'], $iso, $type)) {
+											$discard_generation();
+											return FALSE;
+										}
 										}
 										else {
 											// Create placeholder file for undefined 'ISO Represented' or undefined Countries
@@ -1236,10 +1297,127 @@ function pfblockerng_uc_countries() {
 		else {
 			$log = "\n Failed to load file: {$maxmind_cc}\n";
 			pfb_logger("{$log}", 4);
+			$generation_ok = FALSE;
 		}
 
 	}
 	unset($pfb_geoip);
 	rmdir_recursive("{$pfb['ccdir_tmp']}");
+	$required_files = array($stage_geoip_isos);
+	foreach (array('4', '6') as $type) {
+		foreach (array('Africa', 'Antarctica', 'Asia', 'Europe', 'North_America', 'Oceania', 'South_America', 'Proxy_and_Satellite') as $continent) {
+			$required_files[] = "{$stage_ccdir}/{$continent}_v{$type}.txt";
+		}
+	}
+	foreach ($required_files as $required_file) {
+		if (!is_file($required_file)) {
+			$generation_ok = FALSE;
+			break;
+		}
+	}
+	if (!$generation_ok) {
+		$discard_generation();
+		return FALSE;
+	}
+	if ($stage_output_root !== NULL && !pfblockerng_get_countries($stage_output_root)) {
+		$discard_generation();
+		return FALSE;
+	}
+
+	$pfb['ccdir'] = $live_ccdir;
+	$pfb['geoip_isos'] = $live_geoip_isos;
+	$backup_root = "{$live_ccdir}.old.{$generation}";
+	$backup_ccdir = "{$backup_root}/countries";
+	$backup_output_root = "{$backup_root}/ui";
+	$swap_sentinel = "{$live_ccdir}/.pfb_generation_swapping";
+	safe_mkdir($backup_ccdir, 0755);
+	safe_mkdir($backup_output_root, 0755);
+	safe_mkdir($live_ccdir, 0755);
+	$original_country_files = [];
+	foreach (glob("{$live_ccdir}/*") ?: [] as $live_file) {
+		if (is_file($live_file)) {
+			$name = basename($live_file);
+			$original_country_files[$name] = TRUE;
+			if (!@copy($live_file, "{$backup_ccdir}/{$name}")) {
+				$discard_generation();
+				rmdir_recursive($backup_root);
+				return FALSE;
+			}
+		}
+	}
+	$had_geoip_isos = is_file($live_geoip_isos);
+	if ($had_geoip_isos && !@copy($live_geoip_isos, "{$backup_root}/geoip_isos")) {
+		$discard_generation();
+		rmdir_recursive($backup_root);
+		return FALSE;
+	}
+	if (@file_put_contents($swap_sentinel, $generation, LOCK_EX) === FALSE) {
+		$discard_generation();
+		rmdir_recursive($backup_root);
+		return FALSE;
+	}
+	$published_country_files = [];
+	$published_output_files = [];
+	$publish_ok = TRUE;
+	foreach (glob("{$stage_ccdir}/*") ?: [] as $stage_file) {
+		if (is_file($stage_file)) {
+			$name = basename($stage_file);
+			$published_country_files[$name] = TRUE;
+			if (!@rename($stage_file, "{$live_ccdir}/{$name}")) {
+				$publish_ok = FALSE;
+				break;
+			}
+		}
+	}
+	if ($publish_ok && !@rename($stage_geoip_isos, $live_geoip_isos)) {
+		$publish_ok = FALSE;
+	}
+	if ($publish_ok && $stage_output_root !== NULL) {
+		foreach (glob("{$stage_output_root}/*") ?: [] as $stage_file) {
+			if (is_file($stage_file)) {
+				$name = basename($stage_file);
+				$published_output_files[$name] = TRUE;
+				if (is_file("{$output_root}/{$name}") && !@copy("{$output_root}/{$name}", "{$backup_output_root}/{$name}")) {
+					$publish_ok = FALSE;
+					break;
+				}
+				if (!@rename($stage_file, "{$output_root}/{$name}")) {
+					$publish_ok = FALSE;
+					break;
+				}
+			}
+		}
+	}
+	if (!$publish_ok) {
+		foreach ($published_country_files as $name => $_) {
+			unlink_if_exists("{$live_ccdir}/{$name}");
+		}
+		foreach (glob("{$backup_ccdir}/*") ?: [] as $backup_file) {
+			@rename($backup_file, "{$live_ccdir}/" . basename($backup_file));
+		}
+		if ($had_geoip_isos) {
+			@rename("{$backup_root}/geoip_isos", $live_geoip_isos);
+		} else {
+			unlink_if_exists($live_geoip_isos);
+		}
+		foreach ($published_output_files as $name => $_) {
+			unlink_if_exists("{$output_root}/{$name}");
+			if (is_file("{$backup_output_root}/{$name}")) {
+				@rename("{$backup_output_root}/{$name}", "{$output_root}/{$name}");
+			}
+		}
+		$discard_generation();
+		rmdir_recursive($backup_root);
+		unlink_if_exists($swap_sentinel);
+		return FALSE;
+	}
+	foreach ($original_country_files as $name => $_) {
+		if (!isset($published_country_files[$name])) {
+			unlink_if_exists("{$live_ccdir}/{$name}");
+		}
+	}
+	$discard_generation();
+	rmdir_recursive($backup_root);
+	unlink_if_exists($swap_sentinel);
 	return TRUE;
 }

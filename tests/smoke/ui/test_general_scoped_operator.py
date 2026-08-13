@@ -79,7 +79,7 @@ GENERAL_SAVE_TIMEOUT = 300.0
 
 GEN_CFG_SECTION = "installedpackages/pfblockerng/config/0"
 SOFTWARE_CHECK_CFG = f"{GEN_CFG_SECTION}/pfb_software_check"
-INTERVAL_CFG = f"{GEN_CFG_SECTION}/pfb_interval"
+MARGIN_CFG = f"{GEN_CFG_SECTION}/pfb_log_trim_margin_pct"
 PFB_KEEP_CFG = f"{GEN_CFG_SECTION}/pfb_keep"
 
 # --------------------------------------------------------------------------- #
@@ -283,7 +283,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
 
       When that operator logs in, GETs the General page (200 + the "General
         Settings" marker -- proves the priv routes), then POSTs a save changing
-        ONLY ``pfb_interval`` (an unrelated, differently-write-gated field),
+        ONLY ``pfb_log_trim_margin_pct`` (an unrelated page-owned field),
 
       Then the save succeeds (200, still authenticated, no new gated PHP
         diagnostic), the changed field persists, and ``pfb_software_check`` is
@@ -313,7 +313,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         ``pkg_mgr_installed.php`` for the PRESENT-but-unchanged
         ``pfb_software_check`` key -> ``PfbConfig`` throws ``RuntimeException`` ->
         the save 500s -> ``post_resp.status_code == 200`` fails.
-      * ``pfb_interval`` persisted -- a regression that made the save silently
+      * ``pfb_log_trim_margin_pct`` persisted -- a regression that made the save silently
         no-op (e.g. an over-broad early return) leaves the stored value at its
         PRE-save baseline -> the equality assertion fails.
       * PhpErrorLogGuard -- a regression that let an uncaught exception reach the
@@ -332,7 +332,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
     password = uuid.uuid4().hex
 
     orig_software_state = helpers.config_get_state(vm, SOFTWARE_CHECK_CFG)
-    orig_interval = helpers.config_get(vm, INTERVAL_CFG)
+    orig_margin = helpers.config_get(vm, MARGIN_CFG)
     orig_nextuid = helpers.config_get(vm, "system/nextuid")
 
     user_created = False
@@ -363,10 +363,9 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         render = evaluate_render(GENERAL_PAGE, get_resp.status_code, get_resp.text, GENERAL_MARKERS)
         assert render.ok, f"scoped operator GET {GENERAL_PAGE} failed the render oracle: {render.detail}"
 
-        # Flip an UNRELATED, differently-write-gated select field (default write_priv
-        # == this page, which the operator DOES hold) to a definite new value.
-        new_interval = "2" if orig_interval != "2" else "3"
-        post_resp = scoped.post(GENERAL_PAGE, {"pfb_interval": new_interval}, timeout=GENERAL_SAVE_TIMEOUT)
+        # Flip an unrelated General-page field the operator is allowed to write.
+        new_margin = "25" if orig_margin != "25" else "20"
+        post_resp = scoped.post(GENERAL_PAGE, {"pfb_log_trim_margin_pct": new_margin}, timeout=GENERAL_SAVE_TIMEOUT)
         assert post_resp.status_code == 200, (
             f"scoped operator General save -> HTTP {post_resp.status_code} (expected 200 after the "
             "post-save redirect back to the General page)"
@@ -377,8 +376,8 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
 
         guard.assert_no_growth()
 
-        assert helpers.config_get(vm, INTERVAL_CFG) == new_interval, (
-            "the scoped operator's save of the UNRELATED pfb_interval field did not persist"
+        assert helpers.config_get(vm, MARGIN_CFG) == new_margin, (
+            "the scoped operator's save of the unrelated log-trim margin did not persist"
         )
         assert helpers.config_get(vm, SOFTWARE_CHECK_CFG) == "", (
             "pfb_software_check did not canonicalise legacy 'off' during an unrelated General save -- "
@@ -415,7 +414,7 @@ def test_scoped_operator_general_save_pass_through_and_software_refused(
         # Field restores run BEFORE the user delete: a raised delete must never skip
         # putting the box's config back the way it was.
         helpers.config_restore_state(vm, SOFTWARE_CHECK_CFG, orig_software_state)
-        _set_config_value(vm, INTERVAL_CFG, orig_interval)
+        _set_config_value(vm, MARGIN_CFG, orig_margin)
         if user_created:
             _delete_scoped_user(vm, username, orig_nextuid)
 

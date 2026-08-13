@@ -93,7 +93,9 @@ final class QuarterHourMigrationTest extends TestCase
 		$this->assertSame('23', config_get_path(self::GEN . '/pfb_schedule_hour'));
 		$this->assertSame('45', config_get_path(self::GEN . '/pfb_schedule_minute'));
 		$this->assertSame('0', config_get_path(self::GEN . '/skipfeed'));
-		$this->assertSame('Disabled', config_get_path(self::GEN . '/pfb_interval'));
+		foreach (['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'] as $key) {
+			$this->assertNull(config_get_path(self::GEN . "/{$key}"), "retired General key remains: {$key}");
+		}
 	}
 
 	public function testIntervalVocabularyAndHostileTokens(): void
@@ -177,6 +179,72 @@ final class QuarterHourMigrationTest extends TestCase
 		$this->assertStringNotContainsString('99', $this->noticeText());
 	}
 
+	public function testMalformedCanonicalScheduleFallsBackInsteadOfSuppressingRuntime(): void
+	{
+		config_set_path(self::GEN, [
+			'enable_cb' => 'on', 'pfb_scheduled_feed_updates' => 'on',
+			'pfb_schedule_weekday' => ['7'], 'pfb_schedule_hour' => '24',
+			'pfb_schedule_minute' => '5', 'skipfeed' => '0',
+		]);
+		config_set_path(self::V4, [[
+			'action' => 'Deny_Inbound', 'cron' => 'EveryDay',
+			'row' => [['url' => 'https://example.test', 'state' => 'Enabled']],
+			'schedule_override' => 'on', 'schedule_weekday' => ['2'],
+			'schedule_hour' => '4', 'schedule_minute' => '15',
+		]]);
+		config_set_path(self::V6, []);
+		config_set_path(self::DNS, []);
+
+		pfb_run_migrations();
+
+		$this->assertSame('7', config_get_path(self::GEN . '/pfb_schedule_weekday'));
+		$this->assertSame('0', config_get_path(self::GEN . '/pfb_schedule_hour'));
+		$this->assertSame('0', config_get_path(self::GEN . '/pfb_schedule_minute'));
+		$this->assertSame('7', config_get_path(self::V4 . '/0/schedule_weekday'));
+		$this->assertSame('4', config_get_path(self::V4 . '/0/schedule_hour'));
+		$this->assertSame('15', config_get_path(self::V4 . '/0/schedule_minute'));
+		$this->assertStringContainsString('pfb_schedule_weekday', $this->noticeText());
+		$this->assertStringContainsString('schedule_weekday', $this->noticeText());
+		$this->assertStringNotContainsString('24', $this->noticeText());
+	}
+
+	public function testNonWeeklyDormantWeekdayFallsBackToCurrentGeneralDefault(): void
+	{
+		config_set_path(self::GEN, [
+			'enable_cb' => 'on', 'pfb_scheduled_feed_updates' => 'on',
+			'pfb_schedule_weekday' => '3', 'pfb_schedule_hour' => '4',
+			'pfb_schedule_minute' => '15', 'skipfeed' => '0',
+		]);
+		config_set_path(self::V4, [[
+			'action' => 'Deny_Inbound', 'cron' => 'EveryDay',
+			'row' => [['url' => 'https://example.test', 'state' => 'Enabled']],
+			'schedule_override' => 'on', 'schedule_weekday' => 'bogus',
+			'schedule_hour' => '4', 'schedule_minute' => '15',
+		]]);
+		config_set_path(self::V6, []);
+		config_set_path(self::DNS, []);
+
+		pfb_run_migrations();
+
+		$this->assertSame('3', config_get_path(self::V4 . '/0/schedule_weekday'));
+	}
+
+	public function testPartialCanonicalScheduleUsesRegistryFallbackWithoutRandomReseed(): void
+	{
+		$migrated = pfb_schedule_migrate([
+			self::GEN => [
+				'enable_cb' => 'on', 'pfb_scheduled_feed_updates' => 'on',
+				'pfb_schedule_weekday' => '3', 'pfb_schedule_hour' => '5', 'skipfeed' => '0',
+			],
+			self::V4 => [], self::V6 => [], self::DNS => [],
+		], static fn (): int => 7);
+
+		$this->assertIsArray($migrated);
+		$this->assertSame('3', $migrated[self::GEN]['pfb_schedule_weekday']);
+		$this->assertSame('5', $migrated[self::GEN]['pfb_schedule_hour']);
+		$this->assertSame('0', $migrated[self::GEN]['pfb_schedule_minute']);
+	}
+
 	public function testGroupMigrationCoversIpv4Ipv6DnsblAndWeeklyBranches(): void
 	{
 		$group = static fn (string $action, string $cron, mixed $dow, array $rows): array => [
@@ -195,6 +263,7 @@ final class QuarterHourMigrationTest extends TestCase
 		foreach ([self::V4, self::V6, self::DNS] as $section) {
 			$this->assertSame('4', config_get_path($section . '/0/schedule_hour'));
 			$this->assertSame('15', config_get_path($section . '/0/schedule_minute'));
+			$this->assertNull(config_get_path($section . '/0/dow'), "retired group dow remains in {$section}");
 		}
 		$this->assertSame('on', config_get_path(self::V4 . '/0/schedule_override'));
 		$this->assertSame('3', config_get_path(self::V4 . '/0/schedule_weekday'));
@@ -245,6 +314,12 @@ final class QuarterHourMigrationTest extends TestCase
 		$this->assertSame('7', config_get_path(self::DNS . '/0/schedule_weekday'));
 		$this->assertSame('', config_get_path(self::DNS . '/1/schedule_override'));
 		$this->assertSame('7', config_get_path(self::DNS . '/1/schedule_weekday'));
+		foreach ([self::V4 => 3, self::V6 => 3, self::DNS => 2] as $section => $count) {
+			for ($index = 0; $index < $count; $index++) {
+				$this->assertNull(config_get_path("{$section}/{$index}/dow"),
+					"retired group dow remains in {$section}/{$index}");
+			}
+		}
 		$this->assertStringContainsString('dow', $this->noticeText());
 		$this->assertStringNotContainsString('secret', $this->noticeText());
 	}
@@ -263,10 +338,10 @@ final class QuarterHourMigrationTest extends TestCase
 
 	public function testAlreadyMigratedCanonicalStateIsNoOp(): void
 	{
-		$canonical = ['enable_cb' => 'on', 'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '2', 'pfb_schedule_minute' => '30', 'skipfeed' => '0', 'pfb_interval' => '4'];
+		$canonical = ['enable_cb' => 'on', 'pfb_scheduled_feed_updates' => 'on', 'pfb_schedule_weekday' => '7', 'pfb_schedule_hour' => '2', 'pfb_schedule_minute' => '30', 'skipfeed' => '0'];
 		config_set_path(self::GEN, $canonical);
 		foreach ([self::V4, self::V6, self::DNS] as $section) {
-			config_set_path($section, [['action' => 'Deny_Inbound', 'cron' => 'Weekly', 'dow' => '3', 'row' => $GLOBALS['pfb_test_rows'] ?? [['url' => 'https://example.test', 'state' => 'Enabled']], 'schedule_override' => 'on', 'schedule_weekday' => '3', 'schedule_hour' => '2', 'schedule_minute' => '30']]);
+			config_set_path($section, [['action' => 'Deny_Inbound', 'cron' => 'Weekly', 'row' => $GLOBALS['pfb_test_rows'] ?? [['url' => 'https://example.test', 'state' => 'Enabled']], 'schedule_override' => 'on', 'schedule_weekday' => '3', 'schedule_hour' => '2', 'schedule_minute' => '30']]);
 		}
 		pfb_run_migrations();
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls']);
@@ -282,6 +357,9 @@ final class QuarterHourMigrationTest extends TestCase
 		pfb_run_migrations();
 		$this->assertSame('on', config_get_path(self::GEN . '/pfb_scheduled_feed_updates'));
 		$this->assertSame('2', config_get_path(self::GEN . '/pfb_schedule_hour'));
+		foreach (['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'] as $key) {
+			$this->assertNull(config_get_path(self::GEN . "/{$key}"), "retired General key remains: {$key}");
+		}
 		$this->assertCount(1, $GLOBALS['pfb_test_write_config_calls']);
 		$first = config_get_path(self::GEN);
 		$GLOBALS['pfb_test_write_config_calls'] = [];

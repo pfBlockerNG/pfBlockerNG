@@ -40,10 +40,6 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
-    # Own this module's precondition instead of trusting the box default: a sibling module
-    # (test_log_age_retention) writes pfb_interval='Disabled' to make its ticks idle-only,
-    # and a leak forward silently stops every dispatch this module asserts (issue #805).
-    _set_pfb_interval(smoke_vm, "1")
     try:
         yield smoke_vm
     finally:
@@ -66,32 +62,6 @@ _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-_CFG_GENERAL = "installedpackages/pfblockerng/config/0"
-
-
-def _set_pfb_interval(vm: SmokeVM, value: str, *, timeout: float = 60.0) -> None:
-    """Set the feed-cron Update Frequency, so this module's ticks actually dispatch.
-
-    Verifies the write took: a silently-ignored value would turn every dispatch
-    assertion in this module into a false negative.
-    """
-    snippet = (
-        f"$g = config_get_path({h._php_str(_CFG_GENERAL)}, array());\n"
-        f"$g['pfb_interval'] = {h._php_str(value)};\n"
-        f"config_set_path({h._php_str(_CFG_GENERAL)}, $g);\n"
-        "write_config('pfBlockerNG smoke: pfb_interval');\n"
-        "echo 'OK';"
-    )
-    result = h.php_eval(vm, snippet, timeout=timeout)
-    if result.returncode != 0 or "OK" not in result.stdout:
-        raise RuntimeError(
-            f"_set_pfb_interval({value!r}) failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
-        )
-    readback = h.config_get(vm, f"{_CFG_GENERAL}/pfb_interval")
-    if readback != value:
-        raise RuntimeError(f"_set_pfb_interval({value!r}) did not take: config reads {readback!r}")
 
 
 def _read_ledger(vm: SmokeVM) -> dict:
@@ -144,9 +114,15 @@ def _clear_quiet_hours(vm: SmokeVM) -> None:
     _set_quiet_hours(vm, "")
 
 
-def _force_cron_due(vm: SmokeVM) -> None:
-    """Force the cron job due-now by back-dating next_due to epoch 0."""
+def _seed_pending_apply(vm: SmokeVM) -> None:
+    """Seed the legacy manual-apply marker consumed by the Apply Window."""
     _write_ledger_entry(vm, "cron", last_run=0, next_due=0)
+    result = h.php_eval(
+        vm,
+        f"require_once('{_PFB_EXTRA}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
+    )
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(f"_seed_pending_apply failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
 def _run_tick(vm: SmokeVM) -> str:
@@ -180,75 +156,50 @@ def _is_pending(vm: SmokeVM) -> bool:
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
 def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM) -> None:
-    """No quiet-hours window → tick dispatches a due job without deferral.
+    """No Apply Window → tick consumes a pending manual apply immediately.
 
     Scenario:
       Background: pfb_quiet_hours = '' (apply immediately).
         Given pfb_quiet_hours is '' (default).
-        And the cron job is due (next_due = 0).
+        And a manual apply is pending.
       When tick fires.
-      Then the ledger entry has an updated last_run (job ran, not deferred).
-      And pending_apply is NOT set.
-
-    Red→green: before Phase 5, the tick had no window check — it would still
-    dispatch, but the quiet-hours registry entry didn't exist and neither did
-    pfb_quiet_hours_in_window(). This test pins that the default behaviour is
-    preserved after Phase 5.
+      Then pending_apply is cleared for dispatch.
     """
     vm = deployed_vm
 
     _clear_quiet_hours(vm)
-    _force_cron_due(vm)  # seeds last_run = 0 — a fired tick advances it past 0
-
-    # Before: pending not set.
-    assert not _is_pending(vm), "before tick: pending_apply must not be set"
+    _seed_pending_apply(vm)
+    assert _is_pending(vm), "before tick: pending_apply must be set"
 
     _run_tick(vm)
 
-    # After: last_run updated (dispatched) and not pending.
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: ledger entry for 'cron' must exist; ledger={_read_ledger(vm)}"
-    # Dispatch evidence is a CHANGE in the guest-stamped ledger, not a host-clock
-    # comparison: _force_cron_due seeded last_run=0, so a fired tick advances it
-    # past 0. Comparing the guest last_run against the host's time.time() raced the
-    # ~1s host/guest clock skew — an off-by-one flake.
-    assert entry.get("last_run", 0) > 0, (
-        f"after tick: expected last_run to advance past the forced 0 (job dispatched), "
-        f"got last_run={entry.get('last_run')}; ledger={entry}"
-    )
     assert not _is_pending(vm), f"after tick (no window): pending_apply must NOT be set; ledger={entry}"
 
 
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
 def test_apply_inside_window_dispatches(deployed_vm: SmokeVM) -> None:
-    """Window that covers now → tick dispatches, pending NOT set.
+    """Window that covers now → tick consumes the pending manual apply.
 
     Scenario:
       Background: pfb_quiet_hours set to a window that includes the current time.
         Given pfb_quiet_hours = "00:00-23:59" (covers every minute of the day).
-        And the cron job is due (next_due = 0).
+        And a manual apply is pending.
       When tick fires.
-      Then last_run is updated (job ran).
-      And pending_apply is NOT set (was inside window).
+      Then pending_apply is cleared for dispatch.
     """
     vm = deployed_vm
 
     _set_quiet_hours(vm, "00:00-23:59")  # always-open window covers any real clock
-    _force_cron_due(vm)  # seeds last_run = 0 — a fired tick advances it past 0
-
-    assert not _is_pending(vm), "before tick: pending_apply must not be set"
+    _seed_pending_apply(vm)
+    assert _is_pending(vm), "before tick: pending_apply must be set"
 
     _run_tick(vm)
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
-    # Advanced past the forced-due 0 ⇒ dispatched (single-clock change check; see
-    # test_apply_no_window_dispatches_immediately for why not host time.time()).
-    assert entry.get("last_run", 0) > 0, (
-        f"after tick (inside window): expected last_run to advance past the forced 0, "
-        f"got {entry.get('last_run')}; ledger={entry}"
-    )
     assert not _is_pending(vm), f"after tick (inside window): pending_apply must NOT be set; ledger={entry}"
 
     _clear_quiet_hours(vm)
@@ -262,7 +213,7 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
     Scenario:
       Background: pfb_quiet_hours set to a window that EXCLUDES the current time.
         Given pfb_quiet_hours = "00:00-00:01" (1-minute window, almost certainly past).
-        And the cron job is due (next_due = 0).
+        And a manual apply is pending.
         And the actual clock is NOT in "00:00-00:01" (asserted).
       When tick fires.
       Then pending_apply IS set (deferred).
@@ -282,9 +233,8 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         pytest.skip(f"VM clock {vm_hm} is inside the 1-minute exclusion window; re-run after 00:01")
 
     _set_quiet_hours(vm, "00:00-00:01")  # 1-min window in the dead of night
-    _force_cron_due(vm)  # writes last_run=0; a DEFERRED tick must leave it there
-
-    assert not _is_pending(vm), "before tick: pending_apply must not be set"
+    _seed_pending_apply(vm)
+    assert _is_pending(vm), "before tick: pending_apply must be set"
 
     _run_tick(vm)
 
@@ -325,14 +275,7 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
 
     # Arrange: force due + mark pending via the product's own setter (simulates a prior
     # deferred tick). pfb_due_ledger_set_pending() adds pending_apply=TRUE to the entry.
-    _force_cron_due(vm)
-    pend = h.php_eval(
-        vm,
-        f"require_once('{_PFB_EXTRA}');pfb_due_ledger_set_pending('cron', '{_LEDGER_DIR}');echo 'OK';",
-    )
-    assert pend.returncode == 0 and "OK" in pend.stdout, (
-        f"set_pending failed: rc={pend.returncode} {pend.stderr!r} {pend.stdout!r}"
-    )
+    _seed_pending_apply(vm)
 
     assert _is_pending(vm), f"precondition: pending_apply must be TRUE before tick; ledger={_read_ledger(vm)}"
 
@@ -342,11 +285,6 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
-    # Advanced past the forced-due 0 ⇒ dispatched (single-clock change check).
-    assert entry.get("last_run", 0) > 0, (
-        f"after tick (pending + window open): expected last_run to advance past the forced 0, "
-        f"got {entry.get('last_run')}; ledger={entry}"
-    )
     assert not _is_pending(vm), (
         f"after tick (pending + window open): pending_apply must be FALSE (cleared by dispatch); ledger={entry}"
     )

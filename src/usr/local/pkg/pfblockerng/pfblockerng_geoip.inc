@@ -23,6 +23,10 @@
 // Function to process Continent txt files and create Country ISO files and to Generate GUI PHP files.
 function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') {
 	global $g, $pfb;
+	if (!is_dir($output_root) && !@mkdir($output_root, 0755, TRUE)) {
+		return FALSE;
+	}
+	$output_ok = TRUE;
 
 	$coptions4 = $coptions6 = array();
 	$options4 = $options6 = '';
@@ -125,7 +129,8 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 						// Create placeholder for null ISO Data or 'undefined ISO Represented'
 						if (strpos($line, 'Total Networks: 0') !== FALSE || strpos($line, 'Total Networks: NA') !== FALSE) {
 							if (!empty(pfb_filter($isocode, PFB_FILTER_WORD, 'php'))) {
-								@file_put_contents("{$pfb['ccdir']}/{$isocode}_v{$type}.txt", '', LOCK_EX);
+									$output_ok = @file_put_contents("{$pfb['ccdir']}/{$isocode}_v{$type}.txt", '', LOCK_EX) !== FALSE
+										&& $output_ok;
 							}
 							$pfb['complete'] = TRUE;
 						}
@@ -139,7 +144,9 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 							} else {
 								$total++;
 								if (!empty($line)) {
-									@file_put_contents("{$pfb['ccdir']}/{$isocode}_v{$type}.txt", "{$line}\n", FILE_APPEND | LOCK_EX);
+									$output_ok = @file_put_contents(
+										"{$pfb['ccdir']}/{$isocode}_v{$type}.txt", "{$line}\n", FILE_APPEND | LOCK_EX
+									) !== FALSE && $output_ok;
 								}
 							}
 						}
@@ -151,7 +158,8 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 						if (!empty(pfb_filter($isocode, PFB_FILTER_WORD, 'php'))) {
 							// Create placeholder for null ISO Data or 'undefined ISO Represented'
 							if (strpos($line, 'Total Networks: 0') !== FALSE || strpos($line, 'Total Networks: NA') !== FALSE) {
-								@file_put_contents("{$pfb['ccdir']}/{$isocode}_v{$type}.txt", '', LOCK_EX);
+								$output_ok = @file_put_contents("{$pfb['ccdir']}/{$isocode}_v{$type}.txt", '', LOCK_EX) !== FALSE
+									&& $output_ok;
 							}
 
 							if (file_exists("{$pfb['ccdir']}/{$isocode}_v{$type}.txt")) {
@@ -169,6 +177,9 @@ function pfblockerng_get_countries($output_root = '/usr/local/www/pfblockerng') 
 
 			if ($handle) {
 				@fclose($handle);
+			}
+			else {
+				$output_ok = FALSE;
 			}
 
 			if (empty($continent)) {
@@ -757,7 +768,9 @@ events.push(function() {
 EOF;
 		// Update each Continent PHP file.
 		if (!empty(pfb_filter($continent_en, PFB_FILTER_WORD, 'php'))) {
-			@file_put_contents("{$output_root}/pfblockerng_{$continent_en}.php", $php_data, LOCK_EX);
+			$output_ok = @file_put_contents(
+				"{$output_root}/pfblockerng_{$continent_en}.php", $php_data, LOCK_EX
+			) !== FALSE && $output_ok;
 		}
 
 		// Unset Arrays
@@ -791,13 +804,14 @@ EOF;
 	}
 
 	//Build Reputation Tab
-	pfb_build_reputation_tab($et_options, $output_root);
+	$output_ok = pfb_build_reputation_tab($et_options, $output_root) && $output_ok;
 
 	$log = "Country Code Update Ended\n\n";
 	pfb_logger("{$log}", 4);
 
 	// Unset arrays
 	unset($roptions4, $et_options);
+	return $output_ok;
 }
 
 
@@ -1238,7 +1252,8 @@ EOF;
 	}
 
 	// Save pfBlockerng_reputation.php file
-	@file_put_contents("{$output_root}/pfblockerng_reputation.php", $php_rep, LOCK_EX);
+	$output_ok = @file_put_contents("{$output_root}/pfblockerng_reputation.php", $php_rep, LOCK_EX) !== FALSE;
 	unset($php_rep);
+	return $output_ok;
 }
 ?>

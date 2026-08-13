@@ -97,6 +97,13 @@ _ARRAY_FIELD_CASES: list[tuple[str, str, dict[str, str] | None]] = [
     ("/pfblockerng/pfblockerng_ip.php", "pfb_alias_delta_batch", None),
     ("/pfblockerng/pfblockerng_general.php", "enable_cb", None),  # pfb_filter ON_OFF
     ("/pfblockerng/pfblockerng_general.php", "pfb_log_trim_margin_pct", None),  # is_array/ctype_digit
+    ("/pfblockerng/pfblockerng_general.php", "pfb_scheduled_feed_updates", None),
+    ("/pfblockerng/pfblockerng_general.php", "pfb_schedule_weekday", None),
+    ("/pfblockerng/pfblockerng_general.php", "pfb_schedule_hour", None),
+    ("/pfblockerng/pfblockerng_general.php", "pfb_schedule_minute", None),
+    ("/pfblockerng/pfblockerng_general.php", "pfb_quiet_hours_enabled", None),
+    ("/pfblockerng/pfblockerng_general.php", "pfb_quiet_hours_start", {"pfb_quiet_hours_enabled": "on"}),
+    ("/pfblockerng/pfblockerng_general.php", "pfb_quiet_hours_end", {"pfb_quiet_hours_enabled": "on"}),
     # issue #1106: category_edit's own ingress guard (bypasses pfb_filter entirely).
     ("/pfblockerng/pfblockerng_category_edit.php?type=dnsbl", "aliasname", None),  # preg_match/strlen
     ("/pfblockerng/pfblockerng_category_edit.php?type=dnsbl", "custom", None),  # explode

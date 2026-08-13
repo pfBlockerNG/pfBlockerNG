@@ -414,11 +414,10 @@ final class CfgGatewayTest extends TestCase
 
 	public function testReadReturnsRegisteredDefaultForPlainStringAbsentKey(): void
 	{
-		// pfb_interval default is '1'.
-		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
+		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_schedule_hour'));
 
-		$result = PfbConfig::read('gen/pfb_interval');
-		$this->assertSame('1', $result, 'pfb_interval absent -> "1"');
+		$result = PfbConfig::read('gen/pfb_schedule_hour');
+		$this->assertSame('0', $result, 'pfb_schedule_hour absent -> "0"');
 	}
 
 	public function testReadReturnsRegisteredDefaultForAlexaTypeAbsentKey(): void
@@ -1195,14 +1194,10 @@ final class CfgGatewayTest extends TestCase
 			// pfblockerng/config/0 scalars
 			'enable_cb',
 			'pfb_keep',
-			'pfb_interval',
 			'pfb_scheduled_feed_updates',
 			'pfb_schedule_weekday',
 			'pfb_schedule_hour',
 			'pfb_schedule_minute',
-			'pfb_min',
-			'pfb_hour',
-			'pfb_dailystart',
 			'skipfeed',
 			'pfb_agg_types',
 			'log_max_log',
@@ -1386,8 +1381,8 @@ final class CfgGatewayTest extends TestCase
 	public function testReadRoutesToCorrectConfigPath(): void
 	{
 		// General section key.
-		$this->seedConfig('installedpackages/pfblockerng/config/0/pfb_interval', '6');
-		$this->assertSame('6', PfbConfig::read('gen/pfb_interval'));
+		$this->seedConfig('installedpackages/pfblockerng/config/0/pfb_schedule_hour', '6');
+		$this->assertSame('6', PfbConfig::read('gen/pfb_schedule_hour'));
 
 		// DNSBL settings section key.
 		$this->seedConfig('installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsport', '8080');
@@ -1410,13 +1405,13 @@ final class CfgGatewayTest extends TestCase
 	{
 		// General section key (plain string).
 		// Before: absent.
-		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
+		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_schedule_hour'));
 
 		// When.
-		PfbConfig::write('gen/pfb_interval', '12');
+		PfbConfig::write('gen/pfb_schedule_hour', '12');
 
 		// After: stored.
-		$this->assertSame('12', config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
+		$this->assertSame('12', config_get_path('installedpackages/pfblockerng/config/0/pfb_schedule_hour'));
 	}
 
 	public function testWriteAppliesToggleAdapterBeforeStorage(): void
@@ -1476,14 +1471,14 @@ final class CfgGatewayTest extends TestCase
 	 */
 	public function testDeleteRemovesKeyFromConfigPath(): void
 	{
-		$path = 'installedpackages/pfblockerng/config/0/pfb_interval';
+		$path = 'installedpackages/pfblockerng/config/0/pfb_schedule_hour';
 
 		// Given.
 		$this->seedConfig($path, '3');
 		$this->assertSame('3', config_get_path($path), 'before: key is set');
 
 		// When.
-		PfbConfig::delete('gen/pfb_interval');
+		PfbConfig::delete('gen/pfb_schedule_hour');
 
 		// After.
 		$this->assertNull(config_get_path($path), 'after delete: key is gone');
@@ -1533,7 +1528,7 @@ final class CfgGatewayTest extends TestCase
 	public function testReadSectionReturnsSeededSectionArray(): void
 	{
 		$section = 'installedpackages/pfblockerng/config/0';
-		$data    = ['enable_cb' => 'on', 'pfb_keep' => 'on', 'pfb_interval' => '6'];
+		$data    = ['enable_cb' => 'on', 'pfb_keep' => 'on', 'pfb_schedule_hour' => '6'];
 
 		// Before: absent.
 		$this->assertSame([], PfbConfig::readSection($section), 'before: empty section returns []');
@@ -2794,7 +2789,7 @@ final class CfgGatewayTest extends TestCase
 		PfbConfig::read('gen/pfb_keep');
 		PfbConfig::delete('gen/pfb_keep');
 		PfbConfig::readSection('installedpackages/pfblockerng/config/0');
-		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', ['pfb_keep' => '', 'pfb_interval' => '1']);
+		PfbConfig::writeSection('installedpackages/pfblockerng/config/0', ['pfb_keep' => '', 'pfb_schedule_hour' => '1']);
 		PfbConfig::deleteSection('installedpackages/pfblockerng/config/0');
 
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'],
@@ -2830,8 +2825,15 @@ final class CfgGatewayTest extends TestCase
 
 		$alias_of_section = array_flip(PFB_SECTIONS);
 		$registry         = pfb_cfg_registry();
+		$retired = ['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'];
+		foreach ($retired as $bare) {
+			$this->assertArrayHasKey($bare, $fixture, "historical fixture must retain retired key '{$bare}'");
+		}
 
 		foreach ($fixture as $bare => $expected) {
+			if (in_array($bare, $retired, TRUE)) {
+				continue;
+			}
 			$this->assertArrayHasKey($expected['section'], $alias_of_section,
 				"fixture entry '{$bare}': section '{$expected['section']}' has no PFB_SECTIONS alias"
 			);

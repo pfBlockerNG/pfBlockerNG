@@ -1603,7 +1603,7 @@ whoisconvert() {
 			# Download IPinfo asn databases on first use.
 			if [ ! -f "${pathasncsv}" ]; then
 				printf 'Downloading [ IPinfo databases ] [ %s ]' "${now}"
-				/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php asn_shell
+				/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php asn_shell scheduled
 				printf "... completed"
 			fi
 
@@ -1724,7 +1724,7 @@ reputation_depends() {
 	# Download MaxMind GeoLite2-Country.mmdb on first install.
 	if [ ! -f "${pathgeoipdat}" ]; then
 		echo "Downloading [ MaxMind GeoLite2-Country.mmdb ] [ ${now} ]" >> "${geoiplog}"
-		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bu
+		/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bu scheduled
 	fi
 
 	# Exit if GeoLite2-Country.mmdb is not found

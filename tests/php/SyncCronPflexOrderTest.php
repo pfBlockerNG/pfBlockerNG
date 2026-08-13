@@ -63,6 +63,16 @@ final class SyncCronPflexOrderTest extends TestCase
 		);
 	}
 
+	public function testCronOwnsDispatcherBeforeFeedLockThroughOutcomePublication(): void
+	{
+		$dispatch = strpos(self::$functionBody, 'pfb_schedule_dispatch_begin');
+		$feed = strpos(self::$functionBody, "pfb_feed_pass_begin('cron')");
+		$this->assertNotFalse($dispatch);
+		$this->assertNotFalse($feed);
+		$this->assertLessThan($feed, $dispatch);
+		$this->assertStringContainsString('pfb_schedule_dispatch_release', self::$functionBody);
+	}
+
 	/**
 	 * Scenario: pfblockerng_sync_cron() processes a row whose .fail marker
 	 * exists (the retry branch).
@@ -96,5 +106,45 @@ final class SyncCronPflexOrderTest extends TestCase
 			. "--- around derivation (offset {$derivationPos}) ---\n" . $snippet($body, $derivationPos) . "\n"
 			. "--- around first call site (offset {$callSitePos}) ---\n" . $snippet($body, $callSitePos)
 		);
+	}
+
+	public function testScheduledApplyHonorsApplyWindowAndPersistsPending(): void
+	{
+		$this->assertStringContainsString('pfb_quiet_hours_in_window', self::$functionBody);
+		$this->assertStringContainsString("pfb_due_ledger_set_pending('cron'", self::$functionBody);
+		$this->assertLessThan(
+			strpos(self::$functionBody, "sync_package_pfblockerng('cron')"),
+			strpos(self::$functionBody, 'pfb_quiet_hours_in_window')
+		);
+	}
+
+	public function testChangedSourcePersistsApplyMarkerBeforeCompletingOccurrence(): void
+	{
+		$check = strpos(self::$functionBody, '$check = static function');
+		$end = strpos(self::$functionBody, '$log =', $check);
+		$this->assertNotFalse($check);
+		$this->assertNotFalse($end);
+		$body = substr(self::$functionBody, $check, $end - $check);
+		$pending = strpos($body, 'pfb_due_ledger_set_pending');
+		$outcome = strpos($body, 'pfb_schedule_state_record_outcome');
+		$this->assertNotFalse($pending);
+		$this->assertNotFalse($outcome);
+		$this->assertLessThan($outcome, $pending);
+		$this->assertStringNotContainsString('pfb_clear_pending_changes()', self::$functionBody,
+			'cron caller must not erase a marker when nested sync defers or fails');
+	}
+
+	public function testExistingHoldCompletesItsReservedOccurrenceBeforeSkipping(): void
+	{
+		$hold = strpos(self::$functionBody, "\$row['state'] == 'Hold'");
+		$this->assertNotFalse($hold);
+		$continue = strpos(self::$functionBody, 'continue;', $hold);
+		$this->assertNotFalse($continue);
+		$outcome = strpos(self::$functionBody, 'pfb_schedule_state_record_outcome', $hold);
+		$this->assertNotFalse($outcome);
+		$this->assertLessThan($continue, $outcome);
+		$clearFail = strpos(self::$functionBody, 'unlink_if_exists', $hold);
+		$this->assertNotFalse($clearFail);
+		$this->assertLessThan($continue, $clearFail, 'healthy Hold source must consume a stale retry marker');
 	}
 }

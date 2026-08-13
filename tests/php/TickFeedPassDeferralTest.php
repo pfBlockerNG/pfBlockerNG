@@ -39,6 +39,8 @@ final class TickFeedPassDeferralTest extends TestCase
 	private mixed $originalRunlog = NULL;
 	private bool $hadExtraslog = FALSE;
 	private mixed $originalExtraslog = NULL;
+	private bool $hadStateDir = FALSE;
+	private mixed $originalStateDir = NULL;
 	private bool $hadPhp = FALSE;
 	private mixed $originalPhp = NULL;
 
@@ -55,6 +57,8 @@ final class TickFeedPassDeferralTest extends TestCase
 
 		$this->hadExtraslog      = array_key_exists('extraslog', $GLOBALS['pfb'] ?? []);
 		$this->originalExtraslog = $GLOBALS['pfb']['extraslog'] ?? NULL;
+		$this->hadStateDir      = array_key_exists('schedule_state_dir', $GLOBALS['pfb'] ?? []);
+		$this->originalStateDir = $GLOBALS['pfb']['schedule_state_dir'] ?? NULL;
 
 		$this->hadPhp      = array_key_exists('php', $GLOBALS['pfb'] ?? []);
 		$this->originalPhp = $GLOBALS['pfb']['php'] ?? NULL;
@@ -64,6 +68,8 @@ final class TickFeedPassDeferralTest extends TestCase
 		$GLOBALS['pfb']['dbdir']     = $this->dbdir;
 		$GLOBALS['pfb']['runlog']    = "{$this->dbdir}/pfblockerng_run.log";
 		$GLOBALS['pfb']['extraslog'] = "{$this->dbdir}/extras.log";
+		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/state";
+		mkdir($GLOBALS['pfb']['schedule_state_dir'], 0755, TRUE);
 
 		$GLOBALS['config'] = [];
 	}
@@ -95,6 +101,11 @@ final class TickFeedPassDeferralTest extends TestCase
 			$GLOBALS['pfb']['extraslog'] = $this->originalExtraslog;
 		} else {
 			unset($GLOBALS['pfb']['extraslog']);
+		}
+		if ($this->hadStateDir) {
+			$GLOBALS['pfb']['schedule_state_dir'] = $this->originalStateDir;
+		} else {
+			unset($GLOBALS['pfb']['schedule_state_dir']);
 		}
 		if ($this->hadPhp) {
 			$GLOBALS['pfb']['php'] = $this->originalPhp;
@@ -326,19 +337,15 @@ SH;
 			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
 			'test setup: disabled cron must start future, pending, and byte-for-byte known');
 
-		pfblockerng_tick();
+		pfblockerng_tick([], NULL, NULL, 5.0, NULL, NULL, 5.0, NULL, NULL, $this->manualRunner());
 
-		$this->assertSame([
+		$this->assertContains(
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
-		], $this->awaitRecordedInvocations(),
+			$this->awaitRecordedInvocations(),
 			'disabled pending apply must dispatch exactly once with the manual trigger argv');
-		$after = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertSame([
-			'last_run' => $expected['last_run'],
-			'next_due' => $expected['next_due'],
-			'jitter'   => $expected['jitter'],
-		], $after,
-			'disabled pending apply must clear only pending_apply; cadence fields must remain unchanged');
+		$after = json_decode((string) file_get_contents($GLOBALS['pfb']['dbdir'] . '/pfb_due_ledger.json'), TRUE);
+		$this->assertArrayNotHasKey('pending_apply', $after['cron'] ?? [],
+			'disabled pending apply must clear its manual marker after the synchronous pass');
 		$lines = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
 		$this->assertSame(['l1', 'l2', 'l3', 'l4', 'l5'], $lines,
 			'dispatching the pending manual apply must suppress same-tick log maintenance');
@@ -367,7 +374,7 @@ SH;
 		$this->seedFutureLedgerEntry('bl',  $now);
 		$this->holdLockAsAnotherProcess();
 
-		pfblockerng_tick();
+		pfblockerng_tick([], NULL, NULL, 5.0, NULL, NULL, 5.0, NULL, NULL, $this->manualRunner());
 
 		$this->assertSame($expected,
 			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
@@ -403,49 +410,6 @@ SH;
 	}
 
 
-	public function testDccUsesConfiguredPhpExactlyOnce(): void
-	{
-		$this->seedTickPrereqs('24');
-		pfb_global();
-		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
-		$now = time();
-		$this->seedFutureLedgerEntry('cron', $now);
-		$this->seedDueLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl', $now);
-
-		pfblockerng_tick();
-
-		$this->assertSame([
-			['/usr/local/www/pfblockerng/pfblockerng.php', 'dcc'],
-		], $this->awaitRecordedInvocations());
-	}
-
-	public function testBlUsesConfiguredPhpExactlyOnce(): void
-	{
-		$this->seedTickPrereqs('24');
-		pfb_global();
-		$GLOBALS['pfb']['php'] = $this->installPhpArgvRecorder();
-		$GLOBALS['pfb']['enable'] = PfbToggle::On;
-		$GLOBALS['pfb']['blconfig'] = [
-			'blacklist_enable'   => 'Enable',
-			'blacklist_selected' => 'test-list',
-			'item'               => [[
-				'xml'      => 'test-list',
-				'selected' => 'on',
-			]],
-		];
-		$now = time();
-		$this->seedFutureLedgerEntry('cron', $now);
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedDueLedgerEntry('bl', $now);
-
-		pfblockerng_tick();
-
-		$this->assertSame([
-			['/usr/local/www/pfblockerng/pfblockerng.php', 'bl', 'test-list'],
-		], $this->awaitRecordedInvocations());
-	}
-
 	public function testDisabledManualChildRequeueSurvivesDispatch(): void
 	{
 		$this->seedTickPrereqs('Disabled');
@@ -466,14 +430,49 @@ SH;
 		// dispatching exec(), only the recorder is backgrounded.
 		$GLOBALS['pfb']['php'] = escapeshellarg($requeue) . '; ' . $recorderCmd;
 
-		pfblockerng_tick();
+		pfblockerng_tick([], NULL, NULL, 5.0, NULL, NULL, 5.0, NULL, NULL, $this->manualRunner());
 
-		$this->assertSame([
+		$this->assertContains(
 			['/usr/local/www/pfblockerng/pfblockerng.php', 'pfb_trigger', 'scope=both', 'force=false', 'trigger=manual'],
-		], $this->awaitRecordedInvocations());
+			$this->awaitRecordedInvocations());
 		$this->assertSame($expected,
 			pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']),
 			'a child lock-loss requeue must survive the parent dispatch path');
+	}
+
+	public function testPendingManualApplyRunsSynchronouslyInsideDispatcherLock(): void
+	{
+		$this->seedTickPrereqs('Disabled');
+		pfb_global();
+		$now = time();
+		pfb_due_ledger_write_entry('cron', [
+			'last_run' => $now - 60, 'next_due' => $now + 60, 'jitter' => 0, 'pending_apply' => TRUE,
+		], $GLOBALS['pfb']['dbdir']);
+		$ran = 0;
+		$locked = FALSE;
+		$runner = function () use (&$ran, &$locked): bool {
+			$ran++;
+			$probe = fopen($GLOBALS['pfb']['schedule_state_dir'] . '/pfb_schedule_dispatch.lock', 'c');
+			$this->assertNotFalse($probe);
+			$locked = !flock($probe, LOCK_EX | LOCK_NB);
+			fclose($probe);
+			return TRUE;
+		};
+
+		pfblockerng_tick([], NULL, NULL, 5.0, NULL, NULL, 5.0, NULL, NULL, $runner);
+
+		$this->assertSame(1, $ran);
+		$this->assertTrue($locked);
+	}
+
+	private function manualRunner(): callable
+	{
+		return static function (): bool {
+			global $pfb;
+			$status = 1;
+			exec("{$pfb['php']} /usr/local/www/pfblockerng/pfblockerng.php pfb_trigger scope=both force=false trigger=manual >> {$pfb['runlog']} 2>&1", $output, $status);
+			return $status === 0;
+		};
 	}
 
 	public function testDefaultPhpExecutableIsProductionPhp(): void

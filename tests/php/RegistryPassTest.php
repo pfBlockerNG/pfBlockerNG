@@ -75,7 +75,9 @@ final class RegistryPassTest extends TestCase
 		$result = pfb_registry_pass($sections);
 
 		$this->assertSame('on', $result[self::GEN_SECTION]['pfb_keep'] ?? NULL);
-		$this->assertSame('1', $result[self::GEN_SECTION]['pfb_interval'] ?? NULL);
+		foreach (['pfb_interval', 'pfb_min', 'pfb_hour', 'pfb_dailystart'] as $retired) {
+			$this->assertArrayNotHasKey($retired, $result[self::GEN_SECTION]);
+		}
 		$this->assertSame('tranco', $result[self::DNSBL_SECTION]['top1m_source'] ?? NULL);
 		$this->assertSame('Disable', $result[self::SS_SECTION]['safesearch_enable'] ?? NULL);
 		$this->assertSame('', $result[self::IP_SECTION]['v6suppression'] ?? NULL);

@@ -66,6 +66,7 @@ final class Issue1840SuppUpdateNullPostinstallTest extends TestCase
 
 		$GLOBALS['pfb'] = array_merge(PFB_ISSUE1840_PFB_BASELINE, [
 			'dbdir'    => $this->dbdir,
+			'schedule_state_dir' => $this->dbdir,
 			'log'      => "{$this->dbdir}/pfblockerng.log",
 			'errlog'   => "{$this->dbdir}/error.log",
 			'runlog'   => "{$this->dbdir}/run.log",

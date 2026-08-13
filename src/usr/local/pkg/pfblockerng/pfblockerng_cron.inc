@@ -54,9 +54,10 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 		$log = "\t\t\t\t\t\t\tUpdate found\n";
 		pfb_logger("{$log}", 1);
+		$pfb['cron_update'] = TRUE;
 		$pfb['update_cron'] = TRUE;
 		touch("{$pfbfolder}/{$header}.update");
-		return NULL;
+		return PfbScheduleTerminalResult::Success;
 	}
 	elseif ($format == 'geoip') {
 		if (strpos($list_url, ' ') !== FALSE) {
@@ -87,7 +88,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 
 	if ($pfb['skipfeed'] != 0) {
 		// Determine if previous download fails have exceeded threshold.
-		if ($pfb['failed'][$header] >= $pfb['skipfeed']) {
+		if (($pfb['failed'][$header] ?? 0) >= $pfb['skipfeed']) {
 			$log = "  Max daily download failure attempts exceeded. Clear widget 'failed downloads' to reset.\n\n";
 			pfb_logger("{$log}", 1);
 			unlink_if_exists("{$pfbfolder}/{$header}.fail");
@@ -119,9 +120,10 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 		if ($format == 'rsync') {
 			$log = "\t\t\t\t( rsync )\t\tUpdate found\n";
 			pfb_logger("{$log}", 1);
+			$pfb['cron_update'] = TRUE;
 			$pfb['update_cron'] = TRUE;
 			touch("{$pfbfolder}/{$header}.update");
-			return NULL;
+			return PfbScheduleTerminalResult::Success;
 		}
 
 		// Determine if URL is a pfSense localfile
@@ -203,6 +205,7 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 					// Persist the validators from this 200 response so the next run
 					// can send a conditional GET.
 					pfb_validator_write("{$local_file}", $probe_meta['etag'], $probe_meta['lastmod']);
+					$pfb['cron_update'] = TRUE;
 					$pfb['update_cron'] = TRUE;
 					touch("{$pfbfolder}/{$header}.update");
 					return PfbScheduleTerminalResult::Success;
@@ -248,15 +251,34 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 //   Defaults to FALSE to preserve the existing cron behaviour byte-identically.
 // $scope — 'both' (default), 'ip', or 'dnsbl'; filters which list types are probed.
 //   Defaults to 'both' so existing callers (case 'cron') are unchanged.
-function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
+function pfblockerng_sync_cron(
+	$force_all = FALSE,
+	$scope = 'both',
+	bool $pending_change = FALSE,
+	bool $clear_hashes = FALSE
+): bool {
 	global $pfb, $pfbarr;
+
+	$pfb_dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
+		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
+	if (!pfb_schedule_dispatch_begin()) {
+		pfb_logger("\n Scheduled feed pass deferred: dispatcher lock unavailable; durable pending occurrences retained.\n", 1);
+		return FALSE;
+	}
 
 	// issue #1175: serialize feed passes -- same ownership discipline as
 	// sync_package_pfblockerng(); its tail call below reenters the SAME lock.
 	$pfb_feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock']);
 	if (!pfb_feed_pass_begin('cron')) {
 		pfb_logger("\n Scheduled feed pass deferred: feed lock unavailable; durable pending occurrences retained.\n", 1);
-		return;
+		if ($pfb_dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		return FALSE;
+	}
+	if ($force_all) {
+		$dirs = pfb_force_scope_dirs($scope, $pfb['origdir'], $pfb['dnsorigdir']);
+		pfb_force_clear_validators($dirs, $clear_hashes);
 	}
 
 	// Open the per-run log window BEFORE the first log line so the live viewer mirrors the whole
@@ -278,7 +300,10 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 			if ($pfb_feed_pass_owner) {
 				pfb_feed_pass_release();
 			}
-			return;
+			if ($pfb_dispatch_owner) {
+				pfb_schedule_dispatch_release();
+			}
+			return FALSE;
 		}
 		if ($runtime_model['scheduled']) {
 			foreach ($runtime_model['entries'] as $id => $entry) {
@@ -302,8 +327,16 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 		string $vtype,
 		mixed $srcint
 	) use ($scheduled_runtime, $state_dir): void {
+		global $pfb;
 		$result = pfb_update_check($header, $url, $folder, $orig, $flex, $format, $vtype, $srcint);
 		if ($scheduled_runtime && $result !== NULL) {
+			if ($result === PfbScheduleTerminalResult::Success && !empty($pfb['cron_update'])) {
+				pfb_mark_pending_changes();
+				if (!pfb_due_ledger_set_pending('cron', $pfb['dbdir'])) {
+					pfb_logger("\n Failed to publish pending apply marker; occurrence retained.\n", 2);
+					return;
+				}
+			}
 			pfb_schedule_state_record_outcome($feed_id, $result, $state_dir);
 		}
 	};
@@ -351,6 +384,12 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 
 						// Bypass update if state is defined as 'Hold' and list file exists
 						if ($row['state'] == 'Hold' && file_exists("{$pfbfolder}/{$header}.txt")) {
+							unlink_if_exists("{$pfbfolder}/{$header}.fail");
+							if ($scheduled_runtime && isset($pending_ids[$feed_id])) {
+								pfb_schedule_state_record_outcome(
+									$feed_id, PfbScheduleTerminalResult::Success, $state_dir
+								);
+							}
 							continue;
 						}
 
@@ -367,14 +406,14 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 							if ($scheduled_runtime) {
 								$pfb['scheduled_selected_ids'][$feed_id] = TRUE;
 							}
-							$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+								$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'] ?? '', $vtype, $srcint);
 							continue;
 						}
 
 						if ($force_all) {
-							$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
-						} elseif (isset($pending_ids[$feed_id])) {
-							$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'], $vtype, $srcint);
+								$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'] ?? '', $vtype, $srcint);
+							} elseif (isset($pending_ids[$feed_id])) {
+								$check($feed_id, $header, $row['url'], $pfbfolder, $pfborig, $pflex, $row['format'] ?? '', $vtype, $srcint);
 						}
 					}
 				}
@@ -396,11 +435,25 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 		}
 	}
 
+	$sync_ok = TRUE;
+	$apply_now = !$scheduled_runtime || pfb_quiet_hours_in_window(
+		time(), (string) PfbConfig::read('gen/pfb_quiet_hours')
+	);
 	if ($pfb['update_cron']) {
-		sync_package_pfblockerng('cron');
+		if ($apply_now) {
+			$sync_ok = sync_package_pfblockerng('cron');
+		} else {
+			pfb_mark_pending_changes();
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+			pfb_logger("\n Updates detected; automatic apply deferred until the configured window.\n", 1);
+		}
 		$pfb['update_cron'] = FALSE;
+	} elseif ($pending_change && !$apply_now) {
+		pfb_mark_pending_changes();
+		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+		pfb_logger("\n Pending content change retained until the configured apply window.\n", 1);
 	} else {
-		sync_package_pfblockerng('noupdates');
+		$sync_ok = sync_package_pfblockerng('noupdates');
 		$log = "\n  No Updates required.\n CRON  PROCESS  ENDED\n UPDATE PROCESS ENDED\n";
 		pfb_logger("{$log}", 1);
 	}
@@ -416,4 +469,8 @@ function pfblockerng_sync_cron($force_all = FALSE, $scope = 'both') {
 	if ($pfb_feed_pass_owner) {
 		pfb_feed_pass_release();
 	}
+	if ($pfb_dispatch_owner) {
+		pfb_schedule_dispatch_release();
+	}
+	return $sync_ok;
 }

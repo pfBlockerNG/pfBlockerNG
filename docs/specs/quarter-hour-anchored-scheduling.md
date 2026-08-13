@@ -146,9 +146,9 @@ Mixed hourly/daily/weekly groups do not pull one another early. Multiple groups 
 once each. Two consecutive ticks never run the same occurrence twice.
 
 The shared `cron` cache entry stores the earliest future occurrence among enabled, scheduled
-groups. A cadence, action, active-row state, master-switch, or effective schedule change
-immediately recomputes that wake. A valid cache without a `cron` entry represents no future
-scheduled-feed wake.
+groups. The next tick recomputes that wake after a cadence, action, active-row state,
+master-switch, or effective schedule change. A valid cache without a `cron` entry represents no
+future scheduled-feed wake.
 
 ### Catch-up, pending work, and failure
 
@@ -156,9 +156,10 @@ If downtime crosses one or more occurrences, every affected feed group runs once
 eligible tick. Missed occurrences are never replayed. After that pass, the shared ledger advances
 to the earliest future occurrence.
 
-A busy feed pass or existing pending state preserves one pending occurrence and retries it on the
-next eligible tick. Missing, malformed, or configuration-stale cache state is regenerated before
-due work is selected; cache absence never becomes a second scheduling policy.
+A busy feed pass leaves the active cache and durable state untouched and retries selection on the
+next eligible tick. Existing pending state preserves one occurrence. Missing, malformed, or
+configuration-stale cache state is regenerated before due work is selected; cache absence never
+becomes a second scheduling policy.
 
 Feed download/probe and downstream-processing failures retain their existing retry behavior. In
 particular, an outcome which currently leaves a `.fail` marker continues to retry on later fixed
@@ -181,6 +182,7 @@ removed.
 When `dcc` or `bl` and feeds share a slot, all due Extras refreshes finish before feed processing,
 so feeds consume the newest successful data. An Extras refresh failure keeps and consumes the
 last-known-good data, never clears or partially replaces good data, and never blocks the feed pass.
+It retries at its next scheduled occurrence, not the next fixed tick.
 
 ### Automatic Apply Window
 
@@ -216,15 +218,20 @@ authorization boundary. Authorization denial is covered at that hermetic gateway
 and at pfSense's existing page privilege gate; no unreachable in-page denial seam is introduced.
 
 After authorization and validation, save configuration through the normal pfSense path. Then
-derive the schedule cache into a temporary file, validate it there, and rename it into place.
-Preserve successful-execution/completed-occurrence facts and durable pending markers. If cache
-generation, validation, or publication fails, configuration remains saved and the General page
-visibly reports that schedule-cache generation failed and the likely bug should be reported.
+derive a candidate schedule cache in private temporary storage, reread and validate it there, and
+discard it. The save path never replaces the active cache. If candidate generation or validation
+fails, configuration remains saved and the General page visibly reports that schedule-cache
+generation failed and the likely bug should be reported.
 
-The cache may live in temporary storage. Boot, pfBlockerNG enablement, and every tick regenerate a
-missing, malformed, or configuration-stale cache before scheduling decisions are made. This makes
-power loss between configuration publication and cache rename recoverable without a cross-file
-transaction or journal.
+The cache may live in temporary storage. The first locked scheduling consumer after boot or
+pfBlockerNG enablement, and every later tick or update that finds a missing, malformed, or
+configuration-stale cache, regenerates it before scheduling decisions are made. Save and enable
+paths only validate a private candidate; they never publish the active cache. This makes power loss
+after configuration publication recoverable without a cross-file transaction or journal. The
+scheduled process holds the schedule-dispatch lock and existing feed-pass lock while it regenerates
+the active cache, reserves occurrences, runs Extras and feeds synchronously, writes marker and
+outcome state, and publishes the final cache. No background scheduled worker or timed dispatch
+lease can outlive those locks.
 
 ### Installation and upgrade migration
 
@@ -280,28 +287,29 @@ migrated installation. Fresh groups inherit the Default Schedule (`schedule_over
    pending applies, and editable schedule controls retain their specified behavior.
 9. Due Extras run before feeds at a shared slot. Injected `dcc` and `bl` failures preserve and feed
    last-known-good data and do not block the feed pass.
-10. General and group save tests prove strict scalar/set validation, dormant-value preservation,
-    unchanged override values while Off, delta-aware authorization, immediate cache rephasing,
-    preserved successful-execution/pending facts, and saved configuration plus a visible warning
-    on cache failure.
+10. General save and stored-group runtime tests prove strict scalar/set validation, dormant-value
+    preservation, unchanged override values while Off, delta-aware authorization, disposable
+    candidate validation without active-cache replacement, and saved configuration plus a visible
+    warning on candidate failure.
 11. Automatic Apply Window tests prove empty, inclusive start, exclusive end, midnight wrap, equal-
     endpoint rejection, canonical storage, forgotten endpoints when unchecked, and pending apply at
     the first eligible tick.
 12. `PfbConfig` registry, adapter, inventory, grandfathering, and registered-path sniff tests cover
     every new General field; dynamic group fields remain foreign and round-trip unchanged outside
     their explicit migration/save paths.
-13. General and group UI changes carry Tier-A render coverage and Tier-B browser coverage for
-    control presence, placement, enable/disable behavior, cadence-dependent Weekday behavior,
-    validation errors, save/reload persistence, the existing privilege gate, and cache-failure
-    warnings.
+13. General UI changes carry Tier-A render coverage and Tier-B browser coverage for control
+    presence, placement, enable/disable behavior, validation errors, save/reload persistence, the
+    existing privilege gate, and cache-failure warnings. Feed-group override UI remains deferred.
 14. Focused live smoke proves fresh-install seed persistence, one genuine legacy migration,
     inherited and overridden hourly/daily/weekly dispatch, shared-slot Extras ordering,
     once-only downtime catch-up, cache regeneration, and pending apply-window behavior on selected
     CE and Plus legs.
 15. Cache lifecycle tests cover valid, missing, malformed, configuration-stale, temporary-write
-    failure, validation failure, rename failure, reboot/enable/tick regeneration, and valid no-wake
-    state. Execution-history tests distinguish successful changed and unchanged checks, failures
-    below the retry cap, retry-cap exhaustion, and downstream failure after source success.
+    failure, validation failure, rename failure, first-consumer regeneration after reboot or
+    enablement, later tick/update regeneration, valid no-wake
+    state, lock contention, and synchronous lock ownership through marker/outcome publication.
+    Execution-history tests distinguish successful changed and unchanged checks, failures below
+    the retry cap, retry-cap exhaustion, and downstream failure after source success.
 16. `scripts/agent/run-gates.sh --diff origin/devel` and all focused PHP, smoke, and UI suites pass;
     every behavior change carries frozen test-first red-to-green evidence.
 

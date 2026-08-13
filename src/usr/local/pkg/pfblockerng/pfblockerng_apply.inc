@@ -244,7 +244,7 @@ function pfb_top1m_fetch_if_needed(string $dbdir, ?callable $fetch = NULL): bool
 	if ($fetch !== NULL) {
 		$fetch();
 	} else {
-		exec('/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php al');
+		exec('/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php al scheduled');
 	}
 	return TRUE;
 }
@@ -650,9 +650,18 @@ function pfb_dnsbl_script_reuse_decision(bool $verbatim_reuse_ok, $script_pre, $
 }
 
 // Main pfBlockerNG function
-function sync_package_pfblockerng($cron='') {
+function sync_package_pfblockerng($cron=''): bool {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
+
+	// The update owns scheduler state from before feed selection through final publication.
+	// Nested calls made by a scheduled tick reuse its existing dispatcher hold.
+	$pfb_dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
+		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
+	if (!pfb_schedule_dispatch_begin()) {
+		pfb_mark_pending_changes();
+		return FALSE;
+	}
 
 	// issue #1175: serialize feed passes. Capture ownership BEFORE acquiring -- only the
 	// invocation that transitions the lock releases it (a nested reentrant call no-ops).
@@ -660,8 +669,22 @@ function sync_package_pfblockerng($cron='') {
 	if (!pfb_feed_pass_begin('sync')) {
 		// issue #1277: a lost race must not silently drop the GUI Save/Force --
 		// mirror pfblockerng_tick()'s 'cron' deferral so the next tick retries.
+		pfb_mark_pending_changes();
 		pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
-		return;
+		if ($pfb_dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		return FALSE;
+	}
+	if (!pfb_geoip_generation_ready()) {
+		pfb_mark_pending_changes();
+		if ($pfb_feed_pass_owner) {
+			pfb_feed_pass_release();
+		}
+		if ($pfb_dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		return FALSE;
 	}
 
 	// Open the per-run log window for the live viewer (no-op if pfblockerng_sync_cron() already
@@ -739,7 +762,10 @@ function sync_package_pfblockerng($cron='') {
 		if ($pfb_feed_pass_owner) {
 			pfb_feed_pass_release();
 		}
-		return;
+		if ($pfb_dispatch_owner) {
+			pfb_schedule_dispatch_release();
+		}
+		return TRUE;
 	}
 
 	// ADR-43: normalize the trigger input.
@@ -1829,7 +1855,7 @@ function sync_package_pfblockerng($cron='') {
 
 							$log = "\nDownloading Blacklist Database(s) [{$bl_sources} ] ... Please wait ...\n";
 							pfb_logger("{$log}", 1);
-							exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bls {$bl_string} 2>&1", $pfb_return);
+							exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php bls scheduled {$bl_string} 2>&1", $pfb_return);
 
 							if (is_array($pfb_return)) {
 								foreach ($pfb_return as $return_output) {
@@ -3191,7 +3217,19 @@ function sync_package_pfblockerng($cron='') {
 			if (!preg_grep("/pfblockerng[.]php\s+dc/", $result_cron)) {
 				$log = "\nMaxMind Database downloading and processing ( approx 4MB ) ... Please wait ...\n";
 				pfb_logger("{$log}", 1);
-				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dc >> {$pfb['log']} 2>&1");
+				exec("/usr/local/bin/php /usr/local/www/pfblockerng/pfblockerng.php dc scheduled >> {$pfb['log']} 2>&1", $maxmind_output, $maxmind_status);
+				if ($maxmind_status !== 0 || !pfb_geoip_generation_ready()) {
+					pfb_mark_pending_changes();
+					pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+					pfb_logger("MaxMind processing failed; update deferred.\n", 2);
+					if ($pfb_feed_pass_owner) {
+						pfb_feed_pass_release();
+					}
+					if ($pfb_dispatch_owner) {
+						pfb_schedule_dispatch_release();
+					}
+					return FALSE;
+				}
 				restart_service('pfb_filter');
 			}
 			else {
@@ -4840,7 +4878,12 @@ function sync_package_pfblockerng($cron='') {
 	// A single */15 cron entry fires; the tick reads the due-ledger
 	// and dispatches each job only when its entry says "due". clearip/cleardnsbl
 	// are out of scope (ADR-30 territory) and remain as separate jobs below.
-	pfblockerng_configure_tick_cron($pfb['enable'] === PfbToggle::On, $pfb['log']);
+	pfblockerng_configure_tick_cron(
+		$pfb['enable'] === PfbToggle::On,
+		$pfb['log'],
+		NULL,
+		FALSE
+	);
 
 	// Define pfBlockerNG clear [ dnsbl and/or IP ] counter CRON job
 	foreach (array( 'clearip', 'cleardnsbl') as $type) {
@@ -4963,7 +5006,22 @@ function sync_package_pfblockerng($cron='') {
 	// banner. A General-page save ($pfb['save']=TRUE) deliberately does not reach this, so its
 	// changes stay flagged until a genuine cron/Run-Now Update applies them.
 	if (!$pfb['save']) {
-		pfb_clear_pending_changes();
+		$pending_cleared = !pfb_due_ledger_is_pending('cron', $pfb['dbdir'])
+			|| pfb_due_ledger_update_entry(
+				'cron',
+				static function (?array $entry): array {
+					$entry ??= ['last_run' => 0, 'next_due' => 0, 'jitter' => 0];
+					unset($entry['pending_apply']);
+					return $entry;
+				},
+				$pfb['dbdir']
+			);
+		if ($pending_cleared) {
+			pfb_clear_pending_changes();
+		}
+		if ($pfb['enable'] === PfbToggle::On) {
+			pfb_schedule_cache_refresh_locked();
+		}
 	}
 
 	if ($pfb['enable'] === PfbToggle::On && !$pfb['save'] || $pfb['summary']) {
@@ -4974,4 +5032,8 @@ function sync_package_pfblockerng($cron='') {
 	if ($pfb_feed_pass_owner) {
 		pfb_feed_pass_release();
 	}
+	if ($pfb_dispatch_owner) {
+		pfb_schedule_dispatch_release();
+	}
+	return TRUE;
 }
