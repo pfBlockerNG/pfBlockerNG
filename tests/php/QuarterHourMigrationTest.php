@@ -59,7 +59,14 @@ require {$extra};
 	\$v6 => [],
 	\$dns => [],
 ], static fn (): int => 0);
-echo json_encode(\$migrated[\$v4][0], JSON_THROW_ON_ERROR);
+\$model = [
+	'default' => ['weekday' => 7, 'hour' => 6, 'minute' => 45],
+	'entries' => [
+		'extra:dcc' => ['cadence' => 'EveryDay', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL],
+	],
+];
+\$extras = pfb_schedule_extra_plan(\$model, ['schema' => 1, 'items' => []], strtotime('2026-01-07 07:00:00 UTC'), new DateTimeZone('UTC'));
+echo json_encode(['group' => \$migrated[\$v4][0], 'extras_due' => \$extras['due']], JSON_THROW_ON_ERROR);
 PHP;
 		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
@@ -71,12 +78,14 @@ PHP;
 		$status = proc_close($process);
 
 		$this->assertSame(0, $status, (string) $stderr);
-		$group = json_decode((string) $stdout, TRUE, flags: JSON_THROW_ON_ERROR);
+		$output = json_decode((string) $stdout, TRUE, flags: JSON_THROW_ON_ERROR);
+		$group = $output['group'];
 		$this->assertSame('on', $group['schedule_override']);
 		$this->assertSame('3', $group['schedule_weekday']);
 		$this->assertSame('6', $group['schedule_hour']);
 		$this->assertSame('45', $group['schedule_minute']);
 		$this->assertArrayNotHasKey('dow', $group);
+		$this->assertSame(['extra:dcc'], $output['extras_due']);
 	}
 
 	public function testRegistryAddsCanonicalScheduleFieldsAndFreshSkipfeedDefault(): void

@@ -4088,12 +4088,6 @@ function pfb_geoip_append_iso_data(
 	return TRUE;
 }
 
-/** Consumers must not read a GeoIP generation interrupted during publication. */
-function pfb_geoip_generation_ready(): bool {
-	global $pfb;
-	return empty($pfb['ccdir']) || !is_file($pfb['ccdir'] . '/.pfb_generation_swapping');
-}
-
 /** Hold a shared generation lock until the caller finishes reading and publishing its result. */
 function pfb_geoip_generation_read_lock() {
 	global $pfb;
