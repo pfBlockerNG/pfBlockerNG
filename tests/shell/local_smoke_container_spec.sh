@@ -158,6 +158,11 @@ EOF
     The output should include "-e CIVM_REF='ghcr.io/example/civm:v2'"
   End
 
+  It 'passes box UI credentials into the container'
+    When call bootstrap --ref dummy
+    The output should include '-e SMOKE_ADMIN_USER -e SMOKE_ADMIN_PASSWORD'
+  End
+
   It 'keeps persistent mounts and makes image storage container-local'
     When call bootstrap --ref dummy
     The output should include '/root/pfBlockerNG:/root/pfBlockerNG'

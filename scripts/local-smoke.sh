@@ -235,7 +235,8 @@ _bootstrap="cd /root/pfBlockerNG \
       -v /root/pfBlockerNG:/root/pfBlockerNG \
       -v /root/FreeBSD-ports:/root/FreeBSD-ports \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
-      -e SMOKE_GHCR_TOKEN -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \
+      -e SMOKE_GHCR_TOKEN -e SMOKE_ADMIN_USER -e SMOKE_ADMIN_PASSWORD \
+      -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \
       -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
       -e SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' -e SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \
       -e SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' -e SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \
