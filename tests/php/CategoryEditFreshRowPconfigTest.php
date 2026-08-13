@@ -177,6 +177,18 @@ final class CategoryEditFreshRowPconfigTest extends TestCase
 		$this->assertSame('', $pconfig['custom']);
 	}
 
+	public function testArrayStoredActionFailsClosedWithoutStringWarning(): void
+	{
+		$pconfig = $this->runExpectingNoDiagnostics([4 => [
+			'aliasname' => 'hostile-action',
+			'description' => 'array action',
+			'cron' => 'Never',
+			'action' => ['unexpected'],
+		]], 4, 'dnsbl');
+
+		$this->assertSame('Disabled', $pconfig['action']);
+	}
+
 	// --- Axis 2: populated-key, gtype=ipv4 -- guards are no-ops ---------------
 
 	public function testExistingIpv4RowWithEveryKeyPresentPassesValuesThroughUnchanged(): void

@@ -981,7 +981,8 @@ else {
 	// $rowdata[$rowid] keys -- every other read needs its save-path default (:743-790).
 	$pconfig['aliasname']			= $rowdata[$rowid]['aliasname'] ?? '';
 	$pconfig['description']			= $rowdata[$rowid]['description'] ?? '';
-	$pconfig['action']			= $rowdata[$rowid]['action'] ?? 'Disabled';
+	$pconfig['action']			= is_string($rowdata[$rowid]['action'] ?? NULL)
+				? $rowdata[$rowid]['action'] : 'Disabled';
 	$pconfig['cron']			= $rowdata[$rowid]['cron'] ?? 'Never';
 	$pconfig['sort']			= $rowdata[$rowid]['sort'] ?? 'sort';
 	$pfb_schedule_row = is_array($rowdata[$rowid] ?? NULL) ? $rowdata[$rowid] : [];
@@ -990,7 +991,7 @@ else {
 		$pfb_schedule_row,
 		$pfb_schedule_general,
 		(string) ($pfb_schedule_row['cron'] ?? 'Never'),
-		(string) ($pfb_schedule_row['action'] ?? 'Disabled'),
+		$pconfig['action'],
 		!empty($pfb_schedule_row['row'])
 	);
 	$pconfig['schedule_override'] = in_array($pfb_schedule_row['schedule_override'] ?? '', ['', 'on'], TRUE)
