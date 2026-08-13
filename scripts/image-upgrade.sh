@@ -335,6 +335,11 @@ pfb_switch_branch() {
     log "branch switch confirmed — refreshing pkg catalogue (pkg update -f)"
     _psb_pkg_log="${_psb_log_dir}/pkg-update-branch.log"
     true > "$_psb_pkg_log"
+    _psb_retries="${PKG_LOCK_RETRIES:-12}"
+    _psb_interval="${PKG_LOCK_INTERVAL:-5}"
+    case "$_psb_retries" in '' | *[!0-9]*) _psb_retries=0 ;; esac
+    [ "$_psb_retries" -ge 1 ] || die "PKG_LOCK_RETRIES must be a positive integer"
+    case "$_psb_interval" in *[!0-9]*) die "PKG_LOCK_INTERVAL must be a non-negative integer" ;; esac
     _psb_try=1
     while true; do
         _psb_rc=0
@@ -345,12 +350,12 @@ pfb_switch_branch() {
             *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
             *) die "pkg catalogue refresh failed after branch switch (see $_psb_pkg_log)" ;;
         esac
-        if [ "$_psb_try" -ge "${PKG_LOCK_RETRIES:-12}" ]; then
-            die "pkg catalogue refresh still locked after ${PKG_LOCK_RETRIES:-12} attempts (see $_psb_pkg_log)"
+        if [ "$_psb_try" -ge "$_psb_retries" ]; then
+            die "pkg catalogue refresh still locked after ${_psb_retries} attempts (see $_psb_pkg_log)"
         fi
-        warn "pkg catalogue refresh: pkg database locked; retry ${_psb_try}/${PKG_LOCK_RETRIES:-12} in ${PKG_LOCK_INTERVAL:-5}s"
+        warn "pkg catalogue refresh: pkg database locked; retry ${_psb_try}/${_psb_retries} in ${_psb_interval}s"
         _psb_try=$((_psb_try + 1))
-        sleep "${PKG_LOCK_INTERVAL:-5}"
+        sleep "$_psb_interval"
     done
 }
 # pfb_switch_branch END
