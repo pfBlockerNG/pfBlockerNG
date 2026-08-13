@@ -312,28 +312,19 @@ jobs:
     # continue-on-error on smoke.yml's `uses:` fan-out job. Default false: every
     # other caller (PR gate, nightly, bare dispatch) keeps the hard veto.
     continue-on-error: ${{ inputs.nonblocking }}
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-latest
     container:
-      image: ${{ vars.PFB_LAN_REGISTRY || 'ghcr.io' }}/pfblockerng/ci-runner-vm:7
+      image: ghcr.io/pfblockerng/ci-runner-vm:7
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      # /dev/kvm must cross BOTH boundaries -- Proxmox host to unprivileged LXC, then LXC
-      # to container -- or qemu silently falls back to TCG and the leg times out instead
-      # of failing. The sysctl lets the non-root mock DNS bind :53; it is namespaced, so
-      # the container sets its own. No --user: the self-hosted runner's uid (1000) differs
-      # from the GitHub-hosted one (1001), and pinning either would break the other fleet.
+      # Pass KVM into the container explicitly or qemu silently falls back to TCG.
+      # The sysctl lets the non-root mock DNS bind :53 inside its namespace.
       # NET_ADMIN: helpers.block_egress() (armed by SMOKE_BLOCK_EGRESS below) flips this
       # container netns's iptables OUTPUT policy for the hermetic probes -- Docker's
       # default capability set lacks it and every hermetic case then errors (issue #2261).
       options: --init --device /dev/kvm --cap-add=NET_ADMIN --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
-    # issue #2246: host env does not reach a GHA container job -- the repo
-    # variable is the only channel scripts/resolve-legs.sh's LAN-registry
-    # routing (image-ref/digest/pull) has to detect the LAN zot cache.
-    env:
-      PFB_LAN_REGISTRY: ${{ vars.PFB_LAN_REGISTRY }}
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -346,9 +337,8 @@ jobs:
           persist-credentials: false
 
       - name: Assert KVM acceleration and the egress gate are available
-        # The container gets /dev/kvm via `--device`; the old udev rule that made it
-        # world-RW on a GitHub-hosted runner is gone with the runner. Assert rather than
-        # log: without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
+        # The container gets /dev/kvm via `--device`. Assert rather than log:
+        # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
         # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
           set -eu
@@ -427,28 +417,14 @@ jobs:
           # ADR-47 P5: digest resolved by the shared script (writes digest= k= to $GITHUB_OUTPUT).
           sh scripts/resolve-legs.sh digest "$IMAGE_REF"
 
-      # issue #2246: actions/cache is the GitHub-hosted FALLBACK path only —
-      # skipped whenever the LAN zot cache is active (PFB_LAN_REGISTRY set in
-      # the job env above): zot already serves the same bytes at LAN speed, so
-      # a WAN round-trip to GitHub's own cache backend on top of that would be
-      # strictly worse, never faster. An unset repo variable compares equal to
-      # '' in the `if:` expression below, so this defaults ON for a plain
-      # GitHub-hosted run (no PFB_LAN_REGISTRY var) and OFF on the self-hosted
-      # fleet (var set).
       - name: Restore cached pfSense image
         id: pfcache
-        if: ${{ vars.PFB_LAN_REGISTRY == '' }}
         uses: actions/cache/restore@v5
         with:
           path: image
           key: pfsense-img-${{ steps.digest.outputs.k }}
 
-      # When the restore step above is skipped (LAN mode), its outputs are
-      # empty, so cache-hit != 'true' holds and this always pulls. When the
-      # fallback cache is active, this pulls only on a cache miss, exactly as
-      # before. Either way the pull itself routes through
-      # scripts/resolve-legs.sh pull, which picks up PFB_ORAS_FLAGS/login
-      # skip for the LAN case internally.
+      # Pull only on a cache miss.
       - name: Pull pfSense image (by digest)
         if: steps.pfcache.outputs.cache-hit != 'true'
         env:
@@ -460,9 +436,8 @@ jobs:
 
       # Save right after the pull (before the run) so the image is cached even if
       # a later step fails. Key = the resolved digest, so it never serves stale.
-      # LAN-gated the same as the restore step above.
       - name: Save pfSense image to cache
-        if: ${{ vars.PFB_LAN_REGISTRY == '' && steps.pfcache.outputs.cache-hit != 'true' }}
+        if: steps.pfcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: image
@@ -470,10 +445,9 @@ jobs:
 
       # The civm client VM (ADR-04 two-VM topology) — the realistic LAN client the
       # DNS probes run on. Resolve its digest (cache key), restore-or-pull, and
-      # cache it exactly like the pfSense image (issue #2246: same LAN-gating as
-      # above). The oras login from the digest step above persists in-job
-      # (skipped entirely when the LAN registry is active). SMOKE_CLIENT_IMAGE_NAME/_TAG
-      # are repo VARIABLES (default civm:v1).
+      # cache it exactly like the pfSense image. The oras login from the digest
+      # step above persists in-job. SMOKE_CLIENT_IMAGE_NAME/_TAG are repo
+      # VARIABLES (default civm:v1).
       - name: Resolve civm image ref + digest (cache key)
         id: civm
         env:
@@ -495,7 +469,6 @@ jobs:
 
       - name: Restore cached civm image
         id: civmcache
-        if: ${{ vars.PFB_LAN_REGISTRY == '' }}
         uses: actions/cache/restore@v5
         with:
           path: client-image
@@ -511,7 +484,7 @@ jobs:
           sh scripts/resolve-legs.sh pull "$CIVM_REF" "$DIGEST" client-image
 
       - name: Save civm image to cache
-        if: ${{ vars.PFB_LAN_REGISTRY == '' && steps.civmcache.outputs.cache-hit != 'true' }}
+        if: steps.civmcache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: client-image
