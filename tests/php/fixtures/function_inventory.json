@@ -833,6 +833,54 @@
             }
         ]
     },
+    "pfb_category_schedule_validate": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "general",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "cadence",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "action",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "has_active_rows",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            }
+        ]
+    },
     "pfb_category_script_pre_render": {
         "returnsRef": false,
         "returnType": "array",
@@ -9518,6 +9566,40 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            }
+        ]
+    },
+    "pfb_schedule_cache_candidate_validate": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
             }
         ]
     },

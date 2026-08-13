@@ -174,7 +174,18 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page("category_ip", "/pfblockerng/pfblockerng_category.php?type=ipv4", ("Summary", "pfBlockerNG")),
     Page("category_dnsbl", "/pfblockerng/pfblockerng_category.php?type=dnsbl", ("Summary", "DNSBL")),
     # category_edit.php: default IP view AND the DNSBL view; Form_Section('Advanced Tuneables') is unique to it.
-    Page("category_edit_ip", "/pfblockerng/pfblockerng_category_edit.php?type=ipv4", ("Advanced Tuneables",)),
+    Page(
+        "category_edit_ip",
+        "/pfblockerng/pfblockerng_category_edit.php?type=ipv4",
+        (
+            "Advanced Tuneables",
+            "Override Default Schedule",
+            "schedule_override",
+            "schedule_weekday",
+            "schedule_hour",
+            "schedule_minute",
+        ),
+    ),
     # issue #1926: the DNSBL-only pre-script warning (script_pre help text) must render
     # on the dnsbl view. Markers assert presence only, so the IP view's tuple simply
     # omits it; the DNSBL-only conditioning is pinned server-side by
@@ -182,12 +193,31 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "category_edit_dnsbl",
         "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl",
-        ("Advanced Tuneables", "A DNSBL pre-process script must not remove"),
+        (
+            "Advanced Tuneables",
+            "A DNSBL pre-process script must not remove",
+            "Override Default Schedule",
+            "schedule_override",
+            "schedule_weekday",
+            "schedule_hour",
+            "schedule_minute",
+        ),
     ),
     # ?type=ipv6 renders the issue-#760 §3 "Suppression CIDR Limit" select block (gated
     # `if ($gtype == 'ipv6')`, a code path the ipv4/dnsbl entries above never exercise) --
     # this entry guards it against a PHP render regression.
-    Page("category_edit_ipv6", "/pfblockerng/pfblockerng_category_edit.php?type=ipv6", ("Advanced Tuneables",)),
+    Page(
+        "category_edit_ipv6",
+        "/pfblockerng/pfblockerng_category_edit.php?type=ipv6",
+        (
+            "Advanced Tuneables",
+            "Override Default Schedule",
+            "schedule_override",
+            "schedule_weekday",
+            "schedule_hour",
+            "schedule_minute",
+        ),
+    ),
     # issue #1211: the fresh add/addgroup-row $pconfig block (:868-914) reads keys a
     # fresh row never populates. This GET exercises that exact path (no config write --
     # act=addgroup/atype without $_POST['save'] never persists). NOTE: this tier CANNOT

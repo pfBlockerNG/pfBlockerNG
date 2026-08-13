@@ -866,6 +866,91 @@ function pfb_general_schedule_validate(array $post): array
 	return ['errors' => $errors, 'values' => $errors === [] ? $values : []];
 }
 
+/** Validate and canonicalize a feed-group schedule override before config save. */
+function pfb_category_schedule_validate(
+	array $post,
+	array $stored,
+	array $general,
+	string $cadence,
+	string $action,
+	bool $has_active_rows
+): array {
+	$errors = [];
+	$values = [];
+	$token = static function (mixed $value, int $min, int $max): ?string {
+		if (!is_string($value) || !preg_match('/^(?:0|[1-9][0-9]*)$/D', $value)) {
+			return NULL;
+		}
+		$number = (int) $value;
+		return $number >= $min && $number <= $max ? $value : NULL;
+	};
+	$minute = static function (mixed $value) use ($token): ?string {
+		$value = $token($value, 0, 45);
+		return $value !== NULL && in_array($value, ['0', '15', '30', '45'], TRUE) ? $value : NULL;
+	};
+	$general_weekday = $token($general['pfb_schedule_weekday'] ?? NULL, 1, 7) ?? '7';
+	$general_hour = $token($general['pfb_schedule_hour'] ?? NULL, 0, 23) ?? '0';
+	$general_minute = $minute($general['pfb_schedule_minute'] ?? NULL) ?? '0';
+	$stored_weekday = $token($stored['schedule_weekday'] ?? NULL, 1, 7) ?? $general_weekday;
+	$stored_hour = $token($stored['schedule_hour'] ?? NULL, 0, 23) ?? $general_hour;
+	$stored_minute = $minute($stored['schedule_minute'] ?? NULL) ?? $general_minute;
+	$override = $post['schedule_override'] ?? '';
+	if (!is_string($override)) {
+		$errors[] = 'Override Default Schedule is invalid.';
+		$override = '';
+	} elseif (!in_array($override, ['', 'on'], TRUE)) {
+		$errors[] = 'Override Default Schedule is invalid.';
+		$override = '';
+	}
+	$strict_inputs = !is_string($post['schedule_override'] ?? NULL)
+		|| !in_array($post['schedule_override'] ?? NULL, ['', 'on'], TRUE)
+		|| $override === 'on';
+	foreach (['schedule_weekday', 'schedule_hour', 'schedule_minute'] as $key) {
+		if (array_key_exists($key, $post) && is_array($post[$key])) {
+			$errors[] = ucfirst(str_replace('_', ' ', $key)) . ' is invalid.';
+		} elseif ($strict_inputs && array_key_exists($key, $post)) {
+			$valid = $key === 'schedule_weekday'
+				? $token($post[$key], 1, 7)
+				: ($key === 'schedule_hour' ? $token($post[$key], 0, 23) : $minute($post[$key]));
+			if ($valid === NULL) {
+				$errors[] = ucfirst(str_replace('_', ' ', $key)) . ' is invalid.';
+			}
+		}
+	}
+	$values = [
+		'schedule_override' => $override,
+		'schedule_weekday' => $stored_weekday,
+		'schedule_hour' => $stored_hour,
+		'schedule_minute' => $stored_minute,
+	];
+	if ($override === '') {
+		return ['errors' => $errors, 'values' => $errors === [] ? $values : []];
+	}
+	$weekday = $token($post['schedule_weekday'] ?? NULL, 1, 7);
+	$hour = $token($post['schedule_hour'] ?? NULL, 0, 23);
+	$minute_value = $minute($post['schedule_minute'] ?? NULL);
+	$active = $has_active_rows && $action !== 'Disabled' && $cadence !== 'Never';
+	if ($cadence === 'Weekly' && ($weekday === NULL || $hour === NULL || $minute_value === NULL)) {
+		$errors[] = 'Weekly schedule requires a valid weekday, hour, and minute.';
+	} elseif ($active && $cadence !== 'Weekly' && ($hour === NULL || $minute_value === NULL)) {
+		$errors[] = 'Schedule requires a valid hour and minute.';
+	} elseif (!$active && ($hour === NULL || $minute_value === NULL)) {
+		$hour = $stored_hour;
+		$minute_value = $stored_minute;
+	}
+	if ($errors !== []) {
+		return ['errors' => $errors, 'values' => []];
+	}
+	$values['schedule_hour'] = $hour ?? $stored_hour;
+	$values['schedule_minute'] = $minute_value ?? $stored_minute;
+	if ($cadence === 'Weekly') {
+		$values['schedule_weekday'] = $weekday ?? $stored_weekday;
+	} elseif ($weekday !== NULL) {
+		$values['schedule_weekday'] = $weekday;
+	}
+	return ['errors' => [], 'values' => $values];
+}
+
 // DNSBL-IP is an IP group even though its setting lives on the DNSBL page.
 // Invalid persisted/HA values fail closed before any autorule, path, or alias use.
 function pfb_dnsblip_action_value(mixed $action): string {

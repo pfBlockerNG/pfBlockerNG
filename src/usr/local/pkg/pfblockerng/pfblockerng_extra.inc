@@ -5017,6 +5017,43 @@ function pfb_general_schedule_save_redirect(
 	return $cache_ok ? '/pfblockerng/pfblockerng_general.php' : $failure_redirect;
 }
 
+/** Validate a disposable schedule-cache candidate without touching the active cache. */
+function pfb_schedule_cache_candidate_validate(
+	?array $model,
+	?array $state,
+	mixed $timezone,
+	?int $now = NULL
+): bool {
+	if (!$model || !$state) {
+		return FALSE;
+	}
+	try {
+		$timezone = $timezone instanceof DateTimeZone ? $timezone : new DateTimeZone((string) $timezone);
+	} catch (Throwable) {
+		return FALSE;
+	}
+	$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
+	$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
+	if ($candidate_file !== FALSE) {
+		@unlink($candidate_file);
+		if (!@mkdir($candidate_dir, 0700)) {
+			$candidate_dir = '';
+		}
+	}
+	$ok = $candidate_dir !== ''
+		&& pfb_schedule_cache_refresh($model, $state, $now ?? time(), $timezone, $candidate_dir)
+		&& pfb_due_ledger_read_cache($candidate_dir, $model['config_hash']) !== NULL;
+	if ($candidate_dir !== '') {
+		foreach (scandir($candidate_dir) ?: [] as $artifact) {
+			if ($artifact !== '.' && $artifact !== '..') {
+				@unlink("{$candidate_dir}/{$artifact}");
+			}
+		}
+		@rmdir($candidate_dir);
+	}
+	return $ok;
+}
+
 /** Regenerate the disposable schedule cache without starting update work. */
 function pfb_schedule_cache_refresh_locked(): bool
 {
