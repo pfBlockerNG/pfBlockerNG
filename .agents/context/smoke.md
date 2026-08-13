@@ -4,6 +4,8 @@ Scope: `tests/smoke/` + live-VM harness. Load when: touching `tests/smoke/**` or
 
 `tests/smoke/` installs branch `.pkg` on REAL pfSense CE VM in CI, asserts pfBlockerNG end-to-end. **Run locally first** (no workflow spent): [`docs/misc/local-smoke-debian.md`](../../docs/misc/local-smoke-debian.md), wrapped by `scripts/local-smoke.sh` — already exists; reach for it before asking.
 
+**NEVER remove `.pfb_cron_disable`: every smoke appliance creates it before package install; assert cron registration and invoke `tick` explicitly.**
+
 **Live-VM smoke ALWAYS runs locally — never claim "needs CI" or "cannot run on this host".** `scripts/local-smoke.sh` leases box from **`PFB_BOXES`** pool (ADR-47), runs whole leg — images, build, pytest — **on that box** over ssh, inside `ghcr.io/pfblockerng/ci-runner-vm` (issue #2223). Dev machine needs only `ssh` (macOS included); box needs only `docker` + `git`. Pool = **`root@10.0.0.31` … `root@10.0.0.34`** (four boxes); export verbatim from [`docs/misc/local-smoke-debian.md`](../../docs/misc/local-smoke-debian.md). Never take addresses from `tests/shell/select_box_spec.sh` — those (`10.0.0.23`, `10.0.0.24`) are fake boxes for lease-token assertions; run aimed at them dies with `No route to host`. Red→green proof for `tests/smoke/**` is EXECUTED on leased box (`--marker`/`--filter` to scope), never dispatched to CI, never reasoned through.
 
 Non-obvious truths, each costly to relearn:

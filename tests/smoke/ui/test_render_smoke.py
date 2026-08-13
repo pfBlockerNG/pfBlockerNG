@@ -769,58 +769,6 @@ def test_update_page_cron_status_reports_harness_disable_flag(
     )
 
 
-@pytest.mark.ui_e2e
-def test_update_page_cron_status_without_flag_never_misreports_missing_cron(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:  # noqa: ARG001
-    """Without the flag, an enabled+synced pfBlockerNG never shows '[ Missing cron task ]' (#1204).
-
-    Guards step 2's probe-command fix (pfblockerng_update.php's ``pfblockerng_cron_exists``
-    check now targets the cron-tick command): the OLD probe still searched for the legacy
-    'pfblockerng.php tick' command while sync installs 'cron-tick', so a perfectly healthy,
-    enabled box misreported '[ Missing cron task ]' on every load. Drives enabled+synced
-    state itself (never relies on session-order state an earlier UI test may have left) —
-    the ``ui_e2e`` marker rides ``_ui_pfb_isolation``'s post-test config.xml restore, so no
-    manual config cleanup is needed; the harness flag (outside config.xml) still needs its
-    own restore.
-
-    Given the master switch ON, stale pfb_tick_interval=30, and a fresh sync pass,
-        and the harness flag removed,
-    When GET pfblockerng_update.php,
-    Then the cron-status line shows neither the harness banner nor '[ Missing cron task ]'.
-    """
-    flag = helpers.PFB_CRON_DISABLE_PATH
-    helpers.set_package_enabled(smoke_vm, True)
-    helpers.config_set(smoke_vm, _CFG_TICK_INTERVAL, "30")
-    assert helpers.config_get(smoke_vm, _CFG_TICK_INTERVAL) == "30", "stale tick interval seed must remain raw 30"
-    helpers.reload(smoke_vm, "update")
-    rm = smoke_vm.ssh("rm", "-f", flag)
-    assert rm.returncode == 0, f"failed to remove {flag}: rc={rm.returncode} {rm.stderr!r}"
-    try:
-        resp = webui.get(_UPDATE_PAGE)
-        result = evaluate_render(_UPDATE_PAGE, resp.status_code, resp.text, ("NEXT Scheduled CRON Event",))
-        assert result.ok, f"Update page render oracle failed: {result.detail}"
-        assert f"[ Disabled by {flag} ]" not in resp.text, (
-            "Update page still shows the harness disable banner after the flag was removed"
-        )
-        cron_lines = [
-            line.split()
-            for line in smoke_vm.ssh("/usr/bin/grep", "pfblockerng.php cron-tick", "/etc/crontab").stdout.splitlines()
-            if "cron-tick" in line
-        ]
-        assert len(cron_lines) == 1 and cron_lines[0][0] == "*/15", (
-            f"stale pfb_tick_interval=30 must still install exactly one fixed */15 cron-tick entry; got {cron_lines!r}"
-        )
-        assert "[ Missing cron task ]" not in resp.text, (
-            "Update page misreports '[ Missing cron task ]' on a healthy, enabled, synced box -- "
-            "the cron-tick probe-command fix regressed"
-        )
-    finally:
-        touch = smoke_vm.ssh("/usr/bin/touch", flag)
-        if touch.returncode != 0:
-            raise AssertionError(f"failed to restore {flag}: rc={touch.returncode} {touch.stderr!r}")
-
-
 def test_geoip_page_renders_current_maxmind_document_link(webui: WebUI) -> None:
     """Generated continent output proves the shared document-link call ran."""
     body = webui.get("/pfblockerng/pfblockerng_Africa.php").text

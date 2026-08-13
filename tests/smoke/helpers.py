@@ -398,10 +398,9 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     install-pkg.sh polls ``unbound-control status`` after POST-INSTALL, so on
     return Unbound is ready.
 
-    Also writes the :data:`PFB_CRON_DISABLE_PATH` sentinel: the box's own wall-clock
-    cron-tick must never dispatch an update pass mid-suite (issue #1179's flake) — the
-    suite drives every dispatch explicitly via the ``tick``/``cron-tick`` verbs, which
-    the sentinel never gates (issue #1204).
+    Also reasserts the :data:`PFB_CRON_DISABLE_PATH` sentinel: the box's own wall-clock
+    cron-tick must never dispatch an update pass mid-suite (issue #1179's flake). The
+    suite asserts cron-tick suppression and drives work explicitly via ``tick`` (#1204).
     """
     pkg = pkg_path or os.environ.get("SMOKE_PKG")
     if not pkg or not Path(pkg).is_file():
@@ -457,6 +456,31 @@ def _write_cron_disable_flag(vm: SmokeVM, *, timeout: float = 60.0) -> None:
 
     mkdir -p first: dbdir does not exist before the package's first install.
     """
+    _touch_cron_disable_flag(vm, timeout=timeout)
+    boot_cmd = f"/bin/mkdir -p {PFB_DBDIR} && /usr/bin/touch {PFB_CRON_DISABLE_PATH}"
+    registered = php_eval(
+        vm,
+        "$cmds = config_get_path('system/earlyshellcmd', array());"
+        "if (!is_array($cmds)) { $cmds = empty($cmds) ? array() : array($cmds); }"
+        f"$cmd = {_php_str(boot_cmd)};"
+        "if (!in_array($cmd, $cmds, TRUE)) {"
+        "  $cmds[] = $cmd;"
+        "  config_set_path('system/earlyshellcmd', $cmds);"
+        "  write_config('pfBlockerNG smoke: permanently disable scheduled ticks');"
+        "}"
+        "echo 'OK';",
+        timeout=timeout,
+    )
+    if registered.returncode != 0 or "OK" not in registered.stdout:
+        raise RuntimeError(
+            f"deploy: failed to persist cron-disable boot guard: rc={registered.returncode} "
+            f"stdout={registered.stdout!r} stderr={registered.stderr!r}"
+        )
+
+
+def _touch_cron_disable_flag(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Reassert the scheduled-tick off-switch without changing config.xml."""
+    # NEVER REMOVE: every smoke test must keep scheduled ticks disabled for its entire lifetime.
     result = vm.ssh(f"/bin/mkdir -p {PFB_DBDIR} && /usr/bin/touch {PFB_CRON_DISABLE_PATH}", timeout=timeout)
     if result.returncode != 0:
         raise RuntimeError(
@@ -721,7 +745,7 @@ def deinstall_debug(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 
 PFB_DBDIR = "/var/db/pfblockerng"
 # issue #1204: presence-only sentinel pfb_cron_disabled() checks — mirrors
-# pfb_cron_disable_path()'s default (pfblockerng.inc). Written by deploy() so the
+# pfb_cron_disable_path()'s default (pfblockerng.inc). Written at boot before deploy so the
 # guest's own wall-clock cron-tick never races the suite; never gates the tick verb.
 PFB_CRON_DISABLE_PATH = f"{PFB_DBDIR}/.pfb_cron_disable"
 
@@ -3710,6 +3734,10 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
     # Mirror the initial boot's post-wait_ready gate (conftest boot_vm): block until
     # is_platform_booting() clears so a post-reboot pfBlockerNG sync cannot race boot (#559).
     wait_boot_complete(vm)
+    flag = vm.ssh("/bin/test", "-f", PFB_CRON_DISABLE_PATH)
+    if flag.returncode != 0:
+        raise RuntimeError(f"reboot_vm: earlyshellcmd did not restore {PFB_CRON_DISABLE_PATH} before tests resumed")
+    _write_cron_disable_flag(vm)
     # Extra over a bare boot: the reboot tests probe DNS, so wait for Unbound to answer.
     wait_unbound_ready(vm)
 

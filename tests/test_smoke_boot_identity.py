@@ -150,9 +150,47 @@ def test_boot_and_probe_logs_identity_after_boot_completion(monkeypatch: pytest.
     monkeypatch.setattr(smoke_conftest.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
     monkeypatch.setattr(smoke_conftest.subprocess, "run", fake_run)
     monkeypatch.setattr(live_helpers, "wait_boot_complete", lambda vm: events.append("boot-complete"))
+    monkeypatch.setattr(live_helpers, "_write_cron_disable_flag", lambda vm: events.append("cron-disabled"))
     monkeypatch.setattr(smoke_conftest, "_log_guest_identity", lambda vm: events.append("identity"), raising=False)
 
     handle = smoke_conftest.boot_and_probe(Path("base.qcow2"), "smoke-key", log_path=tmp_path / "vm.log")
     handle.log_file.close()
 
-    assert events == ["boot-complete", "identity"]
+    assert events == ["boot-complete", "cron-disabled", "identity"]
+
+
+def test_smoke_vm_refuses_cron_disable_sentinel_removal(monkeypatch: pytest.MonkeyPatch) -> None:
+    called = False
+
+    def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        nonlocal called
+        called = True
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(smoke_conftest.subprocess, "run", fake_run)
+    vm = smoke_conftest.SmokeVM("smoke-key", "127.0.0.1", 2222, 8080, 5353)
+
+    with pytest.raises(RuntimeError, match="scheduled ticks must stay disabled"):
+        vm.ssh("rm", "-f", "/var/db/pfblockerng/.pfb_cron_disable")
+
+    assert not called, "the forbidden removal must be rejected before SSH runs"
+
+
+def test_cron_disable_guard_persists_across_guest_reboots(monkeypatch: pytest.MonkeyPatch) -> None:
+    live_helpers = importlib.import_module("tests.smoke.helpers")
+    snippets: list[str] = []
+
+    class FakeVM:
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(remote, 0, "", "")
+
+    def fake_php_eval(vm: object, snippet: str, *, timeout: float) -> subprocess.CompletedProcess[str]:
+        snippets.append(snippet)
+        return subprocess.CompletedProcess(snippet, 0, "OK", "")
+
+    monkeypatch.setattr(live_helpers, "php_eval", fake_php_eval)
+    live_helpers._write_cron_disable_flag(cast(Any, FakeVM()))
+
+    assert len(snippets) == 1
+    assert "system/earlyshellcmd" in snippets[0]
+    assert "/var/db/pfblockerng/.pfb_cron_disable" in snippets[0]

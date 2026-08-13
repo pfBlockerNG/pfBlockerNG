@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -278,6 +279,10 @@ class SmokeVM:
 
     def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
         """Run a command on the guest over SSH and capture its output."""
+        sh_command = remote[0] if len(remote) == 1 else shlex.join(remote)
+        # NEVER REMOVE THIS GUARD: scheduled pfBlockerNG ticks must remain disabled for every smoke test.
+        if "/var/db/pfblockerng/.pfb_cron_disable" in sh_command and re.search(r"\b(?:rm|unlink)\b", sh_command):
+            raise RuntimeError("scheduled ticks must stay disabled throughout every smoke run")
         # issue #605: time each guest command, but emit only the heavy ones (>=1s) so the
         # tight poll loops (wait_*, snap_state) don't flood the log with sub-second lines.
         with timed(_ssh_timing_label(remote), min_seconds=step_min_seconds()):
@@ -448,6 +453,8 @@ def boot_and_probe(
 
     try:
         helpers.wait_boot_complete(vm)
+        # NEVER REMOVE: install the scheduler off-switch before pfBlockerNG can be installed.
+        helpers._write_cron_disable_flag(vm)
         _log_guest_identity(vm)
     except Exception:
         # Route a boot-complete failure (its loud timeout, or an SSH/php_eval error) through the
@@ -1585,6 +1592,16 @@ def _dump_vm_on_failure(request: pytest.FixtureRequest) -> Iterator[None]:
     from . import helpers  # local import: helpers imports from conftest (avoid cycle)
 
     helpers.dump_diagnostics(vm)
+
+
+@pytest.fixture(autouse=True)
+def _scheduled_ticks_stay_disabled(request: pytest.FixtureRequest) -> None:
+    """Reassert the scheduler off-switch before every test without booting an unused VM."""
+    vm = request.session.stash.get(SMOKE_VM_KEY, None)
+    if vm is not None:
+        from . import helpers
+
+        helpers._touch_cron_disable_flag(vm)
 
 
 # --------------------------------------------------------------------------- #
