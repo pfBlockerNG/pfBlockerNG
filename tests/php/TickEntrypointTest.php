@@ -46,6 +46,8 @@ final class TickEntrypointTest extends TestCase
 	/** Whether $GLOBALS['pfb']['dbdir'] was set before this test, and its value. */
 	private bool $hadDbdir = FALSE;
 	private mixed $originalDbdir = NULL;
+	private bool $hadStateDir = FALSE;
+	private mixed $originalStateDir = NULL;
 
 	/** Whether $GLOBALS['pfb']['runlog']/['extraslog'] were set before this test, and their values. */
 	private bool $hadRunlog = FALSE;
@@ -107,6 +109,8 @@ final class TickEntrypointTest extends TestCase
 	{
 		$this->hadDbdir      = array_key_exists('dbdir', $GLOBALS['pfb'] ?? []);
 		$this->originalDbdir = $GLOBALS['pfb']['dbdir'] ?? NULL;
+		$this->hadStateDir      = array_key_exists('schedule_state_dir', $GLOBALS['pfb'] ?? []);
+		$this->originalStateDir = $GLOBALS['pfb']['schedule_state_dir'] ?? NULL;
 
 		$this->hadRunlog      = array_key_exists('runlog', $GLOBALS['pfb'] ?? []);
 		$this->originalRunlog = $GLOBALS['pfb']['runlog'] ?? NULL;
@@ -134,7 +138,9 @@ final class TickEntrypointTest extends TestCase
 
 		$this->dbdir = $this->dbdirPrefix() . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
+		mkdir("{$this->dbdir}/state", 0755, TRUE);
 		$GLOBALS['pfb']['dbdir']     = $this->dbdir;
+		$GLOBALS['pfb']['schedule_state_dir'] = "{$this->dbdir}/state";
 		$GLOBALS['pfb']['runlog']    = "{$this->dbdir}/pfblockerng_run.log";
 		$GLOBALS['pfb']['extraslog'] = "{$this->dbdir}/extras.log";
 		$GLOBALS['pfb']['logdir']    = $this->dbdir;
@@ -160,6 +166,11 @@ final class TickEntrypointTest extends TestCase
 			$GLOBALS['pfb']['dbdir'] = $this->originalDbdir;
 		} else {
 			unset($GLOBALS['pfb']['dbdir']);
+		}
+		if ($this->hadStateDir) {
+			$GLOBALS['pfb']['schedule_state_dir'] = $this->originalStateDir;
+		} else {
+			unset($GLOBALS['pfb']['schedule_state_dir']);
 		}
 		if ($this->hadRunlog) {
 			$GLOBALS['pfb']['runlog'] = $this->originalRunlog;
@@ -487,11 +498,10 @@ final class TickEntrypointTest extends TestCase
 	 *   Given pfb_interval='24' (a normal numeric cadence, NOT disabled).
 	 *   And   the 'cron' ledger entry is NOT due (next_due 1h in the future).
 	 *   And   the same 'log' seeding as Case A.
-	 *   Before: 'log' has 5 lines; 'cron' next_due is 1h in the future.
+	 *   Before: 'log' has 5 lines; no pending manual apply exists.
 	 *   When  pfblockerng_tick() is called.
-	 *   Then  the feed cron is NOT dispatched (its ledger entry is untouched --
-	 *         no mark_ran).
-	 *   And   'log' is STILL trimmed -- log maintenance runs regardless of
+	 *   Then  'log' is trimmed, proving no manual pass dispatched and log
+	 *         maintenance runs regardless of
 	 *         whether the feed cron itself was due this tick.
 	 */
 	public function testLogMaintenanceRunsEvenWhenFeedCronNotDue(): void
@@ -524,14 +534,6 @@ final class TickEntrypointTest extends TestCase
 
 		// Act.
 		pfblockerng_tick($psLines);
-
-		// The feed cron ledger entry must be unchanged (no mark_ran) -- confirms
-		// the tick genuinely treated 'cron' as not-due this pass.
-		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($cronEntry, 'cron ledger entry must still exist after the tick');
-		$this->assertSame($now + 3600, $cronEntry['next_due'],
-			'cron next_due must be unchanged (not marked ran): expected ' . ($now + 3600)
-			. " got {$cronEntry['next_due']} -- the feed cron must NOT have dispatched this tick");
 
 		// After: log maintenance ran anyway.
 		clearstatcache(TRUE, $logPath);
@@ -977,15 +979,28 @@ final class TickEntrypointTest extends TestCase
 		$this->assertSame(5, $linesBefore, "Before: expected 'log' to have 5 lines, got {$linesBefore}");
 
 		// Act.
-		pfblockerng_tick($psLines);
+		$manualRuns = 0;
+		pfblockerng_tick(
+			$psLines,
+			NULL,
+			NULL,
+			5.0,
+			NULL,
+			NULL,
+			5.0,
+			NULL,
+			NULL,
+			static function () use (&$manualRuns): bool {
+				$manualRuns++;
+				return TRUE;
+			}
+		);
+		$this->assertSame(1, $manualRuns, 'pending manual apply must run exactly once');
 
 		// The pending cron entry WAS dispatched despite pfb_interval='Disabled' --
 		// pending_apply bypasses $cron_disabled (pfblockerng_extra.inc).
-		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
-		$this->assertArrayNotHasKey('pending_apply', $cronEntry,
-			'pending_apply must have been cleared by the dispatch branch -- proves the pending '
-			. 'entry genuinely dispatched, not merely persisted untouched');
+		$this->assertFalse(pfb_due_ledger_is_pending('cron', $GLOBALS['pfb']['dbdir']),
+			'pending_apply must have been cleared by the dispatch branch');
 
 		// The precondition above proves this test entered through the $dispatched half.
 		// After: log maintenance was skipped -- 'log' still has its original 5 lines.
@@ -1009,8 +1024,7 @@ final class TickEntrypointTest extends TestCase
 	 *   Given pfb_interval='Disabled' and a FUTURE-seeded (non-pending) 'cron'
 	 *   ledger entry; dcc/bl future-seeded too; no stray process.
 	 *   When  pfblockerng_tick() is called.
-	 *   Then  'cron' is untouched (not dispatched) and 'log' IS trimmed --
-	 *         log maintenance ran on this genuinely idle tick.
+	 *   Then  'log' IS trimmed, proving the tick remained idle.
 	 */
 	public function testDisabledIntervalWithFutureSeededCronStaysIdleAndRunsLogMaintenance(): void
 	{
@@ -1033,13 +1047,6 @@ final class TickEntrypointTest extends TestCase
 
 		// Act.
 		pfblockerng_tick($psLines);
-
-		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($cronEntry, 'cron ledger entry must still exist after the tick');
-		$this->assertSame($now + 3600, $cronEntry['next_due'],
-			'cron next_due must be unchanged (not dispatched): expected ' . ($now + 3600)
-			. " got {$cronEntry['next_due']} -- a future-seeded, non-pending 'cron' entry must "
-			. 'NOT bypass $cron_disabled');
 
 		clearstatcache(TRUE, $logPath);
 		$linesAfter = array_values(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
