@@ -4815,6 +4815,50 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_geoip_generation_publication_lock": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "ccdir",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_geoip_generation_publication_unlock": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "lock",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_geoip_generation_read_lock": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": []
+    },
+    "pfb_geoip_generation_read_unlock": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "lock",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
+                "default": null
+            }
+        ]
+    },
     "pfb_geoip_generation_ready": {
         "returnsRef": false,
         "returnType": "bool",

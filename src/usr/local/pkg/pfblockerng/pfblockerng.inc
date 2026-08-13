@@ -4027,6 +4027,70 @@ function pfb_geoip_generation_ready(): bool {
 	return empty($pfb['ccdir']) || !is_file($pfb['ccdir'] . '/.pfb_generation_swapping');
 }
 
+/** Hold a shared generation lock until the caller finishes reading and publishing its result. */
+function pfb_geoip_generation_read_lock() {
+	global $pfb;
+
+	if (isset($GLOBALS['pfb_geoip_generation_read_lock']) &&
+	    is_resource($GLOBALS['pfb_geoip_generation_read_lock'])) {
+		$GLOBALS['pfb_geoip_generation_read_depth']++;
+		return $GLOBALS['pfb_geoip_generation_read_lock'];
+	}
+	if (empty($pfb['ccdir']) || !pfb_geoip_generation_ready()) {
+		return FALSE;
+	}
+	$lock = @fopen($pfb['ccdir'] . '/.pfb_generation.lock', 'c');
+	if ($lock === FALSE || !@flock($lock, LOCK_SH | LOCK_NB)) {
+		if (is_resource($lock)) {
+			@fclose($lock);
+		}
+		return FALSE;
+	}
+	if (!pfb_geoip_generation_ready()) {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
+		return FALSE;
+	}
+	$GLOBALS['pfb_geoip_generation_read_lock'] = $lock;
+	$GLOBALS['pfb_geoip_generation_read_depth'] = 1;
+	return $lock;
+}
+
+function pfb_geoip_generation_read_unlock($lock): void {
+	if (!is_resource($lock) || !isset($GLOBALS['pfb_geoip_generation_read_lock']) ||
+	    $lock !== $GLOBALS['pfb_geoip_generation_read_lock']) {
+		return;
+	}
+	$GLOBALS['pfb_geoip_generation_read_depth']--;
+	if ($GLOBALS['pfb_geoip_generation_read_depth'] > 0) {
+		return;
+	}
+	@flock($lock, LOCK_UN);
+	@fclose($lock);
+	unset($GLOBALS['pfb_geoip_generation_read_lock'], $GLOBALS['pfb_geoip_generation_read_depth']);
+}
+
+/** Exclude readers while a complete staged GeoIP generation replaces live files. */
+function pfb_geoip_generation_publication_lock(string $ccdir) {
+	$lock = @fopen($ccdir . '/.pfb_generation.lock', 'c');
+	if ($lock === FALSE) {
+		return FALSE;
+	}
+	$timed_out = FALSE;
+	if (!pfb_flock_bounded($lock, LOCK_EX, 60.0, $timed_out)) {
+		@fclose($lock);
+		return FALSE;
+	}
+	return $lock;
+}
+
+function pfb_geoip_generation_publication_unlock($lock): void {
+	if (is_resource($lock)) {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
+	}
+}
+
 function pfb_download_extraction_succeeded(int $retval): bool {
 	return $retval === 0;
 }
@@ -11224,13 +11288,18 @@ function ip_explode($ip) {
 // Determine the header which Alerted an IP address and return the header name
 function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 	global $pfb;
-	if ($geoip && !pfb_geoip_generation_ready()) {
-		return array('Unknown', 'Unknown');
+	$geoip_lock = FALSE;
+	if ($geoip) {
+		$geoip_lock = pfb_geoip_generation_read_lock();
+		if ($geoip_lock === FALSE) {
+			return array('Unknown', 'Unknown');
+		}
 	}
 
 	// Find exact IP match
 	$q_ip = pfb_ip_exact_entry_pattern($ip);
 	if ($q_ip === NULL) {
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return array('Unknown', 'Unknown');
 	}
 	$q_ip = escapeshellarg($q_ip);
@@ -11242,6 +11311,7 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 	$query	= exec("{$pfb['grep']} -s {$q_ip} {$pfbfolder} /dev/null 2>&1");
 	if (!empty($query)) {
 		$rx = pfb_parse_query($query);
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return $rx;
 	}
 	else {
@@ -11275,11 +11345,13 @@ function find_reported_header($ip, $pfbfolder, $geoip=FALSE) {
 		$rx = pfb_match_reported_cidr($result, $ip, $v4_type);
 		unset($result);
 		if ($rx !== NULL) {
+			pfb_geoip_generation_read_unlock($geoip_lock);
 			return $rx;
 		}
 	}
 
 	unset($result);
+	pfb_geoip_generation_read_unlock($geoip_lock);
 	return array('Unknown', 'Unknown');
 }
 
@@ -11463,8 +11535,11 @@ function pfb_ip_render_attribution(array $fields): array {
 	global $pfb;
 
 	$rq = pfb_ip_render_query($fields);
-	if ($rq['pfb_geoip'] && !pfb_geoip_generation_ready()) {
-		return array(
+	$geoip_lock = FALSE;
+	if ($rq['pfb_geoip']) {
+		$geoip_lock = pfb_geoip_generation_read_lock();
+		if ($geoip_lock === FALSE) {
+			return array(
 			'host' => $rq['host'],
 			'hostname' => $rq['hostname'],
 			'pfb_geoip' => TRUE,
@@ -11474,7 +11549,8 @@ function pfb_ip_render_attribution(array $fields): array {
 			'eval_new' => 'Not listed!',
 			'alias_new' => '',
 			'pfb_matchtitle' => 'This IP is not currently listed!',
-		);
+			);
+		}
 	}
 	$memos = &pfb_ip_render_memos();
 	$mask = '';
@@ -11529,7 +11605,7 @@ function pfb_ip_render_attribution(array $fields): array {
 		}
 	}
 
-	return array(
+	$result = array(
 		'host' => $rq['host'],
 		'hostname' => $rq['hostname'],
 		'pfb_geoip' => $rq['pfb_geoip'],
@@ -11540,6 +11616,8 @@ function pfb_ip_render_attribution(array $fields): array {
 		'alias_new' => $alias_new,
 		'pfb_matchtitle' => $pfb_matchtitle,
 	);
+	pfb_geoip_generation_read_unlock($geoip_lock);
+	return $result;
 }
 
 
@@ -11667,9 +11745,13 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 	if (empty($hosts)) {
 		return $out;
 	}
-	if ($geoip && !pfb_geoip_generation_ready()) {
-		$grep_failed = array_fill_keys($hosts, TRUE);
-		return $out;
+	$geoip_lock = FALSE;
+	if ($geoip) {
+		$geoip_lock = pfb_geoip_generation_read_lock();
+		if ($geoip_lock === FALSE) {
+			$grep_failed = array_fill_keys($hosts, TRUE);
+			return $out;
+		}
 	}
 
 	// Round A (exact): same command shape as find_reported_header()'s exact-match exec,
@@ -11691,6 +11773,7 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 
 	if ($lines === NULL) {
 		$grep_failed = array_fill_keys($hosts, TRUE);
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return $out;
 	}
 
@@ -11708,6 +11791,7 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 	}
 
 	if (empty($missed)) {
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return $out;
 	}
 
@@ -11764,6 +11848,7 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 		}
 	}
 
+	pfb_geoip_generation_read_unlock($geoip_lock);
 	return $out;
 }
 
@@ -11780,15 +11865,19 @@ function pfb_find_reported_headers(array $hosts, $pfbfolder, $geoip = FALSE, ?ar
 function pfb_ip_prefetch(array $rows): void {
 	global $pfb;
 
-	$geoip_ready = TRUE;
+	$geoip_lock = FALSE;
+	$has_geoip = FALSE;
 	foreach ($rows as $row) {
 		if (!empty($row['pfb_geoip'])) {
-			$geoip_ready = pfb_geoip_generation_ready();
+			$has_geoip = TRUE;
 			break;
 		}
 	}
-	$rows = array_values(array_filter($rows, static function (array $row) use ($geoip_ready): bool {
-		return empty($row['pfb_geoip']) || $geoip_ready;
+	if ($has_geoip) {
+		$geoip_lock = pfb_geoip_generation_read_lock();
+	}
+	$rows = array_values(array_filter($rows, static function (array $row) use ($has_geoip, $geoip_lock): bool {
+		return empty($row['pfb_geoip']) || !$has_geoip || $geoip_lock !== FALSE;
 	}));
 	if (empty($rows)) {
 		return;
@@ -11850,6 +11939,7 @@ function pfb_ip_prefetch(array $rows): void {
 	}
 
 	if (empty($miss_rows)) {
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return;
 	}
 
@@ -11916,6 +12006,7 @@ function pfb_ip_prefetch(array $rows): void {
 	if ($alias_lines === NULL) {
 		// B3: the aliastables pattern file could not be created/written -- leave every
 		// remaining row unseeded (per-row fallback fires for all of them).
+		pfb_geoip_generation_read_unlock($geoip_lock);
 		return;
 	}
 
@@ -11924,6 +12015,7 @@ function pfb_ip_prefetch(array $rows): void {
 		$raw_validate = pfb_ip_prefetch_last_match($alias_lines, $eval_new) ?? '';
 		$memos['miss'][$miss_key] = array($pfb_query, $raw_validate);
 	}
+	pfb_geoip_generation_read_unlock($geoip_lock);
 }
 
 
@@ -16264,7 +16356,8 @@ function pfb_daemon_filterlog() {
 						if (isset($pfb['continent_list'][$geoip_validate])) {
 							$geoip_folder = TRUE;
 						}
-						$geoip_deferred = $geoip_folder && !pfb_geoip_generation_ready();
+						$geoip_lock = $geoip_folder ? pfb_geoip_generation_read_lock() : FALSE;
+						$geoip_deferred = $geoip_folder && $geoip_lock === FALSE;
 						$pfb_query = find_reported_header($host, $folder, $geoip_folder);
 
 						// Report specific ET IQRisk details
@@ -16323,6 +16416,7 @@ function pfb_daemon_filterlog() {
 							}
 							pfb_close_sqlite($db_handle);
 						}
+						pfb_geoip_generation_read_unlock($geoip_lock);
 					}
 
 					// Use cached entries

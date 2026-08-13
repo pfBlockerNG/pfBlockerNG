@@ -151,6 +151,7 @@ final class IpPrefetchTest extends TestCase
 	protected function tearDown(): void
 	{
 		pfb_ip_render_memos_reset();
+		unlink_if_exists("{$this->fixturesDir}/geoip/.pfb_generation.lock");
 
 		foreach (['pfb', 'continents'] as $g) {
 			if ($this->savedGlobals[$g] === null) {
