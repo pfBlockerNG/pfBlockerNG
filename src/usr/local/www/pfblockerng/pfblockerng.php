@@ -1329,6 +1329,11 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 
 	$pfb['ccdir'] = $live_ccdir;
 	$pfb['geoip_isos'] = $live_geoip_isos;
+	$publication_lock = pfb_geoip_generation_publication_lock($live_ccdir);
+	if ($publication_lock === FALSE) {
+		$discard_generation();
+		return FALSE;
+	}
 	$backup_root = "{$live_ccdir}.old.{$generation}";
 	$backup_ccdir = "{$backup_root}/countries";
 	$backup_output_root = $stage_output_root === NULL ? NULL : "{$output_root}.old.{$generation}";
@@ -1349,6 +1354,7 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 				if ($backup_output_root !== NULL) {
 					rmdir_recursive($backup_output_root);
 				}
+				pfb_geoip_generation_publication_unlock($publication_lock);
 				return FALSE;
 			}
 		}
@@ -1360,6 +1366,7 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 		if ($backup_output_root !== NULL) {
 			rmdir_recursive($backup_output_root);
 		}
+		pfb_geoip_generation_publication_unlock($publication_lock);
 		return FALSE;
 	}
 	if (@file_put_contents($swap_sentinel, $generation, LOCK_EX) === FALSE) {
@@ -1368,6 +1375,7 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 		if ($backup_output_root !== NULL) {
 			rmdir_recursive($backup_output_root);
 		}
+		pfb_geoip_generation_publication_unlock($publication_lock);
 		return FALSE;
 	}
 	$published_country_files = [];
@@ -1426,6 +1434,7 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 			rmdir_recursive($backup_output_root);
 		}
 		unlink_if_exists($swap_sentinel);
+		pfb_geoip_generation_publication_unlock($publication_lock);
 		return FALSE;
 	}
 	foreach ($original_country_files as $name => $_) {
@@ -1439,5 +1448,6 @@ function pfblockerng_uc_countries(?string $output_root = NULL) {
 		rmdir_recursive($backup_output_root);
 	}
 	unlink_if_exists($swap_sentinel);
+	pfb_geoip_generation_publication_unlock($publication_lock);
 	return TRUE;
 }
