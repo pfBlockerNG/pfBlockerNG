@@ -3031,10 +3031,10 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
     a tar extraction failure left ``$retval == 0``: the (empty) ``.orig`` file passed the
     inner-content MIME gate (an empty file probes as the allow-listed ``inode/x-empty``)
     and the feed imported as a silent, member-less "empty feed" with NO error logged.
-    This test FAILS on pre-fix code for exactly that reason -- no "Decompression Failed"
+    This test FAILS on pre-fix code for exactly that reason -- no extraction-failure
     line ever appears. The fix (``set -o pipefail``) makes ``$retval`` reflect ``tar``'s
-    real exit status, routing the failure to the existing "Decompression Failed" reject
-    path instead.
+    real exit status. The staged-publish path then rejects the candidate and logs its
+    precise ``zip publish failed`` marker before returning.
 
     Fixture: a valid single-member DEFLATE zip with one byte flipped a few bytes into
     the compressed data stream (past the 30-byte local file header + filename). The
@@ -3043,13 +3043,13 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
     to the listing probe and only surfaces as a CRC failure when ``tar -xOf`` actually
     decompresses the member. That is the live red-before-fix vector this test pins.
 
-    Given the alias is absent and a delta baseline of "Decompression Failed" lines in
+    Given the alias is absent and a delta baseline of ZIP publish-failure lines in
       the pfB log (module-wide, on purpose -- only the delta across THIS case's own
       Force Update window is asserted).
     When the case Force-Updates over the corrupt-payload zip (outer MIME gate sees
       application/zip and the structural listing probe passes, but extraction itself
       fails on the corrupted member),
-    Then the alias remains absent AND a NEW "Decompression Failed" line appears in the
+    Then the alias remains absent AND a NEW ZIP publish-failure line appears in the
       pfB log -- the extraction error surfaced as an error, not a silent empty import.
     """
     member = "payload.txt"
@@ -3089,10 +3089,11 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
     header = "issue819zex"
     feed_url = mock_feeds.register("issue819_zip_extract_fail.zip", zip_bytes)
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
+    marker = "[pfb_download] zip publish failed (tar exit 1)"
 
-    # Given -- alias absent + delta baseline of "Decompression Failed" lines.
+    # Given -- alias absent + delta baseline of ZIP publish-failure lines.
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the corrupt-payload zip feed"
-    before = h.count_log_marker(deployed_vm, h.PFB_LOG, "Decompression Failed")
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
 
     with h.CaseContext(deployed_vm, spec):
         # When -- Force Update; the outer gate + structural probe both pass, extraction fails.
@@ -3101,13 +3102,13 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
             f"expected {spec.alias!r} absent after the corrupt-payload zip (extraction must fail), "
             f"found it present — tables: {tables_after}"
         )
-        # Then -- a NEW "Decompression Failed" line was logged (the error surfaced,
+        # Then -- a NEW ZIP publish-failure line was logged (the error surfaced,
         # rather than the feed silently importing as empty).
-        after = h.count_log_marker(deployed_vm, h.PFB_LOG, "Decompression Failed")
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         if not (after > before):
             tail = h.read_log_file(deployed_vm, h.PFB_LOG).splitlines()[-20:]
             raise AssertionError(
-                f"expected a NEW 'Decompression Failed' line in {h.PFB_LOG} after the corrupt-payload "
+                f"expected a NEW {marker!r} line in {h.PFB_LOG} after the corrupt-payload "
                 f"zip Force Update; count before={before} after={after}\n"
                 f"last 20 lines of {h.PFB_LOG}:\n" + "\n".join(tail)
             )
