@@ -2009,7 +2009,7 @@ def test_force_mode_download_clears_validators(
         # AFTER: forcecheck is detached, so consume the sidecar-removal event instead of
         # racing the child immediately after the POST returns.
         assert helpers.wait_until(
-            lambda: vm.ssh("/bin/test", "-f", sidecar_etag).returncode != 0,
+            lambda: vm.ssh("/bin/test", "-f", sidecar_etag).returncode == 1,
             timeout=25.0,
         ), (
             f"{sidecar_etag} still exists after force=download POST — "
@@ -2099,7 +2099,7 @@ def test_force_mode_both_clears_hash_sidecars(
         # AFTER: forcecheck is detached, so consume the removal event instead of racing
         # the child immediately after the POST returns.
         assert helpers.wait_until(
-            lambda: all(vm.ssh("/bin/test", "-f", path).returncode != 0 for path, _ in planted),
+            lambda: all(vm.ssh("/bin/test", "-f", path).returncode == 1 for path, _ in planted),
             timeout=25.0,
         ), (
             "sidecars still exist after force=both/scope=both POST — "
