@@ -3307,7 +3307,7 @@ function pfb_reserved_header_skip_active(bool $is_reserved_owner, string $header
 // ---------------------------------------------------------------------------
 // ADR-38: pure key=value syslog event formatters (pfb_syslog_format_ip() etc.) — the fixed
 // key order, empty-value omission rules, and quoting/escaping are specified in
-// .ADRs/ADR_38_System_Log_Integration/ and pinned by tests/php/SyslogFormatTest.php.
+// legacy/ADRs/ADR_38_System_Log_Integration/ and pinned by tests/php/SyslogFormatTest.php.
 // PURE — no globals, no I/O, no config reads.
 // ---------------------------------------------------------------------------
 
@@ -3630,7 +3630,7 @@ function pfb_csv_field(string $value): string
  * pfb_ip_log_row_schema_ok — exact field-count schema gate for a raw
  * (pre-timestamp-shift) IP feature-log row as delivered to convert_ip_log().
  * Only the current 23-field feature-row / 24-field Unified-row schema (see
- * .ADRs/ADR_38_System_Log_Integration/ Amendment 3) is supported; ANY other
+ * legacy/ADRs/ADR_38_System_Log_Integration/ Amendment 3) is supported; ANY other
  * count -- including every pre-upgrade legacy (21-field feature / 22-field
  * Unified) row still on disk -- must be rejected BEFORE a single indexed
  * field access, so a short/garbage row never trips an "undefined array key"

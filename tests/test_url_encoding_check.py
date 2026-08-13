@@ -38,6 +38,18 @@ def _find_md(text: str, source: str = "t.md") -> list[Any]:
     return cue.find_violations_in_markdown(text, source)
 
 
+def test_default_scan_excludes_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        cue,
+        "_git_tracked",
+        lambda patterns: (
+            ["legacy/old.sh", "scripts/live.sh"] if patterns == ["*.sh"] else ["legacy/old.md", "docs/live.md"]
+        ),
+    )
+
+    assert cue._default_files() == (["scripts/live.sh"], ["docs/live.md"])
+
+
 # --------------------------------------------------------------------------- #
 # Shell — bad (flagged) vs good (clean)
 # --------------------------------------------------------------------------- #

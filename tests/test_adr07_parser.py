@@ -32,7 +32,7 @@ from tests import test_adr07_decision_spec as spec
 
 
 def _spike() -> ModuleType:
-    spike_path = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "spike_adr07_regex.py")
+    spike_path = os.path.join(os.path.dirname(__file__), "..", "legacy", "benchmarks", "spike_adr07_regex.py")
     s = importlib.util.spec_from_file_location("spike_adr07_regex", spike_path)
     assert s and s.loader
     mod = importlib.util.module_from_spec(s)

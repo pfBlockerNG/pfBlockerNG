@@ -8,12 +8,12 @@ vendor large copyrighted feeds into the repo, per the Phase-1 constraint); every
 line is a syntactic exemplar of a category the parser/reducer/matcher must handle.
 
 The point of the corpus is the **line-type distribution and the regex-reduction /
-ReDoS behaviour**, not blocklist coverage. `benchmarks/spike_adr07_regex.py`
+ReDoS behaviour**, not blocklist coverage. `legacy/benchmarks/spike_adr07_regex.py`
 categorises and counts these lines, measures the regex reduction ratio, the
 irreducible count at feed scale, the inline per-query scan latency, and the ReDoS
 exposure (static-flag + worst real first-hit). The full measured distribution and
 the GO/NO-GO are written into
-`.ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/01_Results.txt`.
+`legacy/ADRs/ADR_07_ABP_DNSBL_Support/RESULTS/01_Results.txt`.
 
 ## Files
 

@@ -40,7 +40,7 @@ pixel baselines).
 §7 RELIABILITY/BUDGET (the ADR-01-analog kill gate) is MEASURED in CI, not here:
 this dev box has no live VM and cannot run repeated browser legs. The procedure,
 the measured numbers, and the keep/demote/drop decision are recorded in
-``.ADRs/ADR_14_UI_UX_Testing/RESULTS/04_Results.txt``. The tier is daily/on-demand
+``legacy/ADRs/ADR_14_UI_UX_Testing/RESULTS/04_Results.txt``. The tier is daily/on-demand
 and NEVER a PR gate (marker ``ui_browser``, off default collection), so it cannot
 block fast iteration regardless of the §7 outcome.
 

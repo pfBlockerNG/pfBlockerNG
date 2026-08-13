@@ -52,9 +52,9 @@ skip() { skipped="${skipped} $1"; }
 #     -z + tr: the newline listing C-quotes a path holding a quote, backslash,
 #     control byte or non-ASCII byte, so the suffix regexes below match nothing
 #     and that commit's language gates silently never run (issue #2212). ---
-staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n')
+staged_all=$(git diff --cached --name-only -z --diff-filter=ACMRD | tr '\0' '\n' | grep -v '^legacy/' || true)
 [ -n "$staged_all" ] || exit 0
-staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\0' '\n')
+staged=$(git diff --cached --name-only -z --diff-filter=ACMR | tr '\0' '\n' | grep -v '^legacy/' || true)
 staged_has() { printf '%s\n' "$staged" | grep -qE "$1"; }
 staged_py=0;  staged_has '\.py$'        && staged_py=1
 staged_md=0;  staged_has '\.md$'        && staged_md=1
@@ -151,6 +151,7 @@ if [ "$staged_sh" = 1 ] || [ "$staged_specplumb" = 1 ]; then
 			case $f in
 			.claude/skills/git-guardrails-claude-code/*) continue ;;
 			.agents/skills/git-guardrails-claude-code/*) continue ;;
+			legacy/*) continue ;;
 			plugins/*) continue ;;
 			esac
 			case $(head -n1 "$f" 2>/dev/null) in

@@ -70,7 +70,7 @@ regression anchors, not endorsements.
 
 Deep pfSense-runtime integration (config apply, service reloads, pf/Unbound
 wiring, URL/MIME validation that shells out to `/usr/bin/file` or resolves
-hosts) stays the live-VM smoke's job — see `.ADRs/ADR_04_VM_Smoke_Tests/`.
+hosts) stays the live-VM smoke's job — see `legacy/ADRs/ADR_04_VM_Smoke_Tests/`.
 
 ## Adding a test
 

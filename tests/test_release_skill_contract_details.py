@@ -114,14 +114,14 @@ def test_branch_independent_adr_contract_is_current() -> None:
         assert "Nightly follows devel" not in _text(path), path
 
     for name in ("ADR_09_Release_Version_Automation", "ADR_18_Nightly_Channel"):
-        content = _text(ROOT / f".ADRs/{name}/ADR.md")
+        content = _text(ROOT / f"legacy/ADRs/{name}/ADR.md")
         assert "## Amendment — 2026-08-04" in content, name
         amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
         assert "pinned source SHA" in amendment, name
         assert "devel` snapshot" not in amendment, name
 
     for name in ("ADR_17_Pkg_Repository", "ADR_27_Release_Rollback_And_EOL_Routing"):
-        content = _text(ROOT / f".ADRs/{name}/ADR.md")
+        content = _text(ROOT / f"legacy/ADRs/{name}/ADR.md")
         assert "## Amendment — 2026-08-04" in content, name
         amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
         assert "pinned pfBlockerNG SHA" in amendment, name
@@ -150,7 +150,7 @@ def test_published_workflow_has_no_retired_nightly_ports_bump_contract() -> None
 
 
 def test_latest_adr09_amendment_matches_the_implemented_trailer_and_workflows() -> None:
-    content = _text(ROOT / ".ADRs/ADR_09_Release_Version_Automation/ADR.md")
+    content = _text(ROOT / "legacy/ADRs/ADR_09_Release_Version_Automation/ADR.md")
     assert "## Amendment — 2026-08-04" in content
     amendment = content.rsplit("## Amendment — 2026-08-04", 1)[-1]
     assert "tag trailer carries only the channel" in amendment

@@ -3,7 +3,7 @@
 This guide covers developing, testing, building, and releasing the package. For
 installation and a feature overview, see the [README](README.md); the per-feature
 design records (one Architecture Decision Record per subsystem) live under
-[`.ADRs/`](.ADRs/).
+[`legacy/ADRs/`](legacy/ADRs/).
 
 ## Principles & standards (read first)
 
@@ -201,7 +201,7 @@ pattern).
 
 ## Subsystem internals
 
-Per-subsystem design lives in the ADRs under [`.ADRs/`](.ADRs/), summarised — with the
+Per-subsystem design lives in the ADRs under [`legacy/ADRs/`](legacy/ADRs/), summarised — with the
 cross-subsystem detail — in
 [`docs/misc/architecture-notes.md`](docs/misc/architecture-notes.md): the DNSBL/ABP build
 pipeline (ADR-06/07/62), zero-downtime data swap (ADR-10), IDN homoglyph protection (ADR-08),
@@ -213,15 +213,15 @@ hook example) is documented in the [README](README.md).
 
 ## Benchmarks
 
-`benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the
+`legacy/benchmarks/` holds an opt-in suite comparing the domain-trie matcher against the
 flat-dict matcher it replaced (latency on positive/negative queries, and memory
 footprint). It is dev-only, not shipped, and not collected by the default
-`pytest` run. See [`benchmarks/README.md`](benchmarks/README.md):
+`pytest` run. See [`legacy/benchmarks/README.md`](legacy/benchmarks/README.md):
 
 ```sh
-python -m pip install -r benchmarks/requirements.txt
-python -m pytest benchmarks/test_bench_matching.py --benchmark-columns=min,mean,ops
-python -m pytest benchmarks/test_memory.py -s
+python -m pip install -r legacy/benchmarks/requirements.txt
+python -m pytest legacy/benchmarks/test_bench_matching.py --benchmark-columns=min,mean,ops
+python -m pytest legacy/benchmarks/test_memory.py -s
 ```
 
 It also holds the ADR-06 init-time / peak-RAM spike for the Python DNSBL build —
@@ -230,7 +230,7 @@ retained dict footprint on a large, un-pruned ≥1M-entry corpus):
 
 ```sh
 python -m pip install pympler    # dev-only retained-footprint tool (ADR-05 §3a)
-SPIKE_N=5 SPIKE_SIZES=1000000 python benchmarks/spike_adr06_build.py
+SPIKE_N=5 SPIKE_SIZES=1000000 python legacy/benchmarks/spike_adr06_build.py
 ```
 
 …and the ADR-07 regex/ReDoS spike (`spike_adr07_regex.py`, stdlib only) — the
@@ -239,8 +239,8 @@ count, added per-query latency at feed scale, and the worst real ReDoS first-hit
 on a ≤253-char input vs the kill-threshold (run with `tracemalloc` off):
 
 ```sh
-python benchmarks/spike_adr07_regex.py
-SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 python benchmarks/spike_adr07_regex.py
+python legacy/benchmarks/spike_adr07_regex.py
+SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 python legacy/benchmarks/spike_adr07_regex.py
 ```
 
 ## Linting
@@ -393,7 +393,7 @@ is installing a retained older version rather than re-deploying a site.
   `scripts/publish-pkg-repo.sh`, which commits the assembled catalogue into `pkg`. A publish
   failure never breaks the Release or the ports PR.
 
-See [ADR-17](.ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
+See [ADR-17](legacy/ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
 
 ## Smoke tests (live pfSense VM)
 
@@ -443,7 +443,7 @@ image from private GHCR, then runs `pytest -m smoke`. The test fixture **blocks
 the runner's egress after `deploy()`** so the run is hermetic — feeds come from
 an in-runner mock server reached over the SLIRP host alias `10.0.2.2`. Required
 Actions
-config (see `.ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt`):
+config (see `legacy/ADRs/ADR_04_VM_Smoke_Tests/RESULTS/02_Results.txt`):
 `SMOKE_IMAGE_REF`, `SMOKE_GHCR_USER`, `SMOKE_GHCR_TOKEN`, `SMOKE_SSH_PRIV_KEY`
 (and, to match the baked image, `SMOKE_DNSBL_VIP4` / `SMOKE_CONTROL_NAME` /
 `SMOKE_CONTROL_IP`).
@@ -495,7 +495,7 @@ Dispatch `.github/workflows/image-refresh.yml` with `pfsense_version` and
 
 If the gate fails, use `scripts/image-publish.sh` to produce a fresh seed from a
 clean manual install (manual fallback — see
-[`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)).
+[`legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)).
 The automated image refresh (`image-refresh.yml`) is **CE-only**; the **Plus** image is
 refreshed **manually** with `scripts/image-publish.sh` (re-export + push the licensed,
 private qcow2 — the MAC/SMBIOS uuid must stay constant, ADR-24). The seed and every version
@@ -560,7 +560,7 @@ called automatically for each file in `tests/smoke/fixtures/` when the
 **Kill-gate / gate status.** The HTTP-fetch reliability is the ADR-16 Part-C
 kill-gate (≥ 4/5 clean runs). The test is authored in the `smoke` marker and
 gated as part of the `ui-tests`-labeled PR suite; the GO/DEMOTE decision is
-recorded in `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`
+recorded in `legacy/ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`
 (status: OPTIMISTIC-GO, pending the live CI run). If the live run shows
 &lt; 4/5 clean, `test_smoke_feeds.py` is demoted to dispatch-only as a fast-follow.
 
@@ -654,7 +654,7 @@ image** today. Adding a second pfSense image (Plus / another CE) is a one-line
 change — append a label to `DEFAULT_VERSIONS` in the `prepare` job of
 `ui-tests.yml` and wire its image ref — then the matrix expands to one leg per
 (tier × version) with no harness change. Building/publishing that image follows
-[`.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)
+[`legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md`](legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md)
 (see [Rebuilding the image on a CE bump](#rebuilding-the-image-on-a-ce-bump) above).
 
 ## Image pipeline (smoke-test base)
@@ -675,7 +675,7 @@ build and drive its disk image — no Packer, since pfBlockerNG compiles nothing
 
 These produce one image per supported minor CE version; CI runs the smoke matrix
 across all of them. See [`scripts/README.md`](scripts/README.md) for the build/ABI
-details and [`.ADRs/ADR_04_VM_Smoke_Tests/`](.ADRs/ADR_04_VM_Smoke_Tests/).
+details and [`legacy/ADRs/ADR_04_VM_Smoke_Tests/`](legacy/ADRs/ADR_04_VM_Smoke_Tests/).
 
 ## Releasing
 

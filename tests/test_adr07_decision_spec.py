@@ -55,7 +55,7 @@ handoff so Phases 4-6 implement the same thing):
     ``||`` host-anchor). ``@@||domain^`` un-blocks the domain and subdomains.
   * Reducible regex folds to the SAME shape as its literal form: ``^(.+\\.)?D$``
     / ``(^|\\.)D$`` -> wildcard (domain + subs); ``^D$`` / ``^(www\\.)?D$`` ->
-    exact (domain only). Mirrors ``benchmarks/spike_adr07_regex.reduce_pattern``.
+    exact (domain only). Mirrors ``legacy/benchmarks/spike_adr07_regex.reduce_pattern``.
   * Irreducible regex matches the query string as written (``re.search`` over the
     full query name), block or ``@@`` allow.
   * ``$important`` raises a feed rule from band 1/2 to 3/4 (inverts allow-vs-block
@@ -186,7 +186,7 @@ def _valid_domain(host: str) -> str | None:
 
 
 # --------------------------------------------------------------------------- #
-# Regex reduction grammar (mirrors benchmarks/spike_adr07_regex.reduce_pattern).
+# Regex reduction grammar (mirrors legacy/benchmarks/spike_adr07_regex.reduce_pattern).
 # A reducible /re/ decides IDENTICALLY to a domain/wildcard rule (ADR.md SS2).
 # --------------------------------------------------------------------------- #
 _DOMAIN_LITERAL = re.compile(r"^[A-Za-z0-9_-]+(?:\\\.[A-Za-z0-9_-]+)+$")  # underscore #723; case-fold #2099
@@ -835,7 +835,7 @@ def _spike() -> ModuleType:
     import importlib.util
     import os
 
-    spike_path = os.path.join(os.path.dirname(__file__), "..", "benchmarks", "spike_adr07_regex.py")
+    spike_path = os.path.join(os.path.dirname(__file__), "..", "legacy", "benchmarks", "spike_adr07_regex.py")
     spec = importlib.util.spec_from_file_location("spike_adr07_regex", spike_path)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)

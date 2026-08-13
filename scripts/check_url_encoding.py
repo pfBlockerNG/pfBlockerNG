@@ -46,10 +46,11 @@ HEURISTIC (deliberately low false-positive)
 
 The detection logic lives in :func:`find_violations` (pure, importable) so it is
 unit-tested directly without a subprocess. The :func:`main` CLI, with no args,
-resolves the file list via ``git ls-files`` — every tracked ``*.sh`` script (the
+resolves the file list via ``git ls-files`` — every maintained tracked ``*.sh`` script (the
 ``src/**`` hook/pre-script surface, plus dev ``scripts``/``tests`` shell, mirroring
 the pre-commit shebang/`sh -n` checks that also scan all tracked shell) and every
-tracked ``*.md`` (scanning only the shell-tagged fenced blocks) — or it scans the
+tracked ``*.md`` (scanning only the shell-tagged fenced blocks); ``legacy/**`` is
+excluded from default discovery — or it scans the
 explicit paths passed as args. It prints ``path:line: <message>`` to stderr,
 exiting 1 if any violation is found.
 
@@ -296,9 +297,9 @@ def _git_tracked(patterns: list[str]) -> list[str]:
 
 
 def _default_files() -> tuple[list[str], list[str]]:
-    """Resolve the default scan set: (shell files, markdown files)."""
-    shell = _git_tracked(["*.sh"])
-    markdown = _git_tracked(["*.md"])
+    """Resolve maintained shell and Markdown files, excluding legacy records."""
+    shell = [path for path in _git_tracked(["*.sh"]) if not path.startswith("legacy/")]
+    markdown = [path for path in _git_tracked(["*.md"]) if not path.startswith("legacy/")]
     return shell, markdown
 
 

@@ -1,10 +1,8 @@
 {
   // markdownlint-cli2 runner config (globs + ignores). Rule set lives in
   // `.markdownlint.jsonc`. Run from the repo root: `npx markdownlint-cli2`
-  // (add `--fix` to auto-fix). Lints every tracked Markdown file, including
-  // .ADRs/ and the repo's own .claude/skills/ + .agents/skills/; skips
-  // dependency/virtualenv trees and the VENDORED plugin skill trees listed
-  // below.
+  // (add `--fix` to auto-fix). Lints maintained Markdown and skips historical,
+  // dependency/virtualenv, and vendored plugin trees.
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules",
@@ -13,6 +11,7 @@
     "**/.venv/**",
     "vendor",
     "**/vendor/**",
+    "legacy/**",
     // Verbatim conversation transcript (a historical record, not maintained
     // documentation): its repeated "User"/"Assistant" headings and multiple
     // H1s are inherent to the format, so it is not linted.

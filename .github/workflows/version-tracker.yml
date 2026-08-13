@@ -24,7 +24,7 @@ name: Version Tracker
 # Phase 5 (image-refresh.yml) and Phase 6 (smoke.yml) are wired
 # here by name.  They do not exist yet on this branch; the trigger is
 # live and will activate as soon as each phase lands.  See HANDOFF at:
-#   .ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt
+#   legacy/ADRs/ADR_09_Release_Version_Automation/RESULTS/04_Results.txt
 
 on:
   # Run daily at 06:00 UTC.  Adjust the cron expression if needed.

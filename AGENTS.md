@@ -114,7 +114,11 @@ pfBlockerNG/
 │       ├── share/             # info.xml
 │       └── www/               # Web UI (PHP pages, JS, widgets, wizards)
 ├── tests/                 # pytest; php/ (PHPUnit); smoke/ (+ui/); phpcs/; shell/; js/
-├── .ADRs/                 # Historical ADR corpus (plans = wayfinder maps)
+├── legacy/               # Historical records excluded from active checks
+│   ├── ADRs/             # Historical ADR corpus (plans = wayfinder maps)
+│   ├── ADR_RESULTS/      # Root-level legacy ADR gate/handoff artifacts
+│   ├── archive/          # Completed one-shot tooling
+│   └── benchmarks/       # Frozen benchmark harnesses
 ├── .agents/               # policy/ + context/ + skills/ (canonical) + model-tiers.conf
 ├── docs/misc/             # Dev-only notes: architecture-notes, runbooks; docs/history/ = incidents
 ├── scripts/               # Dev tooling: deploy.sh, setup-hooks.sh, policy checkers, agent/ ops

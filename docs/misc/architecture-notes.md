@@ -5,7 +5,7 @@ scheduling, UI tiers, pkg distribution). Load when: the routing table names a se
 
 Implementation detail extracted from `CLAUDE.md` to keep the always-loaded instructions
 lean. This is the mid-level summary; the authoritative design for each item is its
-`.ADRs/ADR_NN_*/` directory. Read the relevant section here before touching the code it
+`legacy/ADRs/ADR_NN_*/` directory. Read the relevant section here before touching the code it
 describes.
 
 ---
@@ -20,11 +20,11 @@ index + `whiteDB`, then emit `pfb_py_count`) lives in `pfb_unbound.py`'s pure
 (`/var/unbound/pfb_py_sources.json` + per-feed raw). PHP/shell only download + tag + run the
 DNSBL-IP firewall pass. Decision-equivalence is pinned by `tests/test_adr06_*` (golden oracle,
 build module, init-from-raw, PHP boundary); the init/peak-RAM kill-gate is
-`benchmarks/spike_adr06_build.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0).
+`legacy/benchmarks/spike_adr06_build.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0).
 Its synthetic `build()` on a generic runner is NOT the production number, so the CI
 `benchmarks` job is **manual-only** (dispatch Tests with `run_benchmarks`, default off); the
 real build-time/RAM regression gate is moving to the live smoke VM (timing `updatednsbl`
-start→finish + unbound RSS) — see issue #76 and `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
+start→finish + unbound RSS) — see issue #76 and `legacy/ADRs/ADR_06_DNSBL_Preprocessing_To_Python/`.
 
 ### ADR-07 — ABP / EasyList support
 
@@ -39,8 +39,8 @@ per-line decision, not a feed-level one.) Untrusted feed + user regex is guarded
 an always-on runtime warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
 evict-after-loop). Pinned by `tests/test_adr07_*` (decision spec/oracle, parser, reconcile,
 matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS kill-gate is
-`benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
-runnable via the manual-only CI `benchmarks` job. See `.ADRs/ADR_07_ABP_DNSBL_Support/`.
+`legacy/benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
+runnable via the manual-only CI `benchmarks` job. See `legacy/ADRs/ADR_07_ABP_DNSBL_Support/`.
 
 ### DNSBL regex case-insensitivity invariant (#2079, #2097, #2098, #2099, #2199)
 
@@ -50,7 +50,7 @@ pattern, never by folding a pattern's own text. Every regex that matches a query
 `IGNORECASE` (feed/user regex load, the save-time validator, and the catastrophic-shape gate's
 atom-overlap probe); the domain-literal reduction grammar (prod `pfb_unbound.py`, the
 reference oracle `tests/test_adr07_decision_spec.py`, and the benchmark spike
-`benchmarks/spike_adr07_regex.py` — kept in lockstep) admits either case and lowercases the
+`legacy/benchmarks/spike_adr07_regex.py` — kept in lockstep) admits either case and lowercases the
 folded key at fold time, so a mixed-case literal reduces identically to its lowercase twin.
 The exact-form fold's optional `(www\.)?` prefix strip is the one fixed-text token in the
 grammar that contains a letter (the other prefixes -- `^`, `(.+\.)?`, `(^|\.)` -- are pure
@@ -115,7 +115,7 @@ never `/re/` regex rules. Every line class outside the delta table is
 byte-identical to `origin/devel`, pinned by a corpus oracle (`tests/test_adr62_*`,
 `tests/php/Adr62*Test.php`) whose golden fixtures were captured by running the real
 functions at the pre-change base and are regenerated only through those same functions.
-See `.ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
+See `legacy/ADRs/ADR_62_DNSBL_Unified_Line_Parsing/`.
 
 ### DNSBL interchange format — compact NDJSON (issues #1083 and #1177)
 
@@ -264,14 +264,14 @@ base = pre-#1083 merge-base `e9dda731`):
 
 The PHP result is back below the 25% threshold. The Python surface is an unrelated path that
 reads unchanged per-feed `.raw` files. For 1,000,000 domain rows with
-`benchmarks/_corpus_raw.py`'s realistic domain-length distribution, legacy CSV occupies
+`legacy/benchmarks/_corpus_raw.py`'s realistic domain-length distribution, legacy CSV occupies
 45,719,338 bytes, issue #1083 objects occupy 99,719,338 bytes, and compact `d` rows occupy
 29,719,338 bytes (29.72 B/row): **70.2% smaller than objects and 35.0% smaller than CSV**.
 This compact representation is staging-only; the final manifest and `.raw` files remain
 readable and unchanged.
 
-`benchmarks/spike_adr06_build.py` (the ADR-06 Phase-1 spike) is unaffected: it drives a
-self-contained synthetic corpus (`benchmarks/_corpus_raw.py`) and never imports
+`legacy/benchmarks/spike_adr06_build.py` (the ADR-06 Phase-1 spike) is unaffected: it drives a
+self-contained synthetic corpus (`legacy/benchmarks/_corpus_raw.py`) and never imports
 `pfb_unbound.py` or touches the interchange format.
 
 ### ADR-10 — zero-downtime DNSBL data swap
@@ -301,7 +301,7 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
   an `unbound.conf`/mode/Resolver change still restarts.
 - **Fallback to restart (fail-safe)** when the swap can't run: a RAM-constrained box (PHP RAM
   gate primary, Python free-page probe secondary — the ~2× transient build/swap footprint is
-  `benchmarks/spike_adr10_swap.py`'s kill-gate), the feature/python mode off, Unbound down, a
+  `legacy/benchmarks/spike_adr10_swap.py`'s kill-gate), the feature/python mode off, Unbound down, a
   staged config change, or a prior swap/sentinel error.
 - **Cache on swap:** `decisionDB` cleared (no stale decision); **block→allow
   immediate** (blocks not C-cached since #43). The default-off `pfb_cache_flush` option lets
@@ -317,7 +317,7 @@ manifest and excludes stages; legacy fixed `pfb_py_raw/` manifests remain readab
 
 Pinned by `tests/test_adr10_*` (snapshot equivalence, fail-closed swap, watcher); idle
 decision-identity stays guarded by `tests/test_adr06_*`/`tests/test_adr07_*`. See
-`.ADRs/ADR_10_Zero_Downtime_DNSBL/`.
+`legacy/ADRs/ADR_10_Zero_Downtime_DNSBL/`.
 
 ### ADR-08 — IDN homoglyph protection
 
@@ -344,7 +344,7 @@ The analyzer (inlined in `pfb_unbound.py`) resolves each code point's script fro
 names are stable across UCD versions for the in-scope scripts, so the FP/TP result holds across
 Python 3.11–3.14. Measured on `tests/fixtures/adr08_corpus/`: 0 false positives on the
 legitimate set, 6/6 homographs caught. Guards: the `tests/test_adr08_*` suite. See
-[`.ADRs/ADR_08_Homoglyph_Protection/`](../../.ADRs/ADR_08_Homoglyph_Protection/).
+[`legacy/ADRs/ADR_08_Homoglyph_Protection/`](../../legacy/ADRs/ADR_08_Homoglyph_Protection/).
 
 ### ADR-12 — update hooks (PHP/shell, dependency-derived Python)
 
@@ -402,7 +402,7 @@ gist, not shipped): a `post` hook guarded on `[ "$PFB_IP_CHANGED" -gt 0 ]` that 
 `/usr/local/etc/rc.d/haproxy.sh restart` — the package rc-script's graceful cycle (its stop
 signals `SIGUSR1`, HAProxy's soft-stop, which drains in-flight sessions before the fresh process
 re-reads the on-disk ACL files). See
-[`.ADRs/ADR_12_Update_Hooks/`](../../.ADRs/ADR_12_Update_Hooks/).
+[`legacy/ADRs/ADR_12_Update_Hooks/`](../../legacy/ADRs/ADR_12_Update_Hooks/).
 
 ### ADR-11 — aggregate ("Uber") aliases live smoke — `tests/smoke/test_smoke_aggregate.py`
 
@@ -506,7 +506,7 @@ sinkhole VIP(s) end-to-end — no manual Firewall > Virtual IPs entry.
 - **HA/CARP.** `pfb_dnsvip_auto` and the address live in `config.xml` and replicate; each node
   creates/removes its own node-local `lo0` IP-Alias VIP on its own enable/disable pass.
 
-See [`.ADRs/ADR_13_Auto_DNSBL_VIP/`](../../.ADRs/ADR_13_Auto_DNSBL_VIP/).
+See [`legacy/ADRs/ADR_13_Auto_DNSBL_VIP/`](../../legacy/ADRs/ADR_13_Auto_DNSBL_VIP/).
 
 ## IP dedup + reputation: batch recompute (issue #1084)
 
@@ -676,7 +676,7 @@ Diagnostics (screenshots + VM logs + smoke snapshot) upload `if: always()` as
 `ui-diagnostics-<tier>-<variant>-<version>` (variant = ce/plus, e.g. `ui-diagnostics-browser-ce-2.8`).
 The §7 browser reliability numbers are **CI-pending**; the
 browser leg has a one-line demote/drop switch (drop `browser` from `DEFAULT_SCHEDULE_TIERS` +
-run release `ui-suite` as `tier: functional`). Full design: `.ADRs/ADR_14_UI_UX_Testing/`.
+run release `ui-suite` as `tier: functional`). Full design: `legacy/ADRs/ADR_14_UI_UX_Testing/`.
 
 **Selective dispatch (ADR-14 + smoke).** A bare `gh workflow run ui-tests.yml` (and
 `smoke.yml`) defaults to **`scope=impacted`**: the **min CE leg only** plus, with no `-f
@@ -880,7 +880,7 @@ is **≥ 4/5 clean runs**. This test is `OPTIMISTIC-GO, PENDING-CI` — all 6 re
 are authored; the live CI run (the `ui-tests`-labeled PR suite) decides GO vs DEMOTE. If < 4/5
 clean, `test_smoke_feeds.py` is demoted to dispatch-only (Part A still ships; the local-file load
 coverage in `test_smoke_matrix.py` / `test_smoke_abp.py` remains). The final decision is recorded
-in `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`.
+in `legacy/ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt`.
 
 ## Locale policy (ADR-26)
 
@@ -1208,7 +1208,7 @@ pfB-rule-set identical, idempotence, and behavioural equivalence to the years-pr
 emission on every dup-free config) is pinned off-appliance in
 `tests/php/AutoruleListOracleTest.php`; the live data-plane precedence sweep is
 `tests/smoke/test_smoke_autorule_immutable.py` (ADR-04). Design + the corrected pf-precedence
-analysis: `.ADRs/ADR_41_Immutable_User_Firewall_Rules/` (`RESULTS/05`).
+analysis: `legacy/ADRs/ADR_41_Immutable_User_Firewall_Rules/` (`RESULTS/05`).
 
 ## Managed firewall object ownership and teardown (ADR-35)
 

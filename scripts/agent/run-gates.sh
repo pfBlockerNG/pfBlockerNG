@@ -58,7 +58,7 @@ git_paths() {
 # Map a touched-file list (stdin, one path per line) to gate commands (stdout, one per
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
 gates_for() {
-	files=$(cat)
+	files=$(grep -v '^legacy/' || true)
 	out=''
 	nl='
 '

@@ -25,6 +25,7 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
+      - 'legacy/**'
   pull_request:
     # labeled/unlabeled so adding or removing a gate label re-evaluates the
     # label-gated jobs — TWO depend on these types: `ui-tests` (the UI suite gate)
@@ -38,6 +39,7 @@ on:
       - '**/*.md'
       - '*.md'
       - 'docs/**'
+      - 'legacy/**'
   # Manual trigger to opt INTO the benchmark kill-gates (issue #76). They are OFF in
   # the automated push/PR flow: a synthetic corpus on a generic runner is not the
   # number that matters — the production-faithful build-time/RAM measurement belongs
@@ -249,6 +251,7 @@ jobs:
               case $f in
                 .claude/skills/git-guardrails-claude-code/*) continue ;;
                 .agents/skills/git-guardrails-claude-code/*) continue ;;
+                legacy/*) continue ;;
                 plugins/*) continue ;;
               esac
               case $(head -n1 "$f" 2>/dev/null) in "#!"*bash*) echo "$f" ;; esac
@@ -752,12 +755,12 @@ jobs:
       - name: ReDoS / regex-latency kill-gate
         # Non-zero exit on NO-GO (reduction-floor / per-pattern-latency / worst
         # first-hit). No `|| true` — the exit code IS the gate.
-        run: python benchmarks/spike_adr07_regex.py
+        run: python legacy/benchmarks/spike_adr07_regex.py
 
       - name: Build init-time / peak-RAM kill-gate
         # Non-zero exit on NO-GO (build seconds / retained B/entry) at the default
         # 1M-entry un-pruned corpus.
-        run: python benchmarks/spike_adr06_build.py
+        run: python legacy/benchmarks/spike_adr06_build.py
 
   # ── ADR-14 UI suite (opt-in PR gate, label-gated) ────────────────────────
   # PURE-LABEL model: the live-VM UI suite (render + functional + browser) runs,

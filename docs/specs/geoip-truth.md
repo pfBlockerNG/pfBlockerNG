@@ -9,7 +9,7 @@ The appliance consumes one reviewed, committed truth artifact and retains the
 last complete output generation when truth or provider input is invalid.
 
 This specification replaces the unimplemented plan in
-[ADR-64](../../.ADRs/ADR_64_GeoIP_Truth_Table/ADR.md). The historical ADR remains
+[ADR-64](../../legacy/ADRs/ADR_64_GeoIP_Truth_Table/ADR.md). The historical ADR remains
 unchanged as the rationale record.
 
 ## Fixed constraints
