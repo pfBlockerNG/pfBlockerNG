@@ -82,6 +82,16 @@ Describe 'run-gates.sh gates_for()'
     The output should equal 'npx markdownlint-cli2'
   End
 
+  It 'ignores every legacy file type'
+    Data
+      #|legacy/old.py
+      #|legacy/old.sh
+      #|legacy/old.md
+    End
+    When call gates_for
+    The output should equal ''
+  End
+
   It 'combines gate families for a mixed diff'
     Data
       #|a.py
@@ -107,7 +117,7 @@ Describe 'run-gates.sh gates_for()'
 
   It 'ignores an unsafe-named file that has no gates at all'
     Data
-      #|.ADRs/ADR_04/07_Unbound_(next_only).txt
+      #|legacy/ADRs/ADR_04/07_Unbound_(next_only).txt
       #|scripts/ok.py
     End
     When call gates_for

@@ -1,6 +1,6 @@
 # Spec: Block Triangulator (Why-Blocked diagnostics)
 
-Migrated from `.ADRs/ADR_34_Triangulator_Tool/` (Proposed, never implemented; folds in
+Migrated from `legacy/ADRs/ADR_34_Triangulator_Tool/` (Proposed, never implemented; folds in
 issue #294) under wayfinder map
 [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383), map ticket
 [#1484](https://github.com/pfBlockerNG/pfBlockerNG/issues/1484). Requirements and

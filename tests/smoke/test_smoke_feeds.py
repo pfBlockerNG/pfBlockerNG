@@ -22,7 +22,7 @@ format expansion follows. The reliability bar is **>= 4/5 clean runs at a sane
 per-leg budget**: if the live CI run cannot hit it, ``test_smoke_feeds.py`` is
 DEMOTED to dispatch-only (dropped from the gated smoke set) — Part A still ships and
 the local-file load coverage (the matrix) remains. The numbers + GO/DEMOTE decision
-are recorded in ``.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt``;
+are recorded in ``legacy/ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt``;
 this run is OPTIMISTIC-GO (all formats authored) pending the live evidence.
 
 Fixture members / non-members are the Phase-4 RESULTS contract (RESULTS/04 §"THE 6

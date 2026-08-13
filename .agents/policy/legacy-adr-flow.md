@@ -1,6 +1,6 @@
 # Legacy ADR flow — acceptance and amendments
 
-Scope: existing `.ADRs/` corpus only. New implementation-plan ADRs stopped (wayfinder map #1383); this file govern historical records that remain. Load when: touching Accepted/Implemented ADR text or flipping legacy ADR status.
+Scope: existing `legacy/ADRs/` corpus only. New implementation-plan ADRs stopped (wayfinder map #1383); this file govern historical records that remain. Load when: touching Accepted/Implemented ADR text or flipping legacy ADR status.
 
 ## ADR acceptance — automated tests, not a manual sign-off
 
@@ -13,5 +13,5 @@ Accepted/Implemented ADR still spec future readers plan against — stale text s
 - **When post-merge fix overturns piece of Accepted/Implemented ADR** — review finding, issue fix, anything invalidating decision, contract, or stated fact — ADR gains (or extends) dated **"Post-merge amendments" / "Post-acceptance addendum" section in same change** as fix. Correction never live only in issue/PR.
 - Accepted ADR body stay byte-identical as historical record. Same immutability apply to that ADR's phase documents and Results artifacts: later work append dated correction/addendum, never edit existing content. Direct edits allowed only while authoring, implementing, or testing ADR before acceptance.
 - Dated amendment/addendum is authoritative correction: one item per overturned piece, each naming issue/commit that overturned it and corrected decision.
-- Exemplars: `.ADRs/ADR_60_Age_Based_Log_Retention/ADR.md` §8 and `.ADRs/ADR_61_Sync_Status_Ledger/ADR.md` §8.
+- Exemplars: `legacy/ADRs/ADR_60_Age_Based_Log_Retention/ADR.md` §8 and `legacy/ADRs/ADR_61_Sync_Status_Ledger/ADR.md` §8.
 - ADR text is dev-only no-PR class, so amendment commits directly to `devel` alongside (or right after) fix landing.

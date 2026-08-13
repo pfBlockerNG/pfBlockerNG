@@ -4389,7 +4389,7 @@ def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusio
 # Stage-A (parse_abp) into the pre-emit rule sets build() folds in; NEVER
 # compiles/executes a regex itself. Reference oracle:
 # tests/test_adr07_decision_spec.py (reduce_regex/reconcile/priority/decide),
-# benchmarks/spike_adr07_regex.reduce_pattern; ADR.md SS2.
+# legacy/benchmarks/spike_adr07_regex.reduce_pattern; ADR.md SS2.
 # --------------------------------------------------------------------------- #
 
 # Regex-reduction grammar (mirrors the reference oracle reduce_regex + the spike

@@ -57,7 +57,7 @@ Observed on CE **2.8.1** box; 2.8.0 shares same base toolchain.
 
 ### pfBlockerNG runtime dependencies (port `RUN_DEPENDS`)
 
-Must be present for pfBlockerNG to work. By convention ADR-04 smoke image **bakes** them so harness `pkg add` of branch `.pkg` resolves them from local pkg db **offline** (see `.ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md` §3). Missing dep = `pkg add` "Missing dependency" = bad image, re-bake.
+Must be present for pfBlockerNG to work. By convention ADR-04 smoke image **bakes** them so harness `pkg add` of branch `.pkg` resolves them from local pkg db **offline** (see `legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md` §3). Missing dep = `pkg add` "Missing dependency" = bad image, re-bake.
 
 These = port's explicit `RUN_DEPENDS` (10 packages, issue #1806 — fixes pre-existing drift against port Makefile: table had stopped at 9), verified against `net/pfSense-pkg-pfBlockerNG-edge/Makefile`. To bake onto image, run [`scripts/misc/install_deps_CE_2.8.sh`](../../scripts/misc/install_deps_CE_2.8.sh) on box (as root):
 

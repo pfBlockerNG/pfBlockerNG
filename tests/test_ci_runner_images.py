@@ -450,14 +450,14 @@ def test_the_base_image_carries_actionlint() -> None:
 
 def test_baked_python_toolchain_covers_the_benchmarks_job() -> None:
     """ci-requirements.txt claims to carry every package the non-VM jobs install. The
-    manual `benchmarks` job installs benchmarks/requirements.txt, so those pins are part
+    manual `benchmarks` job installs legacy/benchmarks/requirements.txt, so those pins are part
     of that claim — and must not drift from their source file."""
     # Compare parsed pins, not substrings: `pin in text` also matches a COMMENTED-OUT pin
     # or one embedded in prose, so the guard would pass on a package that is not installed.
     baked = _requirement_pins(_read(DOCKER_DIR / "ci-requirements.txt"))
-    wanted = _requirement_pins(_read(ROOT / "benchmarks/requirements.txt"))
+    wanted = _requirement_pins(_read(ROOT / "legacy/benchmarks/requirements.txt"))
 
-    assert wanted, "benchmarks/requirements.txt has no pins to check against"
+    assert wanted, "legacy/benchmarks/requirements.txt has no pins to check against"
     missing = wanted - baked
     assert not missing, f"the image must bake the benchmarks pins {sorted(missing)}"
 

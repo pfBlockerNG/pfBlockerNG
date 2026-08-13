@@ -238,7 +238,7 @@ in `read-version-matrix.sh`.
 | [`install-from-repo.sh`](install-from-repo.sh) | **First-time install** onto a clean pfSense from `src/` — no Netgate pkg. |
 | [`deploy.sh`](deploy.sh) | Fast code update of an **already-installed** pfBlockerNG: rsync `src/` + restart unbound/nginx. |
 | [`setup-hooks.sh`](setup-hooks.sh) | Point git at `.githooks` (run once after cloning). |
-| [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`.ADRs/`, `docs/`) excluded from its pathspec. |
+| [`git-no-docs.sh`](git-no-docs.sh) | Local doc-free history views: run a read-only git command (default `log -p`) with the `.gitattributes` `linguist-documentation` trees (`legacy/ADRs/`, `docs/`) excluded from its pathspec. |
 | [`update-pfsense-stubs.py`](update-pfsense-stubs.py) | Regenerate `stubs/pfsense/` after a CE bump. |
 
 `install-from-repo.sh` syncs the files then runs the selected static recipe's real
@@ -362,7 +362,7 @@ network write of any kind. Publication is a separate, maintainer-gated step.
 
 ## Image pipeline (ADR-04 smoke base)
 
-The CI smoke harness — see [`../.ADRs/ADR_04_VM_Smoke_Tests/`](../.ADRs/ADR_04_VM_Smoke_Tests/) —
+The CI smoke harness — see [`../legacy/ADRs/ADR_04_VM_Smoke_Tests/`](../legacy/ADRs/ADR_04_VM_Smoke_Tests/) —
 boots a real pfSense CE VM. **No Packer**: pfBlockerNG compiles nothing.
 
 | Script | Use |

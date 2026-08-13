@@ -1,6 +1,6 @@
 # Spec: sanitized configuration export (Diagnostics page)
 
-Migrated from `.ADRs/ADR_52_Sanitized_Config_Export/` (Proposed, never implemented) under
+Migrated from `legacy/ADRs/ADR_52_Sanitized_Config_Export/` (Proposed, never implemented) under
 wayfinder map [#1383](https://github.com/pfBlockerNG/pfBlockerNG/issues/1383), spec ticket
 [#1441](https://github.com/pfBlockerNG/pfBlockerNG/issues/1441). Requirements and rationale
 migrate; the ADR's phase plan and phase-prompt files are obsolete under the fresh-session

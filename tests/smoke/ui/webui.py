@@ -11,7 +11,7 @@ test that drives a page must first log in like a browser:
 3. subsequent GETs carry that cookie -> authenticated.
 
 Field/cookie names are pfSense-core facts confirmed against upstream
-``pfsense/pfSense`` (see ``.ADRs/ADR_14_UI_UX_Testing/RESULTS/01_Results.txt``):
+``pfsense/pfSense`` (see ``legacy/ADRs/ADR_14_UI_UX_Testing/RESULTS/01_Results.txt``):
 
 * login form fields ``usernamefld`` / ``passwordfld`` -- ``src/etc/inc/authgui.inc``
   ``display_login_form()`` (``<input name="usernamefld" ...>`` /

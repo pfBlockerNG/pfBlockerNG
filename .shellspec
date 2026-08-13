@@ -1,4 +1,5 @@
 --shell sh
+# The explicit suite root keeps legacy/** out of ShellSpec discovery.
 --default-path tests/shell
 --load-path tests/shell
 --require spec_helper

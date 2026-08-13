@@ -9,7 +9,7 @@
 #
 # The list is EXACTLY the port RUN_DEPENDS for
 # net/pfSense-pkg-pfBlockerNG[-devel] (see docs/misc/pfSense_versions.md and
-# .ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md §3). The py311-* packages are
+# legacy/ADRs/ADR_04_VM_Smoke_Tests/IMAGE_RUNBOOK.md §3). The py311-* packages are
 # pinned to CE 2.8.x's Python 3.11 — a pfSense base on a different Python needs
 # the matching py3XX-* (add a sibling install_deps_CE_<ver>.sh for it).
 #

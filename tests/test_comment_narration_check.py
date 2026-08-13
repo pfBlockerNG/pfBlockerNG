@@ -198,7 +198,7 @@ def test_markdown_and_out_of_root_paths_are_clean() -> None:
     assert _find("docs/misc/architecture-notes.md", bad) == []
     assert _find("src/notes.md", bad) == []
     assert _find("tests/test_x.py", bad) == []
-    assert _find(".ADRs/ADR_60_X/prompt.txt", bad) == []
+    assert _find("legacy/ADRs/ADR_60_X/prompt.txt", bad) == []
 
 
 def test_self_and_companion_test_are_excluded() -> None:

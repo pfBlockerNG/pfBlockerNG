@@ -27,7 +27,7 @@ charset-normalizer==3.4.9
 PyYAML==6.0.3
 
 # The manual-only `benchmarks` job (test.yml, workflow_dispatch + run_benchmarks) installs
-# benchmarks/requirements.txt. Pinned there, restated here so a dispatched benchmark run
+# legacy/benchmarks/requirements.txt. Pinned there, restated here so a dispatched benchmark run
 # does not have to reach PyPI — and so this file's "every package the non-VM jobs
 # install" claim is actually true. tests/test_ci_runner_images.py pins the agreement.
 pytest-benchmark==5.2.3

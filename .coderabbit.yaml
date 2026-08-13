@@ -5,10 +5,8 @@ reviews:
   path_filters:
     # Documentation and historical artifacts.
     - "!**/*.md"
-    - "!.ADRs/**"
     - "!docs/**"
-    - "!RESULTS/**"
-    - "!archive/**"
+    - "!legacy/**"
     # Vendored agent content and bundled web dependencies.
     - "!.agents/skills/**"
     - "!.claude/skills/**"

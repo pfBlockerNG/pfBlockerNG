@@ -2209,7 +2209,7 @@ def test_pfctl_disruption_uncensored(
       - How much does delta reduce disruption at 1% and 5% churn?
       - Does the picture support the shipped defaults (5% threshold, batch 512)?
 
-    Results: .ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/02c_Disruption_Magnitude_Uncensored.txt
+    Results: legacy/ADRs/ADR_40_Content_Addressed_Alias_Updates/RESULTS/02c_Disruption_Magnitude_Uncensored.txt
     Always passes — measurement harness.
     """
     print("\n=== ADR-40 02c: uncensored disruption magnitudes ===")

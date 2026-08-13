@@ -192,7 +192,7 @@ fi
 #   1. cd to the repo on the box
 #   2. narrow the working tree to the paths a smoke leg reads (src/ builds the .pkg,
 #      scripts/ is the harness, stubs/python/ supports root conftest, tests/smoke/ is the suite). 38 MB of tracked files
-#      against 13 MB for what a leg actually uses; .ADRs/, tests/php/ and plugins/ are
+#      against 13 MB for what a leg actually uses; legacy/ADRs/, tests/php/ and plugins/ are
 #      the bulk of the difference and none of them is read here.
 #   3. fetch the requested ref and check out its FETCHED TIP (FETCH_HEAD) — NOT a
 #      bare `git checkout <ref>`, which lands the box's possibly-stale LOCAL branch

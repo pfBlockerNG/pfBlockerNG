@@ -62,7 +62,7 @@ from pfb_unbound import (
 # Test-only insert helpers
 # Each helper writes into the relevant flat dict (the runtime matching structure)
 # AND sets the enabling pfb[...] flag, so tests don't poke module internals
-# directly. (ADR-01's trie was rejected and rolled back; see benchmarks/.)
+# directly. (ADR-01's trie was rejected and rolled back; see legacy/benchmarks/.)
 # ---------------------------------------------------------------------------
 
 

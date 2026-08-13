@@ -1,7 +1,7 @@
 # ADR-04 smoke-harness dev dependencies — DEV ONLY, never shipped.
 #
 # The release archive contains only src/; this file (like
-# benchmarks/requirements.txt, ADR-01) is part of the dev tooling and is not
+# legacy/benchmarks/requirements.txt, ADR-01) is part of the dev tooling and is not
 # packaged. Install on the smoke runner with:
 #   python -m pip install -r tests/smoke/requirements.txt
 #
