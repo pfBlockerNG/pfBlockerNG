@@ -339,7 +339,9 @@ pfb_switch_branch() {
     _psb_interval="${PKG_LOCK_INTERVAL:-5}"
     case "$_psb_retries" in '' | *[!0-9]*) _psb_retries=0 ;; esac
     [ "$_psb_retries" -ge 1 ] || die "PKG_LOCK_RETRIES must be a positive integer"
+    [ "$_psb_retries" -le 12 ] || die "PKG_LOCK_RETRIES must be between 1 and 12"
     case "$_psb_interval" in *[!0-9]*) die "PKG_LOCK_INTERVAL must be a non-negative integer" ;; esac
+    [ "$_psb_interval" -le 5 ] || die "PKG_LOCK_INTERVAL must be between 0 and 5"
     _psb_try=1
     while true; do
         _psb_rc=0

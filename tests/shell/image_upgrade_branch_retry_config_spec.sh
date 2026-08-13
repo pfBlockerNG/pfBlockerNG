@@ -45,4 +45,18 @@ Describe 'image-upgrade.sh branch refresh retry configuration'
     The stderr should include 'PKG_LOCK_INTERVAL must be a non-negative integer'
     The contents of file "$CALLS" should not include 'pkg update -f'
   End
+
+  It 'rejects a retry cap above the production maximum before refreshing'
+    When call run_with_config 13 0
+    The status should be failure
+    The stderr should include 'PKG_LOCK_RETRIES must be between 1 and 12'
+    The contents of file "$CALLS" should not include 'pkg update -f'
+  End
+
+  It 'rejects a retry interval above the production maximum before refreshing'
+    When call run_with_config 2 6
+    The status should be failure
+    The stderr should include 'PKG_LOCK_INTERVAL must be between 0 and 5'
+    The contents of file "$CALLS" should not include 'pkg update -f'
+  End
 End
