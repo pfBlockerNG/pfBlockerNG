@@ -82,7 +82,7 @@ PAGE_TABLE: tuple[Page, ...] = (
     Page(
         "general",
         "/pfblockerng/pfblockerng_general.php",
-        ("pfBlockerNG", "General Settings", "Advanced Text Editor"),
+        ("pfBlockerNG", "General Settings", "Scheduling", "Advanced Text Editor"),
     ),
     # "Aggregated Aliases" is the ADR-11 pfb_agg_types multi-select label (rendered
     # verbatim) — a third marker so the gate also proves that field renders on the IP page.

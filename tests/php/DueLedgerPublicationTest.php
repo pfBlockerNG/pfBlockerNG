@@ -67,4 +67,14 @@ final class DueLedgerPublicationTest extends TestCase
 			$this->assertFileDoesNotExist($path . '.tmp', $failure . ' must remove staging file');
 		}
 	}
+
+	public function testPendingPublicationReportsWhetherTheDurableMarkerWasWritten(): void
+	{
+		$this->assertTrue(pfb_due_ledger_set_pending('cron', $this->dir));
+		$this->assertTrue(pfb_due_ledger_read_entry('cron', $this->dir)['pending_apply'] ?? FALSE);
+		$before = file_get_contents($this->dir . '/pfb_due_ledger.json');
+
+		$this->assertFalse(pfb_due_ledger_set_pending('cron', $this->dir, 5.0, ['fail_rename' => TRUE]));
+		$this->assertSame($before, file_get_contents($this->dir . '/pfb_due_ledger.json'));
+	}
 }

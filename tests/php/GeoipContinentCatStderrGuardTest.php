@@ -8,6 +8,16 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 {
 	private string $dir;
 
+	public static function setUpBeforeClass(): void
+	{
+		if (!function_exists('pfblockerng_uc_countries')) {
+			$source = file_get_contents(__DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng.php');
+			$start = strpos($source, 'function pfblockerng_uc_countries');
+			self::assertNotFalse($start);
+			eval(substr($source, $start));
+		}
+	}
+
 	protected function setUp(): void
 	{
 		$this->dir = sys_get_temp_dir() . '/pfb_geoip_cat_' . bin2hex(random_bytes(8));
@@ -16,10 +26,7 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (glob($this->dir . '/*') ?: [] as $file) {
-			is_dir($file) ? @rmdir($file) : @unlink($file);
-		}
-		@rmdir($this->dir);
+		rmdir_recursive($this->dir);
 	}
 
 	public function testCatFailureDiscardsPartialOutputAndTemporaryState(): void
@@ -67,6 +74,109 @@ final class GeoipContinentCatStderrGuardTest extends TestCase
 			'/bin/cat', $iso, $continent, $tmp, 'US', '4', static function (): void {}
 		));
 		$this->assertFileDoesNotExist($continent);
+	}
+
+	public function testCountryGenerationFailurePreservesLiveGeneration(): void
+	{
+		$live = $this->dir . '/live';
+		$share = $this->dir . '/share';
+		$log = $this->dir . '/log';
+		mkdir($live, 0700);
+		mkdir($share, 0700);
+		mkdir($log, 0700);
+		file_put_contents($live . '/Europe_v4.txt', "healthy-continent\n");
+		file_put_contents($this->dir . '/geoip_isos', 'healthy-isos');
+		file_put_contents(
+			$share . '/GeoLite2-Country-Locations-en.csv',
+			"geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name\n"
+			. "49518,en,EU,Europe,RW,Rwanda\n"
+		);
+		foreach (['4' => '1.2.3.0/24', '6' => '2001:db8::/32'] as $type => $network) {
+			file_put_contents(
+				$share . "/GeoLite2-Country-Blocks-IPv{$type}.csv",
+				"network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider\n"
+				. "{$network},49518,49518,,0,0\n"
+			);
+		}
+
+		$oldPfb = $GLOBALS['pfb'];
+		$GLOBALS['pfb'] = array_merge($oldPfb, [
+			'dbdir' => $this->dir . '/db',
+			'logdir' => $log,
+			'ccdir' => $live,
+			'ccdir_tmp' => $this->dir . '/working',
+			'geoipshare' => $share,
+			'geoip_isos' => $this->dir . '/geoip_isos',
+			'maxmind_locale' => 'en',
+			'grep' => '/usr/bin/grep',
+			'cut' => '/usr/bin/cut',
+			'cat' => $this->catFixture("printf 'partial-network\\n'\nexit 7\n"),
+		]);
+
+		try {
+			$this->assertFalse(pfblockerng_uc_countries());
+			$this->assertSame("healthy-continent\n", file_get_contents($live . '/Europe_v4.txt'));
+			$this->assertSame('healthy-isos', file_get_contents($this->dir . '/geoip_isos'));
+		} finally {
+			$GLOBALS['pfb'] = $oldPfb;
+		}
+	}
+
+	public function testUiGenerationFailurePreservesLiveGeneration(): void
+	{
+		$live = $this->dir . '/live';
+		$share = $this->dir . '/share';
+		$log = $this->dir . '/log';
+		mkdir($live, 0700);
+		mkdir($share, 0700);
+		mkdir($log, 0700);
+		file_put_contents($live . '/Europe_v4.txt', "healthy-continent\n");
+		file_put_contents($this->dir . '/geoip_isos', 'healthy-isos');
+		file_put_contents(
+			$share . '/GeoLite2-Country-Locations-en.csv',
+			"geoname_id,locale_code,continent_code,continent_name,country_iso_code,country_name\n"
+			. "49518,en,EU,Europe,RW,Rwanda\n"
+		);
+		foreach (['4' => '1.2.3.0/24', '6' => '2001:db8::/32'] as $type => $network) {
+			file_put_contents(
+				$share . "/GeoLite2-Country-Blocks-IPv{$type}.csv",
+				"network,geoname_id,registered_country_geoname_id,represented_country_geoname_id,is_anonymous_proxy,is_satellite_provider\n"
+				. "{$network},49518,49518,,0,0\n"
+			);
+		}
+		$outputRoot = $this->dir . '/not-a-directory';
+		file_put_contents($outputRoot, 'occupied');
+		$oldPfb = $GLOBALS['pfb'];
+		$GLOBALS['pfb'] = array_merge($oldPfb, [
+			'dbdir' => $this->dir . '/db', 'logdir' => $log, 'ccdir' => $live,
+			'ccdir_tmp' => $this->dir . '/working', 'geoipshare' => $share,
+			'geoip_isos' => $this->dir . '/geoip_isos', 'maxmind_locale' => 'en',
+			'grep' => '/usr/bin/grep', 'cut' => '/usr/bin/cut', 'cat' => '/bin/cat',
+		]);
+
+		try {
+			$this->assertFalse(pfblockerng_uc_countries($outputRoot));
+			$this->assertSame("healthy-continent\n", file_get_contents($live . '/Europe_v4.txt'));
+			$this->assertSame('healthy-isos', file_get_contents($this->dir . '/geoip_isos'));
+		} finally {
+			$GLOBALS['pfb'] = $oldPfb;
+		}
+	}
+
+	public function testInterruptedSwapSentinelBlocksConsumersUntilDccRecovery(): void
+	{
+		$oldPfb = $GLOBALS['pfb'];
+		$GLOBALS['pfb']['ccdir'] = $this->dir . '/live';
+		mkdir($GLOBALS['pfb']['ccdir'], 0700);
+		file_put_contents($GLOBALS['pfb']['ccdir'] . '/.pfb_generation_swapping', 'pending');
+
+		try {
+			$this->assertFalse(pfb_geoip_generation_ready());
+			unlink($GLOBALS['pfb']['ccdir'] . '/.pfb_generation_swapping');
+			$this->assertTrue(pfb_geoip_generation_ready());
+		} finally {
+			$GLOBALS['pfb'] = $oldPfb;
+		}
 	}
 
 	private function catFixture(string $body): string

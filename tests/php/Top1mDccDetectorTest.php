@@ -628,6 +628,54 @@ final class Top1mDccDetectorTest extends TestCase
 		}
 	}
 
+	public function testScheduledDccReportsChangeWithoutBackgroundDispatch(): void
+	{
+		$dispatch_log = "{$this->dir}/scheduled-dispatch.log";
+		$fake_php = "{$this->dir}/fake-php-scheduled";
+		$this->assertNotFalse(file_put_contents(
+			$fake_php,
+			"#!/bin/sh\nprintf '%s\\n' \"\$*\" >> " . escapeshellarg($dispatch_log) . "\n"
+		));
+		$this->assertTrue(chmod($fake_php, 0755));
+		$saved_argv = $GLOBALS['argv'];
+		$saved = $GLOBALS['pfb'];
+		try {
+			$GLOBALS['argv'] = ['pfblockerng.php', 'dcc', 'scheduled'];
+			$GLOBALS['pfb']['php'] = $fake_php;
+			$GLOBALS['pfb']['runlog'] = '/dev/null';
+			$GLOBALS['pfb']['top1m_changed'] = TRUE;
+			unset($GLOBALS['pfb']['top1m_dispatch_done']);
+
+			$this->assertTrue(pfb_top1m_dispatch_if_changed(TRUE, FALSE));
+			$deadline = microtime(TRUE) + 2.0;
+			while (!is_file($dispatch_log) && microtime(TRUE) < $deadline) {
+				usleep(10_000);
+			}
+			$this->assertFileDoesNotExist($dispatch_log);
+		} finally {
+			$GLOBALS['argv'] = $saved_argv;
+			$GLOBALS['pfb'] = $saved;
+		}
+	}
+
+	public function testGeoipCliCommandsPropagateGenerationFailureStatus(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng.php');
+		$this->assertIsString($source);
+		$this->assertStringContainsString('exit(pfblockerng_uc_countries() ? 0 : 1);', $source);
+		$this->assertStringContainsString('exit(pfblockerng_get_countries() ? 0 : 1);', $source);
+		$this->assertStringContainsString("if (!pfblockerng_uc_countries('/usr/local/www/pfblockerng'))", $source);
+	}
+
+	public function testLockedSyncMarksInternalDcChildAsParentOwned(): void
+	{
+		$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc');
+		$this->assertIsString($source);
+		$this->assertStringContainsString('pfblockerng.php dc scheduled', $source);
+		$this->assertStringContainsString('$maxmind_status);', $source);
+		$this->assertStringContainsString('$maxmind_status !== 0 || !pfb_geoip_generation_ready()', $source);
+	}
+
 	private static function loadWwwDccHelpers(): void
 	{
 		if (function_exists('pfb_top1m_detector_decision')) {

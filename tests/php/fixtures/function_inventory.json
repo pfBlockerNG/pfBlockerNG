@@ -3607,7 +3607,7 @@
     },
     "pfb_due_ledger_set_pending": {
         "returnsRef": false,
-        "returnType": "void",
+        "returnType": "bool",
         "params": [
             {
                 "name": "job_key",
@@ -4018,6 +4018,11 @@
             }
         ]
     },
+    "pfb_extras_process_begin": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
     "pfb_failures": {
         "returnsRef": false,
         "returnType": null,
@@ -4248,7 +4253,15 @@
     "pfb_feed_task_running": {
         "returnsRef": false,
         "returnType": "bool",
-        "params": []
+        "params": [
+            {
+                "name": "ps_lines",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_file_mtime": {
         "returnsRef": false,
@@ -4712,6 +4725,19 @@
             }
         ]
     },
+    "pfb_general_schedule_validate": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_general_toggle_help": {
         "returnsRef": false,
         "returnType": "string",
@@ -4780,6 +4806,11 @@
     "pfb_geoip_doc_link": {
         "returnsRef": false,
         "returnType": "string",
+        "params": []
+    },
+    "pfb_geoip_generation_ready": {
+        "returnsRef": false,
+        "returnType": "bool",
         "params": []
     },
     "pfb_geoip_js_asset_render": {
@@ -9494,6 +9525,102 @@
             }
         ]
     },
+    "pfb_schedule_cache_refresh_locked": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_schedule_cache_regenerate": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": []
+    },
+    "pfb_schedule_dispatch_begin": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "timeout_s",
+                "byRef": false,
+                "variadic": false,
+                "type": "float",
+                "default": "0.1"
+            }
+        ]
+    },
+    "pfb_schedule_dispatch_release": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": []
+    },
+    "pfb_schedule_extra_plan": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "model",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "state",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "now",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "timezone",
+                "byRef": false,
+                "variadic": false,
+                "type": "DateTimeZone",
+                "default": null
+            },
+            {
+                "name": "cache",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_schedule_extra_run": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "job",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "argument",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
+            },
+            {
+                "name": "changed",
+                "byRef": true,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            }
+        ]
+    },
     "pfb_schedule_feed_id": {
         "returnsRef": false,
         "returnType": "?string",
@@ -9731,6 +9858,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
+            },
+            {
+                "name": "extras",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
             }
         ]
     },
@@ -9818,6 +9952,13 @@
                 "variadic": false,
                 "type": "array",
                 "default": "array (\n)"
+            },
+            {
+                "name": "expected_occurrence",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
             }
         ]
     },
@@ -12807,6 +12948,20 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "regenerate",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "regenerate_cache",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "true"
             }
         ]
     },
@@ -12942,7 +13097,7 @@
     },
     "pfblockerng_sync_cron": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "bool",
         "params": [
             {
                 "name": "force_all",
@@ -12957,6 +13112,20 @@
                 "variadic": false,
                 "type": null,
                 "default": "'both'"
+            },
+            {
+                "name": "pending_change",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
+            },
+            {
+                "name": "clear_hashes",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": "false"
             }
         ]
     },
@@ -13030,6 +13199,27 @@
                 "variadic": false,
                 "type": "float",
                 "default": "5.0"
+            },
+            {
+                "name": "extra_runner",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "feed_runner",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "manual_runner",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -13082,7 +13272,7 @@
     },
     "sync_package_pfblockerng": {
         "returnsRef": false,
-        "returnType": null,
+        "returnType": "bool",
         "params": [
             {
                 "name": "cron",

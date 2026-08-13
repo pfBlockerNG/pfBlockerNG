@@ -29,7 +29,6 @@ the output filter per render -- it must be re-extracted, never cached).
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 from dataclasses import dataclass
@@ -677,39 +676,37 @@ def test_ip_maxmind_key_masked_field_persists_and_is_never_echoed(
 # --------------------------------------------------------------------------- #
 
 
-def test_general_cron_interval_select_coerces_bogus_to_default(
+def test_general_schedule_valid_save_and_invalid_visible_reject(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """A CRON select takes a valid in-range key, coerces a bogus value to default 1.
-
-    Representative ``log_max_``-adjacent CRON select (Hour Interval, ``pfb_interval``).
-    Save loop: ``$options_pfb_interval`` keys are 1,2,3,4,6,8,12,24,'Disabled'. A
-    valid key '2' is stored verbatim (truthy, survives the trailing ``?:1``); a
-    bogus '999' is not a key -> ``$_POST`` is coerced to the default 1, then stored
-    1 (the save still SUCCEEDS -- soft coerce, not an abort). '2' is chosen because
-    it is truthy and distinct from the default 1 (a falsy '0'/'Disabled'-adjacent
-    probe would be indistinguishable from the reject outcome).
-
-    Transition: read the box's current value first, drive to '2' (assert '2'),
-    drive back to the original, then prove the bogus POST coerces to 1.
-    """
+    """General schedule persists valid W/H/M and visibly rejects an invalid minute."""
     vm = smoke_vm
-    cfg = "installedpackages/pfblockerng/config/0/pfb_interval"
-    original = helpers.config_get(vm, cfg)
+    base = "installedpackages/pfblockerng/config/0"
+    paths = {
+        name: f"{base}/{name}"
+        for name in ("pfb_scheduled_feed_updates", "pfb_schedule_weekday", "pfb_schedule_hour", "pfb_schedule_minute")
+    }
+    original = {name: helpers.config_get_state(vm, path) for name, path in paths.items()}
     try:
-        # BEFORE: a fresh image defaults to 1; assert whatever it currently is is a
-        # known key so the transition is meaningful (not asserting it equals '2').
-        assert original != "2", f"pfb_interval already '2' before the valid POST (original={original!r})"
-        # VALID: '2' is a key -> stored verbatim.
-        assert _post_and_confirm_general(webui, vm, {"pfb_interval": "2"}, cfg) == "2"
-        # Restore to the original valid key.
-        assert _post_and_confirm_general(webui, vm, {"pfb_interval": original or "1"}, cfg) == (original or "1")
-        # BOGUS: not a key -> coerced to default 1 (save succeeds, value != '999').
-        got = _post_and_confirm_general(webui, vm, {"pfb_interval": "999"}, cfg)
-        assert got == "1", f"bogus pfb_interval should coerce to default 1, got {got!r}"
+        valid = {
+            "pfb_scheduled_feed_updates": "on",
+            "pfb_schedule_weekday": "2",
+            "pfb_schedule_hour": "5",
+            "pfb_schedule_minute": "45",
+        }
+        resp = webui.post(GENERAL_PAGE, valid, timeout=SAVE_TIMEOUT)
+        assert not looks_like_login_page(resp.text)
+        for name, value in valid.items():
+            assert helpers.config_get(vm, paths[name]) == value
+
+        before_invalid = helpers.config_get(vm, paths["pfb_schedule_minute"])
+        rejected = webui.post(GENERAL_PAGE, {"pfb_schedule_minute": "5"}, timeout=SAVE_TIMEOUT)
+        assert "Schedule minute is invalid" in rejected.text
+        assert helpers.config_get(vm, paths["pfb_schedule_minute"]) == before_invalid
     finally:
-        webui.post(GENERAL_PAGE, {"pfb_interval": original or "1"}, timeout=SAVE_TIMEOUT)
+        for name, state in original.items():
+            helpers.config_restore_state(vm, paths[name], state)
 
 
 def test_general_log_max_select_coerces_bogus_to_default(
@@ -1782,37 +1779,27 @@ def test_dnsvip_auto_form_provisions_and_removes_marked_vip(
 
 
 # ---------------------------------------------------------------------------
-# ADR-43 Phase 6 — Update page Run Now updates the due ledger
+# Issue #2308 — Update page Run Now leaves the tick-owned cache alone
 # ---------------------------------------------------------------------------
 
 _ENABLE_CB_CFG = "installedpackages/pfblockerng/config/0/enable_cb"
 _LEDGER_PATH = f"{helpers.PFB_DBDIR}/pfb_due_ledger.json"
 
 
-def test_update_runnow_scope_guard_and_ledger(
+def test_update_runnow_does_not_publish_schedule_cache(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Phase-6 Run Now only advances the cron ledger entry when scope=both.
+    """Run Now never publishes the derived schedule cache.
 
     Scenario: scope-guard — partial scope=ip must NOT advance cron.last_run.
       Background: pfBlockerNG deployed and enabled; no feeds configured (fast run).
 
     Given pfBlockerNG is enabled,
-    And the VM clock is captured as before_ts,
+    When Run Now is submitted for partial and full scopes,
+    Then ``pfb_due_ledger.json`` remains byte-identical after each POST.
 
-    When the Update page Run Now form is submitted with scope=ip and force unchecked,
-
-    Then the ``pfb_due_ledger.json`` 'cron' entry is UNCHANGED (last_run < before_ts) —
-      proving pfb_runnow() guards mark_ran('cron') to scope=both only;
-
-    When the Update page Run Now form is submitted a second time with scope=both,
-
-    Then the 'cron' entry shows last_run >= before_ts —
-      proving the full-pass scope=both DOES advance the ledger.
-
-    The BEFORE assertion establishes the pre-state; the two-step ACT proves the guard
-    fires on scope=ip and releases on scope=both (transition evidence per mandate).
+    The next locked tick owns cache regeneration from config and durable state.
     """
     vm = smoke_vm
     # Ensure pfBlockerNG is enabled; restore the original state at the end.
@@ -1821,20 +1808,8 @@ def test_update_runnow_scope_guard_and_ledger(
         helpers.set_package_enabled(vm, True)
 
     try:
-        # BEFORE: capture VM wall-clock timestamp so we can assert last_run was set
-        # by THIS run and not an earlier one.  Use the VM clock (not the runner clock)
-        # to avoid a cross-host time discrepancy.
-        before_ts = int(vm.ssh("/bin/date", "+%s").stdout.strip())
-
-        # BEFORE-state assertion: if a cron ledger entry exists, its last_run is older.
         pre = vm.ssh("/bin/cat", _LEDGER_PATH)
-        if pre.returncode == 0:
-            pre_data = json.loads(pre.stdout)
-            pre_last = pre_data.get("cron", {}).get("last_run", 0)
-            assert pre_last < before_ts, (
-                f"cron.last_run ({pre_last}) already >= before_ts ({before_ts}) "
-                "before the Run Now POST — cannot confirm the POST caused the update"
-            )
+        pre_snapshot = (pre.returncode, pre.stdout)
 
         # ACT 1: POST scope=ip — a partial run; the cron ledger must NOT advance.
         # pfb_runnow() dispatches a detached process and returns immediately (the live log is
@@ -1848,16 +1823,9 @@ def test_update_runnow_scope_guard_and_ledger(
         )
         assert not looks_like_login_page(resp.text), "scope=ip POST returned the login form (session lost)"
 
-        # AFTER scope=ip: cron ledger must be UNCHANGED — the scope-guard fires.
         result = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
-        cron_last_after_ip = 0
-        if result.returncode == 0:
-            ledger_ip = json.loads(result.stdout)
-            cron_last_after_ip = ledger_ip.get("cron", {}).get("last_run", 0)
-        assert cron_last_after_ip < before_ts, (
-            f"ledger cron.last_run={cron_last_after_ip} >= before_ts={before_ts} after scope=ip — "
-            "pfb_runnow() must NOT call mark_ran('cron') for a partial scope=ip run "
-            "(would suppress the next DNSBL-inclusive full pass)"
+        assert (result.returncode, result.stdout) == pre_snapshot, (
+            "scope=ip Run Now replaced the tick-owned schedule cache"
         )
 
         # Run Now no longer blocks (the live log is AJAX-polled, #671), so the scope=ip dispatched
@@ -1879,8 +1847,9 @@ def test_update_runnow_scope_guard_and_ledger(
             "pfb_active_task_running() would refuse the next dispatch"
         )
 
-        # ACT 2: POST scope=both — a full-pass run; the cron ledger MUST advance.
-        ts_before_both = int(vm.ssh("/bin/date", "+%s").stdout.strip())
+        # ACT 2: a full pass must leave the same ownership boundary intact.
+        before_both = vm.ssh("/bin/cat", _LEDGER_PATH)
+        before_both_snapshot = (before_both.returncode, before_both.stdout)
         resp2 = webui.post(
             UPDATE_PAGE,
             overrides={"pfb_scope": "both"},
@@ -1889,19 +1858,9 @@ def test_update_runnow_scope_guard_and_ledger(
         )
         assert not looks_like_login_page(resp2.text), "scope=both POST returned the login form (session lost)"
 
-        # AFTER scope=both: cron ledger must reflect the full-pass run.
         result2 = vm.ssh("/bin/cat", _LEDGER_PATH, timeout=30.0)
-        assert result2.returncode == 0, (
-            f"pfb_due_ledger.json not found after scope=both Run Now "
-            f"(rc={result2.returncode} stderr={result2.stderr!r}) — "
-            "pfb_due_ledger_mark_ran() may not have been called"
-        )
-        ledger_both = json.loads(result2.stdout)
-        assert "cron" in ledger_both, f"ledger has no 'cron' key after scope=both: {ledger_both!r}"
-        last_run_both = ledger_both["cron"].get("last_run", 0)
-        assert last_run_both >= ts_before_both, (
-            f"ledger cron.last_run={last_run_both} < ts_before_both={ts_before_both} after scope=both — "
-            "Run Now with scope=both must advance the cron ledger entry"
+        assert (result2.returncode, result2.stdout) == before_both_snapshot, (
+            "scope=both Run Now replaced the tick-owned schedule cache"
         )
 
         # Re-render the Update page and confirm the Schedule section is present.

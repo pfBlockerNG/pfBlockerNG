@@ -250,3 +250,94 @@ def test_log_settings_grouped_layout(
     assert n_rows >= 1, f"expected at least one Log Settings row (select[name^=log_max_]), found {n_rows}"
     expect(max_days).to_have_count(n_rows, timeout=JS_TIMEOUT_MS)
     expect(page.locator("label.form-label")).to_have_count(n_rows * 2, timeout=JS_TIMEOUT_MS)
+
+
+def test_quarter_hour_scheduling_controls_and_apply_window(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """Scheduling renders in place, persists, validates, and exposes cache warnings."""
+    page = browser_page
+    _open(page, webui, GENERAL_PAGE)
+
+    expect(page.locator('input[name="pfb_scheduled_feed_updates"]')).to_be_attached(timeout=JS_TIMEOUT_MS)
+    weekday = page.locator('select[name="pfb_schedule_weekday"]')
+    hour = page.locator('select[name="pfb_schedule_hour"]')
+    minute = page.locator('select[name="pfb_schedule_minute"]')
+    expect(weekday).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(weekday.locator("option")).to_have_count(7, timeout=JS_TIMEOUT_MS)
+    expect(weekday.locator("option").first).to_have_value("7", timeout=JS_TIMEOUT_MS)
+    expect(hour.locator("option")).to_have_count(24, timeout=JS_TIMEOUT_MS)
+    expect(minute.locator("option")).to_have_values(["0", "15", "30", "45"], timeout=JS_TIMEOUT_MS)
+
+    for retired in ("pfb_interval", "pfb_min", "pfb_hour", "pfb_dailystart"):
+        expect(page.locator(f'[name="{retired}"]')).to_have_count(0, timeout=JS_TIMEOUT_MS)
+
+    window_toggle = page.locator('input[name="pfb_quiet_hours_enabled"]')
+    start = page.locator('input[name="pfb_quiet_hours_start"]')
+    end = page.locator('input[name="pfb_quiet_hours_end"]')
+    expect(start).to_have_attribute("type", "time", timeout=JS_TIMEOUT_MS)
+    expect(end).to_have_attribute("step", "900", timeout=JS_TIMEOUT_MS)
+    sections = page.locator(".panel-title").all_text_contents()
+    assert sections.index("General Settings") < sections.index("Scheduling") < sections.index("Log Settings")
+
+    base = "installedpackages/pfblockerng/config/0"
+    paths = {
+        name: f"{base}/{name}"
+        for name in (
+            "pfb_scheduled_feed_updates",
+            "pfb_schedule_weekday",
+            "pfb_schedule_hour",
+            "pfb_schedule_minute",
+            "pfb_quiet_hours",
+        )
+    }
+    original = {name: helpers.config_get_state(smoke_vm, path) for name, path in paths.items()}
+    try:
+        helpers.config_set(smoke_vm, paths["pfb_quiet_hours"], "")
+        _open(page, webui, GENERAL_PAGE)
+        expect(start).to_be_disabled(timeout=JS_TIMEOUT_MS)
+        expect(end).to_be_disabled(timeout=JS_TIMEOUT_MS)
+        window_toggle.check()
+        expect(start).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(end).to_be_enabled(timeout=JS_TIMEOUT_MS)
+
+        saved = {
+            "pfb_scheduled_feed_updates": "on",
+            "pfb_schedule_weekday": "4",
+            "pfb_schedule_hour": "6",
+            "pfb_schedule_minute": "30",
+        }
+        response = webui.post(GENERAL_PAGE, saved, timeout=_GENERAL_POST_TIMEOUT)
+        assert "Sign In" not in response.text
+        for name, value in saved.items():
+            assert helpers.config_get(smoke_vm, paths[name]) == value
+
+        _open(page, webui, GENERAL_PAGE)
+        expect(page.locator('input[name="pfb_scheduled_feed_updates"]')).to_be_checked(timeout=JS_TIMEOUT_MS)
+        expect(page.locator('select[name="pfb_schedule_weekday"]')).to_have_value("4", timeout=JS_TIMEOUT_MS)
+        expect(page.locator('select[name="pfb_schedule_hour"]')).to_have_value("6", timeout=JS_TIMEOUT_MS)
+        expect(page.locator('select[name="pfb_schedule_minute"]')).to_have_value("30", timeout=JS_TIMEOUT_MS)
+
+        rejected = webui.post(GENERAL_PAGE, {"pfb_schedule_minute": "5"}, timeout=_GENERAL_POST_TIMEOUT)
+        assert "Schedule minute is invalid" in rejected.text
+        assert helpers.config_get(smoke_vm, paths["pfb_schedule_minute"]) == "30"
+
+        _open(page, webui, GENERAL_PAGE + "?schcache=failed")
+        expect(
+            page.get_by_text("Settings were saved, but schedule-cache generation failed.", exact=False)
+        ).to_be_visible(timeout=JS_TIMEOUT_MS)
+
+        # Master Off suppresses scheduled work only; schedule and enabled window remain editable.
+        window_toggle.check()
+        master = page.locator('input[name="pfb_scheduled_feed_updates"]')
+        master.uncheck()
+        expect(weekday).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(hour).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(minute).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(start).to_be_enabled(timeout=JS_TIMEOUT_MS)
+        expect(end).to_be_enabled(timeout=JS_TIMEOUT_MS)
+    finally:
+        for name, state in original.items():
+            helpers.config_restore_state(smoke_vm, paths[name], state)

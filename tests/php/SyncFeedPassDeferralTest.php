@@ -32,6 +32,7 @@ final class SyncFeedPassDeferralTest extends TestCase
 
 	/** Raw fd simulating another process holding the feed-pass lock. */
 	private $lockFp = NULL;
+	private $dispatchLockFp = NULL;
 
 	protected function setUp(): void
 	{
@@ -46,10 +47,12 @@ final class SyncFeedPassDeferralTest extends TestCase
 		mkdir($this->dbdir, 0755, TRUE);
 
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
-			'dbdir'  => $this->dbdir,
-			'log'    => "{$this->dbdir}/pfblockerng.log",
-			'errlog' => "{$this->dbdir}/error.log",
-			'runlog' => "{$this->dbdir}/run.log",
+			'dbdir'             => $this->dbdir,
+			'schedule_state_dir' => $this->dbdir,
+			'log'               => "{$this->dbdir}/pfblockerng.log",
+			'errlog'            => "{$this->dbdir}/error.log",
+			'runlog'            => "{$this->dbdir}/run.log",
+			'pending_marker'     => "{$this->dbdir}/pfb_pending_changes",
 		]);
 
 		$GLOBALS['config'] = [];
@@ -62,6 +65,11 @@ final class SyncFeedPassDeferralTest extends TestCase
 			@flock($this->lockFp, LOCK_UN);
 			@fclose($this->lockFp);
 			$this->lockFp = NULL;
+		}
+		if (is_resource($this->dispatchLockFp)) {
+			@flock($this->dispatchLockFp, LOCK_UN);
+			@fclose($this->dispatchLockFp);
+			$this->dispatchLockFp = NULL;
 		}
 		// Self-encapsulation: never leave this process holding the lock across tests.
 		pfb_feed_pass_release();
@@ -189,7 +197,7 @@ final class SyncFeedPassDeferralTest extends TestCase
 		$this->assertSame($now + 3600, $before['next_due'], 'test setup sanity: seeded future next_due');
 
 		// Act -- a GUI Save/Force loses the feed-pass lock race.
-		sync_package_pfblockerng();
+		$this->assertFalse(sync_package_pfblockerng(), 'lock deferral must be observable by CLI/manual callers');
 
 		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
 		$this->assertNotNull($after, 'cron ledger entry must still exist after the lost race');
@@ -198,5 +206,32 @@ final class SyncFeedPassDeferralTest extends TestCase
 			. "expected {$now}+3600 got {$after['next_due']}");
 		$this->assertTrue(!empty($after['pending_apply']),
 			'cron ledger entry must be marked pending_apply so the next tick retries the dropped GUI change');
+	}
+
+	public function testUpdateDefersBeforeFeedWorkWhenDispatcherLockIsHeld(): void
+	{
+		$now = time();
+		$this->assertTrue(pfb_due_ledger_write_entry('cron', [
+			'last_run' => $now - 3600,
+			'next_due' => $now + 3600,
+			'jitter'   => 0,
+		], $this->dbdir));
+		$this->dispatchLockFp = fopen("{$this->dbdir}/pfb_schedule_dispatch.lock", 'c');
+		$this->assertNotFalse($this->dispatchLockFp);
+		$this->assertTrue(flock($this->dispatchLockFp, LOCK_EX));
+		$before = file_get_contents("{$this->dbdir}/pfb_due_ledger.json");
+		$this->assertIsString($before);
+
+		$GLOBALS['g']['pfblockerng_install'] = TRUE;
+		try {
+			$this->assertFalse(sync_package_pfblockerng(), 'dispatcher deferral must be observable by callers');
+		} finally {
+			unset($GLOBALS['g']['pfblockerng_install']);
+		}
+
+		$this->assertSame($before, file_get_contents("{$this->dbdir}/pfb_due_ledger.json"),
+			'Lock contention must not mutate the active cache or its markers.');
+		$this->assertTrue(pfb_pending_changes(),
+			'The durable request marker must preserve an update deferred before feed work starts.');
 	}
 }

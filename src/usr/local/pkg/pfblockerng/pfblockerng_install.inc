@@ -125,11 +125,14 @@ pfb_install_settings_family_finalize($pfb_installed_family);
 if (empty($pfb['maxmind_key'])) {
 	update_status("\nMaxMind GeoIP databases are not pre-installed during installation.\nTo utilize the MaxMind GeoIP functionalities, you will be required to register for a free MaxMind user account and access key. Review the IP tab: MaxMind Settings for more details.\n\n");
 }
-else {
+elseif (pfb_geoip_generation_ready()) {
 	// Update any PHP changes to GeoIP Tabs
 	update_status("\nRebuilding GeoIP tabs...");
 	pfblockerng_get_countries();
 	update_status(" done.");
+}
+else {
+	update_status("\nGeoIP tab rebuild deferred until the interrupted GeoIP refresh is retried.\n");
 }
 
 // Create Reputation tab

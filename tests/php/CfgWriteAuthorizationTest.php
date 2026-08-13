@@ -480,25 +480,25 @@ final class CfgWriteAuthorizationTest extends TestCase
 
 	public function testWriteSectionNonScalarChangeUnderPlainKeyIsAnAuthorizationEvent(): void
 	{
-		// A crafted-POST array riding a plain registered key (pfb_interval has
+		// A crafted-POST array riding a plain registered key (pfb_schedule_hour has
 		// NULL/NULL adapters). Stored and incoming arrays DIFFER, so this is a
 		// real change: the delta gate must consult the privilege and refuse.
-		config_set_path(self::GEN, ['pfb_interval' => ['a']]);
+		config_set_path(self::GEN, ['pfb_schedule_hour' => ['a']]);
 
 		$GLOBALS['pfb_test_allowed_pages'] = [
 			'pfblockerng/pfblockerng_general.php' => false,
 		];
 
 		try {
-			PfbConfig::writeSection(self::GEN, ['pfb_interval' => ['b']]);
+			PfbConfig::writeSection(self::GEN, ['pfb_schedule_hour' => ['b']]);
 			$this->fail('expected RuntimeException, none thrown');
 		} catch (RuntimeException $e) {
-			$this->assertStringContainsString('pfb_interval', $e->getMessage(),
+			$this->assertStringContainsString('pfb_schedule_hour', $e->getMessage(),
 				'exception message must name the key'
 			);
 		}
 
-		$this->assertSame(['a'], config_get_path(self::GEN . '/pfb_interval'),
+		$this->assertSame(['a'], config_get_path(self::GEN . '/pfb_schedule_hour'),
 			'refused non-scalar change must leave the stored value unchanged'
 		);
 	}
@@ -509,7 +509,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 		// "Array to string conversion" (the cast would, on BOTH tests here --
 		// PHPUnit converts warnings to errors under failOnWarning, and this
 		// closure-based handler catches it regardless of that setting).
-		config_set_path(self::GEN, ['pfb_interval' => ['a']]);
+		config_set_path(self::GEN, ['pfb_schedule_hour' => ['a']]);
 
 		$GLOBALS['pfb_test_allowed_pages'] = [
 			'pfblockerng/pfblockerng_general.php' => false,
@@ -521,7 +521,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 			return true;
 		}, E_WARNING | E_NOTICE);
 		try {
-			PfbConfig::writeSection(self::GEN, ['pfb_interval' => ['a']]);
+			PfbConfig::writeSection(self::GEN, ['pfb_schedule_hour' => ['a']]);
 		} finally {
 			restore_error_handler();
 		}
@@ -529,7 +529,7 @@ final class CfgWriteAuthorizationTest extends TestCase
 		$this->assertSame([], $warnings,
 			'the delta comparison must not string-cast non-scalars'
 		);
-		$this->assertSame(['a'], config_get_path(self::GEN . '/pfb_interval'),
+		$this->assertSame(['a'], config_get_path(self::GEN . '/pfb_schedule_hour'),
 			'identical non-scalar pass-through must persist verbatim'
 		);
 	}

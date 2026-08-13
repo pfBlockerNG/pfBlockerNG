@@ -145,6 +145,9 @@ final class ScheduleRuntimeModelTest extends TestCase
 	{
 		$cases = [];
 		$row = $this->row('hostile');
+		$row['format'] = [];
+		$cases[] = $row;
+		$row = $this->row('hostile');
 		$row['url'] = ['not-a-url'];
 		$cases[] = $row;
 		$row = $this->row('hostile');
@@ -179,6 +182,18 @@ final class ScheduleRuntimeModelTest extends TestCase
 		]));
 		$this->assertIsArray($unknown_action);
 		$this->assertFalse($unknown_action['entries']['ipv4:inactive_v4']['enabled']);
+	}
+
+	public function testMalformedSourceInterfaceFailsClosedBeforeScheduledCron(): void
+	{
+		$general = $this->general();
+		$groups = $this->sections([
+			$this->group('Deny_Inbound', 'EveryDay', [$this->row('hostile')]),
+		]);
+		$this->assertIsArray(pfb_schedule_runtime_model($general, $groups));
+		$groups['ipv4'][0]['srcint'] = ['wan'];
+
+		$this->assertNull(pfb_schedule_runtime_model($general, $groups));
 	}
 
 	public function testModelValidatorRejectsSemanticTampering(): void
@@ -224,7 +239,7 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertTrue(pfb_schedule_cache_refresh($model, $state, $now, new DateTimeZone('UTC'), $this->dir));
 		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
 		$this->assertIsArray($cache);
-		$this->assertSame($now, $cache['cron']['last_run']);
+		$this->assertSame(0, $cache['cron']['last_run']);
 		$this->assertSame($now, $cache['cron']['next_due']);
 		$this->assertSame(0, $cache['cron']['jitter']);
 		$this->assertSame(['last_run' => 1, 'next_due' => 2, 'jitter' => 0], $cache['dcc']);
@@ -242,8 +257,10 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertSame(['_meta' => ['schema' => 1, 'config_hash' => $model['config_hash']]], pfb_due_ledger_read_cache($this->dir, $model['config_hash']));
 		$state['items']['ipv4:feed_v4'] = ['pending_occurrence' => $now - 60];
 		$this->assertTrue(pfb_schedule_cache_refresh($model, $state, $now, new DateTimeZone('UTC'), $this->dir));
-		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
-		$this->assertSame($now, $cache['cron']['next_due']);
+		$this->assertSame(
+			['_meta' => ['schema' => 1, 'config_hash' => $model['config_hash']]],
+			pfb_due_ledger_read_cache($this->dir, $model['config_hash'])
+		);
 	}
 
 	public function testRefreshReplacesMalformedTargetAtomically(): void
@@ -288,7 +305,8 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertTrue(pfb_schedule_cache_refresh($model, $completed, $now, new DateTimeZone('UTC'), $this->dir));
 		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
 		$this->assertSame(TRUE, $cache['cron']['pending_apply']);
-		$this->assertSame(2, $cache['cron']['next_due']);
+		$this->assertGreaterThan($now, $cache['cron']['next_due']);
+		$scheduled_next_due = $cache['cron']['next_due'];
 
 		$off = pfb_schedule_runtime_model($this->general(''), $this->sections([
 			$this->group('Deny_Inbound', 'EveryDay', [$this->row('feed')]),
@@ -297,6 +315,6 @@ final class ScheduleRuntimeModelTest extends TestCase
 		$this->assertTrue(pfb_schedule_cache_refresh($off, $completed, $now, new DateTimeZone('UTC'), $this->dir));
 		$cache = pfb_due_ledger_read_cache($this->dir, $off['config_hash']);
 		$this->assertSame(TRUE, $cache['cron']['pending_apply']);
-		$this->assertSame(2, $cache['cron']['next_due']);
+		$this->assertSame($scheduled_next_due, $cache['cron']['next_due']);
 	}
 }

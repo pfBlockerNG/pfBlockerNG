@@ -4,13 +4,14 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
-/** Runtime schedule source must drive the real tick, independently of pfb_interval. */
+/** Runtime schedule source drives the real fixed tick. */
 final class TickScheduleRuntimeTest extends TestCase
 {
 	private string $dir = '';
 	private string $stateDir = '';
 	private mixed $originalPfb = NULL;
 	private mixed $originalConfig = NULL;
+	private int $feedRuns = 0;
 
 	protected function setUp(): void
 	{
@@ -26,6 +27,14 @@ final class TickScheduleRuntimeTest extends TestCase
 		$GLOBALS['pfb']['log'] = $this->dir . '/pfb.log';
 		$GLOBALS['pfb']['logdir'] = $this->dir;
 		$GLOBALS['pfb']['errlog'] = $this->dir . '/error.log';
+		$GLOBALS['pfb']['denydir'] = $this->dir . '/deny';
+		$GLOBALS['pfb']['matchdir'] = $this->dir . '/match';
+		$GLOBALS['pfb']['permitdir'] = $this->dir . '/permit';
+		$GLOBALS['pfb']['nativedir'] = $this->dir . '/native';
+		$GLOBALS['pfb']['dnsdir'] = $this->dir . '/dnsbl';
+		foreach (['denydir', 'matchdir', 'permitdir', 'nativedir', 'dnsdir'] as $dir) {
+			mkdir($GLOBALS['pfb'][$dir], 0755, TRUE);
+		}
 		$GLOBALS['pfb']['enable'] = PfbToggle::On;
 		$GLOBALS['pfb']['blconfig'] = [];
 		$GLOBALS['pfb']['php'] = $this->recorder();
@@ -35,7 +44,6 @@ final class TickScheduleRuntimeTest extends TestCase
 		$slot = $now->modify('-15 minutes');
 		$minute = intdiv((int) $slot->format('i'), 15) * 15;
 		$general = [
-			'pfb_interval' => 'Disabled',
 			'pfb_scheduled_feed_updates' => 'on',
 			'pfb_schedule_weekday' => $slot->format('N'),
 			'pfb_schedule_hour' => $slot->format('G'),
@@ -45,7 +53,7 @@ final class TickScheduleRuntimeTest extends TestCase
 		foreach ($general as $key => $value) {
 			config_set_path('installedpackages/pfblockerng/config/0/' . $key, $value);
 		}
-		foreach (['pfb_min' => '0', 'pfb_hour' => '0', 'pfb_dailystart' => '0', 'skipfeed' => '0'] as $key => $value) {
+		foreach (['skipfeed' => '0'] as $key => $value) {
 			config_set_path('installedpackages/pfblockerng/config/0/' . $key, $value);
 		}
 		foreach (['suppression' => '', 'database_cc' => '', 'maxmind_locale' => 'en', 'asn_reporting' => 'disabled', 'asn_token' => '', 'maxmind_account' => '', 'maxmind_key' => ''] as $key => $value) {
@@ -95,107 +103,69 @@ final class TickScheduleRuntimeTest extends TestCase
 		$this->remove($this->dir);
 	}
 
-	public function testDisabledLegacyIntervalDoesNotSuppressDueRuntimeSchedule(): void
+	private function tick(): void
 	{
-		pfblockerng_tick([]);
+		pfblockerng_tick(
+			[], NULL, NULL, 5.0, NULL, NULL, 5.0,
+			static fn (string $_job, string $_argument = ''): bool => TRUE,
+			function (): void {
+				$this->feedRuns++;
+			},
+			static fn (): bool => TRUE
+		);
+	}
+
+	public function testDueRuntimeScheduleRunsFromCanonicalConfiguration(): void
+	{
+		$this->tick();
 
 		$this->assertFileExists($this->stateDir . '/pfb_schedule_state.json');
 		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
-		$this->assertSame(['ipv4:runtime_v4'], array_keys($state['items'] ?? []));
+		$this->assertArrayHasKey('ipv4:runtime_v4', $state['items'] ?? []);
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_scheduled_feed_updates'));
-		$this->assertContains('Tick: dispatching feed cron.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
-		$this->assertSame(
-			"/usr/local/www/pfblockerng/pfblockerng.php cron\n",
-			$this->awaitSpawnLog(1),
-			'scheduled runtime dispatch must invoke configured PHP with the cron command exactly once'
-		);
+		$this->assertContains('Tick: running scheduled feed pass.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
+		$this->assertSame(1, $this->feedRuns);
+		$this->assertFileDoesNotExist($this->dir . '/spawns');
 	}
 
 	public function testMissingCacheIsRegeneratedBeforeRuntimeDispatch(): void
 	{
 		@unlink($this->dir . '/pfb_due_ledger.json');
-		pfblockerng_tick([]);
+		$this->tick();
 		$cache = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$this->assertMatchesRegularExpression('/^[0-9a-f]{64}$/D', $cache['_meta']['config_hash']);
 		$this->assertIsArray(pfb_due_ledger_read_cache($this->dir, $cache['_meta']['config_hash']));
-		$spawns = array_values(array_filter(explode("\n", $this->awaitSpawnLog(1)), 'strlen'));
-		$this->assertContains('/usr/local/www/pfblockerng/pfblockerng.php cron', $spawns);
+		$this->assertSame(1, $this->feedRuns);
 
 		file_put_contents($this->dir . '/pfb_due_ledger.json', '{"broken":true}');
 		$GLOBALS['pfb_test_logger_calls'] = [];
-		pfblockerng_tick([]);
+		$this->tick();
 		$repaired = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$this->assertIsArray(pfb_due_ledger_read_cache($this->dir, $repaired['_meta']['config_hash']));
 	}
 
-	public function testWorkerCompletionDuringReservationSuppressesStaleDispatch(): void
+	public function testMalformedPendingApplyIsNeverTrustedAsManualWork(): void
 	{
-		$model = pfb_schedule_runtime_config();
-		$this->assertIsArray($model);
-		$plan = pfb_schedule_plan($model['entries'], $model['default'], NULL, time(), new DateTimeZone(date_default_timezone_get()));
-		$occurrence = $plan['occurrences']['ipv4:runtime_v4'];
-		$calls = 0;
-		$GLOBALS['pfb']['schedule_state_io'] = [
-			'before_document' => function () use (&$calls, $occurrence): void {
-				if ($calls++ !== 0) {
-					return;
-				}
-				file_put_contents($this->stateDir . '/pfb_schedule_state.json', json_encode([
-					'schema' => 1,
-					'items' => ['ipv4:runtime_v4' => [
-						'last_completed_occurrence' => $occurrence,
-						'completion_outcome' => 'success',
-					]],
-				]));
+		$cache = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
+		$cache['cron'] = ['last_run' => 0, 'next_due' => 0, 'jitter' => 0, 'pending_apply' => 'yes'];
+		file_put_contents($this->dir . '/pfb_due_ledger.json', json_encode($cache, JSON_THROW_ON_ERROR));
+		$manualRuns = 0;
+
+		pfblockerng_tick(
+			[], NULL, NULL, 5.0, NULL, NULL, 5.0,
+			static fn (string $_job, string $_argument = ''): bool => TRUE,
+			function (): void {
+				$this->feedRuns++;
 			},
-		];
-
-		pfblockerng_tick([]);
-
-		$this->assertNotContains(
-			'Tick: dispatching feed cron.',
-			array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message')
+			static function () use (&$manualRuns): bool {
+				$manualRuns++;
+				return TRUE;
+			}
 		);
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
-		$state = pfb_schedule_state_read($this->stateDir);
-		$this->assertArrayNotHasKey('pending_occurrence', $state['items']['ipv4:runtime_v4']);
-	}
 
-	public function testWorkerCompletionDuringDispatchMarkSuppressesSpawn(): void
-	{
-		$model = pfb_schedule_runtime_config();
-		$this->assertIsArray($model);
-		$plan = pfb_schedule_plan($model['entries'], $model['default'], NULL, time(), new DateTimeZone(date_default_timezone_get()));
-		$occurrence = $plan['occurrences']['ipv4:runtime_v4'];
-		$this->assertTrue(pfb_schedule_state_write([
-			'schema' => 1,
-			'items' => ['ipv4:runtime_v4' => [
-				'pending_occurrence' => $occurrence,
-				'pending_dispatch_at' => time() - 900,
-			]],
-		], $this->stateDir));
-		$calls = 0;
-		$GLOBALS['pfb']['schedule_state_io'] = [
-			'before_document' => function () use (&$calls, $occurrence): void {
-				if ($calls++ !== 1) {
-					return;
-				}
-				file_put_contents($this->stateDir . '/pfb_schedule_state.json', json_encode([
-					'schema' => 1,
-					'items' => ['ipv4:runtime_v4' => [
-						'last_completed_occurrence' => $occurrence,
-						'completion_outcome' => 'success',
-					]],
-				]));
-			},
-		];
-
-		pfblockerng_tick([]);
-
-		$this->assertNotContains(
-			'Tick: dispatching feed cron.',
-			array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message')
-		);
+		$this->assertSame(0, $manualRuns);
+		$repaired = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
+		$this->assertNotSame('yes', $repaired['cron']['pending_apply'] ?? NULL);
 	}
 
 	public function testCachePublicationFailureSuppressesCronAndPreservesBytes(): void
@@ -203,9 +173,9 @@ final class TickScheduleRuntimeTest extends TestCase
 		$before = '{"broken":true}';
 		file_put_contents($this->dir . '/pfb_due_ledger.json', $before);
 		$GLOBALS['pfb']['schedule_cache_io'] = ['fail_rename' => TRUE];
-		pfblockerng_tick([]);
+		$this->tick();
 		$this->assertSame($before, file_get_contents($this->dir . '/pfb_due_ledger.json'));
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
+		$this->assertSame(0, $this->feedRuns);
 		$this->assertContains('Tick: scheduled feed runtime unavailable; cron selection suppressed.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
 	}
 
@@ -214,7 +184,7 @@ final class TickScheduleRuntimeTest extends TestCase
 		$before = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$current = (string) PfbConfig::read('gen/pfb_schedule_minute');
 		PfbConfig::writeSystem('gen/pfb_schedule_minute', $current === '30' ? '45' : '30');
-		pfblockerng_tick([]);
+		$this->tick();
 		$after = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$this->assertNotSame($before['_meta']['config_hash'], $after['_meta']['config_hash']);
 		$this->assertIsArray(pfb_due_ledger_read_cache($this->dir, $after['_meta']['config_hash']));
@@ -223,11 +193,86 @@ final class TickScheduleRuntimeTest extends TestCase
 	public function testMasterOffSuppressesLegacyDueAndLeavesNoCronWake(): void
 	{
 		PfbConfig::writeSystem('gen/pfb_scheduled_feed_updates', PfbToggle::Off);
-		PfbConfig::writeSystem('gen/pfb_interval', '1');
-		pfblockerng_tick([]);
+		$this->tick();
 		$cache = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$this->assertArrayNotHasKey('cron', $cache);
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
+		$this->assertSame(0, $this->feedRuns);
+	}
+
+	public function testDisabledFeedFailMarkerRemainsDormantAcrossTicks(): void
+	{
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockernglistsv4/config', [[
+			'action' => 'Disabled',
+			'cron' => 'EveryDay',
+			'schedule_override' => '',
+			'row' => [['header' => 'runtime', 'url' => 'https://example.test/feed', 'state' => 'Enabled']],
+		]]);
+		file_put_contents($GLOBALS['pfb']['denydir'] . '/runtime_v4.fail', 'failed');
+		$this->tick();
+		$this->tick();
+		$this->assertSame(0, $this->feedRuns);
+		$this->assertFileExists($GLOBALS['pfb']['denydir'] . '/runtime_v4.fail');
+	}
+
+	public function testFarPastCronWakeCollapsesToOneRunAndReanchorsFuture(): void
+	{
+		$cachePath = $this->dir . '/pfb_due_ledger.json';
+		$cache = json_decode((string) file_get_contents($cachePath), TRUE);
+		$cache['cron'] = ['last_run' => time() - 259200, 'next_due' => time() - 172800, 'jitter' => 0];
+		file_put_contents($cachePath, json_encode($cache, JSON_THROW_ON_ERROR));
+		$feedRunner = function (): void {
+			$this->feedRuns++;
+			$state = pfb_schedule_state_read($this->stateDir);
+			foreach ($state['items'] ?? [] as $id => $item) {
+				if (!str_starts_with($id, 'extra:') && isset($item['pending_occurrence'])) {
+					pfb_schedule_state_record_outcome($id, PfbScheduleTerminalResult::Success, $this->stateDir);
+				}
+			}
+		};
+		for ($tick = 0; $tick < 2; $tick++) {
+			pfblockerng_tick(
+				[], NULL, NULL, 5.0, NULL, NULL, 5.0,
+				static fn (string $_job, string $_argument = ''): bool => TRUE,
+				$feedRunner,
+				static fn (): bool => TRUE
+			);
+		}
+
+		$this->assertSame(1, $this->feedRuns);
+		$after = json_decode((string) file_get_contents($cachePath), TRUE);
+		$this->assertGreaterThan(time(), $after['cron']['next_due']);
+	}
+
+	public function testStalePendingFeedCoalescesToLatestMissedOccurrence(): void
+	{
+		$stale = time() - 172800;
+		$this->assertTrue(pfb_schedule_state_write([
+			'schema' => 1,
+			'items' => ['ipv4:runtime_v4' => ['pending_occurrence' => $stale]],
+		], $this->stateDir));
+		$feedRunner = function (): void {
+			$this->feedRuns++;
+			pfb_schedule_state_record_outcome(
+				'ipv4:runtime_v4', PfbScheduleTerminalResult::Success, $this->stateDir
+			);
+		};
+
+		for ($tick = 0; $tick < 2; $tick++) {
+			pfblockerng_tick(
+				[], NULL, NULL, 5.0, NULL, NULL, 5.0,
+				static fn (string $_job, string $_argument = ''): bool => TRUE,
+				$feedRunner,
+				static fn (): bool => TRUE
+			);
+		}
+
+		$state = pfb_schedule_state_read($this->stateDir);
+		$this->assertSame(1, $this->feedRuns);
+		$this->assertGreaterThan($stale, $state['items']['ipv4:runtime_v4']['last_completed_occurrence']);
+		$this->assertGreaterThan(
+			time(),
+			pfb_due_ledger_read_entry('cron', $this->dir)['next_due']
+		);
 	}
 
 	public function testDueSlotReservesConfiguredFamiliesInStableOrder(): void
@@ -249,43 +294,44 @@ final class TickScheduleRuntimeTest extends TestCase
 			],
 		]]);
 
-		pfblockerng_tick([]);
+		$this->tick();
 		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
+		$feed_items = array_filter(
+			$state['items'] ?? [],
+			static fn (string $id): bool => !str_starts_with($id, 'extra:'),
+			ARRAY_FILTER_USE_KEY
+		);
 		$this->assertSame(
 			['ipv4:alpha_v4', 'ipv4:beta_v4', 'ipv6:gamma_v6', 'dnsbl:runtime_dns'],
-			array_keys($state['items'] ?? [])
+			array_keys($feed_items)
 		);
-		foreach (array_keys($state['items'] ?? []) as $id) {
+		foreach (array_keys($feed_items) as $id) {
 			$this->assertArrayHasKey('pending_occurrence', $state['items'][$id]);
 		}
-		$this->assertCount(1, array_unique(array_column($state['items'], 'pending_occurrence')));
-		$this->assertSame(
-			"/usr/local/www/pfblockerng/pfblockerng.php cron\n",
-			$this->awaitSpawnLog(1)
-		);
+		$this->assertCount(1, array_unique(array_column($feed_items, 'pending_occurrence')));
+		$this->assertSame(1, $this->feedRuns);
 	}
 
 	public function testSecondTickWithPendingOccurrenceDoesNotReplayCursor(): void
 	{
-		pfblockerng_tick([]);
+		$this->tick();
 		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
 		$state['items']['ipv4:runtime_v4']['last_completed_occurrence'] = $state['items']['ipv4:runtime_v4']['pending_occurrence'];
 		$state['items']['ipv4:runtime_v4']['completion_outcome'] = 'success';
 		unset($state['items']['ipv4:runtime_v4']['pending_occurrence']);
-		unset($state['items']['ipv4:runtime_v4']['pending_dispatch_at']);
 		$this->assertTrue(pfb_schedule_state_write($state, $this->stateDir));
-		@unlink($this->dir . '/spawns');
-		pfblockerng_tick([]);
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
+		$this->feedRuns = 0;
+		$this->tick();
+		$this->assertSame(0, $this->feedRuns);
 	}
 
 	public function testStatePublicationFailureSuppressesDispatchAndPreservesCache(): void
 	{
 		$GLOBALS['pfb']['schedule_state_io'] = ['fail_rename' => TRUE];
 		$before = time();
-		pfblockerng_tick([]);
+		$this->tick();
 		$after = time();
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
+		$this->assertSame(0, $this->feedRuns);
 		$cache = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
 		$this->assertGreaterThanOrEqual($before, $cache['cron']['next_due']);
 		$this->assertLessThanOrEqual($after, $cache['cron']['next_due']);
@@ -294,21 +340,78 @@ final class TickScheduleRuntimeTest extends TestCase
 	public function testScheduledCronIgnoresQuietWindow(): void
 	{
 		PfbConfig::writeSystem('gen/pfb_quiet_hours', '00:00-00:01');
-		pfblockerng_tick([]);
+		$this->tick();
 		$messages = array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message');
-		$this->assertContains('Tick: dispatching feed cron.', $messages);
+		$this->assertContains('Tick: running scheduled feed pass.', $messages);
+		$this->assertSame(1, $this->feedRuns);
 	}
 
-	public function testBusyScheduledCronReservesOccurrenceWithoutManualPendingFlag(): void
+	public function testPendingApplyDoesNotSuppressLaterChecksOutsideWindow(): void
+	{
+		$start = ((int) date('G') + 12) % 24;
+		PfbConfig::writeSystem('gen/pfb_quiet_hours', sprintf('%02d:00-%02d:01', $start, $start));
+		$model = pfb_schedule_runtime_config();
+		$this->assertIsArray($model);
+		$this->assertTrue(pfb_schedule_cache_refresh(
+			$model,
+			['schema' => 1, 'items' => []],
+			time(),
+			new DateTimeZone(date_default_timezone_get()),
+			$this->dir
+		));
+		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
+		$this->assertIsArray($cache);
+		$cache['cron'] = [
+				'last_run' => time() - 3600,
+				'next_due' => time() - 1,
+				'jitter' => 0,
+				'pending_apply' => TRUE,
+		];
+		$state = ['schema' => 1, 'items' => []];
+		foreach ($model['entries'] as $id => $entry) {
+			if (str_starts_with($id, 'extra:') && $entry['enabled']) {
+				$cache[$id] = ['last_run' => time(), 'next_due' => time() + 86400, 'jitter' => 0];
+				$state['items'][$id] = [
+					'last_completed_occurrence' => time(),
+					'completion_outcome' => 'success',
+				];
+			}
+		}
+		$this->assertTrue(pfb_schedule_state_write($state, $this->stateDir));
+		unset($cache['_meta']);
+		$this->assertTrue(pfb_due_ledger_write_cache($cache, $model['config_hash'], $this->dir));
+		$manualRuns = 0;
+		$feedSawPending = FALSE;
+
+		pfblockerng_tick(
+			[], NULL, NULL, 5.0, NULL, NULL, 5.0,
+			static fn (string $_job, string $_argument = ''): bool => TRUE,
+			function (bool $pendingChange) use (&$feedSawPending): void {
+				$this->feedRuns++;
+				$feedSawPending = $pendingChange;
+			},
+			static function () use (&$manualRuns): bool {
+				$manualRuns++;
+				return TRUE;
+			}
+		);
+
+		$this->assertSame(1, $this->feedRuns, 'A pending apply must not suppress later scheduled source checks.');
+		$this->assertTrue($feedSawPending, 'The feed funnel must retain pending apply intent outside the window.');
+		$this->assertSame(0, $manualRuns, 'Automatic apply must remain deferred outside its window.');
+		$this->assertTrue(pfb_due_ledger_read_entry('cron', $this->dir)['pending_apply'] ?? FALSE);
+	}
+
+	public function testBusyFeedPassLeavesScheduleCacheAndStateUntouched(): void
 	{
 		$lock = fopen($this->dir . '/pfb_feed_pass.lock', 'c');
 		$this->assertNotFalse($lock);
 		$this->assertTrue(flock($lock, LOCK_EX));
-		pfblockerng_tick([]);
-		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
-		$this->assertArrayHasKey('pending_occurrence', $state['items']['ipv4:runtime_v4']);
-		$cache = json_decode((string) file_get_contents($this->dir . '/pfb_due_ledger.json'), TRUE);
-		$this->assertArrayNotHasKey('pending_apply', $cache['cron']);
+		$before = file_get_contents($this->dir . '/pfb_due_ledger.json');
+		$this->tick();
+		$this->assertSame($before, file_get_contents($this->dir . '/pfb_due_ledger.json'));
+		$this->assertFileDoesNotExist($this->stateDir . '/pfb_schedule_state.json');
+		$this->assertSame(0, $this->feedRuns);
 		flock($lock, LOCK_UN);
 		fclose($lock);
 	}
@@ -319,7 +422,7 @@ final class TickScheduleRuntimeTest extends TestCase
 		$this->assertTrue(pfb_due_ledger_write_entry('cron', [
 			'last_run' => time() - 60, 'next_due' => time() - 1, 'jitter' => 0, 'pending_apply' => TRUE,
 		], $this->dir));
-		pfblockerng_tick([]);
+		$this->tick();
 		$messages = array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message');
 		$this->assertContains('Tick: dispatching pending manual apply.', $messages);
 		$entry = pfb_due_ledger_read_entry('cron', $this->dir);
@@ -328,58 +431,105 @@ final class TickScheduleRuntimeTest extends TestCase
 
 	public function testDispatcherLockSuppressesConcurrentScheduledTick(): void
 	{
-		pfblockerng_tick([]);
+		$this->tick();
+		$this->feedRuns = 0;
 		$GLOBALS['pfb_test_logger_calls'] = [];
 		$path = $this->stateDir . '/pfb_schedule_dispatch.lock';
 		$lock = fopen($path, 'c');
 		$this->assertNotFalse($lock);
 		$this->assertTrue(flock($lock, LOCK_EX));
 		$before = file_get_contents($this->stateDir . '/pfb_schedule_state.json');
-		@unlink($this->dir . '/spawns');
-		pfblockerng_tick([]);
+		$this->tick();
 		$this->assertSame($before, file_get_contents($this->stateDir . '/pfb_schedule_state.json'));
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
-		$this->assertNotContains('Tick: dispatching feed cron.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
+		$this->assertSame(0, $this->feedRuns);
 		flock($lock, LOCK_UN);
 		fclose($lock);
 	}
 
 	public function testMasterOffRetainsDurablePendingOccurrenceWithoutDispatch(): void
 	{
-		pfblockerng_tick([]);
+		$this->tick();
 		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
 		$pending = $state['items']['ipv4:runtime_v4']['pending_occurrence'];
 		PfbConfig::writeSystem('gen/pfb_scheduled_feed_updates', PfbToggle::Off);
-		@unlink($this->dir . '/spawns');
-		pfblockerng_tick([]);
+		$this->feedRuns = 0;
+		$this->tick();
 		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
 		$this->assertSame($pending, $state['items']['ipv4:runtime_v4']['pending_occurrence']);
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
+		$this->assertSame(0, $this->feedRuns);
 	}
 
-	public function testPendingOccurrenceWithoutCompletionSuppressesDuplicateTick(): void
+	public function testDurablePendingFeedWakesEvenWhenValidCachePointsToFuture(): void
 	{
-		pfblockerng_tick([]);
-		$GLOBALS['pfb_test_logger_calls'] = [];
-		@unlink($this->dir . '/spawns');
-		pfblockerng_tick([]);
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
-		$this->assertNotContains('Tick: dispatching feed cron.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
-		$GLOBALS['pfb_test_logger_calls'] = [];
-		pfblockerng_tick([]);
-		$this->assertFileDoesNotExist($this->dir . '/spawns');
-		$this->assertNotContains('Tick: dispatching feed cron.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
+		$model = pfb_schedule_runtime_config();
+		$this->assertIsArray($model);
+		$state = ['schema' => 1, 'items' => [
+			'ipv4:runtime_v4' => ['pending_occurrence' => time() - 60],
+		]];
+		$this->assertTrue(pfb_schedule_state_write($state, $this->stateDir));
+		$this->assertTrue(pfb_schedule_cache_refresh(
+			$model, ['schema' => 1, 'items' => []], time(), new DateTimeZone(date_default_timezone_get()), $this->dir
+		));
+		$cache = pfb_due_ledger_read_cache($this->dir, $model['config_hash']);
+		$this->assertIsArray($cache);
+		$cache['cron']['next_due'] = time() + 86400;
+		foreach (['extra:dcc', 'extra:bl'] as $id) {
+			if (isset($cache[$id])) {
+				$cache[$id]['next_due'] = time() + 86400;
+			}
+		}
+		$this->assertNotFalse(file_put_contents(
+			$this->dir . '/pfb_due_ledger.json', json_encode($cache, JSON_THROW_ON_ERROR)
+		));
+
+		$this->tick();
+
+		$this->assertSame(1, $this->feedRuns);
 	}
 
-	public function testExpiredPendingDispatchMarkerRetriesScheduledTick(): void
+	public function testFailMarkerWakesACompletedFeedOnTheNextFixedTick(): void
 	{
-		pfblockerng_tick([]);
-		$state = json_decode((string) file_get_contents($this->stateDir . '/pfb_schedule_state.json'), TRUE);
-		$state['items']['ipv4:runtime_v4']['pending_dispatch_at'] = time() - 900;
-		file_put_contents($this->stateDir . '/pfb_schedule_state.json', json_encode($state));
-		$GLOBALS['pfb_test_logger_calls'] = [];
-		pfblockerng_tick([]);
-		$this->assertContains('Tick: dispatching feed cron.', array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
+		$this->tick();
+		$state = pfb_schedule_state_read($this->stateDir);
+		$this->assertIsArray($state);
+		$pending = $state['items']['ipv4:runtime_v4']['pending_occurrence'];
+		$state['items']['ipv4:runtime_v4'] = [
+			'last_successful_check' => time(),
+			'last_completed_occurrence' => $pending,
+			'completion_outcome' => 'success',
+		];
+		$this->assertTrue(pfb_schedule_state_write($state, $this->stateDir));
+		$model = pfb_schedule_runtime_config();
+		$this->assertIsArray($model);
+		$this->assertTrue(pfb_schedule_cache_refresh(
+			$model, $state, time(), new DateTimeZone(date_default_timezone_get()), $this->dir
+		));
+		$this->assertNotFalse(file_put_contents($this->dir . '/deny/runtime_v4.fail', ''));
+		$this->feedRuns = 0;
+
+		$this->tick();
+
+		$this->assertSame(1, $this->feedRuns, 'urgent .fail must bypass the completed calendar cursor');
+	}
+
+	public function testDisabledGroupKeepsPendingOccurrenceDormant(): void
+	{
+		$this->tick();
+		$state = pfb_schedule_state_read($this->stateDir);
+		$this->assertArrayHasKey('pending_occurrence', $state['items']['ipv4:runtime_v4']);
+		$group = config_get_path('installedpackages/pfblockernglistsv4/config/0');
+		$group['action'] = 'Disabled';
+		PfbConfig::writeSectionRawSystem('installedpackages/pfblockernglistsv4/config', [$group]);
+		$this->feedRuns = 0;
+
+		$this->tick();
+
+		$this->assertSame(0, $this->feedRuns);
+		$after = pfb_schedule_state_read($this->stateDir);
+		$this->assertSame(
+			$state['items']['ipv4:runtime_v4']['pending_occurrence'],
+			$after['items']['ipv4:runtime_v4']['pending_occurrence']
+		);
 	}
 
 	private function recorder(): string
@@ -389,20 +539,6 @@ final class TickScheduleRuntimeTest extends TestCase
 		file_put_contents($path, "#!/bin/sh\nprintf '%s\\n' \"\$*\" >> {$log}\n");
 		chmod($path, 0755);
 		return $path;
-	}
-
-	private function awaitSpawnLog(int $count): string
-	{
-		$path = $this->dir . '/spawns';
-		$deadline = microtime(TRUE) + 2.0;
-		do {
-			$raw = @file_get_contents($path);
-			if (is_string($raw) && substr_count($raw, "\n") >= $count) {
-				return $raw;
-			}
-			usleep(1000);
-		} while (microtime(TRUE) < $deadline);
-		$this->fail(sprintf('scheduled dispatch did not publish %d spawn record(s)', $count));
 	}
 
 	private function remove(string $dir): void

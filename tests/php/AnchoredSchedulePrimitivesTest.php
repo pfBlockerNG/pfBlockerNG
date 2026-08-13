@@ -296,6 +296,23 @@ final class AnchoredSchedulePrimitivesTest extends TestCase
 		$this->assertSame(['feed' => $this->timestamp('2026-01-05 05:00:00')], $result['occurrences']);
 	}
 
+	public function testColdHourlyPlanMemoizesIdenticalFleetSchedules(): void
+	{
+		$default = ['weekday' => 1, 'hour' => 0, 'minute' => 0];
+		$groups = [];
+		for ($i = 0; $i < 5000; $i++) {
+			$groups["feed_{$i}"] = [
+				'cadence' => '01hour', 'enabled' => TRUE, 'has_active_rows' => TRUE, 'override' => NULL,
+			];
+		}
+		$started = microtime(TRUE);
+		$result = pfb_schedule_plan($groups, $default, NULL, $this->timestamp('2026-01-05 05:07:00'), $this->scheduleTimezone);
+
+		$this->assertCount(5000, $result['due']);
+		$this->assertLessThan(1.0, microtime(TRUE) - $started,
+			'A cold-start plan must not enumerate every missed occurrence for every feed.');
+	}
+
 	public function testSchedulePlanPreservesFamilyKeysIsIdempotentAndTiesNextWake(): void
 	{
 		$default = ['weekday' => 1, 'hour' => 4, 'minute' => 0];

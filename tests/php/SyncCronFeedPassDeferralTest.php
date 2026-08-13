@@ -12,11 +12,13 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 {
 	private string $dbdir = '';
 	private array $originalPfb = [];
+	private mixed $originalConfig = NULL;
 	private $lockFp = NULL;
 
 	protected function setUp(): void
 	{
 		$this->originalPfb = $GLOBALS['pfb'];
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
 		$this->dbdir = sys_get_temp_dir() . '/pfb_sync_cron_feedpass_' . uniqid('', TRUE);
 		mkdir($this->dbdir, 0755, TRUE);
 		$GLOBALS['pfb']['dbdir'] = $this->dbdir;
@@ -35,14 +37,29 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		}
 		pfb_feed_pass_release();
 		$GLOBALS['pfb'] = $this->originalPfb;
+		$GLOBALS['config'] = $this->originalConfig;
+		unset($GLOBALS['g']['pfblockerng_install']);
+		foreach (glob("{$this->dbdir}/state/*") ?: [] as $path) {
+			unlink($path);
+		}
+		@rmdir("{$this->dbdir}/state");
 		foreach (glob("{$this->dbdir}/*") ?: [] as $path) {
 			unlink($path);
 		}
 		rmdir($this->dbdir);
 	}
 
-	public function testLockLossSetsPendingApplyWithoutAdvancingNextDue(): void
+	public function testLockLossLeavesScheduleStateAndCacheUntouched(): void
 	{
+		$stateDir = "{$this->dbdir}/state";
+		mkdir($stateDir, 0755, TRUE);
+		$GLOBALS['pfb']['schedule_state_dir'] = $stateDir;
+		$state = [
+			'schema' => 1,
+			'items' => ['ipv4:feed_v4' => ['pending_occurrence' => 123]],
+		];
+		$this->assertTrue(pfb_schedule_state_write($state, $stateDir));
+
 		$nextDue = time() + 3600;
 		pfb_due_ledger_write_entry('cron', [
 			'last_run' => time() - 3600,
@@ -50,13 +67,43 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 			'jitter'   => 0,
 		], $this->dbdir);
 
-		$before = pfb_due_ledger_read_entry('cron', $this->dbdir);
-		$this->assertSame($nextDue, $before['next_due'], 'test setup: future next_due must be seeded');
+		$beforeLedger = file_get_contents("{$this->dbdir}/pfb_due_ledger.json");
+		$beforeState = file_get_contents("{$stateDir}/pfb_schedule_state.json");
 
-		pfblockerng_sync_cron();
+		$this->assertFalse(pfblockerng_sync_cron(), 'feed-lock deferral must be observable by Force Check');
 
-		$after = pfb_due_ledger_read_entry('cron', $this->dbdir);
-		$this->assertSame($nextDue, $after['next_due'], 'lost lock must preserve next_due');
-		$this->assertTrue(!empty($after['pending_apply']), 'lost lock must schedule retry on next enabled tick');
+		$this->assertSame($beforeLedger, file_get_contents("{$this->dbdir}/pfb_due_ledger.json"),
+			'lost feed-pass lock must not mutate the runtime cache');
+		$this->assertSame($beforeState, file_get_contents("{$stateDir}/pfb_schedule_state.json"),
+			'lost feed-pass lock must leave the durable occurrence reserved for the next tick');
+	}
+
+	public function testPendingTop1mChangeDoesNotApplyOutsideWindowOnNoUpdatePass(): void
+	{
+		flock($this->lockFp, LOCK_UN);
+		fclose($this->lockFp);
+		$this->lockFp = NULL;
+		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
+		$GLOBALS['pfb']['continents'] = [];
+		$GLOBALS['config'] = [];
+		$start = ((int) date('G') + 12) % 24;
+		config_set_path('installedpackages/pfblockerng/config/0', [
+			'pfb_scheduled_feed_updates' => 'on',
+			'pfb_schedule_weekday' => '7',
+			'pfb_schedule_hour' => '0',
+			'pfb_schedule_minute' => '0',
+			'pfb_quiet_hours' => sprintf('%02d:00-%02d:01', $start, $start),
+		]);
+		config_set_path('installedpackages/pfblockernglistsv4/config', []);
+		config_set_path('installedpackages/pfblockernglistsv6/config', []);
+		config_set_path('installedpackages/pfblockerngdnsbl/config', []);
+		config_set_path('installedpackages/pfblockerngblacklist', [
+			'blacklist_selected' => '', 'blacklist_freq' => 'Never', 'item' => [],
+		]);
+		$this->assertTrue(pfb_schedule_state_write(['schema' => 1, 'items' => []], $this->dbdir));
+
+		$this->assertTrue(pfblockerng_sync_cron(FALSE, 'both', TRUE));
+		$this->assertTrue(pfb_due_ledger_is_pending('cron', $this->dbdir),
+			'A TOP1M change must stay pending when the no-update feed tail runs outside the apply window.');
 	}
 }

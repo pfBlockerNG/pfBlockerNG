@@ -89,19 +89,6 @@ final class PfbGlobalParityTest extends TestCase
 	}
 
 	/**
-	 * pfb_interval: OLD = $pfb['config']['pfb_interval'] ?: '1' = '1' when absent.
-	 * Via gateway: PfbConfig::read('gen/pfb_interval') = '1' (registered default).
-	 */
-	public function testParityPfbIntervalAbsentYieldsOne(): void
-	{
-		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_interval'));
-
-		$result = PfbConfig::read('gen/pfb_interval');
-
-		$this->assertSame('1', $result, 'pfb_interval absent -> "1"');
-	}
-
-	/**
 	 * pfb_agg_types: OLD = $pfb['config']['pfb_agg_types'] ?? '' = '' when absent.
 	 * Via gateway: PfbConfig::read('gen/pfb_agg_types') = '' (registered default).
 	 */
@@ -112,45 +99,6 @@ final class PfbGlobalParityTest extends TestCase
 		$result = PfbConfig::read('gen/pfb_agg_types');
 
 		$this->assertSame('', $result, 'pfb_agg_types absent -> ""');
-	}
-
-	/**
-	 * pfb_min: OLD = $pfb['config']['pfb_min'] ?: '0' = '0' when absent.
-	 * Via gateway: PfbConfig::read('gen/pfb_min') = '0' (registered default).
-	 */
-	public function testParityPfbMinAbsentYieldsZero(): void
-	{
-		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_min'));
-
-		$result = PfbConfig::read('gen/pfb_min');
-
-		$this->assertSame('0', $result, 'pfb_min absent -> "0"');
-	}
-
-	/**
-	 * pfb_hour: OLD = $pfb['config']['pfb_hour'] ?: '0' = '0' when absent.
-	 * Via gateway: PfbConfig::read('gen/pfb_hour') = '0' (registered default).
-	 */
-	public function testParityPfbHourAbsentYieldsZero(): void
-	{
-		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_hour'));
-
-		$result = PfbConfig::read('gen/pfb_hour');
-
-		$this->assertSame('0', $result, 'pfb_hour absent -> "0"');
-	}
-
-	/**
-	 * pfb_dailystart: OLD = $pfb['config']['pfb_dailystart'] ?: '0' = '0' when absent.
-	 * Via gateway: PfbConfig::read('gen/pfb_dailystart') = '0' (registered default).
-	 */
-	public function testParityPfbDailystartAbsentYieldsZero(): void
-	{
-		$this->assertNull(config_get_path('installedpackages/pfblockerng/config/0/pfb_dailystart'));
-
-		$result = PfbConfig::read('gen/pfb_dailystart');
-
-		$this->assertSame('0', $result, 'pfb_dailystart absent -> "0"');
 	}
 
 	/**

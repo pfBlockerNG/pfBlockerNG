@@ -61,6 +61,7 @@ final class FeedPassLockTest extends TestCase
 
 		// Never leave this process holding the lock across tests (self-encapsulation).
 		pfb_feed_pass_release();
+		pfb_schedule_dispatch_release();
 
 		if ($this->hadPfb) {
 			$GLOBALS['pfb'] = $this->originalPfb;
@@ -88,6 +89,32 @@ final class FeedPassLockTest extends TestCase
 	private function lockPath(): string
 	{
 		return "{$this->dbdir}/pfb_feed_pass.lock";
+	}
+
+	public function testNestedScheduleCacheRegenerationPreservesOuterFeedLock(): void
+	{
+		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
+		$this->assertTrue(pfb_schedule_dispatch_begin());
+		$this->assertTrue(pfb_feed_pass_acquire());
+		$dispatchOuter = $GLOBALS['pfb_schedule_dispatch_lock'];
+		$outer = $GLOBALS['pfb_feed_pass_lock'];
+
+		pfb_schedule_cache_regenerate();
+
+		$this->assertSame($dispatchOuter, $GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL);
+		$this->assertTrue(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL));
+		$this->assertSame($outer, $GLOBALS['pfb_feed_pass_lock'] ?? NULL);
+		$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL));
+		pfb_schedule_dispatch_release();
+	}
+
+	public function testStandaloneExtrasProcessHoldsDispatcherAndFeedLocks(): void
+	{
+		$GLOBALS['pfb']['schedule_state_dir'] = $this->dbdir;
+		$this->assertTrue(pfb_extras_process_begin());
+		$this->assertTrue(is_resource($GLOBALS['pfb_schedule_dispatch_lock'] ?? NULL));
+		$this->assertTrue(is_resource($GLOBALS['pfb_feed_pass_lock'] ?? NULL));
+		pfb_schedule_dispatch_release();
 	}
 
 	/** A second, independent fd probing the lock -- proves whether it is held. */

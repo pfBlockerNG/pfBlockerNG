@@ -1150,22 +1150,35 @@ def _php_kv_array(data: dict[str, str]) -> str:
 
 
 def pin_cron_due(vm: SmokeVM) -> int:
-    """Set pfb_reuse='' and pfb_dailystart=date('G') on the guest so an EveryDay feed is due.
+    """Reserve every configured feed group for a direct ``cron`` smoke invocation.
 
-    Returns the guest's wall-clock hour (0-23) pinned into ``pfb_dailystart``, echoed back
-    atomically with the write. Callers that later run ``cron`` should fast-guard against an
-    hour rollover between this pin and the cron run (see :func:`guest_hour`) — if the
-    wall clock ticked over, the EveryDay feed is no longer due and a "not re-ingested"
-    assertion would misread that as a change-detector regression.
+    The production tick normally creates these durable reservations. Feed detector smoke
+    tests invoke ``cron`` directly, so reserve the same stable IDs through the package state
+    API and disable reuse. The returned guest hour preserves existing diagnostics.
     """
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
+        "$g['pfb_scheduled_feed_updates'] = 'on';\n"
         "$hour = date('G');\n"
-        "$g['pfb_dailystart'] = $hour;\n"
         f"config_set_path({_php_str(CFG_GLOBAL)}, $g);\n"
-        "write_config('pfBlockerNG smoke #538: due cron');\n"
+        "write_config('pfBlockerNG smoke: reserve scheduled feeds');\n"
+        "$model = pfb_schedule_runtime_config();\n"
+        "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';\n"
+        "$state = pfb_schedule_state_read($state_dir) ?? array('schema' => 1, 'items' => array());\n"
+        "$occurrences = array();\n"
+        "foreach (($model['entries'] ?? array()) as $id => $entry) {\n"
+        "    if (strpos($id, 'extra:') !== 0 && !empty($entry['enabled']) && !empty($entry['has_active_rows'])) {\n"
+        "        $completed = $state['items'][$id]['last_completed_occurrence'] ?? 0;\n"
+        "        $occurrences[$id] = max(time(), $completed + 1);\n"
+        "    }\n"
+        "}\n"
+        "if ($model === NULL || $occurrences === array()\n"
+        "    || !pfb_schedule_state_set_pending($occurrences, $state_dir)) {\n"
+        "    exit(1);\n"
+        "}\n"
         f"echo 'OK' . '{sentinel_open}' . $hour . '{sentinel_close}';"
     )
     res = php_eval(vm, snippet)
@@ -3381,24 +3394,23 @@ _BASELINE_DEL_SECTIONS = (
 )
 # Behaviour toggles a case writes into CFG_GLOBAL (config/0). Derived from every config/0
 # write-site in this module + the apply/tick tests: the IP master switch (enable_cb), the
-# ADR-38 syslog toggle (log_syslog), the cron knobs (pfb_dailystart/pfb_reuse/pfb_interval), the
-# managed-objects keep flag (pfb_keep), the ADR-11 aggregate selector (pfb_agg_types) and
+# ADR-38 syslog toggle (log_syslog), scheduled-feed controls, the managed-objects keep flag
+# (pfb_keep), the ADR-11 aggregate selector (pfb_agg_types) and
 # the ADR-43 PfbConfig knob (pfb_quiet_hours). The retired pfb_tick_interval cleanup stays
 # inert for stale config.xml values and is deliberately not read by production.
 _BASELINE_GLOBAL_KEYS = (
     "enable_cb",
     "log_syslog",
-    "pfb_dailystart",
     "pfb_keep",
     "pfb_reuse",
+    "pfb_scheduled_feed_updates",
+    "pfb_schedule_weekday",
+    "pfb_schedule_hour",
+    "pfb_schedule_minute",
     "pfb_agg_types",
     "pfb_quiet_hours",
     # Retired scheduler knob: stale raw XML is cleaned between smoke cases, never read.
     "pfb_tick_interval",
-    # Update Frequency: test_log_age_retention writes 'Disabled' to gate the tick's feed-cron
-    # dispatch; leaked forward it silently disables dispatch for every later module
-    # (bit test_smoke_apply_on_change — issue #805).
-    "pfb_interval",
     # ADR-40 apply-path mode: test_smoke_adr40 writes 'delta'/'auto'/'replace' via
     # PfbConfig (General section, issue #804); unset so later modules read the
     # box's own default (end-state is mode-invariant, but the apply path is not).

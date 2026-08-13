@@ -16,9 +16,7 @@ use PHPUnit\Framework\TestCase;
  * This suite drives the REAL pfblockerng_tick() entrypoint -- relocated here
  * (from the www/ dispatcher script, which is never require()'d off-appliance)
  * so it is loadable by the PHPUnit bootstrap, per ADR43-5 -- and pins that log
- * maintenance is no longer gated behind the feed-cron cadence (Cases A/B), while
- * (PR #790 review) it also stays gated OFF on a tick that itself just dispatched
- * an update pass (Case D) -- see pfb_update_pass_running() in pfblockerng.inc.
+ * maintenance is no longer gated behind the legacy feed-cron cadence (Cases A/B).
  *
  * Red→green: before this change pfblockerng_tick() existed only in
  * src/usr/local/www/pfblockerng/pfblockerng.php, a script the PHPUnit bootstrap
@@ -30,19 +28,8 @@ use PHPUnit\Framework\TestCase;
  *   Case B — pfb_interval numeric + feed cron NOT due (future ledger entry):
  *            log maintenance still runs -- proving it is unconditional on the
  *            feed-cron cadence, not merely re-homed behind the same due-job gate.
- *   Case C — issue #573 phase 2: the feed-cron next_due anchors to its own
- *            previous next_due (via pfb_due_ledger_mark_ran_anchored), not to
- *            wall-clock time(), so a tick that fires a fraction of a second
- *            early does not slip the schedule a full tick interval late.
- *   Case D — PR #790 review: a tick that DISPATCHES an update pass this cycle
- *            (testDispatchingTickSkipsLogMaintenanceThisTick) must skip log
- *            maintenance THAT tick -- pfb_log_mgmt()'s tail-to-temp-then-cat-over
- *            trim would otherwise race the backgrounded pass it just exec()'d.
  *   Case E — issue #1769: the pfb_update_pass_running() half of the gate's skip
  *            must be observable, not silent (testTickLogsDeferredMaintenanceWhenAPassIsRunning).
- *   Case F — issue #1769: the $dispatched half of the SAME gate (Case D's skip)
- *            was ALSO silent -- now observable via logger()/syslog, NOT $pfb['log']
- *            (Case D pins that file unchanged) -- (testDispatchingTickLogsSkippedMaintenanceMessage).
  *   Case G — issue #1769 root cause: a PENDING 'cron' entry (pfb_due_ledger_set_pending)
  *            bypasses $cron_disabled even with pfb_interval='Disabled', dispatches, and
  *            skips log maintenance via $dispatched, NOT pfb_update_pass_running() --
@@ -648,70 +635,6 @@ final class TickEntrypointTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// issue #573 (phase 2) -- the feed-cron next_due must anchor to its own
-	// PREVIOUS next_due, not to wall-clock $now, so a tick that starts a hair
-	// earlier than its predecessor does not push the whole schedule one full
-	// tick interval late (cron phase creep).
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Red->green: before pfblockerng_tick() dispatched the feed cron via
-	 * pfb_due_ledger_mark_ran_anchored(), a due job's next_due was always
-	 * tick_start + interval -- so a ledger entry missed by a few seconds (a
-	 * completely ordinary boundary fluctuation, not a real catch-up) produced
-	 * a next_due that was ALSO a few seconds late, repeating every cycle
-	 * (issue #573's monotonic phase creep -- eventually crossing a
-	 * calendar-hour boundary and silently skipping an EveryDay/Weekly
-	 * per-feed schedule gated on that hour). This test drives the REAL
-	 * pfblockerng_tick() entrypoint and pins that the cron next_due instead
-	 * advances by EXACTLY $interval from its OWN previous value, never from
-	 * $now.
-	 *
-	 * Scenario:
-	 *   Given pfb_interval='24' (interval = 86400 s) and a 'cron' ledger entry
-	 *   whose next_due is 10 s in the past (missed the boundary by a few
-	 *   seconds -- the ordinary case, not a real catch-up); dcc/bl are NOT due.
-	 *   When  pfblockerng_tick() runs (the real entrypoint, not the pure
-	 *         helper covered elsewhere).
-	 *   Then  the new cron next_due = the OLD next_due + 86400 EXACTLY --
-	 *         not time() + 86400 (which would land seconds later and, over
-	 *         many cycles, eventually cross a calendar-hour boundary).
-	 */
-	public function testCronNextDueAnchorsToPreviousNextDueNotWallClock(): void
-	{
-		$this->seedTickPrereqs('24');
-		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
-		pfb_global();
-		$this->ensureLogDir();
-
-		$now         = time();
-		$interval    = 86400;	// pfb_interval='24' hours
-		$oldNextDue  = $now - 10;	// missed the boundary by 10 s -- the ordinary case
-
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $oldNextDue - $interval,
-			'next_due' => $oldNextDue,
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-
-		// Prevent a real exec() dispatch for dcc/bl.
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		// Act.
-		pfblockerng_tick($this->suiteWorkerPsLines());
-
-		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$expected  = $oldNextDue + $interval;
-
-		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
-		$this->assertSame($expected, $cronEntry['next_due'],
-			"cron next_due: expected old_next_due + interval ({$expected} = {$oldNextDue} + {$interval}), "
-			. "got {$cronEntry['next_due']} -- pfblockerng_tick() must anchor the feed-cron next_due to "
-			. 'its own previous schedule, not to wall-clock time() (issue #573 phase creep)');
-	}
-
-	// -----------------------------------------------------------------------
 	// issue #2089 — SafeSearch refresh is its own zero-jitter 900-second job.
 	// -----------------------------------------------------------------------
 
@@ -805,86 +728,8 @@ final class TickEntrypointTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// PR #790 review — a tick that DISPATCHES an update pass this cycle must
-	// NOT also run log maintenance in the same call: pfb_log_mgmt()'s
-	// tail-to-temp-then-cat-over trim (pfblockerng.inc) is a read/truncate/
-	// rewrite window that races the backgrounded pass it just exec()'d, which
-	// appends to the SAME log files ($pfb['runlog']/['extraslog']) for
-	// potentially minutes -- a lost-append hazard, not merely a stale read.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Red->green: before this fix pfblockerng_tick() called pfb_log_mgmt()
-	 * unconditionally at its tail, even on a tick that itself just dispatched
-	 * the feed cron. This test drives a tick that DOES dispatch (a due,
-	 * in-window 'cron' job) and pins that log maintenance is SKIPPED that tick
-	 * (the $dispatched flag path -- deterministic, does not depend on `ps`,
-	 * unlike the pfb_update_pass_running() branch covered by Cases A/B staying
-	 * idle).
-	 *
-	 * Scenario:
-	 *   Given pfb_interval='24' and a 'cron' ledger entry 10 s past due
-	 *   (dispatches this tick); the same 5-line 'log' seeding as Case A.
-	 *   Before: 'log' has 5 lines.
-	 *   When  pfblockerng_tick() is called.
-	 *   Then  the feed cron IS dispatched (mark_ran_anchored advances 'cron').
-	 *   And   'log' is STILL 5 lines -- pfb_log_mgmt() must be skipped on a
-	 *         tick that itself just dispatched an update pass.
-	 */
-	public function testDispatchingTickSkipsLogMaintenanceThisTick(): void
-	{
-		$this->seedTickPrereqs('24');
-		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
-		pfb_global();
-		$this->ensureLogDir();
-
-		$now      = time();
-		$interval = 86400;	// pfb_interval='24' hours
-
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $now - $interval - 10,
-			'next_due' => $now - 10,	// 10 s past due -- dispatches this tick
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-
-		// Prevent a real exec() dispatch for dcc/bl -- isolate to the cron dispatch.
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		$logPath = $this->logPath('log');
-
-		file_put_contents($logPath, implode("\n", ['l1', 'l2', 'l3', 'l4', 'l5']) . "\n");
-
-		// Before.
-		$linesBefore = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
-		$this->assertSame(5, $linesBefore,
-			"Before: expected 'log' to have 5 lines, got {$linesBefore}");
-
-		// Act.
-		pfblockerng_tick($this->suiteWorkerPsLines());
-
-		// The feed cron WAS dispatched -- mark_ran_anchored advanced 'cron' past its
-		// pre-tick next_due, proving this tick genuinely took the dispatch branch.
-		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
-		$this->assertGreaterThan($now - 10, $cronEntry['next_due'],
-			'cron next_due must have advanced (dispatched this tick): expected > ' . ($now - 10)
-			. " got {$cronEntry['next_due']} -- test setup did not actually dispatch the cron");
-
-		// After: log maintenance must NOT have run -- the dispatch this tick holds
-		// pfblockerng_tick()'s $dispatched race guard closed.
-		clearstatcache(TRUE, $logPath);
-		$linesAfter = count(array_filter(explode("\n", (string) file_get_contents($logPath)), 'strlen'));
-		$this->assertSame(5, $linesAfter,
-			"After a tick that DISPATCHED the feed cron: expected 'log' UNTRIMMED at 5 lines, got "
-			. "{$linesAfter} -- pfb_log_mgmt() must be skipped on a tick that just dispatched an "
-			. 'update pass (race against the backgrounded pass appending to the same log)');
-	}
-
-	// -----------------------------------------------------------------------
 	// issue #1769 — the pfb_update_pass_running() half of the log-maintenance
-	// gate (the OTHER half of Case D above, which covers $dispatched) was
-	// SILENT on skip: a stray process matching the ps-scan regex closed the
+	// gate was SILENT on skip: a stray process matching the ps-scan regex closed the
 	// gate with zero trace, which cost a live-tier diagnosis (the smoke suite's
 	// seeded log rode this same unsynchronized gate). This test drives a REAL
 	// background process through a REAL, suite-scoped `ps` snapshot
@@ -904,7 +749,7 @@ final class TickEntrypointTest extends TestCase
 	 *   Given a REAL background process whose /bin/ps -wax command line matches
 	 *   pfb_update_pass_running()'s regex (a tiny `/bin/sh <sandbox>/pfblockerng.php
 	 *   dcc` sleeper -- proven live via the ps scan itself, not an injected array).
-	 *   And   the same 5-line 'log' / log_max_log=3 seeding as Case A/D.
+	 *   And   the same 5-line 'log' / log_max_log=3 seeding as Case A.
 	 *   And   cron/dcc/bl ledger entries all future-dated (no real dispatch of
 	 *         pfblockerng_tick()'s own jobs this tick -- isolates to the stray
 	 *         process's effect on the gate).
@@ -914,11 +759,8 @@ final class TickEntrypointTest extends TestCase
 	 *   And   (b) a "log maintenance deferred" line IS appended -- the skip is
 	 *         no longer silent.
 	 *
-	 * issue #1769 review: this branch is deliberately KEPT on pfb_logger()/$pfb['log']
-	 * (unlike the NEW $dispatched-skip message added alongside it -- see
-	 * testDispatchingTickLogsSkippedMaintenanceMessage below, which uses logger()/syslog
-	 * because Case D pins 'log' unchanged for that path) -- this test and the ADR-60
-	 * smoke suite's self-diagnosing failure output both already assert on this exact
+	 * issue #1769 review: this branch is deliberately KEPT on pfb_logger()/$pfb['log'];
+	 * this test and the ADR-60 smoke suite's self-diagnosing failure output assert this exact
 	 * surface. Tradeoff stated explicitly, not silently kept: a long-lived stray/leaked
 	 * update pass would make this line accumulate in the very file it's deferring
 	 * maintenance on, bounded by how long that pass survives (transient in practice).
@@ -1075,73 +917,6 @@ final class TickEntrypointTest extends TestCase
 			$this->assertTrue($reaped,
 				'expected the fixture process to have been terminated and reaped via proc_close()');
 		}
-	}
-
-	// -----------------------------------------------------------------------
-	// issue #1769 Case F — the $dispatched half of the log-maintenance gate
-	// (Case D's skip) was ALSO silent, same as Case E's pfb_update_pass_running()
-	// half. Sibling to testTickLogsDeferredMaintenanceWhenAPassIsRunning, reusing
-	// Case D's exact dispatch setup.
-	// -----------------------------------------------------------------------
-
-	/**
-	 * Red->green: before this fix, a dispatching tick fell through BOTH the
-	 * `if (!$dispatched && ...)` and the old `elseif (!$dispatched)` with no
-	 * logger() call at all -- $GLOBALS['pfb_test_logger_calls'] stayed empty.
-	 * The assertion below is the one that fails RED against the pre-fix worktree.
-	 *
-	 * Scenario:
-	 *   Given pfb_interval='24' and a 'cron' ledger entry 10 s past due
-	 *   (dispatches this tick, same as Case D); dcc/bl are NOT due.
-	 *   When  pfblockerng_tick() is called.
-	 *   Then  the feed cron IS dispatched (mark_ran_anchored advances 'cron',
-	 *         same tripwire as Case D).
-	 *   And   a logger() call with "log maintenance skipped" text was recorded --
-	 *         the $dispatched skip is no longer silent. Deliberately NOT asserted
-	 *         via 'log' content: Case D pins that file byte-unchanged for this
-	 *         exact scenario, so this message cannot land there (see the tail-gate
-	 *         comment in pfblockerng_extra.inc).
-	 */
-	public function testDispatchingTickLogsSkippedMaintenanceMessage(): void
-	{
-		$this->seedTickPrereqs('24');
-		// Mirrors src/usr/local/www/pfblockerng/pfblockerng.php:63 -- see Case A.
-		pfb_global();
-		$this->ensureLogDir();
-
-		$now      = time();
-		$interval = 86400;	// pfb_interval='24' hours
-
-		pfb_due_ledger_write_entry('cron', [
-			'last_run' => $now - $interval - 10,
-			'next_due' => $now - 10,	// 10 s past due -- dispatches this tick
-			'jitter'   => 0,
-		], $GLOBALS['pfb']['dbdir']);
-
-		// Prevent a real exec() dispatch for dcc/bl -- isolate to the cron dispatch.
-		$this->seedFutureLedgerEntry('dcc', $now);
-		$this->seedFutureLedgerEntry('bl',  $now);
-
-		// Act.
-		pfblockerng_tick($this->suiteWorkerPsLines());
-
-		// The feed cron WAS dispatched -- same tripwire as Case D.
-		$cronEntry = pfb_due_ledger_read_entry('cron', $GLOBALS['pfb']['dbdir']);
-		$this->assertNotNull($cronEntry, 'cron ledger entry must exist after the tick');
-		$this->assertGreaterThan($now - 10, $cronEntry['next_due'],
-			'cron next_due must have advanced (dispatched this tick): expected > ' . ($now - 10)
-			. " got {$cronEntry['next_due']} -- test setup did not actually dispatch the cron");
-
-		$skipped = array_values(array_filter(
-			$GLOBALS['pfb_test_syslog_calls'] ?? [],
-			static fn (array $c) => str_contains($c['body'], 'log maintenance skipped')
-		));
-		$this->assertNotEmpty($skipped,
-			'expected a "log maintenance skipped" pfb_syslog_emit() call after a dispatching tick, got '
-			. var_export($GLOBALS['pfb_test_syslog_calls'] ?? [], TRUE)
-			. ' -- the $dispatched half of the log-maintenance gate must be observable, not silent (issue #1769; '
-			. 'B3 probe: a bare logger() reaches NO file on the appliance -- only the openlog(pfblockerng) '
-			. 'path lands in pfblockerng_syslog.log)');
 	}
 
 	// -----------------------------------------------------------------------

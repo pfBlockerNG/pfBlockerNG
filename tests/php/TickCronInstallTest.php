@@ -72,6 +72,28 @@ final class TickCronInstallTest extends TestCase
 		$this->assertSame([self::CRON_TICK_CMD], $this->cronCommands());
 	}
 
+	public function testEnableRegeneratesDisposableScheduleCache(): void
+	{
+		$regenerated = 0;
+
+		pfblockerng_configure_tick_cron(TRUE, self::LOG, static function () use (&$regenerated): bool {
+			$regenerated++;
+			return TRUE;
+		});
+
+		$this->assertSame(1, $regenerated);
+	}
+
+	public function testSettingsSaveCanSuppressActiveCacheRegeneration(): void
+	{
+		$regenerated = 0;
+		pfblockerng_configure_tick_cron(TRUE, self::LOG, static function () use (&$regenerated): bool {
+			$regenerated++;
+			return TRUE;
+		}, FALSE);
+		$this->assertSame(0, $regenerated);
+	}
+
 	public function testEnableRemovesStaleCronTickBeforeReinstall(): void
 	{
 		$this->seedCronItem(0, self::CRON_TICK_CMD, '*/30');

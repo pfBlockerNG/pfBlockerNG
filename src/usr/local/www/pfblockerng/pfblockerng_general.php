@@ -61,12 +61,22 @@ $pconfig['pfb_feed_internal_filter']	= PfbConfig::read('gen/pfb_feed_internal_fi
 // (one per line) whose feeds are allowed even when they resolve internally.
 $pconfig['pfb_feed_internal_allowlist']	= (string) base64_decode($pfb['gconfig']['pfb_feed_internal_allowlist'] ?? '');
 
-$pconfig['pfb_interval']		= $pfb['gconfig']['pfb_interval']			?: 1;
+$pconfig['pfb_scheduled_feed_updates'] = PfbConfig::read('gen/pfb_scheduled_feed_updates')->value;
+$pconfig['pfb_schedule_weekday'] = PfbConfig::read('gen/pfb_schedule_weekday');
+$pconfig['pfb_schedule_hour'] = PfbConfig::read('gen/pfb_schedule_hour');
+$pconfig['pfb_schedule_minute'] = PfbConfig::read('gen/pfb_schedule_minute');
+$pconfig['skipfeed'] = PfbConfig::read('gen/skipfeed');
 
-$pconfig['pfb_min']			= $pfb['gconfig']['pfb_min']				?: 0;
-$pconfig['pfb_hour']			= $pfb['gconfig']['pfb_hour']				?: 0;
-$pconfig['pfb_dailystart']		= $pfb['gconfig']['pfb_dailystart']			?: 0;
-$pconfig['skipfeed']			= $pfb['gconfig']['skipfeed']				?: 0;
+$pconfig['pfb_quiet_hours_enabled'] = '';
+$pconfig['pfb_quiet_hours_start'] = '00:00';
+$pconfig['pfb_quiet_hours_end'] = '06:00';
+$pfb_quiet_hours = (string) PfbConfig::read('gen/pfb_quiet_hours');
+if (preg_match('/^((?:[01][0-9]|2[0-3]):(?:00|15|30|45))-((?:[01][0-9]|2[0-3]):(?:00|15|30|45))$/D', $pfb_quiet_hours, $matches) === 1
+	&& $matches[1] !== $matches[2]) {
+	$pconfig['pfb_quiet_hours_enabled'] = 'on';
+	$pconfig['pfb_quiet_hours_start'] = $matches[1];
+	$pconfig['pfb_quiet_hours_end'] = $matches[2];
+}
 
 // Flat list of per-log suffixes shared by the log_max_*/log_max_days_* key families below
 // (read here, saved further down) and their validation loops -- one source of truth for
@@ -104,18 +114,12 @@ $pfb_syntaxhl_on = pfb_editor_enabled();
 $pfb_general_editor = pfb_general_editor_render($pfb_syntaxhl_on);
 
 // Select field options
-$options_pfb_interval	= [	'1' => 'Every hour',
-				'2' => 'Every 2 hours',
-				'3' => 'Every 3 hours',
-				'4' => 'Every 4 hours',
-				'6' => 'Every 6 hours',
-				'8' => 'Every 8 hours',
-				'12' => 'Every 12 hours',
-				'24' => 'Once a day',
-				'Disabled' => 'Disabled' ];
-$options_pfb_min	= [ '0' => '00', '15' => '15', '30' => '30', '45' => '45' ];
-$options_pfb_hour	= range(0, 23, 1);
-$options_pfb_dailystart	= range(0, 23, 1);
+$options_schedule_weekday = [
+	'7' => 'Sunday', '1' => 'Monday', '2' => 'Tuesday', '3' => 'Wednesday',
+	'4' => 'Thursday', '5' => 'Friday', '6' => 'Saturday',
+];
+$options_schedule_hour = array_combine(array_map('strval', range(0, 23)), range(0, 23));
+$options_schedule_minute = [ '0' => '00', '15' => '15', '30' => '30', '45' => '45' ];
 $options_skipfeed	= [ '0' => 'No Limit', '1' => '1', '2' => '2', '3' => '3', '4' => '4', '5' => '5', '6' => '6' ];
 $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '4000' => '4,000', '6000' => '6,000',
 				'8000' => '8,000', '10000' => '10,000', '20000' => '20,000', '40000' => '40,000', '60000' => '60,000',
@@ -127,10 +131,14 @@ $options_log_types	= [	'100' => '100', '1000' => '1,000', '2000' => '2,000', '40
 // $input_errors is read unconditionally in the render section below, so it must be
 // defined on every request path (incl. a POST without 'save'). Initialise it once.
 $input_errors = array();
+$schedule_cache_failed = ($_GET['schcache'] ?? '') === 'failed';
 
 // Validate input fields and save
 if ($_POST) {
 	if (isset($_POST['save'])) {
+		$schedule_result = pfb_general_schedule_validate($_POST);
+		$input_errors = array_merge($input_errors, $schedule_result['errors']);
+		$schedule_values = $schedule_result['values'];
 
 		// issue #1723: sanitize at ingestion -- first step, before any evaluation.
 		// The whole-blob trim() folds in here too (persist-site base64_encode() is
@@ -138,11 +146,7 @@ if ($_POST) {
 		$_POST['pfb_feed_internal_allowlist'] = trim(pfb_sanitize_text_area((string) ($_POST['pfb_feed_internal_allowlist'] ?? '')));
 
 		// Validate Select field options
-		$select_options = array(	'pfb_interval'			=> 1,
-						'pfb_min'			=> 0,
-						'pfb_hour'			=> 0,
-						'pfb_dailystart'		=> 0,
-						'skipfeed'			=> 0,
+		$select_options = array(	'skipfeed'			=> 0,
 						'log_max_log'			=> 20000,
 						'log_max_errlog'		=> 20000,
 						'log_max_extraslog'		=> 20000,
@@ -201,10 +205,11 @@ if ($_POST) {
 			if ($pfb['gconfig']['pfb_feed_internal_filter'] === 'on') {
 				$pfb['gconfig']['pfb_feed_internal_allowlist']	= base64_encode($_POST['pfb_feed_internal_allowlist'] ?? '');
 			}
-			$pfb['gconfig']['pfb_interval']			= $_POST['pfb_interval']			?: 1;
-			$pfb['gconfig']['pfb_min']			= $_POST['pfb_min']				?: 0;
-			$pfb['gconfig']['pfb_hour']			= $_POST['pfb_hour']				?: 0;
-			$pfb['gconfig']['pfb_dailystart']		= $_POST['pfb_dailystart']			?: 0;
+			$pfb['gconfig']['pfb_scheduled_feed_updates'] = $schedule_values['pfb_scheduled_feed_updates'];
+			$pfb['gconfig']['pfb_schedule_weekday'] = $schedule_values['pfb_schedule_weekday'];
+			$pfb['gconfig']['pfb_schedule_hour'] = $schedule_values['pfb_schedule_hour'];
+			$pfb['gconfig']['pfb_schedule_minute'] = $schedule_values['pfb_schedule_minute'];
+			$pfb['gconfig']['pfb_quiet_hours'] = $schedule_values['pfb_quiet_hours'];
 			$pfb['gconfig']['skipfeed']			= $_POST['skipfeed']				?: 0;
 
 			// Remove old Line Limit setting
@@ -238,9 +243,38 @@ if ($_POST) {
 
 			PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig']);
 			write_config('[pfBlockerNG] save General settings');
-
+			$runtime_model = pfb_schedule_runtime_config();
+			$runtime_state = pfb_schedule_state_read($pfb['schedule_state_dir'] ?? '/usr/local/etc');
+			$runtime_timezone = $pfb['schedule_timezone'] ?? date_default_timezone_get();
+			try {
+				$runtime_timezone = $runtime_timezone instanceof DateTimeZone
+					? $runtime_timezone : new DateTimeZone((string) $runtime_timezone);
+			} catch (Throwable) {
+				$runtime_timezone = NULL;
+			}
+			$candidate_file = @tempnam(sys_get_temp_dir(), 'pfb_sched_');
+			$candidate_dir = $candidate_file === FALSE ? '' : $candidate_file . '.d';
+			if ($candidate_file !== FALSE) {
+				@unlink($candidate_file);
+				if (!@mkdir($candidate_dir, 0700)) {
+					$candidate_dir = '';
+				}
+			}
+			$cache_ok = $runtime_model !== NULL && $runtime_state !== NULL && $runtime_timezone instanceof DateTimeZone
+				&& $candidate_dir !== ''
+				&& pfb_schedule_cache_refresh($runtime_model, $runtime_state, time(), $runtime_timezone, $candidate_dir)
+				&& pfb_due_ledger_read_cache($candidate_dir, $runtime_model['config_hash']) !== NULL;
+			if ($candidate_dir !== '') {
+				@unlink($candidate_dir . '/pfb_due_ledger.json');
+				@unlink($candidate_dir . '/pfb_due_ledger.json.lock');
+				@rmdir($candidate_dir);
+			}
 			$pfb['save'] = TRUE;
 			sync_package_pfblockerng();
+			if (!$cache_ok) {
+				header('Location: /pfblockerng/pfblockerng_general.php?schcache=failed');
+				exit;
+			}
 
 			header('Location: /pfblockerng/pfblockerng_general.php');
 			exit;
@@ -255,6 +289,9 @@ include_once('head.inc');
 
 if ($input_errors) {
 	print_input_errors($input_errors);
+}
+if ($schedule_cache_failed) {
+	print_info_box('Settings were saved, but schedule-cache generation failed. This is likely a bug; please report it.', 'warning');
 }
 
 // Load Wizard on new installations only
@@ -348,36 +385,6 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp(pfb_general_toggle_help());
 
-$group = new Form_Group('CRON Settings');
-$group->add(new Form_Select(
-	'pfb_interval',
-	'Hour Interval',
-	$pconfig['pfb_interval'],
-	$options_pfb_interval
-))->setHelp('Default: <strong>Every hour</strong><br />Select the Cron hour interval.');
-
-$group->add(new Form_Select(
-	'pfb_min',
-	'Start Min',
-	$pconfig['pfb_min'],
-	$options_pfb_min
-))->setHelp('Default: <strong>:00</strong><br />Select the Cron update minute.');
-
-$group->add(new Form_Select(
-	'pfb_hour',
-	'Start Hour',
-	$pconfig['pfb_hour'],
-	$options_pfb_hour
-))->setHelp('Default: <strong>0</strong><br />Select the Cron start hour.');
-
-$group->add(new Form_Select(
-	'pfb_dailystart',
-	'Daily/Weekly Start Hour',
-	$pconfig['pfb_dailystart'],
-	$options_pfb_dailystart
-))->setHelp('Default: <strong>0</strong><br />Select the \'Daily/Weekly\' start hour.');
-$section->add($group);
-
 $section->addInput(new Form_Select(
 	'skipfeed',
 	'Download Failure Threshold',
@@ -388,6 +395,61 @@ $section->addInput(new Form_Select(
 		. 'On a download failure, the previously downloaded list is reloaded.')
   ->setAttribute('style', 'width: auto');
 
+$form->add($section);
+
+$section = new Form_Section('Scheduling');
+$section->addInput(new Form_Checkbox(
+	'pfb_scheduled_feed_updates',
+	'Scheduled Feed Updates',
+	gettext('Enable'),
+	$pconfig['pfb_scheduled_feed_updates'] === 'on',
+	'on'
+))->setHelp('Run enabled feed groups on their configured schedules. This does not affect manual updates, Extras refreshes, or pending applies.<br />'
+	);
+
+$group = new Form_Group('Default Schedule');
+$group->setHelp('Default local-time schedule for feed groups and calendar-scheduled Extras. Hourly schedules use the minute; daily schedules use the time; weekly schedules use all three.');
+$group->add(new Form_Select(
+	'pfb_schedule_weekday',
+	'Weekday',
+	$pconfig['pfb_schedule_weekday'],
+	$options_schedule_weekday
+))->setHelp('Sunday first.');
+$group->add(new Form_Select(
+	'pfb_schedule_hour',
+	'Hour',
+	$pconfig['pfb_schedule_hour'],
+	$options_schedule_hour
+))->setHelp('Local hour (00–23).');
+$group->add(new Form_Select(
+	'pfb_schedule_minute',
+	'Minute',
+	$pconfig['pfb_schedule_minute'],
+	$options_schedule_minute
+))->setHelp('Quarter-hour minute.');
+$section->add($group);
+
+$section->addInput(new Form_Checkbox('pfb_quiet_hours_enabled',
+	'Automatic Apply Window',
+	gettext('Restrict automatic applies to a time window'),
+	$pconfig['pfb_quiet_hours_enabled'] === 'on',
+	'on'
+))->setHelp('Changes detected outside this window remain pending and apply on the first eligible tick inside it.');
+
+$group = new Form_Group('Apply Window');
+$group->add((new Form_Input(
+	'pfb_quiet_hours_start',
+	'Start',
+	'time',
+	$pconfig['pfb_quiet_hours_start']
+))->setAttribute('step', '900'))->setWidth(4);
+$group->add((new Form_Input(
+	'pfb_quiet_hours_end',
+	'End',
+	'time',
+	$pconfig['pfb_quiet_hours_end']
+))->setAttribute('step', '900'))->setWidth(4);
+$section->add($group);
 $form->add($section);
 
 // issue #489: Log Settings — grouped by category, one row per log. A shaded header row
@@ -593,6 +655,15 @@ events.push(function() {
 
 	$('#pfb_feed_internal_filter').click(pfb_sync_internal_filter);
 	pfb_sync_internal_filter();
+
+	function pfb_sync_quiet_hours() {
+		var enabled = $('#pfb_quiet_hours_enabled').prop('checked');
+		disableInput('pfb_quiet_hours_start', !enabled);
+		disableInput('pfb_quiet_hours_end', !enabled);
+	}
+
+	$('#pfb_quiet_hours_enabled').click(pfb_sync_quiet_hours);
+	pfb_sync_quiet_hours();
 
 <?=$pfb_general_editor['lists']?>
 
