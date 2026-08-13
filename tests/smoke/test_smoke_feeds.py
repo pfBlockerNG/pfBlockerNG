@@ -3089,7 +3089,7 @@ def test_zip_extraction_failure_rejected_not_empty(deployed_vm: SmokeVM, mock_fe
     header = "issue819zex"
     feed_url = mock_feeds.register("issue819_zip_extract_fail.zip", zip_bytes)
     spec = h.IpCase(aliasname=header, feed_url=feed_url, header=header, family="v4")
-    marker = "[pfb_download] zip publish failed (tar exit 1)"
+    marker = f"[pfb_download] zip publish failed (tar exit {extract_rc})"
 
     # Given -- alias absent + delta baseline of ZIP publish-failure lines.
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the corrupt-payload zip feed"
