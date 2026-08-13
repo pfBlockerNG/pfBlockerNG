@@ -327,9 +327,9 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
 
     Scenario:
         Background: the harness flag is PRESENT (its normal, always-on state during
-            the suite) and the 'cron' ledger entry is due.
+            the suite) and the built-in 'ss_refresh' ledger entry is due.
             When 'pfblockerng.php tick' runs directly,
-            Then it dispatches the due feed cron (ledger 'cron' next_due advances) and
+            Then it dispatches the due job (ledger 'ss_refresh' next_due advances) and
                 prints no '[ Disabled by ... ]' banner.
     """
     vm = deployed_vm
@@ -337,7 +337,7 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
     assert vm.ssh("test", "-f", flag).returncode == 0, f"precondition: {flag} must be present for this test"
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
-    _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+    _write_ledger_entry(vm, "ss_refresh", now_ts - 90000, now_ts - 1)
 
     result = _run_tick(vm)
     assert result.returncode == 0, f"tick rc={result.returncode} stderr={result.stderr!r}"
@@ -345,10 +345,10 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
         f"the direct 'tick' verb must never print the cron-tick disabled banner; got {result.stdout!r}"
     )
     assert h.wait_until(
-        lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
+        lambda: _read_ledger(vm).get("ss_refresh", {}).get("next_due", 0) > now_ts,
         timeout=30,
         interval=2,
-    ), f"the direct 'tick' verb must dispatch the due feed cron regardless of the flag; ledger={_read_ledger(vm)}"
+    ), f"the direct 'tick' verb must dispatch a due job regardless of the flag; ledger={_read_ledger(vm)}"
 
 
 @pytest.mark.smoke
