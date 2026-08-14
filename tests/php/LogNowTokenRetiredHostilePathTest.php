@@ -69,4 +69,21 @@ final class LogNowTokenRetiredHostilePathTest extends TestCase
 		$result = pfb_test_run_process(['git', '-C', $this->root, 'ls-files', '-z', '--', 'src'], 10.0, $environment);
 		$this->assertSame("src/café.inc\0", $result['stdout']);
 	}
+
+	public function testRetiredTokenScanIgnoresInheritedGitContext(): void
+	{
+		$foreign = $this->root . '/foreign';
+		$this->assertTrue(mkdir($foreign));
+		$result = pfb_test_run_process(['git', '-C', $foreign, 'init', '-q'], 10.0, pfb_test_scrubbed_git_env());
+		$this->assertSame(0, $result['exit'], 'foreign git init failed: ' . $result['stderr']);
+
+		$phpunit = dirname(__DIR__, 2) . '/vendor/bin/phpunit';
+		$test = $this->root . '/tests/php/LogNowTokenRetiredTest.php';
+		$environment = pfb_test_scrubbed_git_env();
+		$environment['GIT_DIR'] = $foreign . '/.git';
+		$result = pfb_test_run_process([$phpunit, '--colors=never', '--no-configuration', $test], 10.0, $environment);
+
+		$this->assertSame(1, $result['exit'], "retired-token scan must ignore inherited Git context:\n{$result['stdout']}{$result['stderr']}");
+		$this->assertStringContainsString('src/café.inc:2', $result['stdout'] . $result['stderr']);
+	}
 }
