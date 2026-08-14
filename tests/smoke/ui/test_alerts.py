@@ -312,7 +312,6 @@ def test_dnsbl_remove_rejects_missing_type(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.ui_render
 def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
