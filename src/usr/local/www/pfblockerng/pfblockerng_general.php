@@ -186,6 +186,7 @@ else {
 	$tab_array[]	= array(gettext('Logs'),	false,	'/pfblockerng/pfblockerng_log.php');
 	$tab_array[]	= array(gettext('Sync'),	false,	'/pfblockerng/pfblockerng_sync.php');
 	$tab_array[]	= array(gettext('Wizard'),	false,	'/wizard.php?xml=pfblockerng_wizard.xml');
+	pfb_software_add_tab($tab_array);
 	display_top_tabs($tab_array, true);
 }
 
