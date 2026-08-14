@@ -274,6 +274,43 @@ readable and unchanged.
 self-contained synthetic corpus (`legacy/benchmarks/_corpus_raw.py`) and never imports
 `pfb_unbound.py` or touches the interchange format.
 
+### Feed-at-suffix policy — issue #2371
+
+Two `PfbConfig`-registered selects, `dnsbl/pfb_psl_feed_private_policy` (PSL PRIVATE —
+shared domains, e.g. `github.io`) and `dnsbl/pfb_psl_feed_icann_policy` (public suffix),
+each a `PfbFeedSuffixPolicy` enum (`ignore`/`apex`/`honor`, absent → Honor), govern what
+a **FEED**-provenance rule does when its normalized name resolves EXACTLY to its
+winning public suffix. **USER**-provenance rows (Custom_List, sovereign ABP) are exempt
+in every state.
+
+**Enforcement points** (`pfb_unbound.py`): both the plain `tld_wildcard_classify()`
+loop and the ABP reconcile-fold loop run every suffix-apex FEED row through
+`_dnsbl_suffix_feed_policy()` — `ignore` drops the entry (tallied `suffix_drop`); `apex`
+demotes a would-be wildcard ZONE anchor to an exact-apex DATA block (tallied
+`suffix_demote`); `honor` leaves the row alone (pre-#2371 behaviour) — an explicit ABP
+wildcard rule can still blanket the suffix even under `honor`. A policy != `honor` is
+ALSO a third authority load gate in `_dnsbl_config_from_manifest()`, applying
+regardless of Wildcard Blocking (ABP zones exist independently of it, #1255). The two
+tally buckets ride the existing reject-stats bucket enumeration (`_tally_reject()`)
+PHP already consumes.
+
+**Defaults.** A fresh install seeds BOTH selects `apex`/`apex` (owner decision
+2026-08-14): `pfb_psl_feed_policy_is_fresh_install()` reads the DNSBL section's
+fresh-install-ness BEFORE the registry pass runs, and `pfb_install_psl_feed_policy_seed()`
+writes the seed AFTER it — deliberately not a `pfb_migration_registry()` grandfather
+map, since #1921's ABSENT map is OLDCFG-only and would misfire on a genuinely-fresh
+install too. An existing (upgraded) install is instead grandfathered `honor`/`honor` —
+byte-identical to pre-#2371 behaviour — because the registry's absent/empty default for
+both keys is `''`, which `PfbFeedSuffixPolicy` reads as Honor.
+
+**UI** (issue #2371 Step 3): both fields render as `Form_Select`s on
+`pfblockerng_dnsbl.php`, read/written exclusively through `PfbConfig` (never a raw
+`config_*_path`), placed near Wildcard Blocking but NOT gated by any checkbox
+show/hide — the policy is feed-wide and independent of Wildcard Blocking. POST
+sanitises to a bare word; any token outside the three-value vocabulary normalises to
+Honor via the enum's own fail-safe `fromStored()`/`fromLegacy()` fallback (same
+principle as `PfbToggle`/`PfbIdnMode`). Pinned by `tests/php/DnsblPslPolicyUiTest.php`.
+
 ### ADR-10 — zero-downtime DNSBL data swap
 
 A DNSBL **DATA** update is a **zero-downtime background swap — no Unbound restart**. The module

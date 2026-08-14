@@ -73,6 +73,11 @@ $pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
 $pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
 $pconfig['pfb_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');
+// issue #2371: feed-at-suffix policy selects (PfbFeedSuffixPolicy enum; absent -> Honor).
+// ->value gives the runtime option key the <select> options below carry (same idiom as
+// pfb_idn above).
+$pconfig['pfb_psl_feed_private_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_private_policy')->value;
+$pconfig['pfb_psl_feed_icann_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_icann_policy')->value;
 // ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
 // PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all', legacy 'off', and '' -> Off);
 // enum value gives the runtime option key that the <select> options below carry.
@@ -829,6 +834,13 @@ if ($_POST) {
 			$pfb['dconfig']['tld_wildcard']		= pfb_filter($_POST['tld_wildcard'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$psl_include_private = pfb_filter($_POST['pfb_psl_include_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$psl_allow_private = pfb_filter($_POST['pfb_psl_allow_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+			// issue #2371: feed-at-suffix policy selects. PFB_FILTER_WORD only checks shape
+			// (word chars) -- the canonicalisation to the three-token vocabulary (anything
+			// else -> Honor) happens in PfbConfig::write()'s write_adapter
+			// (pfb_cfg_feed_suffix_policy_write -> PfbFeedSuffixPolicy::fromStored), same
+			// fail-safe principle as PfbToggle/PfbIdnMode's unknown-token fallback.
+			$psl_feed_private_policy = pfb_filter($_POST['pfb_psl_feed_private_policy'] ?? '', PFB_FILTER_WORD, 'dnsbl') ?: '';
+			$psl_feed_icann_policy = pfb_filter($_POST['pfb_psl_feed_icann_policy'] ?? '', PFB_FILTER_WORD, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_dnsbl_nonat']	= pfb_filter($_POST['pfb_dnsbl_nonat'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
@@ -975,6 +987,8 @@ if ($_POST) {
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
 			PfbConfig::write('dnsbl/pfb_psl_include_private', $psl_include_private);
 			PfbConfig::write('dnsbl/pfb_psl_allow_private', $psl_allow_private);
+			PfbConfig::write('dnsbl/pfb_psl_feed_private_policy', $psl_feed_private_policy);
+			PfbConfig::write('dnsbl/pfb_psl_feed_icann_policy', $psl_feed_icann_policy);
 
 			// Save DoH/DoT/DoQ blocking fields via gateway (registered keys in pfblockerngsafesearch)
 			PfbConfig::write('ss/safesearch_doh', $_POST['safesearch_doh'] ?: 'Disable');
@@ -1125,6 +1139,40 @@ $section->addInput(new Form_Checkbox(
 	pfb_cfg_toggle_read($pconfig['tld_wildcard']) === PfbToggle::On,
 	'on'
 ))->setHelp($dnsbl_text);
+
+// issue #2371: feed-at-suffix policy selects. Feed-wide and independent of Wildcard
+// Blocking (and of each other) -- deliberately NOT behind a hideCheckbox() show/hide,
+// so placement here (near Wildcard Blocking, for topical proximity) never implies a
+// dependency on it. Applies only to Feed-provenance rows; a Custom List or a sovereign
+// ABP list entry is never affected by either select.
+$psl_feed_policy_options = array(
+	'ignore'	=> 'Ignore entirely',
+	'apex'		=> 'Block the suffix apex only',
+	'honor'		=> 'Honor list rules',
+);
+$psl_feed_policy_help = '<ul>'
+	. '<li><strong>Ignore entirely</strong> - the feed entry is dropped (counted in the reject stats).</li>'
+	. '<li><strong>Block the suffix apex only</strong> - only the exact suffix name is blocked; every registrant under it stays reachable.</li>'
+	. '<li><strong>Honor list rules</strong> - the list is honored as written, including an explicit ABP wildcard rule that may still blanket the suffix.</li>'
+	. '</ul>'
+	. 'A Custom List or a sovereign ABP list entry is never affected by this policy. Intentional whole-suffix blocking belongs in '
+	. '<strong>TLD Blacklist</strong> below (dotted entries supported).';
+
+$section->addInput(new Form_Select(
+	'pfb_psl_feed_private_policy',
+	gettext('Feed entries at shared-hosting suffixes (PSL PRIVATE)'),
+	$pconfig['pfb_psl_feed_private_policy'],
+	$psl_feed_policy_options
+))->setHelp('Applies only to a Feed entry named exactly at a PSL PRIVATE suffix (shared domains such as github.io -- not private DNS).'
+	. $psl_feed_policy_help);
+
+$section->addInput(new Form_Select(
+	'pfb_psl_feed_icann_policy',
+	gettext('Feed entries at public suffixes (ICANN)'),
+	$pconfig['pfb_psl_feed_icann_policy'],
+	$psl_feed_policy_options
+))->setHelp('Applies only to a Feed entry named exactly at an ICANN (public) suffix.'
+	. $psl_feed_policy_help);
 
 $section->addInput(new Form_Checkbox(
 	'pfb_psl_include_private',

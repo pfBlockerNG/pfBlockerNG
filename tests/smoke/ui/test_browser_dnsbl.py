@@ -512,6 +512,128 @@ def test_gateway_dnsbl_lenient_save_roundtrip(
 
 
 # --------------------------------------------------------------------------- #
+# issue #2371 Step 3: ADR-29 gateway save->reload round-trip for BOTH feed-at-suffix
+# policy selects (pfb_psl_feed_private_policy / pfb_psl_feed_icann_policy).
+# --------------------------------------------------------------------------- #
+
+_CFG_FEED_PRIVATE_POLICY = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_private_policy"
+_CFG_FEED_ICANN_POLICY = "installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_icann_policy"
+
+
+def test_gateway_dnsbl_feed_suffix_policy_save_roundtrip(
+    browser_page: Page,
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+    dnsbl_vip_ready_browser: None,
+    screenshot_dir: Path,
+) -> None:
+    """pfb_psl_feed_private_policy / pfb_psl_feed_icann_policy round-trip through the
+    DNSBL page and the gateway (issue #2371 Step 3).
+
+    Same idiom as ``test_gateway_dnsbl_lenient_save_roundtrip`` above, extended to TWO
+    independent ``<select>`` fields (instead of one checkbox) so a field-swap bug (the
+    save binding for one field accidentally writing the other's key) is caught: each
+    field is driven to a DIFFERENT non-default token ('apex' for PRIVATE, 'ignore' for
+    ICANN).
+
+    Scenario: ADR-29 gateway save->reload round-trip for the feed-at-suffix policy
+      selects on the DNSBL page.
+      Background: pfBlockerNG deployed; DNSBL VIP seeded; webConfigurator authenticated.
+
+    Given the current stored token of both fields (read via config_get oracle; an
+      absent/unrecognised token reads as 'honor' per PfbFeedSuffixPolicy's fail-safe
+      default -- see CfgGatewayTest.php),
+    When the DNSBL page is POST-saved with BOTH selects set to a non-default value,
+    Then config.xml holds the CANONICAL token for both keys; AND the DNSBL page,
+      navigated fresh in the browser, renders both selects at the matching value; AND a
+      second POST restores each field's original value with the same two assertions
+      (both directions).
+    """
+    page = browser_page
+
+    original_private = helpers.config_get(smoke_vm, _CFG_FEED_PRIVATE_POLICY) or "honor"
+    original_icann = helpers.config_get(smoke_vm, _CFG_FEED_ICANN_POLICY) or "honor"
+    flipped_private = "apex" if original_private != "apex" else "honor"
+    flipped_icann = "ignore" if original_icann != "ignore" else "honor"
+
+    try:
+        # ---- FLIP: POST both selects to a non-default, DISTINCT value ---- #
+        resp = webui.post(
+            DNSBL_PAGE,
+            {
+                "pfb_psl_feed_private_policy": flipped_private,
+                "pfb_psl_feed_icann_policy": flipped_icann,
+            },
+            timeout=_DNSBL_POST_TIMEOUT,
+        )
+        assert "Sign In" not in resp.text, "feed-suffix-policy flip POST lost the session"
+
+        # Config oracle: both stored tokens must match the flipped selection.
+        stored_private_flip = helpers.config_get(smoke_vm, _CFG_FEED_PRIVATE_POLICY)
+        assert stored_private_flip == flipped_private, (
+            f"pfb_psl_feed_private_policy gateway FAIL after flip: stored {stored_private_flip!r}, "
+            f"expected {flipped_private!r}"
+        )
+        stored_icann_flip = helpers.config_get(smoke_vm, _CFG_FEED_ICANN_POLICY)
+        assert stored_icann_flip == flipped_icann, (
+            f"pfb_psl_feed_icann_policy gateway FAIL after flip: stored {stored_icann_flip!r}, "
+            f"expected {flipped_icann!r}"
+        )
+
+        # DOM oracle: reload the DNSBL page and assert both selects show the flipped value.
+        _open(page, webui, DNSBL_PAGE)
+        sel_private_flip = page.locator("#pfb_psl_feed_private_policy")
+        sel_icann_flip = page.locator("#pfb_psl_feed_icann_policy")
+        expect(sel_private_flip).to_be_attached(timeout=JS_TIMEOUT_MS)
+        expect(sel_icann_flip).to_be_attached(timeout=JS_TIMEOUT_MS)
+        expect(sel_private_flip).to_have_value(flipped_private, timeout=JS_TIMEOUT_MS)
+        expect(sel_icann_flip).to_have_value(flipped_icann, timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "gateway_dnsbl_feed_suffix_policy_after_flip")
+
+        # ---- RESTORE: POST both selects back to their original values ---- #
+        resp = webui.post(
+            DNSBL_PAGE,
+            {
+                "pfb_psl_feed_private_policy": original_private,
+                "pfb_psl_feed_icann_policy": original_icann,
+            },
+            timeout=_DNSBL_POST_TIMEOUT,
+        )
+        assert "Sign In" not in resp.text, "feed-suffix-policy restore POST lost the session"
+
+        # Config oracle: both stored tokens must match the restored (original) selection.
+        stored_private_restore = helpers.config_get(smoke_vm, _CFG_FEED_PRIVATE_POLICY)
+        assert stored_private_restore == original_private, (
+            f"pfb_psl_feed_private_policy gateway FAIL after restore: stored {stored_private_restore!r}, "
+            f"expected {original_private!r}"
+        )
+        stored_icann_restore = helpers.config_get(smoke_vm, _CFG_FEED_ICANN_POLICY)
+        assert stored_icann_restore == original_icann, (
+            f"pfb_psl_feed_icann_policy gateway FAIL after restore: stored {stored_icann_restore!r}, "
+            f"expected {original_icann!r}"
+        )
+
+        # DOM oracle: reload and assert both selects show the restored (original) value.
+        _open(page, webui, DNSBL_PAGE)
+        sel_private_restore = page.locator("#pfb_psl_feed_private_policy")
+        sel_icann_restore = page.locator("#pfb_psl_feed_icann_policy")
+        expect(sel_private_restore).to_be_attached(timeout=JS_TIMEOUT_MS)
+        expect(sel_icann_restore).to_be_attached(timeout=JS_TIMEOUT_MS)
+        expect(sel_private_restore).to_have_value(original_private, timeout=JS_TIMEOUT_MS)
+        expect(sel_icann_restore).to_have_value(original_icann, timeout=JS_TIMEOUT_MS)
+        _shot(page, screenshot_dir, "gateway_dnsbl_feed_suffix_policy_after_restore")
+
+    finally:
+        # Belt-and-suspenders: restore both fields to their original stored token on any
+        # mid-flip abort (config_set writes the raw token verbatim -- both original
+        # values captured above are already-canonical PfbFeedSuffixPolicy tokens).
+        if helpers.config_get(smoke_vm, _CFG_FEED_PRIVATE_POLICY) != original_private:
+            helpers.config_set(smoke_vm, _CFG_FEED_PRIVATE_POLICY, original_private)
+        if helpers.config_get(smoke_vm, _CFG_FEED_ICANN_POLICY) != original_icann:
+            helpers.config_set(smoke_vm, _CFG_FEED_ICANN_POLICY, original_icann)
+
+
+# --------------------------------------------------------------------------- #
 # PR #660 (ADR-36/37): DNS-Redirect + DoT/DoQ-Block interface quick-fill and
 # Exception-Alias autocomplete. Both are browser-only behaviours an HTTP POST
 # cannot reach, so they live in the Tier-B browser tier per the CLAUDE.md mandate.
