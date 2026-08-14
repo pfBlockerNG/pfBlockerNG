@@ -38,6 +38,60 @@ final class WwwCheckboxPostedValueTest extends TestCase
 	}
 
 	/**
+	 * Split a PHP argument list on its TOP-LEVEL commas.
+	 *
+	 * A plain explode() would split inside a quoted title ("Enable, then reload") and inside
+	 * a nested call, counting arguments that are not there — which for this guard means a
+	 * page that omits the posted value reads as if it passed one.
+	 *
+	 * @return list<string>
+	 */
+	public static function splitArgs(string $args): array
+	{
+		$parts = [];
+		$current = '';
+		$quote = '';
+		$depth = 0;
+		$length = strlen($args);
+
+		for ($i = 0; $i < $length; $i++) {
+			$char = $args[$i];
+
+			if ($quote !== '') {
+				// Inside a string literal: a backslash escapes the next character, so an
+				// escaped quote does not end it.
+				if ($char === '\\' && $i + 1 < $length) {
+					$current .= $char . $args[++$i];
+					continue;
+				}
+				if ($char === $quote) {
+					$quote = '';
+				}
+				$current .= $char;
+				continue;
+			}
+
+			if ($char === "'" || $char === '"') {
+				$quote = $char;
+			} elseif ($char === '(' || $char === '[') {
+				$depth++;
+			} elseif ($char === ')' || $char === ']') {
+				$depth--;
+			} elseif ($char === ',' && $depth === 0) {
+				$parts[] = trim($current);
+				$current = '';
+				continue;
+			}
+
+			$current .= $char;
+		}
+
+		$parts[] = trim($current);
+
+		return $parts;
+	}
+
+	/**
 	 * The constructor arguments of every ``new Form_Checkbox(...)`` in a file, comments and
 	 * line breaks already stripped so formatting cannot change the answer.
 	 *
@@ -45,15 +99,78 @@ final class WwwCheckboxPostedValueTest extends TestCase
 	 */
 	private function checkboxArgs(string $path): array
 	{
-		$source = php_strip_whitespace($path);
-		preg_match_all("/new Form_Checkbox\(((?:[^()]|\([^()]*\))*)\)/", $source, $matches);
+		// Tokenised, not pattern-matched: a description like gettext('text (with parens)')
+		// nests deeper than any fixed regex, and a call the sweep cannot see is a page it
+		// cannot guard -- which is how a real offender would slip through.
+		$tokens = token_get_all(php_strip_whitespace($path));
+		$count  = count($tokens);
+		$calls  = [];
 
-		$calls = [];
-		foreach ($matches[1] as $args) {
-			$calls[] = array_map('trim', explode(',', $args));
+		for ($i = 0; $i < $count; $i++) {
+			if (!is_array($tokens[$i]) || $tokens[$i][0] !== T_NEW) {
+				continue;
+			}
+			$j = $i + 1;
+			while ($j < $count && is_array($tokens[$j]) && in_array($tokens[$j][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
+				$j++;
+			}
+			if ($j >= $count || !is_array($tokens[$j]) || $tokens[$j][0] !== T_STRING || $tokens[$j][1] !== 'Form_Checkbox') {
+				continue;
+			}
+			$k = $j + 1;
+			while ($k < $count && is_array($tokens[$k]) && $tokens[$k][0] === T_WHITESPACE) {
+				$k++;
+			}
+			if ($k >= $count || $tokens[$k] !== '(') {
+				continue;
+			}
+
+			$depth = 0;
+			$args  = '';
+			for ($n = $k; $n < $count; $n++) {
+				$text = is_array($tokens[$n]) ? $tokens[$n][1] : $tokens[$n];
+				if ($text === '(' || $text === '[') {
+					$depth++;
+					if ($depth === 1) {
+						continue;
+					}
+				} elseif ($text === ')' || $text === ']') {
+					$depth--;
+					if ($depth === 0) {
+						break;
+					}
+				}
+				$args .= $text;
+			}
+
+			$calls[] = self::splitArgs($args);
 		}
 
 		return $calls;
+	}
+
+	/**
+	 * The splitter is the guard's load-bearing half: miscount the arguments and a page that
+	 * omits its posted value reads as compliant. A comma inside a title is the realistic
+	 * shape ("Enable, then reload"), and a nested call is the other.
+	 */
+	public function testArgumentSplitterIgnoresCommasInsideLiteralsAndCalls(): void
+	{
+		$this->assertSame(
+			["'pfb_x'", "'Enable, then reload'", "'Enabled'", '$checked'],
+			self::splitArgs("'pfb_x', 'Enable, then reload', 'Enabled', \$checked"),
+			'a comma inside a quoted argument must not end that argument'
+		);
+		$this->assertSame(
+			["'pfb_x'", 'gettext(\'A, B\')', "'Enabled'", '$checked', "'on'"],
+			self::splitArgs("'pfb_x', gettext('A, B'), 'Enabled', \$checked, 'on'"),
+			'a comma inside a nested call must not end that argument'
+		);
+		$this->assertSame(
+			["'pfb_x'", '"a \\", b"', "'Enabled'", '$checked'],
+			self::splitArgs("'pfb_x', \"a \\\", b\", 'Enabled', \$checked"),
+			'an escaped quote must not end the literal it sits in'
+		);
 	}
 
 	public function testEveryCheckboxPassesItsPostedValueExplicitly(): void
@@ -72,9 +189,15 @@ final class WwwCheckboxPostedValueTest extends TestCase
 			}
 		}
 
-		// A guard that finds nothing to guard is not a guard: if the sweep stops matching,
-		// this count goes to zero and says so instead of passing quietly.
-		$this->assertGreaterThan(20, $seen, 'the sweep found almost no checkboxes; its pattern has stopped matching');
+		// A guard that silently sees only SOME of the calls is worse than one that sees none,
+		// so the sweep's own count is checked against a second, cruder count of the same
+		// construct. An undercount means a page is unguarded without anything saying so.
+		$expected = 0;
+		foreach ($this->pages() as $page) {
+			$expected += substr_count(php_strip_whitespace($page), 'new Form_Checkbox');
+		}
+		$this->assertGreaterThan(20, $expected, 'the sweep found almost no checkboxes; it has stopped matching');
+		$this->assertSame($expected, $seen, 'the sweep parsed fewer checkbox calls than the tree contains');
 		$this->assertSame(
 			[],
 			$offenders,
