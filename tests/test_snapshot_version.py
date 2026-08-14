@@ -8,13 +8,14 @@ from scripts import release_version as rv
 
 SOURCE_A = "a" * 40
 SOURCE_B = "b" * 64
+SOURCE_MIXED = ("0123456789abcdef" * 3)[:40]
 PORTS_A = "c" * 40
 PORTS_B = "d" * 64
 MATRIX_A = "e" * 64
 MATRIX_B = "f" * 64
 
 
-@pytest.mark.parametrize("source_sha", [SOURCE_A, SOURCE_B])
+@pytest.mark.parametrize("source_sha", [SOURCE_A, SOURCE_B, SOURCE_MIXED])
 def test_nightly_version_accepts_utc_seconds_and_short_source_sha(source_sha: str) -> None:
     version = f"20260804153045.{source_sha[:7]}"
     assert rv.validate_nightly_version(version, source_sha=source_sha) == version
