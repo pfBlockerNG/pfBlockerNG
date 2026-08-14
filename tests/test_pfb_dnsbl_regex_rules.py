@@ -208,6 +208,8 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
         "(?P=g",
         "(?P=g)",
         "(a|b",
+        "(a|(b",
+        "(a|(b))",
         "(?>a)",
         "\\1",
         "([a-z])\\1",
