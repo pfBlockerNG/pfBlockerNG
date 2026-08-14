@@ -29,8 +29,6 @@ under the **Apache License 2.0**.
 > [!NOTE]
 > For day-to-day usage and configuration, start with the
 > [official pfBlockerNG documentation](https://pfblockerng.github.io/).
-> The [Netgate pfBlockerNG guide](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
-> remains a useful baseline for classic package behavior.
 
 ## Features
 
@@ -246,8 +244,6 @@ channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
   [official user documentation](https://pfblockerng.github.io/).
 - **Installing project builds:**
   [package repository](https://pfblockerng.github.io/pkg).
-- **Classic package baseline:**
-  [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html).
 - **Developing, testing, and releasing this package:**
   [CONTRIBUTING.md](CONTRIBUTING.md).
 
