@@ -166,15 +166,16 @@ verdict from it is the verdict the PR will get. On Apple Silicon it is also simp
 faster for the Python suite — 59 s against 201 s, measured back to back — because the
 suite is process-spawn bound and Linux `fork`/`exec` costs far less than macOS.
 
-It runs in the container or not at all: if Docker is missing, the daemon is down, or
-the image cannot be pulled (`PFB_BUILD=1` builds it locally instead), it prints why and
-exits 125 rather than quietly grading against your
+It runs in the container or not at all: if Docker is missing, the daemon is down, the
+image cannot be pulled (`PFB_BUILD=1` builds it locally instead), or your working
+directory resolves outside the tree git names, it prints why and exits 125 rather than
+quietly grading against your
 host toolchain. `PFB_ALLOW_HOST=1` opts back into a host run when that is what you
 want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which happened
 after the fact.
 
 Every suite is green in the image — pytest 5039 passed, PHPUnit 5234 tests with no
-failures, shellspec 1326 examples — so a red there is yours. What differs between the
+failures, shellspec 1330 examples — so a red there is yours. What differs between the
 image and a macOS host is which tests *skip*, not which fail: its locale and `file(1)`
 classify a few inputs differently, one case needs a PHP build whose `php://memory` can
 fail `flock()`, and it runs as your own uid rather than root. Read the skip list, not just

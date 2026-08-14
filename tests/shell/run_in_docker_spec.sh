@@ -135,6 +135,101 @@ STUB_EOF
     The output should not include "${WORK}/alias"
   End
 
+  # ── the SECOND mount has to be physical too ───────────────────────────────── #
+  #
+  # A linked worktree's `.git` is a file pointing at the main repository, so that
+  # directory is mounted separately — and it reaches the wrapper through git, not through
+  # the shell. Modern git answers `--path-format=absolute --git-common-dir` with symlinks
+  # already resolved, which is why the workdir example above cannot cover this: the only
+  # ways a logical path gets in are the pre-2.31 fallback and the `cd`-and-print that
+  # follows it. Both are exercised here with a git that behaves like the old one, because
+  # an unmounted git dir fails exactly like an unmounted work tree — quietly, as "not a
+  # repository" inside a container that has the tree but not its history.
+
+  # A git that predates --path-format=absolute and answers the common dir the way the
+  # caller reached it. COMMON_ANSWER is what `rev-parse --git-common-dir` prints.
+  stub_git() {
+    cat > "${STUB}/git" <<'GIT_EOF'
+#!/bin/sh
+case "$*" in
+	*--is-inside-work-tree*) exit 0 ;;
+	*--show-toplevel*) printf '%s\n' "$STUB_TOPLEVEL" ;;
+	*--path-format=absolute*) exit 1 ;;
+	*--git-common-dir*) printf '%s\n' "$COMMON_ANSWER" ;;
+	*) exit 0 ;;
+esac
+GIT_EOF
+    chmod +x "${STUB}/git"
+
+    mkdir -p "${WORK}/real/sub" "${WORK}/gitdir"
+    ln -s "${WORK}/gitdir" "${WORK}/gitalias"
+    export STUB_TOPLEVEL="$(CDPATH='' cd "${WORK}/real" && pwd -P)"
+    REAL_GITDIR="$(CDPATH='' cd "${WORK}/gitdir" && pwd -P)"
+  }
+
+  wrapper_in_real_tree() {
+    ( cd "${WORK}/real/sub" && PATH="$STUB_PATH" PFB_IMAGE=stub-image "$SCRIPT" "$@" )
+  }
+
+  It 'mounts the git common dir at its resolved path when git names it through a symlink'
+    export STUB_INSPECT_RC=0
+    stub_git
+    export COMMON_ANSWER="${WORK}/gitalias"
+    When call wrapper_in_real_tree true
+    The status should be success
+    The output should include "--volume ${REAL_GITDIR}:${REAL_GITDIR}"
+    The output should not include 'gitalias'
+  End
+
+  It 'refuses when the resolved working directory is not inside the mounted tree'
+    # Resolving both paths is not enough on its own: a case-insensitive filesystem lets a
+    # caller enter the tree by a spelling `pwd -P` preserves and git canonicalizes away
+    # (`/private/TMP/...` under macOS bash), and the two disagree again. The wrapper must
+    # refuse rather than run in whatever that path names inside the container, because an
+    # empty working directory is the silent-green failure this whole change is about.
+    export STUB_INSPECT_RC=0
+    stub_git
+    mkdir -p "${WORK}/elsewhere/.git"
+    export STUB_TOPLEVEL="$(CDPATH='' cd "${WORK}/elsewhere" && pwd -P)"
+    export COMMON_ANSWER="${STUB_TOPLEVEL}/.git"
+    When call wrapper_in_real_tree sh -c "echo ran > '${WORK}/host_ran'"
+    The status should equal 125
+    The path "${WORK}/host_ran" should not be exist
+    The stderr should include 'not inside the mounted tree'
+    The stderr should include 'PFB_ALLOW_HOST=1'
+  End
+
+  It 'ignores an inherited GIT_WORK_TREE when deciding what to mount'
+    # ADR-47: the pre-commit hook exports GIT_* into every child, and the hook routes its
+    # gates through this wrapper. An inherited GIT_WORK_TREE makes git answer with THAT
+    # tree, so the wrapper would mount a directory the caller is not in — and then either
+    # refuse or, before the containment check existed, run in a directory the container
+    # does not have. Scrubbing is what every other git-touching entry point here does.
+    export STUB_INSPECT_RC=0
+    mkdir -p "${WORK}/elsewhere"
+    export GIT_WORK_TREE="${WORK}/elsewhere"
+    When call wrapper true
+    The status should be success
+    The output should include "--volume ${PFB_ROOT}:${PFB_ROOT}"
+    The output should not include 'elsewhere'
+  End
+
+  It 'refuses when git names no work tree at all'
+    # `git rev-parse --is-inside-work-tree` prints "false" and exits 0 from inside a .git
+    # directory, so the check above passes and --show-toplevel then answers with nothing.
+    # An empty root would make the containment check vacuous (every absolute path matches
+    # the empty prefix's `/*`) and mount an empty string, so it has to be its own refusal.
+    export STUB_INSPECT_RC=0
+    stub_git
+    export STUB_TOPLEVEL=''
+    export COMMON_ANSWER="${WORK}/gitdir"
+    When call wrapper_in_real_tree sh -c "echo ran > '${WORK}/host_ran'"
+    The status should equal 125
+    The path "${WORK}/host_ran" should not be exist
+    The stderr should include 'no work tree'
+    The stderr should include 'PFB_ALLOW_HOST=1'
+  End
+
   # ── every way of not getting a container is now a refusal ─────────────────── #
   #
   # 125 and not 1: the exit status has to be distinguishable from the wrapped command's
