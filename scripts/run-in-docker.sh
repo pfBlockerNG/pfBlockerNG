@@ -100,6 +100,20 @@ root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 [ -n "$root" ] ||
 	fallback "git names no work tree here (inside a .git directory?), so there is nothing to mount" "$@"
 
+# The working directory is resolved the way git resolves the mount, and then CHECKED
+# against it. Resolving is what fixes the common case — on macOS /tmp is a symlink to
+# /private/tmp, so a checkout entered through /tmp used to be mounted at /private/tmp and
+# then run in an empty /tmp directory that exists in the image, where a suite collects
+# nothing and reports success. The check is for the cases resolving cannot reach: on a
+# case-insensitive filesystem `/private/TMP/...` survives `pwd -P` under bash while git
+# canonicalises it away, and the two disagree again. Refusing is the only safe answer,
+# because the failure it prevents is silent (issue #2362).
+workdir="$(pwd -P)"
+case "$workdir" in
+"$root" | "$root"/*) ;;
+*) fallback "the working directory ${workdir} is not inside the mounted tree ${root}, so the container would start somewhere else entirely" "$@" ;;
+esac
+
 # `--git-common-dir` is the MAIN repo's .git even from a linked worktree, which is
 # exactly the path the worktree's .git file points at.
 #
@@ -208,20 +222,6 @@ git_mount=''
 case "$common" in
 "${root}"/*) ;;
 *) git_mount="$common" ;;
-esac
-
-# The working directory is resolved the way git resolves the mount, and then CHECKED
-# against it. Resolving is what fixes the common case — on macOS /tmp is a symlink to
-# /private/tmp, so a checkout entered through /tmp used to be mounted at /private/tmp and
-# then run in an empty /tmp directory that exists in the image, where a suite collects
-# nothing and reports success. The check is for the cases resolving cannot reach: on a
-# case-insensitive filesystem `/private/TMP/...` survives `pwd -P` under bash while git
-# canonicalises it away, and the two disagree again. Refusing is the only safe answer,
-# because the failure it prevents is silent (issue #2362).
-workdir="$(pwd -P)"
-case "$workdir" in
-"$root" | "$root"/*) ;;
-*) fallback "the working directory ${workdir} is not inside the mounted tree ${root}, so the container would start somewhere else entirely" "$@" ;;
 esac
 
 # A TTY only when there is one to attach, so this stays usable in a pipe or a script.
