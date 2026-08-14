@@ -78,18 +78,41 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # divergences); iprange is the FireHOL set-subtraction tool ADR-53 P3 exercises; zstd is
 # actions/cache's compressor; sudo keeps the workflow steps that call it working
 # unchanged. libcurl4/libelf1/libdw1 are kcov's runtime libs, the rest are the shared
-# objects the relocated CPython links against. Three are load-bearing in non-obvious ways:
+# objects the relocated CPython links against. Four are load-bearing in non-obvious ways:
 # `patch` runs in scripts/build-webassets.sh, `file` backs the ADR-45 MIME detection that
-# pfb_download() shells out to, and `netbase` supplies /etc/services, without which
-# getservbyname() returns false and the is_port() parity tests fail. gnupg is deliberately
+# pfb_download() shells out to, `libarchive-tools` supplies the bsdtar the next step puts
+# at /usr/bin/tar, and `netbase` supplies /etc/services, without which getservbyname()
+# returns false and the is_port() parity tests fail. gnupg is deliberately
 # absent: apt verifies the sury archive with its own gpgv against a keyring file.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      bzip2 ca-certificates curl file git iprange jq less libbz2-1.0 libcurl4 libdw1 \
+      bzip2 ca-certificates curl file git iprange jq less libarchive-tools libbz2-1.0 libcurl4 libdw1 \
       libelf1 libexpat1 libffi8 libgdbm-compat4t64 libgdbm6t64 liblzma5 libncursesw6 \
       libreadline8t64 libsqlite3-0 libssl3t64 netbase patch procps rsync sqlite3 sudo tar time unzip \
       locales uuid-runtime xz-utils zlib1g zstd \
  && rm -rf /var/lib/apt/lists/*
+
+# /usr/bin/tar is bsdtar here, because that is what it IS on FreeBSD (libarchive), and
+# pfBlockerNG shells out to that absolute path — the ADR-45 archive probe, the GeoIP and
+# TOP1M extraction, the XLSX reader. GNU tar cannot read a ZIP at all, so with Debian's
+# tar at that path six PHPUnit archive cases had no environment that could run them and
+# skipped in CI as silently as they did locally (issue #2356).
+#
+# GNU tar moves to /usr/sbin/tar rather than going away, and the location is load-bearing
+# in two ways. dpkg-deb runs `tar --warning=no-timestamp`, a GNU-only option bsdtar
+# rejects, and it searches a PATH of its own that begins with /usr/sbin — so every
+# apt-get/dpkg (this file's later layers, the whole ci-runner-vm image, anything a job
+# installs) keeps finding GNU tar. /usr/sbin also precedes /usr/bin in the image's own
+# PATH, so a bare `tar` still means GNU tar for everything that expects it: actions/cache
+# in the VM jobs, the release tarball step. Only the absolute path — the one the appliance
+# defines and the code under test hardcodes — changes hands.
+#
+# --no-rename + an explicit mv, not --rename: dpkg-divert refuses to rename a file out of
+# an Essential package without complaint, and the diversion is what makes a future `tar`
+# upgrade install to /usr/sbin/tar instead of overwriting the bsdtar symlink.
+RUN dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar \
+ && mv /usr/bin/tar /usr/sbin/tar \
+ && ln -s bsdtar /usr/bin/tar
 
 # Keep the process-wide default C.UTF-8, but provide the German UTF-8 locale for
 # collation/decimal-separator contracts that explicitly select it.
@@ -271,6 +294,18 @@ RUN set -eu; \
     printf 'SELECT 1;' | sqlite3 :memory: >/dev/null; \
     /usr/bin/time -f '%e' true 2>/dev/null; \
     file --version; \
+    /usr/bin/tar --version | grep -q '^bsdtar'; \
+    tar --version | grep -q 'GNU tar'; \
+    python3 -c 'import zipfile; zipfile.ZipFile("/tmp/probe.zip", "w").writestr("a.txt", "x")'; \
+    /usr/bin/tar -tf /tmp/probe.zip | grep -qx a.txt; \
+    rm -f /tmp/probe.zip; \
+    mkdir -p /tmp/probe-pkg/DEBIAN; \
+    printf 'Package: probe\nVersion: 1\nArchitecture: all\nMaintainer: pfBlockerNG <ci@invalid>\nDescription: dpkg still works after the tar swap\n' \
+      > /tmp/probe-pkg/DEBIAN/control; \
+    dpkg-deb --build /tmp/probe-pkg /tmp/probe.deb >/dev/null; \
+    dpkg -i /tmp/probe.deb >/dev/null; \
+    dpkg -r probe >/dev/null; \
+    rm -rf /tmp/probe-pkg /tmp/probe.deb; \
     php -r 'new SQLite3(":memory:");'; \
     php -r 'getservbyname("domain", "udp") === 53 or exit(1);'; \
     LC_ALL=de_DE.UTF-8 locale charmap | grep -qx UTF-8; \

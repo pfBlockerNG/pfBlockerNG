@@ -101,7 +101,7 @@ jobs:
     name: Resolve FreeBSD/PHP for CE ${{ inputs.pfsense_ce_version }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:8
+      image: ghcr.io/pfblockerng/ci-runner:9
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -162,7 +162,7 @@ jobs:
     needs: resolve-version
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:8
+      image: ghcr.io/pfblockerng/ci-runner-vm:9
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -284,7 +284,7 @@ jobs:
     needs: [publish-image, build-pkg]
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:8
+      image: ghcr.io/pfblockerng/ci-runner-vm:9
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

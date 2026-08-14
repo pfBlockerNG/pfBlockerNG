@@ -312,6 +312,43 @@ def test_php_selection_is_available_as_alternatives() -> None:
     )
 
 
+def test_usr_bin_tar_is_bsdtar_as_it_is_on_the_appliance() -> None:
+    """pfBlockerNG shells out to the ABSOLUTE path /usr/bin/tar, which on FreeBSD is
+    bsdtar (libarchive) and reads ZIP. Debian's tar there is GNU tar, which cannot read
+    ZIP at all, so six PHPUnit archive cases skipped in CI as well as locally until the
+    image supplied bsdtar at that path (issue #2356).
+
+    Anchored to the RUN blocks rather than whole-file text: the Dockerfile's rationale
+    comments name both tools, so a whole-file substring would stay green with the
+    packages and the divert dropped."""
+    blocks = _run_blocks(_read(BASE_DOCKERFILE))
+    installs = " ".join(b for b in blocks if b.startswith("RUN apt-get"))
+    assert " libarchive-tools " in f"{installs} ", "no RUN apt-get block installs libarchive-tools (the bsdtar package)"
+
+    diverts = [b for b in blocks if "dpkg-divert" in b]
+    assert diverts, "no RUN block diverts the distribution tar out of /usr/bin/tar"
+    divert = diverts[0]
+    assert "--divert /usr/sbin/tar --add /usr/bin/tar" in divert, (
+        f"the diversion must send a future `tar` upgrade to /usr/sbin/tar:\n{divert}"
+    )
+    assert "mv /usr/bin/tar /usr/sbin/tar" in divert, (
+        "GNU tar must remain at /usr/sbin/tar: dpkg-deb runs `tar --warning=no-timestamp`, "
+        f"which bsdtar rejects, and searches /usr/sbin first:\n{divert}"
+    )
+    assert "ln -s bsdtar /usr/bin/tar" in divert, f"nothing puts bsdtar at /usr/bin/tar after the divert:\n{divert}"
+
+    checks = " ".join(b for b in _expanded_blocks(_read(BASE_DOCKERFILE)) if b.startswith("RUN set -eu"))
+    assert "/usr/bin/tar -tf /tmp/probe.zip" in checks, (
+        "the image self-check must PROVE /usr/bin/tar reads a ZIP; a --version probe "
+        "cannot tell bsdtar-with-zip-support from any other libarchive build"
+    )
+    assert "dpkg -i /tmp/probe.deb" in checks, (
+        "the image self-check must PROVE dpkg still unpacks after the tar swap — pointing "
+        "/usr/bin/tar at bsdtar with no GNU tar left where dpkg looks breaks every "
+        "apt-get in this file's later layers and in the whole ci-runner-vm image"
+    )
+
+
 def test_vm_image_is_built_on_the_base_image_at_the_same_version() -> None:
     """Two independently-pinned toolchains would let the VM legs grade under a different
     ShellCheck/PHP than the non-VM legs."""
