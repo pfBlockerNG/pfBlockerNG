@@ -1,11 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Red canary for scripts/check_skip_allowlist.py (issue #2359, testing.md's red-canary
-     rule): one skipped testcase whose id can never legitimately appear on
-     tests/skip-allowlist.txt. classname/name are suite neutral, so the resulting
-     id (SUITE:SkipAllowlistCanary::test_this_id_is_never_on_any_allowlist) is
-     valid input regardless of which suite value the CI step passes. Both skip element
-     shapes appear, because shellspec writes <skip> where pytest and PHPUnit write
-     <skipped>, and the canary runs for every suite. -->
+<!-- One skipped testcase whose id can never legitimately appear on
+     tests/skip-allowlist.txt, so feeding this report to the checker must fail.
+     classname/name are suite neutral, so the id is valid input whichever suite value
+     the CI step passes, and both skip element shapes appear because shellspec writes <skip>
+     where pytest and PHPUnit write <skipped>. -->
 <testsuites>
   <testsuite name="skip-allowlist-canary" tests="2" failures="0" skipped="2">
     <testcase classname="SkipAllowlistCanary" name="test_this_id_is_never_on_any_allowlist" time="0">

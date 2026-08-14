@@ -14,19 +14,17 @@
 # skips than CI (any chmod/permission-guarded case that denies only under a non-root,
 # non-1001 uid). Only an id observed in a report but absent from this file fails the gate.
 #
-# Recorded 2026-08-14 from a real run of each suite inside ghcr.io/pfblockerng/ci-runner
-# (.agents/policy/testing.md "Running tests"); PHPUnit enumerated on both PHP 8.3 and PHP 8.5.
 # An entry is "<id>  # <reason>" with TWO OR MORE spaces before the '#', and the split takes
 # the RIGHTMOST one, so ids keep every '#' they carry -- a pytest parametrised id renders
 # its parameter verbatim, even when that parameter contains the separator shape itself, and
 # PHPUnit names an unnamed data-set case `testFoo with data set #0`. A single space before
 # the '#' is a parse error, not a guess.
-# PHPUnit writes a bare <skipped/> with no message, so the gate can name an unlisted
-# PHPUnit skip but never its reason -- read the suite output for that.
-# Copy the id from the report the
-# suite wrote: a pytest parametrised id can be index-derived (channel_args1), and the
-# checker replaces XML-illegal control bytes with '?' before parsing, so an id built
-# from a description carrying one is recorded in that replaced form.
+#
+# Copy an id from the report the suite wrote, never from its source: a pytest parametrised
+# id can be index-derived (channel_args1), and the checker replaces XML-illegal control
+# bytes with '?' before parsing, so an id built from a description carrying one is recorded
+# in that replaced form. PHPUnit writes a bare <skipped/> with no message, so the gate can
+# name an unlisted PHPUnit skip but never its reason -- read the suite output for that.
 
 # PHPUnit -- union of PHP 8.3 and PHP 8.5 (issue #2356's four remaining skips).
 phpunit:OctetStreamRecoveryWiringTest::test_octet_stream_archive_recovered_to_zip  # host file(1) classification (PHP 8.3 and 8.5)
