@@ -2768,6 +2768,37 @@ def test_software_panel_channel_falls_back_to_the_package_name_off_repo(
     )
 
 
+def test_software_check_checkbox_posts_a_token_the_save_path_accepts(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The "New version check" box must POST a token its own save path accepts (issue #2367).
+
+    pfSense's Form_Checkbox posts ``yes`` unless the page passes a value, and the save path
+    filters with PFB_FILTER_ON_OFF, which takes only ``on`` and ``''``. Built without that
+    argument the box renders fine and saves to disabled every time, including when ticked,
+    with no UI path back — so the rendered VALUE is the thing worth pinning, not the presence
+    of the control.
+
+    Scenario:
+      Given the override sentinel set to 'on' (so the page renders at all),
+      When the Software page is GET,
+      Then the pfb_software_check control renders with value="on".
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"Software page render oracle failed: {result.detail}"
+        body = resp.text
+
+    control = re.search(r'<input[^>]*\bname="pfb_software_check"[^>]*>', body)
+    assert control is not None, "the Software page must render the pfb_software_check control"
+    value = re.search(r'\bvalue="([^"]*)"', control.group(0))
+    assert value is not None and value.group(1) == "on", (
+        f"pfb_software_check renders {control.group(0)!r}; it must post 'on', the only enabled "
+        "token PFB_FILTER_ON_OFF accepts (pfSense's Form_Checkbox default 'yes' is rejected)"
+    )
+
+
 def test_software_actions_link_to_package_manager(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:

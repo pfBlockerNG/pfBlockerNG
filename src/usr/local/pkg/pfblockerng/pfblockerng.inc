@@ -4921,10 +4921,17 @@ function pfb_channel_for_install(?string $repo, ?string $pkgname): ?string {
  * re-announce an already-notified version and blank the last-known latest.
  */
 function pfb_software_cache_matches_install(array $cache, string $pkgname, string $repo): bool {
-	if ((string) ($cache['pkgname'] ?? '') !== $pkgname) {
+	// The cache is a JSON file on disk, so a non-scalar can reach either half; casting one
+	// to string emits "Array to string conversion" on every call before returning the same
+	// FALSE (issue #2367). Neither can identify an install, so both are refused here.
+	$cached_name = $cache['pkgname'] ?? '';
+	if (!is_scalar($cached_name) || (string) $cached_name !== $pkgname) {
 		return FALSE;
 	}
-	return !array_key_exists('repo', $cache) || (string) $cache['repo'] === $repo;
+	if (!array_key_exists('repo', $cache)) {
+		return TRUE;
+	}
+	return is_scalar($cache['repo']) && (string) $cache['repo'] === $repo;
 }
 
 /*
