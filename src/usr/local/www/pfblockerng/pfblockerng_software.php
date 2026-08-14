@@ -184,7 +184,8 @@ $section->addInput(new Form_Checkbox(
 	'pfb_software_check',
 	'New version check',
 	'Enabled',
-	$pfb_sw_check
+	$pfb_sw_check,
+	'on'
 ))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
 
