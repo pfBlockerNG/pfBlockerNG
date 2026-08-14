@@ -12,7 +12,6 @@ from tests.smoke import helpers
 
 def test_wait_boot_complete_waits_for_boot_metadata_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     sentinel_statuses = iter([1, 0])
-    monotonic_values = iter([0.0, 0.0, 1.0, 2.0, 3.0])
     calls: list[tuple[str, ...]] = []
 
     class FakeVM:
@@ -28,7 +27,7 @@ def test_wait_boot_complete_waits_for_boot_metadata_sentinel(monkeypatch: pytest
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "<<BOOT>>0<<END>>", ""),
     )
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
-    monkeypatch.setattr(helpers.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(helpers.time, "monotonic", lambda: 0.0)
 
     helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=3, delay=0)
 
@@ -36,6 +35,33 @@ def test_wait_boot_complete_waits_for_boot_metadata_sentinel(monkeypatch: pytest
         ("/bin/test", "-f", "/var/run/pfSense_version.rc"),
         ("/bin/test", "-f", "/var/run/pfSense_version.rc"),
     ]
+
+
+def test_wait_boot_complete_keeps_per_probe_cap_for_long_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    probe_timeouts: list[float] = []
+    metadata_timeouts: list[float] = []
+
+    class FakeVM:
+        def ssh(self, *_remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            metadata_timeouts.append(timeout)
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    def fake_php_eval(
+        _vm: helpers.SmokeVM,
+        _snippet: str,
+        *,
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        probe_timeouts.append(timeout)
+        return subprocess.CompletedProcess([], 0, "<<BOOT>>0<<END>>", "")
+
+    monkeypatch.setattr(helpers, "php_eval", fake_php_eval)
+    monkeypatch.setattr(helpers.time, "monotonic", lambda: 0.0)
+
+    helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=31)
+
+    assert probe_timeouts == [30.0]
+    assert metadata_timeouts == [30.0]
 
 
 def test_wait_boot_complete_plain_reboot_needs_only_platform_boot_flag(
