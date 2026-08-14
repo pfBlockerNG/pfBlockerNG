@@ -234,12 +234,11 @@ a half-applied Policy generation.
 - Runtime events record action, Policy ID/name snapshot or Baseline, matched
   origin/Group/Feed/rule, response reason, recipient class, and static/active
   generations. Secrets and raw credentials are forbidden.
-- Durable notices are immutable event records with a stable event ID, code,
-  severity, subject, and redacted details. Producers may
-  deduplicate an unchanged event but never resolve, retract, remove, or rewrite
-  one after emission. Live generation, pending generation, last acknowledgement,
-  cache-flush status, alias expansion, and recovery are computed status rather
-  than notices.
+- Notification producers keep their own domain state and delivery cursor when
+  needed to suppress unchanged repeats. Emission is a one-way handoff: producers
+  never query, mutate, dismiss, or otherwise use the notification as storage.
+  Live generation, pending generation, last acknowledgement, cache-flush status,
+  alias expansion, and recovery remain producer-owned status.
 
 ### 8. Compatibility and release boundary
 

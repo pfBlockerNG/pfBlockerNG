@@ -56,7 +56,7 @@ unchanged as the rationale record.
   the active provider's normalized country outputs. It is not provider data or
   a truth-artifact continent.
 - **Output generation:** the mutually consistent `geoip.txt`, country files,
-  continent files, generated pages, aliases, and event-deduplication ledger
+  continent files, generated pages, aliases, and GeoIP availability-state ledger
   produced from one truth artifact and one complete provider input set.
 
 ## Decisions
@@ -329,10 +329,11 @@ default-enabled `PfbToggle`. The UI label is **GeoIP change notifications**.
 Help text states that it reports significant provider changes which may affect
 firewall-rule reliability or effectiveness.
 
-An atomically written runtime ledger records the last successfully published
-per-country/per-family empty/nonempty state and the current unsupported-provider
-states. After a successful publication, compare old and new ledgers and emit
-persistent `file_notice` entries only for these edges:
+An atomically written, producer-owned runtime ledger records the last
+successfully published per-country/per-family empty/nonempty state and the
+current unsupported-provider states. This GeoIP state, not any notification,
+suppresses unchanged repeats. After a successful publication, compare old and
+new ledgers and call `file_notice` only for these edges:
 
 - selected country/family nonzero to zero;
 - unsupported/unknown provider state first appears; and
@@ -340,12 +341,12 @@ persistent `file_notice` entries only for these edges:
 
 Current country availability and unsupported/unknown provider conditions are
 exposed separately as live GeoIP status. Recovery updates that status but emits
-no notice and never retracts, resolves, removes, or rewrites an existing notice.
-Notice dismissal or deletion is user-owned and does not affect deduplication.
-No notice fires for reboot or unchanged zero-to-zero updates. Disabling the
-setting suppresses future nonfatal notices only. Fatal truth, input, generation,
-and publication failures remain visible. The ledger advances only with the
-output generation it describes.
+no notification. Notification emission is a one-way handoff; GeoIP never queries,
+mutates, dismisses, or otherwise uses the notification as storage. No notification
+fires for reboot or unchanged zero-to-zero updates. Disabling the setting suppresses
+future nonfatal notifications only. Fatal truth, input, generation, and publication
+failures remain visible. The ledger advances only with the output generation it
+describes.
 
 ### Publication transaction
 
@@ -353,7 +354,7 @@ All output is built beneath a private staging root. Before publication the
 pipeline validates file inventory, byte oracles, country and fixed-system-group
 membership, every country/bucket family file, both `Top_Spammers` info files,
 continent totals, page parseability, coverage complements, `geoip.txt`, and the
-notice ledger. No live target is touched before all checks pass.
+GeoIP availability-state ledger. No live target is touched before all checks pass.
 
 Publication runs under the existing GeoIP update exclusion mechanism, snapshots
 every replaced target, replaces targets with same-filesystem `rename()`, and
@@ -425,7 +426,7 @@ also unchanged.
 | Configuration | unconfigured/configured country; provider-present/absent; legacy `6255147`/`6255148` read and canonical save; all eight `UNK_*`; enabled/disabled notification setting |
 | World complement | explicit unknown row; public uncovered space; provider-covered space; each private/reserved/bogon class; malformed/missing/empty exclusion file; IPv4 `iprange` error; IPv6 subtraction error |
 | Publication | stage write failure; validation failure; each rename position fails; rollback failure is fatal and loud; no caller proceeds on an incomplete generation |
-| Notifications/status | nonzero→zero entry event; zero→nonzero status-only recovery; zero→zero; unknown appears entry event/resolves status-only/unchanged; reboot; dismissed or deleted notice; save with empty selection; setting disabled; fatal errors always visible |
+| Notifications/status | nonzero→zero notification; zero→nonzero status-only recovery; zero→zero; unknown appears notification/resolves status-only/unchanged; reboot; notification transport state does not affect producer decisions; save with empty selection; setting disabled; fatal errors always visible |
 | Output | exact `geoip.txt`, per-selection, continent, represented/proxy, generated-page, alias, and log bytes; only Approved deltas excluded |
 
 Every implementation packet enumerates the subset it changes across both

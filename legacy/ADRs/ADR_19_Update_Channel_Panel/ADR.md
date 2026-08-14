@@ -470,3 +470,10 @@ runtime and package-name detection remain unchanged.
 
 This amendment does not reinstate package downgrade. It only records the future client boundary
 required by the release model; #2140 changes no PHP, cron, repository configuration, or UI.
+
+## Amendment — 2026-08-14: notification handoff boundary (issue #1630)
+
+`last_notified` remains producer-owned software-update state used only to suppress repeated
+sends. `file_notice()` is a one-way handoff: the producer never queries, mutates, dismisses, or
+otherwise uses the emitted pfSense notification as storage. Recipient and transport lifecycle
+state is outside this ADR's software-update state model.

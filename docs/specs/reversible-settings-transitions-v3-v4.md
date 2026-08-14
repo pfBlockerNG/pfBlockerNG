@@ -39,7 +39,7 @@ forward-transformation and runtime-reconstruction mechanisms.
   other generated/runtime state.
 - Package lifecycle scripts and transition helpers are noninteractive. They never prompt,
   read, or wait on stdin. Missing, corrupt, incompatible, or contradictory identity fails
-  closed with Package Manager output, logs, and a persistent pfSense notice.
+  closed with Package Manager output, logs, and a pfSense notification.
 - A matching-family pfSense restore-driven reinstall preserves active settings and runs
   normal idempotent migrations/resync without confirmation.
 - Exact environment value `PFB_BYPASS_UPGRADE_VERSION_CHECKS=1` bypasses only legacy source
@@ -164,12 +164,12 @@ It is durable before `PRE-INSTALL` or the legacy runner crosses its mutation bou
 - Entering a family records the final post-migration settings hash as its activation
   baseline.
 - Leaving a family whose live hash changed creates a new verified source snapshot, restores
-  the target head without merging, and emits a persistent event keyed to the exact source
-  and target snapshot hashes.
-- Producer deduplication suppresses only that exact hash pair and survives reboot. A later
-  pair is a new event. Recovery updates live transition status only; it never retracts,
-  resolves, removes, or rewrites a transition-failure or divergence notice. Notice read,
-  dismissal, and deletion remain user-owned and do not change transition state.
+  the target head without merging, and sends a notification. Producer-owned transition
+  state records the exact source and target snapshot hashes.
+- That transition state suppresses only the exact hash pair and survives reboot. A later
+  pair sends a new notification. Recovery updates live transition status only and sends no
+  recovery notification. Emission is a one-way handoff; transition code never queries,
+  mutates, dismisses, or otherwise uses the notification as storage.
 - Keep all distinct snapshots for the active family and the three most recent prior schema
   families. Prune a whole oldest family only after the new family's settings,
   migrations, and resync have completed successfully.
