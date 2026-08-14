@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/ProcessRunner.php';
+
 /**
  * Issue #1657 pinned url_compare() in pfblockerng_feeds.php after it declared
  * four optional parameters BEFORE the required $a_key, which PHP 8 deprecates
@@ -95,7 +97,7 @@ final class SrcPhpDeprecationLintTest extends TestCase
 			2 => ['pipe', 'w'],
 		];
 
-		$proc = proc_open($cmd, $descriptors, $pipes);
+		$proc = proc_open($cmd, $descriptors, $pipes, null, pfb_test_scrubbed_git_env());
 		if (!is_resource($proc)) {
 			throw new RuntimeException('test bootstrap: failed to spawn `' . implode(' ', $cmd) . '`');
 		}
