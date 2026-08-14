@@ -62,9 +62,11 @@ _XML_ILLEGAL_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 # renders its parameter verbatim (test_x[a#b], and even test_x[see # this]), and PHPUnit
 # names an unnamed data-set case `testFoo with data set #0`. Splitting on any single '#',
 # spaced or not, truncates one of those into an id no run produces, and the skip it names
-# could then never be recorded. Two spaces is what every entry in the file already uses and
-# what no suite puts inside an id.
-_ENTRY = re.compile(r"^(?P<id>\S.*?)\s{2,}#\s*(?P<reason>\S.*)$")
+# could then never be recorded. Two spaces is what every entry in the file already uses.
+# The id group is GREEDY, so the split takes the RIGHTMOST separator: a parameter value can
+# contain the separator shape itself, and the id is the suite's to generate while the reason
+# is ours to write.
+_ENTRY = re.compile(r"^(?P<id>\S.*)\s{2,}#\s*(?P<reason>\S.*)$")
 
 
 # pytest and PHPUnit write <skipped>; shellspec 0.28.1 writes <skip> (probed against its

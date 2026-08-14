@@ -287,6 +287,15 @@ def test_allowlist_id_may_contain_a_spaced_hash_from_a_parameter(tmp_path: Path)
     assert csa.parse_allowlist(allow) == {"pytest:C::test_x[see # this]": "parametrised skip"}
 
 
+def test_allowlist_id_may_contain_the_separator_shape_itself(tmp_path: Path) -> None:
+    """A pytest parameter value can contain two spaces and a '#' — the separator shape —
+    and pytest renders it into the id verbatim. The split therefore takes the RIGHTMOST
+    separator: the id is the suite's to generate and cannot be constrained, while the
+    reason is ours to write."""
+    allow = _write(tmp_path, "allow.txt", "pytest:C::test_x[foo  # bar]  # parametrised skip\n")
+    assert csa.parse_allowlist(allow) == {"pytest:C::test_x[foo  # bar]": "parametrised skip"}
+
+
 def test_allowlist_single_space_before_the_hash_is_a_parse_error(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
