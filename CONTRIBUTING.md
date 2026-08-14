@@ -151,7 +151,7 @@ plus behavioural doubles for the pfSense runtime functions) — see
 [`tests/php/README.md`](tests/php/README.md). Deep pfSense-runtime integration
 stays the live-VM smoke's job (ADR-04).
 
-To run any of these inside the same image CI grades with, prefix the command with
+Run any of these inside the same image CI grades with by prefixing the command with
 `scripts/run-in-docker.sh`:
 
 ```sh
@@ -160,17 +160,26 @@ scripts/run-in-docker.sh vendor/bin/phpunit
 scripts/run-in-docker.sh                       # no command: an interactive shell
 ```
 
-Worth doing when a failure reproduces only in CI, or when your local Python/PHP/Node
-differs from the matrix. On Apple Silicon it is also simply faster for the Python
-suite — 59 s against 201 s, measured back to back — because the suite is
-process-spawn bound and Linux `fork`/`exec` costs far less than macOS.
+This is the recommended way to run the suites, not just a fallback for a failure that
+reproduces only in CI: every job in `test.yml` executes inside this image, so a local
+verdict from it is the verdict the PR will get. On Apple Silicon it is also simply
+faster for the Python suite — 59 s against 201 s, measured back to back — because the
+suite is process-spawn bound and Linux `fork`/`exec` costs far less than macOS.
 
-It never refuses to run: if Docker is missing, the daemon is down, or the image
-cannot be pulled (the packages are private for now — `PFB_BUILD=1` builds it locally
-instead), it prints why and runs the command on the host. `PFB_RUNNER` is set to
-`container` or `host` so you can tell which happened after the fact, and a few tests
-legitimately differ between the two: the process-group signal cases and one mtime
-race fail under Linux containers, and platform-gated cases skip differently.
+It runs in the container or not at all: if Docker is missing, the daemon is down, or
+the image cannot be pulled (the packages are private for now — `PFB_BUILD=1` builds it
+locally instead), it prints why and exits 125 rather than quietly grading against your
+host toolchain. `PFB_ALLOW_HOST=1` opts back into a host run when that is what you
+want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which happened
+after the fact. A few tests legitimately differ between the two: the process-group
+signal cases and one mtime race fail under Linux containers, and platform-gated cases
+skip differently.
+
+`scripts/agent/run-gates.sh` routes every gate it runs through this wrapper, and the
+`pre-commit` hook routes its `php -l` and PHPCS gates the same way — those two need a
+PHP matching the matrix, which a host PHP is not. The hook's other linters (ruff,
+ShellCheck, markdownlint, the Python policy checks) still run natively, so committing
+does not require Docker unless the commit stages PHP.
 
 ### Shell tests (shellspec)
 

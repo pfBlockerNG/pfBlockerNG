@@ -25,17 +25,26 @@
 # Platform-gated cases may skip differently from a host run. CI grades on Linux,
 # so the container is the closer answer where they disagree.
 #
-# IT ALWAYS RUNS THE COMMAND. Every reason the container cannot be reached — docker
-# missing, daemon down, image absent and unpullable, a local build that fails, not even a
-# git work tree — prints one line naming that reason and then runs on the host instead.
-# The container is an optimisation, and a wrapper that refuses to run is worse than no
-# wrapper; naming the reason is what keeps a host run from being mistaken for a graded one.
+# IT RUNS IN THE CONTAINER OR NOT AT ALL. Every reason the container cannot be reached —
+# docker missing, daemon down, image absent and unpullable, a local build that fails, not
+# even a git work tree — prints one line naming that reason and exits 125 (docker's own
+# "could not run the container" status, so a caller can tell it apart from the wrapped
+# command going red).
+#
+# It used to degrade to a host run instead, on the reasoning that a wrapper which refuses
+# to run is worse than no wrapper. That holds for a convenience and fails for a gate: the
+# gates and the git hooks route through here now (issue #2350), and a run graded against
+# the host toolchain is not the run CI performs — every job in test.yml executes inside
+# this exact image. PFB_ALLOW_HOST=1 restores the old behaviour where that trade is still
+# the right one.
 #
 # Env:
 #   PFB_IMAGE   full image ref (default: ghcr.io/pfblockerng/ci-runner:<VERSION>)
 #   PFB_VM      non-empty -> use the ci-runner-vm image (qemu, oras, Playwright)
 #   PFB_BUILD   non-empty -> build the image locally instead of pulling (needs no
 #               credentials, which is the point while the packages are private)
+#   PFB_ALLOW_HOST  non-empty -> run on the host when no container can be reached,
+#               instead of refusing (the pre-#2350 behaviour; still says why)
 #   PFB_DOCKER_ARGS  extra args for `docker run` (e.g. "-e FOO=bar --network none")
 
 set -eu
@@ -46,22 +55,27 @@ if [ "$#" -eq 0 ]; then
 	set -- sh
 fi
 
-# The container is an optimisation, not a requirement: the command runs either way. Every
-# reason we cannot reach it is a fallback rather than an error, because refusing to run at
-# all would make this wrapper worse than typing the command directly — but each says WHY,
-# so a run that quietly graded on the host toolchain is never mistaken for a container one.
-# PFB_RUNNER travels with the process because the stderr line does not survive the ways
-# this gets used: `2>/dev/null` deletes it, a captured `$(...)` never shows it, and in a
-# long test run it scrolls past thousands of lines. `exec` rules out a closing summary, so
-# the fact has to be carried in-band — anything downstream, or `env | grep PFB_RUNNER`,
-# can then tell a host run from a graded one without having watched the scrollback.
+# Every reason we cannot reach a container ends here, and every one of them says WHY —
+# a refusal that does not name its cause just moves the debugging somewhere worse. The
+# override is named in the same breath, so the message is never a dead end.
+#
+# Under PFB_ALLOW_HOST the old degrade-to-host path runs instead. PFB_RUNNER travels with
+# the process there because the stderr line does not survive the ways this gets used:
+# `2>/dev/null` deletes it, a captured `$(...)` never shows it, and in a long test run it
+# scrolls past thousands of lines. `exec` rules out a closing summary, so the fact has to
+# be carried in-band — anything downstream, or `env | grep PFB_RUNNER`, can then tell a
+# host run from a graded one without having watched the scrollback.
 fallback() {
 	reason="$1"
 	shift
-	echo "run-in-docker: ${reason} — running on the host instead" >&2
-	PFB_RUNNER=host
-	export PFB_RUNNER
-	exec "$@"
+	if [ -n "${PFB_ALLOW_HOST:-}" ]; then
+		echo "run-in-docker: ${reason} — running on the host instead (PFB_ALLOW_HOST)" >&2
+		PFB_RUNNER=host
+		export PFB_RUNNER
+		exec "$@"
+	fi
+	echo "run-in-docker: ${reason} — refusing to run on the host (set PFB_ALLOW_HOST=1 to override)" >&2
+	exit 125
 }
 
 command -v docker >/dev/null 2>&1 ||
