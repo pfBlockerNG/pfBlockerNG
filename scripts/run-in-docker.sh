@@ -78,6 +78,14 @@ fallback() {
 	exit 125
 }
 
+# ADR-47: the pre-commit hook exports GIT_DIR/GIT_INDEX_FILE/GIT_WORK_TREE into every
+# child, and the hook runs its gates through this wrapper. Left in place they would answer
+# for the questions below — which tree to mount, which common dir goes with it — with the
+# hook's context instead of the caller's. Every other git-touching entry point here scrubs
+# for the same reason; the wrapper's own git reads are no different.
+. "$(CDPATH='' cd "$(dirname "$0")" && pwd -P)/lib/git-env-scrub.sh"
+pfb_scrub_git_env
+
 command -v docker >/dev/null 2>&1 ||
 	fallback "docker is not installed or not on PATH" "$@"
 docker info >/dev/null 2>&1 ||
@@ -85,7 +93,12 @@ docker info >/dev/null 2>&1 ||
 
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 ||
 	fallback "not inside a git work tree, so there is nothing to mount" "$@"
-root="$(git rev-parse --show-toplevel)"
+# `--is-inside-work-tree` prints "false" and exits 0 from inside a .git directory, so this
+# can come back empty with the check above satisfied. An empty root would mount an empty
+# string and make the containment check below vacuous, every absolute path being under it.
+root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+[ -n "$root" ] ||
+	fallback "git names no work tree here (inside a .git directory?), so there is nothing to mount" "$@"
 
 # `--git-common-dir` is the MAIN repo's .git even from a linked worktree, which is
 # exactly the path the worktree's .git file points at.
@@ -99,7 +112,7 @@ if [ -z "$common" ]; then
 	common="$(git rev-parse --git-common-dir)"
 	case "$common" in
 	/*) ;;
-	*) common="$(pwd -P)/${common}" ;;
+	*) common="$(pwd)/${common}" ;;
 	esac
 fi
 common="$(CDPATH='' cd "$common" && pwd -P)"
@@ -197,6 +210,20 @@ case "$common" in
 *) git_mount="$common" ;;
 esac
 
+# The working directory is resolved the way git resolves the mount, and then CHECKED
+# against it. Resolving is what fixes the common case — on macOS /tmp is a symlink to
+# /private/tmp, so a checkout entered through /tmp used to be mounted at /private/tmp and
+# then run in an empty /tmp directory that exists in the image, where a suite collects
+# nothing and reports success. The check is for the cases resolving cannot reach: on a
+# case-insensitive filesystem `/private/TMP/...` survives `pwd -P` under bash while git
+# canonicalises it away, and the two disagree again. Refusing is the only safe answer,
+# because the failure it prevents is silent (issue #2362).
+workdir="$(pwd -P)"
+case "$workdir" in
+"$root" | "$root"/*) ;;
+*) fallback "the working directory ${workdir} is not inside the mounted tree ${root}, so the container would start somewhere else entirely" "$@" ;;
+esac
+
 # A TTY only when there is one to attach, so this stays usable in a pipe or a script.
 tty_args=''
 if [ -t 0 ] && [ -t 1 ]; then
@@ -209,11 +236,6 @@ fi
 # all — a two-value flag would leave a plain host run indistinguishable from a fallback.
 # Word-splitting tty_args/git_mount/PFB_DOCKER_ARGS is intentional — they are
 # argument lists, not single arguments.
-# Every path here is PHYSICAL. git answers with symlinks resolved, so the mount is a
-# resolved path, and a logical working directory would name something the mount does not
-# cover: on macOS /tmp is a symlink to /private/tmp, so a checkout entered through /tmp
-# used to run in an empty /tmp directory inside the image, where a suite collects nothing
-# and reports success (issue #2362).
 # shellcheck disable=SC2086
 exec docker run --rm --init ${tty_args} \
 	--user "$(id -u):$(id -g)" \
@@ -221,7 +243,7 @@ exec docker run --rm --init ${tty_args} \
 	--env PFB_RUNNER=container \
 	--volume "${root}:${root}" \
 	${git_mount:+--volume "${git_mount}:${git_mount}"} \
-	--workdir "$(pwd -P)" \
+	--workdir "$workdir" \
 	${PFB_DOCKER_ARGS:-} \
 	"$image" \
 	"$@"

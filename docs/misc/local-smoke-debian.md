@@ -17,7 +17,7 @@ GitHub Actions. These cost real time to relearn; CI workflow
 - `/dev/kvm` present + writable (hardware virtualisation). Everything need KVM.
 - `docker` and `git`. **Nothing else**: qemu, oras, dig, Playwright browser now
   live in `ghcr.io/pfblockerng/ci-runner-vm`, which leg runs inside (issue #2223).
-  Box need credentials for that private image (`/root/.docker/config.json`).
+  Image public — box need no registry credentials.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by `smoke-on-box.sh`).
 
