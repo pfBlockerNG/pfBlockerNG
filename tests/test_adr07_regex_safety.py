@@ -415,6 +415,11 @@ class TestCatastrophicShapeHeuristic:
         # A quantifier-carrying body stays on the entered scan, so a run inside a branch
         # is still found -- the overlap-probe shortcut must never hide it.
         assert _regex_is_catastrophic_shape(r"^([a-z]+[a-z]+[a-z]+|x)@x\.com$") is True
+        # A `|` that only sits inside a NESTED group does not make the outer body an
+        # alternation: `(x(a|b)y)` must take the entered scan (where every atom bridges
+        # the chain), not the overlap probe (whose single-character match would read the
+        # multi-atom body as disjoint and reset the chain).
+        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(x(a|b)y)[a-z]+[a-z]+@x\.com$") is True
         # Disjoint parenthesised alternatives still pin the split.
         assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(\.|(,))[a-z]+[a-z]+$") is False
 
