@@ -91,31 +91,14 @@ final class SrcPhpDeprecationLintTest extends TestCase
 	private static function trackedPhpFiles(string $root): array
 	{
 		$cmd = ['git', '-C', $root, 'ls-files', '-z', '--', 'src/*.php', 'src/*.inc'];
-		$descriptors = [
-			0 => ['pipe', 'r'],
-			1 => ['pipe', 'w'],
-			2 => ['pipe', 'w'],
-		];
-
-		$proc = proc_open($cmd, $descriptors, $pipes, null, pfb_test_scrubbed_git_env());
-		if (!is_resource($proc)) {
-			throw new RuntimeException('test bootstrap: failed to spawn `' . implode(' ', $cmd) . '`');
-		}
-
-		fclose($pipes[0]);
-		$stdout = (string) stream_get_contents($pipes[1]);
-		$stderr = (string) stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$exitCode = proc_close($proc);
-
-		if ($exitCode !== 0) {
+		$result = pfb_test_run_process($cmd, 10.0, pfb_test_scrubbed_git_env());
+		if ($result['exit'] !== 0) {
 			throw new RuntimeException(
-				'test bootstrap: `' . implode(' ', $cmd) . "` exited {$exitCode}: {$stderr}"
+				'test bootstrap: `' . implode(' ', $cmd) . "` exited {$result['exit']}: {$result['stderr']}"
 			);
 		}
 
-		$relative = array_filter(explode("\0", $stdout), static fn(string $p): bool => $p !== '');
+		$relative = array_filter(explode("\0", $result['stdout']), static fn(string $p): bool => $p !== '');
 		$absolute = array_map(static fn(string $p): string => $root . '/' . $p, $relative);
 		sort($absolute);
 
