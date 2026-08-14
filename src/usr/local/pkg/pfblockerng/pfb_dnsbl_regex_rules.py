@@ -226,6 +226,27 @@ def _regex_atoms_overlap(first: str, second: str) -> bool:
     return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)
 
 
+def _regex_body_alternates(body: str) -> bool:
+    """True when ``body`` carries a top-level unescaped ``|`` -- an alternation whose
+    branches the enclosing group's parentheses scope (one inside a nested group or a
+    character class belongs to that construct instead)."""
+    depth = 0
+    index = 0
+    while index < len(body):
+        character = body[index]
+        if character in ("\\", "["):
+            index = _regex_atom_end(body, index)
+            continue
+        if character == "(":
+            depth += 1
+        elif character == ")":
+            depth = max(depth - 1, 0)
+        elif character == "|" and depth == 0:
+            return True
+        index += 1
+    return False
+
+
 def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     """Read one unit at ``index``, returning ``(atom, role, next index)`` with the roles of
     ``_regex_quantifier``. A group contributes by what it does to the engine, not by its
@@ -312,10 +333,17 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     # carrying its own group or alternation belongs to the shapes above instead.
     if role == "run" and body and not any(character in body for character in "()|"):
         return body, "run", quantifier_end
-    # A mandatory group over a bare alternation (`(a|b)`) is the conditional separator
-    # without the condition (issue #2082): entering it would read `|` as a boundary, so the
-    # body -- which compiles standalone -- is handed to the caller's overlap probe instead.
-    if role != "bridge" and body and "|" in body and "(" not in body and ")" not in body:
+    # A mandatory group over a quantifier-free alternation (`(a|b)`, `(a|(b))`) is the
+    # conditional separator without the condition (issue #2082): entering it would read `|`
+    # as a boundary, so the body -- which compiles standalone -- is handed to the caller's
+    # overlap probe instead. A body carrying any quantifier keeps the entered scan, so a
+    # run inside a branch is still found rather than hidden behind the probe.
+    if (
+        role != "bridge"
+        and body
+        and _regex_body_alternates(body)
+        and not any(character in body for character in "+*{?")
+    ):
         return body, role, max(quantifier_end, group_end)
     # Every other group is entered rather than skipped: parentheses hide a run from the
     # reader, never from the engine, and its atoms -- not its punctuation -- decide what

@@ -401,6 +401,23 @@ class TestCatastrophicShapeHeuristic:
         # Disjoint alternatives really pin the split.
         assert _regex_is_catastrophic_shape(r"^([0-9])[a-z]+[a-z]+(\.|,)[a-z]+[a-z]+$") is False
 
+    def test_alternation_separator_with_a_parenthesised_branch(self) -> None:
+        # PR #2361 review round 2: a parenthesised branch pushed `(a|(b))` off the
+        # bare-alternation path into the entered scan, whose bare `|` reset the chain.
+        # Measured 1478 / 1463 / 1451 ms per query at 253 characters (CI image).
+        for pat in (
+            r"^[a-z]+[a-z]+(a|(b))[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?:a|(b))[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+((a)|b){3}[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(b))+[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # A quantifier-carrying body stays on the entered scan, so a run inside a branch
+        # is still found -- the overlap-probe shortcut must never hide it.
+        assert _regex_is_catastrophic_shape(r"^([a-z]+[a-z]+[a-z]+|x)@x\.com$") is True
+        # Disjoint parenthesised alternatives still pin the split.
+        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(\.|(,))[a-z]+[a-z]+$") is False
+
     def test_backreference_separator_bridges_the_chain(self) -> None:
         # A backreference's character set is unknowable statically, so the gate must not
         # read it as a boundary: measured 1564 ms (`\1`) and 2018 ms (`(?P=g)`) per query
