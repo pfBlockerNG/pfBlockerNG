@@ -36,3 +36,36 @@ def test_wait_boot_complete_waits_for_boot_metadata_sentinel(monkeypatch: pytest
         ("/bin/test", "-f", "/var/run/pfSense_version.rc"),
         ("/bin/test", "-f", "/var/run/pfSense_version.rc"),
     ]
+
+
+def test_wait_boot_complete_plain_reboot_needs_only_platform_boot_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boot_values = iter(["1", "0"])
+    php_calls: list[str] = []
+
+    class FakeVM:
+        def ssh(self, *_remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            raise AssertionError("plain reboot must not probe package metadata")
+
+    def fake_php_eval(_vm: helpers.SmokeVM, snippet: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        php_calls.append(snippet)
+        return subprocess.CompletedProcess([], 0, f"<<BOOT>>{next(boot_values)}<<END>>", "")
+
+    monkeypatch.setattr(
+        helpers,
+        "php_eval",
+        fake_php_eval,
+    )
+    monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(helpers.time, "monotonic", lambda: 0.0)
+
+    helpers.wait_boot_complete(
+        cast(helpers.SmokeVM, FakeVM()),
+        timeout=3,
+        delay=0,
+        require_pkg_metadata=False,
+    )
+
+    assert len(php_calls) == 2
+    assert all("is_platform_booting" in snippet for snippet in php_calls)

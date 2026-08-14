@@ -3656,7 +3656,12 @@ def pfb_config_digest(vm: SmokeVM, *, timeout: float = 30.0) -> str:
 _BOOTTIME_SYSCTL = "sysctl -n kern.boottime"
 
 
-def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
+def reboot_vm(
+    vm: SmokeVM,
+    *,
+    timeout: float = DEFAULT_BOOT_TIMEOUT,
+    require_pkg_metadata: bool = False,
+) -> None:
     """Reboot, observe a changed ``kern.boottime``, then await full readiness.
 
     The boottime poll is the reboot event; ``timeout`` supplies independent salvage caps for
@@ -3731,9 +3736,9 @@ def reboot_vm(vm: SmokeVM, *, timeout: float = DEFAULT_BOOT_TIMEOUT) -> None:
         raise RuntimeError(
             f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
         )
-    # Mirror the initial boot's post-wait_ready gate (conftest boot_vm): block until
-    # is_platform_booting() clears so a post-reboot pfBlockerNG sync cannot race boot (#559).
-    wait_boot_complete(vm)
+    # Plain smoke reboots need the platform boot flag. Upgrade-oriented callers can also
+    # require the package-metadata sentinel used by initial boot readiness.
+    wait_boot_complete(vm, require_pkg_metadata=require_pkg_metadata)
     flag = vm.ssh("/bin/test", "-f", PFB_CRON_DISABLE_PATH)
     if flag.returncode != 0:
         raise RuntimeError(f"reboot_vm: earlyshellcmd did not restore {PFB_CRON_DISABLE_PATH} before tests resumed")
@@ -4035,8 +4040,14 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -
     )
 
 
-def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.0) -> None:
-    """Block until pfSense has finished booting and package metadata has settled.
+def wait_boot_complete(
+    vm: SmokeVM,
+    *,
+    timeout: float = 180.0,
+    delay: float = 3.0,
+    require_pkg_metadata: bool = True,
+) -> None:
+    """Block until pfSense has finished booting and, when requested, metadata has settled.
 
     pfSense's rc removes ``/var/run/booting`` only at the very END of bootup -- AFTER
     the web port (which ``wait_ready.sh`` keys on) already answers. So a fast box can
@@ -4070,6 +4081,8 @@ def wait_boot_complete(vm: SmokeVM, *, timeout: float = 180.0, delay: float = 3.
         if "<<BOOT>>" in out and "<<END>>" in out:
             last = out.split("<<BOOT>>", 1)[1].split("<<END>>", 1)[0].strip()
             if last == "0":
+                if not require_pkg_metadata:
+                    return
                 try:
                     metadata = vm.ssh("/bin/test", "-f", "/var/run/pfSense_version.rc", timeout=30.0)
                 except subprocess.TimeoutExpired:
