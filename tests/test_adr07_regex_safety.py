@@ -288,7 +288,7 @@ class TestCatastrophicShapeHeuristic:
             r"^cdn[a-z]+[0-9]*\.example\.com$",
             r"^[a-z]+[0-9]+[a-z]+[0-9]+@example\.com$",
             r"^\w+\.\w+$",
-            r"^.+@.+$",  # a literal separator ends the run
+            r"^.+@.+$",  # '@' floats through '.' spans but leaves no adjacent pair
         ):
             assert _regex_is_catastrophic_shape(pat) is False, pat
 
@@ -309,9 +309,79 @@ class TestCatastrophicShapeHeuristic:
         # (`a{3}`) has nothing to give -- neither can partition the span, so neither starts
         # or continues a run.
         # The middle row is the discriminating one: its first two atoms already form a run,
-        # so it stays admitted ONLY because the possessive third atom is refused entry.
+        # so it stays admitted ONLY because the possessive third atom never joins it as a
+        # third quantifier (it bridges the chain like any mandatory overlapping atom).
         for pat in (r"^[a-z]++[a-z]++[a-z]++$", r"^[a-z]+[a-z]+[a-z]++$", r"^[a-z]{3}[a-z]{3}[a-z]{3}$"):
             assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_overlapping_mandatory_separator_does_not_split_a_run(self) -> None:
+        # issue #2082: a mandatory atom whose character set overlaps its neighbours is no
+        # boundary -- its position floats inside the span, so the quantifiers on both sides
+        # keep multiplying through it. Measured with the runtime's IGNORECASE compile against
+        # failing 253-character inputs (CI image; the rejected three-quantifier run costs
+        # 24.9 ms in the same environment): 1533 ms for the issue's reproduction (first row),
+        # 24 ms for the pair+separator+quantifier rows, 1465 ms for the fixed-repeat
+        # separator, 490 ms for the multi-character literal, 75 s for the double-separator row.
+        for pat in (
+            r"^[a-z]+[a-z]+a[a-z]+[a-z]+@x\.com$",  # the issue's console reproduction
+            r"^([a-z]+)([a-z]+)a([a-z]+)([a-z]+)@x\.com$",  # the same run wearing groups
+            r"^[a-z]+[a-z]+a[a-z]+@x\.com$",
+            r"^[a-z]+a[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+a{3}[a-z]+[a-z]+@x\.com$",  # a fixed repeat floats the same way
+            r"^[a-z]+[a-z]+abc[a-z]+[a-z]+@x\.com$",  # multi-character literal separator
+            r"^[a-z]+[a-z]+a[a-z]+a[a-z]+[a-z]+@x\.com$",
+            r"^\w+\w+x\w+\w+$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_separator_overlap_is_judged_case_insensitively(self) -> None:
+        # The matcher compiles admitted patterns with re.IGNORECASE, so 'A' floats through
+        # [a-z] spans exactly like 'a' does (measured 1520 ms per query at 253 characters).
+        assert _regex_is_catastrophic_shape(r"^[A-Z]+[a-z]+A[a-z]+[A-Z]+@x\.com$") is True
+
+    def test_single_quantifier_gaps_between_overlapping_separators_stay_admitted(self) -> None:
+        # The issue's design constraint: with ONE quantifier per gap the floating separator
+        # has no adjacent pair to multiply -- 5.8 ms worst case at 253 characters against an
+        # adversarial separator-rich input, under the 10 ms warn ceiling. Run length through
+        # bridged separators alone is NOT the discriminator; rejecting these would drop
+        # benign feed shapes.
+        for pat in (
+            r"^[a-z]+x[a-z]+y[a-z]+@x\.com$",  # the issue's measured benign row
+            r"^[a-z]+a[a-z]+$",
+            r"^[a-z]+[a-z]+a$",  # trailing separator: no quantifier after the float
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_conditional_group_separator_is_the_same_defect(self) -> None:
+        # issue #2082's second spelling: `(?(1)a|b)` between the pairs is the bare `a`
+        # separator wearing a conditional (measured 1492 ms per query at 253 characters;
+        # the QUANTIFIED spelling below costs 79 s).
+        for pat in (
+            r"^([a-z])[a-z]+[a-z]+(?(1)a|b)[a-z]+[a-z]+@x\.com$",
+            r"^([a-z])[a-z]+[a-z]+(?(1)a|b)+[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # A conditional whose EVERY alternative is disjoint from the run really does pin
+        # the split, exactly like a bare disjoint literal.
+        assert _regex_is_catastrophic_shape(r"^([0-9])[a-z]+[a-z]+(?(1)\.|,)[a-z]+[a-z]+@x\.com$") is False
+
+    def test_scoped_flags_and_atomic_group_separator_spellings(self) -> None:
+        # `(?i:a)` and `(?>a)` between the pairs are still the floating `a` separator:
+        # scoped flags do not change what the engine backtracks over, and an atomic group's
+        # POSITION floats with the run even though its body never gives characters back
+        # (measured 1512 ms and 1558 ms per query at 253 characters).
+        for pat in (
+            r"^[a-z]+[a-z]+(?i:a)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?>a)[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_scoped_flags_group_body_is_scanned(self) -> None:
+        # A `(?i:...)` group is entered like `(?:...)`: skipping it wholesale would hide a
+        # run from the scan entirely (measured 1532 ms per query at 253 characters for the
+        # first row), and a quantified single-atom spelling IS that atom's quantifier.
+        assert _regex_is_catastrophic_shape(r"^(?i:[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$") is True
+        assert _regex_is_catastrophic_shape(r"^(?i:[a-z])+(?i:[a-z])+(?i:[a-z])+@x\.com$") is True
 
     def test_newline_repeat_is_not_read_as_a_named_unicode_escape(self) -> None:
         # The two spellings are different regexes and each pins one half of the scanner.
@@ -342,8 +412,8 @@ class TestCatastrophicShapeHeuristic:
         # would flag this). Build a pattern whose budget is EXACTLY MAX -- `_REGEX_BUDGET_MAX`
         # unbounded `*` quantifiers, zero alternations, and no other catastrophic shape (no
         # nested/adjacent quantified group, no stacked bounded repeat, and -- issue #2035 --
-        # no run of adjacent quantified atoms either, so the unquantified `b` separators
-        # keep every quantifier in a run of one).
+        # no run of adjacent quantified atoms either: the `b` separators are DISJOINT from
+        # `a`, so they split every quantifier into a chain of its own (issue #2082)).
         at_budget = "a*b" * pfb_dnsbl_regex_rules._REGEX_BUDGET_MAX
         # Compute the budget the SAME way the code does and pin it to MAX before asserting.
         budget = len(pfb_dnsbl_regex_rules._REGEX_UNBOUNDED_QUANTIFIER.findall(at_budget)) + len(
