@@ -22,23 +22,15 @@ WHITELIST_PATH = "/var/unbound/pfb_py_whitelist.txt"
 MANIFEST_PATH = "/var/unbound/pfb_py_sources.json"
 
 
-def _optional_guest_file(vm: helpers.SmokeVM, path: str) -> str | None:
-    result = vm.ssh("cat", path)
-    if result.returncode == 0:
-        return result.stdout
-    missing = vm.ssh("test", "!", "-e", path)
-    assert missing.returncode == 0, f"failed to read existing {path}: {result.stderr!r}"
-    return None
-
-
 def _derived_whitelist_entries(vm: helpers.SmokeVM) -> tuple[set[str] | None, set[str] | None]:
-    whitelist_raw = _optional_guest_file(vm, WHITELIST_PATH)
+    snapshot = test_alerts._snapshot_guest_files(vm)
+    whitelist_raw = snapshot[WHITELIST_PATH]
     whitelist = (
         None
         if whitelist_raw is None
         else {line.partition(",")[0] for line in whitelist_raw.splitlines() if line.strip()}
     )
-    manifest_raw = _optional_guest_file(vm, MANIFEST_PATH)
+    manifest_raw = snapshot[MANIFEST_PATH]
     if manifest_raw is None:
         return whitelist, None
     manifest = json.loads(manifest_raw)
@@ -52,6 +44,7 @@ def test_addwhitelistdom_failure_restores_derived_unbound_state(
 ) -> None:
     """An assertion failure after whitelist POST leaves no derived Unbound entry."""
     baseline = helpers.unique_domain("uiwlbase")
+    session_derived = test_alerts._snapshot_guest_files(smoke_vm)
     try:
         encoded = base64.b64encode(f"{baseline}\n".encode()).decode()
         helpers.config_set(smoke_vm, test_alerts.CFG_WHITELIST, encoded)
@@ -62,7 +55,7 @@ def test_addwhitelistdom_failure_restores_derived_unbound_state(
             "echo 'OK';",
         )
         assert seeded.returncode == 0 and "OK" in seeded.stdout, seeded.stderr
-        manifest_seed = json.dumps({"version": 1, "config": {"user_whitelist": [baseline]}, "feeds": {}})
+        manifest_seed = json.dumps({"version": 1, "config": {"user_whitelist": [baseline]}, "feeds": []}, indent=4)
         written = subprocess.run(
             smoke_vm.ssh_argv("tee", MANIFEST_PATH),
             input=manifest_seed,
@@ -75,7 +68,7 @@ def test_addwhitelistdom_failure_restores_derived_unbound_state(
 
         original = helpers.config_get(smoke_vm, test_alerts.CFG_WHITELIST)
         original_entries = test_alerts._suppression_entries(smoke_vm, test_alerts.CFG_WHITELIST)
-        original_derived = _derived_whitelist_entries(smoke_vm)
+        original_derived = test_alerts._snapshot_guest_files(smoke_vm)
         suppression_entries = test_alerts._suppression_entries
         added_entries: set[str] = set()
         reloads_after_post: int | None = None
@@ -103,10 +96,13 @@ def test_addwhitelistdom_failure_restores_derived_unbound_state(
 
         assert helpers.config_get(smoke_vm, test_alerts.CFG_WHITELIST) == original
         assert added_entries, "failure injection did not observe the whitelist POST mutation"
-        assert _derived_whitelist_entries(smoke_vm) == original_derived
+        assert test_alerts._snapshot_guest_files(smoke_vm) == original_derived
         assert reloads_after_post is not None
         assert helpers.count_log_marker(smoke_vm, helpers.PFB_LOG, "Reloading Unbound Resolver") > reloads_after_post, (
             "failed-test cleanup did not reload Unbound"
         )
     finally:
-        helpers.restore_pfb_config_baseline(smoke_vm, snapshot_path=UI_CONFIG_SNAPSHOT)
+        try:
+            test_alerts._restore_guest_files(smoke_vm, session_derived)
+        finally:
+            helpers.restore_pfb_config_baseline(smoke_vm, snapshot_path=UI_CONFIG_SNAPSHOT)
