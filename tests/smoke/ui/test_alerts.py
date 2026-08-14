@@ -38,6 +38,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from .. import helpers
+from .conftest import UI_CONFIG_SNAPSHOT
 from .webui import extract_csrf_token, looks_like_login_page, row_containing
 
 if TYPE_CHECKING:
@@ -386,16 +387,24 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
             f".{domain} still in the DNSBL Whitelist after entry_delete=delete_domainwildcard"
         )
     finally:
-        helpers.php_eval(
+        cleanup = helpers.php_eval(
             vm,
             "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+            "$had_manifest = file_exists($pfb['unbound_py_sources']);\n"
             f"config_set_path('{CFG_WHITELIST}', '{original}');\n"
             "write_config('pfBlockerNG smoke: restore suppression');\n"
             "pfb_unbound_python_whitelist('alerts');\n"
-            "pfb_unbound_python_sources_whitelist();\n"
+            "$patched = pfb_unbound_python_sources_whitelist();\n"
+            "if ($had_manifest && !$patched) { exit(1); }\n"
             "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
             "echo 'OK';",
         )
+        if cleanup.returncode != 0 or "OK" not in cleanup.stdout:
+            helpers.restore_pfb_config_baseline(vm, snapshot_path=UI_CONFIG_SNAPSHOT)
+            raise RuntimeError(
+                f"Alerts whitelist cleanup failed: rc={cleanup.returncode} "
+                f"stderr={cleanup.stderr!r} stdout={cleanup.stdout!r}"
+            )
 
 
 def test_addwhitelistdom_exclude_writes_tld_exclusion_and_entry_delete_removes_it(
