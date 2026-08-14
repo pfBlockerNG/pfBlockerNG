@@ -111,6 +111,160 @@ if TYPE_CHECKING:
 global pfb
 pfb: dict[str, Any] = {}
 
+
+@dataclass(frozen=True)
+class PslRules:
+    """Ordered, normalized PSL rules split by section and syntax."""
+
+    icann_exact: tuple[str, ...] = ()
+    icann_wildcard: tuple[str, ...] = ()
+    icann_exception: tuple[str, ...] = ()
+    private_exact: tuple[str, ...] = ()
+    private_wildcard: tuple[str, ...] = ()
+    private_exception: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class PslResolution:
+    """Public suffix resolution for one normalized DNS name."""
+
+    icann_suffix: str
+    public_suffix: str
+    registrable_domain: str
+    private_active: bool
+
+
+_PSL_ICANN_BEGIN = "// ===BEGIN ICANN DOMAINS==="
+_PSL_ICANN_END = "// ===END ICANN DOMAINS==="
+_PSL_PRIVATE_BEGIN = "// ===BEGIN PRIVATE DOMAINS==="
+_PSL_PRIVATE_END = "// ===END PRIVATE DOMAINS==="
+
+
+def _psl_normalize_name(name: str) -> str:
+    labels = name.split(".")
+    if not name or any(not label for label in labels) or len(name.encode("utf-8")) > 253:
+        raise ValueError("invalid DNS name")
+    normalized: list[str] = []
+    for label in labels:
+        if any(char in label for char in "*!"):
+            raise ValueError("invalid DNS label")
+        if any(char.isspace() or unicodedata.category(char) in {"Cc", "Cf", "Cn"} for char in label):
+            raise ValueError("invalid DNS label")
+        try:
+            encoded = label.encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise ValueError("invalid IDNA label") from exc
+        if not encoded or len(encoded.encode("ascii")) > 63:
+            raise ValueError("invalid DNS label")
+        normalized.append(encoded)
+    result = ".".join(normalized)
+    if len(result.encode("ascii")) > 253:
+        raise ValueError("invalid DNS name")
+    return result
+
+
+def _psl_rule_token(raw: str) -> tuple[str, str]:
+    token = raw.strip().split(None, 1)[0] if raw.strip() else ""
+    if not token or token.startswith("#") or token.startswith("//"):
+        raise ValueError("not a rule")
+    kind = "exact"
+    if token.startswith("!"):
+        kind, token = "exception", token[1:]
+    elif token.startswith("*."):
+        kind, token = "wildcard", token[2:]
+    elif "*" in token or "!" in token:
+        raise ValueError("invalid PSL rule")
+    if not token or token.startswith(".") or token.endswith(".") or ".." in token:
+        raise ValueError("invalid PSL rule")
+    return kind, _psl_normalize_name(token)
+
+
+def _psl_section(lines: list[str]) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    exact: list[str] = []
+    wildcard: list[str] = []
+    exception: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.startswith("//"):
+            continue
+        kind, token = _psl_rule_token(stripped)
+        if kind == "exact":
+            exact.append(token)
+        elif kind == "wildcard":
+            wildcard.append(token)
+        else:
+            exception.append(token)
+    wildcard_set = set(wildcard)
+    if any("." not in rule or ".".join(rule.split(".")[1:]) not in wildcard_set for rule in exception):
+        raise ValueError("PSL exception has no wildcard family")
+    return tuple(exact), tuple(wildcard), tuple(exception)
+
+
+def parse_psl_rules(text: str) -> PslRules:
+    """Parse the self-describing PSL authority, retaining source order."""
+    lines = text.splitlines()
+    marker_values = (_PSL_ICANN_BEGIN, _PSL_ICANN_END, _PSL_PRIVATE_BEGIN, _PSL_PRIVATE_END)
+    positions: list[int] = []
+    for marker in marker_values:
+        found = [index for index, line in enumerate(lines) if line.strip() == marker]
+        if len(found) != 1:
+            raise ValueError("PSL authority markers missing or duplicated")
+        positions.append(found[0])
+    begin, end, private_begin, private_end = positions
+    if not begin < end < private_begin < private_end:
+        raise ValueError("PSL authority markers out of order")
+    icann = _psl_section(lines[begin + 1 : end])
+    private = _psl_section(lines[private_begin + 1 : private_end])
+    return PslRules(*icann, *private)
+
+
+def _psl_prevailing(
+    labels: list[str],
+    exact: tuple[str, ...],
+    wildcard: tuple[str, ...],
+    exception: tuple[str, ...],
+) -> str:
+    def tail(rule: str) -> bool:
+        rule_labels = rule.split(".")
+        return len(labels) >= len(rule_labels) and labels[-len(rule_labels) :] == rule_labels
+
+    matching_exceptions = [rule for rule in exception if tail(rule)]
+    if matching_exceptions:
+        rule = max(matching_exceptions, key=lambda value: value.count("."))
+        return ".".join(rule.split(".")[1:])
+    candidates: list[tuple[int, str]] = []
+    for rule in exact:
+        if tail(rule):
+            candidates.append((len(rule.split(".")), rule))
+    for rule in wildcard:
+        if tail(rule) and len(labels) > len(rule.split(".")):
+            candidates.append((len(rule.split(".")) + 1, ".".join(labels[-len(rule.split(".")) - 1 :])))
+    if candidates:
+        return max(candidates, key=lambda value: value[0])[1]
+    return labels[-1]
+
+
+def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
+    """Apply PSL prevailing-rule semantics for ICANN and combined sections."""
+    normalized = _psl_normalize_name(name)
+    labels = normalized.split(".")
+    icann_suffix = _psl_prevailing(labels, rules.icann_exact, rules.icann_wildcard, rules.icann_exception)
+    public_suffix = _psl_prevailing(
+        labels,
+        rules.icann_exact + rules.private_exact,
+        rules.icann_wildcard + rules.private_wildcard,
+        rules.icann_exception + rules.private_exception,
+    )
+    suffix_labels = public_suffix.split(".")
+    registrable = ".".join(labels[-len(suffix_labels) - 1 :]) if len(labels) > len(suffix_labels) else ""
+    return PslResolution(
+        icann_suffix=icann_suffix,
+        public_suffix=public_suffix,
+        registrable_domain=registrable,
+        private_active=len(public_suffix.split(".")) > len(icann_suffix.split(".")),
+    )
+
+
 # ADR-08: stdlib unicodedata backs the inlined IDN homoglyph analyzer below (script_of).
 import unicodedata
 from collections import OrderedDict, defaultdict
