@@ -20,6 +20,22 @@ def _ci_requirements() -> str:
     return (ROOT / ".github/docker/ci-requirements.txt").read_text(encoding="utf-8")
 
 
+def _docs_under(root: Path) -> list[Path]:
+    """The Markdown files this checkout is answerable for.
+
+    `.claude/worktrees/` is excluded by PATH, not by directory name: it holds per-task
+    agent worktrees — gitignored, one whole repository checkout each — so a name-based
+    skip would also drop a legitimate `worktrees/` directory elsewhere in the tree, while
+    walking into them grades OTHER branches' documentation at commits this checkout has no
+    say over. One worktree pinned before #2198 then reports an unpinned installer forever,
+    and no edit here can make the suite green (#2353). CI never sees it: a fresh
+    actions/checkout has no worktrees.
+    """
+    skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
+    worktrees = root / ".claude" / "worktrees"
+    return [path for path in root.rglob("*.md") if not skip & set(path.parts) and worktrees not in path.parents]
+
+
 def test_the_gate_deciding_pins_live_in_the_image_and_nowhere_else() -> None:
     """The toolchain moved from per-job installs into ci-runner. These pins decide gate
     verdicts, so they need exactly ONE home: a workflow that re-installs a pinned tool
@@ -87,14 +103,42 @@ def test_no_doc_offers_an_unpinned_shellspec_installer() -> None:
     """CONTRIBUTING.md's pinned instructions are only worth anything if they are the ones a
     contributor finds: tests/shell/README.md carried a second, unpinned install (`brew` +
     the upstream `curl | sh`) that CONTRIBUTING.md itself links to (#2198)."""
-    skip = {"node_modules", ".venv", "vendor", "plugins", ".git"}
     offenders = sorted(
         str(path.relative_to(ROOT))
-        for path in ROOT.rglob("*.md")
-        if not skip & set(path.parts) and "git.io/shellspec" in path.read_text(encoding="utf-8")
+        for path in _docs_under(ROOT)
+        if "git.io/shellspec" in path.read_text(encoding="utf-8")
     )
 
     assert offenders == [], (
         f"these docs still hand out an unpinned shellspec installer instead of pointing at"
         f" CONTRIBUTING.md's pinned instructions: {offenders}"
     )
+
+
+def test_the_doc_scan_ignores_agent_worktrees(tmp_path: Path) -> None:
+    """`.claude/worktrees/` holds per-task agent worktrees — gitignored, one whole
+    repository checkout each. Walking into them grades OTHER branches' documentation, at
+    commits this checkout has no say over, so a worktree pinned before #2198 reports an
+    unpinned installer forever and the suite cannot be made green from here (#2353)."""
+    (tmp_path / ".claude/worktrees/issue-1/docs").mkdir(parents=True)
+    (tmp_path / ".claude/worktrees/issue-1/CONTRIBUTING.md").write_text("stale", encoding="utf-8")
+    (tmp_path / ".claude/worktrees/issue-1/docs/deep.md").write_text("stale", encoding="utf-8")
+
+    assert _docs_under(tmp_path) == []
+
+
+def test_the_doc_scan_still_reaches_the_checkouts_own_docs(tmp_path: Path) -> None:
+    """The exclusion has to be the worktree directory and nothing more: a scan that skipped
+    `.claude/` wholesale, or simply returned nothing, would pass every assertion above while
+    guarding nothing at all."""
+    (tmp_path / "docs/misc").mkdir(parents=True)
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "docs/misc/notes.md").write_text("kept", encoding="utf-8")
+    (tmp_path / ".claude/rules.md").write_text("kept", encoding="utf-8")
+    (tmp_path / "README.md").write_text("kept", encoding="utf-8")
+    (tmp_path / "vendor/upstream.md").write_text("skipped — not ours to grade", encoding="utf-8")
+
+    found = sorted(str(path.relative_to(tmp_path)) for path in _docs_under(tmp_path))
+
+    assert found == [".claude/rules.md", "README.md", "docs/misc/notes.md"]
