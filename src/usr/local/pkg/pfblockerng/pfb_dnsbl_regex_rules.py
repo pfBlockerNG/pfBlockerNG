@@ -68,8 +68,13 @@ _REGEX_STACKED_BOUNDED_REPEAT = re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?
 # neighbour, so a failing tail walks a partition of the matched span -- the mechanism the
 # group-keyed shapes above already cover, minus the parentheses they all key on. Measured
 # against a 253-character name (the longest the matcher can be handed): a run of 3 costs
-# 7 ms and a run of 4 costs 462 ms, versus 0.08 ms for a run of 2 -- so runs LONGER than
-# this bound are rejected and a pair stays admitted (a pair is what real host patterns use).
+# 7 ms and a run of 4 costs 462 ms, versus 0.08 ms for a run of 2 -- so a pair stays
+# admitted (a pair is what real host patterns use). A mandatory atom whose character set
+# overlaps the run is NOT a boundary (issue #2082): its position floats inside the span,
+# so `[a-z]+[a-z]+a[a-z]+[a-z]+` multiplies through the `a` (1533 ms measured) -- such an
+# atom bridges the chain while breaking pair-adjacency, and a chain is rejected once it
+# carries more than this many quantifiers AND at least one back-to-back pair (single
+# quantifiers between floating separators stay admitted: 5.8 ms worst-case measured).
 _REGEX_ADJACENT_ATOM_MAX = 2
 
 # Character sets are compared by probing both atoms with one character at a time: this
@@ -219,8 +224,10 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     """Read one unit at ``index``, returning ``(atom, role, next index)`` with the roles of
     ``_regex_quantifier``. A group contributes by what it does to the engine, not by its
     punctuation: a comment or a lookaround consumes nothing and bridges; a plain
-    ``(...)``/``(?:...)``/``(?P<n>...)`` is scanned through as if the parentheses were not
-    there; one wrapping a single atom IS that atom when the quantifier sits outside it."""
+    ``(...)``/``(?:...)``/``(?P<n>...)`` -- and (issue #2082) a scoped-flags ``(?i:...)`` or
+    atomic ``(?>...)`` group -- is scanned through as if the parentheses were not there; one
+    wrapping a single atom IS that atom when the quantifier sits outside it; a conditional
+    ``(?(...)...)`` returns its alternation body for the caller's overlap probe."""
     if pattern[index] == ")":
         quantifier_end, role = _regex_quantifier(pattern, index + 1)
         return (
@@ -254,8 +261,30 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
         body_start = name_end + 1
     elif pattern.startswith("(?:", index):
         body_start = index + 3
+    elif pattern.startswith("(?(", index):
+        # issue #2082: a conditional is a mandatory construct whose POSITION floats, so its
+        # post-condition body (an alternation the overlap probe can compile) is handed to
+        # the caller to judge like a bare atom -- never read as a run boundary outright.
+        condition_end = pattern.find(")", index + 3)
+        if not closed or condition_end == -1 or condition_end >= group_end - 1:
+            return "", "break", group_end
+        body = pattern[condition_end + 1 : group_end - 1]
+        quantifier_end, role = _regex_quantifier(pattern, group_end)
+        if role == "bridge" or not body:
+            return "", "bridge", max(quantifier_end, group_end)
+        return body, role, max(quantifier_end, group_end)
+    elif pattern.startswith("(?>", index):
+        # An atomic group never gives characters back, but its position still floats with
+        # the run around it, so it is entered like a plain group (issue #2082).
+        body_start = index + 3
     elif pattern.startswith("(?", index):
-        return "", "break", group_end  # atomic, flags, conditionals: not a plain group
+        flags_end = index + 2
+        while flags_end < len(pattern) and pattern[flags_end] in "aiLmsux-":
+            flags_end += 1
+        if flags_end > index + 2 and pattern[flags_end : flags_end + 1] == ":":
+            body_start = flags_end + 1  # scoped flags: `(?i:...)` backtracks like `(?:...)`
+        else:
+            return "", "break", group_end  # backreference, global flags: not a plain group
     else:
         body_start = index + 1
     quantifier_end, role = _regex_quantifier(pattern, group_end)
@@ -272,13 +301,18 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
 
 
 def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
-    """True when ``pattern`` carries a run of more than ``_REGEX_ADJACENT_ATOM_MAX``
-    back-to-back atoms that each take a backtracking unbounded quantifier and whose
-    character sets overlap along the run -- every atom in such a run can cede characters to
-    its neighbour. A lookaround's body is scanned as a pattern of its own, bounded by
+    """True when ``pattern`` carries an overlap-connected CHAIN of more than
+    ``_REGEX_ADJACENT_ATOM_MAX`` atoms that each take a backtracking unbounded quantifier,
+    where the chain holds at least one back-to-back pair. A mandatory atom overlapping the
+    chain is no boundary -- its position floats inside the span (issue #2082) -- so it
+    bridges the chain while breaking pair-adjacency; a disjoint one really pins the split
+    and ends the chain. A lookaround's body is scanned as a pattern of its own, bounded by
     ``_REGEX_NESTED_SCAN_MAX`` so nested lookarounds cannot exhaust the stack. Pure string
     analysis: nothing here runs the candidate against an input."""
-    run: list[str] = []
+    anchor = ""  # last quantified atom of the chain ("" = no chain)
+    quantified = 0
+    pairs = 0
+    adjacent = False  # whether the chain unit before this one was a quantified atom
     index = 0
     while index < len(pattern):
         atom, role, index = _regex_next_unit(pattern, index)
@@ -288,12 +322,21 @@ def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
             continue
         if role == "bridge":
             continue
-        if role != "run":
-            run = []
+        if role == "run":
+            if anchor and _regex_atoms_overlap(anchor, atom):
+                quantified += 1
+                if adjacent:
+                    pairs += 1
+            else:
+                quantified, pairs = 1, 0
+            anchor, adjacent = atom, True
+            if pairs and quantified > _REGEX_ADJACENT_ATOM_MAX:
+                return True
             continue
-        run = [*run, atom] if not run or _regex_atoms_overlap(run[-1], atom) else [atom]
-        if len(run) > _REGEX_ADJACENT_ATOM_MAX:
-            return True
+        if atom and anchor and _regex_atoms_overlap(anchor, atom):
+            adjacent = False  # mandatory overlapping atom: floats, so the chain survives it
+            continue
+        anchor, quantified, pairs, adjacent = "", 0, 0, False
     return False
 
 

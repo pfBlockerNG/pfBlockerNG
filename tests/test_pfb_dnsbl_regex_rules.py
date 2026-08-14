@@ -192,6 +192,18 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
         "((((",
         ")+",
         "(?",
+        "(?(",
+        "(?(1",
+        "(?(1)",
+        "(?(1)a",
+        "(?(1)a|b",
+        "(?(1))",
+        "(?i",
+        "(?i:",
+        "(?>",
+        "(?>a",
+        "(?aiLmsux-imsx:x)",
+        "(?-:x)",
         "[a-z]+" * 500,
         "a" * 5000 + "+",
     ):
@@ -201,6 +213,24 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
     # there rather than going blind from the first `(?#` onwards.
     assert _regex_is_catastrophic_shape(r"(?#x\w+\w+\w+") is True
     assert _regex_is_catastrophic_shape(r"(?=a\w+\w+\w+") is True
+    assert _regex_is_catastrophic_shape(r"(?i:\w+\w+\w+") is True
+
+
+def test_probe_and_resolver_both_reject_an_overlapping_separator_run() -> None:
+    """issue #2082: a mandatory atom overlapping its neighbours was read as a run BOUNDARY,
+    so the issue's reproduction reached both consumers unflagged. Same two surfaces as the
+    #2035 twin above: the composed predicate the resolver imports, and ``main()`` the way
+    pfb_dnsbl_regex_validation_errors() runs it."""
+    from pfb_dnsbl_regex_rules import _regex_is_catastrophic_shape
+
+    pattern = r"^[a-z]+[a-z]+a[a-z]+[a-z]+@x\.com$"
+    assert _regex_is_catastrophic_shape(pattern) is True
+
+    proc = run_probe((pattern + "\n").encode("utf-8"), "0")
+    assert proc.returncode == 1, f"probe admitted {pattern!r}"
+    assert proc.stderr.decode("utf-8").splitlines() == [f"line 1: {pattern!r}: catastrophic-backtracking shape"], (
+        proc.stderr
+    )
 
 
 def test_main_treats_crlf_terminated_lines_like_lf() -> None:
