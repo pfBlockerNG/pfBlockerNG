@@ -98,14 +98,16 @@ RUN apt-get update \
 # tar at that path six PHPUnit archive cases had no environment that could run them and
 # skipped in CI as silently as they did locally (issue #2356).
 #
-# GNU tar moves to /usr/sbin/tar rather than going away, and the location is load-bearing
-# in two ways. dpkg-deb runs `tar --warning=no-timestamp`, a GNU-only option bsdtar
-# rejects, and it searches a PATH of its own that begins with /usr/sbin — so every
-# apt-get/dpkg (this file's later layers, the whole ci-runner-vm image, anything a job
-# installs) keeps finding GNU tar. /usr/sbin also precedes /usr/bin in the image's own
-# PATH, so a bare `tar` still means GNU tar for everything that expects it: actions/cache
-# in the VM jobs, the release tarball step. Only the absolute path — the one the appliance
-# defines and the code under test hardcodes — changes hands.
+# GNU tar moves to /usr/sbin/tar rather than going away, and the location is load-bearing:
+# /usr/sbin precedes /usr/bin in this image's PATH, so everything that resolves `tar` by
+# NAME still gets GNU tar. That covers dpkg-deb — it runs `tar --warning=no-timestamp`, a
+# GNU-only option bsdtar rejects, and it inherits the caller's PATH, so every apt-get and
+# dpkg (this file's later layers, the whole ci-runner-vm image, anything a job installs)
+# keeps working — and it covers actions/cache in the VM jobs and the release tarball step.
+# Only the absolute path — the one the appliance defines and the code under test hardcodes
+# — changes hands. A caller that strips /usr/sbin out of PATH gets bsdtar for a bare `tar`
+# and breaks dpkg; nothing in this repo does that, and the self-check below proves the
+# image's own PATH keeps dpkg working.
 #
 # --no-rename + an explicit mv, not --rename: dpkg-divert refuses to rename a file out of
 # an Essential package without complaint, and the diversion is what makes a future `tar`

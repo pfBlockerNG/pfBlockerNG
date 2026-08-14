@@ -173,13 +173,14 @@ host toolchain. `PFB_ALLOW_HOST=1` opts back into a host run when that is what y
 want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which happened
 after the fact.
 
-Every suite is green in the image — pytest 5033 passed, PHPUnit 5233 tests with no
-failures, shellspec 1324 examples — so a red there is yours. What differs between the
-image and a macOS host is which tests *skip*, not which fail: the image's `/usr/bin/tar`
-is GNU tar rather than the appliance's bsdtar, its locale and `file(1)` classify a few
-inputs differently, and it runs as your own uid rather than root. Read the skip list, not
-just the exit status; a skip is not coverage. Nine of them are skipped in CI as well and
-are tracked in issue #2356.
+Every suite is green in the image — pytest 5039 passed, PHPUnit 5233 tests with no
+failures, shellspec 1325 examples — so a red there is yours. What differs between the
+image and a macOS host is which tests *skip*, not which fail: its locale and `file(1)`
+classify a few inputs differently, one case needs a PHP build whose `php://memory` can
+fail `flock()`, and it runs as your own uid rather than root. Read the skip list, not just
+the exit status; a skip is not coverage. Four PHPUnit cases skip there today; the nine
+that used to join them are gone (#2356), and `/usr/bin/tar` in the image is bsdtar, as it
+is on the appliance.
 
 `scripts/agent/run-gates.sh` routes every gate it runs through this wrapper, and the
 `pre-commit` hook routes its `php -l` and PHPCS gates the same way — those two need a

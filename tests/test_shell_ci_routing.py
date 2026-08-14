@@ -71,11 +71,16 @@ def test_ci_runner_series_bumped_and_all_consumers_follow_it() -> None:
     """No consumer may be left on the PREVIOUS series: a half-repointed bump leaves some
     jobs grading under the old toolchain, which is exactly the silent verdict change the
     immutable tags exist to prevent. Derived from VERSION rather than a literal, so the
-    guard keeps working after the next bump instead of failing as its own reminder."""
+    guard keeps working after the next bump instead of failing as its own reminder.
+
+    Matched against the image reference, not a bare ``:N`` substring: the workflows are
+    full of colon-digit pairs that have nothing to do with the series — a QEMU MAC
+    (``BC:24:11:37:9C:AC`` carries ``:9``), ``--user 1001:1001`` (carries ``:10``) — and a
+    substring test would turn every future bump into a false red."""
     version = int(_read(".github/docker/VERSION").strip())
-    stale = f":{version - 1}"
+    stale = re.compile(rf"ci-runner(?:-vm)?:{version - 1}(?!\d)")
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         text = path.read_text(encoding="utf-8")
-        assert stale not in text, f"stale ci-runner series {stale} in {path}"
+        assert not stale.search(text), f"stale ci-runner series {version - 1} in {path}"
     smoke = _read("scripts/local-smoke.sh")
-    assert stale not in smoke, f"stale ci-runner series {stale} in scripts/local-smoke.sh"
+    assert not stale.search(smoke), f"stale ci-runner series {version - 1} in scripts/local-smoke.sh"

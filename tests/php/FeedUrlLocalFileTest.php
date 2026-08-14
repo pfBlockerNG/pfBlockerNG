@@ -166,6 +166,27 @@ final class FeedUrlLocalFileTest extends TestCase
 	}
 
 	/**
+	 * A DIRECTORY sitting directly in an allowed dir is rejected: the branch requires a
+	 * regular file, so a path that satisfies containment can still fail on its type. The
+	 * accepted case above cannot distinguish the two — with the regular-file requirement
+	 * dropped, a directory would be handed to the download path as a feed source.
+	 */
+	public function testDirectoryInAllowedDirRejected(): void
+	{
+		$dir = $this->dbdir . '/pfb_localfile_subdir_' . getmypid();
+		$this->assertTrue(mkdir($dir, 0o755), "could not create the test directory {$dir}");
+
+		try {
+			$this->assertFalse(
+				$this->validate($dir),
+				'a directory inside an allowed dir must be rejected: the branch requires a regular file'
+			);
+		} finally {
+			@rmdir($dir);
+		}
+	}
+
+	/**
 	 * A symlink placed INSIDE an allowed directory but pointing OUTSIDE it must be
 	 * rejected: realpath() resolves the link to its target, whose canonical directory
 	 * is not in the allow-list. Paired with the in-bounds symlink test below, this proves
