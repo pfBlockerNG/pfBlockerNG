@@ -77,6 +77,12 @@ _REGEX_STACKED_BOUNDED_REPEAT = re.compile(r"(?:\)|\]|\w)\{\d+(?:,\d*)?\}\{\d+(?
 # quantifiers between floating separators stay admitted: 5.8 ms worst-case measured).
 _REGEX_ADJACENT_ATOM_MAX = 2
 
+# Ceiling for chains connected ONLY by floating separators (no back-to-back pair): they
+# blow up one quantifier later. Measured at 253 characters (CI image): 3 quantifiers cost
+# 23 ms (the runtime warn layer's accepted residual; rejecting 3 would drop the admitted
+# single-gap shapes above) while 4 cost 1753 ms, far over the 100 ms evict ceiling.
+_REGEX_CHAIN_ATOM_MAX = 3
+
 # Character sets are compared by probing both atoms with one character at a time: this
 # alphabet only has to be big enough to separate the classes a domain pattern is written
 # over (letters, digits, punctuation, whitespace, non-ASCII word characters).
@@ -227,14 +233,15 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     ``(...)``/``(?:...)``/``(?P<n>...)`` -- and (issue #2082) a scoped-flags ``(?i:...)`` or
     atomic ``(?>...)`` group -- is scanned through as if the parentheses were not there; one
     wrapping a single atom IS that atom when the quantifier sits outside it; a conditional
-    ``(?(...)...)`` returns its alternation body for the caller's overlap probe."""
+    ``(?(...)...)``, an atomic ``(?>...)``, or a bare-alternation group returns its body for
+    the caller's overlap probe; a named backreference is role ``float`` (mandatory,
+    overlap unknowable)."""
     if pattern[index] == ")":
-        quantifier_end, role = _regex_quantifier(pattern, index + 1)
-        return (
-            "",
-            "break" if role == "break" and quantifier_end > index + 1 else "bridge",
-            max(quantifier_end, index + 1),
-        )
+        # A group's closing punctuation separates nothing by itself -- the atoms inside
+        # already decided whether the chain survives -- and a fixed repeat ON the group
+        # floats with it (issue #2082), so `)` never ends a chain.
+        quantifier_end, _ = _regex_quantifier(pattern, index + 1)
+        return "", "bridge", max(quantifier_end, index + 1)
     if pattern[index] != "(":
         if pattern[index] in "|^$*+?{}":
             return "", "break", index + 1
@@ -274,9 +281,20 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
             return "", "bridge", max(quantifier_end, group_end)
         return body, role, max(quantifier_end, group_end)
     elif pattern.startswith("(?>", index):
-        # An atomic group never gives characters back, but its position still floats with
-        # the run around it, so it is entered like a plain group (issue #2082).
-        body_start = index + 3
+        # Atomicity forbids backtracking INSIDE the body, so it is never entered as a run
+        # source -- but the group's POSITION floats with the run around it (issue #2082),
+        # so its body feeds the caller's overlap probe like a bare atom.
+        if not closed:
+            return "", "break", group_end
+        body = pattern[index + 3 : group_end - 1]
+        quantifier_end, role = _regex_quantifier(pattern, group_end)
+        if role == "bridge" or not body:
+            return "", "bridge", max(quantifier_end, group_end)
+        return body, role, max(quantifier_end, group_end)
+    elif pattern.startswith("(?P=", index):
+        # A backreference's character set is unknowable statically, so it can never be
+        # proven a boundary: mandatory, position floats, overlap assumed (issue #2082).
+        return "", "float", group_end
     elif pattern.startswith("(?", index):
         flags_end = index + 2
         while flags_end < len(pattern) and pattern[flags_end] in "aiLmsux-":
@@ -284,7 +302,7 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
         if flags_end > index + 2 and pattern[flags_end : flags_end + 1] == ":":
             body_start = flags_end + 1  # scoped flags: `(?i:...)` backtracks like `(?:...)`
         else:
-            return "", "break", group_end  # backreference, global flags: not a plain group
+            return "", "break", group_end  # global flags and any unknown `(?` construct
     else:
         body_start = index + 1
     quantifier_end, role = _regex_quantifier(pattern, group_end)
@@ -294,10 +312,21 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     # carrying its own group or alternation belongs to the shapes above instead.
     if role == "run" and body and not any(character in body for character in "()|"):
         return body, "run", quantifier_end
+    # A mandatory group over a bare alternation (`(a|b)`) is the conditional separator
+    # without the condition (issue #2082): entering it would read `|` as a boundary, so the
+    # body -- which compiles standalone -- is handed to the caller's overlap probe instead.
+    if role != "bridge" and body and "|" in body and "(" not in body and ")" not in body:
+        return body, role, max(quantifier_end, group_end)
     # Every other group is entered rather than skipped: parentheses hide a run from the
-    # reader, never from the engine. Only what the group does to its NEIGHBOURS varies --
-    # one that may match nothing cannot separate them; one that must match does.
-    return "", "bridge" if quantifier_end == group_end or role == "bridge" else "break", body_start
+    # reader, never from the engine, and its atoms -- not its punctuation -- decide what
+    # happens to the chain (issue #2082: a fixed repeat ON the group floats with it).
+    return "", "bridge", body_start
+
+
+def _regex_is_backref(atom: str) -> bool:
+    """``\\1``..``\\9`` as read by ``_regex_atom_end`` (two characters; ``\\0`` is the
+    octal null escape, a literal atom, never a group reference)."""
+    return len(atom) == 2 and atom[0] == "\\" and atom[1] in "123456789"
 
 
 def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
@@ -330,11 +359,13 @@ def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
             else:
                 quantified, pairs = 1, 0
             anchor, adjacent = atom, True
-            if pairs and quantified > _REGEX_ADJACENT_ATOM_MAX:
+            if (pairs and quantified > _REGEX_ADJACENT_ATOM_MAX) or quantified > _REGEX_CHAIN_ATOM_MAX:
                 return True
             continue
-        if atom and anchor and _regex_atoms_overlap(anchor, atom):
-            adjacent = False  # mandatory overlapping atom: floats, so the chain survives it
+        # A mandatory unit whose set overlaps the chain -- or cannot be proven disjoint
+        # (a backreference) -- floats, so it bridges the chain instead of ending it.
+        if role == "float" or (atom and anchor and (_regex_atoms_overlap(anchor, atom) or _regex_is_backref(atom))):
+            adjacent = False
             continue
         anchor, quantified, pairs, adjacent = "", 0, 0, False
     return False

@@ -204,6 +204,13 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
         "(?>a",
         "(?aiLmsux-imsx:x)",
         "(?-:x)",
+        "(?P=",
+        "(?P=g",
+        "(?P=g)",
+        "(a|b",
+        "(?>a)",
+        "\\1",
+        "([a-z])\\1",
         "[a-z]+" * 500,
         "a" * 5000 + "+",
     ):
