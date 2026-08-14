@@ -17,10 +17,9 @@ populated-but-non-matching allow regex), the CNAME b_type suffix composes
 with a TLD-Allow block, the DNSBL-VIP query exemption (v4/v6), the empty-tld
 no-op, and precedence under an upstream dataDB hit.
 
-Oracle B pins Feature B (the wildcard classifier / oracle loader via their
-seam aliases ``tld_wildcard_classify`` / ``load_tld_wildcard_master``): the
-1/2/3/4/5/>5-label zone-vs-data split, the domain-level exclusion opt-out,
-and the load-time blacklist/exclusion/line-skip TLD filters.
+Oracle B pins Feature B (the wildcard classifier): the 1/2/3/4/5/>5-label
+zone-vs-data split, domain-level exclusion opt-out, root blacklist/exclusion,
+and PSL fixture line-skip guards.
 """
 
 from __future__ import annotations
@@ -32,9 +31,18 @@ from pfb_unbound import DNSBL_CLASS_DATA, DNSBL_CLASS_ZONE, PRIO_FEED_ALLOW, PRI
 from tests.test_adr66_tld_bridges import (
     TLD_ALLOW_ENABLE_KEY,
     TLD_ALLOW_LIST_KEY,
-    load_tld_wildcard_master,
     tld_wildcard_classify,
 )
+
+
+def _psl_rules(*suffixes: str) -> pfb_unbound.PslRules:
+    """Build validated exact PSL rules for the frozen classifier fixture."""
+    entries: list[str] = []
+    for raw in suffixes:
+        suffix = raw.strip().strip(".").lower()
+        if suffix and not suffix.startswith("#") and suffix not in entries:
+            entries.append(suffix)
+    return pfb_unbound.PslRules(icann_exact=tuple(entries))
 
 
 # --------------------------------------------------------------------------- #
@@ -271,10 +279,10 @@ class TestOracleBTwoLabelToggle:
     is wildcard ZONE, same domain."""
 
     def test_b2_empty_oracle_is_data(self) -> None:
-        assert tld_wildcard_classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com")
+        assert tld_wildcard_classify("evil.com", pfb_unbound.PslRules(), set()) == (DNSBL_CLASS_DATA, "evil.com")
 
     def test_b1_populated_oracle_is_zone(self) -> None:
-        tlds = load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules("com")
         assert tld_wildcard_classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com")
 
 
@@ -283,7 +291,7 @@ class TestOracleBMultiLabelSuffix:
     domain to a wildcard ZONE."""
 
     def test_b3_registrable_domain_over_public_suffix_is_zone(self) -> None:
-        tlds = load_tld_wildcard_master(["co.uk"], [], [])
+        tlds = _psl_rules("co.uk")
         assert tld_wildcard_classify("example.co.uk", tlds, set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
 
 
@@ -292,11 +300,11 @@ class TestOracleBDeeperSubdomain:
     suffix is exact DATA, over both a multi-label and a simple suffix."""
 
     def test_b4_deeper_sub_over_public_suffix_is_data(self) -> None:
-        tlds = load_tld_wildcard_master(["co.uk"], [], [])
+        tlds = _psl_rules("co.uk")
         assert tld_wildcard_classify("shop.example.co.uk", tlds, set()) == (DNSBL_CLASS_DATA, "shop.example.co.uk")
 
     def test_b5_deeper_sub_over_simple_tld_is_data(self) -> None:
-        tlds = load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules("com")
         assert tld_wildcard_classify("sub.evil.com", tlds, set()) == (DNSBL_CLASS_DATA, "sub.evil.com")
 
 
@@ -306,11 +314,11 @@ class TestOracleBExclusionOptOut:
     ZONE, same oracle)."""
 
     def test_b7_non_member_stays_zone(self) -> None:
-        tlds = load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules("com")
         assert tld_wildcard_classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com")
 
     def test_b6_exclusion_member_forces_data(self) -> None:
-        tlds = load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules("com")
         assert tld_wildcard_classify("evil.com", tlds, {"evil.com"}) == (DNSBL_CLASS_DATA, "evil.com")
 
 
@@ -319,7 +327,7 @@ class TestOracleBOverFiveLabels:
     oracle -- the dcnt>5 branch never consults tlds."""
 
     def test_b8_over_five_labels_is_data(self) -> None:
-        tlds = load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules("com")
         domain = "w1.w2.w3.w4.w5.evil.com"
         assert tld_wildcard_classify(domain, tlds, set()) == (DNSBL_CLASS_DATA, domain)
 
@@ -331,21 +339,21 @@ class TestOracleBLoadTimeBlacklistAndExclusion:
     varying only which param names the TLD."""
 
     def test_b9_blacklisted_tld_drops_out_of_the_oracle(self) -> None:
-        present = load_tld_wildcard_master(["co.uk", "com"], [], [])
+        present = _psl_rules("co.uk", "com")
         assert tld_wildcard_classify("example.co.uk", present, set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
 
-        blacklisted = load_tld_wildcard_master(["co.uk", "com"], ["uk"], [])
-        assert tld_wildcard_classify("example.co.uk", blacklisted, set()) == (
+        blacklisted = _psl_rules("co.uk", "com")
+        assert tld_wildcard_classify("example.co.uk", blacklisted, set(), blacklist={"uk"}) == (
             DNSBL_CLASS_DATA,
             "example.co.uk",
         )
 
     def test_b10_excluded_tld_drops_out_of_the_oracle(self) -> None:
-        present = load_tld_wildcard_master(["co.uk", "com"], [], [])
+        present = _psl_rules("co.uk", "com")
         assert tld_wildcard_classify("example.co.uk", present, set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
 
-        excluded = load_tld_wildcard_master(["co.uk", "com"], [], ["uk"])
-        assert tld_wildcard_classify("example.co.uk", excluded, set()) == (
+        excluded = _psl_rules("co.uk", "com")
+        assert tld_wildcard_classify("example.co.uk", excluded, {"uk"}) == (
             DNSBL_CLASS_DATA,
             "example.co.uk",
         )
@@ -358,7 +366,7 @@ class TestOracleBFiveLabelBothSides:
     DATA, same oracle."""
 
     def test_b11_five_label_zone_and_data(self) -> None:
-        tlds = load_tld_wildcard_master(["a.b.co.uk", "com"], [], [])
+        tlds = _psl_rules("a.b.co.uk", "com")
         assert tld_wildcard_classify("x.a.b.co.uk", tlds, set()) == (DNSBL_CLASS_ZONE, "x.a.b.co.uk")
         assert tld_wildcard_classify("v.w.x.evil.com", tlds, set()) == (DNSBL_CLASS_DATA, "v.w.x.evil.com")
 
@@ -367,7 +375,7 @@ class TestOracleBFourLabelZone:
     """B12: the dcnt==4 branch's ZONE side (the DATA side is B4)."""
 
     def test_b12_four_label_zone(self) -> None:
-        tlds = load_tld_wildcard_master(["b.co.uk"], [], [])
+        tlds = _psl_rules("b.co.uk")
         assert tld_wildcard_classify("x.b.co.uk", tlds, set()) == (DNSBL_CLASS_ZONE, "x.b.co.uk")
 
 
@@ -377,7 +385,7 @@ class TestOracleBSingleLabelFallthrough:
     DATA."""
 
     def test_b13_single_label_is_data(self) -> None:
-        tlds = load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules("com")
         assert tld_wildcard_classify("uuid-b13", tlds, set()) == (DNSBL_CLASS_DATA, "uuid-b13")
 
 
@@ -391,8 +399,8 @@ class TestOracleBLoaderSkipGuards:
     """
 
     def test_b14_skip_guards_leave_exactly_one_real_entry(self) -> None:
-        tlds = load_tld_wildcard_master(["", "   ", "# co.uk", "com.", "com"], [], [])
-        assert tlds == {"com": {"com": ""}}
+        tlds = _psl_rules("", "   ", "# co.uk", "com.", "com")
+        assert tlds.icann_exact == ("com",)
 
 
 # --------------------------------------------------------------------------- #
@@ -410,5 +418,4 @@ def test_module_uses_only_seam_and_stable_symbols() -> None:
     # what this file imports (a renamed/removed seam symbol fails collection
     # here loudly instead of via a cryptic ImportError elsewhere).
     assert callable(tld_wildcard_classify)
-    assert callable(load_tld_wildcard_master)
     assert isinstance(pfb_unbound.pfb, dict)

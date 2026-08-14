@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from typing import Any
 
 import pfb_unbound
@@ -101,10 +100,17 @@ def _write_plain_boundary_manifest(tmp_path: Any, *, top1m_enabled: bool) -> tup
 
     # issue #1255: the public-suffix oracle is a SHIPPED file gated by an ini flag,
     # not a manifest key (HSTS parity) -- stage it exactly like dnsbl_cache_stage().
-    oracle = os.path.join(str(tmp_path), "pfb_py_tld.txt")
-    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), oracle)
+    oracle = os.path.join(str(tmp_path), "dnsbl_psl")
+    suffixes = open(os.path.join(FIXTURES, "tld_master.txt"), encoding="utf-8").read()
+    with open(oracle, "w", encoding="utf-8") as fh:
+        fh.write(
+            "// ===BEGIN ICANN DOMAINS===\n"
+            + suffixes
+            + "// ===END ICANN DOMAINS===\n// ===BEGIN PRIVATE DOMAINS===\n"
+            + "// ===END PRIVATE DOMAINS===\n"
+        )
     pfb_unbound.pfb["python_tld_wildcard"] = True
-    pfb_unbound.pfb["pfb_py_tld"] = oracle
+    pfb_unbound.pfb["pfb_py_psl"] = oracle
 
     if top1m_enabled:
         top1m_path = os.path.join(str(tmp_path), "pfb_py_top1m.txt")

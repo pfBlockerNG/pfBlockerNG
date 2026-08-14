@@ -39,7 +39,6 @@ import pfb_unbound
 from pfb_unbound import (
     DNSBL_CLASS_DATA,
     DNSBL_CLASS_ZONE,
-    _dnsbl_load_tld_wildcard_master,
     _parse_ini_int,
     convert_ipv4,
     convert_ipv6,
@@ -57,6 +56,12 @@ from pfb_unbound import (
     tld_wildcard_classify,
     whitelist_check_domain,
 )
+
+
+def _psl_rules(lines: list[str], *_ignored: object) -> pfb_unbound.PslRules:
+    """Build parsed-style rules for legacy fixture suffix rows."""
+    return pfb_unbound.PslRules(icann_exact=tuple(line.strip() for line in lines if line.strip()))
+
 
 # ---------------------------------------------------------------------------
 # Test-only insert helpers
@@ -4127,20 +4132,24 @@ class TestClassifyTldWildcardOffEmptyOracle:
     def test_tld_wildcard_off_empty_oracle_two_label_is_data(self) -> None:
         # Before the #1255 fix this returned (DNSBL_CLASS_ZONE, "evil.com") --
         # the RED proof: the dcnt==2 branch never consulted tlds.
-        assert tld_wildcard_classify("evil.com", {}, set()) == (DNSBL_CLASS_DATA, "evil.com"), (
-            f"expected {(DNSBL_CLASS_DATA, 'evil.com')!r}, got {tld_wildcard_classify('evil.com', {}, set())!r}"
+        assert tld_wildcard_classify("evil.com", pfb_unbound.PslRules(), set()) == (DNSBL_CLASS_DATA, "evil.com"), (
+            f"expected {(DNSBL_CLASS_DATA, 'evil.com')!r}, got "
+            f"{tld_wildcard_classify('evil.com', pfb_unbound.PslRules(), set())!r}"
         )
 
     def test_tld_wildcard_off_empty_oracle_public_suffix_is_data(self) -> None:
-        assert tld_wildcard_classify("example.co.uk", {}, set()) == (DNSBL_CLASS_DATA, "example.co.uk"), (
+        assert tld_wildcard_classify("example.co.uk", pfb_unbound.PslRules(), set()) == (
+            DNSBL_CLASS_DATA,
+            "example.co.uk",
+        ), (
             f"expected {(DNSBL_CLASS_DATA, 'example.co.uk')!r}, got "
-            f"{tld_wildcard_classify('example.co.uk', {}, set())!r}"
+            f"{tld_wildcard_classify('example.co.uk', pfb_unbound.PslRules(), set())!r}"
         )
 
     def test_two_label_domain_stays_zone_when_oracle_populated(self) -> None:
         # Before-state proven above (empty oracle -> DATA); with the SAME domain
         # and a populated oracle, the guard must not fire -- ON-side is unchanged.
-        tlds = _dnsbl_load_tld_wildcard_master(["com"], [], [])
+        tlds = _psl_rules(["com"])
         assert tld_wildcard_classify("evil.com", tlds, set()) == (DNSBL_CLASS_ZONE, "evil.com"), (
             f"expected {(DNSBL_CLASS_ZONE, 'evil.com')!r}, got {tld_wildcard_classify('evil.com', tlds, set())!r}"
         )
@@ -4161,7 +4170,7 @@ class TestAbpWildcardUnaffectedByTldWildcardToggle:
     def _build(self, tld_master: list[str]) -> pfb_unbound.BuildResult:
         manifest = {"feeds": [{"raw": "f.raw", "feed": "F", "group": "G", "log_flag": "1"}]}
         config: dict[str, object] = {
-            "tld_wildcard_master": tld_master,
+            "psl_rules": _psl_rules(tld_master),
             "tld_wildcard_blacklist": [],
             "tld_wildcard_exclusion": [],
             "user_whitelist": [],
@@ -4196,8 +4205,8 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
     # a suffix as an opaque string, so no real PSL entry is needed to pin this.
     _SUFFIXES = ["com", "net", "org", "uk", "br", "co.uk", "com.br", "gov.br", "xn--p1ai.xn--80asehdb"]
 
-    def _tlds(self) -> dict[str, dict[str, str]]:
-        return _dnsbl_load_tld_wildcard_master(self._SUFFIXES, [], [])
+    def _tlds(self) -> pfb_unbound.PslRules:
+        return _psl_rules(self._SUFFIXES)
 
     def test_com_br_bare_suffix_is_exact_data(self) -> None:
         assert tld_wildcard_classify("com.br", self._tlds(), set()) == (DNSBL_CLASS_DATA, "com.br")
@@ -4227,7 +4236,7 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
     def test_oracle_absent_two_label_public_suffix_stays_data(self) -> None:
         # The empty-oracle guard (#1255) returns exact DATA at the top of the
         # function, before the dcnt==2 suffix check is ever reached.
-        assert tld_wildcard_classify("com.br", {}, set()) == (DNSBL_CLASS_DATA, "com.br")
+        assert tld_wildcard_classify("com.br", pfb_unbound.PslRules(), set()) == (DNSBL_CLASS_DATA, "com.br")
 
     def test_two_label_punycode_suffix_is_exact_data(self) -> None:
         # Unicode/xn-- 2-label suffixes are opaque strings to the classifier --
@@ -4244,7 +4253,7 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
         # build() pipeline (_normalise_verdict rejects an empty label as
         # domain-shape-invalid first); the classifier stays defensive when
         # called directly.
-        assert tld_wildcard_classify(".uk", self._tlds(), set()) == (DNSBL_CLASS_ZONE, ".uk")
+        assert tld_wildcard_classify(".uk", self._tlds(), set()) == (DNSBL_CLASS_DATA, ".uk")
 
     def test_trailing_dot_form_is_not_a_two_label_shape(self) -> None:
         # str.split(".") on a trailing-dot domain yields a trailing empty label,
@@ -4266,7 +4275,7 @@ class TestTldWildcardClassifyTwoLabelPublicSuffixViaBuild:
     def _build(self, raw_lines: list[str]) -> pfb_unbound.BuildResult:
         manifest = {"feeds": [{"raw": "f.raw", "feed": "F", "group": "G", "log_flag": "1"}]}
         config: dict[str, object] = {
-            "tld_wildcard_master": ["com", "net", "org", "co.uk", "com.br", "gov.br"],
+            "psl_rules": _psl_rules(["com", "net", "org", "co.uk", "com.br", "gov.br"]),
             "tld_wildcard_blacklist": [],
             "tld_wildcard_exclusion": [],
             "user_whitelist": [],
@@ -4329,8 +4338,8 @@ class TestTldWildcardClassifyMultiLabelPublicSuffix:
         "xn--a1.xn--b2.xn--c3",
     ]
 
-    def _tlds(self) -> dict[str, dict[str, str]]:
-        return _dnsbl_load_tld_wildcard_master(self._SUFFIXES, [], [])
+    def _tlds(self) -> pfb_unbound.PslRules:
+        return _psl_rules(self._SUFFIXES)
 
     # ---- bare N-label suffix apex -> exact DATA, one row per dcnt branch ---- #
 
@@ -4424,7 +4433,7 @@ class TestTldWildcardClassifyMultiLabelPublicSuffix:
     def test_oracle_absent_multi_label_suffix_apex_stays_data(self) -> None:
         # The empty-oracle guard (#1255) returns exact DATA at the top of the
         # function, before the generalized apex check is ever reached.
-        assert tld_wildcard_classify("act.edu.au", {}, set()) == (DNSBL_CLASS_DATA, "act.edu.au")
+        assert tld_wildcard_classify("act.edu.au", pfb_unbound.PslRules(), set()) == (DNSBL_CLASS_DATA, "act.edu.au")
 
     def test_exclusion_and_oracle_apex_agree_on_data(self) -> None:
         # act.edu.au is in BOTH the oracle (as a suffix apex) AND the
@@ -4443,12 +4452,10 @@ class TestTldWildcardClassifyMultiLabelPublicSuffix:
         # domain string is never a literal oracle key (the oracle stores
         # "act.edu.au", not ".act.edu.au") -- the generalized apex check must
         # not spuriously match. It falls through to the dcnt==4 oracle search,
-        # whose 3-label truncation ("act.edu.au") IS the real suffix -> still
-        # classifies as a wildcard ZONE (same pattern as the pre-existing
-        # 2-label ".uk" pin) -- unreachable in production (_normalise_verdict
-        # rejects an empty label first).
+        # Resolver rejects the malformed empty label and fails closed to DATA --
+        # unreachable in production (_normalise_verdict rejects it first).
         assert tld_wildcard_classify(".act.edu.au", self._tlds(), set()) == (
-            DNSBL_CLASS_ZONE,
+            DNSBL_CLASS_DATA,
             ".act.edu.au",
         )
 

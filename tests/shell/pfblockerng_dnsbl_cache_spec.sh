@@ -4,7 +4,7 @@
 # Pins the three subcommands against a sandbox chroot:
 #   stage   -- copies the SHIPPED files into the chroot and creates the nullfs/devfs
 #              mount-point dirs (the fresh-MFS fix that made pfb_python_mount fail).
-#   teardown -- removes the SHIPPED files and mapped TLD copy from the chroot.
+#   teardown -- removes the SHIPPED files from the chroot.
 #   save    -- archives ONLY the GENERATED set (pfb_py_* + pfb_unbound.ini), never the
 #              shipped files (those come from /usr/local on restore -> no stale code).
 #   restore -- untars the generated set THEN stages the shipped files; round-trips the
@@ -49,10 +49,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     echo 'HSTS-v1' > "${pfbpkgdir}/pfb_py_hsts.txt"
     echo 'WRAPPER-CODE-v1' > "${pfbpkgdir}/pfb_python.sh"
     chmod +x "${pfbpkgdir}/pfb_python.sh"
-    # issue #1255: the TLD-Wildcard public-suffix oracle -- name-mapped (source
-    # basename 'dnsbl_tld', chroot copy 'pfb_py_tld.txt'), NOT in PFB_PY_SHIPPED
-    # (whose same-basename cp -f loop cannot rename).
-    echo 'TLD-ORACLE-v1' > "${pfbpkgdir}/dnsbl_tld"
+    echo 'PSL-AUTHORITY-v1' > "${pfbpkgdir}/dnsbl_psl"
   }
 
   cleanup_sandbox() {
@@ -85,7 +82,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc restore
   }
 
-  It 'stage copies all shipped files and the mapped TLD file, then creates mount-point dirs'
+  It 'stage copies all shipped files and the PSL authority, then creates mount-point dirs'
     setup_sandbox
     # Before: the chroot does not exist at all (fresh MFS).
     When call dc stage
@@ -95,7 +92,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "${pfbchroot}/pfb_unbound_include.inc" should be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should be exist
     The path "${pfbchroot}/pfb_python.sh" should be executable
-    The path "${pfbchroot}/pfb_py_tld.txt" should be exist
+    The path "${pfbchroot}/dnsbl_psl" should be exist
     # The mount-point dirs exist (the fresh-MFS fix).
     The path "${pfbchroot}/lib" should be directory
     The path "${pfbchroot}/dev" should be directory
@@ -104,7 +101,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     cleanup_sandbox
   End
 
-  It 'teardown removes all shipped files and the mapped TLD file from a chroot path with spaces'
+  It 'teardown removes all shipped files from a chroot path with spaces'
     setup_sandbox
     pfbchroot="${sandbox}/chroot path"
     dc stage
@@ -115,7 +112,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The path "${pfbchroot}/pfb_unbound_include.inc" should not be exist
     The path "${pfbchroot}/pfb_py_hsts.txt" should not be exist
     The path "${pfbchroot}/pfb_python.sh" should not be exist
-    The path "${pfbchroot}/pfb_py_tld.txt" should not be exist
+    The path "${pfbchroot}/dnsbl_psl" should not be exist
     cleanup_sandbox
   End
 
@@ -134,7 +131,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc teardown
     When call teardown_twice
     The output should equal '0:0'
-    The path "${pfbchroot}/pfb_py_tld.txt" should not be exist
+    The path "${pfbchroot}/dnsbl_psl" should not be exist
     cleanup_sandbox
   End
 
@@ -155,22 +152,20 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The output should equal '-f unbound:unbound CHROOT'
   End
 
-  It 'stage copies the TLD oracle from dnsbl_tld to pfb_py_tld.txt (name-mapped, issue #1255)'
+  It 'stage copies the PSL authority by basename'
     setup_sandbox
     When call dc stage
-    The contents of file "${pfbchroot}/pfb_py_tld.txt" should equal 'TLD-ORACLE-v1'
-    # The shipped file itself is NEVER renamed (PFB_PY_SHIPPED's same-basename cp
-    # loop is untouched -- this is a separate, explicit name-mapped copy).
-    The contents of file "${pfbpkgdir}/dnsbl_tld" should equal 'TLD-ORACLE-v1'
+    The contents of file "${pfbchroot}/dnsbl_psl" should equal 'PSL-AUTHORITY-v1'
+    The contents of file "${pfbpkgdir}/dnsbl_psl" should equal 'PSL-AUTHORITY-v1'
     cleanup_sandbox
   End
 
-  It 'stage is a no-op for the TLD oracle when the shipped file is absent'
+  It 'stage is a no-op for the PSL authority when the shipped file is absent'
     setup_sandbox
-    rm -f "${pfbpkgdir}/dnsbl_tld"
+    rm -f "${pfbpkgdir}/dnsbl_psl"
     When call dc stage
     The status should be success
-    The path "${pfbchroot}/pfb_py_tld.txt" should not be exist
+    The path "${pfbchroot}/dnsbl_psl" should not be exist
     cleanup_sandbox
   End
 
@@ -205,7 +200,7 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The result of "tar_list()" should not include 'pfb_dnsbl_regex_rules.py'
     # ... nor the name-mapped TLD oracle (issue #1255: matches the pfb_py_* glob
     # but is shipped, not generated -- archiving it would reinstate a stale oracle).
-    The result of "tar_list()" should not include 'pfb_py_tld.txt'
+    The result of "tar_list()" should not include 'dnsbl_psl'
     cleanup_sandbox
   End
 
@@ -319,9 +314,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     dc save
     rm -rf "${pfbchroot}"
     # Bump the shipped oracle to prove restore re-stages CURRENT code, like pfb_unbound.py.
-    echo 'TLD-ORACLE-v2' > "${pfbpkgdir}/dnsbl_tld"
+    echo 'PSL-AUTHORITY-v2' > "${pfbpkgdir}/dnsbl_psl"
     When call dc restore
-    The contents of file "${pfbchroot}/pfb_py_tld.txt" should equal 'TLD-ORACLE-v2'
+    The contents of file "${pfbchroot}/dnsbl_psl" should equal 'PSL-AUTHORITY-v2'
     cleanup_sandbox
   End
 

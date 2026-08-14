@@ -62,11 +62,11 @@ from tests.test_adr06_golden_oracle import (
 def _build_config(config: dict[str, Any]) -> dict[str, Any]:
     """Shape the golden config.json into the build() config blob.
 
-    The golden config.json carries ``tld_wildcard_master`` as a fixture file name; the
-    build takes the suffix lines directly (no filesystem coupling), so expand it here.
+    The golden config.json carries a legacy suffix fixture name; parse it into the
+    runtime PSL rules directly (no filesystem coupling).
     """
     return {
-        "tld_wildcard_master": _read_lines("tld_master.txt"),
+        "psl_rules": pfb_unbound.PslRules(icann_exact=tuple(_read_lines("tld_master.txt"))),
         "tld_wildcard_blacklist": config.get("tld_wildcard_blacklist", []),
         "tld_wildcard_exclusion": config.get("tld_wildcard_exclusion", []),
         "user_whitelist": config.get("user_whitelist", []),
@@ -251,7 +251,7 @@ class TestNormaliseVerdictBucket:
 
 class TestClassify:
     def _tlds(self) -> dict[str, dict[str, str]]:
-        return pfb_unbound._dnsbl_load_tld_wildcard_master(_read_lines("tld_master.txt"), [], [])
+        return pfb_unbound.PslRules(icann_exact=tuple(_read_lines("tld_master.txt")))
 
     def test_two_label_is_zone(self) -> None:
         cls, key = pfb_unbound.tld_wildcard_classify("tracker.org", self._tlds(), set())

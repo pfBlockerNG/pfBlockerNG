@@ -188,7 +188,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	// -----------------------------------------------------------------------
 
 	/**
-	 * Scenario: returns the four flat inputs (incl. HSTS + TLD oracle) plus sorted
+	 * Scenario: returns the four flat inputs (incl. HSTS + PSL authority) plus sorted
 	 * manifest-authoritative raw files -- NOT orphan raw files or the retired
 	 * unbound_py_data/unbound_py_zone (ADR-65).
 	 *
@@ -217,7 +217,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
-			'unbound_py_tld'     => "{$this->tmpDir}/pfb_py_tld.txt",
+			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => $rawDir,
 			// Keys that must NOT appear in the result:
 			'unbound_py_count'       => "{$this->tmpDir}/pfb_py_count",
@@ -227,7 +227,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 
 		$result = pfb_dnsbl_loaded_input_paths($pfb);
 
-		// The four flat inputs must be present (incl. HSTS + TLD-Wildcard oracle).
+		// The four flat inputs must be present (incl. HSTS + PSL authority).
 		// ADR-65: unbound_py_data/unbound_py_zone are retired writer targets --
 		// they must NOT appear (a stray on-disk copy must never gate the reload).
 		$this->assertNotContains($pfb['unbound_py_data'], $result, 'retired unbound_py_data must NOT be in the path list (ADR-65)');
@@ -235,7 +235,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$this->assertContains($pfb['unbound_py_wh'],      $result, 'unbound_py_wh must be in the path list');
 		$this->assertContains($pfb['unbound_py_sources'], $result, 'unbound_py_sources must be in the path list');
 		$this->assertContains($pfb['unbound_py_hsts'],    $result, 'unbound_py_hsts must be in the path list (shipped HSTS preload; #520)');
-		$this->assertContains($pfb['unbound_py_tld'],     $result, 'unbound_py_tld must be in the path list (shipped TLD-Wildcard oracle; issue #1255)');
+		$this->assertContains($pfb['unbound_py_psl'],     $result, 'unbound_py_psl must be in the path list (shipped PSL authority)');
 
 		// Both .raw files must be present.
 		$this->assertContains("{$rawDir}/aa_feed.raw", $result, 'aa_feed.raw must be in the path list');
@@ -255,7 +255,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	}
 
 	/**
-	 * Scenario: empty rawdir — no .raw files, just the four flat inputs (incl. HSTS + TLD).
+	 * Scenario: empty rawdir — no .raw files, just the four flat inputs (incl. HSTS + PSL).
 	 *
 	 * Given:  a rawdir that is empty (no .raw files)
 	 * When:   pfb_dnsbl_loaded_input_paths() is called
@@ -270,7 +270,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
-			'unbound_py_tld'     => "{$this->tmpDir}/pfb_py_tld.txt",
+			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 			'unbound_py_count'       => "{$this->tmpDir}/pfb_py_count",
 			'unbound_py_regex_count' => "{$this->tmpDir}/pfb_py_regex_count",
@@ -333,7 +333,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => $hsts,
-			'unbound_py_tld'     => "{$this->tmpDir}/pfb_py_tld.txt",
+			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
 
@@ -371,7 +371,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => $hsts,
-			'unbound_py_tld'     => "{$this->tmpDir}/pfb_py_tld.txt",
+			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
 
@@ -382,21 +382,21 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	}
 
 	/**
-	 * Scenario: TLD-Wildcard oracle content change is detected by the fingerprint —
+	 * Scenario: PSL authority content change is detected by the fingerprint —
 	 * issue #1255, HSTS-parity (#520) applied to the public-suffix oracle.
 	 *
-	 * The shipped pfb_py_tld.txt is re-staged by dnsbl_cache_stage() (cp -f) between
+	 * The shipped dnsbl_psl is re-staged by dnsbl_cache_stage() (cp -f) between
 	 * the $pfb_fp_old and $pfb_fp_new snapshots, exactly like pfb_py_hsts.txt. A
-	 * package update shipping a new TLD oracle must flip the fingerprint so the
+	 * package update shipping a new PSL authority must flip the fingerprint so the
 	 * zero-downtime reload picks it up.
 	 *
-	 * Given:  a TLD oracle file included in the path set via pfb_dnsbl_loaded_input_paths()
+	 * Given:  a PSL authority file included in the path set via pfb_dnsbl_loaded_input_paths()
 	 * When:   the file content changes (simulating a package update staging a new oracle)
 	 * Then:   the fingerprint differs (reload is triggered)
 	 */
 	public function testTldOracleFileChangeChangesFingerprint(): void
 	{
-		$tld = "{$this->tmpDir}/pfb_py_tld.txt";
+		$tld = "{$this->tmpDir}/dnsbl_psl";
 		file_put_contents($tld, "com\nnet\n");
 
 		$pfb = [
@@ -405,7 +405,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
-			'unbound_py_tld'     => $tld,
+			'unbound_py_psl'     => $tld,
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
 
@@ -421,12 +421,12 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$this->assertNotSame(
 			$fp_before,
 			$fp_after,
-			'A change to pfb_py_tld.txt must produce a different fingerprint (issue #1255: shipped TLD oracle update must trigger a zero-downtime reload)'
+			'A change to dnsbl_psl must produce a different fingerprint (shipped PSL update must trigger a zero-downtime reload)'
 		);
 	}
 
 	/**
-	 * Scenario: TLD-Wildcard oracle appearing (absent -> present) is detected.
+	 * Scenario: PSL authority appearing (absent -> present) is detected.
 	 *
 	 * Given:  a path set with the oracle ABSENT
 	 * When:   the oracle file is created and the fingerprint recomputed
@@ -434,14 +434,14 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	 */
 	public function testTldOracleAbsentVsPresentChangesFingerprint(): void
 	{
-		$tld = "{$this->tmpDir}/pfb_py_tld.txt";
+		$tld = "{$this->tmpDir}/dnsbl_psl";
 		$pfb = [
 			'unbound_py_data'    => "{$this->tmpDir}/pfb_py_data.txt",
 			'unbound_py_zone'    => "{$this->tmpDir}/pfb_py_zone.txt",
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
-			'unbound_py_tld'     => $tld,
+			'unbound_py_psl'     => $tld,
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
 
@@ -462,7 +462,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 	// the TLD-mode-only array_diff narrowing this helper used to apply is gone
 	// (a no-op once the base path list never carried them). A content change to
 	// either retired file therefore never moves the fingerprint, in EITHER
-	// dnsbl_tld_wildcard state; every other input (the TLD oracle included)
+	// dnsbl_tld_wildcard state; every other input (the PSL authority included)
 	// still gates the reload normally.
 	// -----------------------------------------------------------------------
 
@@ -474,7 +474,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmpDir}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmpDir}/pfb_py_sources.json",
 			'unbound_py_hsts'    => "{$this->tmpDir}/pfb_py_hsts.txt",
-			'unbound_py_tld'     => "{$this->tmpDir}/pfb_py_tld.txt",
+			'unbound_py_psl'     => "{$this->tmpDir}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmpDir}/raw",
 		];
 	}
@@ -484,7 +484,7 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$pfb = $this->reloadFpBasePfb();
 		$pfb['dnsbl_tld_wildcard'] = 'on';
 		file_put_contents($pfb['unbound_py_data'], 'stale-legacy-data');
-		file_put_contents($pfb['unbound_py_tld'], "com\n");
+		file_put_contents($pfb['unbound_py_psl'], "com\n");
 
 		$fp_before = pfb_dnsbl_reload_fingerprint($pfb);
 
@@ -497,10 +497,10 @@ final class DnsblLoadedFingerprintTest extends TestCase
 			'a retired unbound_py_data/unbound_py_zone write must never move the fingerprint (ADR-65)');
 
 		// ...but a staged oracle content change (dnsbl_cache_stage cp -f) MUST.
-		file_put_contents($pfb['unbound_py_tld'], "com\nnet\n");
+		file_put_contents($pfb['unbound_py_psl'], "com\nnet\n");
 		$fp_after_oracle_change = pfb_dnsbl_reload_fingerprint($pfb);
 		$this->assertNotSame($fp_after_data_write, $fp_after_oracle_change,
-			'issue #1255: a TLD oracle content change must still flip the fingerprint in TLD mode (the upgrade requirement)');
+			'PSL authority content change must still flip the fingerprint in TLD mode');
 	}
 
 	/**
