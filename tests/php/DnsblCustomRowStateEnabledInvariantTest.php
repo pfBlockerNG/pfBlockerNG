@@ -58,6 +58,20 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 
 	public function testIpAliasCustomRowSelectsRegexParserWithoutDiagnostics(): void
 	{
+		$source = file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc'
+		);
+		if (!is_string($source)) {
+			throw new RuntimeException('test bootstrap: failed to read pfblockerng_apply.inc');
+		}
+		$marker = strpos($source, "// Set 'auto' format for all lists");
+		$start = $marker === FALSE ? FALSE : strpos($source, 'if (', $marker);
+		$end = $start === FALSE ? FALSE : strpos($source, '// issue #1925:', $start);
+		if ($start === FALSE || $end === FALSE) {
+			throw new RuntimeException('test bootstrap: IP parser-selection block not found');
+		}
+
+		$row = pfb_dnsbl_custom_row('ip-alias', "192.0.2.1\n198.51.100.7");
 		$diagnostics = [];
 		set_error_handler(
 			static function (int $severity, string $message) use (&$diagnostics): bool {
@@ -67,13 +81,12 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 			E_WARNING | E_DEPRECATED
 		);
 		try {
-			$row = pfb_dnsbl_custom_row('ip-alias', "192.0.2.1\n198.51.100.7");
-			$parser = $row['format'] == 'regex' ? 'regex' : 'auto';
+			eval(substr($source, $start, $end - $start));
 		} finally {
 			restore_error_handler();
 		}
 
-		$this->assertSame('regex', $parser);
+		$this->assertSame('regex', $pftype);
 		$this->assertSame([], $diagnostics);
 	}
 
