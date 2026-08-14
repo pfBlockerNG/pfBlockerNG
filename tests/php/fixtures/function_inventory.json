@@ -5352,6 +5352,33 @@
             }
         ]
     },
+    "pfb_install_psl_feed_policy_seed": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "fresh",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "write",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            },
+            {
+                "name": "flush",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
     "pfb_install_registry_writeback": {
         "returnsRef": false,
         "returnType": "void",

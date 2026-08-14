@@ -945,14 +945,10 @@ update_status(" done.\n");
 
 // issue #2371: apply the fresh-install feed-at-suffix PSL policy seed captured at the
 // top of this file, now that the registry pass has already persisted its own (unrelated)
-// '' defaults for these two fields -- see pfb_psl_feed_policy_is_fresh_install()'s
-// docblock (pfblockerng.inc) for why this runs AFTER pfb_install_registry_writeback()
-// rather than as a pfb_migration_registry() entry.
-if ($pfb_psl_feed_policy_fresh_install) {
-	PfbConfig::writeSystem('dnsbl/pfb_psl_feed_private_policy', 'apex');
-	PfbConfig::writeSystem('dnsbl/pfb_psl_feed_icann_policy', 'apex');
-	write_config('pfBlockerNG: seeded feed-at-suffix PSL policy defaults for fresh install (issue #2371)');
-}
+// '' defaults for these two fields -- see pfb_psl_feed_policy_is_fresh_install()'s and
+// pfb_install_psl_feed_policy_seed()'s docblocks (pfblockerng.inc) for why this runs
+// AFTER pfb_install_registry_writeback() rather than as a pfb_migration_registry() entry.
+pfb_install_psl_feed_policy_seed($pfb_psl_feed_policy_fresh_install);
 unset($pfb_psl_feed_policy_fresh_install);
 
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
