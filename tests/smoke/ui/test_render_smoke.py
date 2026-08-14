@@ -2790,12 +2790,18 @@ def test_software_check_checkbox_posts_a_token_the_save_path_accepts(
         assert result.ok, f"Software page render oracle failed: {result.detail}"
         body = resp.text
 
-    control = re.search(r'<input[^>]*\bname="pfb_software_check"[^>]*>', body)
-    assert control is not None, "the Software page must render the pfb_software_check control"
-    value = re.search(r'\bvalue="([^"]*)"', control.group(0))
-    assert value is not None and value.group(1) == "on", (
-        f"pfb_software_check renders {control.group(0)!r}; it must post 'on', the only enabled "
-        "token PFB_FILTER_ON_OFF accepts (pfSense's Form_Checkbox default 'yes' is rejected)"
+    # scrape_form_fields() is the codebase's own attribute parser (quoting variants and
+    # all) and it reports a checkbox only when it is CHECKED, which is precisely the state
+    # whose posted value decides the save.
+    submitted = scrape_form_fields(body)
+    assert "pfb_software_check" in submitted, (
+        "the Software page must render the pfb_software_check control CHECKED here — the "
+        "registry default is enabled, and an unchecked box submits nothing to inspect"
+    )
+    assert submitted["pfb_software_check"] == "on", (
+        f"pfb_software_check posts {submitted['pfb_software_check']!r}; it must post 'on', the "
+        "only enabled token PFB_FILTER_ON_OFF accepts (pfSense's Form_Checkbox default 'yes' "
+        "is rejected, so a ticked Save would persist disabled)"
     )
 
 
