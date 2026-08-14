@@ -130,6 +130,11 @@ PAGE_TABLE: tuple[Page, ...] = (
             "Recognize Shared-Hosting Suffixes (PSL PRIVATE)",
             "Allow Only Selected Domain Suffixes",
             "Allow Shared-Hosting Suffixes (PSL PRIVATE)",
+            # issue #2371 Step 3: the two feed-at-suffix policy selects render with
+            # their labels and (one representative) option text.
+            "Feed entries at shared-hosting suffixes (PSL PRIVATE)",
+            "Feed entries at public suffixes (ICANN)",
+            "Block the suffix apex only",
         ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
