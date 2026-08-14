@@ -64,6 +64,18 @@ def test_wait_boot_complete_keeps_per_probe_cap_for_long_deadline(monkeypatch: p
     assert metadata_timeouts == [30.0]
 
 
+def test_wait_boot_complete_nan_deadline_does_not_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        helpers,
+        "php_eval",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("NaN deadline reached platform probe")),
+    )
+    monkeypatch.setattr(helpers.time, "monotonic", lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match="did not settle"):
+        helpers.wait_boot_complete(cast(helpers.SmokeVM, object()), timeout=float("nan"))
+
+
 def test_wait_boot_complete_plain_reboot_needs_only_platform_boot_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

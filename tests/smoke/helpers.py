@@ -4071,7 +4071,7 @@ def wait_boot_complete(
     last_metadata = "not checked"
     while True:
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if not remaining > 0:
             break
         # Under boot load pfSsh.php (full config load+lock) can be slow; let one over-30s probe
         # retry on the remaining budget instead of aborting the whole wait. The deadline still
@@ -4087,7 +4087,7 @@ def wait_boot_complete(
                 if not require_pkg_metadata:
                     return
                 remaining = deadline - time.monotonic()
-                if remaining <= 0:
+                if not remaining > 0:
                     break
                 try:
                     metadata = vm.ssh(
@@ -4103,7 +4103,7 @@ def wait_boot_complete(
                 if metadata.returncode == 0:
                     return
         remaining = deadline - time.monotonic()
-        if remaining <= 0:
+        if not remaining > 0:
             break
         time.sleep(min(delay, remaining))
     raise RuntimeError(
