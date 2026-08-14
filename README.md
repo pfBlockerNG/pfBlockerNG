@@ -27,10 +27,10 @@ continuing the original package by [BBcan177](https://github.com/BBcan177),
 under the **Apache License 2.0**.
 
 > [!NOTE]
-> For day-to-day usage and configuration, the
-> [Netgate pfBlockerNG documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
-> applies. This README covers installation and the features added on top of
-> the classic pfBlockerNG.
+> For day-to-day usage and configuration, start with the
+> [official pfBlockerNG documentation](https://pfblockerng.github.io/).
+> The [Netgate pfBlockerNG guide](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
+> remains a useful baseline for classic package behavior.
 
 ## Features
 
@@ -148,9 +148,8 @@ pkg upgrade pfSense-pkg-pfBlockerNG
 
 ## Usage
 
-The
-[Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html)
-is the general configuration reference. Two additions are worth calling out.
+The [official documentation](https://pfblockerng.github.io/) is the
+general configuration reference. Two additions are worth calling out.
 
 ### Update Hooks
 
@@ -244,6 +243,10 @@ channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
 ## Documentation
 
 - **Using pfBlockerNG:**
+  [official user documentation](https://pfblockerng.github.io/).
+- **Installing project builds:**
+  [package repository](https://pfblockerng.github.io/pkg).
+- **Classic package baseline:**
   [Netgate documentation](https://docs.netgate.com/pfsense/en/latest/packages/pfblocker.html).
 - **Developing, testing, and releasing this package:**
   [CONTRIBUTING.md](CONTRIBUTING.md).
