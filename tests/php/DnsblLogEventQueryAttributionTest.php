@@ -208,6 +208,16 @@ final class DnsblLogEventQueryAttributionTest extends TestCase
 		}
 	}
 
+	public function testReapRespondersSurfacesChildFailure(): void
+	{
+		$this->forkChild(static function (): void {
+			throw new RuntimeException('salvage cap expired / stuck or environment: waiting for the query-channel request marker');
+		});
+		$this->expectException(RuntimeException::class);
+		$this->expectExceptionMessage('salvage cap expired / stuck or environment: waiting for the query-channel request marker');
+		$this->reapResponders();
+	}
+
 	/**
 	 * Spawn a tracked process playing the query channel's Python side --
 	 * mirrors DnsblQueryClientTest::spawnResponder(). Answers with $replyTemplateJson
