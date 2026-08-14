@@ -4069,12 +4069,15 @@ def wait_boot_complete(
     snippet = "echo '<<BOOT>>' . (is_platform_booting() ? '1' : '0') . '<<END>>';"
     last = "?"
     last_metadata = "not checked"
-    while time.monotonic() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         # Under boot load pfSsh.php (full config load+lock) can be slow; let one over-30s probe
         # retry on the remaining budget instead of aborting the whole wait. The deadline still
         # bounds it -- a persistently slow box times out loudly below.
         try:
-            out = php_eval(vm, snippet, timeout=30.0).stdout
+            out = php_eval(vm, snippet, timeout=min(30.0, remaining)).stdout
         except subprocess.TimeoutExpired:
             last = "timeout"
             continue
@@ -4083,15 +4086,26 @@ def wait_boot_complete(
             if last == "0":
                 if not require_pkg_metadata:
                     return
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
                 try:
-                    metadata = vm.ssh("/bin/test", "-f", "/var/run/pfSense_version.rc", timeout=30.0)
+                    metadata = vm.ssh(
+                        "/bin/test",
+                        "-f",
+                        "/var/run/pfSense_version.rc",
+                        timeout=min(30.0, remaining),
+                    )
                 except subprocess.TimeoutExpired:
                     last_metadata = "timeout"
                     continue
                 last_metadata = f"rc={metadata.returncode} stdout={metadata.stdout!r} stderr={metadata.stderr!r}"
                 if metadata.returncode == 0:
                     return
-        time.sleep(delay)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(delay, remaining))
     raise RuntimeError(
         f"pfSense boot did not settle after {timeout:.0f}s: is_platform_booting() last returned "
         f"{last!r} (expected '0'); /var/run/pfSense_version.rc last probe: {last_metadata}. "
