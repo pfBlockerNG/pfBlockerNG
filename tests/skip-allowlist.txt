@@ -1,0 +1,34 @@
+# tests/skip-allowlist.txt -- recorded skip allowlist for scripts/check-skip-allowlist.py
+# (issue #2359). One entry per line: <suite>:<classname>::<name>, the id the script derives
+# from each suite's JUnit report (`#` starts a comment; blank lines ignored).
+#
+# Every entry MUST carry a trailing `# <reason>` comment -- an entry with none is a parse
+# error (exit 2), so this file cannot rot into a bare id list with no record of WHY a test
+# currently skips. Add a legitimately new skip as its own entry with its own reason; never
+# widen an existing reason to cover an unrelated test.
+#
+# An allowlisted id this run did NOT observe is informational only (exit 0 unaffected) --
+# the skip set legitimately differs per matrix leg (a PHP-build-gated case skips on PHP 8.3
+# and not 8.5) and per invoking uid: CI's pytest/shellspec jobs run as uid 1001, while a
+# local `scripts/run-in-docker.sh` run uses your own uid, so a local run may observe MORE
+# skips than CI (any chmod/permission-guarded case that denies only under a non-root,
+# non-1001 uid). Only an id observed in a report but absent from this file fails the gate.
+#
+# Recorded 2026-08-14 from a real run of each suite inside ghcr.io/pfblockerng/ci-runner
+# (.agents/policy/testing.md "Running tests"); PHPUnit enumerated on both PHP 8.3 and PHP 8.5.
+
+# PHPUnit -- union of PHP 8.3 and PHP 8.5 (issue #2356's four remaining skips).
+phpunit:OctetStreamRecoveryWiringTest::test_octet_stream_archive_recovered_to_zip  # host file(1) classification (PHP 8.3 and 8.5)
+phpunit:PfbFeedNormalizeTest::testBomAndZwjAreStrippedAsNonPrintable  # platform locale data (PHP 8.3 and 8.5)
+phpunit:PfbFeedNormalizeTest::testInteriorNbspIsDataWhileTrailingNbspIsTrimmed  # platform locale data (PHP 8.3 and 8.5)
+phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse  # PHP 8.3's php://memory can fail flock(); absent from the PHP 8.5 report (informational there)
+
+# pytest -- 6 observed via scripts/run-in-docker.sh (own uid, not CI's uid 1001).
+pytest:tests.test_add_repo_conf::test_no_abi_placeholder_in_any_generator_output[build-repo.sh-channel_args1]  # build-repo.sh has no --nightly alias in --print-conf mode
+pytest:tests.test_add_repo_conf::test_no_abi_placeholder_in_any_generator_output[build-repo-portable.py-channel_args1]  # build-repo-portable.py has no --nightly alias (channels use --channel)
+pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present in the image
+pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present in the image
+pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the image is Linux
+pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the image is Linux
+
+# shellspec -- 0 observed in the image today (no entries needed).
