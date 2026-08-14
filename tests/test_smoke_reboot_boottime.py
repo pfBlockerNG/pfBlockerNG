@@ -88,6 +88,7 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(
         helpers.reboot_vm(vm, timeout=5, require_pkg_metadata=require_pkg_metadata)
 
     assert ready_calls
+    assert "/sbin/reboot" in fake_vm.calls
     assert fake_vm.boottime_reads == 4
     assert boot_waits == [(vm, False if require_pkg_metadata is None else require_pkg_metadata)]
     assert cron_guards == [vm]
