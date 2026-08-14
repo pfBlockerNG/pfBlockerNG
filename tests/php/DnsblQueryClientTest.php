@@ -848,7 +848,9 @@ final class DnsblQueryClientTest extends TestCase
 
 	public function testShortReplyTimeoutReturnsNullAndCleansUp(): void
 	{
-		$result = pfb_dnsbl_query('short-reply-timeout.example', 'A', 0.001);
+		// Start expiry only after publication, so scheduler latency cannot select the lock branch.
+		$now = fn (): float => file_exists($this->channel()) ? 1.0 : 0.0;
+		$result = pfb_dnsbl_query('short-reply-timeout.example', 'A', 0.001, $now);
 
 		$this->assertNull($result);
 		$logs = (string) @file_get_contents($GLOBALS['pfb']['errlog']);
