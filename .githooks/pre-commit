@@ -273,7 +273,7 @@ if [ "$staged_php" = 1 ]; then
 	# and 8.5, a host PHP is whichever version that machine happens to carry, and there
 	# is nothing to gain from grading syntax and sniffs against it. An unreachable
 	# container is a FAILED gate here, not a skip: a skipped gate reads greener than a
-	# failed one, and `git commit --no-verify` is the deliberate way past it.
+	# failed one, so an unreachable image blocks the commit until it is reachable.
 
 	# php -l syntax check (output shown only for files that fail). One container
 	# invocation for the whole tree, not one per file.
