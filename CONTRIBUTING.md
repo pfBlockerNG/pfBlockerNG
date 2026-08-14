@@ -183,6 +183,15 @@ the exit status; a skip is not coverage. Four PHPUnit cases skip there today; th
 that used to join them are gone (#2356), and `/usr/bin/tar` in the image is bsdtar, as it
 is on the appliance.
 
+CI gates the skip *set*, not just its count (issue #2359): each suite's job writes a
+JUnit report and a `Skip allowlist` step runs `scripts/check-skip-allowlist.py` against
+`tests/skip-allowlist.txt` (one file, shared by all three suites — ids are prefixed
+`pytest:` / `phpunit:` / `shellspec:`). A test that starts skipping and is not on that
+file fails the build. To add a legitimately new skip, add its id as its own line in
+`tests/skip-allowlist.txt` with a trailing `# <reason>` comment (a bare id with no reason
+is itself a build failure) — run the suite locally to get the exact id from its report,
+never hand-guess it.
+
 `scripts/agent/run-gates.sh` routes every gate it runs through this wrapper, and the
 `pre-commit` hook routes its `php -l` and PHPCS gates the same way — those two need a
 PHP matching the matrix, which a host PHP is not. The hook's other linters (ruff,
