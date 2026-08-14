@@ -161,11 +161,12 @@ function pfb_dnsbl_alias_count_rebuild(string $path, int $current): int {
 	return $current + (pfb_count_lines($path) ?? 0);
 }
 
-/** @return array{header:string,custom:mixed,state:string,url:string} */
+/** @return array{header:string,custom:mixed,format:string,state:string,url:string} */
 function pfb_dnsbl_custom_row(string $aliasname, mixed $custom): array {
 	return [
 		'header' => "{$aliasname}_custom",
 		'custom' => $custom,
+		'format' => 'regex',
 		'state'  => 'Enabled',
 		'url'    => 'custom',
 	];
