@@ -412,7 +412,17 @@ def test_software_page_toggle_post_roundtrip(
         with software_panel_forced(smoke_vm, "on"):
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text, "Software panel override must expose reachable POST form"
-            assert (flow.field in scrape_form_fields(page.text)) is (original == flow.on)
+            rendered = scrape_form_fields(page.text)
+            assert (flow.field in rendered) is (original == flow.on)
+            # What the RENDERED box posts, not what this test would like it to post: the
+            # checkbox carried pfSense's default 'yes' for a release, which the save path
+            # rejects, so every Save persisted disabled while a hardcoded 'on' POST here
+            # kept passing (issue #2367).
+            if flow.field in rendered:
+                assert rendered[flow.field] == flow.on, (
+                    f"the rendered checkbox posts {rendered[flow.field]!r}; the save path accepts "
+                    f"only {flow.on!r}, so a ticked Save would persist disabled"
+                )
             _set_and_confirm(webui, smoke_vm, flow, flipped)
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text

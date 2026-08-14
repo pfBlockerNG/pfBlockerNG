@@ -179,11 +179,16 @@ $section->addInput(new Form_StaticText(
 $form->add($section);
 
 $section = new Form_Section('Updates');
+// The 5th argument is the token this box POSTS when ticked, and it is load-bearing:
+// pfSense defaults it to 'yes', which the save path's PFB_FILTER_ON_OFF rejects, so a
+// checked Save would persist the disabled token and the setting could never be turned
+// back on (issue #2367).
 $section->addInput(new Form_Checkbox(
 	'pfb_software_check',
 	'New version check',
 	'Enabled',
-	$pfb_sw_check
+	$pfb_sw_check,
+	'on'
 ))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
 
