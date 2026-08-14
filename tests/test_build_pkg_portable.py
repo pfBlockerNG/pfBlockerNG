@@ -1707,30 +1707,31 @@ def test_project_build_uses_canonical_channel_recipe_not_moved_substitute(tmp_pa
     assert full["comment"] == "Channel fixture"
 
 
-def test_nightly_requires_explicit_calendar_pkgversion(tmp_path: Path) -> None:
+@pytest.mark.parametrize("pkgversion", [None, "20260804", f"20261304153045.{'a' * 40}"])
+def test_nightly_requires_valid_explicit_pkgversion(tmp_path: Path, pkgversion: str | None) -> None:
     ports, portdir, _ports_sha, _source_sha = _make_channel_port(tmp_path, "nightly")
     out = tmp_path / "out"
-    assert (
-        bpp.main(
-            [
-                "--ports",
-                str(ports),
-                "--port-dir",
-                str(portdir),
-                "--channel",
-                "nightly",
-                "--abi",
-                "FreeBSD:15:amd64",
-                "--py-flavor",
-                "py311",
-                "--compression",
-                "xz",
-                "--out",
-                str(out),
-            ]
-        )
-        == 1
-    )
+    args = [
+        "--ports",
+        str(ports),
+        "--port-dir",
+        str(portdir),
+        "--channel",
+        "nightly",
+        "--abi",
+        "FreeBSD:15:amd64",
+        "--py-flavor",
+        "py311",
+        "--php",
+        "8.3",
+        "--compression",
+        "xz",
+        "--out",
+        str(out),
+    ]
+    if pkgversion is not None:
+        args += ["--pkgversion", pkgversion]
+    assert bpp.main(args) == 1
     assert not out.exists() or not list(out.glob("*.pkg"))
 
 

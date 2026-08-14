@@ -586,14 +586,15 @@ jobs:
           export LEG
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
-          NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${{ github.sha }}"
+          SOURCE_SHA="$(git rev-parse HEAD)"
+          NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHA}"
           PKG="$(sh scripts/build-leg.sh \
             --channel    nightly \
             --abi        "$ABI" \
             --py-flavor  "$PY_FLAVOR" \
             --php        "$PHP_VERSION" \
             --pkgversion "$NIGHTLY_VERSION" \
-            --annotate   "commit=${{ github.sha }}")"
+            --annotate   "commit=${SOURCE_SHA}")"
           echo "SMOKE_NIGHTLY_PKG=$PKG" >> "$GITHUB_ENV"
 
       # ADR-24 §2.2.4: the VM identity (NIC MAC + SMBIOS uuid) is per-image. CE

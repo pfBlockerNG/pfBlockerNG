@@ -55,6 +55,7 @@ def test_nightly_workflow_exists_and_is_branch_independent() -> None:
     assert "source_sha:" in text
     assert "rev-parse HEAD" in text
     assert "cancel-in-progress: false" in text
+    assert "queue: max" in text
     assert "read-version-matrix.sh" in text
     assert "--print-build" in text
     assert "--print-route" in text
