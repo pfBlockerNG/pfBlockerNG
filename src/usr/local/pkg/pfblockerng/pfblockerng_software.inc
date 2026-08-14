@@ -32,9 +32,9 @@
  * file-local stand-in for that one config field, matching devel's enabled/disabled
  * semantics exactly (see their docblock).
  *
- * Ported wholesale from devel's pfblockerng.inc (ADR-19 section). Pinned by
- * tests/php/assert_software_3_3.php, which includes ONLY this file (never extra.inc) to
- * prove the self-containment.
+ * Ported wholesale from devel's pfblockerng.inc (ADR-19 section). No tests ship on this
+ * branch (owner ruling, issue #2360); a standalone off-repo assertion harness exercised
+ * this file in isolation (never extra.inc) to prove the self-containment.
  */
 
 /*
@@ -163,8 +163,9 @@ function pfb_software_cache_matches_install(array $cache, string $pkgname, strin
  * per-channel catalogues 'pfblockerng-stable' / '-testing' / '-edge' / '-nightly'. The
  * repo is read from `pkg query '%R' <pkgname>`. A Netgate-installed add-on (repo
  * 'pfSense'), an empty/'unknown' origin, or anything else -> FALSE: the Software tab,
- * the page, the priv match[] line, AND the cron notice all gate on this so a stock build
- * shows none of them.
+ * the page's own top-of-file guard, and the cron notice all gate on this so a stock
+ * build shows none of them (the static priv match[] line cannot gate; the page guard
+ * covers direct requests).
  */
 function pfb_software_is_our_build(?string $installed_repo): bool {
 	return in_array(
@@ -190,8 +191,9 @@ function pfb_update_available(?string $installed, ?string $latest): bool {
 /*
  * pfb_software_check_config_read()/_write() — the ONE config field this backport reads
  * (installedpackages/pfblockerng/config/0/pfb_software_check), owned locally rather than
- * through PfbConfig (owner directive: zero touch to the shared 3.2 gateway on this
- * branch). Semantics mirror devel's registered field exactly:
+ * through PfbConfig (owner directive: zero touch to the shared 3.3-line gateway on this
+ * branch). Semantics match devel's registered field (devel compares the raw value; this
+ * reader also trims surrounding whitespace before comparing):
  *   - absent (NULL)   -> ENABLED (issue #1887's registry default 'on');
  *   - present 'on' (case-insensitive, trimmed) -> ENABLED;
  *   - present '' or any other token             -> DISABLED (explicit Off / legacy junk).
@@ -512,9 +514,9 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
  * catalogues `pfblockerng-stable|-testing|-edge|-nightly`. A Netgate-ports install (repo
  * 'pfSense'/unknown/'') returns false.
  *
- * The Software tab append, the pfblockerng_software.php top-of-file guard, and
- * the priv match line all gate on this single predicate so a Netgate-installed
- * add-on shows no Software page anywhere.
+ * The Software tab append and the pfblockerng_software.php top-of-file guard
+ * both gate on this single predicate so a Netgate-installed add-on shows no
+ * Software page anywhere (the static priv match line cannot gate by itself).
  */
 // Hidden test/support override for the Software-page provenance gate. A file
 // containing 'on' or 'off' FORCES the gate (case-insensitive, trimmed); absent or any other
