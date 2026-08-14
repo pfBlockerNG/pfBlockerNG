@@ -57,14 +57,14 @@ from pathlib import Path
 # it before parsing; a genuinely truncated/malformed report still fails below.
 _XML_ILLEGAL_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
-# An allowlist line is "<id>  # <reason>", split on the LAST '#' that has whitespace on
-# both sides. The suites own the id and put unspaced '#' in it -- a pytest parametrised id
-# (test_x[a#b]) and PHPUnit's unnamed data-set naming (`testFoo with data set #0`) both do
-# -- so a split on the first '#' truncates the id into one no run produces, and the skip it
-# names can never be recorded. We own the reason, so the one shape ruled out is a reason
-# carrying a spaced '#'; that surfaces as an id carrying one, which is a parse error below.
-_ENTRY = re.compile(r"^(?P<id>.*\S)\s+#\s+(?P<reason>\S.*)$")
-_SPACED_HASH = re.compile(r"\s#\s")
+# An allowlist line is "<id>  # <reason>": the separator is TWO OR MORE spaces before the
+# '#'. The suites own the id and put every kind of '#' in it -- a pytest parametrised id
+# renders its parameter verbatim (test_x[a#b], and even test_x[see # this]), and PHPUnit
+# names an unnamed data-set case `testFoo with data set #0`. Splitting on any single '#',
+# spaced or not, truncates one of those into an id no run produces, and the skip it names
+# could then never be recorded. Two spaces is what every entry in the file already uses and
+# what no suite puts inside an id.
+_ENTRY = re.compile(r"^(?P<id>\S.*?)\s{2,}#\s*(?P<reason>\S.*)$")
 
 
 # pytest and PHPUnit write <skipped>; shellspec 0.28.1 writes <skip> (probed against its
@@ -135,11 +135,8 @@ def parse_allowlist(path: Path) -> dict[str, str]:
             continue
         entry = _ENTRY.match(line)
         if entry is None:
-            raise AllowlistError(f"{path}:{lineno}: allowlist entry has no trailing '# reason': {raw!r}")
-        entry_id = entry.group("id")
-        if _SPACED_HASH.search(entry_id):
-            raise AllowlistError(f"{path}:{lineno}: a reason may not contain a spaced '#': {raw!r}")
-        reasons[entry_id] = entry.group("reason").strip()
+            raise AllowlistError(f"{path}:{lineno}: allowlist entry needs a reason after two spaces and a '#': {raw!r}")
+        reasons[entry.group("id")] = entry.group("reason").strip()
     return reasons
 
 
