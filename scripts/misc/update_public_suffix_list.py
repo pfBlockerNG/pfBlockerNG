@@ -176,6 +176,10 @@ def _punycode_label(label: str) -> str:
         converted = label.lower()
     else:
         converted = label.encode("idna").decode("ascii").lower()
+    if converted.startswith("xn--"):
+        canonical = converted.encode("ascii").decode("idna").encode("idna").decode("ascii").lower()
+        if canonical != converted:
+            raise UnicodeError(f"non-canonical IDNA label: {label!r}")
     if len(converted) > 63:
         raise UnicodeError(f"DNS label exceeds the 63-octet cap: {len(converted)} octets")
     if (

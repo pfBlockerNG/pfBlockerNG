@@ -113,6 +113,14 @@ def test_parser_rejects_shell_and_regex_metacharacters(rule: str) -> None:
         pfb_unbound.parse_psl_rules(AUTHORITY.replace("com\n", f"com\n{rule}\n", 1))
 
 
+@pytest.mark.parametrize("label", ["xn--bad", "xn--abc"])
+def test_parser_and_resolver_reject_invalid_ace_labels(label: str) -> None:
+    with pytest.raises(ValueError):
+        pfb_unbound.parse_psl_rules(AUTHORITY.replace("com\n", f"com\n{label}\n", 1))
+    with pytest.raises(ValueError):
+        pfb_unbound.resolve_public_suffix(f"{label}.com", pfb_unbound.parse_psl_rules(AUTHORITY))
+
+
 def test_parser_accepts_duplicate_overlapping_rules_without_changing_precedence() -> None:
     authority = AUTHORITY.replace("com\n", "com\ncom\n").replace("*.ck\n", "*.ck\n*.ck\n")
     rules = pfb_unbound.parse_psl_rules(authority)
