@@ -182,11 +182,14 @@ GIT_EOF
   End
 
   It 'refuses when the resolved working directory is not inside the mounted tree'
-    # Resolving both paths is not enough on its own: a case-insensitive filesystem lets a
-    # caller enter the tree by a spelling `pwd -P` preserves and git canonicalizes away
-    # (`/private/TMP/...` under macOS bash), and the two disagree again. The wrapper must
-    # refuse rather than run in whatever that path names inside the container, because an
-    # empty working directory is the silent-green failure this whole change is about.
+    # Resolving both paths is not enough on its own. The case that motivates this is a
+    # case-insensitive filesystem, where a caller enters the tree by a spelling `pwd -P`
+    # preserves under bash and git canonicalises away (`/private/TMP/...`) — but that one
+    # cannot be built portably, so the disagreement is staged directly with a git that
+    # names a different tree. What is pinned is the wrapper's answer to the disagreement,
+    # not the way it arose: refuse, rather than run in whatever the path names inside the
+    # container, because an empty working directory is the silent-green failure this whole
+    # change is about.
     export STUB_INSPECT_RC=0
     stub_git
     mkdir -p "${WORK}/elsewhere/.git"
@@ -212,6 +215,25 @@ GIT_EOF
     The status should be success
     The output should include "--volume ${PFB_ROOT}:${PFB_ROOT}"
     The output should not include 'elsewhere'
+  End
+
+  It 'joins a RELATIVE common dir onto the directory git was asked from'
+    # git may answer `--git-common-dir` relative, and relative to the CWD rather than to
+    # the toplevel. The join is what makes that absolute; get it wrong and the `cd` that
+    # follows fails and the run dies instead of mounting anything. Whether the join starts
+    # from the logical or the physical directory is NOT pinned here — the `cd`-and-print
+    # after it resolves either spelling to the same place, which is why that half was left
+    # as it was.
+    export STUB_INSPECT_RC=0
+    stub_git
+    mkdir -p "${WORK}/real/sub/nested.git"
+    export COMMON_ANSWER='nested.git'
+    NESTED="$(CDPATH='' cd "${WORK}/real/sub/nested.git" && pwd -P)"
+    When call wrapper_in_real_tree true
+    The status should be success
+    # It resolves under the mounted tree, so it needs no second --volume of its own.
+    The output should include "--volume ${STUB_TOPLEVEL}:${STUB_TOPLEVEL}"
+    The output should not include "--volume ${NESTED}"
   End
 
   It 'refuses when git names no work tree at all'

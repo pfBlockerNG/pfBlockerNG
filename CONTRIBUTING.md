@@ -175,7 +175,7 @@ want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which ha
 after the fact.
 
 Every suite is green in the image — pytest 5039 passed, PHPUnit 5234 tests with no
-failures, shellspec 1330 examples — so a red there is yours. What differs between the
+failures, shellspec 1331 examples — so a red there is yours. What differs between the
 image and a macOS host is which tests *skip*, not which fail: its locale and `file(1)`
 classify a few inputs differently, one case needs a PHP build whose `php://memory` can
 fail `flock()`, and it runs as your own uid rather than root. Read the skip list, not just
