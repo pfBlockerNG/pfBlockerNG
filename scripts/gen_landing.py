@@ -951,8 +951,35 @@ def _dir_entries(site: str, rel: str) -> tuple[list[str], list[tuple[str, int, f
             subdirs.append(name)
         else:
             st = os.stat(p)
-            files.append((name, st.st_size, st.st_mtime))
+            files.append((name, st.st_size, _display_epoch(p, st.st_mtime)))
     return subdirs, files
+
+
+def _display_epoch(path: str, mtime: float) -> float:
+    """The epoch a listing row shows: a .pkg's embedded creation epoch, else mtime.
+
+    The publisher regenerates listings in a fresh clone whose mtimes are all
+    'now' (issue #2375), so for packages the embedded ``created`` annotation /
+    build-record ``source_date_epoch`` is the only truthful date. Unreadable or
+    unannotated packages (pre-record hand builds, foreign files) keep the mtime.
+    """
+    if not path.endswith(".pkg"):
+        return mtime
+    try:
+        manifest = read_compact_manifest(path)
+    except Exception:  # corrupt/foreign .pkg — a listing must never crash the publish
+        return mtime
+    annotations = manifest.get("annotations") or {}
+    for epoch in (annotations.get("created"), _build_record(manifest).get("source_date_epoch")):
+        if epoch is None:
+            continue
+        try:
+            value = float(epoch)
+            artifact_datetime(value)  # reject out-of-range epochs the renderer would choke on
+            return value
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    return mtime
 
 
 def render_autoindex(

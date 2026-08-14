@@ -222,6 +222,44 @@ def test_commit_sha_falls_back_to_build_record_source_sha() -> None:
     assert gl.commit_sha({"annotations": {"pfb_build_record": "{not json"}}) == ""
 
 
+def test_dir_entries_use_record_epoch_for_pkg_files(tmp_path: Path, monkeypatch: Any) -> None:
+    """Scenario: the per-directory listing must not show the publish run's mtime for packages.
+
+    Given a cell directory holding a .pkg (whose embedded build record carries
+    source_date_epoch) and a catalog plumbing file,
+    When the directory entries are scanned,
+    Then the .pkg row carries the record epoch while the plumbing file keeps its mtime,
+    And an unreadable .pkg (corrupt/foreign) falls back to its mtime instead of crashing.
+    """
+    import json
+
+    record_epoch = int(datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp())
+    (tmp_path / "pfSense-pkg-pfBlockerNG-3.3.2.pkg").write_bytes(b"not a real pkg")
+    (tmp_path / "broken.pkg").write_bytes(b"also not a pkg")
+    (tmp_path / "meta.conf").write_text("meta")
+
+    def fake_read(path: str) -> dict:
+        if path.endswith("broken.pkg"):
+            raise ValueError("corrupt")
+        return {"annotations": {"pfb_build_record": json.dumps({"source_date_epoch": record_epoch})}}
+
+    monkeypatch.setattr(gl, "read_compact_manifest", fake_read)
+    _, files = gl._dir_entries(str(tmp_path), "")
+    by_name = {name: mtime for name, _size, mtime in files}
+    assert by_name["pfSense-pkg-pfBlockerNG-3.3.2.pkg"] == float(record_epoch)
+    assert by_name["broken.pkg"] == os.stat(tmp_path / "broken.pkg").st_mtime
+    assert by_name["meta.conf"] == os.stat(tmp_path / "meta.conf").st_mtime
+    # Out-of-range epoch (inf) must fall back to mtime, not crash the renderer later.
+    monkeypatch.setattr(
+        gl,
+        "read_compact_manifest",
+        lambda _p: {"annotations": {"created": "1e309"}},
+    )
+    _, files = gl._dir_entries(str(tmp_path), "")
+    by_name = {name: mtime for name, _size, mtime in files}
+    assert by_name["broken.pkg"] == os.stat(tmp_path / "broken.pkg").st_mtime
+
+
 def test_commit_cell_links_valid_sha_and_dashes_missing() -> None:
     """The Commit column links a short SHA to GitHub, and degrades safely.
 
