@@ -152,6 +152,10 @@ def _psl_normalize_name(name: str) -> str:
             raise ValueError("invalid DNS label")
         try:
             encoded = label.encode("idna").decode("ascii").lower()
+            if encoded.startswith("xn--"):
+                canonical = encoded.encode("ascii").decode("idna").encode("idna").decode("ascii").lower()
+                if canonical != encoded:
+                    raise UnicodeError("non-canonical IDNA label")
         except UnicodeError as exc:
             raise ValueError("invalid IDNA label") from exc
         if (

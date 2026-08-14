@@ -699,12 +699,15 @@ def test_main_private_floor_rejection_preserves_both_outputs(tmp_path: Path, mon
     assert (tld_target.read_bytes(), psl_target.read_bytes()) == before
 
 
-def test_main_malformed_rule_rejection_preserves_both_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("bad_rule", ["a..b", "xn--bad", "xn--abc"])
+def test_main_malformed_rule_rejection_preserves_both_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_rule: str
+) -> None:
     tld_target = tmp_path / "dnsbl_tld"
     psl_target = tmp_path / "dnsbl_psl"
     tld_target.write_bytes(b"old tld\n")
     psl_target.write_bytes(b"old psl\n")
-    malformed = _FAKE_FETCH_BODY.replace("ac\ncom\n", "a..b\ncom\n")
+    malformed = _FAKE_FETCH_BODY.replace("ac\ncom\n", f"{bad_rule}\ncom\n")
     monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
     monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
     monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
