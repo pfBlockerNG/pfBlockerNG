@@ -16,8 +16,10 @@
 #
 # Recorded 2026-08-14 from a real run of each suite inside ghcr.io/pfblockerng/ci-runner
 # (.agents/policy/testing.md "Running tests"); PHPUnit enumerated on both PHP 8.3 and PHP 8.5.
-# An entry is "<id>  # <reason>", split on the first whitespace-preceded '#', so an
-# id may carry a '#' of its own but not a spaced one. Copy the id from the report the
+# An entry is "<id>  # <reason>", split on the LAST '#' that has whitespace on both sides,
+# so an id may carry a '#' of its own -- pytest parametrised ids and PHPUnit's `with data
+# set #0` naming do -- while a REASON may not carry a spaced one (that is a parse error).
+# Copy the id from the report the
 # suite wrote: a pytest parametrised id can be index-derived (channel_args1), and the
 # checker replaces XML-illegal control bytes with '?' before parsing, so an id built
 # from a description carrying one is recorded in that replaced form.

@@ -263,6 +263,31 @@ def test_allowlist_id_may_contain_a_hash(tmp_path: Path) -> None:
     assert csa.parse_allowlist(allow) == {"pytest:C::test_x[a#b]": "tracked reason"}
 
 
+def test_allowlist_id_may_contain_a_spaced_hash(tmp_path: Path) -> None:
+    """PHPUnit names an unnamed data-set case `<method> with data set #0`, so a real id can
+    carry a SPACE-preceded '#'. Splitting on the first one truncates that id into something
+    no run produces, and the skip it names could then never be recorded — the gate would
+    fail on it forever, whatever the allowlist said."""
+    allow = _write(
+        tmp_path,
+        "allow.txt",
+        "phpunit:ProbeTest::testFoo with data set #0  # provider case skips off-appliance\n",
+    )
+    assert csa.parse_allowlist(allow) == {
+        "phpunit:ProbeTest::testFoo with data set #0": "provider case skips off-appliance"
+    }
+
+
+def test_allowlist_reason_may_not_contain_a_spaced_hash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The delimiter is the LAST spaced '#', so a reason carrying one would silently move
+    the split and record an id no run produces. Reasons are ours to write, ids are the
+    suite's, so this is a parse error rather than a guess."""
+    report = _report(tmp_path, "r.xml", '<testcase classname="C" name="a"><skipped/></testcase>')
+    allow = _write(tmp_path, "allow.txt", "pytest:C::a  # tracked # reason\n")
+    assert csa.main(["--suite", "pytest", "--allowlist", str(allow), str(report)]) == 2
+    assert "spaced" in capsys.readouterr().err
+
+
 def test_allowlist_reason_may_contain_a_hash(tmp_path: Path) -> None:
     """The reason is free text and often carries an issue reference."""
     allow = _write(tmp_path, "allow.txt", "pytest:C::a  # see #2359 for the cause\n")
