@@ -8,7 +8,7 @@ from scripts import release_version as rv
 
 SOURCE_A = "a" * 40
 SOURCE_B = "b" * 64
-SOURCE_MIXED = ("0123456789abcdef" * 3)[:40]
+SOURCE_MIXED = ("0123abcdef" * 4)[:40]
 PORTS_A = "c" * 40
 PORTS_B = "d" * 64
 MATRIX_A = "e" * 64
