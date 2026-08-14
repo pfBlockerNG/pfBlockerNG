@@ -328,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="exit non-zero if dnsbl_tld is out of date vs a fresh PSL fetch; changes nothing",
+        help="exit non-zero if dnsbl_tld and dnsbl_psl are out of date; changes nothing",
     )
     args = parser.parse_args(argv)
 
@@ -375,11 +375,13 @@ def main(argv: list[str] | None = None) -> int:
 def _atomic_write(path: Path, text: str) -> None:
     """Publish one generated file through a same-directory flushed replacement."""
     temporary: str | None = None
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o644
     try:
         with tempfile.NamedTemporaryFile(
             mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
         ) as handle:
             temporary = handle.name
+            os.fchmod(handle.fileno(), mode)
             handle.write(text)
             handle.flush()
             os.fsync(handle.fileno())

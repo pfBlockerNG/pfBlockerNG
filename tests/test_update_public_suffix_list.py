@@ -678,7 +678,7 @@ def test_module_help_and_test_prose_keep_both_output_sections(capsys: pytest.Cap
     assert "PRIVATE" in (upsl.__doc__ or "")
     with pytest.raises(SystemExit):
         upsl.main(["--help"])
-    assert "dnsbl_psl" in capsys.readouterr().out
+    assert "exit non-zero if dnsbl_tld and dnsbl_psl are out of date" in capsys.readouterr().out
 
 
 def test_main_private_floor_rejection_preserves_both_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -781,3 +781,13 @@ def test_failed_psl_replace_preserves_existing_file_and_removes_temp(
 
     assert psl_target.read_bytes() == before_psl
     assert not list(tmp_path.glob(f".{psl_target.name}.*"))
+
+
+def test_atomic_write_preserves_existing_file_mode(tmp_path: Path) -> None:
+    target = tmp_path / "dnsbl_psl"
+    target.write_text("old\n", encoding="utf-8")
+    target.chmod(0o644)
+
+    upsl._atomic_write(target, "new\n")
+
+    assert target.stat().st_mode & 0o777 == 0o644

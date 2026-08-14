@@ -107,6 +107,12 @@ def test_parser_refuses_bad_markers_or_orphan_exceptions(authority: str) -> None
         pfb_unbound.parse_psl_rules(authority)
 
 
+@pytest.mark.parametrize("rule", ["a$[b].com", "a|b.com", "a;$(id).com"])
+def test_parser_rejects_shell_and_regex_metacharacters(rule: str) -> None:
+    with pytest.raises(ValueError):
+        pfb_unbound.parse_psl_rules(AUTHORITY.replace("com\n", f"com\n{rule}\n", 1))
+
+
 def test_parser_accepts_duplicate_overlapping_rules_without_changing_precedence() -> None:
     authority = AUTHORITY.replace("com\n", "com\ncom\n").replace("*.ck\n", "*.ck\n*.ck\n")
     rules = pfb_unbound.parse_psl_rules(authority)
