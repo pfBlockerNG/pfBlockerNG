@@ -51,6 +51,10 @@ _CONTAINER_KEYS = frozenset(
         "allowRegexDB",
         "feedGroupIndexDB",
         "hstsDB",
+        "psl_rules",
+        "tld_allow_roots",
+        "psl_include_private",
+        "psl_allow_private",
     }
 )
 
@@ -105,6 +109,10 @@ def _snapshot_from_result(result: P.BuildResult, *, hsts: dict[str, Any] | None 
         important_rules=result.important_rules,
         counts=result.counts,
         regex_count=result.regex_count,
+        psl_rules=result.psl_rules,
+        tld_allow_roots=("com", "net", "org"),
+        psl_include_private=True,
+        psl_allow_private=False,
     )
 
 
@@ -120,6 +128,10 @@ def _legacy_containers(result: P.BuildResult, *, hsts: dict[str, Any] | None = N
         "allowRegexDB": result.allow_regex_db,
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": hsts if hsts is not None else {},
+        "psl_rules": result.psl_rules,
+        "tld_allow_roots": ("com", "net", "org"),
+        "psl_include_private": True,
+        "psl_allow_private": False,
     }
 
 

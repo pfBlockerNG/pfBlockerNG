@@ -751,6 +751,9 @@ def _build_swap_snapshot() -> Snapshot | None:
         regex_count=len(regex_db) + len(allow_regex_db),
         rejects=build_result.rejects,
         psl_rules=build_result.psl_rules,
+        tld_allow_roots=_selected_tld_roots(pfb.get("tld_allow_list", ())),
+        psl_include_private=bool(pfb.get("psl_include_private", True)),
+        psl_allow_private=bool(pfb.get("psl_allow_private", False)),
     )
 
 
@@ -1198,6 +1201,16 @@ def parse_tld_allow(raw: str) -> list[str]:
     return [t.lower() for t in (part.strip() for part in raw.split(",")) if t]
 
 
+def _selected_tld_roots(values: Iterable[str]) -> tuple[str, ...]:
+    """Freeze configured TLD-Allow selections for one matcher snapshot."""
+    roots: list[str] = []
+    for value in values:
+        root = value.strip().strip(".").lower()
+        if root and root not in roots:
+            roots.append(root)
+    return tuple(roots)
+
+
 def _parse_ini_int(config: ConfigParser, section: str, option: str) -> int | None:
     """Parse an integer MAIN-ini option; ``None`` on a malformed (non-integer) value.
 
@@ -1486,6 +1499,8 @@ def init_standard(id: int, env: module_env) -> bool:
     # no-op rather than a block-everything trap.
     pfb["tld_allow"] = False
     pfb["tld_allow_list"] = []
+    pfb["psl_include_private"] = True
+    pfb["psl_allow_private"] = False
     pfb["python_tld_seg"] = 0
     # issue #1255: DNSBL Wildcard Blocking (TLD) -- a DIFFERENT feature from
     # tld_allow ("TLD Allow") above. Gates the public-suffix oracle exactly like
@@ -1720,6 +1735,10 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["tld_allow"] = config.getboolean("MAIN", "tld_allow")
             if config.has_option("MAIN", "tld_allow_list"):
                 pfb["tld_allow_list"] = parse_tld_allow(config.get("MAIN", "tld_allow_list"))
+            if config.has_option("MAIN", "psl_include_private"):
+                pfb["psl_include_private"] = config.getboolean("MAIN", "psl_include_private")
+            if config.has_option("MAIN", "psl_allow_private"):
+                pfb["psl_allow_private"] = config.getboolean("MAIN", "psl_allow_private")
             if config.has_option("MAIN", "dnsbl_ipv4"):
                 pfb["dnsbl_ipv4"] = config.get("MAIN", "dnsbl_ipv4")
             if config.has_option("MAIN", "dnsbl_ipv6"):
@@ -2004,6 +2023,9 @@ def init_standard(id: int, env: module_env) -> bool:
             counts=len(dataDB) + len(zoneDB),
             regex_count=len(regexDB) + len(allowRegexDB),
             psl_rules=psl_rules,
+            tld_allow_roots=_selected_tld_roots(pfb.get("tld_allow_list", ())),
+            psl_include_private=bool(pfb.get("psl_include_private", True)),
+            psl_allow_private=bool(pfb.get("psl_allow_private", False)),
         )
 
     rebuild_and_swap(_init_build_snapshot, emit_counts=False)
@@ -3992,6 +4014,11 @@ class Snapshot:
     regex_count: int = 0
     rejects: RejectTally = field(default_factory=dict)
     psl_rules: PslRules = field(default_factory=PslRules)
+    # ``None`` marks hand-built legacy fixtures; runtime swaps always capture a
+    # tuple (including empty) and therefore never consult mutable pfb selection.
+    tld_allow_roots: tuple[str, ...] | None = None
+    psl_include_private: bool = True
+    psl_allow_private: bool = False
     # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
     # never passed by builders.
     gen: int = field(default_factory=lambda: next(_snapshot_gen))
@@ -4010,6 +4037,10 @@ class Snapshot:
             "allowRegexDB": self.allow_regex_db,
             "feedGroupIndexDB": self.feed_group_index_db,
             "hstsDB": self.hsts_db,
+            "psl_rules": self.psl_rules,
+            "tld_allow_roots": self.tld_allow_roots or (),
+            "psl_include_private": self.psl_include_private,
+            "psl_allow_private": self.psl_allow_private,
         }
 
 
@@ -5145,6 +5176,7 @@ def build(
     psl_rules = config.get("psl_rules", PslRules())
     if not isinstance(psl_rules, PslRules):
         raise ValueError("psl_rules must be parsed PslRules")
+    psl_classification_rules = psl_rules if bool(config.get("psl_wildcard_enabled", True)) else PslRules()
 
     data_db: dict[str, dict[str, Any]] = {}
     zone_db: dict[str, dict[str, Any]] = {}
@@ -5307,7 +5339,13 @@ def build(
             if entry.kind != DNSBL_KIND_BLOCK:
                 continue
             idx = index_for(feed, group)
-            cls, key = tld_wildcard_classify(domain, psl_rules, exclusion, blacklist=set(tld_wildcard_blacklist))
+            cls, key = tld_wildcard_classify(
+                domain,
+                psl_classification_rules,
+                exclusion,
+                include_private=bool(config.get("psl_include_private", True)),
+                blacklist=set(tld_wildcard_blacklist),
+            )
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
             payload = {"log": log_flag, "index": idx, "important": False, "band": block_band}
@@ -5607,8 +5645,8 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
 
     The public-suffix oracle is not part of the manifest: a shipped ``dnsbl_psl``
     file (``pfb["pfb_py_psl"]``)
-    gated by ``pfb["python_tld_wildcard"]``, mirroring ``pfb["pfb_py_hsts"]``/
-    ``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
+    gated by ``pfb["python_tld_wildcard"]`` or TLD-Allow, mirroring
+    ``pfb["pfb_py_hsts"]``/``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
     shape) is ignored entirely -- an absent oracle is expected, not a warning.
     ``tld_wildcard_blacklist`` / ``tld_wildcard_exclusion`` / ``user_whitelist`` /
     ``user_unlock`` are passed through as lists. Missing keys
@@ -5617,7 +5655,10 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     config = manifest.get("config", {})
 
     psl_path = pfb.get("pfb_py_psl", "")
-    psl_rules = _load_psl_authority(psl_path, enabled=bool(pfb.get("python_tld_wildcard", False)))
+    psl_rules = _load_psl_authority(
+        psl_path,
+        enabled=bool(pfb.get("python_tld_wildcard", False) or pfb.get("tld_allow", False)),
+    )
 
     # ADR-07: the static-cap flag reaches build() via the ini-derived pfb setting
     # (the cap setting lives in pfb_unbound.ini MAIN, not the manifest); a manifest
@@ -5627,6 +5668,8 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
 
     return {
         "psl_rules": psl_rules,
+        "psl_wildcard_enabled": bool(pfb.get("python_tld_wildcard", False)),
+        "psl_include_private": bool(pfb.get("psl_include_private", True)),
         "tld_wildcard_blacklist": list(config.get("tld_wildcard_blacklist", [])),
         "tld_wildcard_exclusion": list(config.get("tld_wildcard_exclusion", [])),
         "user_whitelist": list(config.get("user_whitelist", [])),
@@ -6350,6 +6393,41 @@ def _resolve_numeric_allow(
     return allow_band >= block_band
 
 
+def _tld_allow_blocks(
+    q_name: str,
+    tld: str,
+    cfg: dict[str, Any],
+    containers: dict[str, Any],
+) -> bool:
+    """Return whether PSL-aware TLD-Allow should create its synthetic block."""
+    if not cfg.get("tld_allow"):
+        return False
+    selected = cfg.get("tld_allow_list") or containers.get("tld_allow_roots", ())
+    roots = _selected_tld_roots(selected)
+    if not roots or not tld:
+        return False
+    query = q_name.rstrip(".").lower()
+    rules = containers.get("psl_rules", cfg.get("psl_rules", PslRules()))
+    include_private = bool(containers.get("psl_include_private", cfg.get("psl_include_private", True)))
+    allow_private = bool(containers.get("psl_allow_private", cfg.get("psl_allow_private", False)))
+    try:
+        resolution = resolve_public_suffix(query, rules)
+    except (AttributeError, TypeError, ValueError):
+        # Invalid DNS names cannot be matched safely; TLD-Allow fails closed.
+        return True
+    suffix_roots = {
+        resolution.icann_suffix,
+        resolution.public_suffix,
+        resolution.icann_suffix.rsplit(".", 1)[-1],
+        resolution.public_suffix.rsplit(".", 1)[-1],
+    }
+    if suffix_roots.intersection(roots):
+        return False
+    if include_private and allow_private and resolution.private_active:
+        return False
+    return True
+
+
 def evaluate_domain(
     q_name: str,
     q_name_original: str,
@@ -6415,13 +6493,7 @@ def evaluate_domain(
                 block_band = _block_entry_band(zone_entry)
 
     if not is_found:
-        if (
-            cfg["tld_allow"]
-            and cfg["tld_allow_list"]
-            and tld != ""
-            and q_name not in (cfg["dnsbl_ipv4"], cfg["dnsbl_ipv6"])
-            and tld not in cfg["tld_allow_list"]
-        ):
+        if q_name not in (cfg["dnsbl_ipv4"], cfg["dnsbl_ipv6"]) and _tld_allow_blocks(q_name, tld, cfg, containers):
             is_found = True
             feed = "TLD_Allow"
             group = "DNSBL_TLD_Allow"
@@ -6640,7 +6712,14 @@ def _evaluate_cfg(snap: Snapshot) -> dict[str, Any]:
         "dataDB": bool(snap.data_db),
         "zoneDB": bool(snap.zone_db),
         "tld_allow": pfb["tld_allow"],
-        "tld_allow_list": pfb["tld_allow_list"],
+        "tld_allow_list": (
+            snap.tld_allow_roots
+            if snap.tld_allow_roots is not None
+            else _selected_tld_roots(pfb.get("tld_allow_list", ()))
+        ),
+        "psl_rules": snap.psl_rules,
+        "psl_include_private": snap.psl_include_private,
+        "psl_allow_private": snap.psl_allow_private,
         "dnsbl_ipv4": pfb["dnsbl_ipv4"],
         "dnsbl_ipv6": pfb["dnsbl_ipv6"],
         "python_idn": pfb["python_idn"],

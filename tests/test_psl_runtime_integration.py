@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -23,7 +24,7 @@ github.io
 
 def _manifest(path: Path) -> Path:
     raw = path / "feed.raw"
-    raw.write_text("evil.example.com\n", encoding="utf-8")
+    raw.write_text("example.com\n", encoding="utf-8")
     manifest = path / "pfb_py_sources.json"
     manifest.write_text(
         json.dumps(
@@ -93,6 +94,45 @@ def test_build_carries_psl_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert result.psl_rules.private_exact == ("github.io",)
 
 
+def test_tld_allow_also_requires_psl_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    authority = tmp_path / "dnsbl_psl"
+    authority.write_text(PSL, encoding="utf-8")
+    manifest = _manifest(tmp_path)
+    monkeypatch.setitem(P.pfb, "pfb_py_psl", str(authority))
+    monkeypatch.setitem(P.pfb, "python_tld_wildcard", False)
+    monkeypatch.setitem(P.pfb, "tld_allow", True)
+    result = P.dnsbl_build_from_manifest(str(manifest))
+    assert result is not None
+    assert result.psl_rules.icann_exact == ("com", "io")
+
+
+def test_tld_allow_authority_does_not_enable_wildcard_classification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authority = tmp_path / "dnsbl_psl"
+    authority.write_text(PSL, encoding="utf-8")
+    manifest = _manifest(tmp_path)
+    monkeypatch.setitem(P.pfb, "pfb_py_psl", str(authority))
+    monkeypatch.setitem(P.pfb, "python_tld_wildcard", False)
+    monkeypatch.setitem(P.pfb, "tld_allow", True)
+
+    result = P.dnsbl_build_from_manifest(str(manifest))
+
+    assert result is not None
+    assert result.zone_db == {}
+    assert "example.com" in result.data_db
+
+
+def test_tld_allow_invalid_psl_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    authority = tmp_path / "dnsbl_psl"
+    authority.write_bytes(b"\xff")
+    manifest = _manifest(tmp_path)
+    monkeypatch.setitem(P.pfb, "pfb_py_psl", str(authority))
+    monkeypatch.setitem(P.pfb, "python_tld_wildcard", False)
+    monkeypatch.setitem(P.pfb, "tld_allow", True)
+    assert P.dnsbl_build_from_manifest(str(manifest)) is None
+
+
 def test_reload_failure_retains_psl_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     old = P.Snapshot({}, {}, {}, {}, {}, {}, {}, psl_rules=P.parse_psl_rules(PSL))
     monkeypatch.setattr(P, "_snapshot", old)
@@ -113,3 +153,166 @@ def test_successful_reload_snapshot_carries_exact_psl_rules(tmp_path: Path, monk
 
     assert snapshot is not None
     assert snapshot.psl_rules is rules
+
+
+def _allow_cfg(**overrides: Any) -> dict[str, Any]:
+    cfg: dict[str, Any] = {
+        "python_blocking": False,
+        "dataDB": False,
+        "zoneDB": False,
+        "whiteDB": False,
+        "regexDB": False,
+        "allowRegexDB": False,
+        "hstsDB": False,
+        "tld_allow": True,
+        "tld_allow_list": ["com"],
+        "dnsbl_ipv4": "10.10.10.1",
+        "dnsbl_ipv6": "::1",
+        "python_idn": False,
+        "python_tld_seg": 2,
+        "hsts_tlds": (),
+        "psl_include_private": True,
+        "psl_allow_private": False,
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def _allow_containers(rules: P.PslRules) -> dict[str, Any]:
+    return {
+        "dataDB": {},
+        "zoneDB": {},
+        "whiteDB": {},
+        "regexDB": {},
+        "allowRegexDB": {},
+        "feedGroupIndexDB": {},
+        "hstsDB": {},
+        "psl_rules": rules,
+        "tld_allow_roots": ("com",),
+    }
+
+
+def test_psl_tld_allow_selected_root_and_private_precision() -> None:
+    rules = P.parse_psl_rules(PSL)
+    containers = _allow_containers(rules)
+
+    # Selected IANA root always wins, even when the query is under a PRIVATE suffix.
+    selected = P.evaluate_domain(
+        "x.github.io.", "x.github.io.", "io", False, _allow_cfg(tld_allow_list=["io"]), containers
+    )
+    assert selected.is_found is False
+
+    # A non-selected ICANN root remains blocked.
+    blocked = P.evaluate_domain("x.example.net", "x.example.net", "net", False, _allow_cfg(), containers)
+    assert blocked.is_found is True
+    assert blocked.feed == "TLD_Allow"
+
+    # PRIVATE allowance is explicit and does not broaden ICANN roots.
+    private = P.evaluate_domain(
+        "x.github.io",
+        "x.github.io",
+        "io",
+        False,
+        _allow_cfg(psl_allow_private=True),
+        {**containers, "tld_allow_roots": ("com",)},
+    )
+    assert private.is_found is False
+    still_blocked = P.evaluate_domain(
+        "x.example.net",
+        "x.example.net",
+        "net",
+        False,
+        _allow_cfg(psl_allow_private=True),
+        containers,
+    )
+    assert still_blocked.is_found is True
+
+
+def test_psl_tld_allow_private_exception_does_not_fallback_to_private_allow() -> None:
+    rules = P.parse_psl_rules(PSL)
+    containers = {**_allow_containers(rules), "tld_allow_roots": ()}
+    # www.ck is an ICANN exception boundary, not a PRIVATE boundary.
+    decision = P.evaluate_domain(
+        "www.ck",
+        "www.ck",
+        "ck",
+        False,
+        _allow_cfg(tld_allow_list=[], psl_allow_private=True),
+        containers,
+    )
+    assert decision.is_found is False
+
+    # A populated list with an unselected root must still block the exception name.
+    decision = P.evaluate_domain(
+        "www.ck",
+        "www.ck",
+        "ck",
+        False,
+        _allow_cfg(tld_allow_list=["com"], psl_allow_private=True),
+        containers,
+    )
+    assert decision.is_found is True
+
+
+def test_snapshot_containers_capture_psl_policy_without_global_reads() -> None:
+    rules = P.parse_psl_rules(PSL)
+    snapshot = P.Snapshot(
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        psl_rules=rules,
+        tld_allow_roots=("io",),
+        psl_include_private=False,
+        psl_allow_private=True,
+    )
+    containers = snapshot.containers()
+    assert containers["psl_rules"] is rules
+    assert containers["tld_allow_roots"] == ("io",)
+    assert containers["psl_include_private"] is False
+    assert containers["psl_allow_private"] is True
+
+
+def test_snapshot_empty_tld_allow_roots_ignore_later_global_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = P.Snapshot(
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        {},
+        psl_rules=P.parse_psl_rules(PSL),
+        tld_allow_roots=(),
+    )
+    monkeypatch.setattr(P, "_snapshot", snapshot)
+    monkeypatch.setitem(P.pfb, "tld_allow", True)
+    monkeypatch.setitem(P.pfb, "tld_allow_list", ["com"])
+
+    cfg = P._evaluate_cfg(snapshot)
+
+    assert cfg["tld_allow_list"] == ()
+    decision = P.evaluate_domain("x.example.net", "x.example.net", "net", False, cfg, snapshot.containers())
+    assert decision.is_found is False
+
+
+def test_legacy_snapshot_default_roots_are_empty_for_allow_matcher() -> None:
+    snapshot = P.Snapshot({}, {}, {}, {}, {}, {}, {}, psl_rules=P.parse_psl_rules(PSL))
+    assert snapshot.tld_allow_roots is None
+    containers = snapshot.containers()
+
+    assert containers["tld_allow_roots"] == ()
+    decision = P.evaluate_domain(
+        "x.example.net",
+        "x.example.net",
+        "net",
+        False,
+        _allow_cfg(tld_allow_list=[]),
+        containers,
+    )
+    assert decision.is_found is False

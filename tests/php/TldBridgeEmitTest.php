@@ -146,6 +146,39 @@ final class TldBridgeEmitTest extends TestCase
 		$this->assertMatchesRegularExpression('/^tld_allow_list\s*=\s*$/m', $ini);
 	}
 
+	public function testPslPolicyIniPreservesCanonicalTldStorageByteForByte(): void
+	{
+		$canonical = [
+			'tld_wildcard' => 'on',
+			'tld_wildcard_blacklist' => base64_encode("com\nпример\n"),
+			'tld_wildcard_exclusion' => base64_encode("safe.example\n"),
+			'tld_allow' => 'on',
+			'tld_allow_sort' => 'on',
+			'tld_allow_gtld' => 'com,net',
+			'tld_allow_cctld' => 'uk',
+			'tld_allow_itld' => 'xn--p1ai',
+			'tld_allow_bgtld' => 'example',
+		];
+		foreach ($canonical as $key => $value) {
+			PfbConfig::writeSystem("dnsbl/{$key}", $value);
+		}
+		PfbConfig::writeSystem('dnsbl/pfb_psl_include_private', 'on');
+		PfbConfig::writeSystem('dnsbl/pfb_psl_allow_private', '');
+		$before = [];
+		foreach ($canonical as $key => $_value) {
+			$before[$key] = config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/' . $key);
+		}
+
+		pfb_unbound_python('enabled');
+		$ini = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotFalse($ini);
+		$this->assertMatchesRegularExpression('/^psl_include_private\s*=\s*on$/m', $ini);
+		$this->assertMatchesRegularExpression('/^psl_allow_private\s*=\s*off$/m', $ini);
+		foreach ($before as $key => $value) {
+			$this->assertSame($value, config_get_path('installedpackages/pfblockerngdnsblsettings/config/0/' . $key), $key);
+		}
+	}
+
 	public function testManifestTldKeysEmptyWhenDnsblTldOff(): void
 	{
 		$GLOBALS['pfb']['dnsbl_tld_wildcard'] = '';

@@ -1266,6 +1266,24 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default (as pfb_pytld)',
 		],
 
+		// PSL PRIVATE recognition for wildcard classification. Default ON for new and
+		// existing installs; absence is handled by the gateway default without a
+		// grandfather migration because no prior stored field existed.
+		'dnsbl/pfb_psl_include_private' => [
+			'default'        => 'on',
+			'read_adapter'   => 'pfb_cfg_toggle_read',
+			'write_adapter'  => 'pfb_cfg_toggle_write',
+			'no_grandfather' => 'new PSL PRIVATE policy; absent uses the default ON',
+		],
+
+		// PSL PRIVATE precision for TLD-Allow. Opt-in, default OFF.
+		'dnsbl/pfb_psl_allow_private' => [
+			'default'        => '',
+			'read_adapter'   => 'pfb_cfg_toggle_read',
+			'write_adapter'  => 'pfb_cfg_toggle_write',
+			'no_grandfather' => 'new PSL PRIVATE TLD-Allow policy; absent uses the default OFF',
+		],
+
 		// issue #1921: TLD Allow sort order for the python list emit. Default ''.
 		// Consumed via the dnsbl section blob (pfblockerng_dnsbl.php), not a per-key read --
 		// stored '' is legal (config-gateway.md's foreign-key exclusion list previously

@@ -27,12 +27,17 @@ from __future__ import annotations
 from typing import Any
 
 import pfb_unbound
-from pfb_unbound import DNSBL_CLASS_DATA, DNSBL_CLASS_ZONE, PRIO_FEED_ALLOW, PRIO_FEED_BLOCK, evaluate_domain
-from tests.test_adr66_tld_bridges import (
-    TLD_ALLOW_ENABLE_KEY,
-    TLD_ALLOW_LIST_KEY,
+from pfb_unbound import (
+    DNSBL_CLASS_DATA,
+    DNSBL_CLASS_ZONE,
+    PRIO_FEED_ALLOW,
+    PRIO_FEED_BLOCK,
+    evaluate_domain,
     tld_wildcard_classify,
 )
+
+TLD_ALLOW_ENABLE_KEY = "tld_allow"
+TLD_ALLOW_LIST_KEY = "tld_allow_list"
 
 
 def _psl_rules(*suffixes: str) -> pfb_unbound.PslRules:
@@ -78,6 +83,12 @@ def _containers() -> dict[str, Any]:
         "regexDB": {},
         "feedGroupIndexDB": {},
     }
+
+
+def _psl_allow_containers(rules: pfb_unbound.PslRules, roots: tuple[str, ...] = ("io",)) -> dict[str, Any]:
+    containers = _containers()
+    containers.update({"psl_rules": rules, "tld_allow_roots": roots})
+    return containers
 
 
 class TestOracleATldAllowFastPath:
@@ -268,6 +279,34 @@ class TestOracleATldAllowPriorMatchPrecedence:
         assert dec.feed == "Feed_X"
         assert dec.group == "Group_X"
         assert dec.b_type == "DNSBL"
+
+
+class TestOracleATldAllowPslPrivate:
+    def test_selected_root_allows_private_suffix_query(self) -> None:
+        rules = pfb_unbound.parse_psl_rules(
+            "// ===BEGIN ICANN DOMAINS===\nio\ncom\n// ===END ICANN DOMAINS===\n"
+            "// ===BEGIN PRIVATE DOMAINS===\ngithub.io\n// ===END PRIVATE DOMAINS===\n"
+        )
+        cfg = _tld_allow_cfg(**{TLD_ALLOW_ENABLE_KEY: True, TLD_ALLOW_LIST_KEY: ["io"]})
+        dec = evaluate_domain("x.github.io", "x.github.io", "io", False, cfg, _psl_allow_containers(rules))
+        assert dec.is_found is False
+
+    def test_allow_private_only_matches_winning_private_boundary(self) -> None:
+        rules = pfb_unbound.parse_psl_rules(
+            "// ===BEGIN ICANN DOMAINS===\nio\ncom\n// ===END ICANN DOMAINS===\n"
+            "// ===BEGIN PRIVATE DOMAINS===\ngithub.io\n// ===END PRIVATE DOMAINS===\n"
+        )
+        cfg = _tld_allow_cfg(
+            **{
+                TLD_ALLOW_ENABLE_KEY: True,
+                TLD_ALLOW_LIST_KEY: ["com"],
+                "psl_allow_private": True,
+            }
+        )
+        private = evaluate_domain("x.github.io", "x.github.io", "io", False, cfg, _psl_allow_containers(rules, ()))
+        public = evaluate_domain("x.example.net", "x.example.net", "net", False, cfg, _containers())
+        assert private.is_found is False
+        assert public.is_found is True
 
 
 # --------------------------------------------------------------------------- #

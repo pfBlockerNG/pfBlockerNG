@@ -286,6 +286,17 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 		// shape); there is no longer a scalar cross-check to run against it here.
 	}
 
+	public function testPslPolicyKeysHaveNoLegacyNameOrGrandfatherSeed(): void
+	{
+		$registry = pfb_cfg_registry();
+		foreach (['dnsbl/pfb_psl_include_private', 'dnsbl/pfb_psl_allow_private'] as $key) {
+			$this->assertArrayHasKey($key, $registry);
+			$this->assertArrayNotHasKey('old_name', $registry[$key]);
+			$this->assertArrayNotHasKey('grandfather', $registry[$key]);
+			$this->assertArrayHasKey('no_grandfather', $registry[$key]);
+		}
+	}
+
 	// -----------------------------------------------------------------------
 	// 7 -- grandfather maps are string -> string with canonical shapes
 	// -----------------------------------------------------------------------
