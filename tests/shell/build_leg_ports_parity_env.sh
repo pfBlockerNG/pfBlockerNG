@@ -25,7 +25,8 @@ Describe 'build-leg.sh real Ports parity'
     ports_url="$(git -C "$REAL_PORTS_DIR" remote get-url origin)"
     export SOURCE_DATE_EPOCH=1780000000 PFB_RUN_ROOT="${work}/runs" RUN_ID=native-parity
     if [ "$PARITY_CHANNEL" = nightly ]; then
-      nightly_version="20260813153045.$(git -C "$PFB_ROOT" rev-parse HEAD)"
+      source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)"
+      nightly_version="20260813153045.$(printf '%.7s' "$source_sha")"
       direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
         --ports "$REAL_PORTS_DIR" --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" \
         --abi "$PARITY_ABI" --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
@@ -64,7 +65,7 @@ Describe 'build-leg.sh real Ports parity'
     trap 'rm -rf "$work"' EXIT INT TERM
     ports_sha="$(git -C "$REAL_PORTS_DIR" rev-parse HEAD)"
     source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)"
-    nightly_version="20260813153045.${source_sha}"
+    nightly_version="20260813153045.$(printf '%.7s' "$source_sha")"
     source_checkout="${work}/source"
     git clone -q --shared "$PFB_ROOT" "$source_checkout"
     git -C "$source_checkout" checkout -q "$source_sha"

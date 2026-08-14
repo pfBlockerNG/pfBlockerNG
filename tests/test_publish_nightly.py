@@ -126,7 +126,7 @@ def _snapshot(
     matrix_digest: str = _MATRIX_DIGEST,
 ) -> _Snapshot:
     return _Snapshot(
-        pkg_version=f"{build_date:%Y%m%d}120000.{source_sha}",
+        pkg_version=f"{build_date:%Y%m%d}120000.{source_sha[:7]}",
         source_sha=source_sha,
         ports_sha=ports_sha,
         input_digest=np.combined_nightly_input_digest(source_sha, ports_sha, matrix_digest),

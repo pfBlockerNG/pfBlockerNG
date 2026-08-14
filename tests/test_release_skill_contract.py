@@ -28,7 +28,7 @@ def test_active_release_docs_pin_issue_2140_contract() -> None:
         "Nightly is untagged",
         "no GitHub Release",
         "no release notes",
-        "`YYYYMMDDHHMMSS.<full source SHA>`",
+        "`YYYYMMDDHHMMSS.<7-character source SHA>`",
         "Every scheduled or manual invocation builds",
         "No counter, deduplication, or durable state exists",
         "source SHA",

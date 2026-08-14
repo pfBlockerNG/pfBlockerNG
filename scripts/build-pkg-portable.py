@@ -1990,7 +1990,7 @@ def main(argv: list[str]) -> int:
         default="",
         help=(
             "set the explicit package version (required with --build-record; Nightly uses "
-            "YYYYMMDDHHMMSS.<full source SHA>; must not contain '-')."
+            "YYYYMMDDHHMMSS.<7-character source SHA>; must not contain '-')."
         ),
     )
     g_snap.add_argument("--build-record", default="", help="normalized build record as JSON text or a JSON file path")

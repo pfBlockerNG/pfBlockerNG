@@ -141,7 +141,7 @@ def test_build_matrix_row_rejects_missing_unknown_wrong_type_and_non_live(mutato
         ("stable", "v2.8.0", "final", "2.8.0", "pfSense-pkg-pfBlockerNG"),
         ("testing", "v2.8.1.a1", "alpha", "2.8.1.a1", "pfSense-pkg-pfBlockerNG-testing"),
         ("edge", "v2.8.0.r1", "rc", "2.8.0.r1", "pfSense-pkg-pfBlockerNG-edge"),
-        ("nightly", None, "nightly", f"20260804153045.{'a' * 40}", "pfSense-pkg-pfBlockerNG-nightly"),
+        ("nightly", None, "nightly", f"20260804153045.{'a' * 7}", "pfSense-pkg-pfBlockerNG-nightly"),
     ],
 )
 def test_build_record_channel_identities(
@@ -181,9 +181,10 @@ def test_build_record_rejects_malformed_or_tampered(mutator: Callable[..., objec
 
 def test_build_record_nightly_timestamp_sha_and_null_rules() -> None:
     for value in (
-        "20260230153045." + "a" * 40,
-        "20260804246000." + "a" * 40,
-        "20260804153045." + "b" * 40,
+        "20260230153045." + "a" * 7,
+        "20260804246000." + "a" * 7,
+        "20260804153045." + "b" * 7,
+        "20260804153045." + "a" * 40,
         "20260804_1",
         "4.0.0.alpha.24",
     ):
@@ -204,11 +205,11 @@ def test_build_record_nightly_timestamp_sha_and_null_rules() -> None:
         source_tag=None,
         release_line="release/4.0",
         classification="nightly",
-        canonical_package_version=f"20260101153045.{'a' * 40}",
+        canonical_package_version=f"20260101153045.{'a' * 7}",
         native_recipe_identity="pfSense-pkg-pfBlockerNG-nightly",
     )
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
-    assert pfb_pkg.validate_build_record(record)["canonical_package_version"] == f"20260101153045.{'a' * 40}"
+    assert pfb_pkg.validate_build_record(record)["canonical_package_version"] == f"20260101153045.{'a' * 7}"
 
 
 def test_load_build_record_json_and_path(tmp_path: Path) -> None:

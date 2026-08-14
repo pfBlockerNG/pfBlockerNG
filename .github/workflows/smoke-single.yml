@@ -587,7 +587,8 @@ jobs:
           RUN_ID="$(sh scripts/select-box.sh --print-id)"
           export RUN_ID
           SOURCE_SHA="$(git rev-parse HEAD)"
-          NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHA}"
+          SOURCE_SHORT_SHA="$(printf '%.7s' "$SOURCE_SHA")"
+          NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHORT_SHA}"
           PKG="$(sh scripts/build-leg.sh \
             --channel    nightly \
             --abi        "$ABI" \

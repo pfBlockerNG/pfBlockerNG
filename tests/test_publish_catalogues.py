@@ -91,7 +91,7 @@ def _record(
             "classification": "nightly",
             "source_tag": None,
             "source_sha": source_sha,
-            "canonical_package_version": canonical_package_version or f"20260805153045.{source_sha}",
+            "canonical_package_version": canonical_package_version or f"20260805153045.{source_sha[:7]}",
             "native_recipe_identity": "pfSense-pkg-pfBlockerNG-nightly",
             "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
             "matrix_row": row,

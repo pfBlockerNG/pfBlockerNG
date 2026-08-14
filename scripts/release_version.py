@@ -24,7 +24,7 @@ _PREVIEW_RE = re.compile(
     r"(?P<stage>[abr])(?P<sequence>[1-9][0-9]*)$"
 )
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_NIGHTLY_VERSION_RE = re.compile(r"^(?P<timestamp>[0-9]{14})\.(?P<source_sha>[0-9a-f]{40}|[0-9a-f]{64})$")
+_NIGHTLY_VERSION_RE = re.compile(r"^(?P<timestamp>[0-9]{14})\.(?P<source_sha>[0-9a-f]{7})$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RELEASE_TEXT = 128
 
@@ -328,10 +328,10 @@ def _validate_digest(value: object, *, name: str = "input_digest") -> None:
 def validate_nightly_version(value: object, *, source_sha: str | None = None) -> str:
     """Validate one stateless UTC-timestamp and source-commit identity."""
     if not isinstance(value, str) or len(value) > _MAX_RELEASE_TEXT:
-        raise ValueError("Nightly version must be YYYYMMDDHHMMSS.<full source SHA>")
+        raise ValueError("Nightly version must be YYYYMMDDHHMMSS.<7-character source SHA>")
     match = _NIGHTLY_VERSION_RE.fullmatch(value)
     if match is None:
-        raise ValueError("Nightly version must be YYYYMMDDHHMMSS.<full source SHA>")
+        raise ValueError("Nightly version must be YYYYMMDDHHMMSS.<7-character source SHA>")
     try:
         datetime.strptime(match.group("timestamp"), "%Y%m%d%H%M%S")
     except ValueError as exc:
@@ -339,7 +339,7 @@ def validate_nightly_version(value: object, *, source_sha: str | None = None) ->
     version_sha = match.group("source_sha")
     if source_sha is not None:
         _validate_source_sha(source_sha)
-        if version_sha != source_sha:
+        if version_sha != source_sha[:7]:
             raise ValueError("Nightly version source SHA does not match pinned source SHA")
     return value
 

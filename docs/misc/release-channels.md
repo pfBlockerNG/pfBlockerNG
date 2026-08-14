@@ -19,7 +19,7 @@ Channel = metadata + catalog placement, never package-name suffix. Channel and r
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final | required |
 | Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` with `Z != 0` / exact | prerelease | required |
 | Edge | configured `release/X.Y` | `vX.Y.0.aN`, `.bN`, or `.rN` / exact | prerelease | required |
-| Nightly | explicit pinned source SHA | `YYYYMMDDHHMMSS.<full source SHA>` | none | none |
+| Nightly | explicit pinned source SHA | `YYYYMMDDHHMMSS.<7-character source SHA>` | none | none |
 
 Stable, Testing, Edge may share release line. For prerelease tag: `Z == 0` selects Edge, `Z != 0` selects Testing.
 
@@ -36,7 +36,7 @@ Each tagged release emit one native `.pkg` source asset per build-role matrix ro
 
 ## Nightly generation
 
-Nightly is untagged and independent. Creates no GitHub Release or release notes. Every scheduled or manual invocation builds one snapshot. Version = preparation time in UTC, down to seconds, then the full source commit: `YYYYMMDDHHMMSS.<full source SHA>`. Failed runs remain failed; dispatch another run when wanted. No counter, deduplication, recovery ledger, or durable Nightly state exists.
+Nightly is untagged and independent. Creates no GitHub Release or release notes. Every scheduled or manual invocation builds one snapshot. Version = preparation time in UTC, down to seconds, then the first seven characters of the source commit: `YYYYMMDDHHMMSS.<7-character source SHA>`. Failed runs remain failed; dispatch another run when wanted. No counter, deduplication, recovery ledger, or durable Nightly state exists.
 
 Nightly identity include source SHA, FreeBSD-ports SHA, matrix/dependency digest. Ports recipe stay static: no routine version commit, no target final, no PORTEPOCH. Reverse movement need explicit repo-qualified downgrade; no branch or suffix inference may select one.
 

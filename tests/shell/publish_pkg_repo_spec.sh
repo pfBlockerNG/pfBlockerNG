@@ -261,7 +261,7 @@ PY
     # reading $ROUTE_MATRIX instead, the assertion must fail on a value
     # mismatch, not pass on accidental byte-identity between the two fixtures.
     cat > "$HANDOFF_FILE" <<'JSON'
-{"run_id":"10:1","pkg_version":"20260804153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}
+{"run_id":"10:1","pkg_version":"20260804153045.aaaaaaa","route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}
 JSON
   }
 
@@ -694,8 +694,8 @@ HOOK
     The output should include 'ADVANCE'
     The stderr should include 'main'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
-    The variable msg should include 'publish: nightly 20260804153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -> ["nightly"]'
-    The variable msg should include 'pfBlockerNG-Nightly-Version: 20260804153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    The variable msg should include 'publish: nightly 20260804153045.aaaaaaa -> ["nightly"]'
+    The variable msg should include 'pfBlockerNG-Nightly-Version: 20260804153045.aaaaaaa'
     The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
     The variable msg should not include 'pfBlockerNG-Release-Tag'
     The variable msg should not include 'v4.0.0.b1'

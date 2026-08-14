@@ -957,7 +957,8 @@ def test_smoke_single_nightly_fixture_uses_utc_timestamp_and_source_sha() -> Non
     text = SMOKE_SINGLE_WORKFLOW.read_text(encoding="utf-8")
     nightly = text.split("- name: Build a nightly .pkg", 1)[1].split("\n      # ADR-24", 1)[0]
     assert 'SOURCE_SHA="$(git rev-parse HEAD)"' in nightly, nightly
-    assert 'NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHA}"' in nightly, nightly
+    assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in nightly, nightly
+    assert 'NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHORT_SHA}"' in nightly, nightly
     assert '--annotate   "commit=${SOURCE_SHA}"' in nightly, nightly
     assert "github.sha" not in nightly, nightly
     assert "NIGHTLY_COUNT" not in nightly, nightly

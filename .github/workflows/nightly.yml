@@ -147,7 +147,8 @@ jobs:
           MATRIX_DIGEST="$(printf '%s' "$MATRIX_PAYLOAD" | sha256sum | cut -d' ' -f1)"
           mkdir -p plan
           BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"
-          PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHA}"
+          SOURCE_SHORT_SHA="$(printf '%.7s' "$SOURCE_SHA")"
+          PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHORT_SHA}"
           printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha

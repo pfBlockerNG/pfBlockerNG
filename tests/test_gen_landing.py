@@ -1030,7 +1030,7 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
     assert f"{_CANON}-nightly" not in page
     # Nightly keeps its stability badge.
     assert '<span class="badge">not for daily use</span>' in page
-    assert "<code>YYYYMMDDHHMMSS.&lt;full source SHA&gt;</code>" in page
+    assert "<code>YYYYMMDDHHMMSS.&lt;7-character source SHA&gt;</code>" in page
 
 
 def test_render_page_shows_latest_and_empty_stable() -> None:

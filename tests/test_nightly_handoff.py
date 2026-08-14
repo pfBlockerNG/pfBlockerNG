@@ -11,7 +11,7 @@ from scripts import nightly_provenance as np
 
 SOURCE_SHA = "a" * 40
 PORTS_SHA = "b" * 40
-VERSION = f"20260814153045.{SOURCE_SHA}"
+VERSION = f"20260814153045.{SOURCE_SHA[:7]}"
 
 
 def _row(version: str = "2.8.0", *, role: str | None = None, ci: bool | None = None) -> dict[str, object]:
@@ -106,7 +106,7 @@ def test_handoff_rejects_missing_build_result() -> None:
 
 def test_handoff_rejects_version_for_different_source() -> None:
     with pytest.raises(np.ProvenanceError, match="does not match"):
-        _call_handoff([_result()], pkg_version=f"20260814153045.{'f' * 40}")
+        _call_handoff([_result()], pkg_version=f"20260814153045.{'f' * 7}")
 
 
 def test_handoff_carries_one_dep_artifact_sorted() -> None:

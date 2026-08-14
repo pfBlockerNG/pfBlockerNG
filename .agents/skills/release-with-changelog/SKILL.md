@@ -78,7 +78,7 @@ do not invent a predecessor or use an unrelated global tag. Omit empty or intern
    Release is immutable; a mistake requires the next version.
 
 Nightly input identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
-Every scheduled or manual invocation builds `YYYYMMDDHHMMSS.<full source SHA>` using UTC.
+Every scheduled or manual invocation builds `YYYYMMDDHHMMSS.<7-character source SHA>` using UTC.
 Failed runs stay failed; dispatch another when wanted. No counter, deduplication, or durable
 state exists. Keep its Ports recipe static: no routine version commit, no target final, and
 no PORTEPOCH. Timestamped Nightly versions intentionally outrank semantic releases; a reverse

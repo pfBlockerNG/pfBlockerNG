@@ -32,7 +32,7 @@ def test_each_release_skill_carries_the_minimum_procedure() -> None:
         "`Z != 0` selects Testing",
         "Nightly",
         "untagged",
-        "YYYYMMDDHHMMSS.<full source SHA>",
+        "YYYYMMDDHHMMSS.<7-character source SHA>",
         "manual invocation builds",
         "No counter, deduplication",
         "state exists",

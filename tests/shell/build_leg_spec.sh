@@ -345,7 +345,7 @@ SHEOF
         --abi 'FreeBSD:15:amd64' \
         --py-flavor 'py311' \
         --php '8.3' \
-        --pkgversion '20260606153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
+        --pkgversion '20260606153045.aaaaaaa' \
         --annotate 'commit=deadbeef00000000cafebabe' \
         2>/dev/null
       echo "channel=$(arg_after '--channel' "$BUILDER_ARGV_FILE")"
@@ -364,7 +364,7 @@ SHEOF
       # Then: channel=nightly, pkgversion and annotate commit match the inputs.
       When call check_smoke_leg
       The output should include 'channel=nightly'
-      The output should include 'pkgversion=20260606153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      The output should include 'pkgversion=20260606153045.aaaaaaa'
       The output should include 'annotate_commit=present'
     End
   End

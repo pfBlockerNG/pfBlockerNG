@@ -1475,7 +1475,7 @@ def _record(
             "stable": "4.0.0",
             "testing": "4.0.1.a1",
             "edge": "4.0.0.b1",
-            "nightly": f"20260804153045.{source_sha}",
+            "nightly": f"20260804153045.{source_sha[:7]}",
         }[channel]
     row = dict(row or _LIVE_BUILD_ROWS[0])
     version_parts = str(row["pfsense_version"]).split(".")
@@ -1628,7 +1628,7 @@ def test_native_channel_identities_remain_distinct(tmp_path: Path, channel: str)
         "stable": "4.0.0",
         "testing": "4.0.1.a1",
         "edge": "4.0.0.b1",
-        "nightly": f"20260804153045.{source_sha}",
+        "nightly": f"20260804153045.{source_sha[:7]}",
     }[channel]
     if channel == "nightly":
         args += ["--pkgversion", expected_version]
@@ -1707,7 +1707,7 @@ def test_project_build_uses_canonical_channel_recipe_not_moved_substitute(tmp_pa
     assert full["comment"] == "Channel fixture"
 
 
-@pytest.mark.parametrize("pkgversion", [None, "20260804", f"20261304153045.{'a' * 40}"])
+@pytest.mark.parametrize("pkgversion", [None, "20260804", f"20261304153045.{'a' * 7}", f"20260804153045.{'a' * 40}"])
 def test_nightly_requires_valid_explicit_pkgversion(tmp_path: Path, pkgversion: str | None) -> None:
     ports, portdir, _ports_sha, _source_sha = _make_channel_port(tmp_path, "nightly")
     out = tmp_path / "out"

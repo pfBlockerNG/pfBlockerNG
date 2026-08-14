@@ -90,9 +90,9 @@ _ABORT = ("is not installed", "Installation aborted", "Failed to install package
 _HOOK_OK = ("Executing custom_php_install_command", "Menu items")
 
 # Three ascending timestamp-plus-SHA Nightly versions for the upgrade walk.
-V1 = f"20260606120000.{'a' * 40}"
-V2 = f"20260606120001.{'f' * 40}"
-V3 = f"20260607120000.{'0' * 40}"
+V1 = f"20260606120000.{'a' * 7}"
+V2 = f"20260606120001.{'f' * 7}"
+V3 = f"20260607120000.{'0' * 7}"
 
 
 # --------------------------------------------------------------------------- #
