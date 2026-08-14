@@ -36,9 +36,8 @@ def _small_private_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Non
 
 
 # --------------------------------------------------------------------------- #
-# issue #1541 red->green proof: dnsbl_psl is the SOLE shipped PSL artifact --
-# the flat dnsbl_tld file and its pfblockerng_log.php logtype must both be
-# gone. FAILS on the untouched worktree; PASSES once both are retired.
+# issue #1541: dnsbl_psl is the SOLE shipped PSL artifact -- the flat dnsbl_tld
+# file and its pfblockerng_log.php logtype must both be absent.
 # --------------------------------------------------------------------------- #
 
 
@@ -652,7 +651,7 @@ def test_convert_suffix_still_encodes_recently_assigned_codepoint_not_cn() -> No
 
 
 # --------------------------------------------------------------------------- #
-# Step 1 verifier blockers: strict PSL-rule grammar and section integrity.
+# Strict PSL-rule grammar and section integrity.
 # --------------------------------------------------------------------------- #
 
 
@@ -668,7 +667,6 @@ def test_convert_suffix_still_encodes_recently_assigned_codepoint_not_cn() -> No
         "a..b",
         "a.",
         "!a..b",
-        "foo bar",
         "a$[b].com",
         "a|b.com",
         "a;$(id).com",
@@ -677,6 +675,15 @@ def test_convert_suffix_still_encodes_recently_assigned_codepoint_not_cn() -> No
 def test_convert_psl_rule_rejects_malformed_or_metacharacter_tokens(token: str) -> None:
     with pytest.raises(ValueError):
         upsl.convert_psl_rule(token)
+
+
+def test_convert_psl_rule_accepts_token_before_first_whitespace() -> None:
+    # PSL spec: a rule is the token up to the first whitespace; anything after
+    # (registry comments, stray columns) is ignored, matching the runtime parser.
+    assert upsl.convert_psl_rule("com // registry comment") == "com"
+    assert upsl.convert_psl_rule("*.ck\t// wildcard note") == "*.ck"
+    assert upsl.convert_psl_rule("!www.ck extra tokens") == "!www.ck"
+    assert upsl.convert_psl_rule("foo bar") == "foo"
 
 
 def test_build_psl_section_rejects_orphan_exception() -> None:
@@ -770,7 +777,7 @@ def test_main_malformed_rule_rejection_preserves_psl_output(
     monkeypatch.setattr(upsl, "fetch_psl", lambda timeout=15: malformed)
     before = psl_target.read_bytes()
 
-    with pytest.raises(ValueError):
+    with pytest.raises(SystemExit, match="Refusing to rewrite"):
         upsl.main([])
 
     assert psl_target.read_bytes() == before
@@ -843,3 +850,14 @@ def test_atomic_write_preserves_existing_file_mode(tmp_path: Path) -> None:
     upsl._atomic_write(target, "new\n")
 
     assert target.stat().st_mode & 0o777 == 0o644
+
+
+_INSTALL_INC = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/pfblockerng_install.inc"
+
+
+def test_install_upgrade_removes_stale_chroot_oracle_copy() -> None:
+    # The pre-PSL chroot copy (pfb_py_tld.txt) is unowned after upgrade and its
+    # basename matches the pfb_py_* cache-save glob: the installer must remove it
+    # once, since the retired staging/teardown paths no longer touch it.
+    install_inc = _INSTALL_INC.read_text(encoding="utf-8")
+    assert "unlink_if_exists('/var/unbound/pfb_py_tld.txt')" in install_inc

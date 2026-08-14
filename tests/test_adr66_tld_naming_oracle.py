@@ -26,6 +26,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 import pfb_unbound
 from pfb_unbound import (
     DNSBL_CLASS_DATA,
@@ -372,12 +374,13 @@ class TestOracleBOverFiveLabels:
 
 
 class TestOracleBLoadTimeBlacklistAndExclusion:
-    """B9/B10: the oracle loader's blacklist and exclusion params each
-    independently drop a TLD out of the oracle (the `or` condition's two
-    sides) -- before (present, ZONE) / after (dropped, DATA), same domain,
-    varying only which param names the TLD."""
+    """B9/B10: the classifier's blacklist/exclusion arguments each
+    independently force exact DATA for every entry whose resolved suffix or
+    root matches a token -- before (unlisted, ZONE) / after (listed, DATA),
+    same domain, varying only which argument names the TLD (owner-confirmed
+    subtree semantics, PR #2363 review)."""
 
-    def test_b9_blacklisted_tld_drops_out_of_the_oracle(self) -> None:
+    def test_b9_blacklisted_tld_forces_exact_data(self) -> None:
         present = _psl_rules("co.uk", "com")
         assert tld_wildcard_classify("example.co.uk", present, set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
 
@@ -387,7 +390,7 @@ class TestOracleBLoadTimeBlacklistAndExclusion:
             "example.co.uk",
         )
 
-    def test_b10_excluded_tld_drops_out_of_the_oracle(self) -> None:
+    def test_b10_excluded_tld_forces_exact_data(self) -> None:
         present = _psl_rules("co.uk", "com")
         assert tld_wildcard_classify("example.co.uk", present, set()) == (DNSBL_CLASS_ZONE, "example.co.uk")
 
@@ -396,6 +399,20 @@ class TestOracleBLoadTimeBlacklistAndExclusion:
             DNSBL_CLASS_DATA,
             "example.co.uk",
         )
+
+    def test_b10a_excluded_root_covers_every_depth(self) -> None:
+        # Issue #1541 pin: root `uk` covered separately from suffix `co.uk`.
+        # An excluded root forces exact DATA directly under it AND deeper --
+        # exclusion means "never wildcard here", at all depths.
+        rules = _psl_rules("uk", "co.uk", "com")
+        assert tld_wildcard_classify("example.uk", rules, {"uk"}) == (DNSBL_CLASS_DATA, "example.uk")
+        assert tld_wildcard_classify("example.co.uk", rules, {"uk"}) == (DNSBL_CLASS_DATA, "example.co.uk")
+        assert tld_wildcard_classify("deep.example.co.uk", rules, {"uk"}) == (
+            DNSBL_CLASS_DATA,
+            "deep.example.co.uk",
+        )
+        # An unrelated root keeps normal classification under the same call.
+        assert tld_wildcard_classify("example.com", rules, {"uk"}) == (DNSBL_CLASS_ZONE, "example.com")
 
 
 class TestOracleBFiveLabelBothSides:
@@ -429,17 +446,35 @@ class TestOracleBSingleLabelFallthrough:
 
 
 class TestOracleBLoaderSkipGuards:
-    """B14: the oracle loader's line-skip guards -- blank, whitespace-only,
-    and comment-prefixed lines never enter the oracle; a trailing-dot line
-    whose stripped tld is empty is dropped by the same guard as the blank
-    lines. The comment-prefixed row is the hard failable one: without that
-    guard the line would parse as tld "uk", suffix "# co.uk" -- a stray key
-    this assertion catches.
-    """
+    """B14: parse_psl_rules' line handling -- blank, whitespace-only, and
+    comment-prefixed lines never enter the rule set, while a malformed
+    trailing-dot rule fails the WHOLE parse closed (the runtime authority is
+    validated, never silently filtered)."""
 
-    def test_b14_skip_guards_leave_exactly_one_real_entry(self) -> None:
-        tlds = _psl_rules("", "   ", "# co.uk", "com.", "com")
-        assert tlds.icann_exact == ("com",)
+    def test_b14_parser_skips_blanks_and_comments(self) -> None:
+        authority = (
+            "// ===BEGIN ICANN DOMAINS===\n"
+            "\n"
+            "   \n"
+            "# co.uk\n"
+            "// co.uk\n"
+            "com\n"
+            "// ===END ICANN DOMAINS===\n"
+            "// ===BEGIN PRIVATE DOMAINS===\n"
+            "// ===END PRIVATE DOMAINS===\n"
+        )
+        assert pfb_unbound.parse_psl_rules(authority).icann_exact == ("com",)
+
+    def test_b14a_parser_rejects_trailing_dot_rule(self) -> None:
+        authority = (
+            "// ===BEGIN ICANN DOMAINS===\n"
+            "com.\n"
+            "// ===END ICANN DOMAINS===\n"
+            "// ===BEGIN PRIVATE DOMAINS===\n"
+            "// ===END PRIVATE DOMAINS===\n"
+        )
+        with pytest.raises(ValueError):
+            pfb_unbound.parse_psl_rules(authority)
 
 
 # --------------------------------------------------------------------------- #

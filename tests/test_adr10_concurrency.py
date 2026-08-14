@@ -19,9 +19,9 @@ Mechanism map (each produced via the manifest/ini/config; bands per ADR-07 SS2)
 -----------------------------------------------------------------------------------
 BLOCK (gen1 blocked, gen2 allowed -- except the per-mechanism CONTROL, still blocked):
   m1 generic exact   -> dataDB  band 1  (plain feed, 3-part name -> classify DATA)
-  m2 generic exact   -> dataDB  band 1  (plain feed, 2-part name; issue #1255: the
-                                          oracle is no longer manifest-driven, so this
-                                          lane now exercises dataDB, not zoneDB)
+  m2 generic zone    -> zoneDB  band 1  (plain feed, 2-part registrable name; the
+                                          shipped PSL authority is wired via
+                                          pfb_py_psl, so this lane exercises zoneDB)
   m3 abp anchored    -> dataDB  band 1  (||sub.d.com^, 3-part -> DATA)
   m4 abp regex       -> regexDB band 1  (irreducible /re/)
   m5 abp $important  -> dataDB  band 3  (||sub.d.com^$important)
@@ -59,10 +59,18 @@ import pfb_unbound as P
 
 _TRIGGER = os.path.join(os.path.dirname(__file__), "_adr10_reload_trigger.py")
 
-# Public-suffix oracle for the zone lane: a 2-part ``d.com`` (com a known suffix) is the
-# registrable parent -> ZONE; a 3-part ``sub.d.com`` (parent ``d.com`` not a suffix) ->
-# exact DATA. This is what splits the m1/m3 (data) lanes from the m2 (zone) lane.
-_TLD_MASTER = "com\nnet\norg\nco.uk\n"
+# Public-suffix authority for the zone lane: a 2-part ``d.com`` (com a known suffix)
+# is the registrable domain -> ZONE; a 3-part ``sub.d.com`` (parent ``d.com`` not a
+# suffix) -> exact DATA. This is what splits the m1/m3 (data) lanes from the m2
+# (zone) lane. Loaded via the shipped-authority path (pfb_py_psl + flag), the sole
+# oracle source since #1541 retired the manifest tld_wildcard_master key.
+_PSL_AUTHORITY = (
+    "// ===BEGIN ICANN DOMAINS===\n"
+    "com\nnet\norg\nco.uk\n"
+    "// ===END ICANN DOMAINS===\n"
+    "// ===BEGIN PRIVATE DOMAINS===\n"
+    "// ===END PRIVATE DOMAINS===\n"
+)
 
 # Per-lane: how many FLIPPING domains, plus exactly one CONTROL (the odd-one-out in gen2).
 _N_FLIP = 2
@@ -322,12 +330,11 @@ def _write_observed(path: str, generation: int) -> None:
     os.replace(tmp, path)
 
 
-def _manifest_json(tld_master: str, plain_raw: str, user_raw: str, abp_raw: str, spec: GenSpec) -> str:
+def _manifest_json(plain_raw: str, user_raw: str, abp_raw: str, spec: GenSpec) -> str:
     return json.dumps(
         {
             "version": 1,
             "config": {
-                "tld_wildcard_master": tld_master,
                 "tld_wildcard_blacklist": [],
                 "tld_wildcard_exclusion": [],
                 "user_whitelist": spec.user_whitelist,
@@ -357,7 +364,7 @@ def _ini_text(spec: GenSpec) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _materialise_gen(tmp_dir: str, tag: str, tld_master_path: str, spec: GenSpec) -> tuple[str, str]:
+def _materialise_gen(tmp_dir: str, tag: str, spec: GenSpec) -> tuple[str, str]:
     """Write the raw feeds + manifest + ini for one generation. Returns (manifest, ini)."""
     plain_raw = os.path.join(tmp_dir, "{}_plain.txt".format(tag))
     user_raw = os.path.join(tmp_dir, "{}_user.txt".format(tag))
@@ -366,7 +373,7 @@ def _materialise_gen(tmp_dir: str, tag: str, tld_master_path: str, spec: GenSpec
     _write(user_raw, "\n".join(spec.user_feed) + "\n")
     _write(abp_raw, "\n".join(spec.abp_feed) + "\n")
     manifest = os.path.join(tmp_dir, "{}_manifest.json".format(tag))
-    _write(manifest, _manifest_json(tld_master_path, plain_raw, user_raw, abp_raw, spec))
+    _write(manifest, _manifest_json(plain_raw, user_raw, abp_raw, spec))
     ini = os.path.join(tmp_dir, "{}_pfb_unbound.ini".format(tag))
     _write(ini, _ini_text(spec))
     return manifest, ini
@@ -375,9 +382,13 @@ def _materialise_gen(tmp_dir: str, tag: str, tld_master_path: str, spec: GenSpec
 # --------------------------------------------------------------------------- #
 # Module wiring + a snapshot-grading scan (replicates operate()'s per-query build)
 # --------------------------------------------------------------------------- #
-def _wire_module(monkeypatch: Any, *, live_manifest: str, live_ini: str, sentinel: str, applied: str) -> None:
+def _wire_module(
+    monkeypatch: Any, *, live_manifest: str, live_ini: str, sentinel: str, applied: str, psl_authority: str
+) -> None:
     P.pfb["pfb_py_sources"] = live_manifest
     P.pfb["pfb_unbound.ini"] = live_ini
+    P.pfb["python_tld_wildcard"] = True
+    P.pfb["pfb_py_psl"] = psl_authority
     P.pfb["pfb_py_reload"] = sentinel
     P.pfb["pfb_py_reload_applied"] = applied
     P.pfb["python_hsts"] = False  # skip the hsts file load (not part of this matrix)
@@ -490,12 +501,12 @@ def _torn_sample(
 # --------------------------------------------------------------------------- #
 def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monkeypatch: Any) -> None:
     tmp_dir = str(tmp_path)
-    tld_master_path = os.path.join(tmp_dir, "tld_master.txt")
-    _write(tld_master_path, _TLD_MASTER)
+    psl_authority = os.path.join(tmp_dir, "dnsbl_psl")
+    _write(psl_authority, _PSL_AUTHORITY)
 
     # Materialise both generations (manifest + per-feed raw + ini) for the trigger.
-    g1_manifest, g1_ini = _materialise_gen(tmp_dir, "gen1", tld_master_path, _gen1_spec())
-    g2_manifest, g2_ini = _materialise_gen(tmp_dir, "gen2", tld_master_path, _gen2_spec())
+    g1_manifest, g1_ini = _materialise_gen(tmp_dir, "gen1", _gen1_spec())
+    g2_manifest, g2_ini = _materialise_gen(tmp_dir, "gen2", _gen2_spec())
 
     # The LIVE manifest/ini the watcher reads -- seeded with gen1 (the trigger overwrites).
     live_manifest = os.path.join(tmp_dir, "live_manifest.json")
@@ -507,7 +518,14 @@ def test_atomic_swap_no_torn_across_every_matcher_mechanism(tmp_path: Any, monke
     _write(live_ini, _read_file(g1_ini))
     _write(sentinel, "1\n")
 
-    _wire_module(monkeypatch, live_manifest=live_manifest, live_ini=live_ini, sentinel=sentinel, applied=applied)
+    _wire_module(
+        monkeypatch,
+        live_manifest=live_manifest,
+        live_ini=live_ini,
+        sentinel=sentinel,
+        applied=applied,
+        psl_authority=psl_authority,
+    )
 
     expected_gen1 = _expected_gen1()
     expected_gen2 = _expected_gen2()

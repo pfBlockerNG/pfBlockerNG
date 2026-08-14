@@ -82,7 +82,6 @@ def _build(
         ],
     }
     config = {
-        "tld_wildcard_master": _TLD_MASTER,
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": list(user_whitelist),
@@ -93,6 +92,11 @@ def _build(
         return list(raw_store.get(raw, []))
 
     return P.build(manifest, config, line_reader=reader, top1m_enabled=top1m_enabled)
+
+
+# One shared tuple: the equivalence proof compares container values with `is`,
+# and Python does not guarantee identity for equal tuple literals.
+_TLD_ALLOW_ROOTS = ("com", "net", "org")
 
 
 def _snapshot_from_result(result: P.BuildResult, *, hsts: dict[str, Any] | None = None) -> P.Snapshot:
@@ -110,7 +114,7 @@ def _snapshot_from_result(result: P.BuildResult, *, hsts: dict[str, Any] | None 
         counts=result.counts,
         regex_count=result.regex_count,
         psl_rules=result.psl_rules,
-        tld_allow_roots=("com", "net", "org"),
+        tld_allow_roots=_TLD_ALLOW_ROOTS,
         psl_include_private=True,
         psl_allow_private=False,
     )
@@ -129,7 +133,7 @@ def _legacy_containers(result: P.BuildResult, *, hsts: dict[str, Any] | None = N
         "feedGroupIndexDB": result.feed_group_index_db,
         "hstsDB": hsts if hsts is not None else {},
         "psl_rules": result.psl_rules,
-        "tld_allow_roots": ("com", "net", "org"),
+        "tld_allow_roots": _TLD_ALLOW_ROOTS,
         "psl_include_private": True,
         "psl_allow_private": False,
     }

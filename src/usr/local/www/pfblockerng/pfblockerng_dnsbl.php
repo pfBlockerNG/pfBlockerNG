@@ -1132,8 +1132,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_psl_include_private'] === PfbToggle::On,
 	'on'
-))->addClass('psl-policy psl-wildcard')
-	->setHelp('Recognize the PSL PRIVATE section when determining the registrable boundary. A suffix apex is never wildcarded. PSL PRIVATE describes shared domains such as github.io; it does not mean private DNS.');
+))->setHelp('Recognize the PSL PRIVATE section when determining the registrable boundary. A suffix apex is never wildcarded. PSL PRIVATE describes shared domains such as github.io; it does not mean private DNS.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_control',
@@ -2776,8 +2775,7 @@ $section->addInput(new Form_Checkbox(
 	'Enable',
 	$pconfig['pfb_psl_allow_private'] === PfbToggle::On,
 	'on'
-))->addClass('psl-policy psl-allow')
-	->setHelp('Permit only the winning PSL PRIVATE boundary when no selected IANA root TLD matches. This precision applies to shared domains such as github.io; the suffix apex itself is never wildcarded.');
+))->setHelp('Permit only the winning PSL PRIVATE boundary when no selected IANA root TLD matches. This precision applies to shared domains such as github.io; the suffix apex itself is never wildcarded.');
 
 $section->addInput(new Form_Checkbox(
 	'tld_allow_sort',
@@ -3732,11 +3730,11 @@ function enable_tld() {
 	if ($('#tld_wildcard').prop('checked')) {
 		$('#TLD_Exclusion').show();
 		$('#TLD_BW_list').show();
-		$('.psl-wildcard').show();
+		hideCheckbox('pfb_psl_include_private', false);
 	} else {
 		$('#TLD_Exclusion').hide();
 		$('#TLD_BW_list').hide();
-		$('.psl-wildcard').hide();
+		hideCheckbox('pfb_psl_include_private', true);
 	}
 }
 
@@ -3755,12 +3753,12 @@ function enable_tld_allow() {
 		hideCheckbox('tld_allow_sort', false);
 		hideMultiClass('pfb_python', false);
 		$('#dnsbl_python_tld_allow_text').show();
-		$('.psl-allow').show();
+		hideCheckbox('pfb_psl_allow_private', false);
 	} else {
 		hideCheckbox('tld_allow_sort', true);
 		hideMultiClass('pfb_python', true);
 		$('#dnsbl_python_tld_allow_text').hide();
-		$('.psl-allow').hide();
+		hideCheckbox('pfb_psl_allow_private', true);
 	}
 }
 

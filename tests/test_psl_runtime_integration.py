@@ -231,19 +231,11 @@ def test_psl_tld_allow_selected_root_and_private_precision() -> None:
 def test_psl_tld_allow_private_exception_does_not_fallback_to_private_allow() -> None:
     rules = P.parse_psl_rules(PSL)
     containers = {**_allow_containers(rules), "tld_allow_roots": ()}
-    # www.ck is an ICANN exception boundary, not a PRIVATE boundary.
-    decision = P.evaluate_domain(
-        "www.ck",
-        "www.ck",
-        "ck",
-        False,
-        _allow_cfg(tld_allow_list=[], psl_allow_private=True),
-        containers,
-    )
-    assert decision.is_found is False
-
-    # A populated list with an unselected root must still block the exception name.
-    decision = P.evaluate_domain(
+    # www.ck resolves through the ICANN exception (!www.ck): private_active is
+    # False, so PRIVATE allowance must not open it -- while a genuine PRIVATE
+    # boundary (github.io) under the same policy IS allowed. Roots stay
+    # populated so the empty-selection no-op guard cannot mask either outcome.
+    exception_name = P.evaluate_domain(
         "www.ck",
         "www.ck",
         "ck",
@@ -251,7 +243,18 @@ def test_psl_tld_allow_private_exception_does_not_fallback_to_private_allow() ->
         _allow_cfg(tld_allow_list=["com"], psl_allow_private=True),
         containers,
     )
-    assert decision.is_found is True
+    assert exception_name.is_found is True
+    assert exception_name.feed == "TLD_Allow"
+
+    private_name = P.evaluate_domain(
+        "x.github.io",
+        "x.github.io",
+        "io",
+        False,
+        _allow_cfg(tld_allow_list=["com"], psl_allow_private=True),
+        containers,
+    )
+    assert private_name.is_found is False
 
 
 def test_snapshot_containers_capture_psl_policy_without_global_reads() -> None:
@@ -316,3 +319,63 @@ def test_legacy_snapshot_default_roots_are_empty_for_allow_matcher() -> None:
         containers,
     )
     assert decision.is_found is False
+
+
+def test_tld_allow_permits_underscore_service_labels_under_selected_root() -> None:
+    """Underscore service labels (DMARC/DKIM/SRV/ACME) are valid query names.
+
+    TLD-Allow judges the SUFFIX: a selected root admits them and an unselected
+    root blocks them, exactly like any other name -- strict rule-grammar
+    validation must never sinkhole a service lookup under a selected root.
+    """
+    rules = P.parse_psl_rules(PSL)
+    containers = _allow_containers(rules)
+    for name in ("_dmarc.example.com", "_sip._tcp.example.com", "_acme-challenge.example.com"):
+        allowed = P.evaluate_domain(name, name, "com", False, _allow_cfg(), containers)
+        assert allowed.is_found is False, name
+    blocked = P.evaluate_domain("_dmarc.example.net", "_dmarc.example.net", "net", False, _allow_cfg(), containers)
+    assert blocked.is_found is True
+    assert blocked.feed == "TLD_Allow"
+
+
+def test_allow_private_precision_is_independent_of_include_private() -> None:
+    """pfb_psl_allow_private stands alone: the Wildcard-Blocking PRIVATE
+    recognition toggle gates classification only, never TLD-Allow precision."""
+    rules = P.parse_psl_rules(PSL)
+    containers = {
+        **_allow_containers(rules),
+        "psl_include_private": False,
+        "psl_allow_private": True,
+    }
+    private = P.evaluate_domain(
+        "x.github.io",
+        "x.github.io",
+        "io",
+        False,
+        _allow_cfg(psl_include_private=False, psl_allow_private=True),
+        containers,
+    )
+    assert private.is_found is False
+    # PRIVATE precision still never opens the parent TLD.
+    unrelated = P.evaluate_domain(
+        "x.io",
+        "x.io",
+        "io",
+        False,
+        _allow_cfg(psl_include_private=False, psl_allow_private=True),
+        containers,
+    )
+    assert unrelated.is_found is True
+    assert unrelated.feed == "TLD_Allow"
+
+
+def test_allow_private_off_blocks_private_boundary_and_parent_alike() -> None:
+    """With the allow toggle off, x.github.io and unrelated x.io both stay
+    blocked when the io root is not selected (issue #1541 'Allow: PRIVATE off'
+    matrix row, same-root negative)."""
+    rules = P.parse_psl_rules(PSL)
+    containers = _allow_containers(rules)
+    for name in ("x.github.io", "x.io"):
+        decision = P.evaluate_domain(name, name, "io", False, _allow_cfg(), containers)
+        assert decision.is_found is True, name
+        assert decision.feed == "TLD_Allow"

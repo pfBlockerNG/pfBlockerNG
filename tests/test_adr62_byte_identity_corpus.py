@@ -66,7 +66,6 @@ def _corpus_line_reader() -> Callable[[str], Iterable[str]]:
 
 def _run_corpus_build() -> P.BuildResult:
     config: dict[str, Any] = {
-        "tld_wildcard_master": [],
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],

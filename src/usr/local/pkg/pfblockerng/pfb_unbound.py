@@ -5673,7 +5673,9 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     file (``pfb["pfb_py_psl"]``)
     gated by ``pfb["python_tld_wildcard"]`` or TLD-Allow, mirroring
     ``pfb["pfb_py_hsts"]``/``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
-    shape) is ignored entirely -- an absent oracle is expected, not a warning.
+    shape) is ignored entirely. With either gate ON, a missing/corrupt authority
+    raises (fail-closed, no silent empty rule set); with both OFF it is never
+    opened.
     ``tld_wildcard_blacklist`` / ``tld_wildcard_exclusion`` / ``user_whitelist`` /
     ``user_unlock`` are passed through as lists. Missing keys
     within the required ``config`` object default empty.
@@ -6419,6 +6421,31 @@ def _resolve_numeric_allow(
     return allow_band >= block_band
 
 
+def _psl_normalize_query(name: str) -> list[str]:
+    """Lenient label normalization for LIVE QUERY names (the TLD-Allow check).
+
+    Rules are strictly validated at parse time; queries are whatever the
+    resolver was actually asked -- underscore service labels (``_dmarc.*``,
+    ``_sip._tcp.*``, ``_acme-challenge.*``) are legitimate DNS names whose
+    suffix must still be judged. Lowercase each label, best-effort IDNA for
+    non-ASCII; a label the codec refuses stays lowercased raw and simply never
+    matches a (strictly validated) rule label. Only structural emptiness raises.
+    """
+    labels = name.split(".")
+    if not name or any(not label for label in labels):
+        raise ValueError("invalid DNS name")
+    normalized: list[str] = []
+    for label in labels:
+        if label.isascii():
+            normalized.append(label.lower())
+            continue
+        try:
+            normalized.append(label.encode("idna").decode("ascii").lower())
+        except UnicodeError:
+            normalized.append(label.lower())
+    return normalized
+
+
 def _tld_allow_blocks(
     q_name: str,
     tld: str,
@@ -6432,24 +6459,27 @@ def _tld_allow_blocks(
     roots = _selected_tld_roots(selected)
     if not roots or not tld:
         return False
-    query = q_name.rstrip(".").lower()
-    rules = containers.get("psl_rules", cfg.get("psl_rules", PslRules()))
-    include_private = bool(containers.get("psl_include_private", cfg.get("psl_include_private", True)))
+    # The allow toggle stands alone: PRIVATE recognition (psl_include_private)
+    # gates wildcard CLASSIFICATION only, never TLD-Allow precision.
     allow_private = bool(containers.get("psl_allow_private", cfg.get("psl_allow_private", False)))
+    rules = containers.get("psl_rules", cfg.get("psl_rules", PslRules()))
     try:
-        resolution = resolve_public_suffix(query, rules)
+        labels = _psl_normalize_query(q_name.rstrip("."))
     except (AttributeError, TypeError, ValueError):
-        # Invalid DNS names cannot be matched safely; TLD-Allow fails closed.
+        # Structurally invalid names cannot be matched safely; fail closed.
         return True
+    icann_sets, combined_sets = _psl_index(rules)
+    icann_suffix = _psl_prevailing(labels, *icann_sets)
+    public_suffix = _psl_prevailing(labels, *combined_sets)
     suffix_roots = {
-        resolution.icann_suffix,
-        resolution.public_suffix,
-        resolution.icann_suffix.rsplit(".", 1)[-1],
-        resolution.public_suffix.rsplit(".", 1)[-1],
+        icann_suffix,
+        public_suffix,
+        icann_suffix.rsplit(".", 1)[-1],
+        public_suffix.rsplit(".", 1)[-1],
     }
     if suffix_roots.intersection(roots):
         return False
-    if include_private and allow_private and resolution.private_active:
+    if allow_private and len(public_suffix.split(".")) > len(icann_suffix.split(".")):
         return False
     return True
 

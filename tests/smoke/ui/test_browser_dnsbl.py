@@ -214,9 +214,13 @@ def test_tld_checkbox_toggles_both_tld_sections(
     box = page.locator("#tld_wildcard")
     excl = page.locator("#TLD_Exclusion")
     bwl = page.locator("#TLD_BW_list")
+    # issue #1541: the PSL PRIVATE recognition row rides the same gate via
+    # hideCheckbox() (whole form-group, label and help included).
+    psl_row = page.locator("#pfb_psl_include_private")
     expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_attached(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_attached(timeout=JS_TIMEOUT_MS)
 
     # Normalise to a deterministic start (unchecked) regardless of saved config.
     if box.is_checked():
@@ -227,6 +231,7 @@ def test_tld_checkbox_toggles_both_tld_sections(
     expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_tld_before_hidden")
 
     # CHECK -> the handler .show()s both sections.
@@ -234,6 +239,7 @@ def test_tld_checkbox_toggles_both_tld_sections(
     expect(box).to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_visible(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_visible(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_visible(timeout=JS_TIMEOUT_MS)
     _shot(page, screenshot_dir, "dnsbl_tld_after_shown")
 
     # UNCHECK -> both re-hidden (proves a real two-way branch).
@@ -241,6 +247,43 @@ def test_tld_checkbox_toggles_both_tld_sections(
     expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
     expect(excl).to_be_hidden(timeout=JS_TIMEOUT_MS)
     expect(bwl).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    expect(psl_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
+
+
+def test_tld_allow_checkbox_gates_psl_allow_private_row(
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """`#tld_allow` gates the PSL PRIVATE allow row via ``hideCheckbox()``.
+
+    Narrow drill for issue #1541's new toggle only: the wider
+    ``enable_tld_allow`` multi-target set stays deferred as before. Before-state
+    asserted, then both directions.
+    """
+    page = browser_page
+    _open(page, webui, DNSBL_PAGE)
+
+    box = page.locator("#tld_allow")
+    allow_row = page.locator("#pfb_psl_allow_private")
+    expect(box).to_be_attached(timeout=JS_TIMEOUT_MS)
+    expect(allow_row).to_be_attached(timeout=JS_TIMEOUT_MS)
+
+    if box.is_checked():
+        box.evaluate("el => el.click()")
+        expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+
+    expect(allow_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_psl_allow_before_hidden")
+
+    box.evaluate("el => el.click()")
+    expect(box).to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(allow_row).to_be_visible(timeout=JS_TIMEOUT_MS)
+    _shot(page, screenshot_dir, "dnsbl_psl_allow_after_shown")
+
+    box.evaluate("el => el.click()")
+    expect(box).not_to_be_checked(timeout=JS_TIMEOUT_MS)
+    expect(allow_row).to_be_hidden(timeout=JS_TIMEOUT_MS)
 
 
 def test_action_select_toggles_advanced_firewall_sections(

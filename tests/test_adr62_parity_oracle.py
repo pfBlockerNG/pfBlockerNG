@@ -71,7 +71,6 @@ def _corpus_line_reader() -> Callable[[str], Iterable[str]]:
 
 def _run_corpus_build() -> P.BuildResult:
     config: dict[str, Any] = {
-        "tld_wildcard_master": [],
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],
@@ -163,7 +162,6 @@ def _build_synthetic(feeds: list[dict[str, Any]], lines_by_header: dict[str, lis
     exercise a shape PHP cannot yet place in a 'plain' feed's raw."""
     manifest = {"feeds": feeds}
     config: dict[str, Any] = {
-        "tld_wildcard_master": [],
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],
