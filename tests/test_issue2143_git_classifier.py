@@ -55,6 +55,25 @@ def test_classifier_validates_selected_sha_before_tag_classification(tmp_path: P
     )
 
 
+def test_classifier_rejects_tag_commit_off_release_branch(tmp_path: Path) -> None:
+    repo, _anchor, _current = _repo_with_release_line(tmp_path)
+    _git(repo, "checkout", "-q", "main")
+    off_branch = _commit(repo, "off branch")
+    _git(
+        repo,
+        "tag",
+        "-a",
+        "-m",
+        "testing",
+        "-m",
+        "pfBlockerNG-Release-Channel: testing",
+        "v4.0.1.a1",
+        off_branch,
+    )
+    with pytest.raises(ValueError, match="is not reachable from"):
+        derive_destinations_from_git("v4.0.1.a1", "release/4.0", repo, current_commit=off_branch)
+
+
 def test_classifier_rejects_moved_existing_tag(tmp_path: Path) -> None:
     repo, _anchor, current = _repo_with_release_line(tmp_path)
     moved = _commit(repo, "moved tag")
