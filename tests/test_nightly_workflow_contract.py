@@ -62,27 +62,18 @@ def test_nightly_workflow_exists_and_is_branch_independent() -> None:
     assert "pkgversion" in text
     assert "actions/upload-artifact@" in text
     assert "nightly-handoff-" in text
-    assert "nightly-state" in text
-    assert "contents: write" in text
-    assert "always()" in text
+    assert "nightly-state" not in text
+    assert "contents: write" not in _extract_indented_block(text, "permissions:")
     assert "::error::missing live BUILD/ROUTE matrix rows" in text
-    assert "::error::BUILD matrix failed or did not complete successfully" in text
     assert 'nightly_provenance.py" handoff' in text
-    assert "--state plan/state.json" in text
-    assert "--allocation plan/allocation.json" in text
-    assert "--expected-input-digest" in text
+    assert '--pkg-version "$PKG_VERSION"' in text
     assert "PORTS_REF_COUNT" in text
     assert "PORTS_HEAD_SHA" in text
     assert "PORTS_TAG_SHA" in text
     assert "refs/tags/${PORTS_REF}^{}" in text
     assert "LC_ALL=C sort -u" in text
     assert "^[0-9a-f]{40}$" in text
-    assert ".encoding" in text
-    assert "(HTTP 404)" in text
-    assert "VERIFIED=0" in text
-    assert "for _ in 1 2 3 4 5" in text
-    assert "persisted nightly-state.json does not match" in text
-    assert "jq -er '.pkg_version' allocation.json" in text
+    assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHA}"' in text
 
     forbidden = ("gh release", "git tag", "git push", "release notes", "PORTVERSION")
     assert not any(token in text for token in forbidden), "Nightly workflow must not publish or mutate Ports"
@@ -91,7 +82,7 @@ def test_nightly_workflow_exists_and_is_branch_independent() -> None:
 def test_matrix_gate_red_canary_guards_live_matrix_enforcement() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     start = text.index("      - name: Resolve pinned source, Ports, and live matrices")
-    end = text.index("\n      - name: Select plan outcome", start)
+    end = text.index("\n      - name: Expose pinned plan", start)
     step = text[start:end]
 
     canary = (
@@ -149,33 +140,30 @@ def test_build_step_builds_and_hands_off_dependency_packages() -> None:
     assert "DEP_ARTIFACTS_JSON" in step
 
 
-def test_handoff_step_artifact_extraction_stays_canonical_only() -> None:
-    """W5: the handoff step's durable-state artifact extraction remains
-    canonical-only -- dep_artifacts must never reach `complete`/state.json."""
+def test_handoff_step_has_no_durable_completion() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     start = text.index("      - name: Create verified publisher handoff")
     end = text.index("\n      - name: Upload verified publisher handoff", start)
     step = text[start:end]
 
-    assert "jq '[.builds[].artifact]' nightly-handoff.json > artifacts.json" in step
-    assert "dep_artifacts" not in step
+    assert "--pkg-version" in step
+    assert "complete" not in step
+    assert "state" not in step
 
 
 # --------------------------------------------------------------------------- #
 # issue #2146 S3 — the publish-pkg-repo job: the only production catalogue
-# mutation, gated on prepare's outcome AND the handoff job's own success.
+# mutation, ordered after the handoff job's own success.
 # --------------------------------------------------------------------------- #
 
 
-def test_publish_pkg_repo_job_gates_on_prepare_and_handoff() -> None:
-    """W1/W2: needs + if exact -- the only production catalogue mutation runs
-    strictly after the verified handoff, and only on an actual build outcome."""
+def test_publish_pkg_repo_job_runs_after_prepare_and_handoff() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
 
     assert 'name: "Publish the pkg catalogue"' in job
     assert "needs: [prepare, handoff]" in job
-    assert "if: needs.prepare.outputs.outcome == 'build' && needs.handoff.result == 'success'" in job
+    assert "needs.prepare.outputs.outcome" not in job
 
 
 def test_publish_pkg_repo_job_permissions_are_read_only() -> None:
@@ -259,18 +247,8 @@ def test_publish_pkg_repo_job_invokes_the_trusted_wrapper_with_nightly_kind() ->
     assert "sh trusted/scripts/publish-pkg-repo.sh" in job
 
 
-def test_publish_pkg_repo_job_documents_the_rerun_staleness_property() -> None:
-    """W9: a "re-run failed jobs" attempt (new run_attempt against the SAME
-    run_id) is REJECTED by publish_nightly.py's own handoff run_id equality
-    check -- documented in-workflow. A whole-workflow re-run does NOT recover a
-    failed publish either (the handoff job already persisted the allocation to
-    nightly-state.json before this job ran, so an identical-input re-run is a
-    green no-op that skips build+publish) -- the interim recovery is deleting
-    the stranded nightly-state.json record, and the real fix is issue #2245."""
+def test_publish_pkg_repo_job_documents_new_dispatch_after_failure() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
-    assert "re-run" in job.lower() or "rerun" in job.lower()
-    assert "run_id" in job.lower()
-    assert "reject" in job.lower()
-    assert "nightly-state.json" in job
-    assert "#2245" in job
+    assert "Failed Nightly? Dispatch another one." in job
+    assert "No durable allocation exists" in job

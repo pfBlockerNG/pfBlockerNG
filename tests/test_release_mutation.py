@@ -1,9 +1,8 @@
-"""Fail-closed release mutation preconditions for tagged and Nightly identities."""
+"""Fail-closed tagged release mutation preconditions."""
 
 from __future__ import annotations
 
 from dataclasses import fields, replace
-from datetime import date
 from typing import Any
 
 import pytest
@@ -22,10 +21,6 @@ INPUT_DIGEST = "e" * 64
 OTHER_INPUT_DIGEST = "f" * 64
 ARTIFACT_SHA = "1" * 64
 OTHER_ARTIFACT_SHA = "2" * 64
-
-
-def _nightly() -> Any:
-    return VERSIONS.allocate_nightly(date(2026, 8, 4), SOURCE_SHA, PORTS_SHA, INPUT_DIGEST, ())
 
 
 def _request(
@@ -75,56 +70,8 @@ def test_public_mutation_dataclasses_are_frozen_and_explicit() -> None:
     assert API.ObservedMutationState.__dataclass_params__.frozen  # type: ignore[attr-defined]
 
 
-def test_fresh_tagged_and_nightly_mutations_call_callback_once() -> None:
+def test_fresh_tagged_mutation_calls_callback_once() -> None:
     assert _run() == ("mutated", ["mutate"])
-    nightly = _nightly()
-    assert _run(_request(nightly, None), _observed()) == ("mutated", ["mutate"])
-
-
-def test_nightly_noop_requires_observed_existing_package() -> None:
-    nightly = replace(_nightly(), outcome="unchanged")
-    calls: list[str] = []
-    with pytest.raises(ValueError, match="no-op"):
-        API.apply_release_mutation(_request(nightly, None), _observed(), lambda: calls.append("mutate"))
-    assert calls == []
-
-
-def test_nightly_noop_requires_the_exact_allocated_package() -> None:
-    nightly = replace(_nightly(), outcome="unchanged")
-    observed = _observed(
-        existing_pkg_version="20260803",
-        existing_artifact_sha256=ARTIFACT_SHA,
-        existing_source_sha=SOURCE_SHA,
-        existing_ports_sha=PORTS_SHA,
-        existing_input_digest=INPUT_DIGEST,
-    )
-    calls: list[str] = []
-    with pytest.raises(ValueError, match="no-op"):
-        API.apply_release_mutation(_request(nightly, None), observed, lambda: calls.append("mutate"))
-    assert calls == []
-
-
-def test_exact_nightly_noop_wins_over_a_newer_catalog_version() -> None:
-    nightly = replace(_nightly(), outcome="unchanged")
-    observed = _observed(
-        latest_pkg_version="20260805",
-        candidate_vs_latest="<",
-        existing_pkg_version=nightly.pkg_version,
-        existing_artifact_sha256=ARTIFACT_SHA,
-        existing_source_sha=SOURCE_SHA,
-        existing_ports_sha=PORTS_SHA,
-        existing_input_digest=INPUT_DIGEST,
-    )
-    assert _run(_request(nightly, None), observed) == ("unchanged", [])
-
-
-def test_oversized_nightly_identity_never_reaches_mutation() -> None:
-    revision = int("9" * 120)
-    nightly = replace(_nightly(), portrevision=revision, pkg_version=f"20260804_{revision}")
-    calls: list[str] = []
-    with pytest.raises(ValueError, match="128"):
-        API.apply_release_mutation(_request(nightly, None), _observed(), lambda: calls.append("mutate"))
-    assert calls == []
 
 
 def test_exact_existing_artifact_and_build_input_are_unchanged() -> None:
@@ -181,21 +128,6 @@ def test_assetless_tagged_recovery_keeps_tag_and_source_safety() -> None:
         with pytest.raises((TypeError, ValueError)):
             API.apply_release_mutation(_request(), invalid, lambda: calls.append("mutate"))
         assert calls == []
-
-
-def test_nightly_requires_absent_untagged_release_and_no_selected_line() -> None:
-    nightly = _nightly()
-    with pytest.raises(ValueError):
-        API.apply_release_mutation(_request(nightly, STABLE.release_line), _observed(), lambda: None)
-    for observed in (
-        _observed(tag="v4.0.0"),
-        _observed(tag_source_sha=SOURCE_SHA),
-        _observed(release_state="draft_assetless"),
-        _observed(release_state="draft_with_assets"),
-        _observed(release_state="published"),
-    ):
-        with pytest.raises(ValueError):
-            API.apply_release_mutation(_request(nightly, None), observed, lambda: None)
 
 
 @pytest.mark.parametrize("release_state", ["draft_with_assets", "published"])

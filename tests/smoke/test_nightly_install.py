@@ -16,8 +16,8 @@ settle:
      the SAME ``src/`` paths, so they mutually exclude by FILE OVERLAP (no
      ``conflicts`` manifest key — that crashes CE libpkg). Installing one over the
      other replaces it cleanly; the reverse step replaces back.
-  3. MONOTONIC ``pkg upgrade`` — the pkg-safe ``<target>.YYYYMMDD.N`` version orders
-     component-wise, so ``pkg upgrade`` walks an installed nightly forward across
+  3. MONOTONIC ``pkg upgrade`` — the UTC timestamp prefix orders component-wise, so
+     ``pkg upgrade`` walks an installed nightly forward across
      successive builds.
 
 NOT a unit test (the builder/manifest shape is pinned off-box in
@@ -89,11 +89,10 @@ NIGHTLY_LIVE_CONF = "/usr/local/etc/pkg/repos/pfb_nightly_live_smoke.conf"
 _ABORT = ("is not installed", "Installation aborted", "Failed to install package")
 _HOOK_OK = ("Executing custom_php_install_command", "Menu items")
 
-# Three ascending pkg-safe nightly versions (<target>.YYYYMMDD.N) for the upgrade
-# walk; `.N` is the same-day build counter, so .1 < .2 < .3 orders component-wise.
-V1 = "3.2.16.20260606.1"
-V2 = "3.2.16.20260606.2"
-V3 = "3.2.16.20260606.3"
+# Three ascending timestamp-plus-SHA Nightly versions for the upgrade walk.
+V1 = f"20260606120000.{'a' * 40}"
+V2 = f"20260606120001.{'f' * 40}"
+V3 = f"20260607120000.{'0' * 40}"
 
 
 # --------------------------------------------------------------------------- #
@@ -283,7 +282,7 @@ def test_nightly_pkg_upgrade_is_monotonic(nightly_vm: SmokeVM, tmp_path: Path) -
       Given the nightly catalog at V1 and -nightly installed at V1,
       When the catalog is rebuilt at V2 (then V3) and ``pkg upgrade`` runs,
       Then the installed ``%v`` MOVES V1 -> V2 -> V3 — three real before != after
-        transitions, proving ``<target>.YYYYMMDD.N`` is monotonically comparable.
+        transitions, proving the UTC timestamp prefix is monotonically comparable.
     """
     vm = nightly_vm
     _ensure_absent(vm)

@@ -12,9 +12,7 @@ Fixture .pkg archives mirror tests/test_publish_release.py's _wrap_canonical_pkg
 _wrap_dependency_pkg (duplicated here, matching this repo's per-file fixture
 convention) but WITHOUT the tagged -<Variant>-<pfsense_version> suffix: Nightly's
 canonical/dependency declared names equal the package's own manifest identity.
-Build records are minted via nightly_provenance.make_build_record with a genuine
-NightlyAllocation (nightly_provenance.allocate_candidate over an empty durable state
-— no chained history needed for these fixtures, each allocation is independent).
+Build records and handoffs carry a stateless timestamp-plus-source-SHA version.
 Handoffs are assembled via nightly_provenance.build_handoff itself wherever the
 scenario is a legitimate one; hostile/forged scenarios mutate a valid handoff's OWN
 dict after the fact (JSON round-tripped, `_mutate`), since build_handoff's own
@@ -108,25 +106,31 @@ ROW_ROUTE_ONLY_17 = _row(freebsd_major="17", pfsense_version="17.0", variant="CE
 
 
 # --------------------------------------------------------------------------- #
-# Allocation + genuine .pkg archive fixture builders.
+# Snapshot + genuine .pkg archive fixture builders.
 # --------------------------------------------------------------------------- #
 
 
-def _allocation(
+@dataclass(frozen=True)
+class _Snapshot:
+    pkg_version: str
+    source_sha: str
+    ports_sha: str
+    input_digest: str
+
+
+def _snapshot(
     *,
     build_date: date = date(2026, 8, 4),
     source_sha: str = _SOURCE_SHA,
     ports_sha: str = _PORTS_SHA,
     matrix_digest: str = _MATRIX_DIGEST,
-) -> Any:
-    candidate = np.allocate_candidate(
-        np.empty_state(),
-        build_date=build_date,
+) -> _Snapshot:
+    return _Snapshot(
+        pkg_version=f"{build_date:%Y%m%d}120000.{source_sha}",
         source_sha=source_sha,
         ports_sha=ports_sha,
-        matrix_digest=matrix_digest,
+        input_digest=np.combined_nightly_input_digest(source_sha, ports_sha, matrix_digest),
     )
-    return candidate.allocation
 
 
 def _write_tar_pkg(path: Path, members: list[tuple[str, bytes, int, int]]) -> None:
@@ -232,15 +236,25 @@ class _LegSpec:
     source_date_epoch: int = _EPOCH
 
 
-def _build_leg_result(allocation: Any, spec: _LegSpec, *, assets_root: Path) -> dict[str, Any]:
+def _make_record(snapshot: _Snapshot, row: dict[str, object], epoch: int = _EPOCH) -> dict[str, object]:
+    return np.make_build_record(
+        pkg_version=snapshot.pkg_version,
+        source_sha=snapshot.source_sha,
+        ports_sha=snapshot.ports_sha,
+        matrix_row=row,
+        source_date_epoch=epoch,
+    )
+
+
+def _build_leg_result(snapshot: Any, spec: _LegSpec, *, assets_root: Path) -> dict[str, Any]:
     """Mint one leg's genuine record + canonical/dep .pkg archives under
     assets_root/nightly-result-<major>/, and return the handoff-shaped `result` dict
     nightly_provenance.build_handoff itself expects as one entry of `results`."""
     major = str(spec.row["freebsd_major"])
     legdir = assets_root / f"{pn._LEG_DIR_PREFIX}{major}"
     legdir.mkdir(parents=True, exist_ok=True)
-    record = np.make_build_record(allocation=allocation, matrix_row=spec.row, source_date_epoch=spec.source_date_epoch)
-    canonical_name = f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{allocation.pkg_version}.pkg"
+    record = _make_record(snapshot, spec.row, spec.source_date_epoch)
+    canonical_name = f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{snapshot.pkg_version}.pkg"
     _path, digest = _wrap_canonical_pkg(legdir, record, local_name=canonical_name)
     dep_artifacts = []
     for name, version in spec.dep_specs:
@@ -258,7 +272,7 @@ def _build_leg_result(allocation: Any, spec: _LegSpec, *, assets_root: Path) -> 
 
 
 def _build_handoff(
-    allocation: Any,
+    snapshot: Any,
     *,
     legs: Sequence[_LegSpec],
     route_rows: Sequence[dict[str, object]],
@@ -267,12 +281,10 @@ def _build_handoff(
     source_sha: str = _SOURCE_SHA,
     ports_sha: str = _PORTS_SHA,
 ) -> dict[str, Any]:
-    results = [_build_leg_result(allocation, spec, assets_root=assets_root) for spec in legs]
+    results = [_build_leg_result(snapshot, spec, assets_root=assets_root) for spec in legs]
     build_rows = [spec.row for spec in legs]
-    candidate = np.Candidate(allocation=allocation, generation=0)
     return np.build_handoff(
-        candidate=candidate,
-        state=np.empty_state(),
+        pkg_version=snapshot.pkg_version,
         build_rows=build_rows,
         route_rows=list(route_rows),
         results=results,
@@ -323,11 +335,11 @@ class _TempDirTestCase(unittest.TestCase):
 
     def base_handoff(self) -> tuple[dict[str, Any], Path, Any]:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
         )
-        return handoff, results_dir, allocation
+        return handoff, results_dir, snapshot
 
 
 # --------------------------------------------------------------------------- #
@@ -339,13 +351,13 @@ class HappyFanOutTests(_TempDirTestCase):
     @_requires_engine
     def test_two_legs_three_route_rows_three_catalogues(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         legs = [
             _LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")]),
             _LegSpec(row=ROW_PLUS16_03),
         ]
         route_rows = [ROW_CE15, ROW_PLUS16_03, ROW_PLUS16_07]
-        handoff = _build_handoff(allocation, legs=legs, route_rows=route_rows, assets_root=results_dir)
+        handoff = _build_handoff(snapshot, legs=legs, route_rows=route_rows, assets_root=results_dir)
 
         report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
 
@@ -354,7 +366,7 @@ class HappyFanOutTests(_TempDirTestCase):
             {("nightly", "ce-2.8"), ("nightly", "plus-26.03"), ("nightly", "plus-26.07")},
         )
         docs = self.pkg_repo / "docs" / "nightly"
-        canonical_name = f"pfSense-pkg-pfBlockerNG-{allocation.pkg_version}.pkg"
+        canonical_name = f"pfSense-pkg-pfBlockerNG-{snapshot.pkg_version}.pkg"
         self.assertTrue((docs / "ce-2.8" / canonical_name).is_file())
         self.assertTrue((docs / "ce-2.8" / "py311-charset-normalizer-3.4.0.pkg").is_file())
         self.assertTrue((docs / "plus-26.03" / canonical_name).is_file())
@@ -379,12 +391,12 @@ class HappyFanOutTests(_TempDirTestCase):
 class NoopTests(_TempDirTestCase):
     @_requires_engine
     def test_identical_rerun_is_noop(self) -> None:
-        handoff, results_dir, allocation = self.base_handoff()
+        handoff, results_dir, snapshot = self.base_handoff()
         first = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
         self.assertTrue(first.touched)
 
         catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
-        canonical_name = f"pfSense-pkg-pfBlockerNG-{allocation.pkg_version}.pkg"
+        canonical_name = f"pfSense-pkg-pfBlockerNG-{snapshot.pkg_version}.pkg"
         before_mtime = (catalogue_dir / canonical_name).stat().st_mtime_ns
         before_bytes = (catalogue_dir / canonical_name).read_bytes()
 
@@ -409,23 +421,23 @@ class ConflictTests(_TempDirTestCase):
     @_requires_engine
     def test_same_version_different_bytes_rejected(self) -> None:
         results_dir_1 = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff_1 = _build_handoff(
-            allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir_1
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir_1
         )
         first = _run(handoff=handoff_1, results_dir=results_dir_1, pkg_repo=self.pkg_repo)
         self.assertEqual(first.touched, (("nightly", "ce-2.8"),))
 
         catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
-        canonical_name = f"pfSense-pkg-pfBlockerNG-{allocation.pkg_version}.pkg"
+        canonical_name = f"pfSense-pkg-pfBlockerNG-{snapshot.pkg_version}.pkg"
         original_bytes = (catalogue_dir / canonical_name).read_bytes()
 
-        # SAME allocation (same day/version, same source_sha/ports_sha) but a
+        # SAME snapshot (same day/version, same source_sha/ports_sha) but a
         # DIFFERENT source_date_epoch -- genuinely different archive bytes under the
         # identical canonical name, with every OTHER cross-checked field unchanged.
         results_dir_2 = self.new_results_dir()
         handoff_2 = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_CE15, source_date_epoch=_EPOCH + 1)],
             route_rows=[ROW_CE15],
             assets_root=results_dir_2,
@@ -446,7 +458,7 @@ class ConflictTests(_TempDirTestCase):
 class StaleTests(_TempDirTestCase):
     @_requires_engine
     def test_older_absent_version_rejected_before_any_write(self) -> None:
-        newer_alloc = _allocation(build_date=date(2026, 8, 10))
+        newer_alloc = _snapshot(build_date=date(2026, 8, 10))
         results_dir_1 = self.new_results_dir()
         handoff_1 = _build_handoff(
             newer_alloc, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir_1
@@ -457,7 +469,7 @@ class StaleTests(_TempDirTestCase):
         catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
         before = {p.name: p.read_bytes() for p in catalogue_dir.iterdir()}
 
-        older_alloc = _allocation(build_date=date(2026, 8, 5))
+        older_alloc = _snapshot(build_date=date(2026, 8, 5))
         results_dir_2 = self.new_results_dir()
         handoff_2 = _build_handoff(
             older_alloc, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir_2
@@ -491,7 +503,7 @@ class StaleTests(_TempDirTestCase):
             [("+COMPACT_MANIFEST", json.dumps(manifest, separators=(",", ":")).encode(), 0o644, 0)],
         )
 
-        newer_alloc = _allocation(build_date=date(2026, 8, 20))
+        newer_alloc = _snapshot(build_date=date(2026, 8, 20))
         results_dir_2 = self.new_results_dir()
         handoff_2 = _build_handoff(
             newer_alloc, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir_2
@@ -516,13 +528,13 @@ class RetentionTests(_TempDirTestCase):
         dep_name = "py311-charset-normalizer-3.4.0.pkg"
         first_version = None
         for seq in range(keep + 1):
-            allocation = _allocation(build_date=date(2026, 8, 1 + seq))
+            snapshot = _snapshot(build_date=date(2026, 8, 1 + seq))
             if seq == 0:
-                first_version = allocation.pkg_version
+                first_version = snapshot.pkg_version
             dep_specs = [("py311-charset-normalizer", "3.4.0")] if seq == 0 else ()
             results_dir = self.new_results_dir()
             handoff = _build_handoff(
-                allocation,
+                snapshot,
                 legs=[_LegSpec(row=ROW_CE15, dep_specs=dep_specs)],
                 route_rows=[ROW_CE15],
                 assets_root=results_dir,
@@ -555,15 +567,15 @@ class HandoffIntegrityTests(_TempDirTestCase):
             _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
 
     @_requires_engine
-    def test_record_version_mismatches_allocation_rejected(self) -> None:
+    def test_record_version_mismatches_snapshot_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        real_alloc = _allocation(build_date=date(2026, 8, 4))
-        forged_alloc = _allocation(build_date=date(2026, 8, 9))
+        real_alloc = _snapshot(build_date=date(2026, 8, 4))
+        forged_alloc = _snapshot(build_date=date(2026, 8, 9))
         handoff = _build_handoff(
             real_alloc, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
         )
         legdir = results_dir / f"{pn._LEG_DIR_PREFIX}15"
-        forged_record = np.make_build_record(allocation=forged_alloc, matrix_row=ROW_CE15, source_date_epoch=_EPOCH)
+        forged_record = _make_record(forged_alloc, ROW_CE15)
         forged_name = f"pfSense-pkg-pfBlockerNG-{forged_alloc.pkg_version}.pkg"
         _path, forged_digest = _wrap_canonical_pkg(legdir, forged_record, local_name=forged_name)
 
@@ -572,7 +584,7 @@ class HandoffIntegrityTests(_TempDirTestCase):
 
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
-        self.assertIn("allocation.pkg_version", str(ctx.exception))
+        self.assertIn("handoff pkg_version", str(ctx.exception))
 
     @_requires_engine
     def test_run_id_mismatch_rejected(self) -> None:
@@ -638,9 +650,9 @@ class HandoffIntegrityTests(_TempDirTestCase):
     @_requires_engine
     def test_duplicate_build_majors_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_CE15), _LegSpec(row=ROW_PLUS16_03)],
             route_rows=[ROW_CE15, ROW_PLUS16_03],
             assets_root=results_dir,
@@ -653,16 +665,16 @@ class HandoffIntegrityTests(_TempDirTestCase):
         self.assertIn("duplicate", str(ctx.exception))
 
     @_requires_engine
-    def test_allocation_source_sha_mismatch_top_level_rejected(self) -> None:
+    def test_snapshot_source_sha_mismatch_top_level_rejected(self) -> None:
         handoff, results_dir, _alloc = self.base_handoff()
         mutated = _mutate(handoff)
         mutated["source_sha"] = "f" * 40
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
-        self.assertIn("source_sha", str(ctx.exception))
+        self.assertIn("source SHA", str(ctx.exception))
 
     @_requires_engine
-    def test_allocation_ports_sha_mismatch_top_level_rejected(self) -> None:
+    def test_snapshot_ports_sha_mismatch_top_level_rejected(self) -> None:
         handoff, results_dir, _alloc = self.base_handoff()
         mutated = _mutate(handoff)
         mutated["ports_sha"] = "f" * 40
@@ -675,7 +687,7 @@ class HandoffIntegrityTests(_TempDirTestCase):
         """N2: re-run nightly_provenance.build_handoff's OWN input-digest
         cross-check at publish time too -- a handoff whose matrix_digest was
         swapped for a different (still well-formed) value no longer matches
-        allocation.input_digest, which build_handoff computed from the
+        snapshot.input_digest, which build_handoff computed from the
         ORIGINAL matrix_digest at handoff-creation time. Without this
         re-check, a forged matrix_digest sails through untouched: nothing else
         in the handoff shape depends on it."""
@@ -708,9 +720,9 @@ class RoutingTests(_TempDirTestCase):
     @_requires_engine
     def test_route_row_major_has_no_asset_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15, ROW_PLUS16_03], assets_root=results_dir
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15, ROW_PLUS16_03], assets_root=results_dir
         )
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
@@ -719,9 +731,9 @@ class RoutingTests(_TempDirTestCase):
     @_requires_engine
     def test_canonical_asset_serving_zero_route_rows_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_CE15), _LegSpec(row=ROW_PLUS16_03)],
             route_rows=[ROW_CE15],
             assets_root=results_dir,
@@ -735,9 +747,9 @@ class RoutingTests(_TempDirTestCase):
         """The routing-level defensive duplicate-major guard, exercised directly
         (bypassing handoff validation, which already has its OWN dup-major test
         above) via two hand-built VerifiedAsset/_Leg objects sharing one major."""
-        allocation = _allocation()
-        record_a = np.make_build_record(allocation=allocation, matrix_row=ROW_CE15, source_date_epoch=_EPOCH)
-        record_b = np.make_build_record(allocation=allocation, matrix_row=ROW_CE15, source_date_epoch=_EPOCH + 1)
+        snapshot = _snapshot()
+        record_a = _make_record(snapshot, ROW_CE15)
+        record_b = _make_record(snapshot, ROW_CE15, _EPOCH + 1)
         asset_a = pc.VerifiedAsset(
             asset_class="canonical",
             declared_name="a.pkg",
@@ -772,8 +784,8 @@ class RoutingTests(_TempDirTestCase):
         wildcard ABI) is rejected by _route_targets's own ABI cross-check,
         exercised directly via hand-built _Leg/VerifiedAsset objects, same
         idiom as test_two_legs_same_major_rejected_via_route_targets above."""
-        allocation = _allocation()
-        record = np.make_build_record(allocation=allocation, matrix_row=ROW_CE15, source_date_epoch=_EPOCH)
+        snapshot = _snapshot()
+        record = _make_record(snapshot, ROW_CE15)
         canonical = pc.VerifiedAsset(
             asset_class="canonical",
             declared_name="a.pkg",
@@ -807,9 +819,9 @@ class DependencyTests(_TempDirTestCase):
     @_requires_engine
     def test_dep_file_missing_from_leg_dir_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
             route_rows=[ROW_CE15],
             assets_root=results_dir,
@@ -822,9 +834,9 @@ class DependencyTests(_TempDirTestCase):
     @_requires_engine
     def test_dep_sha_mismatch_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
             route_rows=[ROW_CE15],
             assets_root=results_dir,
@@ -837,9 +849,9 @@ class DependencyTests(_TempDirTestCase):
     @_requires_engine
     def test_dep_tagged_style_suffixed_name_rejected(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
             route_rows=[ROW_CE15],
             assets_root=results_dir,
@@ -863,9 +875,9 @@ class RouteOnlyTests(_TempDirTestCase):
     @_requires_engine
     def test_route_only_row_not_targeted_no_error(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15, ROW_ROUTE_ONLY_17], assets_root=results_dir
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15, ROW_ROUTE_ONLY_17], assets_root=results_dir
         )
         report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
         self.assertEqual(report.touched, (("nightly", "ce-2.8"),))
@@ -882,8 +894,8 @@ class MissingFileTests(_TempDirTestCase):
     @_requires_engine
     def test_missing_results_dir_clean_error(self) -> None:
         scratch = self.new_results_dir()
-        allocation = _allocation()
-        handoff = _build_handoff(allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=scratch)
+        snapshot = _snapshot()
+        handoff = _build_handoff(snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=scratch)
         missing_dir = self.tmp / "does-not-exist"
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=handoff, results_dir=missing_dir, pkg_repo=self.pkg_repo)
@@ -892,11 +904,11 @@ class MissingFileTests(_TempDirTestCase):
     @_requires_engine
     def test_missing_canonical_file_clean_error(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
         )
-        canonical_name = f"pfSense-pkg-pfBlockerNG-{allocation.pkg_version}.pkg"
+        canonical_name = f"pfSense-pkg-pfBlockerNG-{snapshot.pkg_version}.pkg"
         (results_dir / f"{pn._LEG_DIR_PREFIX}15" / canonical_name).unlink()
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
@@ -914,9 +926,9 @@ class HostileNameTests(_TempDirTestCase):
         for hostile in ("../x.pkg", "a/b.pkg", "a\\b.pkg"):
             with self.subTest(hostile=hostile):
                 results_dir = self.new_results_dir()
-                allocation = _allocation()
+                snapshot = _snapshot()
                 handoff = _build_handoff(
-                    allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+                    snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
                 )
                 mutated = _mutate(handoff)
                 mutated["builds"][0]["artifact"]["name"] = hostile
@@ -928,9 +940,9 @@ class HostileNameTests(_TempDirTestCase):
         for hostile in ("../x.pkg", "a/b.pkg", "a\\b.pkg"):
             with self.subTest(hostile=hostile):
                 results_dir = self.new_results_dir()
-                allocation = _allocation()
+                snapshot = _snapshot()
                 handoff = _build_handoff(
-                    allocation,
+                    snapshot,
                     legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
                     route_rows=[ROW_CE15],
                     assets_root=results_dir,
@@ -973,9 +985,9 @@ class MainCliTests(_TempDirTestCase):
     @_requires_engine
     def test_main_success_prints_updated_and_returns_zero(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
         )
         handoff_path = self.tmp / "handoff.json"
         handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
@@ -1009,20 +1021,18 @@ class IdentityPostConditionTests(_TempDirTestCase):
     @_requires_engine
     def test_multi_destination_divergence_aborts_publish(self) -> None:
         results_dir = self.new_results_dir()
-        allocation = _allocation()
+        snapshot = _snapshot()
         handoff = _build_handoff(
-            allocation,
+            snapshot,
             legs=[_LegSpec(row=ROW_PLUS16_03)],
             route_rows=[ROW_PLUS16_03, ROW_PLUS16_07],
             assets_root=results_dir,
         )
-        canonical_name = f"pfSense-pkg-pfBlockerNG-{allocation.pkg_version}.pkg"
-        divergent_alloc = _allocation(build_date=date(2026, 8, 20))
+        canonical_name = f"pfSense-pkg-pfBlockerNG-{snapshot.pkg_version}.pkg"
+        divergent_alloc = _snapshot(build_date=date(2026, 8, 20))
         divergent_dir = self.tmp / "divergent"
         divergent_dir.mkdir()
-        divergent_record = np.make_build_record(
-            allocation=divergent_alloc, matrix_row=ROW_PLUS16_03, source_date_epoch=_EPOCH
-        )
+        divergent_record = _make_record(divergent_alloc, ROW_PLUS16_03)
         divergent_path, _digest = _wrap_canonical_pkg(divergent_dir, divergent_record, local_name="divergent.pkg")
         divergent_bytes = divergent_path.read_bytes()
 

@@ -22,7 +22,7 @@ on:
 
 permissions:
   packages: read
-  contents: write
+  contents: read
 
 concurrency:
   group: nightly-snapshot
@@ -36,7 +36,7 @@ env:
 
 jobs:
   prepare:
-    name: Pin inputs and allocate version
+    name: Pin inputs and identify snapshot
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:8
@@ -47,8 +47,7 @@ jobs:
     env:
       HOME: /tmp
     outputs:
-      outcome: ${{ steps.plan.outputs.outcome }}
-      allocation: ${{ steps.plan.outputs.allocation }}
+      pkg_version: ${{ steps.plan.outputs.pkg_version }}
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
       source_sha: ${{ steps.plan.outputs.source_sha }}
       ports_sha: ${{ steps.plan.outputs.ports_sha }}
@@ -75,8 +74,6 @@ jobs:
 
       - name: Resolve pinned source, Ports, and live matrices
         id: inputs
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           if [ -z "${SOURCE_REF:-}" ]; then
@@ -147,41 +144,9 @@ jobs:
             --argjson route "$ROUTE_MATRIX" \
             '{tools_sha: $tools_sha, matrix_sha: $matrix_sha, build: $build, route: $route}')"
           MATRIX_DIGEST="$(printf '%s' "$MATRIX_PAYLOAD" | sha256sum | cut -d' ' -f1)"
-
-          STATE_SHA=""
-          STATE_RESPONSE_FILE="$(mktemp)"
-          STATE_ERROR_FILE="$(mktemp)"
-          trap 'rm -f "$STATE_RESPONSE_FILE" "$STATE_ERROR_FILE"' EXIT
-          if gh api \
-              "repos/${GITHUB_REPOSITORY}/contents/nightly-state.json?ref=nightly-state" \
-              >"$STATE_RESPONSE_FILE" 2>"$STATE_ERROR_FILE"; then
-            STATE_SHA="$(jq -er '.sha' "$STATE_RESPONSE_FILE")"
-            if [ "$(jq -er '.encoding' "$STATE_RESPONSE_FILE")" != "base64" ]; then
-              echo "::error::nightly-state.json is not inline base64; it likely exceeds the Contents API size limit"
-              exit 1
-            fi
-            jq -er '.content' "$STATE_RESPONSE_FILE" \
-              | tr -d '\n' | base64 --decode > state.json
-          elif grep -Fq '(HTTP 404)' "$STATE_ERROR_FILE"; then
-            printf '%s\n' '{"schema":1,"generation":0,"records":[]}' > state.json
-          else
-            cat "$STATE_ERROR_FILE" >&2
-            exit 1
-          fi
-          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" validate --state state.json
-
           mkdir -p plan
-          # Durable generation checks reject stale completions before state mutation.
-          BUILD_DATE="$(date -u +%Y%m%d)"
-          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" allocate \
-            --state state.json \
-            --output plan/allocation.json \
-            --build-date "$BUILD_DATE" \
-            --source-sha "$SOURCE_SHA" \
-            --ports-sha "$PORTS_SHA" \
-            --matrix-digest "$MATRIX_DIGEST"
-          cp state.json plan/state.json
-          printf '%s\n' "$STATE_SHA" > plan/state-file-sha
+          BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"
+          PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHA}"
           printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha
@@ -190,6 +155,7 @@ jobs:
           printf '%s\n' "$MATRIX_SHA" > plan/matrix-sha
           printf '%s\n' "$MATRIX_DIGEST" > plan/matrix-digest
           printf '%s\n' "$SOURCE_DATE_EPOCH" > plan/source-date-epoch
+          printf '%s\n' "$PKG_VERSION" > plan/pkg-version
 
           {
             echo "source_sha=$SOURCE_SHA"
@@ -198,18 +164,16 @@ jobs:
             echo "matrix_sha=$MATRIX_SHA"
             echo "matrix_digest=$MATRIX_DIGEST"
             echo "source_date_epoch=$SOURCE_DATE_EPOCH"
+            echo "pkg_version=$PKG_VERSION"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Select plan outcome
+      - name: Expose pinned plan
         id: plan
         run: |
           set -eu
-          OUTCOME="$(jq -r '.allocation.outcome' plan/allocation.json)"
-          ALLOCATION="$(jq -c '.' plan/allocation.json)"
           BUILD_MATRIX="$(cat plan/build-matrix.json)"
           {
-            echo "outcome=$OUTCOME"
-            echo "allocation=$ALLOCATION"
+            echo "pkg_version=${{ steps.inputs.outputs.pkg_version }}"
             echo "source_sha=${{ steps.inputs.outputs.source_sha }}"
             echo "ports_sha=${{ steps.inputs.outputs.ports_sha }}"
             echo "tools_sha=${{ steps.inputs.outputs.tools_sha }}"
@@ -232,7 +196,6 @@ jobs:
   build:
     name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }})
     needs: prepare
-    if: needs.prepare.outputs.outcome == 'build'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:8
@@ -265,7 +228,7 @@ jobs:
 
       - name: Build and verify package
         env:
-          ALLOCATION_JSON: ${{ needs.prepare.outputs.allocation }}
+          PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
           MATRIX_ROW: ${{ toJson(matrix) }}
           SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
@@ -283,8 +246,6 @@ jobs:
           export SOURCE_DIR="$GITHUB_WORKSPACE/source"
           mkdir -p result
           printf '%s\n' "$MATRIX_ROW" > row.json
-          printf '%s' "$ALLOCATION_JSON" | jq '.allocation' > allocation.json
-          PKG_VERSION="$(jq -er '.pkg_version' allocation.json)"
           FREEBSD_MAJOR="$(jq -r '.freebsd_major' row.json)"
           VARIANT="$(jq -r '.variant' row.json)"
           PY_FLAVOR="$(jq -r '.py_flavor' row.json)"
@@ -293,7 +254,9 @@ jobs:
           OUT_DIR="${RUN_ROOT}/${RUN_ID}/out"
 
           python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" record \
-            --allocation allocation.json \
+            --pkg-version "$PKG_VERSION" \
+            --source-sha "$SOURCE_SHA" \
+            --ports-sha "$PORTS_SHA" \
             --matrix-row row.json \
             --source-date-epoch "$SOURCE_DATE_EPOCH" \
             --output build-record.json
@@ -396,7 +359,6 @@ jobs:
   handoff:
     name: Verify and hand off Nightly snapshot
     needs: [prepare, build]
-    if: always()
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:8
@@ -407,23 +369,7 @@ jobs:
     env:
       HOME: /tmp
     steps:
-      - name: Exit cleanly for identical input
-        if: needs.prepare.outputs.outcome == 'unchanged'
-        run: echo "Nightly input unchanged; no package or state mutation required."
-
-      - name: Require every BUILD leg
-        if: needs.prepare.outputs.outcome == 'build'
-        env:
-          BUILD_RESULT: ${{ needs.build.result }}
-        run: |
-          set -eu
-          if [ "$BUILD_RESULT" != "success" ]; then
-            echo "::error::BUILD matrix failed or did not complete successfully: $BUILD_RESULT"
-            exit 1
-          fi
-
       - name: Checkout trusted workflow tools for handoff validation
-        if: needs.prepare.outputs.outcome == 'build'
         uses: actions/checkout@v6
         with:
           ref: ${{ needs.prepare.outputs.tools_sha }}
@@ -432,14 +378,12 @@ jobs:
           path: trusted
 
       - name: Download pinned plan
-        if: needs.prepare.outputs.outcome == 'build'
         uses: actions/download-artifact@v7
         with:
           name: nightly-plan
           path: plan
 
       - name: Download every BUILD result
-        if: needs.prepare.outputs.outcome == 'build'
         uses: actions/download-artifact@v7
         with:
           pattern: nightly-result-*
@@ -447,9 +391,8 @@ jobs:
           merge-multiple: false
 
       - name: Create verified publisher handoff
-        id: handoff
-        if: needs.prepare.outputs.outcome == 'build'
         env:
+          PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
           TOOLS_SHA: ${{ needs.prepare.outputs.tools_sha }}
@@ -460,8 +403,7 @@ jobs:
           # Run-body export, not an env: map value (issue #2231).
           TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
           python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" handoff \
-            --state plan/state.json \
-            --allocation plan/allocation.json \
+            --pkg-version "$PKG_VERSION" \
             --build-matrix plan/build-matrix.json \
             --route-matrix plan/route-matrix.json \
             --results-dir results \
@@ -475,17 +417,8 @@ jobs:
             --ports-repo "$PORTS_REPO" \
             --ports-ref "$PORTS_REF" \
             --output nightly-handoff.json
-          jq '[.builds[].artifact]' nightly-handoff.json > artifacts.json
-          python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" complete \
-            --state plan/state.json \
-            --candidate plan/allocation.json \
-            --artifacts artifacts.json \
-            --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
-            --expected-input-digest "$(jq -r '.allocation.input_digest' nightly-handoff.json)" \
-            --output nightly-state.json
 
       - name: Upload verified publisher handoff
-        if: steps.handoff.outcome == 'success'
         uses: actions/upload-artifact@v7
         with:
           name: nightly-handoff-${{ github.run_id }}
@@ -493,57 +426,14 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Persist immutable allocation and artifact identity
-        if: steps.handoff.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-        run: |
-          set -eu
-          REPO="repos/${GITHUB_REPOSITORY}"
-          STATE_SHA="$(cat plan/state-file-sha)"
-          if ! gh api "${REPO}/git/ref/heads/nightly-state" >/dev/null 2>&1; then
-            gh api --method POST "${REPO}/git/refs" \
-              -f ref="refs/heads/nightly-state" \
-              -f sha="$SOURCE_SHA" >/dev/null
-          fi
-          CONTENT="$(base64 < nightly-state.json | tr -d '\n')"
-          if [ -n "$STATE_SHA" ]; then
-            gh api --method PUT "${REPO}/contents/nightly-state.json" \
-              -f message="Record Nightly ${GITHUB_RUN_ID}" \
-              -f content="$CONTENT" \
-              -f branch=nightly-state \
-              -f sha="$STATE_SHA" >/dev/null
-          else
-            gh api --method PUT "${REPO}/contents/nightly-state.json" \
-              -f message="Record Nightly ${GITHUB_RUN_ID}" \
-              -f content="$CONTENT" \
-              -f branch=nightly-state >/dev/null
-          fi
-          VERIFIED=0
-          for _ in 1 2 3 4 5; do
-            if gh api "${REPO}/contents/nightly-state.json?ref=nightly-state" \
-                 --jq '.content' | tr -d '\n' | base64 --decode \
-                 | cmp -s nightly-state.json; then
-              VERIFIED=1
-              break
-            fi
-            sleep 3
-          done
-          if [ "$VERIFIED" -ne 1 ]; then
-            echo "::error::persisted nightly-state.json does not match the local state document"
-            exit 1
-          fi
-
   # ── Publish the pkg catalogue (ADR-17, issue #2146 S3) ──────────────────────
   # The only production catalogue mutation in the whole Nightly flow. Runs after
   # the handoff job's own verified handoff succeeds -- never races it, never on
-  # a skipped/failed/unchanged outcome. See scripts/publish-pkg-repo.sh
+  # a failed outcome. See scripts/publish-pkg-repo.sh
   # (PUBLISH_KIND=nightly), the only thing here that touches git.
   publish-pkg-repo:
     name: "Publish the pkg catalogue"
     needs: [prepare, handoff]
-    if: needs.prepare.outputs.outcome == 'build' && needs.handoff.result == 'success'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:8
@@ -622,21 +512,8 @@ jobs:
           export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
           export RESULTS_DIR="$GITHUB_WORKSPACE/results"
           export PUBLISH_KIND=nightly
-          # A "re-run failed jobs" click on just this job keeps the SAME
-          # github.run_id but mints a NEW github.run_attempt — publish_nightly.py
-          # rejects that mismatch against the handoff's own recorded run_id
-          # outright (stale-callback doctrine, issue #2146 S2's publish_nightly.py
-          # _validate_handoff).
-          #
-          # Re-running the WHOLE workflow does NOT recover a failed publish either:
-          # the handoff job already persisted this run's allocation to
-          # nightly-state.json (nightly-state branch) BEFORE this job ran, so an
-          # identical-input re-run just reallocates outcome=unchanged and skips
-          # build+publish entirely — the snapshot stays RECORDED but UNPUBLISHED.
-          # Interim recovery: delete the stranded record for this run from
-          # nightly-state.json on the nightly-state branch, then re-run the whole
-          # workflow (reallocates, rebuilds, publishes into a clean destination).
-          # The proper republish valve is tracked as issue #2245.
+          # Failed Nightly? Dispatch another one. No durable allocation exists to
+          # recover or replay; each invocation gets its own timestamped version.
           export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
           export BASE_URL=https://pfblockerng.github.io/pkg
           sh trusted/scripts/publish-pkg-repo.sh

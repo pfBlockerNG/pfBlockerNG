@@ -1,4 +1,4 @@
-"""Fail-closed preconditions for tagged and independent Nightly mutation."""
+"""Fail-closed preconditions for tagged release mutation."""
 
 from __future__ import annotations
 
@@ -9,7 +9,6 @@ from typing import Callable, Literal
 from scripts import release_version as rv
 
 ReleaseInfo = rv.ReleaseInfo
-NightlyAllocation = rv.NightlyAllocation
 ReleaseState = Literal["absent", "draft_assetless", "draft_with_assets", "published"]
 Comparison = Literal["<", "=", ">"]
 MutationOutcome = Literal["mutated", "unchanged"]
@@ -23,8 +22,8 @@ _COMPARISONS = ("<", "=", ">")
 
 @dataclass(frozen=True)
 class MutationRequest:
-    result: ReleaseInfo | NightlyAllocation
-    selected_release_line: str | None
+    result: ReleaseInfo
+    selected_release_line: str
     source_sha: str
     ports_sha: str
     input_digest: str
@@ -84,16 +83,13 @@ def _validate_observed_tag(value: object) -> None:
         raise ValueError("tag must be a printable ASCII release tag of at most 128 characters")
 
 
-def _validate_result(result: object) -> tuple[bool, str, str, str, str]:
+def _validate_result(result: object) -> str:
     if type(result) is ReleaseInfo:
         rv.validate_release_info(result)
         if result.tag is None:
-            raise ValueError("Nightly must use NightlyAllocation")
-        return False, result.pkg_version, "", "", ""
-    if type(result) is NightlyAllocation:
-        rv.validate_nightly_allocation(result)
-        return True, result.pkg_version, result.source_sha, result.ports_sha, result.input_digest
-    raise TypeError("request.result must be ReleaseInfo or NightlyAllocation")
+            raise ValueError("tagged mutation requires a release tag")
+        return result.pkg_version
+    raise TypeError("request.result must be ReleaseInfo")
 
 
 def _validate_observed(observed: object) -> ObservedMutationState:
@@ -135,20 +131,10 @@ def _validate_observed(observed: object) -> ObservedMutationState:
     return observed
 
 
-def _validate_tag_state(
-    nightly: bool, result: ReleaseInfo | NightlyAllocation, request: MutationRequest, observed: ObservedMutationState
-) -> bool:
+def _validate_tag_state(result: ReleaseInfo, request: MutationRequest, observed: ObservedMutationState) -> bool:
     """Validate tag/release identity; return whether assetless recovery is allowed."""
     if observed.release_state in {"draft_with_assets", "published"}:
         raise ValueError("existing release is immutable")
-    if nightly:
-        if request.selected_release_line is not None:
-            raise ValueError("Nightly has no selected release line")
-        if observed.tag is not None or observed.tag_source_sha is not None or observed.release_state != "absent":
-            raise ValueError("Nightly mutation requires an absent untagged release")
-        return False
-
-    assert isinstance(result, ReleaseInfo)
     if request.selected_release_line != result.release_line:
         raise ValueError("selected release line does not match result")
     if observed.release_state == "absent":
@@ -174,25 +160,15 @@ def apply_release_mutation(
         raise TypeError("request must be MutationRequest")
     if not callable(mutate):
         raise TypeError("mutate must be callable")
-    nightly, pkg_version, result_source, result_ports, result_digest = _validate_result(request.result)
-    if not isinstance(request.selected_release_line, (str, type(None))):
-        raise TypeError("selected_release_line must be str or None")
+    pkg_version = _validate_result(request.result)
+    if not isinstance(request.selected_release_line, str):
+        raise TypeError("selected_release_line must be str")
     _validate_sha(request.source_sha, name="source_sha")
     _validate_sha(request.ports_sha, name="ports_sha")
     _validate_digest(request.input_digest, name="input_digest")
     _validate_artifact_sha(request.artifact_sha256)
-    if nightly and (request.source_sha, request.ports_sha, request.input_digest) != (
-        result_source,
-        result_ports,
-        result_digest,
-    ):
-        raise ValueError("Nightly request provenance does not match allocation")
     state = _validate_observed(observed)
-    recovery = _validate_tag_state(nightly, request.result, request, state)
-    if nightly:
-        assert isinstance(request.result, NightlyAllocation)
-        if request.result.outcome == "unchanged" and state.existing_pkg_version != pkg_version:
-            raise ValueError("Nightly no-op requires exact observed existing package")
+    recovery = _validate_tag_state(request.result, request, state)
     if state.existing_pkg_version == pkg_version:
         if state.existing_artifact_sha256 != request.artifact_sha256:
             raise ValueError("artifact collision for existing package version")
@@ -202,8 +178,6 @@ def apply_release_mutation(
             state.existing_input_digest,
         ) != (request.source_sha, request.ports_sha, request.input_digest):
             raise ValueError("build input collision for existing package version")
-        if nightly:
-            return "unchanged"
         if recovery:
             mutate()
             return "mutated"

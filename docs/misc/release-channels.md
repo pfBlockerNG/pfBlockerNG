@@ -19,7 +19,7 @@ Channel = metadata + catalog placement, never package-name suffix. Channel and r
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final | required |
 | Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` with `Z != 0` / exact | prerelease | required |
 | Edge | configured `release/X.Y` | `vX.Y.0.aN`, `.bN`, or `.rN` / exact | prerelease | required |
-| Nightly | explicit pinned source SHA | untagged date counter | none | none |
+| Nightly | explicit pinned source SHA | `YYYYMMDDHHMMSS.<full source SHA>` | none | none |
 
 Stable, Testing, Edge may share release line. For prerelease tag: `Z == 0` selects Edge, `Z != 0` selects Testing.
 
@@ -36,20 +36,16 @@ Each tagged release emit one native `.pkg` source asset per build-role matrix ro
 
 ## Nightly generation
 
-Nightly is untagged and independent. Creates no GitHub Release, no release notes. Generate when pinned source input change:
+Nightly is untagged and independent. Creates no GitHub Release or release notes. Every scheduled or manual invocation builds one snapshot. Version = preparation time in UTC, down to seconds, then the full source commit: `YYYYMMDDHHMMSS.<full source SHA>`. Failed runs remain failed; dispatch another run when wanted. No counter, deduplication, recovery ledger, or durable Nightly state exists.
 
-- first changed input on UTC date use `YYYYMMDD`;
-- another changed input same date use `YYYYMMDD_1`, then `YYYYMMDD_2`, and so on; and
-- unchanged input or skipped day = no-op.
-
-Nightly identity include source SHA, FreeBSD-ports SHA, matrix/dependency digest. Ports recipe stay static: no routine version commit, no target final, no PORTEPOCH; bare date versions intentionally outrank semantic releases. Reverse movement need explicit repo-qualified downgrade; no branch or suffix inference may select one.
+Nightly identity include source SHA, FreeBSD-ports SHA, matrix/dependency digest. Ports recipe stay static: no routine version commit, no target final, no PORTEPOCH. Reverse movement need explicit repo-qualified downgrade; no branch or suffix inference may select one.
 
 ## Package order
 
 FreeBSD `pkg` = ordering oracle. Intended order for one target:
 
 ```text
-previous final < alpha < beta < rc < target final < bare Nightly date
+previous final < alpha < beta < rc < target final < timestamped Nightly
 ```
 
 Edge and Nightly use exact package version emitted by their selected channel contract. Callers must ask FreeBSD `pkg`/libpkg to compare versions, not reimplement ordering with lexical, SemVer, or tuple comparisons.
@@ -60,7 +56,7 @@ Caller select source line before generation. Stable, Testing, Edge get their con
 Every generated artifact record source SHA, FreeBSD-ports SHA, matrix/dependency digest. Immutable input digest also bind one trusted-tools commit SHA and one pinned `ci-metadata` commit SHA used for both BUILD and ROUTE rows.
 Missing, malformed, conflicting, or changed observations fail closed before mutation.
 
-Branch-independent workflow in `.github/workflows/nightly.yml` use same pinned-input path for scheduled and manual runs. Scheduled runs need repository variable `NIGHTLY_SOURCE_REF`; manual runs need `source_ref`. Workflow serialize allocation, build, validation, handoff; store completed allocation/artifact identities in `nightly-state` branch; upload `nightly-handoff.json` for publisher. Does not publish catalog, create tag or Release, or mutate FreeBSD-ports tree.
+Branch-independent workflow in `.github/workflows/nightly.yml` uses the same pinned-input path for scheduled and manual runs. Scheduled runs need repository variable `NIGHTLY_SOURCE_REF`; manual runs need `source_ref`. Workflow pins inputs, derives the version directly, builds, validates the same-run handoff, and publishes the catalogue. It stores no cross-run state and does not create a tag or Release or mutate the FreeBSD-ports tree.
 
 ## Maintained lines and fixes
 

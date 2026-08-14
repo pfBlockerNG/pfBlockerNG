@@ -567,12 +567,12 @@ _CATALOG_PKG_FILES = {"packagesite.pkg", "data.pkg"}
 def _pkg_version_key(version: str) -> tuple[list[int], int, int]:
     """A monotone sort key for a pkg version — see ``pfb_pkg.pkg_version_sort_key``.
 
-    Used for nightly retention (``<target>.YYYYMMDD.N``, all-numeric — a later build
+    Used for nightly retention (timestamp plus source SHA — a later build
     sorts higher) AND release-channel retention (canonical ``X.Y.Z.aN|bN|rN`` and
     retained legacy expanded versions,
     via ``retain_by_channel``'s ``--release-keep-testing``/``--release-keep-stable`` >
     1), so it must also order the alpha/beta/rc prerelease stages correctly, not just
-    the nightly date/counter shape. Kept as a thin alias — this module's ``_retain_newest``
+    the Nightly timestamp shape. Kept as a thin alias — this module's ``_retain_newest``
     callers reference it by this name.
     """
     return pkg_version_sort_key(version)
@@ -1376,7 +1376,7 @@ def main(argv: list[str]) -> int:
             "  # matrix-driven: build the full variant tree, arch-less (ADR-20; issue #1806)\n"
             "  read-version-matrix.sh --print-build | build-repo-portable.py --build-matrix \\\n"
             "    --matrix-json - --out ./site --ports ./ports --local-src . \\\n"
-            "    --nightly-pkgversion 3.2.16.20260615.1\n"
+            "    --nightly-pkgversion 20260615153045.<full-source-sha>\n"
         ),
     )
     ap.add_argument("--in", dest="in_dir", help="directory holding the input .pkg files (searched, non-recursive)")
@@ -1453,7 +1453,7 @@ def main(argv: list[str]) -> int:
     g_matrix.add_argument(
         "--nightly-pkgversion",
         default=None,
-        help="full pkg-safe nightly version <target>.YYYYMMDD.N applied to every entry's nightly build",
+        help="full pkg-safe nightly version YYYYMMDDHHMMSS.<full source SHA> applied to every nightly build",
     )
     g_matrix.add_argument("--no-nightly", action="store_true", help="skip the nightly subtree (release + routing only)")
     g_matrix.add_argument(

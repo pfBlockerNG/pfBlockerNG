@@ -345,7 +345,7 @@ SHEOF
         --abi 'FreeBSD:15:amd64' \
         --py-flavor 'py311' \
         --php '8.3' \
-        --pkgversion '20260606_2' \
+        --pkgversion '20260606153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' \
         --annotate 'commit=deadbeef00000000cafebabe' \
         2>/dev/null
       echo "channel=$(arg_after '--channel' "$BUILDER_ARGV_FILE")"
@@ -357,14 +357,14 @@ SHEOF
       fi
     }
 
-    It 'records channel nightly, --pkgversion 20260606_2, and --annotate commit in builder argv'
+    It 'records channel nightly, timestamped pkgversion, and --annotate commit in builder argv'
       # Scenario: smoke repo-leg builds a nightly .pkg with a pinned version + commit annotation.
       # Given: build-leg.sh called with nightly channel, hard-coded pkgversion, annotate commit.
       # When: builder argv is recorded.
       # Then: channel=nightly, pkgversion and annotate commit match the inputs.
       When call check_smoke_leg
       The output should include 'channel=nightly'
-      The output should include 'pkgversion=20260606_2'
+      The output should include 'pkgversion=20260606153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
       The output should include 'annotate_commit=present'
     End
   End

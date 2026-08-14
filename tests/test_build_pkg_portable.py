@@ -1471,7 +1471,12 @@ def _record(
     row: dict[str, object] | None = None,
 ) -> dict:
     if version is None:
-        version = {"stable": "4.0.0", "testing": "4.0.1.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
+        version = {
+            "stable": "4.0.0",
+            "testing": "4.0.1.a1",
+            "edge": "4.0.0.b1",
+            "nightly": f"20260804153045.{source_sha}",
+        }[channel]
     row = dict(row or _LIVE_BUILD_ROWS[0])
     version_parts = str(row["pfsense_version"]).split(".")
     route = f"{channel}/{str(row['variant']).lower()}-{version_parts[0]}.{version_parts[1]}"
@@ -1599,7 +1604,7 @@ def _project_args(
 
 @pytest.mark.parametrize("channel", ["stable", "testing", "edge", "nightly"])
 def test_native_channel_identities_remain_distinct(tmp_path: Path, channel: str) -> None:
-    ports, portdir, _ports_sha, _source_sha = _make_channel_port(tmp_path, channel)
+    ports, portdir, _ports_sha, source_sha = _make_channel_port(tmp_path, channel)
     out = tmp_path / "native-out"
     args = [
         "--ports",
@@ -1619,10 +1624,15 @@ def test_native_channel_identities_remain_distinct(tmp_path: Path, channel: str)
         "--out",
         str(out),
     ]
+    expected_version = {
+        "stable": "4.0.0",
+        "testing": "4.0.1.a1",
+        "edge": "4.0.0.b1",
+        "nightly": f"20260804153045.{source_sha}",
+    }[channel]
     if channel == "nightly":
-        args += ["--pkgversion", "20260804_1"]
+        args += ["--pkgversion", expected_version]
     assert bpp.main(args) == 0
-    expected_version = {"stable": "4.0.0", "testing": "4.0.1.a1", "edge": "4.0.0.b1", "nightly": "20260804_1"}[channel]
     pkg = out / f"{_CHANNEL_IDENTITIES[channel]}-{expected_version}.pkg"
     full, _compact, _tf = _read_pkg(pkg)
     assert full["name"] == _CHANNEL_IDENTITIES[channel]

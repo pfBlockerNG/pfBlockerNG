@@ -24,8 +24,8 @@ handoff (``handoff["run_id"] == --source-run-id``); an inequality means a stale 
 foreign handoff replay and is rejected before any other check. There is still no
 durable ledger here (issue #2146's tree-is-state doctrine, same as
 ``catalogue_assembly.py``): "already published" is read straight off
-``nightly/<varver>/`` itself. Because Nightly's version ordering is a single run-wide
-monotonic date/revision (unlike a tagged run's per-varver semver), a destination
+``nightly/<varver>/`` itself. Because Nightly's version starts with one run-wide UTC
+timestamp, a destination
 already holding a NEWER canonical version than this run's own is refused outright
 (``StaleNightlyError``) rather than silently skipped or overwritten — a stale rerun of
 an old workflow attempt must never regress a catalogue a newer run already advanced.
@@ -39,8 +39,8 @@ contracts, plus established private cross-module seams in the same spirit as
 ``catalogue_assembly.py``'s own engine-private dereferences
 (``publish_catalogues._canonical_record``/``_normalize_route_matrix``/
 ``_validate_asset_name``, ``publish_release._Target``/``_asset_map``/``_drop_assets``/
-``_catalogue_descriptor_complete``, ``nightly_provenance._validate_allocation``/
-``_validate_artifacts``/``_validate_dep_artifacts``/``_DIGEST``) — never copies their logic.
+``_catalogue_descriptor_complete``, ``nightly_provenance._validate_artifacts``/
+``_validate_dep_artifacts``/``_DIGEST``) — never copies their logic.
 
 stdlib-only, Python 3.11. The engine is loaded via ``publish_catalogues.load_engine()``
 — explicit ``src_root`` or the ``PFB_SRC`` environment variable, same as
@@ -84,9 +84,8 @@ class PublishNightlyError(Exception):
 
 class StaleNightlyError(PublishNightlyError):
     """A destination already holds a canonical version NEWER than this run's own, and
-    this run's version is not already present there. Nightly has one run-wide
-    monotonic date/revision (unlike a tagged run's per-varver semver) — a stale rerun
-    must never regress a catalogue a newer run already advanced past it."""
+    this run's version is not already present there. A stale rerun must never regress
+    a catalogue a newer run already advanced past it."""
 
 
 # --------------------------------------------------------------------------- #
@@ -103,7 +102,8 @@ _HANDOFF_FIELDS = frozenset(
         "source_ref",
         "ports_repo",
         "ports_ref",
-        "allocation",
+        "pkg_version",
+        "input_digest",
         "source_sha",
         "ports_sha",
         "tools_sha",
@@ -119,7 +119,7 @@ _BUILD_ENTRY_FIELDS = frozenset({"matrix_row", "record", "artifact", "dep_artifa
 
 @dataclass(frozen=True)
 class _ValidatedHandoff:
-    allocation: object  # release_version.NightlyAllocation (via nightly_provenance)
+    pkg_version: str
     source_sha: str
     ports_sha: str
     route_matrix: list[Mapping[str, object]]
@@ -156,26 +156,23 @@ def _validate_handoff(handoff: object, *, engine: pc.Engine, source_run_id: str)
     if not isinstance(source_sha, str) or not isinstance(ports_sha, str):
         raise PublishNightlyError("handoff source_sha/ports_sha must be strings")
 
-    # Reuse nightly_provenance's OWN allocation validator rather than re-deriving the
-    # NightlyAllocation shape/date-revision rules here.
-    allocation = np._validate_allocation(handoff["allocation"])
-    if allocation.source_sha != source_sha:
-        raise PublishNightlyError("handoff allocation.source_sha does not match the top-level source_sha")
-    if allocation.ports_sha != ports_sha:
-        raise PublishNightlyError("handoff allocation.ports_sha does not match the top-level ports_sha")
+    pkg_version = handoff["pkg_version"]
+    try:
+        np.validate_nightly_version(pkg_version, source_sha=source_sha)
+    except ValueError as exc:
+        raise PublishNightlyError(str(exc)) from exc
 
     # Re-run the input-digest cross-check nightly_provenance.build_handoff itself
     # performs at handoff-creation time: nothing else in this handoff's shape ties
-    # matrix_digest to allocation.input_digest, so without this a forged
+    # matrix_digest to input_digest, so without this a forged
     # matrix_digest would sail through untouched.
     matrix_digest = handoff["matrix_digest"]
     if not isinstance(matrix_digest, str) or not np._DIGEST.fullmatch(matrix_digest):
         raise PublishNightlyError("handoff matrix_digest must be lowercase 64-character hex")
     expected_input_digest = np.combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
-    if allocation.input_digest != expected_input_digest:
+    if handoff["input_digest"] != expected_input_digest:
         raise PublishNightlyError(
-            "handoff allocation.input_digest does not match source_sha/ports_sha/matrix_digest "
-            "(tampered or corrupt handoff)"
+            "handoff input_digest does not match source_sha/ports_sha/matrix_digest (tampered or corrupt handoff)"
         )
 
     builds_raw = handoff["builds"]
@@ -206,7 +203,7 @@ def _validate_handoff(handoff: object, *, engine: pc.Engine, source_run_id: str)
         raise PublishNightlyError("handoff route_matrix must be a non-empty list")
 
     return _ValidatedHandoff(
-        allocation=allocation,
+        pkg_version=pkg_version,
         source_sha=source_sha,
         ports_sha=ports_sha,
         route_matrix=route_matrix,
@@ -260,11 +257,10 @@ def _verify_builds(
             work_dir=work_dir / f"leg-{index}-canonical",
         )
         record = pc._canonical_record(canonical_asset)
-        allocation = validated.allocation
-        if record["canonical_package_version"] != allocation.pkg_version:  # type: ignore[union-attr]
+        if record["canonical_package_version"] != validated.pkg_version:
             raise PublishNightlyError(
                 f"FreeBSD {major} canonical asset version {record['canonical_package_version']!r} "
-                f"does not match allocation.pkg_version {allocation.pkg_version!r}"  # type: ignore[union-attr]
+                f"does not match handoff pkg_version {validated.pkg_version!r}"
             )
         if record["source_sha"] != validated.source_sha:
             raise PublishNightlyError(f"FreeBSD {major} canonical asset source_sha does not match handoff source_sha")
@@ -458,7 +454,7 @@ def run(
         targets = _route_targets(engine, validated.route_matrix, legs)
         # publish() reads VerifiedAsset.work_path, which lives under work_dir — must
         # run to completion BEFORE this context manager tears work_dir down.
-        return publish(engine, pkg_repo, targets, validated.allocation.pkg_version)  # type: ignore[union-attr]
+        return publish(engine, pkg_repo, targets, validated.pkg_version)
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:

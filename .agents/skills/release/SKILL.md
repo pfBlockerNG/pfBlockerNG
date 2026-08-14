@@ -31,13 +31,12 @@ prerelease patch rule. Use a pinned source SHA for every channel.
   routes to `(testing, edge)`; a distinct-target Edge primary always routes to `(edge,)`.
   Every channel catalogue strictly contains its slower channels' files. Copies reuse the
   same tag, Release, notes, assets, and provenance.
-- Nightly is untagged, has no GitHub Release, and has no release notes. It is generated
-  independently from its pinned source when its input changes. A changed input uses UTC date
-  `YYYYMMDD`; another changed input on the same date uses `YYYYMMDD_1`, then `_2`. An
-  unchanged input or skipped day is a no-op.
+- Nightly is untagged, has no GitHub Release, and has no release notes. Every scheduled or
+  manual invocation builds `YYYYMMDDHHMMSS.<full source SHA>` using UTC. Failed runs stay
+  failed; dispatch another when wanted. No counter, deduplication, or durable state exists.
 - Nightly identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
   Keep the Ports recipe static: no routine version commit, no target final, and no
-  PORTEPOCH. Bare date versions intentionally outrank semantic releases; a reverse
+  PORTEPOCH. Timestamped Nightly versions intentionally outrank semantic releases; a reverse
   movement requires an explicit repo-qualified downgrade.
 
 ## Procedure

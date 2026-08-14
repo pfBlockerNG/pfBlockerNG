@@ -32,9 +32,10 @@ def test_each_release_skill_carries_the_minimum_procedure() -> None:
         "`Z != 0` selects Testing",
         "Nightly",
         "untagged",
-        "YYYYMMDD",
-        "YYYYMMDD_1",
-        "no-op",
+        "YYYYMMDDHHMMSS.<full source SHA>",
+        "manual invocation builds",
+        "No counter, deduplication",
+        "state exists",
     )
     for path in SKILLS:
         content = _text(path)

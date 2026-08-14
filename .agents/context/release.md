@@ -13,19 +13,19 @@ All channels publish exact package identity `pfSense-pkg-pfBlockerNG`. Channel =
 | Stable | configured `release/X.Y` | `vX.Y.Z` / `X.Y.Z` | final Release; authored notes |
 | Testing | configured `release/X.Y` | `vX.Y.Z.aN`, `.bN`, or `.rN` with `Z != 0` / exact version | prerelease; authored notes |
 | Edge | configured `release/X.Y` | `vX.Y.0.aN`, `.bN`, or `.rN` / exact version | prerelease; authored notes |
-| Nightly | explicit pinned source SHA | untagged; date counter only | no GitHub Release; no release notes |
+| Nightly | explicit pinned source SHA | `YYYYMMDDHHMMSS.<full source SHA>` | no GitHub Release; no release notes |
 
 Stable, Testing, Edge may share release line. For prerelease tag: `Z == 0` selects Edge, `Z != 0` selects Testing.
 
 ## Nightly identity and ordering
 
-Nightly independent of Stable, Testing, Edge. Generate only when immutable input change. Use UTC date `YYYYMMDD`; changed inputs same date get `YYYYMMDD_1`, then `_2`. Unchanged input or skipped day = no-op. Identity include:
+Nightly independent of Stable, Testing, Edge. Every scheduled or manual invocation builds one snapshot. Use UTC `YYYYMMDDHHMMSS.<full source SHA>`. Failed runs stay failed; dispatch another when wanted. No counter, deduplication, or durable state exists. Identity include:
 
 - source SHA;
 - FreeBSD-ports SHA; and
 - matrix/dependency digest.
 
-Ports recipe static: publication must not make routine version commit. Nightly have no target final, no PORTEPOCH. Bare date versions intentionally outrank semantic releases; reverse movement = explicit repo-qualified downgrade, never inferred fallback.
+Ports recipe static: publication must not make routine version commit. Nightly have no target final, no PORTEPOCH. Timestamped Nightly versions intentionally outrank semantic releases; reverse movement = explicit repo-qualified downgrade, never inferred fallback.
 
 ## Publication boundaries
 

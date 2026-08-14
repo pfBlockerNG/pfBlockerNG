@@ -23,14 +23,13 @@ import shutil
 import subprocess
 import tarfile
 import xml.etree.ElementTree as ET
-from datetime import date
 from pathlib import Path
 from typing import Mapping
 
 try:
-    from scripts.release_version import parse_release_tag
+    from scripts.release_version import parse_release_tag, validate_nightly_version
 except ImportError:  # script directory is also a direct import root
-    from release_version import parse_release_tag
+    from release_version import parse_release_tag, validate_nightly_version
 
 ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 XZ_MAGIC = b"\xfd7zXZ\x00"
@@ -54,7 +53,6 @@ _RECORD_FIELDS = {
 }
 _RECORD_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _RECORD_DIGEST = re.compile(r"^[0-9a-f]{64}$")
-_NIGHTLY_VERSION = re.compile(r"^(?P<day>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
 _VARIANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _PF_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 _MATRIX_FIELDS = {
@@ -279,13 +277,10 @@ def validate_build_record(
     if channel == "nightly":
         if source_tag is not None or not release_line or classification != "nightly":
             raise _record_error("nightly source/provenance fields are invalid")
-        match = _NIGHTLY_VERSION.fullmatch(version)
-        if not match:
-            raise _record_error("nightly version must be YYYYMMDD or YYYYMMDD_N")
         try:
-            date(int(match.group("day")[:4]), int(match.group("day")[4:6]), int(match.group("day")[6:]))
-        except ValueError:
-            raise _record_error("nightly version has invalid calendar date") from None
+            validate_nightly_version(version, source_sha=source_sha)
+        except ValueError as exc:
+            raise _record_error(str(exc)) from None
     else:
         if not isinstance(source_tag, str):
             raise _record_error("release source_tag must be a string")
@@ -617,8 +612,8 @@ def validate_project_pkg(
 # rc between themselves (see scripts/release_version.py, whose canonical tags use
 # vX.Y.Z.aN|bN|rN). Retained legacy expanded package versions remain sortable.
 # A version with no stage keyword —
-# a genuine stable release, a bare edition version like "2.8.1", or a nightly's
-# all-numeric "<target>.YYYYMMDD.N" — ranks as RELEASE (highest).
+# a genuine stable release, a bare edition version like "2.8.1", or a Nightly
+# timestamp-plus-SHA version — ranks as RELEASE (highest).
 _STAGE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
 _COMPACT_STAGE_RANK = {"a": 0, "b": 1, "r": 2}
 _COMPACT_STAGE = re.compile(r"^([abr])([1-9][0-9]*)$", re.IGNORECASE)
@@ -640,8 +635,8 @@ def pkg_version_sort_key(version: str) -> tuple[list[int], int, int]:
 
         4.0.0.a1 < 4.0.0.a2 < 4.0.0.b1 < 4.0.0.r1 < 4.0.0
 
-    A version with no stage keyword (a nightly's all-numeric
-    ``<target>.YYYYMMDD.N``, a bare ``pfsense_version`` like ``2.8.1``, or a
+    A version with no stage keyword (a Nightly timestamp-plus-SHA version, a bare
+    ``pfsense_version`` like ``2.8.1``, or a
     genuine stable release) keeps its full numeric run as the base and ranks as
     RELEASE — unchanged ordering vs. the historical key for that case. Any
     non-numeric, non-stage-keyword component maps to ``0`` (same fallback the
