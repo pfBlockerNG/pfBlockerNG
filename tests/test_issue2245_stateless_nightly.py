@@ -2,10 +2,13 @@
 
 from pathlib import Path
 
+import yaml
+
 from scripts import release_version as rv
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
+ACTIONLINT_CONFIG = ROOT / ".github" / "actionlint.yaml"
 SOURCE_SHA = "a" * 40
 VERSION = f"20260814153045.{SOURCE_SHA}"
 
@@ -26,3 +29,9 @@ def test_every_nightly_invocation_builds_without_durable_state() -> None:
     assert 'nightly_provenance.py" allocate' not in workflow
     assert 'nightly_provenance.py" complete' not in workflow
     assert "needs.prepare.outputs.outcome" not in workflow
+
+
+def test_actionlint_exception_is_narrowly_scoped_to_the_queue_key() -> None:
+    assert yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8")) == {
+        "paths": {".github/workflows/nightly.yml": {"ignore": ['unexpected key "queue" for "concurrency" section']}}
+    }
