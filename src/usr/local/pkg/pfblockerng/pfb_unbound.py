@@ -154,7 +154,13 @@ def _psl_normalize_name(name: str) -> str:
             encoded = label.encode("idna").decode("ascii").lower()
         except UnicodeError as exc:
             raise ValueError("invalid IDNA label") from exc
-        if not encoded or len(encoded.encode("ascii")) > 63:
+        if (
+            not encoded
+            or len(encoded.encode("ascii")) > 63
+            or encoded[0] == "-"
+            or encoded[-1] == "-"
+            or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in encoded)
+        ):
             raise ValueError("invalid DNS label")
         normalized.append(encoded)
     result = ".".join(normalized)
