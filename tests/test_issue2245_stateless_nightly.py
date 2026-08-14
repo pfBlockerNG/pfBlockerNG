@@ -19,6 +19,7 @@ def test_every_nightly_invocation_builds_without_durable_state() -> None:
 
     assert 'BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"' in workflow
     assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHA}"' in workflow
+    assert "queue: max" in workflow
     assert "nightly-state" not in workflow
     assert 'nightly_provenance.py" allocate' not in workflow
     assert 'nightly_provenance.py" complete' not in workflow
