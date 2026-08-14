@@ -124,7 +124,7 @@ It is durable before `PRE-INSTALL` or the legacy runner crosses its mutation bou
 | `prepared` | Source snapshot and target action are verified. | If source remains installed, retry or abandon safely. If target is present, continue. |
 | `settings-applying` | Target is present and owned-settings replacement/clear is about to run. | Source-equal live state may apply the target; target-equal live state may continue; any third state requires manual recovery. |
 | `settings-applied` | Target settings input is exact and verified. | Rerun idempotent target migrations/resync; never restore again. |
-| `complete` | Settings read-back, migrations, and resync succeeded. | Record target activation baseline, prune eligible history, clear journal and transition-failure notice. |
+| `complete` | Settings read-back, migrations, and resync succeeded. | Record target activation baseline, prune eligible history, clear the journal, and publish recovered live status without changing prior notices. |
 
 - Snapshot publication/read-back, journal publication, configuration replacement/read-back,
   package execution, and migration/resync dispatch are separate durable boundaries.
@@ -166,9 +166,10 @@ It is durable before `PRE-INSTALL` or the legacy runner crosses its mutation bou
 - Leaving a family whose live hash changed creates a new verified source snapshot, restores
   the target head without merging, and emits a persistent event keyed to the exact source
   and target snapshot hashes.
-- Acknowledgement suppresses only that exact hash pair and survives reboot. A later pair is
-  a new event. Transition-failure notices clear after successful recovery; divergence
-  notices require acknowledgement.
+- Producer deduplication suppresses only that exact hash pair and survives reboot. A later
+  pair is a new event. Recovery updates live transition status only; it never retracts,
+  resolves, removes, or rewrites a transition-failure or divergence notice. Notice read,
+  dismissal, and deletion remain user-owned and do not change transition state.
 - Keep all distinct snapshots for the active family and the three most recent prior schema
   families. Prune a whole oldest family only after the new family's settings,
   migrations, and resync have completed successfully.

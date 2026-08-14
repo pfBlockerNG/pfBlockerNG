@@ -234,10 +234,12 @@ a half-applied Policy generation.
 - Runtime events record action, Policy ID/name snapshot or Baseline, matched
   origin/Group/Feed/rule, response reason, recipient class, and static/active
   generations. Secrets and raw credentials are forbidden.
-- Durable notices use the normalized stable id/code/severity/subject/status/
-  redacted-details/explicit-resolution contract. Live generation, pending
-  generation, last acknowledgement, cache-flush status, and alias expansion are
-  computed status rather than notices.
+- Durable notices are immutable event records with a stable event ID, code,
+  severity, subject, and redacted details. Producers may
+  deduplicate an unchanged event but never resolve, retract, remove, or rewrite
+  one after emission. Live generation, pending generation, last acknowledgement,
+  cache-flush status, alias expansion, and recovery are computed status rather
+  than notices.
 
 ### 8. Compatibility and release boundary
 

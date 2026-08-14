@@ -56,7 +56,7 @@ unchanged as the rationale record.
   the active provider's normalized country outputs. It is not provider data or
   a truth-artifact continent.
 - **Output generation:** the mutually consistent `geoip.txt`, country files,
-  continent files, generated pages, aliases, and notification-state snapshot
+  continent files, generated pages, aliases, and event-deduplication ledger
   produced from one truth artifact and one complete provider input set.
 
 ## Decisions
@@ -335,14 +335,17 @@ states. After a successful publication, compare old and new ledgers and emit
 persistent `file_notice` entries only for these edges:
 
 - selected country/family nonzero to zero;
-- selected country/family zero to nonzero;
-- unsupported/unknown provider state first appears or resolves; and
+- unsupported/unknown provider state first appears; and
 - a GeoIP settings save while a selected country/family is empty.
 
-No notice fires for reboot, unchanged zero-to-zero updates, or dismissal of an
-existing notice. Disabling the setting suppresses future nonfatal notices only.
-Fatal truth, input, generation, and publication failures remain visible. The
-ledger advances only with the output generation it describes.
+Current country availability and unsupported/unknown provider conditions are
+exposed separately as live GeoIP status. Recovery updates that status but emits
+no notice and never retracts, resolves, removes, or rewrites an existing notice.
+Notice dismissal or deletion is user-owned and does not affect deduplication.
+No notice fires for reboot or unchanged zero-to-zero updates. Disabling the
+setting suppresses future nonfatal notices only. Fatal truth, input, generation,
+and publication failures remain visible. The ledger advances only with the
+output generation it describes.
 
 ### Publication transaction
 
@@ -422,7 +425,7 @@ also unchanged.
 | Configuration | unconfigured/configured country; provider-present/absent; legacy `6255147`/`6255148` read and canonical save; all eight `UNK_*`; enabled/disabled notification setting |
 | World complement | explicit unknown row; public uncovered space; provider-covered space; each private/reserved/bogon class; malformed/missing/empty exclusion file; IPv4 `iprange` error; IPv6 subtraction error |
 | Publication | stage write failure; validation failure; each rename position fails; rollback failure is fatal and loud; no caller proceeds on an incomplete generation |
-| Notifications | nonzero→zero; zero→nonzero; zero→zero; unknown appears/resolves/unchanged; reboot; dismissed notice; save with empty selection; setting disabled; fatal errors always visible |
+| Notifications/status | nonzero→zero entry event; zero→nonzero status-only recovery; zero→zero; unknown appears entry event/resolves status-only/unchanged; reboot; dismissed or deleted notice; save with empty selection; setting disabled; fatal errors always visible |
 | Output | exact `geoip.txt`, per-selection, continent, represented/proxy, generated-page, alias, and log bytes; only Approved deltas excluded |
 
 Every implementation packet enumerates the subset it changes across both
