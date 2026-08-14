@@ -3273,6 +3273,8 @@ function pfb_global() {
 	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
 	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
+	$pfb['dnsbl_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');			// PSL PRIVATE recognition (default On)
+	$pfb['dnsbl_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');			// PSL PRIVATE TLD-Allow precision (default Off)
 	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_noaaaa'] ?? '');			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'] ?? '';	// DNSBL Resolver python no AAAA list
@@ -10037,6 +10039,8 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	$python_hsts = ($pfb['dnsbl_hsts'] === PfbToggle::On) ? 'on' : 'off';
 	$dnsbl_tld_wildcard = $pfb['dnsbl_tld_wildcard'];
 	$python_tld_wildcard = !empty($dnsbl_tld_wildcard) ? 'on' : 'off';
+	$psl_include_private = ($pfb['dnsbl_psl_include_private'] === PfbToggle::On) ? 'on' : 'off';
+	$psl_allow_private = ($pfb['dnsbl_psl_allow_private'] === PfbToggle::On) ? 'on' : 'off';
 
 	$idn_mode = $pfb['dnsbl_idn']->toStored();
 	$python_idn = ($pfb['dnsbl_idn'] === PfbIdnMode::All) ? 'on' : 'off';
@@ -10079,6 +10083,8 @@ python_reply	= {$python_reply}
 python_blocking	= {$python_blocking}
 python_hsts	= {$python_hsts}
 python_tld_wildcard	= {$python_tld_wildcard}
+psl_include_private	= {$psl_include_private}
+psl_allow_private	= {$psl_allow_private}
 python_idn	= {$python_idn}
 idn_mode	= {$idn_mode}
 python_idn_block_malicious	= {$python_idn_block_malicious}

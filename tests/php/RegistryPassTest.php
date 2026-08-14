@@ -322,6 +322,20 @@ final class RegistryPassTest extends TestCase
 		$this->assertSecondPassIsEmpty($sections);
 	}
 
+	public function testPslPolicyNewAndOldConfigAbsenceSeedsDefaultsIdempotently(): void
+	{
+		$sections = [self::DNSBL_SECTION => ['pfb_dnsbl' => 'on']];
+		$result = pfb_registry_pass($sections);
+		$this->assertSame('on', $result[self::DNSBL_SECTION]['pfb_psl_include_private'] ?? NULL);
+		$this->assertSame('', $result[self::DNSBL_SECTION]['pfb_psl_allow_private'] ?? NULL);
+		$this->assertSecondPassIsEmpty($result);
+
+		$new = pfb_registry_pass([self::DNSBL_SECTION => []]);
+		$this->assertSame('on', $new[self::DNSBL_SECTION]['pfb_psl_include_private'] ?? NULL);
+		$this->assertSame('', $new[self::DNSBL_SECTION]['pfb_psl_allow_private'] ?? NULL);
+		$this->assertSecondPassIsEmpty($new);
+	}
+
 	/** Row 12: old-only with '' moves as '' -- '' is a stored value, never absence. */
 	public function testRenameOldOnlyEmptyStringMoves(): void
 	{

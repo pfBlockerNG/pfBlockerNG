@@ -78,6 +78,8 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl/pfb_dnsbl_nonat'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_dnsbl_nonat',
 			'gen/pfb_reuse'        => 'installedpackages/pfblockerng/config/0/pfb_reuse',
 			'dnsbl/pfb_hsts'         => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_hsts',
+			'dnsbl/pfb_psl_include_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
+			'dnsbl/pfb_psl_allow_private' => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
 			'dnsbl/pfb_cache_flush'  => 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_cache_flush',
 			'gen/pfb_feed_sanity'  => 'installedpackages/pfblockerng/config/0/pfb_feed_sanity',
 			// issue #1907: adopted onto the toggle adapter (default flipped to 'on').
@@ -584,6 +586,21 @@ final class CfgGatewayTest extends TestCase
 		// issue #1887: the field carries the toggle adapter now, so the enum comes back.
 		$result = PfbConfig::read('dnsbl/pfb_idn_block_malicious');
 		$this->assertSame(PfbToggle::On, $result);
+	}
+
+	public function testPslPolicyDefaultsAndStoredTogglePolarity(): void
+	{
+		$includePath = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private';
+		$allowPath = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private';
+		$this->assertNull(config_get_path($includePath));
+		$this->assertNull(config_get_path($allowPath));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_psl_include_private'));
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_psl_allow_private'));
+
+		$this->seedConfig($includePath, '');
+		$this->seedConfig($allowPath, 'on');
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('dnsbl/pfb_psl_include_private'));
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_psl_allow_private'));
 	}
 
 	/**
@@ -1264,6 +1281,8 @@ final class CfgGatewayTest extends TestCase
 			'pfb_idn',
 			'pfb_idn_block_malicious',
 			'pfb_idn_escalate_suspicious',
+			'pfb_psl_include_private',
+			'pfb_psl_allow_private',
 			'pfb_regex',
 			'pfb_regex_list',
 			'pfb_regex_cap',

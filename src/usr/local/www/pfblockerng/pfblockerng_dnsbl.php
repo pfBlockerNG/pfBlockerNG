@@ -71,6 +71,8 @@ $pconfig['pfb_cache_flush']	= PfbConfig::read('dnsbl/pfb_cache_flush');
 
 $pconfig['pfb_py_reply']	= PfbConfig::read('dnsbl/pfb_py_reply');
 $pconfig['pfb_hsts']		= PfbConfig::read('dnsbl/pfb_hsts');
+$pconfig['pfb_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');
+$pconfig['pfb_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');
 // ADR-08: IDN mode selector (Off | All-IDN | Confusable). PfbConfig::read() returns a
 // PfbIdnMode enum (legacy 'on' -> All; alpha-only 'all', legacy 'off', and '' -> Off);
 // enum value gives the runtime option key that the <select> options below carry.
@@ -825,6 +827,8 @@ if ($_POST) {
 
 			$pfb['dconfig']['pfb_dnsbl']		= pfb_filter($_POST['pfb_dnsbl'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['tld_wildcard']		= pfb_filter($_POST['tld_wildcard'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
+			$psl_include_private = pfb_filter($_POST['pfb_psl_include_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
+			$psl_allow_private = pfb_filter($_POST['pfb_psl_allow_private'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl') ?: '';
 			$pfb['dconfig']['pfb_control']		= pfb_filter($_POST['pfb_control'], PFB_FILTER_ON_OFF, 'dnsbl')		?: '';
 			$pfb['dconfig']['pfb_control_legacy']	= pfb_filter($_POST['pfb_control_legacy'], PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
 			$pfb['dconfig']['pfb_dnsbl_nonat']	= pfb_filter($_POST['pfb_dnsbl_nonat'] ?? '', PFB_FILTER_ON_OFF, 'dnsbl')	?: '';
@@ -969,6 +973,8 @@ if ($_POST) {
 			// before it they are silently clobbered before write_config() flushes, so enabling DNS
 			// Redirect or DoT/DoQ Block never persists. (safesearch_doh* target a different section.)
 			PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig']);
+			PfbConfig::write('dnsbl/pfb_psl_include_private', $psl_include_private);
+			PfbConfig::write('dnsbl/pfb_psl_allow_private', $psl_allow_private);
 
 			// Save DoH/DoT/DoQ blocking fields via gateway (registered keys in pfblockerngsafesearch)
 			PfbConfig::write('ss/safesearch_doh', $_POST['safesearch_doh'] ?: 'Disable');
@@ -1108,11 +1114,20 @@ $dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all 
 
 $section->addInput(new Form_Checkbox(
 	'tld_wildcard',
-	gettext('Wildcard Blocking (TLD)'),
+	gettext('Wildcard Blocking'),
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['tld_wildcard']) === PfbToggle::On,
 	'on'
 ))->setHelp($dnsbl_text);
+
+$section->addInput(new Form_Checkbox(
+	'pfb_psl_include_private',
+	gettext('Recognize Shared-Hosting Suffixes (PSL PRIVATE)'),
+	'Enable',
+	$pconfig['pfb_psl_include_private'] === PfbToggle::On,
+	'on'
+))->addClass('psl-policy psl-wildcard')
+	->setHelp('Recognize the PSL PRIVATE section when determining the registrable boundary. A suffix apex is never wildcarded. PSL PRIVATE describes shared domains such as github.io; it does not mean private DNS.');
 
 $section->addInput(new Form_Checkbox(
 	'pfb_control',
@@ -2734,7 +2749,7 @@ $tld_total = array_sum(array_map('count', $tld_list));
 
 $section->addInput(new Form_Checkbox(
 	'tld_allow',
-	gettext('TLD Allow'),
+	gettext('Allow Only Selected Domain Suffixes'),
 	'Enable',
 	pfb_cfg_toggle_read($pconfig['tld_allow']) === PfbToggle::On,
 	'on'
@@ -2742,12 +2757,21 @@ $section->addInput(new Form_Checkbox(
 		. '<div id="dnsbl_python_tld_allow_text">'
 		. '<strong>By default</strong> \'ARPA\' and the pfSense TLD \'' . strtoupper($local_tld) . '\' are allowed.<br />'
 		. 'If no TLDs are selected, the following are added by default [ COM, NET, ORG, EDU, CA, CO, IO ]<br /><br />'
-		. 'Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
+		. 'Picker: <strong>IANA root TLDs</strong>. Detailed TLD listings : <a target=_blank rel="noopener noreferrer" href="http://www.iana.org/domains/root/db">Root Zone Top-Level Domains.</a><br />'
 		. 'Changes to this option will require a Force Update to take effect.<br /><br />'
 		. '<strong>Legend</strong>:<br />'
 		. '(*) TLD is used by atleast one DNSBL Feed in the Feeds Tab. Confirm the TLDs used by the selected Feeds.<br />'
 		. '(!) TLD is listed by <a target=_blank rel="noopener noreferrer" href="https://www.spamhaus.org/statistics/tlds/">Spamhaus (Most Abused TLDs)</a><br /></div>'
 		);
+
+$section->addInput(new Form_Checkbox(
+	'pfb_psl_allow_private',
+	gettext('Allow Shared-Hosting Suffixes (PSL PRIVATE)'),
+	'Enable',
+	$pconfig['pfb_psl_allow_private'] === PfbToggle::On,
+	'on'
+))->addClass('psl-policy psl-allow')
+	->setHelp('Permit only the winning PSL PRIVATE boundary when no selected IANA root TLD matches. This precision applies to shared domains such as github.io; the suffix apex itself is never wildcarded.');
 
 $section->addInput(new Form_Checkbox(
 	'tld_allow_sort',
@@ -3702,9 +3726,11 @@ function enable_tld() {
 	if ($('#tld_wildcard').prop('checked')) {
 		$('#TLD_Exclusion').show();
 		$('#TLD_BW_list').show();
+		$('.psl-wildcard').show();
 	} else {
 		$('#TLD_Exclusion').hide();
 		$('#TLD_BW_list').hide();
+		$('.psl-wildcard').hide();
 	}
 }
 
@@ -3723,10 +3749,12 @@ function enable_tld_allow() {
 		hideCheckbox('tld_allow_sort', false);
 		hideMultiClass('pfb_python', false);
 		$('#dnsbl_python_tld_allow_text').show();
+		$('.psl-allow').show();
 	} else {
 		hideCheckbox('tld_allow_sort', true);
 		hideMultiClass('pfb_python', true);
 		$('#dnsbl_python_tld_allow_text').hide();
+		$('.psl-allow').hide();
 	}
 }
 

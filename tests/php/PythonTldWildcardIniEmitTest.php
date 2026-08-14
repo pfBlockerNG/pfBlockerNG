@@ -101,6 +101,22 @@ final class PythonTldWildcardIniEmitTest extends TestCase
 		$this->assertMatchesRegularExpression('/^python_tld_wildcard\s*=\s*on$/m', $ini);
 	}
 
+	public function testPslPolicyDefaultsAndExplicitFlipsReachPythonIni(): void
+	{
+		$ini = $this->emit('');
+		$this->assertMatchesRegularExpression('/^psl_include_private\s*=\s*on$/m', $ini);
+		$this->assertMatchesRegularExpression('/^psl_allow_private\s*=\s*off$/m', $ini);
+
+		PfbConfig::writeSystem('dnsbl/pfb_psl_include_private', '');
+		PfbConfig::writeSystem('dnsbl/pfb_psl_allow_private', 'on');
+		pfb_global();
+		pfb_unbound_python('enabled');
+		$flipped = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotFalse($flipped);
+		$this->assertMatchesRegularExpression('/^psl_include_private\s*=\s*off$/m', $flipped);
+		$this->assertMatchesRegularExpression('/^psl_allow_private\s*=\s*on$/m', $flipped);
+	}
+
 	public function testStoredIdnMaliciousOffReachesPythonIni(): void
 	{
 		PfbConfig::writeSystem('dnsbl/pfb_idn', 'confusable');

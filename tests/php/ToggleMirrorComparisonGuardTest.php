@@ -35,6 +35,7 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 		'dnsbl_cname', 'dnsbl_tld_allow', 'dnsbl_py_nolog', 'dnsbl_noaaaa', 'dnsbl_gp',
 		'float', 'dup', 'agg', 'global_log', 'dnsbl_control', 'dnsbl_control_legacy',
 		'dnsbl_idn_block_malicious', 'dnsbl_idn_escalate_suspicious',
+		'dnsbl_psl_include_private', 'dnsbl_psl_allow_private',
 		'rep', 'prep', 'drep',
 	];
 
