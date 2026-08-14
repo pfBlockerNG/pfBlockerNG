@@ -17,7 +17,7 @@ jobs:
     name: Read + print supported-version matrices
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:8
+      image: ghcr.io/pfblockerng/ci-runner:9
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

@@ -21,14 +21,79 @@ use PHPUnit\Framework\TestCase;
  *   - a symlink in an allowed dir whose target is in-bounds   -> ALLOWED
  *   - a real regular file DIRECTLY under an allowed dir       -> ALLOWED
  *
- * The ALLOWED case needs a real file under a real allowed directory (the allow-list
- * is hardcoded absolute paths in production); when the test environment cannot create
- * one (non-root CI), that single case skips rather than failing — the REJECT cases,
- * which need no privileged filesystem, always run.
+ * The ALLOWED cases need a real file under a real allowed directory. Most of the
+ * allow-list is hardcoded absolute paths under /var/db/pfblockerng, which only root
+ * can create — so these tests drive the one allowed directory production derives at
+ * runtime instead: $pfb['dbdir'], appended to the allow-list whenever it resolves.
+ * Pointing it at a temp directory gives every uid a real allowed dir, so the ALLOWED
+ * and symlink cases run everywhere rather than skipping off-appliance (issue #2356).
  */
 #[CoversFunction('pfb_filter')]
 final class FeedUrlLocalFileTest extends TestCase
 {
+	/** The temp directory registered as $pfb['dbdir'] — an allowed dir for this test. */
+	private string $dbdir = '';
+
+	/** Whether $pfb['dbdir'] existed before setUp(), and its prior value. */
+	private bool $hadDbdir = FALSE;
+	private mixed $savedDbdir = NULL;
+
+	/** Files created OUTSIDE the allowed dir, removed in tearDown(). @var list<string> */
+	private array $outside = [];
+
+	/**
+	 * A real regular file one level ABOVE the allowed dir — the out-of-bounds target
+	 * the escape cases point at. It sits in the parent of $pfb['dbdir'], which no
+	 * allow-list entry covers, so a verdict of "allowed" for it can only come from a
+	 * broken containment check.
+	 */
+	private function makeOutsideFile(): string
+	{
+		$path = dirname($this->dbdir) . '/pfb_outside_' . getmypid() . '_' . uniqid() . '.txt';
+		$this->assertNotFalse(file_put_contents($path, "outside\n"), "could not write {$path}");
+		$this->outside[] = $path;
+
+		return $path;
+	}
+
+	protected function setUp(): void
+	{
+		$dir = sys_get_temp_dir() . '/pfb_localfile_' . getmypid() . '_' . uniqid();
+		$this->assertTrue(mkdir($dir, 0o755, TRUE), "could not create the test dbdir {$dir}");
+		$real = realpath($dir);
+		$this->assertNotFalse($real, "could not resolve the test dbdir {$dir}");
+		$this->dbdir = (string) $real;
+
+		$this->hadDbdir   = array_key_exists('dbdir', $GLOBALS['pfb'] ?? []);
+		$this->savedDbdir = $GLOBALS['pfb']['dbdir'] ?? NULL;
+
+		$GLOBALS['pfb']['dbdir'] = $this->dbdir;
+	}
+
+	protected function tearDown(): void
+	{
+		if ($this->hadDbdir) {
+			$GLOBALS['pfb']['dbdir'] = $this->savedDbdir;
+		} else {
+			unset($GLOBALS['pfb']['dbdir']);
+		}
+
+		if ($this->dbdir !== '' && is_dir($this->dbdir)) {
+			foreach ((array) scandir($this->dbdir) as $entry) {
+				if ($entry === '.' || $entry === '..') {
+					continue;
+				}
+				@unlink($this->dbdir . '/' . $entry);
+			}
+			@rmdir($this->dbdir);
+		}
+
+		foreach ($this->outside as $path) {
+			@unlink($path);
+		}
+		$this->outside = [];
+	}
+
 	/** The validator verdict for a local-file path: TRUE = accepted. */
 	private function validate(string $path): bool
 	{
@@ -74,27 +139,23 @@ final class FeedUrlLocalFileTest extends TestCase
 
 	/**
 	 * A real regular file sitting DIRECTLY in an allowed directory is accepted. Proves
-	 * the hardening did not break the legitimate local-file case. Skips (does not fail)
-	 * when the environment cannot create the hardcoded allowed dir.
+	 * the hardening did not break the legitimate local-file case.
 	 */
 	public function testRealFileInAllowedDirAccepted(): void
 	{
-		$dir  = '/var/db/pfblockerng/deny';
+		$dir  = $this->dbdir;
 		$file = $dir . '/pfb_localfile_unit_' . getmypid() . '.txt';
 
-		if (!@is_dir($dir) && !@mkdir($dir, 0o755, true) && !@is_dir($dir)) {
-			$this->markTestSkipped("cannot create allowed dir {$dir} in this environment");
-		}
-		if (@file_put_contents($file, "test\n") === false) {
-			$this->markTestSkipped("cannot write {$file} in this environment");
-		}
+		$this->assertNotFalse(file_put_contents($file, "test\n"), "could not write {$file}");
 
 		try {
-			// Before-state: a sibling path that escapes the same dir is rejected,
-			// proving acceptance below is the containment check, not a blanket allow.
+			// Before-state: an EXISTING regular file one level outside the same dir,
+			// reached through it, is rejected — so acceptance below is the containment
+			// check and not "any resolvable path".
+			$outside = $this->makeOutsideFile();
 			$this->assertFalse(
-				$this->validate($dir . '/../passwd'),
-				'an escaping sibling path is rejected even when the allowed dir exists'
+				$this->validate($dir . '/../' . basename($outside)),
+				'an escaping sibling path is rejected even when the target file exists'
 			);
 
 			// The real file directly under the allowed dir is accepted.
@@ -109,39 +170,17 @@ final class FeedUrlLocalFileTest extends TestCase
 	 * rejected: realpath() resolves the link to its target, whose canonical directory
 	 * is not in the allow-list. Paired with the in-bounds symlink test below, this proves
 	 * the verdict follows the canonical TARGET location, not the link's own path — the
-	 * core reason canonicalization is required. Skips (does not fail) when the environment
-	 * cannot create the allowed dir, the out-of-bounds target, or the symlink.
+	 * core reason canonicalization is required.
 	 */
 	public function testSymlinkEscapingAllowedDirRejected(): void
 	{
-		$dir = '/var/db/pfblockerng/deny';
-		if (!@is_dir($dir) && !@mkdir($dir, 0o755, true) && !@is_dir($dir)) {
-			$this->markTestSkipped("cannot create allowed dir {$dir} in this environment");
-		}
+		$dir = $this->dbdir;
 
 		// Target OUTSIDE every allowed dir.
-		$outside = tempnam(sys_get_temp_dir(), 'pfb_outside_');
-		if ($outside === false) {
-			$this->markTestSkipped('cannot create an out-of-bounds target file');
-		}
-
-		// Make the "outside" precondition explicit and deterministic: if this
-		// environment's temp dir happens to resolve INSIDE the allowed dir, the
-		// rejection below would not be exercised, so skip rather than assert.
-		$real_dir     = realpath($dir);
-		$real_outside = realpath($outside);
-		if ($real_dir === false || $real_outside === false ||
-		    str_starts_with($real_outside, rtrim($real_dir, '/') . '/')) {
-			@unlink($outside);
-			$this->markTestSkipped('temp target is not outside the allowed dir in this environment');
-		}
+		$outside = $this->makeOutsideFile();
 
 		$link = $dir . '/pfb_symlink_escape_' . getmypid() . '.txt';
-		@unlink($link);
-		if (!@symlink($outside, $link)) {
-			@unlink($outside);
-			$this->markTestSkipped('cannot create a symlink in this environment');
-		}
+		$this->assertTrue(symlink($outside, $link), "could not create the symlink {$link}");
 
 		try {
 			$this->assertFalse(
@@ -150,7 +189,6 @@ final class FeedUrlLocalFileTest extends TestCase
 			);
 		} finally {
 			@unlink($link);
-			@unlink($outside);
 		}
 	}
 
@@ -159,27 +197,17 @@ final class FeedUrlLocalFileTest extends TestCase
 	 * regular file ALSO directly under an allowed dir is accepted. Establishes that the
 	 * rejection above is caused by the target ESCAPING the allow-list, not by the input
 	 * merely being a symlink — without it, an "always reject symlinks" implementation
-	 * would pass the escape test for the wrong reason. Skips when the environment cannot
-	 * create the files/link.
+	 * would pass the escape test for the wrong reason.
 	 */
 	public function testSymlinkWithinAllowedDirAccepted(): void
 	{
-		$dir = '/var/db/pfblockerng/deny';
-		if (!@is_dir($dir) && !@mkdir($dir, 0o755, true) && !@is_dir($dir)) {
-			$this->markTestSkipped("cannot create allowed dir {$dir} in this environment");
-		}
+		$dir = $this->dbdir;
 
 		$target = $dir . '/pfb_symlink_target_' . getmypid() . '.txt';
-		if (@file_put_contents($target, "test\n") === false) {
-			$this->markTestSkipped("cannot write {$target} in this environment");
-		}
+		$this->assertNotFalse(file_put_contents($target, "test\n"), "could not write {$target}");
 
 		$link = $dir . '/pfb_symlink_inbounds_' . getmypid() . '.txt';
-		@unlink($link);
-		if (!@symlink($target, $link)) {
-			@unlink($target);
-			$this->markTestSkipped('cannot create a symlink in this environment');
-		}
+		$this->assertTrue(symlink($target, $link), "could not create the symlink {$link}");
 
 		try {
 			$this->assertTrue(

@@ -68,10 +68,14 @@ def test_adr26_locale_contract_uses_sorting_contrast() -> None:
 
 
 def test_ci_runner_series_bumped_and_all_consumers_follow_it() -> None:
-    version = _read(".github/docker/VERSION").strip()
-    assert version == "8"
+    """No consumer may be left on the PREVIOUS series: a half-repointed bump leaves some
+    jobs grading under the old toolchain, which is exactly the silent verdict change the
+    immutable tags exist to prevent. Derived from VERSION rather than a literal, so the
+    guard keeps working after the next bump instead of failing as its own reminder."""
+    version = int(_read(".github/docker/VERSION").strip())
+    stale = f":{version - 1}"
     for path in (ROOT / ".github/workflows").glob("*.yml"):
         text = path.read_text(encoding="utf-8")
-        assert ":7" not in text, f"stale ci-runner series in {path}"
+        assert stale not in text, f"stale ci-runner series {stale} in {path}"
     smoke = _read("scripts/local-smoke.sh")
-    assert ":7" not in smoke
+    assert stale not in smoke, f"stale ci-runner series {stale} in scripts/local-smoke.sh"
