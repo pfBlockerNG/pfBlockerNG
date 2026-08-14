@@ -11,7 +11,9 @@
 #
 # Each check also runs only when its tool is available: a contributor missing a
 # tool is warned and that check is skipped, never blocked (CI is the hard gate),
-# except the mandatory Composer vendor guard for staged PHP.
+# except the mandatory Composer vendor guard for staged PHP and the two PHP style
+# gates, which run in the CI runner image and fail when it cannot be reached
+# (issue #2350).
 # All applicable checks run even after one fails, so every problem is reported in
 # a single pass. Bypass in an emergency with `git commit --no-verify`.
 #
@@ -265,15 +267,21 @@ if [ "$staged_php" = 1 ]; then
 	if [ "$composer_vendor_ok" != 1 ]; then
 		printf '[pre-commit] Composer vendor check failed; skipping PHP style gates.\n' >&2
 	else
-	# php -l syntax check (output shown only for files that fail).
-	if have php; then
-		step 'php -l'
-		find src \( -name '*.php' -o -name '*.inc' \) | sort | while IFS= read -r f; do
-			out=$(php -l "$f" 2>&1) || { printf '%s\n' "$out" >&2; exit 1; }
-		done || failed 'php -l'
-	else
-		skip php
-	fi
+	# Both PHP gates run inside the CI runner image, never against a host PHP (issue
+	# #2350). Every other check in this hook keeps its host tool -- a commit gate that
+	# hard-requires Docker is too heavy -- but PHP is the exception: the matrix pins 8.3
+	# and 8.5, a host PHP is whichever version that machine happens to carry, and there
+	# is nothing to gain from grading syntax and sniffs against it. An unreachable
+	# container is a FAILED gate here, not a skip: a skipped gate reads greener than a
+	# failed one, and `git commit --no-verify` is the deliberate way past it.
+
+	# php -l syntax check (output shown only for files that fail). One container
+	# invocation for the whole tree, not one per file.
+	step 'php -l'
+	scripts/run-in-docker.sh sh -c '
+		find src \( -name "*.php" -o -name "*.inc" \) | sort | while IFS= read -r f; do
+			out=$(php -l "$f" 2>&1) || { printf "%s\n" "$out" >&2; exit 1; }
+		done' || failed 'php -l'
 
 	# PHPCS sniffs (only when the vendor tree is installed). Config auto-discovered
 	# from phpcs.xml.dist.
@@ -283,7 +291,7 @@ if [ "$staged_php" = 1 ]; then
 		# large file (pfblockerng.inc ~19.5k lines) exhausts PHP's default 128M and
 		# aborts, which forces --no-verify and skips ALL gates. CI runs at
 		# memory_limit=-1 so it never OOMs there; this closes the local-only gap.
-		vendor/bin/phpcs -d memory_limit=1G || failed 'phpcs'
+		scripts/run-in-docker.sh vendor/bin/phpcs -d memory_limit=1G || failed 'phpcs'
 	else
 		skip phpcs
 	fi

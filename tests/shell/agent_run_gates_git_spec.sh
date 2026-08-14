@@ -104,4 +104,78 @@ Describe 'run-gates.sh over a C-quoted path'
       The output should include 'GATES: FAIL'
     End
   End
+
+  # ── every gate runs in the CI runner image (issue #2350) ───────────────────── #
+  #
+  # The gates an agent runs locally and the gates CI runs must be the same binaries:
+  # every job in test.yml executes inside ghcr.io/pfblockerng/ci-runner, so a gate
+  # graded against whatever the host happens to have installed answers a different
+  # question. gates_for() stays a pure file-type -> canonical-command mapping (pinned
+  # by the sibling agent_run_gates_spec.sh); the wrapping happens once, in main().
+  Describe 'CI-image routing'
+    It 'wraps every planned gate in the CI runner image'
+      printf 'x = 1\n' > "$repo/scripts/mod.py"
+      gitc add -A
+      gitc commit -q -m python
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
+      The status should equal 0
+      # `sh -c` and not a bare argv: the shellspec gate's command text contains a
+      # command substitution that must resolve to the CONTAINER's dash, not the host's.
+      The line 1 of output should equal "scripts/run-in-docker.sh sh -c 'python3 -m pytest'"
+      The line 2 of output should equal "scripts/run-in-docker.sh sh -c 'ruff check .'"
+      The output should not include 'PFB_ALLOW_HOST'
+    End
+
+    It 'keeps the command substitution inside the container for the shellspec gate'
+      # Expanded host-side this resolves to /opt/homebrew/bin/dash, a path that does
+      # not exist in the image — the gate would die on an unusable --shell argument.
+      printf '#!/bin/sh\necho hi\n' > "$repo/scripts/plain.sh"
+      gitc add -A
+      gitc commit -q -m shell
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
+      The status should equal 0
+      # shellcheck disable=SC2016 # the literal $( ) must survive into the container
+      The output should include "run-in-docker.sh sh -c 'shellspec --shell \$(command -v dash || command -v sh)'"
+    End
+
+    It 'executes the gate through the wrapper rather than the host tool'
+      # A stub wrapper proves the routing end to end: the real gate binaries are never
+      # invoked, so a run that reached them would leave the marker unwritten.
+      mkdir -p "$repo/scripts"
+      printf '#!/bin/sh\necho "WRAPPED $*" >> "%s"\nexit 0\n' "$repo/wrapper.log" \
+        > "$repo/scripts/run-in-docker.sh"
+      chmod +x "$repo/scripts/run-in-docker.sh"
+      printf 'x = 1\n' > "$repo/scripts/mod.py"
+      gitc add -A
+      gitc commit -q -m python
+      When run sh "$SCRIPT" --worktree "$repo" --diff base
+      The status should equal 0
+      The output should include 'GATES: PASS'
+      The output should not include 'TOOL-MISSING'
+      The contents of file "$repo/wrapper.log" should include 'python3 -m pytest'
+      The contents of file "$repo/wrapper.log" should include 'mypy tests/'
+    End
+
+    It 'fails the gate when the container is unreachable instead of skipping it'
+      # The defect this pins: a missing host tool used to report `GATE SKIP`, and a
+      # skipped gate reads greener than a failed one. With the run routed through the
+      # image there is no host tool to be missing — a wrapper that cannot reach a
+      # container is a hard FAIL, and --allow-missing must not soften it either.
+      mkdir -p "$repo/scripts"
+      printf '#!/bin/sh\necho "no container" >&2\nexit 125\n' > "$repo/scripts/run-in-docker.sh"
+      chmod +x "$repo/scripts/run-in-docker.sh"
+      printf 'x = 1\n' > "$repo/scripts/mod.py"
+      gitc add -A
+      gitc commit -q -m python
+      When run sh "$SCRIPT" --worktree "$repo" --diff base --allow-missing
+      The status should equal 1
+      # The stub's own stderr, which run_gate captures and prints before GATE FAIL:
+      # without it a red run proves only that SOME gate failed, not that the gate
+      # reached the wrapper at all.
+      The output should include 'no container'
+      The output should include 'GATE FAIL'
+      The output should not include 'GATE SKIP'
+      The output should include 'GATES: FAIL'
+    End
+  End
 End

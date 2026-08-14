@@ -141,6 +141,12 @@ Describe 'run-gates.sh Composer vendor guard'
     gitc config commit.gpgsign false
     mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts"
     printf 'base\n' > "$repo/README"
+    # Every gate is routed through the CI runner image (issue #2350). A passthrough
+    # wrapper keeps these examples about the RUNNER's own ordering and reporting logic
+    # rather than about whether docker is reachable from the test host. It lands in the
+    # BASE commit so it never appears in the diff and never plans shell gates of its own.
+    printf '#!/bin/sh\nexec "$@"\n' > "$repo/scripts/run-in-docker.sh"
+    chmod +x "$repo/scripts/run-in-docker.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     printf '<?php echo 1;\n' > "$repo/src/a.php"
@@ -199,11 +205,15 @@ Describe 'run-gates.sh Composer vendor guard'
     The output should not include 'GATES: PASS'
   End
 
-  It 'fails closed under --allow-missing when the Composer checker interpreter is unavailable'
-    mv "$stubdir/python3" "$stubdir/python3.disabled"
+  It 'fails closed under --allow-missing when the CI runner wrapper is unavailable'
+    # The vendor guard is the one gate a missing tool may never soften into a SKIP: every
+    # Composer-backed gate downstream of it is unsafe against an unverified vendor tree.
+    # With the run routed through the CI image (issue #2350) the tool that can go missing
+    # is the wrapper itself -- the interpreter now lives in the image, not on the host.
+    rm -f "$repo/scripts/run-in-docker.sh"
     When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha' --allow-missing"
     The status should equal 1
-    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py (TOOL-MISSING: python3)'
+    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py (TOOL-MISSING: scripts/run-in-docker.sh)'
     The output should not include 'GATE SKIP: python3 scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
@@ -244,6 +254,11 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     # Under scripts/ so the files are in shellcheck's scope (src, scripts, .claude/hooks).
     mkdir -p "$repo/scripts"
     printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/scripts/gone.sh"
+    # Passthrough CI-image wrapper (issue #2350): these examples pin the runner's own
+    # ordering, capture and verdict logic, not docker reachability. It lands in the BASE
+    # commit so it stays out of the diff and plans no shell gates of its own.
+    printf '#!/bin/sh\nexec "$@"\n' > "$repo/scripts/run-in-docker.sh"
+    chmod +x "$repo/scripts/run-in-docker.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     gitc rm -q scripts/gone.sh   # also prunes the now-empty scripts/ dir

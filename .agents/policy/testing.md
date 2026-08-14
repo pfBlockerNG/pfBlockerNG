@@ -24,23 +24,21 @@ Tests = how change proves itself. **Five non-negotiable principles govern every 
 
 ## Running tests
 
-```sh
-python3 -m pytest        # from repo root; run after ANY change to pfb_unbound.py or tests/
-composer install        # once; if it 403s in a managed cloud session, run
-                        # scripts/composer-cloud-install.sh instead (issue #950)
-vendor/bin/phpunit      # PHP suite: loads the REAL pfblockerng.inc off-appliance
-```
-
-**Running a suite inside the CI toolchain — `scripts/run-in-docker.sh <cmd>`.** Wraps any repo command in `ghcr.io/pfblockerng/ci-runner`, the image the gates grade with, so a local red/green answers the same question CI does. Also the faster path on Apple Silicon (59 s vs 201 s for `python3 -m pytest -q`: the suite is process-spawn bound and Linux `fork`/`exec` is far cheaper than macOS). Prefer it when **reproducing a CI-only failure**, when the host toolchain versions differ from the matrix, or for any long suite run on Apple Silicon.
+**Every suite runs inside the CI toolchain — `scripts/run-in-docker.sh <cmd>`** (issue #2350). Wraps any repo command in `ghcr.io/pfblockerng/ci-runner`, the image `test.yml` runs every job inside, so a local red/green answers the same question CI does. Also the faster path on Apple Silicon (59 s vs 201 s for `python3 -m pytest -q`: the suite is process-spawn bound and Linux `fork`/`exec` is far cheaper than macOS). This is the default way to run anything, not an option reserved for reproducing a CI-only failure.
 
 ```sh
 scripts/run-in-docker.sh python3 -m pytest -q      # any command, same argv
+scripts/run-in-docker.sh vendor/bin/phpunit        # PHP suite: loads the REAL .inc off-appliance
 scripts/run-in-docker.sh shellspec --shell dash
+scripts/run-in-docker.sh composer install          # if it 403s in a managed cloud session,
+                                                   # scripts/composer-cloud-install.sh (issue #950)
 PFB_VM=1 scripts/run-in-docker.sh ...              # ci-runner-vm (qemu, oras, Playwright)
 PFB_BUILD=1 scripts/run-in-docker.sh ...           # build the image locally, no GHCR login
 ```
 
-**It never refuses to run, so verify WHERE it ran before claiming a containerised result.** Docker missing, daemon down, image unpullable (the packages are private today), a failed build, no work tree — each prints one reason line and execs on the host instead. That line is lost to `2>/dev/null` and to a captured `$(...)`, so the fact rides the environment: **`PFB_RUNNER` is `container` or `host`, and unset when the wrapper was not involved.** Reporting "ran in the CI image" on a `PFB_RUNNER=host` run is a fabricated verification claim — check it, or say "on the host". Container/host differences are real and known: the process-group signal tests and one mtime race test fail in the container, and platform-gated cases skip differently. **CI grades on Linux, so the container is the closer answer where they disagree** — but a fallback run is a HOST run and carries the host's verdict.
+**It runs in the container or not at all.** Docker missing, daemon down, image unpullable (the packages are private today), a failed build, no work tree — each prints one reason line and exits **125**, docker's own "could not run the container" status, so a caller can tell it apart from the wrapped command going red. `scripts/agent/run-gates.sh` routes every gate through it and treats 125 as a gate FAILURE, never a skip; `.githooks/pre-commit` routes its two PHP style gates the same way and keeps its other linters host-native.
+
+**`PFB_ALLOW_HOST=1` restores the old degrade-to-host behaviour**, and then WHERE it ran has to be verified before any containerised claim. The reason line is lost to `2>/dev/null` and to a captured `$(...)`, so the fact rides the environment: **`PFB_RUNNER` is `container` or `host`, and unset when the wrapper was not involved.** Reporting "ran in the CI image" on a `PFB_RUNNER=host` run is a fabricated verification claim — check it, or say "on the host". Container/host differences are real and known: the process-group signal tests and one mtime race test fail in the container, and platform-gated cases skip differently. **CI grades on Linux, so the container is the authoritative answer where they disagree** — a host run carries only the host's verdict.
 
 Environment gotchas that read as fake "baseline failures" — fix env, never dismiss red: pytest suite needs **zstd encoder** (`zstd` binary or `zstandard` module); bare managed-cloud container lacks one and ~70 pkg/repo tests fail — `SessionStart` hook auto-installs it (manual: `pip3 install zstandard`). PHPUnit permission-denial tests (`chmod 0555` fixtures) **skip under root** via `posix_getuid() === 0` guard — root bypasses file permissions, so root run cannot simulate denial (red there means guard missing, not code broke). Any other local-only failure: diagnose before dismissing — if genuinely pre-existing on base branch, **file tracking issue** (exemplars #791, #894); never leave as folklore.
 

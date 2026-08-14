@@ -3,6 +3,11 @@
 # Mechanical runner for the "Canonical gates" table (CLAUDE.md stays the documented
 # source; this script implements it -- change them together).
 #
+# Every gate runs inside the CI runner image via scripts/run-in-docker.sh (issue #2350),
+# so the toolchain grading a local run is the toolchain grading the PR. An unreachable
+# container is a gate FAILURE, not a skip; PFB_ALLOW_HOST=1 in the environment is the
+# documented escape hatch and is honoured by the wrapper, not by this script.
+#
 # Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
 #   --diff BASE      compute touched files: BASE...HEAD merge-base diff UNIONED with
@@ -99,16 +104,68 @@ gates_for() {
 	printf '%s' "$out"
 }
 
+# The Composer vendor guard is fail-closed: a failure there stops the run before any
+# Composer-backed PHP gate, which is unsafe against a missing or stale vendor tree. Matched
+# by substring rather than by whole-command equality because wrap_gates() below rewrites
+# the command text, and a comparison against the unwrapped literal would silently stop
+# recognising it — turning the hard stop into an ordinary gate failure.
+is_vendor_gate() {
+	case "$1" in
+	*'scripts/check_composer_vendor.py'*) return 0 ;;
+	esac
+	return 1
+}
+
+# Every gate runs in the CI runner image rather than against whatever the host happens to
+# have installed: test.yml executes each of its jobs inside ghcr.io/pfblockerng/ci-runner,
+# so a gate graded anywhere else answers a different question (issue #2350). gates_for()
+# stays the pure file-type -> canonical-command mapping its own spec pins; the wrapping
+# happens once, here.
+#
+# `sh -c '<cmd>'` and not a bare argv: the shellspec gate's text carries a command
+# substitution that has to resolve to the CONTAINER's dash — expanded host-side it yields
+# a path the image does not have. Single-quoting is safe because gates_for() already drops
+# any filename outside [A-Za-z0-9._/-] from the per-file buckets.
+#
+# The injection guard is NOT wrapped. It is a refusal, not a gate: it needs no toolchain,
+# and routing it through a container would make "this diff has an unsafe filename" depend
+# on docker being reachable.
+wrap_gates() {
+	while IFS= read -r c; do
+		[ -n "$c" ] || continue
+		case "$c" in
+		"printf 'unsafe filename in diff"*) printf '%s\n' "$c" ;;
+		*) printf "scripts/run-in-docker.sh sh -c '%s'\n" "$c" ;;
+		esac
+	done
+}
+
+# The per-gate report line names the GATE, not the plumbing. wrap_gates() puts the same
+# `scripts/run-in-docker.sh sh -c '...'` around every command, so repeating it on each
+# PASS/FAIL line would push the thing that actually failed off to the right for no added
+# information -- and a failing gate already prints the wrapper's own reason line above its
+# verdict. --plan still prints the real invocation, which is what gets copy-pasted.
+gate_label() {
+	case "$1" in
+	"scripts/run-in-docker.sh sh -c '"*)
+		label=${1#scripts/run-in-docker.sh sh -c \'}
+		printf '%s' "${label%\'}"
+		;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
 run_gate() {
 	# $1 = command line
+	label=$(gate_label "$1")
 	tool=${1%% *}
 	if ! (cd "$worktree" && { command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ]; }); then
-		if [ "$1" = 'python3 scripts/check_composer_vendor.py' ]; then
-			printf 'GATE FAIL: %s (TOOL-MISSING: %s)\n' "$1" "$tool"
+		if is_vendor_gate "$1"; then
+			printf 'GATE FAIL: %s (TOOL-MISSING: %s)\n' "$label" "$tool"
 			overall=1
 			return 1
 		fi
-		printf 'GATE SKIP: %s (TOOL-MISSING: %s)\n' "$1" "$tool"
+		printf 'GATE SKIP: %s (TOOL-MISSING: %s)\n' "$label" "$tool"
 		[ "$allow_missing" -eq 1 ] || overall=1
 		return 0
 	fi
@@ -122,13 +179,13 @@ run_gate() {
 	gate_output=$(cd "$worktree" && sh -c "$1" </dev/null 2>&1)
 	gate_status=$?
 	if [ "$gate_status" -eq 0 ]; then
-		printf 'GATE PASS: %s\n' "$1"
+		printf 'GATE PASS: %s\n' "$label"
 		return 0
 	fi
 	[ -z "$gate_output" ] || printf '%s\n' "$gate_output"
-	printf 'GATE FAIL: %s\n' "$1"
+	printf 'GATE FAIL: %s\n' "$label"
 	overall=1
-	[ "$1" = 'python3 scripts/check_composer_vendor.py' ] && return 1
+	is_vendor_gate "$1" && return 1
 	return 0
 }
 
@@ -175,7 +232,7 @@ main() {
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
-	cmds=$(printf '%s\n' "$files" | gates_for)
+	cmds=$(printf '%s\n' "$files" | gates_for | wrap_gates)
 
 	if [ "$plan" -eq 1 ]; then
 		printf '%s' "$cmds"
@@ -189,7 +246,7 @@ main() {
 		while IFS= read -r c; do
 			[ -n "$c" ] || continue
 			if ! run_gate "$c"; then
-				[ "$c" = 'python3 scripts/check_composer_vendor.py' ] && break
+				is_vendor_gate "$c" && break
 			fi
 		done
 		echo "OVERALL=$overall"
