@@ -191,6 +191,9 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private',
 		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_allow_private',
+		// issue #2371: feed-at-suffix PSL policy fields.
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_private_policy',
+		'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_icann_policy',
 		// issue #1921: TLD Allow sort + bucket scalars (renamed from pfb_pytld* by #1898).
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_sort',
 		'installedpackages/pfblockerngdnsblsettings/config/0/tld_allow_gtld',

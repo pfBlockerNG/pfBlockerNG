@@ -2438,6 +2438,13 @@ function pfb_dnsbl_reload_fingerprint(array $pfb): string {
 	$allow = $allow instanceof PfbToggle ? $allow->value : (is_bool($allow) ? ($allow ? 'on' : 'off') : (string) $allow);
 	$paths[] = "\0pfb-psl-policy:include={$include}";
 	$paths[] = "\0pfb-psl-policy:allow={$allow}";
+	// issue #2371: salt the feed-at-suffix PSL policy fields too, same sentinel family.
+	$feed_private_policy = $pfb['dnsbl_psl_feed_private_policy'] ?? PfbFeedSuffixPolicy::Honor;
+	$feed_icann_policy = $pfb['dnsbl_psl_feed_icann_policy'] ?? PfbFeedSuffixPolicy::Honor;
+	$feed_private_policy = $feed_private_policy instanceof PfbFeedSuffixPolicy ? $feed_private_policy->value : (string) $feed_private_policy;
+	$feed_icann_policy = $feed_icann_policy instanceof PfbFeedSuffixPolicy ? $feed_icann_policy->value : (string) $feed_icann_policy;
+	$paths[] = "\0pfb-psl-policy:feed_private={$feed_private_policy}";
+	$paths[] = "\0pfb-psl-policy:feed_icann={$feed_icann_policy}";
 	return pfb_dnsbl_loaded_fingerprint($paths);
 }
 
@@ -3274,6 +3281,8 @@ function pfb_global() {
 	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');			// PSL PRIVATE recognition (default On)
 	$pfb['dnsbl_psl_allow_private'] = PfbConfig::read('dnsbl/pfb_psl_allow_private');			// PSL PRIVATE TLD-Allow precision (default Off)
+	$pfb['dnsbl_psl_feed_private_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_private_policy');	// issue #2371: feed-at-suffix PSL PRIVATE policy (PfbFeedSuffixPolicy enum; absent -> Honor)
+	$pfb['dnsbl_psl_feed_icann_policy'] = PfbConfig::read('dnsbl/pfb_psl_feed_icann_policy');		// issue #2371: feed-at-suffix PSL ICANN policy (PfbFeedSuffixPolicy enum; absent -> Honor)
 	$pfb['dnsbl_py_nolog']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_py_nolog'] ?? '');			// DNSBL Resolver python - Log events via DNSBL Webserver vs python
 	$pfb['dnsbl_noaaaa']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_noaaaa'] ?? '');			// DNSBL Resolver python no AAAA
 	$pfb['dnsbl_noaaaa_list']=$pfb['dnsblconfig']['pfb_noaaaa_list'] ?? '';	// DNSBL Resolver python no AAAA list
@@ -10065,6 +10074,8 @@ function pfb_unbound_python_ini($mode, ?string $now = NULL): string {
 	$python_tld_wildcard = !empty($dnsbl_tld_wildcard) ? 'on' : 'off';
 	$psl_include_private = ($pfb['dnsbl_psl_include_private'] === PfbToggle::On) ? 'on' : 'off';
 	$psl_allow_private = ($pfb['dnsbl_psl_allow_private'] === PfbToggle::On) ? 'on' : 'off';
+	$psl_feed_private_policy = $pfb['dnsbl_psl_feed_private_policy']->toStored();
+	$psl_feed_icann_policy = $pfb['dnsbl_psl_feed_icann_policy']->toStored();
 
 	$idn_mode = $pfb['dnsbl_idn']->toStored();
 	$python_idn = ($pfb['dnsbl_idn'] === PfbIdnMode::All) ? 'on' : 'off';
@@ -10109,6 +10120,8 @@ python_hsts	= {$python_hsts}
 python_tld_wildcard	= {$python_tld_wildcard}
 psl_include_private	= {$psl_include_private}
 psl_allow_private	= {$psl_allow_private}
+psl_feed_private_policy	= {$psl_feed_private_policy}
+psl_feed_icann_policy	= {$psl_feed_icann_policy}
 python_idn	= {$python_idn}
 idn_mode	= {$idn_mode}
 python_idn_block_malicious	= {$python_idn_block_malicious}
@@ -12430,6 +12443,39 @@ function pfb_control_legacy_seed($dconfig) {
 	}
 	$dconfig['pfb_control_legacy_seeded'] = 'on';
 	return $dconfig;
+}
+
+
+// issue #2371: fresh-install detector for the feed-at-suffix PSL policy fields
+// (dnsbl/pfb_psl_feed_private_policy, dnsbl/pfb_psl_feed_icann_policy). Same
+// empty($dconfig)-on-the-operator-view idiom as pfb_schedule_migrate's $is_fresh, but
+// DELIBERATELY NOT an entry in pfb_migration_registry() and NOT called from
+// pfb_run_migrations(): every pfb_migration_registry() entry's write lands BEFORE
+// pfb_registry_pass() re-reads the section for its own per-section NEWCFG/OLDCFG mode
+// decision (issue #1921) -- seeding new keys into an otherwise-EMPTY dnsbl section
+// there would flip that section's mode to OLDCFG for every OTHER registered dnsbl/*
+// field before the pass ever sees it, wrongly applying an ABSENT-grandfather map meant
+// only for a genuine upgrade. Confirmed against dnsbl/pfb_dnsbl_lenient (grandfather
+// ABSENT -> 'on') via an executed probe: the same latent interaction already reaches
+// gen/pfb_alias_delta_mode through pfb_schedule_migrate (#2308) today, empirically
+// observed to yield 'replace' instead of the intended fresh-install 'auto'. #2371 does
+// not fix that pre-existing interaction; it avoids adding a second instance of it by
+// keeping this seed OUTSIDE pfb_migration_registry() entirely.
+//
+// pfblockerng_install.inc calls this on the section read BEFORE pfb_run_migrations()/
+// pfb_registry_pass() run, then -- only when it returns TRUE -- applies the seed via
+// PfbConfig::writeSystem() AFTER pfb_install_registry_writeback() has already persisted
+// the registry pass's own (unrelated) '' defaults for these two fields.
+//
+// $dconfig is the DNSBL-settings 'config/0' node, read pre-mutation. Returns TRUE iff
+// the section is genuinely fresh (empty under the operator view -- issues
+// #1770/#1771/#1775), else FALSE.
+function pfb_psl_feed_policy_is_fresh_install($dconfig) {
+
+	if (!is_array($dconfig)) {
+		return FALSE;
+	}
+	return empty(pfb_gconfig_operator_view($dconfig));
 }
 
 

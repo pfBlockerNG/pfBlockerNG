@@ -51,6 +51,9 @@ _CONTAINER_KEYS = frozenset(
         "tld_allow_roots",
         "psl_include_private",
         "psl_allow_private",
+        # issue #2371: feed-at-suffix PSL policy fields (plumbing only, no consumer yet).
+        "psl_feed_private_policy",
+        "psl_feed_icann_policy",
     }
 )
 
@@ -93,6 +96,9 @@ def _build(
 # One shared tuple: the equivalence proof compares container values with `is`,
 # and Python does not guarantee identity for equal tuple literals.
 _TLD_ALLOW_ROOTS = ("com", "net", "org")
+# issue #2371: shared for the same `is`-identity reason as _TLD_ALLOW_ROOTS above --
+# the equivalence proof compares container values with `is`, not `==`.
+_HONOR = "honor"
 
 
 def _snapshot_from_result(result: P.BuildResult, *, hsts: dict[str, Any] | None = None) -> P.Snapshot:
@@ -113,6 +119,8 @@ def _snapshot_from_result(result: P.BuildResult, *, hsts: dict[str, Any] | None 
         tld_allow_roots=_TLD_ALLOW_ROOTS,
         psl_include_private=True,
         psl_allow_private=False,
+        psl_feed_private_policy=_HONOR,
+        psl_feed_icann_policy=_HONOR,
     )
 
 
@@ -132,6 +140,8 @@ def _legacy_containers(result: P.BuildResult, *, hsts: dict[str, Any] | None = N
         "tld_allow_roots": _TLD_ALLOW_ROOTS,
         "psl_include_private": True,
         "psl_allow_private": False,
+        "psl_feed_private_policy": _HONOR,
+        "psl_feed_icann_policy": _HONOR,
     }
 
 

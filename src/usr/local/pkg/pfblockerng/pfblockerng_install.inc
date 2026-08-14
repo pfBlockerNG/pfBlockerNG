@@ -26,6 +26,14 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $g, $pfb;
 pfb_global();
 
+// issue #2371: capture the DNSBL-settings section's fresh-install-ness BEFORE any
+// migration or the registry pass runs -- see pfb_psl_feed_policy_is_fresh_install()'s
+// docblock (pfblockerng.inc) for why this must be read pre-mutation and applied only
+// after pfb_install_registry_writeback() below.
+$pfb_psl_feed_policy_fresh_install = pfb_psl_feed_policy_is_fresh_install(
+	PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0')
+);
+
 $pfb_installed_family = pfb_install_settings_family_capture_restore();
 pfb_global();
 // Set 'Install flag' to skip sync process during installations.
@@ -934,6 +942,18 @@ foreach (PFB_SECTIONS as $pfb_registry_section) {
 pfb_install_registry_writeback($pfb_registry_sections);
 unset($pfb_registry_sections, $pfb_registry_section);
 update_status(" done.\n");
+
+// issue #2371: apply the fresh-install feed-at-suffix PSL policy seed captured at the
+// top of this file, now that the registry pass has already persisted its own (unrelated)
+// '' defaults for these two fields -- see pfb_psl_feed_policy_is_fresh_install()'s
+// docblock (pfblockerng.inc) for why this runs AFTER pfb_install_registry_writeback()
+// rather than as a pfb_migration_registry() entry.
+if ($pfb_psl_feed_policy_fresh_install) {
+	PfbConfig::writeSystem('dnsbl/pfb_psl_feed_private_policy', 'apex');
+	PfbConfig::writeSystem('dnsbl/pfb_psl_feed_icann_policy', 'apex');
+	write_config('pfBlockerNG: seeded feed-at-suffix PSL policy defaults for fresh install (issue #2371)');
+}
+unset($pfb_psl_feed_policy_fresh_install);
 
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
 update_status("Upgrading... done\n\nCustom commands completed ... ");

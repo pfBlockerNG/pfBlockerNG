@@ -542,4 +542,32 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$allow_private['dnsbl_psl_allow_private'] = PfbToggle::On;
 		$this->assertNotSame($default, pfb_dnsbl_reload_fingerprint($allow_private));
 	}
+
+	/** issue #2371: the feed-at-suffix PSL policy fields salt the reload fingerprint too. */
+	public function testFeedSuffixPolicySaltsChangeReloadFingerprint(): void
+	{
+		$pfb = $this->reloadFpBasePfb();
+		$default = pfb_dnsbl_reload_fingerprint($pfb);
+
+		$explicit_defaults = $pfb;
+		$explicit_defaults['dnsbl_psl_feed_private_policy'] = PfbFeedSuffixPolicy::Honor;
+		$explicit_defaults['dnsbl_psl_feed_icann_policy'] = PfbFeedSuffixPolicy::Honor;
+		$this->assertSame($default, pfb_dnsbl_reload_fingerprint($explicit_defaults),
+			'explicit Honor must match the implicit default -- same fingerprint');
+
+		$private_ignore = $pfb;
+		$private_ignore['dnsbl_psl_feed_private_policy'] = PfbFeedSuffixPolicy::Ignore;
+		$fp_private_ignore = pfb_dnsbl_reload_fingerprint($private_ignore);
+		$this->assertNotSame($default, $fp_private_ignore);
+
+		$icann_apex = $pfb;
+		$icann_apex['dnsbl_psl_feed_icann_policy'] = PfbFeedSuffixPolicy::Apex;
+		$fp_icann_apex = pfb_dnsbl_reload_fingerprint($icann_apex);
+		$this->assertNotSame($default, $fp_icann_apex);
+		$this->assertNotSame($fp_private_ignore, $fp_icann_apex,
+			'changing the PRIVATE vs ICANN policy independently must produce distinct fingerprints');
+
+		// Stable when unchanged: two calls with the identical (non-default) values agree.
+		$this->assertSame($fp_private_ignore, pfb_dnsbl_reload_fingerprint($private_ignore));
+	}
 }
