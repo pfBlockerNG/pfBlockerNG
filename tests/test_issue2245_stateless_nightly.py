@@ -17,6 +17,8 @@ def test_nightly_version_is_utc_seconds_plus_full_source_sha() -> None:
 def test_every_nightly_invocation_builds_without_durable_state() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
 
+    assert 'TOOLS_SHA="$(git -C "$TRUSTED_DIR" rev-parse HEAD)"' in workflow
+    assert 'SOURCE_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"' in workflow
     assert 'BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"' in workflow
     assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHA}"' in workflow
     assert "queue: max" in workflow
