@@ -35,10 +35,6 @@ from typing import Any, Iterable
 
 import pfb_unbound as P
 
-# A minimal public-suffix oracle (mirrors test_adr07_emit_wire): com/net/org are
-# public suffixes, so example.com is the registrable parent for zone classification.
-_TLD_MASTER = ["com", "net", "org"]
-
 # Every key the pre-refactor operate() assembled into the per-query ``containers``
 # dict (pfb_unbound.py, the old :4140-4148 assembly). The Snapshot MUST cover all of
 # them -- this is the completeness contract.

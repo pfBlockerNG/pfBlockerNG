@@ -305,12 +305,20 @@ def _expected_gen2() -> dict[str, bool]:
 
 
 # Regex lanes (m4/m6/a12) are listed by a STEM; the probe name appends a digit so the
-# pattern actually matches. Every other lane probes the listed name verbatim.
+# pattern actually matches. The m2 zone lane probes a SUBDOMAIN of the listed
+# name: only a zoneDB entry covers it (a dataDB exact key cannot), so the probe
+# fails if the zone lane silently degrades to dataDB. Every other lane probes
+# the listed name verbatim.
 _REGEX_LANES = {"m4_abpre", "m6_userre", "a12_abpallowre"}
+_ZONE_LANES = {"m2_zone"}
 
 
 def _probe(lane_key: str, listed_name: str) -> str:
-    return _regex_probe(listed_name) if lane_key in _REGEX_LANES else listed_name
+    if lane_key in _REGEX_LANES:
+        return _regex_probe(listed_name)
+    if lane_key in _ZONE_LANES:
+        return "torn." + listed_name
+    return listed_name
 
 
 # --------------------------------------------------------------------------- #

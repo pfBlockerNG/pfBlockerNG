@@ -27,10 +27,6 @@ import tests.test_adr07_decision_spec as spec
 # the REAL evaluate_domain over the emitted structures.
 # --------------------------------------------------------------------------- #
 
-# A minimal public-suffix oracle: ``com``/``net``/``org`` are public suffixes, so
-# ``example.com`` is the registrable parent (zone classify groups subdomains there).
-_TLD_MASTER = ["com", "net", "org"]
-
 
 def _build(
     feeds: dict[str, list[str]],
