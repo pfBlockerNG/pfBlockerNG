@@ -57,6 +57,21 @@ from pathlib import Path
 # it before parsing; a genuinely truncated/malformed report still fails below.
 _XML_ILLEGAL_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
+# An allowlist line is "<id>  # <reason>", split on the first WHITESPACE-PRECEDED '#'.
+# A bare `partition("#")` would truncate any id carrying one of its own -- a pytest
+# parametrised id can (test_x[a#b]) -- into an id no run produces, leaving that skip
+# impossible to record. Reasons keep their own '#' (an issue reference) for the same
+# reason. The one shape this cannot express is an id containing a SPACED '#', which only
+# a shellspec description could produce; the header of the allowlist says so.
+_ENTRY = re.compile(r"^(?P<id>\S.*?)\s+#\s*(?P<reason>\S.*)$")
+
+
+# pytest and PHPUnit write <skipped>; shellspec 0.28.1 writes <skip> (probed against its
+# own generator). Reading only one of them makes the gate blind for the other suite —
+# a clean verdict on a report that recorded skips, which is the failure this gate exists
+# to catch.
+_SKIP_ELEMENTS = frozenset({"skipped", "skip"})
+
 
 class ReportError(Exception):
     """The JUnit report is missing, empty, or not well-formed XML."""
@@ -95,10 +110,10 @@ def parse_report(path: Path, suite: str) -> list[tuple[str, str | None]]:
         raise ReportError(f"report file is not well-formed XML: {path}: {exc}") from exc
     skips: list[tuple[str, str | None]] = []
     for testcase in root.iter("testcase"):
-        skipped = testcase.find("skipped")
-        if skipped is None:
-            continue
-        skips.append((testcase_id(suite, testcase), skip_reason(skipped)))
+        for child in testcase:
+            if child.tag in _SKIP_ELEMENTS:
+                skips.append((testcase_id(suite, testcase), skip_reason(child)))
+                break
     return skips
 
 
@@ -108,17 +123,19 @@ def parse_allowlist(path: Path) -> dict[str, str]:
     cannot rot into a bare id list with no record of WHY a test skips."""
     if not path.is_file():
         raise AllowlistError(f"allowlist file not found: {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise AllowlistError(f"allowlist file is not valid UTF-8: {path}: {exc}") from exc
     reasons: dict[str, str] = {}
-    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for lineno, raw in enumerate(text.splitlines(), start=1):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        entry_id, sep, reason = line.partition("#")
-        entry_id = entry_id.strip()
-        reason = reason.strip()
-        if not sep or not entry_id or not reason:
+        entry = _ENTRY.match(line)
+        if entry is None:
             raise AllowlistError(f"{path}:{lineno}: allowlist entry has no trailing '# reason': {raw!r}")
-        reasons[entry_id] = reason
+        reasons[entry.group("id")] = entry.group("reason").strip()
     return reasons
 
 
