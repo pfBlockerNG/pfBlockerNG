@@ -332,8 +332,9 @@ def test_usr_bin_tar_is_bsdtar_as_it_is_on_the_appliance() -> None:
         f"the diversion must send a future `tar` upgrade to /usr/sbin/tar:\n{divert}"
     )
     assert "mv /usr/bin/tar /usr/sbin/tar" in divert, (
-        "GNU tar must remain at /usr/sbin/tar: dpkg-deb runs `tar --warning=no-timestamp`, "
-        f"which bsdtar rejects, and searches /usr/sbin first:\n{divert}"
+        "GNU tar must remain at /usr/sbin/tar, which precedes /usr/bin in the image PATH: "
+        "dpkg-deb runs `tar --warning=no-timestamp`, a GNU-only option bsdtar rejects, and "
+        f"resolves it by name:\n{divert}"
     )
     assert "ln -s bsdtar /usr/bin/tar" in divert, f"nothing puts bsdtar at /usr/bin/tar after the divert:\n{divert}"
 
@@ -346,6 +347,13 @@ def test_usr_bin_tar_is_bsdtar_as_it_is_on_the_appliance() -> None:
         "the image self-check must PROVE dpkg still unpacks after the tar swap — pointing "
         "/usr/bin/tar at bsdtar with no GNU tar left where dpkg looks breaks every "
         "apt-get in this file's later layers and in the whole ci-runner-vm image"
+    )
+    assert "/usr/bin/tar --version | grep -q '^bsdtar'" in checks, (
+        "the image self-check must assert WHICH tar sits at /usr/bin/tar"
+    )
+    assert "tar --version | grep -q 'GNU tar'" in checks, (
+        "the image self-check must assert a bare `tar` is still GNU tar — actions/cache "
+        "and the release tarball step resolve it through PATH"
     )
 
 

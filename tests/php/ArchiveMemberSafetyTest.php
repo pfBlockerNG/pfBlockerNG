@@ -85,10 +85,10 @@ final class ArchiveMemberSafetyTest extends TestCase
 
 	public function testMemberNamesListsRealArchiveAndKeepsTarPrefixedMember(): void
 	{
-		// A plain .tar, NOT a zip: the CI host's /usr/bin/tar is GNU tar, which cannot
-		// read zip (the known FreeBSD-vs-dev-host tool divergence -- on the appliance
-		// /usr/bin/tar is always bsdtar and reads both). A .tar pins the same lister
-		// behaviour on every host; the zip leg is live-proven by the ADR-46 smoke cases.
+		// A plain .tar, NOT a zip: a dev host whose /usr/bin/tar is GNU tar cannot read
+		// zip at all (the CI image now supplies bsdtar there, as the appliance does, but a
+		// bare Linux host still does not). A .tar pins the same lister behaviour on every
+		// host; the zip leg is live-proven by the ADR-46 smoke cases.
 		// A member literally named "tar: keep.txt" must survive -- stderr is discarded,
 		// so a member name can never be confused with a bsdtar diagnostic.
 		$dir  = sys_get_temp_dir() . '/pfb_members_' . uniqid('', TRUE);
