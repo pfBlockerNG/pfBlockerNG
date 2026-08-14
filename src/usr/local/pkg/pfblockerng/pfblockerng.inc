@@ -94,6 +94,37 @@ function pfb_install_registry_writeback(
 	$flush('[pfBlockerNG] Save installation settings');
 }
 
+/**
+ * issue #2371: apply the fresh-install feed-at-suffix PSL policy seed. $fresh is
+ * pfb_psl_feed_policy_is_fresh_install()'s PRE-migration read, captured by the
+ * installer before pfb_run_migrations()/pfb_registry_pass() run; this seam itself
+ * must be called by the installer AFTER pfb_install_registry_writeback() -- see
+ * pfb_psl_feed_policy_is_fresh_install()'s docblock for why (folding the seed into
+ * pfb_migration_registry() would flip pfb_registry_pass()'s NEWCFG/OLDCFG mode for
+ * every OTHER registered dnsbl/* field once the seeded keys make the section
+ * non-empty). A no-op (no write, no flush) when $fresh is FALSE -- an existing
+ * install's absent keys stay absent and read Honor via the registry default.
+ *
+ * DI seam (mirrors pfb_install_registry_writeback() above) so tests exercise this
+ * EXACT function rather than a hand-copied reimplementation: a mutation to this body
+ * is caught by both the installer's real call site (source-scan, see
+ * InstallPrePassWriteOrderTest.php's pattern) and a direct DI-based unit test.
+ */
+function pfb_install_psl_feed_policy_seed(
+	bool $fresh,
+	?callable $write = NULL,
+	?callable $flush = NULL
+): void {
+	if (!$fresh) {
+		return;
+	}
+	$write ??= 'PfbConfig::writeSystem';
+	$flush ??= 'write_config';
+	$write('dnsbl/pfb_psl_feed_private_policy', 'apex');
+	$write('dnsbl/pfb_psl_feed_icann_policy', 'apex');
+	$flush('pfBlockerNG: seeded feed-at-suffix PSL policy defaults for fresh install (issue #2371)');
+}
+
 function pfb_install_probe_cleanup(?callable $purge = NULL): void {
 	$purge ??= 'pfb_purge_probe_bodies';
 	$purge();
