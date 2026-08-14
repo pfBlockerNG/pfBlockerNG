@@ -144,7 +144,7 @@ final class ToggleMirrorComparisonGuardTest extends TestCase
 			'unbound_py_wh'      => '/var/unbound/pfb_py_whitelist.txt',
 			'unbound_py_sources' => '/var/unbound/pfb_py_sources.ini',
 			'unbound_py_hsts'    => '/var/unbound/pfb_py_hsts.txt',
-			'unbound_py_tld'     => '/var/unbound/pfb_py_tld.txt',
+			'unbound_py_psl'     => '/var/unbound/dnsbl_psl',
 			'unbound_py_top1m'   => '/var/unbound/pfb_py_top1m.txt',
 		];
 

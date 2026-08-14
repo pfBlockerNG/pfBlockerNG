@@ -2001,7 +2001,7 @@ def set_dnsbl_tld_wildcard(vm: SmokeVM, on: bool, *, timeout: float = 60.0) -> N
     (``$pfb['dnsbl_tld_wildcard']``), so off is the empty string, matching
     :func:`set_dnsbl_control`. On: the next reload's ini carries
     ``python_tld_wildcard = on`` and the shipped public-suffix oracle
-    (``pfb_py_tld.txt``) gates tld_wildcard_classify()'s 2-label wildcard branch; off:
+    (``dnsbl_psl``) gates tld_wildcard_classify()'s PSL wildcard branch; off:
     the oracle is never opened, so tld_wildcard_classify() forces exact DATA for every
     domain.
     """

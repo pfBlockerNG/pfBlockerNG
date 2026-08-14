@@ -4502,7 +4502,7 @@ def tld_wildcard_classify(
         )
     ):
         return DNSBL_CLASS_DATA, domain
-    root_blacklist = blacklist or set()
+    root_blacklist = {entry.strip(".") for entry in blacklist or set()}
     try:
         resolution = resolve_public_suffix(domain, rules)
     except ValueError:
