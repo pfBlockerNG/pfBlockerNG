@@ -3989,7 +3989,8 @@ class BuildResult:
     ``rejects`` is the ADR-48 (issue #789) per-entry reject tally -- (feed, group)
     -> {'shape': n, 'wire_cap': m} -- for every domain target a normalise-fail (or
     the reconcile() wire-cap fold-drop) rejected; a diagnostic count, not consumed
-    by any decision.
+    by any decision. issue #2371 rides the same tally with two sparse buckets,
+    'suffix_drop' and 'suffix_demote' (present only when they fire).
     """
 
     data_db: dict[str, dict[str, Any]]
@@ -4504,16 +4505,18 @@ def parse(line: str) -> ParsedEntry | None:
 
 # ADR-48 (issue #789): the per-entry reject tally build()/parse_abp()/
 # reconcile() accumulate into, keyed (feed, group) -> {'shape': n, 'wire_cap': m}.
-# A plain dict (no class): the shape never grows past the two RESOLVED buckets
-# (ADR §2 item 4), so a helper that does the defaulting is all this needs.
+# issue #2371 rides the same tally with two sparse buckets, 'suffix_drop' and
+# 'suffix_demote' -- added to a row only when they actually fire, so the
+# pre-#2371 2-key row shape stays byte-identical when they never do.
 RejectTally = dict[tuple[str, str], dict[str, int]]
 
 
 def _tally_reject(tally: RejectTally, feed: str, group: str, bucket: str) -> None:
-    """Increment ``bucket`` ('shape' | 'wire_cap') for (feed, group) in ``tally``,
-    defaulting a fresh {'shape': 0, 'wire_cap': 0} row on first hit."""
+    """Increment ``bucket`` ('shape' | 'wire_cap' | 'suffix_drop' | 'suffix_demote')
+    for (feed, group) in ``tally``, defaulting a fresh {'shape': 0, 'wire_cap': 0}
+    row on first hit (a #2371 suffix bucket is added to the row on demand)."""
     counts = tally.setdefault((feed, group), {"shape": 0, "wire_cap": 0})
-    counts[bucket] += 1
+    counts[bucket] = counts.get(bucket, 0) + 1
 
 
 def _dnsbl_within_wire_caps(host: str) -> bool:
@@ -4614,6 +4617,22 @@ def tld_wildcard_classify(
     if domain == registrable:
         return DNSBL_CLASS_ZONE, domain
     return DNSBL_CLASS_DATA, domain
+
+
+def _dnsbl_suffix_feed_policy(name: str, rules: PslRules, private_policy: str, icann_policy: str) -> str | None:
+    """issue #2371: the feed-at-suffix policy governing ``name``, or ``None``
+    when ``name`` is not exactly its own winning public suffix (normal
+    handling). Section is PRIVATE iff the winning rule's ``private_active`` is
+    True, else ICANN. O(name labels) via the already-indexed
+    ``resolve_public_suffix`` -- no per-entry scan over the shipped ruleset.
+    """
+    try:
+        resolution = resolve_public_suffix(name, rules)
+    except ValueError:
+        return None
+    if name != resolution.public_suffix:
+        return None
+    return private_policy if resolution.private_active else icann_policy
 
 
 # --------------------------------------------------------------------------- #
@@ -5221,7 +5240,10 @@ def build(
     ADR-48 (issue #789): every domain target a normalise-fail rejects (permit path,
     plain path, both parse_abp() call sites) and the reconcile() wire-cap fold-drop
     are tallied into ``BuildResult.rejects`` (bucket 'shape' | 'wire_cap', keyed
-    (feed, group)) -- accounting only, no gate DECISION changes.
+    (feed, group)) -- accounting only, no gate DECISION changes. issue #2371 adds a
+    real gate: a FEED entry AT its winning public suffix is dropped ('ignore',
+    tallied 'suffix_drop') or a wildcard ZONE anchor demoted to exact DATA ('apex',
+    tallied 'suffix_demote'); USER provenance is exempt in every state.
     """
     tld_wildcard_blacklist = list(config.get("tld_wildcard_blacklist", []))
     tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
@@ -5235,6 +5257,12 @@ def build(
     if not isinstance(psl_rules, PslRules):
         raise ValueError("psl_rules must be parsed PslRules")
     psl_classification_rules = psl_rules if bool(config.get("psl_wildcard_enabled", True)) else PslRules()
+    # issue #2371: feed-at-suffix policy, keyed off the RAW psl_rules (never the
+    # wildcard-gated psl_classification_rules) -- ABP zones exist independently
+    # of Wildcard Blocking (#1255), so the policy must apply even when it's OFF.
+    psl_feed_private_policy = str(config.get("psl_feed_private_policy", "honor"))
+    psl_feed_icann_policy = str(config.get("psl_feed_icann_policy", "honor"))
+    psl_feed_policy_active = psl_feed_private_policy != "honor" or psl_feed_icann_policy != "honor"
 
     data_db: dict[str, dict[str, Any]] = {}
     zone_db: dict[str, dict[str, Any]] = {}
@@ -5396,6 +5424,15 @@ def build(
             # Only BLOCK is produced by the lite path (ABP-ready seam; module header).
             if entry.kind != DNSBL_KIND_BLOCK:
                 continue
+            # issue #2371: FEED entry AT a suffix boundary, state 'ignore' -> drop
+            # (tallied). 'apex'/'honor' need no plain-path change: an exact apex
+            # DATA block is already today's outcome (#1541 never wildcards a
+            # plain suffix entry).
+            if provenance == RULE_PROV_FEED and psl_feed_policy_active:
+                policy = _dnsbl_suffix_feed_policy(domain, psl_rules, psl_feed_private_policy, psl_feed_icann_policy)
+                if policy == "ignore":
+                    _tally_reject(rejects, feed, group, "suffix_drop")
+                    continue
             idx = index_for(feed, group)
             cls, key = tld_wildcard_classify(
                 domain,
@@ -5421,11 +5458,24 @@ def build(
         result = reconcile(abp_rules, {}, exclusion, tally=rejects)
         important_rules = important_rules or result.important_rules
 
-        # Domain blocks -> dataDB/zoneDB (carry band + $important).
+        # Domain blocks -> dataDB/zoneDB (carry band + $important). issue #2371:
+        # a FEED rule AT a suffix boundary is dropped ('ignore') or demoted from
+        # ZONE to DATA at the SAME key ('apex', band/important/log preserved) --
+        # ABP ALLOW rules, irreducible regex, and reduced-allow domains never
+        # reach this loop, so policy governs BLOCK emission only.
         for b in result.block_domains:
+            cls = b.cls
+            if b.provenance == RULE_PROV_FEED and psl_feed_policy_active:
+                policy = _dnsbl_suffix_feed_policy(b.key, psl_rules, psl_feed_private_policy, psl_feed_icann_policy)
+                if policy == "ignore":
+                    _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_drop")
+                    continue
+                if policy == "apex" and cls == DNSBL_CLASS_ZONE:
+                    _tally_reject(rejects, b.feed or "DNSBL", b.group or "DNSBL", "suffix_demote")
+                    cls = DNSBL_CLASS_DATA
             idx = index_for(b.feed or "DNSBL", b.group or "DNSBL")
             payload = {"log": b.log or "1", "index": idx, "important": b.important, "band": b.band}
-            if b.cls == DNSBL_CLASS_ZONE:
+            if cls == DNSBL_CLASS_ZONE:
                 zone_db[b.key] = payload
             else:
                 data_db[b.key] = payload
@@ -5705,19 +5755,28 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     file (``pfb["pfb_py_psl"]``)
     gated by ``pfb["python_tld_wildcard"]`` or TLD-Allow, mirroring
     ``pfb["pfb_py_hsts"]``/``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
-    shape) is ignored entirely. With either gate ON, a missing/corrupt authority
-    raises (fail-closed, no silent empty rule set); with both OFF it is never
-    opened.
+    shape) is ignored entirely. issue #2371 adds a THIRD gate: either
+    ``psl_feed_private_policy`` or ``psl_feed_icann_policy`` != "honor" also
+    requires the authority (ABP zones exist independently of Wildcard
+    Blocking, #1255). With any gate ON, a missing/corrupt authority raises
+    (fail-closed, no silent empty rule set); with all OFF it is never opened.
     ``tld_wildcard_blacklist`` / ``tld_wildcard_exclusion`` / ``user_whitelist`` /
     ``user_unlock`` are passed through as lists. Missing keys
     within the required ``config`` object default empty.
     """
     config = manifest.get("config", {})
 
+    private_policy = str(pfb.get("psl_feed_private_policy", "honor"))
+    icann_policy = str(pfb.get("psl_feed_icann_policy", "honor"))
     psl_path = pfb.get("pfb_py_psl", "")
     psl_rules = _load_psl_authority(
         psl_path,
-        enabled=bool(pfb.get("python_tld_wildcard", False) or pfb.get("tld_allow", False)),
+        enabled=bool(
+            pfb.get("python_tld_wildcard", False)
+            or pfb.get("tld_allow", False)
+            or private_policy != "honor"
+            or icann_policy != "honor"
+        ),
     )
 
     # ADR-07: the static-cap flag reaches build() via the ini-derived pfb setting
@@ -5730,6 +5789,8 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
         "psl_rules": psl_rules,
         "psl_wildcard_enabled": bool(pfb.get("python_tld_wildcard", False)),
         "psl_include_private": bool(pfb.get("psl_include_private", True)),
+        "psl_feed_private_policy": private_policy,
+        "psl_feed_icann_policy": icann_policy,
         "tld_wildcard_blacklist": list(config.get("tld_wildcard_blacklist", [])),
         "tld_wildcard_exclusion": list(config.get("tld_wildcard_exclusion", [])),
         "user_whitelist": list(config.get("user_whitelist", [])),
@@ -5835,20 +5896,24 @@ def dnsbl_emit_count(count_path: str, count: int) -> bool:
 
 def dnsbl_emit_reject_stats(stats_path: str, rejects: RejectTally) -> bool:
     """Write the ADR-48 (issue #789) per-entry reject tally to ``pfb_py_reject_stats``
-    as a JSON array of ``{"feed", "group", "shape", "wire_cap"}`` rows, one per
-    (feed, group) with a NONZERO bucket -- PHP reads it after a DNSBL run and emits
-    the canonical ``stage=entries`` line per nonzero bucket (Python never logs the
-    line itself; sinks stay PHP-only). An empty ``rejects`` still writes ``"[]"`` so
-    PHP can tell "ran, zero rejects" from "no artifact" (fresh boot / an old python
-    module that predates this file). Atomic temp + ``os.replace`` (mirrors
-    ``_reload_write_applied``): a partial write can never leave PHP reading a
-    truncated/corrupt artifact. Returns True on success.
+    as a JSON array of ``{"feed", "group", "shape", "wire_cap"}`` rows (issue #2371
+    adds ``"suffix_drop"``/``"suffix_demote"``, present only on a row that actually
+    tallied one), one per (feed, group) with a NONZERO bucket -- PHP reads it after a
+    DNSBL run and emits the canonical ``stage=entries`` line per nonzero bucket
+    (Python never logs the line itself; sinks stay PHP-only). An empty ``rejects``
+    still writes ``"[]"`` so PHP can tell "ran, zero rejects" from "no artifact"
+    (fresh boot / an old python module that predates this file). Atomic temp +
+    ``os.replace`` (mirrors ``_reload_write_applied``): a partial write can never
+    leave PHP reading a truncated/corrupt artifact. Returns True on success.
     """
-    entries = [
-        {"feed": feed, "group": group, "shape": counts["shape"], "wire_cap": counts["wire_cap"]}
-        for (feed, group), counts in sorted(rejects.items())
-        if counts["shape"] or counts["wire_cap"]
-    ]
+    entries = []
+    for (feed, group), counts in sorted(rejects.items()):
+        row = {"feed": feed, "group": group, "shape": counts["shape"], "wire_cap": counts["wire_cap"]}
+        for bucket in ("suffix_drop", "suffix_demote"):
+            if counts.get(bucket):
+                row[bucket] = counts[bucket]
+        if row["shape"] or row["wire_cap"] or "suffix_drop" in row or "suffix_demote" in row:
+            entries.append(row)
     tmp = "{}.tmp".format(stats_path)
     try:
         with open(tmp, "w", encoding="utf-8") as fh:

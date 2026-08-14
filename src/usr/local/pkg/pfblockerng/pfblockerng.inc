@@ -1222,7 +1222,8 @@ function pfb_archive_unsafe_member(?array $names): ?string {
 
 // ADR-48 (issue #789): reads the Python-emitted per-entry reject tally
 // artifact (pfb_py_reject_stats.json -- build()'s normalise() domain-shape rejects
-// and #753 wire-cap rejects, bucketed shape/wire_cap, per feed/group) and emits
+// and #753 wire-cap rejects, bucketed shape/wire_cap, per feed/group; issue #2371
+// adds suffix_drop/suffix_demote) and emits
 // ONE canonical stage=entries line per (feed, nonzero bucket) via pfb_validate_log().
 // Missing, unreadable, corrupt, or non-array JSON is a silent no-op -- a fresh boot
 // or an old python module that predates the artifact, never an error. Python only
@@ -1242,7 +1243,7 @@ function pfb_emit_entry_reject_stats(string $path): void {
 			continue;
 		}
 		$feed = (string) $entry['feed'];
-		foreach (array('shape', 'wire_cap') as $bucket) {
+		foreach (array('shape', 'wire_cap', 'suffix_drop', 'suffix_demote') as $bucket) {
 			$count = (isset($entry[$bucket]) && is_scalar($entry[$bucket])) ? (int) $entry[$bucket] : 0;
 			if ($count > 0) {
 				pfb_validate_log($feed, 'entries', $bucket, (string) $count);
