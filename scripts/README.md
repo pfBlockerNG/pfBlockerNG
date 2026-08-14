@@ -83,13 +83,19 @@ for the ROUTE matrix (see below).
 }
 ```
 
+Served catalogs live at `<channel>/<varver>/`, where `<channel>` is `stable`,
+`testing`, `edge`, or `nightly`; this distribution channel is distinct from the
+matrix row's CE/Plus `channel` field above.
+
 The `role` field controls how the catalog generator treats an entry:
 
 - **Absent or `"build"`** (today's behaviour; back-compat): the entry is built, smoke-tested,
-  and its `release/<varver>/` catalog is regenerated from the fresh build each run. An
-  absent `role` is always treated as `"build"` — no existing entry needs to change.
+  and its catalog is regenerated from the fresh build each run and published to the applicable
+  `<channel>/<varver>/` paths. An absent `role` is always treated as `"build"` — no existing
+  entry needs to change.
 - **`"route-only"`**: the entry's release catalog is regenerated from its **last frozen `.pkg`**
-  (a GitHub Release asset) and served at `release/<varver>/` — but it is **not** rebuilt,
+  (a GitHub Release asset) and published to the applicable `<channel>/<varver>/` paths — but it is
+  **not** rebuilt,
   not included in `--print-build` / `--print-ci` / `--print-test`, and not smoke-tested. This
   is the EOL state: a pfSense version that has left the build matrix still gets its route served
   so existing boxes can `pkg install`/`upgrade`. A truly dropped entry (no route at all) is
@@ -107,7 +113,7 @@ when no post-#1806 wildcard-ABI asset exists; do not repackage the frozen tag at
 
 `--print-route` emits the **ROUTE matrix** — build-role-eligible entries (one row per version,
 never deduped) UNION `role=route-only` entries. This is every entry with an actively served
-`release/<varver>/` catalog. The publish pipeline uses `--print-route` minus `--print-build`
+`<channel>/<varver>/` catalog. The publish pipeline uses `--print-route` minus `--print-build`
 to enumerate the `route-only` entries whose frozen `.pkg` it needs to feed to the catalog
 generator.
 
@@ -490,7 +496,7 @@ CPU-wildcarded — `FreeBSD:<major>:*` (e.g. `FreeBSD:15:*`) — never a concret
   (the builder wildcards the stamp regardless of what's given); one build covers every
   arch AND every pfSense edition/version on that major. Rebuild only on a
   **FreeBSD-major jump** (rare; coincides with raising the minimum supported version).
-- The self-hosted catalog (ADR-17) is **arch-less**: `release/<varver>/` holds the
+- The self-hosted catalog (ADR-17) is **arch-less**: `<channel>/<varver>/` holds the
   catalog directly (no arch subdirectory) — one varver directory serves every arch of
   its FreeBSD major.
 - pfSense **Plus** artifacts build fine without a Plus license (you only need the
