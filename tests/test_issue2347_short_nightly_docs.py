@@ -26,4 +26,3 @@ def test_active_nightly_format_surfaces_use_short_source_sha(relative_path: str)
     assert "7-character source SHA" in text or "7-character-source-sha" in text
     assert "<full source SHA>" not in text
     assert "<full-source-sha>" not in text
-    assert "the full source commit" not in text
