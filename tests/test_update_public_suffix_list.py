@@ -1,5 +1,5 @@
 """Tests for scripts/misc/update_public_suffix_list.py -- the Public Suffix List
-(ICANN-only) sync tool for src/usr/local/pkg/pfblockerng/dnsbl_tld.
+(ICANN + PRIVATE) sync tool for src/usr/local/pkg/pfblockerng/dnsbl_tld and dnsbl_psl.
 
 No network: every test drives the pure parse/convert functions (or main() with
 fetch_psl monkeypatched) directly against small fake fixtures. The real network
@@ -221,12 +221,11 @@ def test_build_psl_authority_keeps_order_markers_and_rule_syntax() -> None:
     assert "// ===END ICANN DOMAINS===" in rendered
     assert "// ===BEGIN PRIVATE DOMAINS===" in rendered
     assert "// ===END PRIVATE DOMAINS===" in rendered
-    assert rendered.splitlines()[-5:] == [
+    assert rendered.splitlines()[-4:] == [
         "// ===END ICANN DOMAINS===",
         "// ===BEGIN PRIVATE DOMAINS===",
         "github.io",
         "// ===END PRIVATE DOMAINS===",
-        "",
     ]
 
 
@@ -453,6 +452,10 @@ def test_convert_suffix_skips_all_ascii_label_one_octet_past_the_boundary() -> N
     assert upsl.convert_suffix("a" * 64) is None
 
 
+def test_convert_suffix_skips_name_past_the_253_octet_dns_cap() -> None:
+    assert upsl.convert_suffix(".".join(["a" * 63] * 4)) is None
+
+
 def test_render_output_stays_one_suffix_per_line_with_an_oversized_body_entry() -> None:
     # render_output only formats an already-built body list -- it never re-validates
     # label length, so a pre-validated oversized entry must still render as one line.
@@ -587,3 +590,194 @@ def test_convert_suffix_still_encodes_recently_assigned_codepoint_not_cn() -> No
     # unassigned-as-of-3.2 (stringprep.in_table_a1), which would false-positive
     # reject this valid, currently-assigned codepoint.
     assert upsl.convert_suffix("aԦb.com") == "xn--ab-e6c.com"
+
+
+# --------------------------------------------------------------------------- #
+# Step 1 verifier blockers: strict PSL-rule grammar and section integrity.
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "*",
+        "**.ck",
+        "*.foo.*.ck",
+        "foo.*.bar",
+        "!",
+        "!*.ck",
+        "a..b",
+        "a.",
+        "!a..b",
+        "foo bar",
+        "a$[b].com",
+        "a|b.com",
+        "a;$(id).com",
+    ],
+)
+def test_convert_psl_rule_rejects_malformed_or_metacharacter_tokens(token: str) -> None:
+    with pytest.raises(ValueError):
+        upsl.convert_psl_rule(token)
+
+
+def test_build_psl_section_rejects_orphan_exception() -> None:
+    with pytest.raises(ValueError, match="wildcard"):
+        upsl.build_psl_section(["!orphan.example"])
+
+
+def test_build_psl_section_requires_exception_wildcard_family() -> None:
+    assert upsl.build_psl_section(["*.ck", "!www.ck"]) == ["*.ck", "!www.ck"]
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        upsl.BEGIN_MARKER,
+        upsl.END_MARKER,
+        upsl.PRIVATE_BEGIN_MARKER,
+        upsl.PRIVATE_END_MARKER,
+    ],
+)
+def test_extract_psl_sections_rejects_each_missing_marker(missing: str) -> None:
+    markers = [upsl.BEGIN_MARKER, upsl.END_MARKER, upsl.PRIVATE_BEGIN_MARKER, upsl.PRIVATE_END_MARKER]
+    lines = [marker for marker in markers if marker != missing]
+    with pytest.raises(SystemExit):
+        upsl.extract_psl_sections(lines)
+
+
+@pytest.mark.parametrize(
+    "duplicate",
+    [
+        upsl.BEGIN_MARKER,
+        upsl.END_MARKER,
+        upsl.PRIVATE_BEGIN_MARKER,
+        upsl.PRIVATE_END_MARKER,
+    ],
+)
+def test_extract_psl_sections_rejects_each_duplicate_marker(duplicate: str) -> None:
+    lines = [upsl.BEGIN_MARKER, upsl.END_MARKER, upsl.PRIVATE_BEGIN_MARKER, upsl.PRIVATE_END_MARKER]
+    lines.insert(lines.index(duplicate), duplicate)
+    with pytest.raises(SystemExit):
+        upsl.extract_psl_sections(lines)
+
+
+def test_extract_psl_sections_rejects_out_of_order_markers() -> None:
+    lines = [upsl.BEGIN_MARKER, upsl.PRIVATE_BEGIN_MARKER, upsl.END_MARKER, upsl.PRIVATE_END_MARKER]
+    with pytest.raises(SystemExit):
+        upsl.extract_psl_sections(lines)
+
+
+def test_render_outputs_have_exactly_one_final_newline() -> None:
+    assert upsl.render_output("v", "c", ["com"]).endswith("\n")
+    assert not upsl.render_output("v", "c", ["com"]).endswith("\n\n")
+    assert upsl.render_psl_output("v", "c", ["com"], ["example"]).endswith("\n")
+    assert not upsl.render_psl_output("v", "c", ["com"], ["example"]).endswith("\n\n")
+
+
+def test_module_help_and_test_prose_keep_both_output_sections(capsys: pytest.CaptureFixture[str]) -> None:
+    assert "PRIVATE" in (upsl.__doc__ or "")
+    with pytest.raises(SystemExit):
+        upsl.main(["--help"])
+    assert "dnsbl_psl" in capsys.readouterr().out
+
+
+def test_main_private_floor_rejection_preserves_both_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tld_target = tmp_path / "dnsbl_tld"
+    psl_target = tmp_path / "dnsbl_psl"
+    tld_target.write_bytes(b"old tld\n")
+    psl_target.write_bytes(b"old psl\n")
+    monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_PRIVATE_SUFFIXES", 2)
+    monkeypatch.setattr(upsl, "fetch_psl", _fake_fetch)
+    before = (tld_target.read_bytes(), psl_target.read_bytes())
+
+    with pytest.raises(SystemExit):
+        upsl.main([])
+
+    assert (tld_target.read_bytes(), psl_target.read_bytes()) == before
+
+
+def test_main_malformed_rule_rejection_preserves_both_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tld_target = tmp_path / "dnsbl_tld"
+    psl_target = tmp_path / "dnsbl_psl"
+    tld_target.write_bytes(b"old tld\n")
+    psl_target.write_bytes(b"old psl\n")
+    malformed = _FAKE_FETCH_BODY.replace("ac\ncom\n", "a..b\ncom\n")
+    monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_PRIVATE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "fetch_psl", lambda timeout=15: malformed)
+    before = (tld_target.read_bytes(), psl_target.read_bytes())
+
+    with pytest.raises(ValueError):
+        upsl.main([])
+
+    assert (tld_target.read_bytes(), psl_target.read_bytes()) == before
+
+
+def test_fetch_psl_rejects_invalid_utf8_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _Response:
+        def __enter__(self) -> "_Response":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"// ===BEGIN ICANN DOMAINS===\n\xff"
+
+    monkeypatch.setattr(upsl.urllib.request, "urlopen", lambda *args, **kwargs: _Response())
+    with pytest.raises(UnicodeDecodeError):
+        upsl.fetch_psl()
+
+
+def test_main_invalid_utf8_rejection_preserves_both_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tld_target = tmp_path / "dnsbl_tld"
+    psl_target = tmp_path / "dnsbl_psl"
+    tld_target.write_bytes(b"old tld\n")
+    psl_target.write_bytes(b"old psl\n")
+    monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
+
+    def invalid_fetch(timeout: float = 15) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad")
+
+    monkeypatch.setattr(upsl, "fetch_psl", invalid_fetch)
+    before = (tld_target.read_bytes(), psl_target.read_bytes())
+
+    with pytest.raises(SystemExit):
+        upsl.main([])
+
+    assert (tld_target.read_bytes(), psl_target.read_bytes()) == before
+
+
+def test_failed_psl_replace_preserves_existing_file_and_removes_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tld_target = tmp_path / "dnsbl_tld"
+    psl_target = tmp_path / "dnsbl_psl"
+    tld_target.write_text("# old\nac\n", encoding="utf-8")
+    psl_target.write_bytes(b"old psl\n")
+    monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_PRIVATE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "fetch_psl", _fake_fetch)
+    real_replace = __import__("os").replace
+
+    def fail_psl_replace(source: str | Path, destination: str | Path) -> None:
+        if Path(destination) == psl_target:
+            raise OSError("simulated replace failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(upsl.os, "replace", fail_psl_replace)
+    before_psl = psl_target.read_bytes()
+
+    with pytest.raises(OSError):
+        upsl.main([])
+
+    assert psl_target.read_bytes() == before_psl
+    assert not list(tmp_path.glob(f".{psl_target.name}.*"))

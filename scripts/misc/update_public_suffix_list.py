@@ -4,17 +4,17 @@
 src/usr/local/pkg/pfblockerng/dnsbl_tld is the flat, one-suffix-per-line master list
 _dnsbl_load_tld_wildcard_master() (pfb_unbound.py) keys registrable domains against,
 staged into the Unbound chroot as pfb_py_tld.txt (the legacy PHP tld_analysis()
-consumer was retired by ADR-65). This script refreshes it from the authoritative upstream source, ICANN
-section only -- the PRIVATE section (blogspot.*, github.io, ...) and PSL wildcard
-('*.') / exception ('!') lines are intentionally dropped (issue #1272): the
-consumers want a plain public-suffix oracle, and neither format extension nor
-private-registry entries are part of that contract.
+consumer was retired by ADR-65). This script refreshes it from the authoritative
+upstream source, while dnsbl_psl preserves both ICANN and PRIVATE rule sections
+for the PSL resolver. The tld output intentionally drops PRIVATE entries and
+wildcard/exception syntax (issue #1272).
 
 Data source
 -----------
 https://publicsuffix.org/list/public_suffix_list.dat -- the ICANN section runs
 between the '// ===BEGIN ICANN DOMAINS===' / '// ===END ICANN DOMAINS===' marker
-lines; everything outside those markers (comments, PRIVATE section) is ignored.
+lines; comments outside those markers are ignored. The PRIVATE section is
+validated and retained in dnsbl_psl, but omitted from dnsbl_tld.
 
 Conversion
 ----------
@@ -31,10 +31,11 @@ label past the 63-octet DNS cap, ASCII or not -- PSL never ships any of these.
 Output format
 -------------
 A '#'-prefixed header (source URL + the upstream VERSION/COMMIT comment values,
-or 'unknown' if either is absent) followed by one suffix per line, in PSL source
-order (the file is NOT sorted). The consumer already skips '' and '#'-prefixed
-lines (pfb_unbound.py's _dnsbl_load_tld_wildcard_master()), so the header rides
-through harmlessly end-to-end.
+or 'unknown' if either is absent) followed by one suffix per line in
+dnsbl_tld, in PSL source order (the file is NOT sorted). dnsbl_psl contains the
+same header plus both normalized PSL sections and their wildcard/exception rules.
+The tld consumer skips '' and '#'-prefixed lines
+(pfb_unbound.py's _dnsbl_load_tld_wildcard_master()).
 
 Churn guard: the header's VERSION timestamp moves on every upstream commit even
 when no suffix actually changed, so a plain run compares the GENERATED BODY
@@ -53,8 +54,10 @@ Dev-host tooling: run from the repo root on a dev box (never the appliance).
 from __future__ import annotations
 
 import argparse
+import os
 import stringprep
 import sys
+import tempfile
 import unicodedata
 import urllib.request
 from pathlib import Path
@@ -167,11 +170,21 @@ def _punycode_label(label: str) -> str:
     paths are skipped identically by the caller's 'except UnicodeError' (issue #1306:
     an ASCII label used to bypass the cap entirely via the isascii() short-circuit).
     """
+    if not label:
+        raise UnicodeError("empty DNS label")
     if label.isascii():
-        if len(label) > 63:
-            raise UnicodeError(f"ASCII label exceeds the 63-octet DNS cap: {len(label)} octets")
-        return label.lower()
-    return label.encode("idna").decode("ascii").lower()
+        converted = label.lower()
+    else:
+        converted = label.encode("idna").decode("ascii").lower()
+    if len(converted) > 63:
+        raise UnicodeError(f"DNS label exceeds the 63-octet cap: {len(converted)} octets")
+    if (
+        converted[0] == "-"
+        or converted[-1] == "-"
+        or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789-" for char in converted)
+    ):
+        raise UnicodeError(f"invalid DNS label: {label!r}")
+    return converted
 
 
 def convert_suffix(line: str) -> str | None:
@@ -189,7 +202,10 @@ def convert_suffix(line: str) -> str | None:
     if _has_blank_or_ignorable_char(line):
         return None
     try:
-        return ".".join(_punycode_label(label) for label in line.split("."))
+        converted = ".".join(_punycode_label(label) for label in line.split("."))
+        if len(converted.encode("ascii")) > 253:
+            raise UnicodeError("DNS name exceeds the 253-octet cap")
+        return converted
     except UnicodeError:
         # idna (or our own length check) refuses a label past the 63-octet DNS cap --
         # malformed, skip it.
@@ -197,23 +213,31 @@ def convert_suffix(line: str) -> str | None:
 
 
 def convert_psl_rule(line: str) -> str | None:
-    """Normalize one PSL exact, wildcard, or exception rule."""
+    """Normalize one PSL exact, wildcard, or exception rule.
+
+    Only blank/comment lines are ignored. Any non-comment that is not valid PSL
+    syntax raises ``ValueError`` so a malformed fetch cannot be published.
+    """
     line = line.strip()
     if not line or line.startswith("//"):
         return None
-    token = line.split(None, 1)[0]
+    if any(char.isspace() for char in line):
+        raise ValueError(f"malformed PSL rule: {line!r}")
+    token = line
     prefix = ""
     if token[:1] in ("*", "!"):
         prefix, token = token[0], token[1:]
-    if prefix == "*" and not token.startswith("."):
-        return None
-    if token.startswith("."):
+    if prefix == "*":
+        if not token.startswith("."):
+            raise ValueError(f"malformed wildcard rule: {line!r}")
         token = token[1:]
+    elif token.startswith("."):
+        raise ValueError(f"malformed PSL rule: {line!r}")
     if not token or any(char in token for char in "!*"):
-        return None
+        raise ValueError(f"malformed PSL rule: {line!r}")
     converted = convert_suffix(token)
     if converted is None:
-        return None
+        raise ValueError(f"malformed PSL rule: {line!r}")
     return prefix + ("." if prefix == "*" else "") + converted
 
 
@@ -224,7 +248,14 @@ def build_body(icann_lines: list[str]) -> list[str]:
 
 def build_psl_section(lines: list[str]) -> list[str]:
     """Normalize PSL rules while retaining exact, wildcard, and exception syntax."""
-    return [rule for line in lines if (rule := convert_psl_rule(line)) is not None]
+    rules = [rule for line in lines if (rule := convert_psl_rule(line)) is not None]
+    wildcard_families = {rule[2:] for rule in rules if rule.startswith("*.")}
+    for rule in rules:
+        if rule.startswith("!"):
+            labels = rule[1:].split(".")
+            if len(labels) < 2 or ".".join(labels[1:]) not in wildcard_families:
+                raise ValueError(f"orphan PSL exception without wildcard family: {rule!r}")
+    return rules
 
 
 def require_plausible(body: list[str]) -> None:
@@ -251,7 +282,8 @@ def existing_body(text: str) -> list[str]:
 
 def render_output(version: str, commit: str, body: list[str]) -> str:
     """Render the full dnsbl_tld file content: header then one suffix per line."""
-    return HEADER_TEMPLATE.format(version=version, commit=commit) + "\n".join(body) + "\n"
+    header = HEADER_TEMPLATE.format(version=version, commit=commit).rstrip("\n")
+    return header + "\n" + "\n".join(body).rstrip("\n") + "\n"
 
 
 def render_psl_output(version: str, commit: str, icann: list[str], private: list[str]) -> str:
@@ -270,7 +302,7 @@ def render_psl_output(version: str, commit: str, icann: list[str], private: list
         + "\n".join(private)
         + "\n"
         + PRIVATE_END_MARKER
-        + "\n\n"
+        + "\n"
     )
 
 
@@ -300,7 +332,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    lines = normalise_lines(fetch_psl())
+    try:
+        fetched = fetch_psl()
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"Refusing to rewrite: fetched PSL is not valid UTF-8 ({exc}).") from exc
+    lines = normalise_lines(fetched)
     version, commit = extract_header(lines)
     icann_lines, private_lines = extract_psl_sections(lines)
     body = build_body(icann_lines)
@@ -325,15 +361,36 @@ def main(argv: list[str] | None = None) -> int:
             print("dnsbl_tld and dnsbl_psl are up to date (bodies unchanged).")
         return 1 if tld_changed or psl_changed else 0
 
-    if tld_changed:
-        DEFAULT_TLD_FILE.write_text(render_output(version, commit, body), encoding="utf-8")
-        print(f"dnsbl_tld regenerated: {len(body)} ICANN suffixes.")
     if psl_changed:
-        DEFAULT_PSL_FILE.write_text(render_psl_output(version, commit, psl_icann, psl_private), encoding="utf-8")
+        _atomic_write(DEFAULT_PSL_FILE, render_psl_output(version, commit, psl_icann, psl_private))
         print(f"dnsbl_psl regenerated: {len(psl_icann)} ICANN/{len(psl_private)} PRIVATE rules.")
+    if tld_changed:
+        _atomic_write(DEFAULT_TLD_FILE, render_output(version, commit, body))
+        print(f"dnsbl_tld regenerated: {len(body)} ICANN suffixes.")
     if not tld_changed and not psl_changed:
         print("dnsbl_tld and dnsbl_psl are up to date (bodies unchanged).")
     return 0
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Publish one generated file through a same-directory flushed replacement."""
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        ) as handle:
+            temporary = handle.name
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        if temporary is not None:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
+        raise
 
 
 if __name__ == "__main__":
