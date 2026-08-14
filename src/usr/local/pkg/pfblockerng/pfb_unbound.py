@@ -40,6 +40,7 @@ from contextlib import nullcontext
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
 # CPython 3.11+ internal regex AST parser used by the literal-prefilter to extract
@@ -148,16 +149,22 @@ def _psl_normalize_name(name: str) -> str:
     for label in labels:
         if any(char in label for char in "*!"):
             raise ValueError("invalid DNS label")
-        if any(char.isspace() or unicodedata.category(char) in {"Cc", "Cf", "Cn"} for char in label):
-            raise ValueError("invalid DNS label")
-        try:
-            encoded = label.encode("idna").decode("ascii").lower()
-            if encoded.startswith("xn--"):
-                canonical = encoded.encode("ascii").decode("idna").encode("idna").decode("ascii").lower()
-                if canonical != encoded:
-                    raise UnicodeError("non-canonical IDNA label")
-        except UnicodeError as exc:
-            raise ValueError("invalid IDNA label") from exc
+        if label.isascii() and not label.lower().startswith("xn--"):
+            # Plain-ASCII fast path (the overwhelming hot-path case): the idna
+            # codec accepts any non-empty ASCII label up to 63 octets, so the
+            # charset/length/hyphen checks below reproduce codec+checks exactly.
+            encoded = label.lower()
+        else:
+            if any(char.isspace() or unicodedata.category(char) in {"Cc", "Cf", "Cn"} for char in label):
+                raise ValueError("invalid DNS label")
+            try:
+                encoded = label.encode("idna").decode("ascii").lower()
+                if encoded.startswith("xn--"):
+                    canonical = encoded.encode("ascii").decode("idna").encode("idna").decode("ascii").lower()
+                    if canonical != encoded:
+                        raise UnicodeError("non-canonical IDNA label")
+            except UnicodeError as exc:
+                raise ValueError("invalid IDNA label") from exc
         if (
             not encoded
             or len(encoded.encode("ascii")) > 63
@@ -228,29 +235,52 @@ def parse_psl_rules(text: str) -> PslRules:
     return PslRules(*icann, *private)
 
 
+_PslSets = tuple[frozenset[str], frozenset[str], frozenset[str]]
+
+
+@lru_cache(maxsize=4)
+def _psl_index(rules: PslRules) -> tuple[_PslSets, _PslSets]:
+    """(ICANN-only, ICANN+PRIVATE) (exact, wildcard, exception) membership sets.
+
+    Built once per PslRules (frozen, hashable) so each resolution costs O(name
+    labels), never a scan over the ~10k shipped rules -- the classifier runs per
+    feed entry at build time and TLD-Allow runs on the live DNS query path.
+    """
+    icann: _PslSets = (
+        frozenset(rules.icann_exact),
+        frozenset(rules.icann_wildcard),
+        frozenset(rules.icann_exception),
+    )
+    combined: _PslSets = (
+        frozenset(rules.icann_exact + rules.private_exact),
+        frozenset(rules.icann_wildcard + rules.private_wildcard),
+        frozenset(rules.icann_exception + rules.private_exception),
+    )
+    return icann, combined
+
+
 def _psl_prevailing(
     labels: list[str],
-    exact: tuple[str, ...],
-    wildcard: tuple[str, ...],
-    exception: tuple[str, ...],
+    exact: frozenset[str],
+    wildcard: frozenset[str],
+    exception: frozenset[str],
 ) -> str:
-    def tail(rule: str) -> bool:
-        rule_labels = rule.split(".")
-        return len(labels) >= len(rule_labels) and labels[-len(rule_labels) :] == rule_labels
-
-    matching_exceptions = [rule for rule in exception if tail(rule)]
-    if matching_exceptions:
-        rule = max(matching_exceptions, key=lambda value: value.count("."))
-        return ".".join(rule.split(".")[1:])
-    candidates: list[tuple[int, str]] = []
-    for rule in exact:
-        if tail(rule):
-            candidates.append((len(rule.split(".")), rule))
-    for rule in wildcard:
-        if tail(rule) and len(labels) > len(rule.split(".")):
-            candidates.append((len(rule.split(".")) + 1, ".".join(labels[-len(rule.split(".")) - 1 :])))
-    if candidates:
-        return max(candidates, key=lambda value: value[0])[1]
+    # Exception wins outright; scanning tails longest-first makes the first hit
+    # the longest match. Exception output drops the rule's leftmost label.
+    count = len(labels)
+    for start in range(count):
+        if ".".join(labels[start:]) in exception:
+            return ".".join(labels[start + 1 :])
+    # Longest surviving suffix wins. A wildcard base at ``start`` yields the
+    # suffix labels[start-1:], one label longer than an exact rule at ``start``
+    # and the SAME string an exact rule at ``start-1`` would yield -- so the
+    # longest-first walk needs no cross-kind tie-breaking.
+    for start in range(count):
+        tail = ".".join(labels[start:])
+        if start > 0 and tail in wildcard:
+            return ".".join(labels[start - 1 :])
+        if tail in exact:
+            return tail
     return labels[-1]
 
 
@@ -258,13 +288,9 @@ def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
     """Apply PSL prevailing-rule semantics for ICANN and combined sections."""
     normalized = _psl_normalize_name(name)
     labels = normalized.split(".")
-    icann_suffix = _psl_prevailing(labels, rules.icann_exact, rules.icann_wildcard, rules.icann_exception)
-    public_suffix = _psl_prevailing(
-        labels,
-        rules.icann_exact + rules.private_exact,
-        rules.icann_wildcard + rules.private_wildcard,
-        rules.icann_exception + rules.private_exception,
-    )
+    icann_sets, combined_sets = _psl_index(rules)
+    icann_suffix = _psl_prevailing(labels, *icann_sets)
+    public_suffix = _psl_prevailing(labels, *combined_sets)
     suffix_labels = public_suffix.split(".")
     registrable = ".".join(labels[-len(suffix_labels) - 1 :]) if len(labels) > len(suffix_labels) else ""
     return PslResolution(
