@@ -224,10 +224,10 @@ ${dir_indexes}"
                 "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID")
             ;;
         nightly)
-            # jq -er: a missing/null allocation.pkg_version aborts here (via
+            # jq -er: a missing/null pkg_version aborts here (via
             # set -e) before any commit — same containment rule as a non-zero
             # exit from the publisher itself further up.
-            nightly_pkg_version=$(jq -er '.allocation.pkg_version' "$HANDOFF_FILE")
+            nightly_pkg_version=$(jq -er '.pkg_version' "$HANDOFF_FILE")
             commit_message=$(printf 'publish: nightly %s -> ["nightly"]\n\npfBlockerNG-Nightly-Version: %s\npfBlockerNG-Source-Run-Id: %s\n' \
                 "$nightly_pkg_version" "$nightly_pkg_version" "$SOURCE_RUN_ID")
             ;;

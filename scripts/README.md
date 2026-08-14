@@ -21,13 +21,13 @@ pinned source SHA. For prereleases, `Z == 0` selects Edge and `Z != 0` selects T
 - Testing uses `vX.Y.Z.aN`, `vX.Y.Z.bN`, or `vX.Y.Z.rN` with the exact package version when
   `Z != 0`.
 - Edge uses the same prerelease grammar when `Z == 0`.
-- Nightly is an independent untagged snapshot from a pinned source SHA with no GitHub Release and no release
-  notes. Changed input uses UTC `YYYYMMDD`, then `YYYYMMDD_1`/`_2` for same-day changes;
-  unchanged or skipped days are no-ops. Identity includes source SHA, FreeBSD-ports SHA,
-  and matrix/dependency digest.
+- Nightly is an independent untagged snapshot from a pinned source SHA with no GitHub Release or release
+  notes. Every invocation builds version `YYYYMMDDHHMMSS.<full source SHA>` using UTC.
+  Failed runs stay failed; rerun by dispatching another Nightly. No durable state or counter exists.
+  Identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
 
 Keep the Ports recipe static: no routine version commit, no target final, and no PORTEPOCH.
-Bare date versions intentionally outrank semantic releases; reverse movement requires an
+Timestamped Nightly versions intentionally outrank semantic releases; reverse movement requires an
 explicit repo-qualified downgrade. `scripts/release-version.sh` remains the parser; callers
 pass channel context, and the parser rejects any context that disagrees with the patch-zero
 Edge / nonzero-patch Testing rule.
@@ -281,7 +281,7 @@ post-write identity/payload validation are mandatory. Project mode requires a
 catalogue, and FreeBSD-version overrides are rejected. Output uses an atomic
 no-clobber boundary: identical bytes are reusable, while divergent bytes or a
 symlink/non-regular destination fail without replacing prior output. Nightly
-versions are explicit `YYYYMMDD[_N]`. The builder publishes nothing and does
+versions are explicit `YYYYMMDDHHMMSS.<full source SHA>`. The builder publishes nothing and does
 not start workflow/catalogue jobs.
 
 Its output was **diffed field-by-field against a real `make package` build** (CI,

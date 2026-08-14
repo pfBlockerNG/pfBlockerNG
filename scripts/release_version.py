@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
 
@@ -24,8 +24,7 @@ _PREVIEW_RE = re.compile(
     r"(?P<stage>[abr])(?P<sequence>[1-9][0-9]*)$"
 )
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_NIGHTLY_RE = re.compile(r"^(?P<date>[0-9]{8})$")
-_NIGHTLY_PKG_RE = re.compile(r"^(?P<date>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
+_NIGHTLY_VERSION_RE = re.compile(r"^(?P<timestamp>[0-9]{14})\.(?P<source_sha>[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_RELEASE_TEXT = 128
 
@@ -69,20 +68,6 @@ class ReleaseTagCandidate:
     primary: Channel
     on_source_line: bool
     ancestor_of_current: bool
-
-
-NightlyOutcome = Literal["build", "unchanged"]
-
-
-@dataclass(frozen=True)
-class NightlyAllocation:
-    outcome: NightlyOutcome
-    portversion: str
-    portrevision: int
-    pkg_version: str
-    source_sha: str
-    ports_sha: str
-    input_digest: str
 
 
 def _invalid(tag: str) -> ValueError:
@@ -328,7 +313,7 @@ def validate_release_info(info: ReleaseInfo) -> None:
     if type(info) is not ReleaseInfo:
         raise TypeError("release info must be ReleaseInfo")
     if info.tag is None:
-        raise ValueError("Nightly uses NightlyAllocation, not ReleaseInfo")
+        raise ValueError("Nightly does not use ReleaseInfo")
     if parse_release_tag(info.tag, info.channel) != info:
         raise ValueError("release info does not match its release tag")
     if len(info.version) > _MAX_RELEASE_TEXT or len(info.pkg_version) > _MAX_RELEASE_TEXT:
@@ -340,37 +325,23 @@ def _validate_digest(value: object, *, name: str = "input_digest") -> None:
         raise ValueError(f"{name} must be lowercase 64-character hex")
 
 
-def _nightly_date(value: object) -> date:
-    if not isinstance(value, str) or not _NIGHTLY_RE.fullmatch(value):
-        raise ValueError("portversion must be YYYYMMDD")
+def validate_nightly_version(value: object, *, source_sha: str | None = None) -> str:
+    """Validate one stateless UTC-timestamp and source-commit identity."""
+    if not isinstance(value, str) or len(value) > _MAX_RELEASE_TEXT:
+        raise ValueError("Nightly version must be YYYYMMDDHHMMSS.<full source SHA>")
+    match = _NIGHTLY_VERSION_RE.fullmatch(value)
+    if match is None:
+        raise ValueError("Nightly version must be YYYYMMDDHHMMSS.<full source SHA>")
     try:
-        return date(int(value[:4]), int(value[4:6]), int(value[6:]))
+        datetime.strptime(match.group("timestamp"), "%Y%m%d%H%M%S")
     except ValueError as exc:
-        raise ValueError(f"invalid Nightly calendar date: {value}") from exc
-
-
-def _validate_nightly_allocation(value: object) -> NightlyAllocation:
-    if type(value) is not NightlyAllocation:
-        raise TypeError("allocation must be NightlyAllocation")
-    if value.outcome not in ("build", "unchanged"):
-        raise ValueError("invalid Nightly outcome")
-    _nightly_date(value.portversion)
-    if type(value.portrevision) is not int or value.portrevision < 0:
-        raise ValueError("portrevision must be a non-negative integer")
-    expected_pkg = value.portversion if value.portrevision == 0 else f"{value.portversion}_{value.portrevision}"
-    if len(value.pkg_version) > _MAX_RELEASE_TEXT:
-        raise ValueError(f"Nightly package identity exceeds {_MAX_RELEASE_TEXT} characters")
-    if value.pkg_version != expected_pkg or not _NIGHTLY_PKG_RE.fullmatch(value.pkg_version):
-        raise ValueError("invalid Nightly package version")
-    _validate_source_sha(value.source_sha)
-    _validate_source_sha(value.ports_sha, name="ports_sha")
-    _validate_digest(value.input_digest)
+        raise ValueError(f"invalid Nightly UTC timestamp: {match.group('timestamp')}") from exc
+    version_sha = match.group("source_sha")
+    if source_sha is not None:
+        _validate_source_sha(source_sha)
+        if version_sha != source_sha:
+            raise ValueError("Nightly version source SHA does not match pinned source SHA")
     return value
-
-
-def validate_nightly_allocation(value: NightlyAllocation) -> None:
-    """Require one Nightly allocation to match the date/revision contract."""
-    _validate_nightly_allocation(value)
 
 
 def combined_nightly_input_digest(source_sha: str, ports_sha: str, input_digest: str) -> str:
@@ -380,75 +351,6 @@ def combined_nightly_input_digest(source_sha: str, ports_sha: str, input_digest:
     _validate_digest(input_digest)
     payload = "\0".join((source_sha, ports_sha, input_digest)).encode("ascii")
     return hashlib.sha256(payload).hexdigest()
-
-
-def allocate_nightly(
-    build_date: date,
-    source_sha: str,
-    ports_sha: str,
-    input_digest: str,
-    existing: Sequence[NightlyAllocation] = (),
-) -> NightlyAllocation:
-    """Allocate a monotonic date/revision Nightly identity for one full input."""
-    if type(build_date) is not date:
-        raise TypeError("build_date must be datetime.date")
-    _validate_source_sha(source_sha)
-    _validate_source_sha(ports_sha, name="ports_sha")
-    _validate_digest(input_digest)
-    try:
-        records = tuple(existing)
-    except TypeError as exc:
-        raise ValueError("existing must be a sequence of NightlyAllocation") from exc
-
-    identity = (source_sha, ports_sha, input_digest)
-    by_identity: dict[tuple[str, str, str], NightlyAllocation] = {}
-    by_version: dict[str, tuple[str, str, str]] = {}
-    parsed: list[tuple[NightlyAllocation, date]] = []
-    for record in records:
-        allocation = _validate_nightly_allocation(record)
-        record_identity = (allocation.source_sha, allocation.ports_sha, allocation.input_digest)
-        previous = by_identity.get(record_identity)
-        if previous is not None and (
-            previous.portversion,
-            previous.portrevision,
-            previous.pkg_version,
-        ) != (
-            allocation.portversion,
-            allocation.portrevision,
-            allocation.pkg_version,
-        ):
-            raise ValueError("conflicting Nightly results for one input")
-        version_identity = by_version.get(allocation.pkg_version)
-        if version_identity is not None and version_identity != record_identity:
-            raise ValueError("Nightly version collision for different inputs")
-        by_identity[record_identity] = allocation
-        by_version[allocation.pkg_version] = record_identity
-        parsed.append((allocation, _nightly_date(allocation.portversion)))
-
-    repeated = by_identity.get(identity)
-    if repeated is not None:
-        return NightlyAllocation(
-            "unchanged",
-            repeated.portversion,
-            repeated.portrevision,
-            repeated.pkg_version,
-            repeated.source_sha,
-            repeated.ports_sha,
-            repeated.input_digest,
-        )
-
-    latest_date = max((record_date for _, record_date in parsed), default=None)
-    if latest_date is not None and build_date < latest_date:
-        raise ValueError("Nightly date is older than the latest allocation")
-    revision = 0
-    if latest_date == build_date:
-        revision = max(allocation.portrevision for allocation, record_date in parsed if record_date == build_date) + 1
-    portversion = f"{build_date.year:04d}{build_date.month:02d}{build_date.day:02d}"
-    pkg_version = portversion if revision == 0 else f"{portversion}_{revision}"
-    if pkg_version in by_version:
-        raise ValueError("Nightly version collision for different inputs")
-    allocation = NightlyAllocation("build", portversion, revision, pkg_version, source_sha, ports_sha, input_digest)
-    return _validate_nightly_allocation(allocation)
 
 
 def validate_branch(info: ReleaseInfo, branch: str) -> None:

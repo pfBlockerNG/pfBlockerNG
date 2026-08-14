@@ -25,15 +25,16 @@ Describe 'build-leg.sh real Ports parity'
     ports_url="$(git -C "$REAL_PORTS_DIR" remote get-url origin)"
     export SOURCE_DATE_EPOCH=1780000000 PFB_RUN_ROOT="${work}/runs" RUN_ID=native-parity
     if [ "$PARITY_CHANNEL" = nightly ]; then
+      nightly_version="20260813153045.$(git -C "$PFB_ROOT" rev-parse HEAD)"
       direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
         --ports "$REAL_PORTS_DIR" --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" \
         --abi "$PARITY_ABI" --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
-        --local-src "$PFB_ROOT" --pkgversion 20260813 --out "${work}/direct")"
+        --local-src "$PFB_ROOT" --pkgversion "$nightly_version" --out "${work}/direct")"
       routed="$(sh "${PFB_ROOT}/scripts/build-leg.sh" \
         --ports-repo "$ports_url" --ports-ref "$ports_sha" \
         --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" --abi "$PARITY_ABI" \
         --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
-        --pkgversion 20260813 --out-dir "${work}/routed")"
+        --pkgversion "$nightly_version" --out-dir "${work}/routed")"
     else
       direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
         --ports "$REAL_PORTS_DIR" --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" \
@@ -63,6 +64,7 @@ Describe 'build-leg.sh real Ports parity'
     trap 'rm -rf "$work"' EXIT INT TERM
     ports_sha="$(git -C "$REAL_PORTS_DIR" rev-parse HEAD)"
     source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)"
+    nightly_version="20260813153045.${source_sha}"
     source_checkout="${work}/source"
     git clone -q --shared "$PFB_ROOT" "$source_checkout"
     git -C "$source_checkout" checkout -q "$source_sha"
@@ -73,14 +75,14 @@ Describe 'build-leg.sh real Ports parity'
     sh "${PFB_ROOT}/scripts/sparse-clone-ports.sh" \
       "$ports_url" "$ports_sha" "$REAL_PORTS_DIR" \
       nightly "$PARITY_PHP" "$PARITY_PY_FLAVOR"
-    python3 - "$work/record.json" "$ports_sha" "$source_sha" <<'PY'
+    python3 - "$work/record.json" "$ports_sha" "$source_sha" "$nightly_version" <<'PY'
 import json
 import os
 import sys
 from pathlib import Path
 from scripts.pfb_pkg import build_input_digest
 
-path, ports_sha, source_sha = sys.argv[1:]
+path, ports_sha, source_sha, nightly_version = sys.argv[1:]
 abi = os.environ["PARITY_ABI"]
 variant = os.environ["PARITY_VARIANT"]
 php = os.environ["PARITY_PHP"]
@@ -108,7 +110,7 @@ record = {
     "classification": "nightly",
     "source_tag": None,
     "source_sha": source_sha,
-    "canonical_package_version": "20260813",
+    "canonical_package_version": nightly_version,
     "native_recipe_identity": "pfSense-pkg-pfBlockerNG-nightly",
     "emitted_identity": "pfSense-pkg-pfBlockerNG",
     "matrix_row": row,
@@ -124,12 +126,12 @@ PY
     direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
       --ports "$REAL_PORTS_DIR" --channel nightly --variant "$PARITY_VARIANT" \
       --abi "$PARITY_ABI" --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
-      --local-src "$source_checkout" --pkgversion 20260813 \
+      --local-src "$source_checkout" --pkgversion "$nightly_version" \
       --build-record "$work/record.json" --out "${work}/direct")"
     routed="$(sh "${PFB_ROOT}/scripts/build-leg.sh" \
       --ports-repo "$ports_url" --ports-ref "$ports_sha" \
       --channel nightly --variant "$PARITY_VARIANT" --abi "$PARITY_ABI" \
-      --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" --pkgversion 20260813 \
+      --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" --pkgversion "$nightly_version" \
       --local-src "$source_checkout" --build-record "$work/record.json" \
       --out-dir "${work}/routed")"
     cmp -s "$direct" "$routed" || {

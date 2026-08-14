@@ -89,8 +89,8 @@ tag/SHA and Ports SHA must resolve in clean Git checkouts with no hidden index
 flags or escaping tracked symlinks. Project mode therefore requires a
 `USE_GITHUB` recipe and `--local-src`; embedded recipes and remote-only source
 fetches remain native-only. `SOURCE_DATE_EPOCH` (when set) must equal the
-record. Nightly project versions must be explicitly validated `YYYYMMDD` or
-`YYYYMMDD_N` values — never the static recipe version.
+record. Nightly project versions must be explicitly validated
+`YYYYMMDDHHMMSS.<full source SHA>` values — never the static recipe version.
 
 After writing a project package, the builder re-inspects the complete identity
 cascade (manifest and filename, PKGBASE/origin, share path, `info.xml`, hooks,
@@ -149,7 +149,7 @@ print the build plan (files, modes, dependencies) without writing an archive.
 | `--port-dir PATH` | — | Build an explicit port directory instead, overriding `--channel`. |
 | `--variant CE\|Plus` | — | Required in project mode; must match the normalized BUILD row exactly. |
 | `--build-record JSON\|PATH` | — | Validate and carry the normalized project record; switches emitted identity to exactly `pfSense-pkg-pfBlockerNG`. Requires `--local-src`; `--annotate`, `--freebsd-version`, and `--repo-catalogue` are rejected because they would add inputs outside the record. |
-| `--pkgversion VERSION` | — | Explicit canonical package version. Required in project mode; Nightly accepts only `YYYYMMDD` or `YYYYMMDD_N`. |
+| `--pkgversion VERSION` | — | Explicit canonical package version. Required in project mode; Nightly accepts only `YYYYMMDDHHMMSS.<full source SHA>`. |
 
 ### Target facts (version-dependent; asked if omitted)
 

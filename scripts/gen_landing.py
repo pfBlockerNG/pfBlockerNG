@@ -406,9 +406,9 @@ _CARD_META: dict[str, dict[str, str]] = {
         "title": "Nightly",
         "badge": '<span class="badge">not for daily use</span>',
         "blurb": (
-            "Untagged snapshot builds (<code>YYYYMMDD[_N]</code>) from a pinned source SHA, "
-            'rebuilt only when inputs change. <span class="warn">Bleeding edge</span> &mdash; the '
-            "only guarantee is that CI passed. Bare date versions intentionally sort above semantic "
+            "Untagged snapshot builds (<code>YYYYMMDDHHMMSS.commit</code>) from a pinned source SHA. "
+            'Every invocation builds. <span class="warn">Bleeding edge</span> &mdash; the '
+            "only guarantee is that CI passed. Nightly versions intentionally sort above semantic "
             "versions: moving off Nightly is an explicit repository-qualified downgrade."
         ),
     },

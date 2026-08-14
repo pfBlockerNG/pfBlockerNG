@@ -953,19 +953,11 @@ def test_tagged_release_recipe_never_mutates_the_nightly_port() -> None:
     assert 'PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"' not in release
 
 
-def test_smoke_single_nightly_fixture_uses_a_utc_date_and_optional_counter() -> None:
+def test_smoke_single_nightly_fixture_uses_utc_timestamp_and_source_sha() -> None:
     text = SMOKE_SINGLE_WORKFLOW.read_text(encoding="utf-8")
     nightly = text.split("- name: Build a nightly .pkg", 1)[1].split("\n      # ADR-24", 1)[0]
-    assert "date -u +%Y%m%d" in nightly, nightly
-    assert re.search(r"YYYYMMDD|NIGHTLY_DATE", nightly), nightly
-    assert 'NIGHTLY_COUNT="${NIGHTLY_COUNT:-0}"' in nightly, nightly
-    assert re.search(
-        r'NIGHTLY_VERSION="\$NIGHTLY_DATE"\s+'
-        r'if \[ "\$NIGHTLY_COUNT" -gt 0 \]; then\s+'
-        r'NIGHTLY_VERSION="\${NIGHTLY_DATE}_\${NIGHTLY_COUNT}"\s+fi',
-        nightly,
-    ), nightly
-    assert 'NIGHTLY_VERSION="3.2.16.${NIGHTLY_DATE}' not in nightly, nightly
+    assert 'NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${{ github.sha }}"' in nightly, nightly
+    assert "NIGHTLY_COUNT" not in nightly, nightly
     assert "20260606" not in nightly, nightly
 
 

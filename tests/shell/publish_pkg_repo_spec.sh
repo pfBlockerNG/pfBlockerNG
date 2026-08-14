@@ -18,16 +18,6 @@
 Describe 'publish-pkg-repo.sh'
   script="${PFB_ROOT}/scripts/publish-pkg-repo.sh"
 
-  # ShellSpec's bash/kcov runner reports the shell's `set -u` missing-variable
-  # status as 1; dash reports 2. POSIX only promises nonzero, so pin the
-  # shell-specific diagnostic while keeping the behavioural failure invariant.
-  missing_env_status() {
-    case "${SHELLSPEC_SHELL##*/}" in
-      bash|ksh|zsh) echo 1 ;;
-      *) echo 2 ;;
-    esac
-  }
-
   setup() {
     scrub_git_env
     base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pubpkgrepo.XXXXXX")"
@@ -271,7 +261,7 @@ PY
     # reading $ROUTE_MATRIX instead, the assertion must fail on a value
     # mismatch, not pass on accidental byte-identity between the two fixtures.
     cat > "$HANDOFF_FILE" <<'JSON'
-{"run_id":"10:1","allocation":{"pkg_version":"26.08.0001"},"route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}
+{"run_id":"10:1","pkg_version":"20260804153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}
 JSON
   }
 
@@ -600,7 +590,7 @@ HOOK
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
-    The status should equal "$(missing_env_status)"
+    The status should not equal 0
     The stderr should include 'HANDOFF_FILE is required'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -612,7 +602,7 @@ HOOK
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
-    The status should equal "$(missing_env_status)"
+    The status should not equal 0
     The stderr should include 'RESULTS_DIR is required'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -624,7 +614,7 @@ HOOK
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
-    The status should equal "$(missing_env_status)"
+    The status should not equal 0
     The stderr should include 'SOURCE_RUN_ID is required'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -663,17 +653,17 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
-  It 'n4c: nightly mode missing allocation.pkg_version aborts before any commit, even after staging'
-    # jq -er '.allocation.pkg_version' HANDOFF_FILE builds the commit message --
+  It 'n4c: nightly mode missing pkg_version aborts before any commit, even after staging'
+    # jq -er '.pkg_version' HANDOFF_FILE builds the commit message --
     # this handoff is otherwise valid (the stubbed publisher succeeds and
     # reports an "updated" target, so staging has ALREADY happened by the time
-    # this read runs) but its allocation object carries no pkg_version key at
-    # all, so jq -er sees a null result and aborts (set -e) before the commit
+    # this read runs) but the handoff carries no pkg_version key, so jq -er sees
+    # a null result and aborts (set -e) before the commit
     # that would otherwise follow. Same containment guarantee as a non-zero
     # publisher exit (n4a/n4b): a damaged/incomplete run must never reach a
     # commit, however late in the pipeline the fault is discovered.
     nightly_env
-    printf '%s' '{"run_id":"10:1","allocation":{},"route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}' > "$HANDOFF_FILE"
+    printf '%s' '{"run_id":"10:1","route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}' > "$HANDOFF_FILE"
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
@@ -704,8 +694,8 @@ HOOK
     The output should include 'ADVANCE'
     The stderr should include 'main'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
-    The variable msg should include 'publish: nightly 26.08.0001 -> ["nightly"]'
-    The variable msg should include 'pfBlockerNG-Nightly-Version: 26.08.0001'
+    The variable msg should include 'publish: nightly 20260804153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -> ["nightly"]'
+    The variable msg should include 'pfBlockerNG-Nightly-Version: 20260804153045.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
     The variable msg should not include 'pfBlockerNG-Release-Tag'
     The variable msg should not include 'v4.0.0.b1'

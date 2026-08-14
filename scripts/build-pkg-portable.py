@@ -42,7 +42,6 @@
 from __future__ import annotations
 
 import argparse
-import datetime
 import glob
 import hashlib
 import io
@@ -69,6 +68,7 @@ from pfb_pkg import (
     validate_project_pkg,
     zstd_compress,
 )
+from release_version import validate_nightly_version
 
 # --------------------------------------------------------------------------- #
 # Small FreeBSD-ports Makefile evaluator
@@ -1368,8 +1368,8 @@ def compute_pkgversion(mk: Makefile) -> str:
 def validate_pkgversion(ver: str) -> str:
     """Validate an explicit `--pkgversion` override.
 
-    `pkg` orders versions component-wise on `.`/`_`/`,`. The nightly carries a
-    calendar version (`YYYYMMDD` or `YYYYMMDD_N`); channel-specific callers apply
+    `pkg` orders versions component-wise on `.`/`_`/`,`. Nightly carries a UTC
+    timestamp plus source SHA; channel-specific callers apply
     that grammar before building. A `-` is the pkg name/version separator
     (`<name>-<version>.pkg`), so it MUST NOT appear in the version — the commit /
     pretty string rides the annotation + comment.
@@ -1431,8 +1431,6 @@ _CHANNEL_PORT_SUB = {
     "edge": "pfSense-pkg-pfBlockerNG-edge",
     "nightly": "pfSense-pkg-pfBlockerNG-nightly",
 }
-
-_NIGHTLY_VERSION = re.compile(r"^(?P<day>[0-9]{8})(?:_(?P<revision>[1-9][0-9]*))?$")
 
 
 def _git_probe(path: Path, *args: str) -> str:
@@ -1546,15 +1544,10 @@ def _snapshot_checkout(path: Path, commit: str, dest: Path, payload_root: Path |
 
 def _validate_nightly_version(version: str) -> str:
     version = validate_pkgversion(version)
-    match = _NIGHTLY_VERSION.fullmatch(version)
-    if match is None:
-        raise BuildError("nightly --pkgversion must be YYYYMMDD or YYYYMMDD_N")
-    day = match.group("day")
     try:
-        datetime.date(int(day[:4]), int(day[4:6]), int(day[6:]))
-    except ValueError:
-        raise BuildError(f"nightly --pkgversion has invalid calendar date: {version!r}") from None
-    return version
+        return validate_nightly_version(version)
+    except ValueError as exc:
+        raise BuildError(str(exc)) from None
 
 
 def _record_annotation(record: dict[str, object]) -> str:
@@ -1997,7 +1990,7 @@ def main(argv: list[str]) -> int:
         default="",
         help=(
             "set the explicit package version (required with --build-record; Nightly uses "
-            "YYYYMMDD or YYYYMMDD_N; must not contain '-')."
+            "YYYYMMDDHHMMSS.<full source SHA>; must not contain '-')."
         ),
     )
     g_snap.add_argument("--build-record", default="", help="normalized build record as JSON text or a JSON file path")
