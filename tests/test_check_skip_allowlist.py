@@ -95,10 +95,11 @@ def test_phpunit_id_uses_classname_not_class(tmp_path: Path) -> None:
 
 
 def test_shellspec_id_keeps_the_spaced_spec_description_as_name(tmp_path: Path) -> None:
+    # <skip/>, not <skipped/>: that is the element shellspec's own JUnit generator writes.
     tc = (
         '<testcase time="0" classname="tests/shell/run_in_docker_spec.sh" '
         'name="run-in-docker.sh refuses, saying so, when docker is not installed">'
-        "<skipped/></testcase>"
+        "<skip/></testcase>"
     )
     report = _report(tmp_path, "r.xml", tc)
     skips = csa.parse_report(report, "shellspec")
@@ -166,11 +167,17 @@ def test_missing_report_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[st
 
 
 def test_empty_report_file_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """An empty report says so, rather than being reported as malformed XML: the two mean
+    different things to whoever reads the failed job — a suite that wrote nothing versus a
+    report that was truncated. The fixture is NOT named empty.xml, so the word can only
+    reach the message from the diagnosis and not from the path."""
     allow = _allowlist(tmp_path, ["# empty"])
-    report = _write(tmp_path, "empty.xml", "")
+    report = _write(tmp_path, "r.xml", "")
     rc = csa.main(["--suite", "pytest", "--allowlist", str(allow), str(report)])
     assert rc == 2
-    assert "empty" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "empty" in err
+    assert "well-formed" not in err
 
 
 def test_unparsable_report_exits_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -210,6 +217,56 @@ def test_allowlist_comment_and_blank_lines_are_ignored(tmp_path: Path) -> None:
 def test_allowlist_trailing_whitespace_on_the_line_is_tolerated(tmp_path: Path) -> None:
     allow = _write(tmp_path, "allow.txt", "pytest:C::a  # tracked reason   \n")
     assert csa.parse_allowlist(allow) == {"pytest:C::a": "tracked reason"}
+
+
+def test_allowlist_that_is_not_utf8_exits_2(tmp_path: Path) -> None:
+    """Undecodable bytes are an unusable allowlist, which is exit 2 like a missing one --
+    the checker never reports a clean run because it could not read its own input."""
+    report = _report(tmp_path, "r.xml", '<testcase classname="C" name="a"><skipped/></testcase>')
+    allow = tmp_path / "allow.txt"
+    allow.write_bytes(b"pytest:C::a  # reason \xff\xfe\n")
+    assert csa.main(["--suite", "pytest", "--allowlist", str(allow), str(report)]) == 2
+
+
+def test_shellspec_skip_element_is_observed(tmp_path: Path) -> None:
+    """shellspec 0.28.1 writes `<skip message="..."/>`, not `<skipped>` -- probed against
+    the real generator. Matching only `<skipped>` made the shellspec leg of the gate blind:
+    it reported a clean run for a report that recorded skips, which is the exact failure
+    this gate exists to catch."""
+    report = _write(
+        tmp_path,
+        "ss.xml",
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<testsuites><testsuite name="shellspec">\n'
+        '<testcase time="0" classname="tests/shell/x_spec.sh" name="x is skipped">\n'
+        '<skip message="needs docker" />\n'
+        "</testcase></testsuite></testsuites>\n",
+    )
+    assert csa.parse_report(report, "shellspec") == [("shellspec:tests/shell/x_spec.sh::x is skipped", "needs docker")]
+
+
+def test_canary_fixture_carries_both_skip_element_shapes() -> None:
+    """The CI red canary runs with --suite shellspec too, so it has to trip a parser that
+    reads shellspec's `<skip>` as well as the `<skipped>` pytest and PHPUnit write."""
+    canary = (Path(__file__).resolve().parent.parent / "tests/fixtures/skip-allowlist-canary.xml").read_text(
+        encoding="utf-8"
+    )
+    assert "<skipped" in canary
+    assert "<skip " in canary
+
+
+def test_allowlist_id_may_contain_a_hash(tmp_path: Path) -> None:
+    """A pytest parametrised id can carry a '#', so the reason delimiter is the first
+    WHITESPACE-preceded '#' rather than the first '#' anywhere on the line. A bare split
+    would truncate the id, and the skip it names could then never be recorded."""
+    allow = _write(tmp_path, "allow.txt", "pytest:C::test_x[a#b]  # tracked reason\n")
+    assert csa.parse_allowlist(allow) == {"pytest:C::test_x[a#b]": "tracked reason"}
+
+
+def test_allowlist_reason_may_contain_a_hash(tmp_path: Path) -> None:
+    """The reason is free text and often carries an issue reference."""
+    allow = _write(tmp_path, "allow.txt", "pytest:C::a  # see #2359 for the cause\n")
+    assert csa.parse_allowlist(allow) == {"pytest:C::a": "see #2359 for the cause"}
 
 
 def test_allowlist_crlf_line_endings_parse_the_same_as_lf(tmp_path: Path) -> None:
@@ -366,8 +423,10 @@ def test_workflow_wires_report_flag_and_gate_step_per_job() -> None:
     }
     for job_name, (run_step_name, suite, flag_prefix) in cases.items():
         steps = jobs[job_name]["steps"]
-        run_step = next(s for s in steps if s["name"] == run_step_name)
-        gate_step = next(s for s in steps if s["name"] == "Skip allowlist")
+        run_step = next((s for s in steps if s.get("name") == run_step_name), None)
+        gate_step = next((s for s in steps if s.get("name") == "Skip allowlist"), None)
+        assert run_step is not None, f"{job_name}: no step named {run_step_name!r}"
+        assert gate_step is not None, f"{job_name}: no step named 'Skip allowlist'"
         assert f"--suite {suite}" in gate_step["run"]
         assert "check_skip_allowlist.py" in gate_step["run"]
         assert "tests/skip-allowlist.txt" in gate_step["run"]
