@@ -65,6 +65,15 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 			$m
 		);
 		$this->assertSame(1, $found, 'the modelled save expression no longer matches the page');
+		// Applied through the page's own constant so this cannot model a filter the page
+		// stopped using, AND pinned to the one that makes the round-trip meaningful: a save
+		// widened to accept a looser token set is a different contract, not a refactor.
+		$this->assertSame(
+			'PFB_FILTER_ON_OFF',
+			$m[1],
+			'the Save must keep filtering with PFB_FILTER_ON_OFF; a looser filter would accept tokens '
+			. 'that no longer round-trip through the toggle gateway'
+		);
 
 		return pfb_filter($posted, constant($m[1]), 'software') ?: '';
 	}

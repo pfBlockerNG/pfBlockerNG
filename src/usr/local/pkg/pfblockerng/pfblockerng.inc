@@ -4925,7 +4925,9 @@ function pfb_software_cache_matches_install(array $cache, string $pkgname, strin
 	// to string emits "Array to string conversion" on every call before returning the same
 	// FALSE (issue #2367). A half that is present but not scalar names nothing, so it is
 	// refused before the cast -- including JSON null, which would otherwise coalesce to ''
-	// and match an install whose own name is empty.
+	// and match an install whose own name is empty. Both live callers reach this through
+	// pfb_software_read_cache(), which drops the same values a layer earlier; this stays for
+	// a caller that hands over a cache array from anywhere else.
 	if (array_key_exists('pkgname', $cache) && !is_scalar($cache['pkgname'])) {
 		return FALSE;
 	}
@@ -5173,8 +5175,9 @@ function pfb_software_read_cache(): array {
 	// latest/last_notified, the page's displayed fields, the install matcher. A non-scalar
 	// value (a hand-edit, a future writer) makes each of those casts emit "Array to string
 	// conversion" once per call, so it is dropped HERE rather than guarded at each site,
-	// where the next site added would be unguarded again (issue #2367). Every key this
-	// package writes is a scalar, so nothing it produces is lost.
+	// where the next site added would be unguarded again (issue #2367). Every key the writer
+	// stores is a scalar or NULL; a stored NULL drops too, which costs nothing because the
+	// only nullable one ('channel') is recomputed live and never read back from here.
 	return array_filter($data, static function ($value): bool {
 		return is_scalar($value);
 	});
