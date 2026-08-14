@@ -74,7 +74,8 @@ def test_nightly_workflow_exists_and_is_branch_independent() -> None:
     assert "refs/tags/${PORTS_REF}^{}" in text
     assert "LC_ALL=C sort -u" in text
     assert "^[0-9a-f]{40}$" in text
-    assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHA}"' in text
+    assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in text
+    assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHORT_SHA}"' in text
 
     forbidden = ("gh release", "git tag", "git push", "release notes", "PORTVERSION")
     assert not any(token in text for token in forbidden), "Nightly workflow must not publish or mutate Ports"

@@ -1409,7 +1409,7 @@ def test_build_matrix_forwards_records_for_testing_stable_edge_nightly(tmp_path:
         _build_record_for(entry, "testing", "4.0.1.a1"),
         _build_record_for(entry, "stable", "4.0.0"),
         _build_record_for(entry, "edge", "4.0.0.b1"),
-        _build_record_for(entry, "nightly", f"20260804153045.{'a' * 40}"),
+        _build_record_for(entry, "nightly", f"20260804153045.{'a' * 7}"),
     ]
     calls: dict[str, tuple[str | None, str | None]] = {}
 
@@ -1432,7 +1432,7 @@ def test_build_matrix_forwards_records_for_testing_stable_edge_nightly(tmp_path:
         "testing": "4.0.1.a1",
         "stable": "4.0.0",
         "edge": "4.0.0.b1",
-        "nightly": f"20260804153045.{'a' * 40}",
+        "nightly": f"20260804153045.{'a' * 7}",
     }
     for channel, record in zip(("testing", "stable", "edge", "nightly"), records):
         forwarded, pkgversion = calls[channel]

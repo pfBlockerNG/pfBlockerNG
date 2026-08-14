@@ -1376,7 +1376,7 @@ def main(argv: list[str]) -> int:
             "  # matrix-driven: build the full variant tree, arch-less (ADR-20; issue #1806)\n"
             "  read-version-matrix.sh --print-build | build-repo-portable.py --build-matrix \\\n"
             "    --matrix-json - --out ./site --ports ./ports --local-src . \\\n"
-            "    --nightly-pkgversion 20260615153045.<full-source-sha>\n"
+            "    --nightly-pkgversion 20260615153045.<7-character-source-sha>\n"
         ),
     )
     ap.add_argument("--in", dest="in_dir", help="directory holding the input .pkg files (searched, non-recursive)")
@@ -1453,7 +1453,7 @@ def main(argv: list[str]) -> int:
     g_matrix.add_argument(
         "--nightly-pkgversion",
         default=None,
-        help="full pkg-safe nightly version YYYYMMDDHHMMSS.<full source SHA> applied to every nightly build",
+        help="pkg-safe nightly version YYYYMMDDHHMMSS.<7-character source SHA> applied to every nightly build",
     )
     g_matrix.add_argument("--no-nightly", action="store_true", help="skip the nightly subtree (release + routing only)")
     g_matrix.add_argument(

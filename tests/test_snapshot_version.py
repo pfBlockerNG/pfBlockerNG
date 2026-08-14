@@ -15,8 +15,8 @@ MATRIX_B = "f" * 64
 
 
 @pytest.mark.parametrize("source_sha", [SOURCE_A, SOURCE_B])
-def test_nightly_version_accepts_utc_seconds_and_full_source_sha(source_sha: str) -> None:
-    version = f"20260804153045.{source_sha}"
+def test_nightly_version_accepts_utc_seconds_and_short_source_sha(source_sha: str) -> None:
+    version = f"20260804153045.{source_sha[:7]}"
     assert rv.validate_nightly_version(version, source_sha=source_sha) == version
 
 
@@ -25,13 +25,15 @@ def test_nightly_version_accepts_utc_seconds_and_full_source_sha(source_sha: str
     [
         "20260804",
         "20260804_1",
-        f"2026080415304.{SOURCE_A}",
-        f"202608041530450.{SOURCE_A}",
-        f"20260229153045.{SOURCE_A}",
-        f"20260804246000.{SOURCE_A}",
-        f"20260804153045.{'A' * 40}",
-        f"20260804153045.{'a' * 39}",
-        f"20260804153045.{'g' * 40}",
+        f"2026080415304.{SOURCE_A[:7]}",
+        f"202608041530450.{SOURCE_A[:7]}",
+        f"20260229153045.{SOURCE_A[:7]}",
+        f"20260804246000.{SOURCE_A[:7]}",
+        f"20260804153045.{'A' * 7}",
+        f"20260804153045.{'a' * 6}",
+        f"20260804153045.{'a' * 8}",
+        f"20260804153045.{'g' * 7}",
+        f"20260804153045.{SOURCE_A}",
     ],
 )
 def test_nightly_version_rejects_old_or_malformed_shapes(version: str) -> None:
@@ -41,7 +43,7 @@ def test_nightly_version_rejects_old_or_malformed_shapes(version: str) -> None:
 
 def test_nightly_version_must_name_the_pinned_source() -> None:
     with pytest.raises(ValueError, match="does not match"):
-        rv.validate_nightly_version(f"20260804153045.{SOURCE_A}", source_sha="b" * 40)
+        rv.validate_nightly_version(f"20260804153045.{SOURCE_A[:7]}", source_sha="b" * 40)
 
 
 def test_combined_input_digest_is_deterministic_and_changes_for_any_component() -> None:

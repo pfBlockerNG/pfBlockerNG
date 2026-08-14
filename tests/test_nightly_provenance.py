@@ -11,7 +11,7 @@ from scripts import nightly_provenance as np
 
 SOURCE_SHA = "a" * 40
 PORTS_SHA = "b" * 40
-VERSION = f"20260814153045.{SOURCE_SHA}"
+VERSION = f"20260814153045.{SOURCE_SHA[:7]}"
 
 
 def _row() -> dict[str, object]:

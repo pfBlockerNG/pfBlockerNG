@@ -32,7 +32,7 @@ prerelease patch rule. Use a pinned source SHA for every channel.
   Every channel catalogue strictly contains its slower channels' files. Copies reuse the
   same tag, Release, notes, assets, and provenance.
 - Nightly is untagged, has no GitHub Release, and has no release notes. Every scheduled or
-  manual invocation builds `YYYYMMDDHHMMSS.<full source SHA>` using UTC. Failed runs stay
+  manual invocation builds `YYYYMMDDHHMMSS.<7-character source SHA>` using UTC. Failed runs stay
   failed; dispatch another when wanted. No counter, deduplication, or durable state exists.
 - Nightly identity includes source SHA, FreeBSD-ports SHA, and matrix/dependency digest.
   Keep the Ports recipe static: no routine version commit, no target final, and no
