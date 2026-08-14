@@ -71,6 +71,41 @@ DNSBL_UNLOCK_STORE = "/tmp/dnsbl_unlock"
 # host since issue #1412 (never a feed CIDR) -- see _ip_unlock_hosts() below.
 IP_UNLOCK_STORE = "/tmp/ip_unlock"
 
+DERIVED_WHITELIST_FILES = (
+    "/var/unbound/pfb_py_whitelist.txt",
+    "/var/unbound/pfb_py_sources.json",
+)
+
+
+def _snapshot_guest_files(vm: helpers.SmokeVM) -> dict[str, str | None]:
+    snapshot: dict[str, str | None] = {}
+    for path in DERIVED_WHITELIST_FILES:
+        result = vm.ssh("cat", path)
+        if result.returncode == 0:
+            snapshot[path] = result.stdout
+        elif vm.ssh("test", "!", "-e", path).returncode == 0:
+            snapshot[path] = None
+        else:
+            raise RuntimeError(f"failed to read existing {path}: {result.stderr!r}")
+    return snapshot
+
+
+def _restore_guest_files(vm: helpers.SmokeVM, snapshot: dict[str, str | None]) -> None:
+    for path, content in snapshot.items():
+        if content is None:
+            result = vm.ssh("rm", "-f", path)
+        else:
+            result = subprocess.run(
+                vm.ssh_argv("tee", path),
+                input=content,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        if result.returncode != 0:
+            raise RuntimeError(f"failed to restore {path}: {result.stderr!r}")
+
 
 def _csrf(webui: WebUI) -> str:
     """GET the alerts page and return its freshly-injected ``__csrf_magic`` token.
@@ -333,6 +368,7 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     vm = smoke_vm
     domain = helpers.unique_domain("uiwl")
     original = helpers.config_get(vm, CFG_WHITELIST)
+    original_derived = _snapshot_guest_files(vm)
     try:
         # BEFORE: the unique domain is not in the whitelist.
         assert domain not in _suppression_entries(vm, CFG_WHITELIST), (
@@ -387,24 +423,32 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
             f".{domain} still in the DNSBL Whitelist after entry_delete=delete_domainwildcard"
         )
     finally:
-        cleanup = helpers.php_eval(
-            vm,
-            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
-            "$had_manifest = file_exists($pfb['unbound_py_sources']);\n"
-            f"config_set_path('{CFG_WHITELIST}', '{original}');\n"
-            "write_config('pfBlockerNG smoke: restore suppression');\n"
-            "pfb_unbound_python_whitelist('alerts');\n"
-            "$patched = pfb_unbound_python_sources_whitelist();\n"
-            "if ($had_manifest && !$patched) { exit(1); }\n"
-            "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
-            "echo 'OK';",
-        )
-        if cleanup.returncode != 0 or "OK" not in cleanup.stdout:
-            helpers.restore_pfb_config_baseline(vm, snapshot_path=UI_CONFIG_SNAPSHOT)
-            raise RuntimeError(
-                f"Alerts whitelist cleanup failed: rc={cleanup.returncode} "
-                f"stderr={cleanup.stderr!r} stdout={cleanup.stdout!r}"
+        try:
+            cleanup = helpers.php_eval(
+                vm,
+                "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+                "$had_manifest = file_exists($pfb['unbound_py_sources']);\n"
+                f"config_set_path('{CFG_WHITELIST}', '{original}');\n"
+                "write_config('pfBlockerNG smoke: restore suppression');\n"
+                "pfb_unbound_python_whitelist('alerts');\n"
+                "$patched = pfb_unbound_python_sources_whitelist();\n"
+                "if ($had_manifest && !$patched) { exit(1); }\n"
+                "$was_active = pfb_unbound_py_mode_active();\n"
+                "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
+                "if ($was_active && !pfb_dnsbl_converged()) { exit(1); }\n"
+                "echo 'OK';",
             )
+            if cleanup.returncode != 0 or "OK" not in cleanup.stdout:
+                raise RuntimeError(
+                    f"Alerts whitelist cleanup failed: rc={cleanup.returncode} "
+                    f"stderr={cleanup.stderr!r} stdout={cleanup.stdout!r}"
+                )
+        except Exception:
+            try:
+                _restore_guest_files(vm, original_derived)
+            finally:
+                helpers.restore_pfb_config_baseline(vm, snapshot_path=UI_CONFIG_SNAPSHOT)
+            raise
 
 
 def test_addwhitelistdom_exclude_writes_tld_exclusion_and_entry_delete_removes_it(
