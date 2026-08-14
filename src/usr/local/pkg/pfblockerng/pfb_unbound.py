@@ -275,6 +275,23 @@ def resolve_public_suffix(name: str, rules: PslRules) -> PslResolution:
     )
 
 
+def _load_psl_authority(path: str, *, enabled: bool) -> PslRules:
+    """Load one shipped PSL authority, or return empty rules while disabled."""
+    if not enabled:
+        return PslRules()
+    try:
+        info = os.stat(path)
+        if not stat.S_ISREG(info.st_mode) or not os.access(path, os.R_OK):
+            raise ValueError("authority is not a readable regular file")
+        with open(path, "rb") as authority:
+            text = authority.read().decode("utf-8", errors="strict")
+        if "\x00" in text:
+            raise ValueError("authority contains NUL")
+        return parse_psl_rules(text)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise ValueError("PSL authority '{}': {}".format(path, exc)) from exc
+
+
 # ADR-08: stdlib unicodedata backs the inlined IDN homoglyph analyzer below (script_of).
 import unicodedata
 from collections import OrderedDict, defaultdict
@@ -713,7 +730,7 @@ def _build_swap_snapshot() -> Snapshot | None:
         try:
             with open(pfb["pfb_py_hsts"], encoding="utf-8", errors="replace") as hsts:
                 for line in hsts:
-                    # match _dnsbl_load_tld_wildcard_master(): skip comment/whitespace-only lines; '0' stays a valid key
+                    # PSL parser skips comment/whitespace-only lines; '0' stays valid.
                     key = line.strip()
                     if not key or key.startswith("#"):
                         continue
@@ -733,6 +750,7 @@ def _build_swap_snapshot() -> Snapshot | None:
         counts=len(data_db) + len(zone_db),
         regex_count=len(regex_db) + len(allow_regex_db),
         rejects=build_result.rejects,
+        psl_rules=build_result.psl_rules,
     )
 
 
@@ -1218,7 +1236,7 @@ def _load_hsts_db() -> None:
     try:
         with open(pfb["pfb_py_hsts"], encoding="utf-8", errors="replace") as hsts:
             for line in hsts:
-                # match _dnsbl_load_tld_wildcard_master(): skip comment/whitespace-only lines; '0' stays a valid key
+                # PSL parser skips comment/whitespace-only lines; '0' stays valid.
                 key = line.strip()
                 if not key or key.startswith("#"):
                     continue
@@ -1509,7 +1527,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_top1m"] = "pfb_py_top1m.txt"
     # issue #1255: shipped TLD-Wildcard public-suffix oracle -- staged by
     # dnsbl_cache_stage() exactly like pfb_py_hsts above.
-    pfb["pfb_py_tld"] = "pfb_py_tld.txt"
+    pfb["pfb_py_psl"] = "dnsbl_psl"
     pfb["pfb_py_ss"] = "pfb_py_ss.txt"
     # ADR-65: the per-feed manifest is the sole DNSBL source. Init builds matcher
     # structures from its raw feed snapshots; a missing/invalid manifest fails loud
@@ -1628,6 +1646,7 @@ def init_standard(id: int, env: module_env) -> bool:
 
     regexDB = defaultdict(str)
     allowRegexDB = defaultdict(str)
+    psl_rules = PslRules()
     # ADR-07: clear the runtime warn rate-limit + perf-fallback strike state on a
     # (re)load so a fresh regex set starts with clean warn/evict bookkeeping.
     _regex_warned.clear()
@@ -1858,6 +1877,7 @@ def init_standard(id: int, env: module_env) -> bool:
             # unbuildable manifest leaves dataDB/zoneDB/whiteDB EMPTY (no fallback);
             # the loud ledger entry opened below signals the failure instead.
             dnsbl_built = False
+            psl_rules = PslRules()
             build_result = dnsbl_build_from_manifest(pfb["pfb_py_sources"])
             if build_result is not None:
                 # Atomic assign of the freshly-built structures into the module
@@ -1866,6 +1886,7 @@ def init_standard(id: int, env: module_env) -> bool:
                 zoneDB = build_result.zone_db
                 feedGroupIndexDB = build_result.feed_group_index_db
                 whiteDB = build_result.white_db
+                psl_rules = build_result.psl_rules
 
                 # ADR-07: MERGE the ABP feed block-regex into regexDB, preserving user-regex
                 # patterns compiled from MAIN.regex_list above, and load
@@ -1982,6 +2003,7 @@ def init_standard(id: int, env: module_env) -> bool:
             important_rules=bool(pfb["important_rules"]),
             counts=len(dataDB) + len(zoneDB),
             regex_count=len(regexDB) + len(allowRegexDB),
+            psl_rules=psl_rules,
         )
 
     rebuild_and_swap(_init_build_snapshot, emit_counts=False)
@@ -3907,6 +3929,7 @@ class BuildResult:
     important_rules: bool = False
     regex_count: int = 0
     rejects: RejectTally = field(default_factory=dict)
+    psl_rules: PslRules = field(default_factory=PslRules)
 
 
 # issue #1074: every built Snapshot gets a unique, monotonically-advancing generation
@@ -3968,6 +3991,7 @@ class Snapshot:
     counts: int = 0
     regex_count: int = 0
     rejects: RejectTally = field(default_factory=dict)
+    psl_rules: PslRules = field(default_factory=PslRules)
     # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
     # never passed by builders.
     gen: int = field(default_factory=lambda: next(_snapshot_gen))
@@ -4458,92 +4482,48 @@ def normalise(value: str) -> str | None:
     return domain
 
 
-def _dnsbl_load_tld_wildcard_master(
-    suffix_lines: Iterable[str],
-    tld_wildcard_blacklist: Iterable[str],
-    tld_wildcard_exclusion: Iterable[str],
-) -> dict[str, dict[str, str]]:
-    """Build the public-suffix oracle tlds[tld][full-suffix], minus any blacklisted
-    or excluded TLD -- the classification pass's sole master-list loader (ADR-65)."""
-    blacklist = {t.strip(".") for t in tld_wildcard_blacklist}
-    exclusion_keys = {e.strip(".") for e in tld_wildcard_exclusion}
-    tlds: dict[str, dict[str, str]] = {}
-    for line in suffix_lines:
-        suffix = line.strip()
-        if not suffix or suffix.startswith("#"):
-            continue
-        tld = suffix.rsplit(".", 1)[-1]
-        if not tld:
-            continue
-        if tld in blacklist or tld in exclusion_keys:
-            continue
-        tlds.setdefault(tld, {})[suffix] = ""
-    return tlds
-
-
-def _dnsbl_tld_wildcard_search(
-    tlds: dict[str, dict[str, str]], tld: str, dparts: list[str], j: int, k: int
-) -> str | None:
-    """If the j-label suffix is a known public suffix, the registrable parent is
-    the k-label slice (formerly mirrored from PHP's tld_search(), ADR-65)."""
-    tld_query = ".".join(dparts[-j:])
-    if tld_query in tlds.get(tld, {}):
-        return ".".join(dparts[-k:])
-    return None
-
-
-def tld_wildcard_classify(domain: str, tlds: dict[str, dict[str, str]], exclusion: set[str]) -> tuple[str, str]:
-    """Return ``(DNSBL_CLASS_ZONE, registrable-parent)`` or ``(DNSBL_CLASS_DATA, domain)``.
-
-    The zone/data split (sole classifier since ADR-65 -- formerly mirrored from
-    PHP's TLD pass): a registrable parent -> wildcard ZONE; a deeper sub-domain
-    whose parent is not a known public suffix -> exact DATA; a whole-domain TLD
-    exclusion forces exact DATA (transparent, not wildcarded).
-
-    An empty ``tlds`` (TLD-Wildcard OFF, or no oracle staged) returns exact DATA
-    for every domain BEFORE any classification runs (#1255) -- every branch below,
-    including the suffix-apex check, is oracle-present-only.
-
-    A domain that is ITSELF a known public suffix, at ANY label count
-    (``co.uk``, ``com.br``, ``act.edu.au``, ``pvt.k12.ma.us``, ...) is the apex
-    of that suffix, not a registrable domain under it -- wildcarding it would
-    block the WHOLE suffix (every registrant under it). It exact-blocks the
-    apex only (DATA); it is never wildcarded and never silently skipped.
-    Checked once, ahead of the dcnt dispatch below, so this subsumes what was
-    originally a dcnt==2-only special case (#1256) -- the identical bug class
-    recurred one level deeper at dcnt==3..5 (#1476: e.g. ``act.edu.au``
-    blanket-wildcarding ``*.act.edu.au``).
-    """
-    if not tlds:
+def tld_wildcard_classify(
+    domain: str,
+    rules: PslRules,
+    exclusion: set[str],
+    *,
+    include_private: bool = True,
+    blacklist: set[str] | None = None,
+) -> tuple[str, str]:
+    """Return ``(DNSBL_CLASS_ZONE, registrable-domain)`` or exact DATA."""
+    if not any(
+        (
+            rules.icann_exact,
+            rules.icann_wildcard,
+            rules.icann_exception,
+            rules.private_exact,
+            rules.private_wildcard,
+            rules.private_exception,
+        )
+    ):
         return DNSBL_CLASS_DATA, domain
-
-    dparts = domain.split(".")
-    dcnt = len(dparts)
-    tld = dparts[-1]
-    dfound = ""
-
-    if domain in tlds.get(tld, {}):
-        # The domain is itself a known public suffix -- its own apex, not a
-        # registrable name under it -> exact DATA, never a wildcard ZONE
-        # (#1256, generalized to every label count by #1476).
-        dfound = ""
-    elif dcnt > 5:
-        dfound = ""
-    elif dcnt == 5:
-        dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 4, 5) or ""
-    elif dcnt == 4:
-        dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 3, 4) or ""
-    elif dcnt == 3:
-        dfound = _dnsbl_tld_wildcard_search(tlds, tld, dparts, 2, 3) or ""
-    elif dcnt == 2:
-        dfound = domain
-
-    # TLD exclusion: whole domain in the exclusion set -> force exact DATA.
-    if domain in exclusion:
-        dfound = ""
-
-    if dfound:
-        return DNSBL_CLASS_ZONE, dfound
+    root_blacklist = blacklist or set()
+    try:
+        resolution = resolve_public_suffix(domain, rules)
+    except ValueError:
+        return DNSBL_CLASS_DATA, domain
+    suffix = resolution.public_suffix if include_private else resolution.icann_suffix
+    root = suffix.rsplit(".", 1)[-1]
+    if (
+        suffix in root_blacklist
+        or root in root_blacklist
+        or suffix in exclusion
+        or root in exclusion
+        or domain in exclusion
+    ):
+        return DNSBL_CLASS_DATA, domain
+    labels = domain.split(".")
+    suffix_labels = suffix.split(".")
+    registrable = ".".join(labels[-len(suffix_labels) - 1 :]) if len(labels) > len(suffix_labels) else ""
+    if domain == suffix or not registrable:
+        return DNSBL_CLASS_DATA, domain
+    if domain == registrable:
+        return DNSBL_CLASS_ZONE, domain
     return DNSBL_CLASS_DATA, domain
 
 
@@ -5132,8 +5112,8 @@ def build(
 
     ``manifest`` is the per-feed boundary: one row per
     raw feed file mapping it to ``{raw, feed, group, log_flag}``.
-    ``config`` carries the classification + whitelist inputs (``tld_wildcard_master``
-    suffix lines, ``tld_wildcard_blacklist``, ``tld_wildcard_exclusion``,
+    ``config`` carries parsed PSL rules plus classification + whitelist inputs
+    (``tld_wildcard_blacklist``, ``tld_wildcard_exclusion``,
     ``user_whitelist``, ``user_unlock``). TOP1M is streamed from the fixed
     ``pfb_py_top1m.txt`` sidecar by ``dnsbl_build_from_manifest``, except for a
     pre-#1542 manifest that predates that sidecar and still carries the retired
@@ -5154,7 +5134,6 @@ def build(
     are tallied into ``BuildResult.rejects`` (bucket 'shape' | 'wire_cap', keyed
     (feed, group)) -- accounting only, no gate DECISION changes.
     """
-    suffix_lines = list(config.get("tld_wildcard_master", []))
     tld_wildcard_blacklist = list(config.get("tld_wildcard_blacklist", []))
     tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
     exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
@@ -5163,7 +5142,9 @@ def build(
     # at load). Read from the manifest config; OFF by default so nothing is dropped.
     static_cap = bool(config.get("regex_cap", False))
 
-    tlds = _dnsbl_load_tld_wildcard_master(suffix_lines, tld_wildcard_blacklist, tld_wildcard_exclusion)
+    psl_rules = config.get("psl_rules", PslRules())
+    if not isinstance(psl_rules, PslRules):
+        raise ValueError("psl_rules must be parsed PslRules")
 
     data_db: dict[str, dict[str, Any]] = {}
     zone_db: dict[str, dict[str, Any]] = {}
@@ -5326,7 +5307,7 @@ def build(
             if entry.kind != DNSBL_KIND_BLOCK:
                 continue
             idx = index_for(feed, group)
-            cls, key = tld_wildcard_classify(domain, tlds, exclusion)
+            cls, key = tld_wildcard_classify(domain, psl_rules, exclusion, blacklist=set(tld_wildcard_blacklist))
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
             payload = {"log": log_flag, "index": idx, "important": False, "band": block_band}
@@ -5341,7 +5322,7 @@ def build(
     important_rules = permit_allow_inserted
     regex_count = 0
     if abp_rules:
-        result = reconcile(abp_rules, tlds, exclusion, tally=rejects)
+        result = reconcile(abp_rules, {}, exclusion, tally=rejects)
         important_rules = important_rules or result.important_rules
 
         # Domain blocks -> dataDB/zoneDB (carry band + $important).
@@ -5397,6 +5378,7 @@ def build(
         important_rules=important_rules,
         regex_count=regex_count,
         rejects=rejects,
+        psl_rules=psl_rules,
     )
 
 
@@ -5623,8 +5605,8 @@ def _dnsbl_fixed_top1m_lines(base_dir: str) -> Iterable[str]:
 def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict[str, Any]:
     """Shape the manifest's ``config`` block into the build() config blob.
 
-    issue #1255: the public-suffix oracle (``tld_wildcard_master`` suffix lines) is
-    NOT part of the manifest -- HSTS parity: a SHIPPED file (``pfb["pfb_py_tld"]``)
+    The public-suffix oracle is not part of the manifest: a shipped ``dnsbl_psl``
+    file (``pfb["pfb_py_psl"]``)
     gated by ``pfb["python_tld_wildcard"]``, mirroring ``pfb["pfb_py_hsts"]``/
     ``pfb["python_hsts"]``. A manifest ``config.tld_master`` key (a stale pre-#1255
     shape) is ignored entirely -- an absent oracle is expected, not a warning.
@@ -5634,15 +5616,8 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     """
     config = manifest.get("config", {})
 
-    tld_wildcard_master_lines: list[str] = []
-    if pfb.get("python_tld_wildcard", False):
-        tld_path = pfb.get("pfb_py_tld", "")
-        if tld_path and os.path.isfile(tld_path):
-            try:
-                with open(tld_path, encoding="utf-8", errors="replace") as fh:
-                    tld_wildcard_master_lines = fh.read().splitlines()
-            except OSError as e:
-                sys.stderr.write("[pfBlockerNG]: Failed to read TLD-Wildcard oracle '{}': {}".format(tld_path, e))
+    psl_path = pfb.get("pfb_py_psl", "")
+    psl_rules = _load_psl_authority(psl_path, enabled=bool(pfb.get("python_tld_wildcard", False)))
 
     # ADR-07: the static-cap flag reaches build() via the ini-derived pfb setting
     # (the cap setting lives in pfb_unbound.ini MAIN, not the manifest); a manifest
@@ -5651,7 +5626,7 @@ def _dnsbl_config_from_manifest(manifest: dict[str, Any], base_dir: str) -> dict
     regex_cap = bool(config.get("regex_cap", pfb.get("regex_cap", False)))
 
     return {
-        "tld_wildcard_master": tld_wildcard_master_lines,
+        "psl_rules": psl_rules,
         "tld_wildcard_blacklist": list(config.get("tld_wildcard_blacklist", [])),
         "tld_wildcard_exclusion": list(config.get("tld_wildcard_exclusion", [])),
         "user_whitelist": list(config.get("user_whitelist", [])),

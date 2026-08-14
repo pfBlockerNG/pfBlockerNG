@@ -327,7 +327,7 @@ aliastables() {
 # pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED (the port's plist
 # is GENERATED from the stagedir, so packaging needs nothing) -- a NAME-MAPPED shipped file
 # (source basename != chroot basename) is the sole exception: it needs its own explicit
-# stage/save/teardown handling instead; see pfb_py_tld.txt. Order matters: a module goes
+# stage/save/teardown handling instead; see dnsbl_psl. Order matters: a module goes
 # BEFORE the file that imports it, so a
 # load racing the staging loop never sees the importer without its dependency.
 dnsbl_cache() {
@@ -339,7 +339,7 @@ dnsbl_cache() {
 	pathtar="${pathtar:-/usr/bin/tar}"
 
 	# The shipped (static) DNSBL Python files + their launcher -- the ONE definition of the set.
-	PFB_PY_SHIPPED='pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt pfb_python.sh'
+	PFB_PY_SHIPPED='dnsbl_psl pfb_dnsbl_regex_rules.py pfb_unbound.py pfb_unbound_include.inc pfb_py_hsts.txt pfb_python.sh'
 
 	dnsbl_cache_stage() {
 		mkdir -p "${pfbchroot}"
@@ -355,19 +355,11 @@ dnsbl_cache() {
 				chown -f unbound:unbound "${pfbchroot}/${_f}"
 			fi
 		done
-		# issue #1255: the TLD-Wildcard public-suffix oracle -- NAME-MAPPED (source
-		# basename 'dnsbl_tld' stays as-is; chroot copy is 'pfb_py_tld.txt'), so it
-		# cannot ride PFB_PY_SHIPPED's same-basename cp loop above.
-		if [ -f "${pfbpkgdir}/dnsbl_tld" ]; then
-			cp -f "${pfbpkgdir}/dnsbl_tld" "${pfbchroot}/pfb_py_tld.txt"
-			chown -f unbound:unbound "${pfbchroot}/pfb_py_tld.txt"
-		fi
 	}
 	dnsbl_cache_teardown() {
 		for _f in ${PFB_PY_SHIPPED}; do
 			rm -f "${pfbchroot}/${_f}"
 		done
-		rm -f "${pfbchroot}/pfb_py_tld.txt"
 	}
 
 	case "${1}" in
@@ -393,10 +385,6 @@ dnsbl_cache() {
 				for _s in ${PFB_PY_SHIPPED}; do
 					[ "${_g}" = "${pfbchroot}/${_s}" ] && _skip=1 && break
 				done
-				# issue #1255: the name-mapped TLD oracle (source 'dnsbl_tld' isn't in
-				# PFB_PY_SHIPPED since its chroot basename differs) -- shipped, not
-				# generated, so it is excluded the same way.
-				[ "${_g}" = "${pfbchroot}/pfb_py_tld.txt" ] && _skip=1
 				[ -z "${_skip}" ] && set -- "$@" "${_g}"
 			done
 			# issue #1542: preserve only the TOP1M detector baseline sidecars;

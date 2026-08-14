@@ -141,9 +141,8 @@ class TestPathWithinBaseHelper:
 
 
 class TestTldWildcardOracleGating:
-    """issue #1255: the public-suffix oracle (``tld_wildcard_master`` suffix lines
-    fed to ``_dnsbl_load_tld_wildcard_master``) is sourced from a SHIPPED file
-    (``pfb["pfb_py_tld"]``) gated by ``pfb["python_tld_wildcard"]`` -- HSTS parity
+    """The parsed PSL authority is sourced from the SHIPPED ``dnsbl_psl`` file
+    gated by ``pfb["python_tld_wildcard"]`` -- HSTS parity
     -- never from the manifest. A manifest carrying a stale/malicious
     ``config.tld_master`` key (an old install, or a crafted manifest) is ignored
     entirely; the flag is the sole gate.
@@ -151,36 +150,45 @@ class TestTldWildcardOracleGating:
 
     def setup_method(self) -> None:
         pfb_unbound.pfb["python_tld_wildcard"] = False
-        pfb_unbound.pfb["pfb_py_tld"] = ""
+        pfb_unbound.pfb["pfb_py_psl"] = ""
 
     def test_oracle_not_loaded_when_flag_off_even_if_file_exists(self, tmp_path: Any) -> None:
-        oracle = tmp_path / "pfb_py_tld.txt"
-        oracle.write_text("com\nnet\n", encoding="utf-8")
+        oracle = tmp_path / "dnsbl_psl"
+        oracle.write_text(
+            "// ===BEGIN ICANN DOMAINS===\ncom\nnet\n// ===END ICANN DOMAINS===\n"
+            "// ===BEGIN PRIVATE DOMAINS===\n// ===END PRIVATE DOMAINS===\n",
+            encoding="utf-8",
+        )
         pfb_unbound.pfb["python_tld_wildcard"] = False
-        pfb_unbound.pfb["pfb_py_tld"] = str(oracle)
+        pfb_unbound.pfb["pfb_py_psl"] = str(oracle)
 
         config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
 
-        assert config["tld_wildcard_master"] == [], "OFF must never load the oracle, even though the file exists"
+        assert config["psl_rules"] == pfb_unbound.PslRules(), (
+            "OFF must never load the oracle, even though the file exists"
+        )
 
     def test_oracle_loaded_when_flag_on_and_file_present(self, tmp_path: Any) -> None:
-        oracle = tmp_path / "pfb_py_tld.txt"
-        oracle.write_text("com\nnet\n", encoding="utf-8")
+        oracle = tmp_path / "dnsbl_psl"
+        oracle.write_text(
+            "// ===BEGIN ICANN DOMAINS===\ncom\nnet\n// ===END ICANN DOMAINS===\n"
+            "// ===BEGIN PRIVATE DOMAINS===\n// ===END PRIVATE DOMAINS===\n",
+            encoding="utf-8",
+        )
         pfb_unbound.pfb["python_tld_wildcard"] = True
-        pfb_unbound.pfb["pfb_py_tld"] = str(oracle)
+        pfb_unbound.pfb["pfb_py_psl"] = str(oracle)
 
         config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
 
-        assert config["tld_wildcard_master"] == ["com", "net"]
+        assert config["psl_rules"].icann_exact == ("com", "net")
 
     def test_oracle_empty_when_flag_on_but_file_missing(self, tmp_path: Any) -> None:
         # Fail-safe: ON but no oracle staged yet -> empty, never a raise/crash.
         pfb_unbound.pfb["python_tld_wildcard"] = True
-        pfb_unbound.pfb["pfb_py_tld"] = str(tmp_path / "does_not_exist.txt")
+        pfb_unbound.pfb["pfb_py_psl"] = str(tmp_path / "does_not_exist")
 
-        config = pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
-
-        assert config["tld_wildcard_master"] == []
+        with pytest.raises(ValueError, match="PSL authority"):
+            pfb_unbound._dnsbl_config_from_manifest({"config": {}}, str(tmp_path))
 
     @pytest.mark.parametrize("flag_on", [False, True])
     def test_manifest_tld_master_key_is_ignored_regardless_of_flag(self, tmp_path: Any, flag_on: bool) -> None:
@@ -190,17 +198,21 @@ class TestTldWildcardOracleGating:
         # manifest key, so a regression that merged/fell back to the manifest value
         # would surface as extra/wrong entries, not just an empty-vs-empty match.
         pfb_unbound.pfb["python_tld_wildcard"] = flag_on
-        expected: list[str] = []
+        expected: tuple[str, ...] = ()
         if flag_on:
-            oracle = tmp_path / "pfb_py_tld.txt"
-            oracle.write_text("com\nnet\n", encoding="utf-8")
-            pfb_unbound.pfb["pfb_py_tld"] = str(oracle)
-            expected = ["com", "net"]
+            oracle = tmp_path / "dnsbl_psl"
+            oracle.write_text(
+                "// ===BEGIN ICANN DOMAINS===\ncom\nnet\n// ===END ICANN DOMAINS===\n"
+                "// ===BEGIN PRIVATE DOMAINS===\n// ===END PRIVATE DOMAINS===\n",
+                encoding="utf-8",
+            )
+            pfb_unbound.pfb["pfb_py_psl"] = str(oracle)
+            expected = ("com", "net")
         manifest = {"config": {"tld_master": "/etc/passwd"}}
 
         config = pfb_unbound._dnsbl_config_from_manifest(manifest, str(tmp_path))
 
-        assert config["tld_wildcard_master"] == expected, (
+        assert config["psl_rules"].icann_exact == expected, (
             f"expected {expected!r} (only the shipped oracle, never the poisoned "
-            f"manifest 'tld_master' key), got {config['tld_wildcard_master']!r}"
+            f"manifest 'tld_master' key), got {config['psl_rules']!r}"
         )

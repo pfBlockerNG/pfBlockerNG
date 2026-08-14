@@ -68,10 +68,18 @@ def _stage_tld_oracle(tmp_path: Any) -> None:
     """issue #1255: stage the public-suffix oracle the way dnsbl_cache_stage() does
     (a shipped file) and flip the ini flag -- the manifest no longer carries
     tld_master at all (HSTS parity)."""
-    oracle = os.path.join(str(tmp_path), "pfb_py_tld.txt")
-    shutil.copyfile(os.path.join(FIXTURES, "tld_master.txt"), oracle)
+    oracle = os.path.join(str(tmp_path), "dnsbl_psl")
+    suffixes = open(os.path.join(FIXTURES, "tld_master.txt"), encoding="utf-8").read()
+    authority = (
+        "// ===BEGIN ICANN DOMAINS===\n"
+        + suffixes
+        + "// ===END ICANN DOMAINS===\n// ===BEGIN PRIVATE DOMAINS===\n"
+        + "// ===END PRIVATE DOMAINS===\n"
+    )
+    with open(oracle, "w", encoding="utf-8") as fh:
+        fh.write(authority)
     pfb_unbound.pfb["python_tld_wildcard"] = True
-    pfb_unbound.pfb["pfb_py_tld"] = oracle
+    pfb_unbound.pfb["pfb_py_psl"] = oracle
 
 
 def _write_onbox_manifest(tmp_path: Any, *, top1m_enabled: bool) -> str:

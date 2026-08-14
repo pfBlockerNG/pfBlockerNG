@@ -16,7 +16,7 @@ STATIC_CHROOT_FILES = (
     "pfb_unbound_include.inc",
     "pfb_py_hsts.txt",
     "pfb_python.sh",
-    "pfb_py_tld.txt",
+    "dnsbl_psl",
 )
 
 
@@ -82,12 +82,13 @@ def test_each_php_consumer_has_one_scoped_teardown_call() -> None:
             assert disabled.count(TEARDOWN_EXEC) == 1
 
 
-def test_shell_teardown_derives_shipped_files_and_maps_tld_copy() -> None:
+def test_shell_teardown_derives_shipped_files_including_psl_authority() -> None:
     source = SHELL.read_text()
     body = _shell_teardown_body(source)
     shipped = _shipped_files(source)
 
     assert body.count("for _f in ${PFB_PY_SHIPPED}; do") == 1
     assert body.count('rm -f "${pfbchroot}/${_f}"') == 1
-    assert 'rm -f "${pfbchroot}/pfb_py_tld.txt"' in body
+    assert "dnsbl_psl" in shipped
+    assert 'rm -f "${pfbchroot}/pfb_py_tld.txt"' not in body
     assert all(file_name not in body for file_name in shipped)

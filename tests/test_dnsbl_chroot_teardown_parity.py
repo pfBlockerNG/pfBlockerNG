@@ -1,8 +1,8 @@
 """DNSBL chroot teardown stays wired to the shell's single source of truth.
 
 `dnsbl_cache stage` owns ``PFB_PY_SHIPPED`` and both PHP consumers must invoke
-`dnsbl_cache teardown`; the shell operation derives the static set and its
-name-mapped TLD copy. No PHP teardown block may duplicate those basenames.
+`dnsbl_cache teardown`; the shell operation derives the static set, including
+the same-basename PSL authority. No PHP teardown block may duplicate those basenames.
 """
 
 from __future__ import annotations
@@ -14,11 +14,7 @@ PKG_DIR = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockern
 SHELL = PKG_DIR / "pfblockerng.sh"
 INC = PKG_DIR / "pfblockerng.inc"
 
-# The TLD-Wildcard oracle is shipped under a DIFFERENT name than its chroot copy
-# (issue #1255: source basename 'dnsbl_tld', chroot copy 'pfb_py_tld.txt'), so it is
-# deliberately absent from PFB_PY_SHIPPED while still needing teardown. It is listed
-# here so the teardown lists can be checked for it too, not just for the shipped set.
-NAME_MAPPED_CHROOT_FILES = ("pfb_py_tld.txt",)
+PSL_AUTHORITY_FILE = "dnsbl_psl"
 
 
 def _shipped_files() -> list[str]:
@@ -41,11 +37,11 @@ def test_both_chroot_teardown_consumers_call_the_derived_shell_operation() -> No
     )
 
 
-def test_teardown_derivation_includes_the_name_mapped_tld_copy() -> None:
+def test_teardown_derivation_includes_the_psl_authority() -> None:
     source = SHELL.read_text()
     assert "for _f in ${PFB_PY_SHIPPED}; do" in source
-    assert '"${pfbchroot}/pfb_py_tld.txt"' in source
-    assert NAME_MAPPED_CHROOT_FILES == ("pfb_py_tld.txt",)
+    assert PSL_AUTHORITY_FILE in _shipped_files()
+    assert '"${pfbchroot}/pfb_py_tld.txt"' not in source
 
 
 def test_an_imported_module_is_staged_before_the_file_that_imports_it() -> None:

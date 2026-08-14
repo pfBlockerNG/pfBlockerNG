@@ -42,7 +42,6 @@ from pfb_unbound import (
     NameVerdict,
     Rule,
     _dnsbl_classify_options,
-    _dnsbl_load_tld_wildcard_master,
     _dnsbl_normalise_whitelist,
     _dnsbl_parse_abp_regex,
     _dnsbl_reduce_regex,
@@ -64,6 +63,10 @@ from pfb_unbound import (
     tld_wildcard_classify,
     whitelist_lookup_band,
 )
+
+
+def _psl_rules(*suffixes: str) -> pfb_unbound.PslRules:
+    return pfb_unbound.PslRules(icann_exact=tuple(suffixes))
 
 
 # --------------------------------------------------------------------------- #
@@ -133,23 +136,23 @@ def _reset_regex_runtime_state() -> None:
 class TestClassifyDepthBranches:
     def test_more_than_five_labels_is_exact_data(self) -> None:
         # >5 labels: no public-suffix search runs -> exact DATA (the dcnt>5 arm).
-        cls, key = tld_wildcard_classify("a.b.c.d.e.f.example", {}, set())
+        cls, key = tld_wildcard_classify("a.b.c.d.e.f.example", pfb_unbound.PslRules(), set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "a.b.c.d.e.f.example")
 
     def test_five_labels_registrable_parent_is_zone(self) -> None:
         # dcnt==5 arm: a 4-label public suffix makes the whole 5-label name the zone.
-        tlds = {"com": {"b.c.d.com": ""}}
-        cls, key = tld_wildcard_classify("a.b.c.d.com", tlds, set())
+        rules = _psl_rules("b.c.d.com")
+        cls, key = tld_wildcard_classify("a.b.c.d.com", rules, set())
         assert (cls, key) == (DNSBL_CLASS_ZONE, "a.b.c.d.com")
 
     def test_five_labels_unknown_suffix_is_exact_data(self) -> None:
         # dcnt==5 arm, suffix NOT public -> exact DATA (the `or ""` fallthrough).
-        cls, key = tld_wildcard_classify("a.b.c.d.com", {}, set())
+        cls, key = tld_wildcard_classify("a.b.c.d.com", pfb_unbound.PslRules(), set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "a.b.c.d.com")
 
     def test_single_label_falls_through_to_data(self) -> None:
         # dcnt==1: no depth arm matches -> dfound stays "" -> exact DATA.
-        cls, key = tld_wildcard_classify("com", {}, set())
+        cls, key = tld_wildcard_classify("com", pfb_unbound.PslRules(), set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "com")
 
 
@@ -172,34 +175,17 @@ class TestStripHostsPrefix:
 
 
 # --------------------------------------------------------------------------- #
-# _dnsbl_load_tld_wildcard_master -- comment/blank skip + blacklist/exclusion drop
+# parse_psl_rules -- validated authority marker/rule handling
 # --------------------------------------------------------------------------- #
-class TestLoadTldMaster:
-    def test_comment_blank_and_blacklisted_tld_dropped(self) -> None:
-        # Comment + blank lines are skipped; a blacklisted/excluded TLD is dropped;
-        # everything else loads under tlds[tld][suffix].
-        tlds = _dnsbl_load_tld_wildcard_master(
-            ["# a comment", "", "com", "co.uk", "net"],
-            tld_wildcard_blacklist=["uk"],
-            tld_wildcard_exclusion=["net"],
+class TestLoadPslRules:
+    def test_markers_and_comments_parse(self) -> None:
+        rules = pfb_unbound.parse_psl_rules(
+            "// ===BEGIN ICANN DOMAINS===\n# a comment\ncom\nco.uk\n"
+            "// ===END ICANN DOMAINS===\n// ===BEGIN PRIVATE DOMAINS===\n"
+            "github.io\n// ===END PRIVATE DOMAINS===\n"
         )
-        assert "uk" not in tlds  # blacklisted
-        assert "net" not in tlds  # excluded
-        assert tlds == {"com": {"com": ""}}
-
-    def test_bare_zero_tld_is_kept(self) -> None:
-        # issue #1116: "0" is a valid dot-less TLD -- not falsy-string dropped.
-        tlds = _dnsbl_load_tld_wildcard_master(["0", "com"], [], [])
-        assert "0" in tlds
-        assert tlds["0"] == {"0": ""}
-
-    def test_empty_extracted_tld_dropped(self) -> None:
-        # issue #1134: rsplit('.', 1)[-1] on a trailing-dot/bare-dot row extracts
-        # '' -- the Python classifier must drop it, preserving the retired PHP
-        # tld_analysis() contract rather than seeding a '' bucket.
-        # 'com' (dot-less, unaffected) proves the guard is scoped to the empty case.
-        tlds = _dnsbl_load_tld_wildcard_master(["bad.", ".", "..", "com"], [], [])
-        assert tlds == {"com": {"com": ""}}
+        assert rules.icann_exact == ("com", "co.uk")
+        assert rules.private_exact == ("github.io",)
 
 
 # --------------------------------------------------------------------------- #

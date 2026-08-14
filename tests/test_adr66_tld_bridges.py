@@ -12,7 +12,7 @@ identifier from the ADR-66 SS2.1/SS2.2 rename maps.
 THE SEAM: this module is the ADR-66 rename phases' ONLY editable surface for
 the oracle's identifier dependencies. Phase 2 updates the Feature-A constants
 (``TLD_ALLOW_*``); Phase 3 updates the Feature-B aliases
-(``tld_wildcard_classify`` / ``load_tld_wildcard_master``) and
+(``tld_wildcard_classify``) and
 ``MANIFEST_TLD_KEYS``. The frozen oracle imports these names and never spells
 an old/new identifier itself.
 
@@ -41,7 +41,6 @@ TLD_WILDCARD_INI_KEY = "python_tld_wildcard"  # ADR "stays" row -- unchanged by 
 MANIFEST_TLD_KEYS = ("tld_wildcard_blacklist", "tld_wildcard_exclusion")  # Phase 3: manifest config + return-blob keys
 
 tld_wildcard_classify = pfb_unbound.tld_wildcard_classify  # Phase 3 rename target
-load_tld_wildcard_master = pfb_unbound._dnsbl_load_tld_wildcard_master  # Phase 3 rename target
 
 
 _SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src", "usr", "local", "pkg", "pfblockerng")

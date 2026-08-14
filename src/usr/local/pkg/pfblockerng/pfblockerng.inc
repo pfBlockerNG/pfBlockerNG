@@ -247,7 +247,7 @@ $pfb['unbound_py_data']	= '/var/unbound/pfb_py_data.txt';
 $pfb['unbound_py_zone'] = '/var/unbound/pfb_py_zone.txt';
 $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
-$pfb['unbound_py_tld']	= '/var/unbound/pfb_py_tld.txt';	// issue #1255: SHIPPED TLD-Wildcard public-suffix oracle, staged/fingerprinted exactly like unbound_py_hsts above
+$pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED PSL authority, staged/fingerprinted exactly like unbound_py_hsts above
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
 $pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
@@ -2420,7 +2420,7 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
 	$top1m_files = (($pfb['dnsbl_top1m'] ?? PfbToggle::Off) === PfbToggle::On)
 		? array($pfb['unbound_py_top1m'] ?? '/var/unbound/pfb_py_top1m.txt') : array();
 	return array_merge(
-		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_tld']),
+		array($pfb['unbound_py_wh'], $pfb['unbound_py_sources'], $pfb['unbound_py_hsts'], $pfb['unbound_py_psl']),
 		$top1m_files,
 		$raw_files
 	);
@@ -2432,7 +2432,14 @@ function pfb_dnsbl_loaded_input_paths(array $pfb): array {
    helper used to apply is gone (a no-op once the base path list never carries them).
    Pure (no global access). */
 function pfb_dnsbl_reload_fingerprint(array $pfb): string {
-	return pfb_dnsbl_loaded_fingerprint(pfb_dnsbl_loaded_input_paths($pfb));
+	$paths = pfb_dnsbl_loaded_input_paths($pfb);
+	$include = $pfb['dnsbl_psl_include_private'] ?? PfbToggle::On;
+	$allow = $pfb['dnsbl_psl_allow_private'] ?? PfbToggle::Off;
+	$include = $include instanceof PfbToggle ? $include->value : (is_bool($include) ? ($include ? 'on' : 'off') : (string) $include);
+	$allow = $allow instanceof PfbToggle ? $allow->value : (is_bool($allow) ? ($allow ? 'on' : 'off') : (string) $allow);
+	$paths[] = "\0pfb-psl-policy:include={$include}";
+	$paths[] = "\0pfb-psl-policy:allow={$allow}";
+	return pfb_dnsbl_loaded_fingerprint($paths);
 }
 
 /* TRUE iff genuine FEED-derived DNSBL content is currently loaded — i.e. at least one
@@ -2459,6 +2466,10 @@ function pfb_dnsbl_loaded_fingerprint(array $paths): string {
 	$parts = array();
 	foreach ($paths as $path) {
 		if ($path === '') {
+			continue;
+		}
+		if (str_starts_with($path, "\0pfb-psl-policy:")) {
+			$parts[] = $path;
 			continue;
 		}
 		$parts[] = $path . ':' . (@md5_file($path) ?: '-');
@@ -9881,7 +9892,7 @@ function pfb_unbound_python_sources_locked($feeds, array $publication_ops=array(
 	// issue #1255: TLD-Wildcard toggle gates the WHOLE wildcard-blocking contribution --
 	// tld_wildcard_blacklist/tld_wildcard_exclusion (user config, stay in the manifest) are
 	// emptied when off, even if configured. The public-suffix oracle itself (tld_master) no
-	// longer rides the manifest at all: it is a SHIPPED file (unbound_py_tld) gated by the same
+	// longer rides the manifest at all: it is a SHIPPED file (unbound_py_psl) gated by the same
 	// toggle's ini flag (python_tld_wildcard), mirroring HSTS (unbound_py_hsts /
 	// python_hsts) -- see pfb_unbound_python()'s ini emit and pfb_unbound.py's
 	// _dnsbl_config_from_manifest().
