@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/support/ProcessRunner.php';
+
 /**
  * issue #1008 retired pfb_logger()'s '[ NOW ]' opt-in scrub (LogTimestampBaselineTest
  * pins the writer side); issue #1047 found 9 pfblockerng.php call sites still carrying
@@ -18,19 +20,12 @@ final class LogNowTokenRetiredTest extends TestCase
 	{
 		$repoRoot = dirname(__DIR__, 2);
 
-		$proc = proc_open(
+		$result = pfb_test_run_process(
 			['git', '-C', $repoRoot, 'ls-files', '-z', '--', 'src/*.php', 'src/*.inc'],
-			[1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-			$pipes
+			10.0
 		);
-		$this->assertIsResource($proc, 'git ls-files must start to enumerate tracked src/ files');
-		$stdout = (string) stream_get_contents($pipes[1]);
-		$stderr = (string) stream_get_contents($pipes[2]);
-		fclose($pipes[1]);
-		fclose($pipes[2]);
-		$exit = proc_close($proc);
-		$this->assertSame(0, $exit, "git ls-files must succeed to enumerate tracked src/ files; got: {$stderr}");
-		$files = array_filter(explode("\0", $stdout), static fn(string $path): bool => $path !== '');
+		$this->assertSame(0, $result['exit'], "git ls-files must succeed to enumerate tracked src/ files; got: {$result['stderr']}");
+		$files = array_filter(explode("\0", $result['stdout']), static fn(string $path): bool => $path !== '');
 
 		$violations = [];
 		foreach ($files as $relpath) {
