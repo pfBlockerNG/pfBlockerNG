@@ -15,10 +15,8 @@
 # (which a live-VM suite can't map automatically — the code runs on the guest,
 # out of any runner-side coverage).
 #
-# The `tests/smoke/test_*.py` glob deliberately does NOT match `tests/smoke/ui/`
-# tests: the literal `test_` in the pattern must follow `$dir/` directly, and a
-# ui/ path has `ui/` there instead — so the smoke and UI workflows each pick up
-# only their own changed tests.
+# Only direct `TEST_DIR/test_*.py` modules match; subdirectories are excluded
+# before the shell glob, whose `*` can otherwise cross `/`.
 #
 # Test seam: PFB_IMPACTED_CHANGED_FILES (newline-separated paths) overrides the
 # git diff, so the pure filtering is exercisable without a git fixture.
@@ -60,6 +58,7 @@ printf '%s\n' "$changed" | {
 	while IFS= read -r f; do
 		[ -n "$f" ] || continue
 		case "$f" in
+			"$dir"/*/*) continue ;;
 			"$dir"/test_*.py) ;;   # a direct test module of THIS dir
 			*) continue ;;
 		esac

@@ -21,8 +21,9 @@ tests/smoke/test_killstates.py"
       The output should equal 'test_dns_redirect or test_killstates'
     End
 
-    It 'excludes the ui/ subtree, src, and non-test infra (owned elsewhere / unmappable)'
+    It 'excludes subtrees, src, and non-test infra (owned elsewhere / unmappable)'
       changed="tests/smoke/test_dns_redirect.py
+tests/smoke/test_group/helper.py
 tests/smoke/ui/test_render.py
 src/usr/local/pkg/pfblockerng/pfb_unbound.py
 tests/smoke/conftest.py"
@@ -37,9 +38,10 @@ tests/smoke/conftest.py"
   End
 
   Describe 'ui dir (tests/smoke/ui)'
-    It 'picks only the changed UI test modules, not the smoke-root ones'
+    It 'picks only direct changed UI test modules, not smoke-root modules or subtrees'
       changed="tests/smoke/test_dns_redirect.py
-tests/smoke/ui/test_render.py"
+tests/smoke/ui/test_render.py
+tests/smoke/ui/test_group/helper.py"
       When call run_with "$changed" tests/smoke/ui
       The output should equal 'test_render'
     End
