@@ -250,7 +250,7 @@ class TestNormaliseVerdictBucket:
 
 
 class TestClassify:
-    def _tlds(self) -> dict[str, dict[str, str]]:
+    def _tlds(self) -> pfb_unbound.PslRules:
         return pfb_unbound.PslRules(icann_exact=tuple(_read_lines("tld_master.txt")))
 
     def test_two_label_is_zone(self) -> None:

@@ -194,7 +194,7 @@ final class DnsblInterchangeRetirementTest extends TestCase
 			'unbound_py_wh'      => "{$this->tmp}/pfb_py_whitelist.txt",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
 			'unbound_py_hsts'    => "{$this->tmp}/pfb_py_hsts.txt",
-			'unbound_py_tld'     => "{$this->tmp}/pfb_py_tld.txt",
+			'unbound_py_psl'     => "{$this->tmp}/dnsbl_psl",
 			'unbound_py_rawdir'  => "{$this->tmp}/raw",
 		];
 	}

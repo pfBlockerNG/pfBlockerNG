@@ -13,7 +13,7 @@ still sinkhole AFTER a RAM-disk reboot (pfb_unbound.py re-staged + matcher rebui
 from the restored manifest), with NO manual update. Verified RED on pre-fix code.
 
 Issue #1255 rides the SAME reboot cycle: the shipped TLD-Wildcard public-suffix
-oracle (``pfb_py_tld.txt``) is archive-EXCLUDED (re-staged fresh from the package
+oracle (``dnsbl_psl``) is archive-EXCLUDED (re-staged fresh from the package
 dir by ``dnsbl_cache_stage()``, like ``pfb_py_hsts.txt``) while the ini
 (``python_tld_wildcard = on``) rides the archived ``pfb_unbound*`` set -- so a
 wildcard-blocked sub-domain must ALSO still sinkhole post-reboot, proving both
@@ -48,7 +48,7 @@ pytestmark = pytest.mark.reboot
 
 VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_468_WIPE"
 PFB_UNBOUND = "/var/unbound/pfb_unbound.py"
-PFB_PY_TLD = "/var/unbound/pfb_py_tld.txt"  # issue #1255: TLD-Wildcard oracle, archive-EXCLUDED, re-staged
+PFB_DNSBL_PSL = "/var/unbound/dnsbl_psl"  # issue #1255: PSL authority, archive-EXCLUDED, re-staged
 RECOVERY_DEADLINE = 240  # seconds to wait for DNSBL to self-heal post-reboot
 
 
@@ -153,7 +153,7 @@ def reboot_observation(dnsbl_vm: SmokeVM) -> DnsblRebootObservation:
 
     var_wiped = vm.ssh("test", "-e", VAR_WIPE_SENTINEL).returncode != 0
     staged_after = vm.ssh("test", "-f", PFB_UNBOUND).returncode == 0
-    tld_oracle_staged_after = vm.ssh("test", "-f", PFB_PY_TLD).returncode == 0
+    tld_oracle_staged_after = vm.ssh("test", "-f", PFB_DNSBL_PSL).returncode == 0
     var_unbound_ls = vm.ssh("/bin/ls", "-la", "/var/unbound").stdout
     manifest_probe = h.php_eval(
         vm,
@@ -265,7 +265,7 @@ def test_dnsbl_tld_wildcard_survives_ramdisk_var_reboot(reboot_observation: Dnsb
     )
     # issue #1255 core: the shipped oracle re-staged into the chroot after the wipe.
     assert obs.tld_oracle_staged_after, (
-        f"issue #1255: {PFB_PY_TLD} missing after RAM-disk reboot (TLD-Wildcard oracle not re-staged)."
+        f"issue #1255: {PFB_DNSBL_PSL} missing after RAM-disk reboot (TLD-Wildcard oracle not re-staged)."
         f"\n/var/unbound:\n{obs.var_unbound_ls}"
     )
     # End-state: still sinkholing — the wildcard ZONE survived the reboot, no manual update.

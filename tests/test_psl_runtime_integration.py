@@ -57,6 +57,17 @@ def test_psl_classifier_uses_arbitrary_depth_and_private_policy() -> None:
     assert P.tld_wildcard_classify("www.ck", rules, set()) == (P.DNSBL_CLASS_ZONE, "www.ck")
 
 
+@pytest.mark.parametrize(
+    ("domain", "blacklist"),
+    [("example.com", ".com"), ("example.com", "com."), ("example.github.io", ".github.io")],
+)
+def test_psl_classifier_normalizes_dotted_blacklist_entries(domain: str, blacklist: str) -> None:
+    assert P.tld_wildcard_classify(domain, P.parse_psl_rules(PSL), set(), blacklist={blacklist}) == (
+        P.DNSBL_CLASS_DATA,
+        domain,
+    )
+
+
 @pytest.mark.parametrize("bad", ["", "not-a-psl", "xn--bad", "a..com", "a$[b].com"])
 def test_psl_authority_loader_rejects_invalid_files(tmp_path: Path, bad: str) -> None:
     authority = tmp_path / "dnsbl_psl"
@@ -88,3 +99,17 @@ def test_reload_failure_retains_psl_snapshot(monkeypatch: pytest.MonkeyPatch) ->
     assert P.rebuild_and_swap(lambda: None, emit_counts=False) is False
     assert P._snapshot is old
     assert P._snapshot.psl_rules == old.psl_rules
+
+
+def test_successful_reload_snapshot_carries_exact_psl_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rules = P.parse_psl_rules(PSL)
+    result = P.BuildResult({}, {}, {}, {}, 0, psl_rules=rules)
+    monkeypatch.setattr(P, "dnsbl_build_from_manifest", lambda _path: result)
+    monkeypatch.setitem(P.pfb, "pfb_py_sources", str(tmp_path / "pfb_py_sources.json"))
+    monkeypatch.setitem(P.pfb, "pfb_unbound.ini", str(tmp_path / "missing.ini"))
+    monkeypatch.setitem(P.pfb, "python_hsts", False)
+
+    snapshot = P._build_swap_snapshot()
+
+    assert snapshot is not None
+    assert snapshot.psl_rules is rules

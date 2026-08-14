@@ -523,4 +523,23 @@ final class DnsblLoadedFingerprintTest extends TestCase
 		$this->assertSame($fp_before, $fp_after,
 			'Non-TLD mode must ALSO exclude the retired unbound_py_data/unbound_py_zone -- never in the path set (ADR-65)');
 	}
+
+	public function testPslPolicySaltsChangeReloadFingerprint(): void
+	{
+		$pfb = $this->reloadFpBasePfb();
+		$default = pfb_dnsbl_reload_fingerprint($pfb);
+
+		$explicit_defaults = $pfb;
+		$explicit_defaults['dnsbl_psl_include_private'] = PfbToggle::On;
+		$explicit_defaults['dnsbl_psl_allow_private'] = PfbToggle::Off;
+		$this->assertSame($default, pfb_dnsbl_reload_fingerprint($explicit_defaults));
+
+		$icann_only = $pfb;
+		$icann_only['dnsbl_psl_include_private'] = PfbToggle::Off;
+		$this->assertNotSame($default, pfb_dnsbl_reload_fingerprint($icann_only));
+
+		$allow_private = $pfb;
+		$allow_private['dnsbl_psl_allow_private'] = PfbToggle::On;
+		$this->assertNotSame($default, pfb_dnsbl_reload_fingerprint($allow_private));
+	}
 }
