@@ -6,9 +6,9 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Issue #1323 -- custom DNSBL rows must stay Enabled so the stale Hold guard
- * cannot suppress them. The three live sync routes share one row-construction
- * decision; behavior tests exercise that decision with each route's inputs.
+ * Issues #1323/#2114 -- custom rows must stay Enabled and carry explicit parser
+ * metadata. The three live sync routes share one row-construction decision;
+ * behavior tests exercise that decision with each route's inputs.
  */
 #[CoversFunction('pfb_dnsbl_custom_row')]
 #[CoversFunction('pfb_dnsbl_hold_stale_rebuild_skip')]
@@ -20,6 +20,7 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 			[
 				'header' => 'normalization_custom',
 				'custom' => 'normal.example',
+				'format' => 'regex',
 				'state'  => 'Enabled',
 				'url'    => 'custom',
 			],
@@ -33,6 +34,7 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 			[
 				'header' => 'download_custom',
 				'custom' => ['download.example', '||ads.download.example^'],
+				'format' => 'regex',
 				'state'  => 'Enabled',
 				'url'    => 'custom',
 			],
@@ -46,11 +48,33 @@ final class DnsblCustomRowStateEnabledInvariantTest extends TestCase
 			[
 				'header' => 'ip-alias_custom',
 				'custom' => "192.0.2.1\n198.51.100.7",
+				'format' => 'regex',
 				'state'  => 'Enabled',
 				'url'    => 'custom',
 			],
 			pfb_dnsbl_custom_row('ip-alias', "192.0.2.1\n198.51.100.7")
 		);
+	}
+
+	public function testIpAliasCustomRowSelectsRegexParserWithoutDiagnostics(): void
+	{
+		$diagnostics = [];
+		set_error_handler(
+			static function (int $severity, string $message) use (&$diagnostics): bool {
+				$diagnostics[] = $message;
+				return TRUE;
+			},
+			E_WARNING | E_DEPRECATED
+		);
+		try {
+			$row = pfb_dnsbl_custom_row('ip-alias', "192.0.2.1\n198.51.100.7");
+			$parser = $row['format'] == 'regex' ? 'regex' : 'auto';
+		} finally {
+			restore_error_handler();
+		}
+
+		$this->assertSame('regex', $parser);
+		$this->assertSame([], $diagnostics);
 	}
 
 	public function testLiveSyncDispatchKeepsAllThreeRoutesOnSharedRowSeam(): void
