@@ -780,6 +780,8 @@ def _build_swap_snapshot() -> Snapshot | None:
         tld_allow_roots=_selected_tld_roots(pfb.get("tld_allow_list", ())),
         psl_include_private=bool(pfb.get("psl_include_private", True)),
         psl_allow_private=bool(pfb.get("psl_allow_private", False)),
+        psl_feed_private_policy=str(pfb.get("psl_feed_private_policy", "honor")),
+        psl_feed_icann_policy=str(pfb.get("psl_feed_icann_policy", "honor")),
     )
 
 
@@ -1527,6 +1529,12 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["tld_allow_list"] = []
     pfb["psl_include_private"] = True
     pfb["psl_allow_private"] = False
+    # issue #2371: feed-at-suffix PSL policy, per PSL section. Default "honor" (today's
+    # pre-#2371 behaviour) -- the ini load below recomputes this from the loaded value,
+    # validated against {"ignore", "apex", "honor"}, else "honor". No consumer yet
+    # (Step 2 of #2371 adds enforcement).
+    pfb["psl_feed_private_policy"] = "honor"
+    pfb["psl_feed_icann_policy"] = "honor"
     pfb["python_tld_seg"] = 0
     # issue #1255: DNSBL Wildcard Blocking (TLD) -- a DIFFERENT feature from
     # tld_allow ("TLD Allow") above. Gates the public-suffix oracle exactly like
@@ -1765,6 +1773,21 @@ def init_standard(id: int, env: module_env) -> bool:
                 pfb["psl_include_private"] = config.getboolean("MAIN", "psl_include_private")
             if config.has_option("MAIN", "psl_allow_private"):
                 pfb["psl_allow_private"] = config.getboolean("MAIN", "psl_allow_private")
+            # issue #2371: feed-at-suffix PSL policy. Validate against the recognised
+            # vocabulary; a missing option, an empty value, or an unrecognised token all
+            # keep the "honor" default set above (mirrors the idn_mode read above).
+            if config.has_option("MAIN", "psl_feed_private_policy"):
+                _raw_feed_private_policy = config.get("MAIN", "psl_feed_private_policy").strip().lower()
+                if _raw_feed_private_policy in ("ignore", "apex", "honor"):
+                    pfb["psl_feed_private_policy"] = _raw_feed_private_policy
+                else:
+                    pfb["psl_feed_private_policy"] = "honor"
+            if config.has_option("MAIN", "psl_feed_icann_policy"):
+                _raw_feed_icann_policy = config.get("MAIN", "psl_feed_icann_policy").strip().lower()
+                if _raw_feed_icann_policy in ("ignore", "apex", "honor"):
+                    pfb["psl_feed_icann_policy"] = _raw_feed_icann_policy
+                else:
+                    pfb["psl_feed_icann_policy"] = "honor"
             if config.has_option("MAIN", "dnsbl_ipv4"):
                 pfb["dnsbl_ipv4"] = config.get("MAIN", "dnsbl_ipv4")
             if config.has_option("MAIN", "dnsbl_ipv6"):
@@ -2052,6 +2075,8 @@ def init_standard(id: int, env: module_env) -> bool:
             tld_allow_roots=_selected_tld_roots(pfb.get("tld_allow_list", ())),
             psl_include_private=bool(pfb.get("psl_include_private", True)),
             psl_allow_private=bool(pfb.get("psl_allow_private", False)),
+            psl_feed_private_policy=str(pfb.get("psl_feed_private_policy", "honor")),
+            psl_feed_icann_policy=str(pfb.get("psl_feed_icann_policy", "honor")),
         )
 
     rebuild_and_swap(_init_build_snapshot, emit_counts=False)
@@ -4045,6 +4070,11 @@ class Snapshot:
     tld_allow_roots: tuple[str, ...] | None = None
     psl_include_private: bool = True
     psl_allow_private: bool = False
+    # issue #2371: feed-at-suffix PSL policy, per PSL section. "honor" default keeps every
+    # hand-built legacy Snapshot fixture (this file and its tests) decision-identical
+    # without passing these explicitly. No consumer yet (Step 2 of #2371).
+    psl_feed_private_policy: str = "honor"
+    psl_feed_icann_policy: str = "honor"
     # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
     # never passed by builders.
     gen: int = field(default_factory=lambda: next(_snapshot_gen))
@@ -4067,6 +4097,8 @@ class Snapshot:
             "tld_allow_roots": self.tld_allow_roots or (),
             "psl_include_private": self.psl_include_private,
             "psl_allow_private": self.psl_allow_private,
+            "psl_feed_private_policy": self.psl_feed_private_policy,
+            "psl_feed_icann_policy": self.psl_feed_icann_policy,
         }
 
 

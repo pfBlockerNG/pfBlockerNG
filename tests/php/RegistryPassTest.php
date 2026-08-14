@@ -79,6 +79,12 @@ final class RegistryPassTest extends TestCase
 			$this->assertArrayNotHasKey($retired, $result[self::GEN_SECTION]);
 		}
 		$this->assertSame('tranco', $result[self::DNSBL_SECTION]['top1m_source'] ?? NULL);
+		// issue #2371: the pass's own NEWCFG default for these two is the registered
+		// default '' (-> Honor), NEVER 'apex' -- the fresh-install apex/apex seed is a
+		// separate, later, install-time write (pfb_psl_feed_policy_is_fresh_install()),
+		// not something pfb_registry_pass() itself performs.
+		$this->assertSame('', $result[self::DNSBL_SECTION]['pfb_psl_feed_private_policy'] ?? NULL);
+		$this->assertSame('', $result[self::DNSBL_SECTION]['pfb_psl_feed_icann_policy'] ?? NULL);
 		$this->assertSame('Disable', $result[self::SS_SECTION]['safesearch_enable'] ?? NULL);
 		$this->assertSame('', $result[self::IP_SECTION]['v6suppression'] ?? NULL);
 		$this->assertSame('', $result[self::REP_SECTION]['enable_rep'] ?? NULL);

@@ -148,6 +148,29 @@ enum PfbIdnMode: string implements PfbStoredEnum
 	}
 }
 
+// PfbFeedSuffixPolicy — issue #2371: per-PSL-section policy governing what a
+// FEED-provenance rule may do when its name resolves to a public suffix of that
+// section. Ignore (drop), Apex (demote to an exact apex block), Honor (today's
+// pre-#2371 behaviour). Absent, present '', and any unknown/junk stored token all
+// read as Honor -- fail-safe, same "never silently drop or demote" principle as
+// PfbToggle's Off/PfbIdnMode's Off fallback. Step 1 of #2371 registers and plumbs
+// this enum only; no enforcement consumer reads it yet.
+enum PfbFeedSuffixPolicy: string implements PfbStoredEnum
+{
+	use PfbStoredEnumAdapter;
+
+	case Ignore = 'ignore';
+	case Apex   = 'apex';
+	case Honor  = 'honor';
+
+	// Parse-fallback (unknown/non-scalar/'' -> Honor). NOT the absent default (the
+	// registry's, also '' -- both paths land on Honor via this same fallback).
+	public static function default(): static
+	{
+		return self::Honor;
+	}
+}
+
 // PfbAliasDeltaMode — ADR-40 alias-table apply mechanism selector.
 //   Auto    ('auto')    — default; delta for small churn (< ~5%), full replace for
 //                         initial load / boot / large churn.
@@ -659,6 +682,19 @@ function pfb_cfg_idn_mode_write(PfbIdnMode|string $mode): string
 {
 	$mode = $mode instanceof PfbIdnMode ? $mode : PfbIdnMode::fromStored($mode);
 	return $mode->toStored();
+}
+
+/** Read a PfbFeedSuffixPolicy from a raw stored value (absent/''/unknown -> Honor). */
+function pfb_cfg_feed_suffix_policy_read(mixed $stored): PfbFeedSuffixPolicy
+{
+	return PfbFeedSuffixPolicy::fromStored($stored);
+}
+
+/** Write a PfbFeedSuffixPolicy (enum or legacy string) back to its stored string. */
+function pfb_cfg_feed_suffix_policy_write(PfbFeedSuffixPolicy|string $policy): string
+{
+	$policy = $policy instanceof PfbFeedSuffixPolicy ? $policy : PfbFeedSuffixPolicy::fromStored($policy);
+	return $policy->toStored();
 }
 
 /** Read a PfbTop1mSource from a raw stored value (legacy 'alexa' -> Tranco, 'domcop' -> OpenPageRank). */
@@ -1282,6 +1318,29 @@ function pfb_cfg_registry(): array
 			'read_adapter'   => 'pfb_cfg_toggle_read',
 			'write_adapter'  => 'pfb_cfg_toggle_write',
 			'no_grandfather' => 'new PSL PRIVATE TLD-Allow policy; absent uses the default OFF',
+		],
+
+		// issue #2371: per-PSL-section policy for FEED-provenance rules landing at a
+		// public-suffix boundary (Ignore/Apex/Honor). Default '' so an absent key reads
+		// Honor -- today's pre-#2371 behaviour -- via the PfbFeedSuffixPolicy adapter,
+		// never via this registry default; a fresh install is instead seeded 'apex' by
+		// pfb_psl_feed_policy_is_fresh_install() + pfblockerng_install.inc's post-registry-
+		// pass write (owner decision 2026-08-14: apex/apex for new installs, honor/honor
+		// grandfathered for existing ones). No enforcement consumer yet (#2371 Step 2).
+		'dnsbl/pfb_psl_feed_private_policy' => [
+			'default'        => '',
+			'read_adapter'   => 'pfb_cfg_feed_suffix_policy_read',
+			'write_adapter'  => 'pfb_cfg_feed_suffix_policy_write',
+			'no_grandfather' => 'new FEED-suffix policy (#2371); absent/empty reads Honor (current pre-#2371 behaviour) on every upgrade -- the fresh-install apex/apex seed is a one-time install-time write (pfb_psl_feed_policy_is_fresh_install()), deliberately NOT a registry grandfather map, since issue #1921\'s ABSENT map is OLDCFG-only and would wrongly also apply to a genuinely-fresh install',
+		],
+
+		// issue #2371: ICANN-section sibling of pfb_psl_feed_private_policy above --
+		// same vocabulary, same default/seed/grandfather reasoning.
+		'dnsbl/pfb_psl_feed_icann_policy' => [
+			'default'        => '',
+			'read_adapter'   => 'pfb_cfg_feed_suffix_policy_read',
+			'write_adapter'  => 'pfb_cfg_feed_suffix_policy_write',
+			'no_grandfather' => 'new FEED-suffix policy (#2371); absent/empty reads Honor (current pre-#2371 behaviour) on every upgrade -- the fresh-install apex/apex seed is a one-time install-time write (pfb_psl_feed_policy_is_fresh_install()), deliberately NOT a registry grandfather map, since issue #1921\'s ABSENT map is OLDCFG-only and would wrongly also apply to a genuinely-fresh install',
 		],
 
 		// issue #1921: TLD Allow sort order for the python list emit. Default ''.

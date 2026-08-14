@@ -271,12 +271,27 @@ def test_snapshot_containers_capture_psl_policy_without_global_reads() -> None:
         tld_allow_roots=("io",),
         psl_include_private=False,
         psl_allow_private=True,
+        # issue #2371: feed-at-suffix PSL policy fields (plumbing only, no consumer yet).
+        psl_feed_private_policy="ignore",
+        psl_feed_icann_policy="apex",
     )
     containers = snapshot.containers()
     assert containers["psl_rules"] is rules
     assert containers["tld_allow_roots"] == ("io",)
     assert containers["psl_include_private"] is False
     assert containers["psl_allow_private"] is True
+    assert containers["psl_feed_private_policy"] == "ignore"
+    assert containers["psl_feed_icann_policy"] == "apex"
+
+
+def test_snapshot_feed_suffix_policy_defaults_honor_for_legacy_fixtures() -> None:
+    """issue #2371: a Snapshot built the pre-#2371 way (no policy kwargs -- every legacy
+    hand-built fixture in this suite) must default both new fields to "honor", never
+    KeyError or silently pick a stricter state."""
+    snapshot = P.Snapshot({}, {}, {}, {}, {}, {}, {})
+    containers = snapshot.containers()
+    assert containers["psl_feed_private_policy"] == "honor"
+    assert containers["psl_feed_icann_policy"] == "honor"
 
 
 def test_snapshot_empty_tld_allow_roots_ignore_later_global_selection(

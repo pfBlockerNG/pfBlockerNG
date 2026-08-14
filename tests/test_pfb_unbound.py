@@ -10,6 +10,7 @@ from configparser import ConfigParser
 from typing import Any
 
 import pytest
+import unboundmodule
 
 # Unbound injects these as module-level globals at runtime; conftest copies them
 # from the unboundmodule stub onto builtins so pfb_unbound (which references them
@@ -3334,6 +3335,70 @@ class TestParseIniInt:
         parsed = _parse_ini_int(config, "MAIN", "python_tld_seg")
         result = parsed if parsed is not None else current_default
         assert result == 9, f"expected 9, got {result!r}"
+
+
+class TestFeedSuffixPolicyIniRead:
+    """issue #2371: init_standard()'s MAIN-section reads for psl_feed_private_policy /
+    psl_feed_icann_policy. Drives the PRODUCTION boundary (a real ini file +
+    init_standard()) rather than a copied implementation, mirroring
+    test_adr28_cfg_adapters.py's _production_boundary helper for idn_mode."""
+
+    def _read(self, tmp_path: Any, monkeypatch: Any, **options: str) -> tuple[str, str]:
+        lines = ["[MAIN]", "python_enable = false"]
+        for key, value in options.items():
+            lines.append(f"{key} = {value}")
+        (tmp_path / "pfb_unbound.ini").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        pfb_unbound.pfb["mod_maxminddb_e"] = "stub"
+        try:
+            assert pfb_unbound.init_standard(0, unboundmodule.module_env()) is True
+            return (
+                pfb_unbound.pfb["psl_feed_private_policy"],
+                pfb_unbound.pfb["psl_feed_icann_policy"],
+            )
+        finally:
+            pfb_unbound.deinit(0)
+
+    def test_absent_options_default_honor(self, tmp_path: Any, monkeypatch: Any) -> None:
+        private, icann = self._read(tmp_path, monkeypatch)
+        assert private == "honor"
+        assert icann == "honor"
+
+    def test_each_canonical_value_round_trips(self, tmp_path: Any, monkeypatch: Any) -> None:
+        for value in ("ignore", "apex", "honor"):
+            private, icann = self._read(
+                tmp_path, monkeypatch, psl_feed_private_policy=value, psl_feed_icann_policy=value
+            )
+            assert private == value
+            assert icann == value
+
+    def test_independent_per_section_values(self, tmp_path: Any, monkeypatch: Any) -> None:
+        private, icann = self._read(
+            tmp_path, monkeypatch, psl_feed_private_policy="ignore", psl_feed_icann_policy="apex"
+        )
+        assert private == "ignore"
+        assert icann == "apex"
+
+    def test_empty_value_defaults_honor(self, tmp_path: Any, monkeypatch: Any) -> None:
+        private, icann = self._read(tmp_path, monkeypatch, psl_feed_private_policy="", psl_feed_icann_policy="")
+        assert private == "honor"
+        assert icann == "honor"
+
+    def test_garbage_value_defaults_honor(self, tmp_path: Any, monkeypatch: Any) -> None:
+        private, icann = self._read(
+            tmp_path, monkeypatch, psl_feed_private_policy="BOGUS", psl_feed_icann_policy="also-bogus"
+        )
+        assert private == "honor"
+        assert icann == "honor"
+
+    def test_uppercase_canonical_value_is_normalised(self, tmp_path: Any, monkeypatch: Any) -> None:
+        # Hostile-input row: 'APEX' must not be silently accepted as a different token,
+        # nor rejected -- it is the recognised value, case-folded, same as idn_mode's read.
+        private, icann = self._read(
+            tmp_path, monkeypatch, psl_feed_private_policy="APEX", psl_feed_icann_policy="IGNORE"
+        )
+        assert private == "apex"
+        assert icann == "ignore"
 
 
 class TestResolveFeedGroup:

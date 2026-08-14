@@ -947,6 +947,32 @@
             }
         ]
     },
+    "pfb_cfg_feed_suffix_policy_read": {
+        "returnsRef": false,
+        "returnType": "PfbFeedSuffixPolicy",
+        "params": [
+            {
+                "name": "stored",
+                "byRef": false,
+                "variadic": false,
+                "type": "mixed",
+                "default": null
+            }
+        ]
+    },
+    "pfb_cfg_feed_suffix_policy_write": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "policy",
+                "byRef": false,
+                "variadic": false,
+                "type": "PfbFeedSuffixPolicy|string",
+                "default": null
+            }
+        ]
+    },
     "pfb_cfg_idn_mode_read": {
         "returnsRef": false,
         "returnType": "PfbIdnMode",
@@ -8928,6 +8954,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_psl_feed_policy_is_fresh_install": {
+        "returnsRef": false,
+        "returnType": null,
+        "params": [
+            {
+                "name": "dconfig",
+                "byRef": false,
+                "variadic": false,
+                "type": null,
                 "default": null
             }
         ]

@@ -604,6 +604,35 @@ final class CfgGatewayTest extends TestCase
 	}
 
 	/**
+	 * issue #2371: dnsbl/pfb_psl_feed_private_policy + dnsbl/pfb_psl_feed_icann_policy --
+	 * absent/''/unknown all read Honor (grandfather + fail-safe: an unrecognised stored
+	 * value must never throw or silently drop/demote a feed entry); every canonical
+	 * token round-trips through PfbConfig::write().
+	 */
+	public function testFeedSuffixPolicyDefaultsRoundTripsAndHostileInput(): void
+	{
+		$privatePath = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_private_policy';
+		$icannPath   = 'installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_feed_icann_policy';
+
+		foreach (['dnsbl/pfb_psl_feed_private_policy' => $privatePath, 'dnsbl/pfb_psl_feed_icann_policy' => $icannPath] as $key => $path) {
+			$this->assertNull(config_get_path($path), "before: {$key} must be absent");
+			$this->assertSame(PfbFeedSuffixPolicy::Honor, PfbConfig::read($key), "{$key}: absent -> Honor");
+
+			foreach ([PfbFeedSuffixPolicy::Ignore, PfbFeedSuffixPolicy::Apex, PfbFeedSuffixPolicy::Honor] as $value) {
+				PfbConfig::write($key, $value);
+				$this->assertSame($value, PfbConfig::read($key), "{$key}: {$value->value} must round-trip");
+				$this->assertSame($value->value, config_get_path($path), "{$key}: stored token must be canonical '{$value->value}'");
+			}
+
+			// Hostile input: present '', legacy/junk, and case-mismatched tokens all read Honor.
+			foreach (['', 'suppress', 'IGNORE', 'Apex', ' apex', 'legacy-junk'] as $hostile) {
+				$this->seedConfig($path, $hostile);
+				$this->assertSame(PfbFeedSuffixPolicy::Honor, PfbConfig::read($key), "{$key}: stored '{$hostile}' must read Honor, never throw");
+			}
+		}
+	}
+
+	/**
 	 * issue #1907: dnsbl/pfb_cache, dnsbl/pfb_py_reply, dnsbl/pfb_hsts, ip/suppression --
 	 * same default-on shape as pfb_idn_block_malicious/pfb_keep above. Absent resolves
 	 * to On; present empty and legacy 'off' resolve to Off; present 'on' resolves to On.
@@ -1283,6 +1312,9 @@ final class CfgGatewayTest extends TestCase
 			'pfb_idn_escalate_suspicious',
 			'pfb_psl_include_private',
 			'pfb_psl_allow_private',
+			// issue #2371: feed-at-suffix PSL policy fields
+			'pfb_psl_feed_private_policy',
+			'pfb_psl_feed_icann_policy',
 			'pfb_regex',
 			'pfb_regex_list',
 			'pfb_regex_cap',
@@ -2383,6 +2415,7 @@ final class CfgGatewayTest extends TestCase
 			'pfb_cfg_idn_mode_read'         => ['on', 'confusable', 'off', 'all', 'junk'],
 			'pfb_cfg_top1m_source_read'     => ['tranco', 'cisco', 'openpagerank', 'majestic', 'cloudflare', 'alexa', 'domcop', 'junk'],
 			'pfb_cfg_alias_delta_mode_read' => ['auto', 'delta', 'replace', '', 'junk'],
+			'pfb_cfg_feed_suffix_policy_read' => ['ignore', 'apex', 'honor', '', 'junk'],
 		];
 
 		$tested = 0;
@@ -2732,6 +2765,8 @@ final class CfgGatewayTest extends TestCase
 			'dnsbl_interface' => 'lo0',           // unadapted, plain.
 			'pfb_dnsvip4'     => '',              // unadapted, plain.
 			'top1m_token'     => 'QWJjMTIz',      // unadapted, plain (base64-shaped).
+			// issue #2371: adapted (feed_suffix_policy), HOSTILE junk -> normalises to Honor.
+			'pfb_psl_feed_private_policy' => 'suppress',
 		];
 
 		PfbConfig::writeSection($section, $data);
@@ -2745,6 +2780,9 @@ final class CfgGatewayTest extends TestCase
 		$this->assertSame('lo0', $result['dnsbl_interface'], 'unadapted dnsbl_interface is byte-identical');
 		$this->assertSame('', $result['pfb_dnsvip4'], 'unadapted pfb_dnsvip4 is byte-identical');
 		$this->assertSame('QWJjMTIz', $result['top1m_token'], 'unadapted top1m_token is byte-identical');
+		$this->assertSame('honor', $result['pfb_psl_feed_private_policy'], "hostile 'suppress' normalises to 'honor'");
+		$this->assertArrayNotHasKey('pfb_psl_feed_icann_policy', $result,
+			'a key absent from the input section blob stays absent (writeSection never materialises an untouched sibling)');
 	}
 
 	/**

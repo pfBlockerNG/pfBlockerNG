@@ -117,6 +117,22 @@ final class PythonTldWildcardIniEmitTest extends TestCase
 		$this->assertMatchesRegularExpression('/^psl_allow_private\s*=\s*on$/m', $flipped);
 	}
 
+	public function testFeedSuffixPolicyDefaultsAndExplicitValuesReachPythonIni(): void
+	{
+		$ini = $this->emit('');
+		$this->assertMatchesRegularExpression('/^psl_feed_private_policy\s*=\s*honor$/m', $ini);
+		$this->assertMatchesRegularExpression('/^psl_feed_icann_policy\s*=\s*honor$/m', $ini);
+
+		PfbConfig::writeSystem('dnsbl/pfb_psl_feed_private_policy', PfbFeedSuffixPolicy::Ignore);
+		PfbConfig::writeSystem('dnsbl/pfb_psl_feed_icann_policy', PfbFeedSuffixPolicy::Apex);
+		pfb_global();
+		pfb_unbound_python('enabled');
+		$flipped = file_get_contents($GLOBALS['pfb']['unbound_py_conf']);
+		$this->assertNotFalse($flipped);
+		$this->assertMatchesRegularExpression('/^psl_feed_private_policy\s*=\s*ignore$/m', $flipped);
+		$this->assertMatchesRegularExpression('/^psl_feed_icann_policy\s*=\s*apex$/m', $flipped);
+	}
+
 	public function testStoredIdnMaliciousOffReachesPythonIni(): void
 	{
 		PfbConfig::writeSystem('dnsbl/pfb_idn', 'confusable');
