@@ -354,8 +354,8 @@ class TestCatastrophicShapeHeuristic:
 
     def test_conditional_group_separator_is_the_same_defect(self) -> None:
         # issue #2082's second spelling: `(?(1)a|b)` between the pairs is the bare `a`
-        # separator wearing a conditional (measured 1492 ms per query at 253 characters;
-        # the QUANTIFIED spelling below costs 79 s).
+        # separator wearing a conditional (measured 1492 ms per query at 253 characters,
+        # CI image; the QUANTIFIED spelling below costs 79 s).
         for pat in (
             r"^([a-z])[a-z]+[a-z]+(?(1)a|b)[a-z]+[a-z]+@x\.com$",
             r"^([a-z])[a-z]+[a-z]+(?(1)a|b)+[a-z]+[a-z]+@x\.com$",
@@ -369,17 +369,69 @@ class TestCatastrophicShapeHeuristic:
         # `(?i:a)` and `(?>a)` between the pairs are still the floating `a` separator:
         # scoped flags do not change what the engine backtracks over, and an atomic group's
         # POSITION floats with the run even though its body never gives characters back
-        # (measured 1512 ms and 1558 ms per query at 253 characters).
+        # (measured 1512 ms and 1558 ms per query at 253 characters, CI image).
         for pat in (
             r"^[a-z]+[a-z]+(?i:a)[a-z]+[a-z]+@x\.com$",
             r"^[a-z]+[a-z]+(?>a)[a-z]+[a-z]+@x\.com$",
         ):
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
+    def test_grouped_mandatory_separator_spellings(self) -> None:
+        # PR #2361 review: the bare separator's grouped spellings float identically.
+        # Measured per query at 253 characters (CI image): 1529 / 1539 / 721 / 786 ms.
+        for pat in (
+            r"^[a-z]+[a-z]+(a){3}[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?:a){3}[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(ab){3}[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a)++[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # A grouped DISJOINT separator still pins the split, exactly like the bare form.
+        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(\.){3}[a-z]+[a-z]+$") is False
+
+    def test_alternation_group_separator_is_the_same_defect(self) -> None:
+        # `(a|b)` between the pairs is the conditional separator without the condition --
+        # its body compiles standalone, so the overlap probe judges it directly. Measured
+        # 1719 / 1747 ms per query at 253 characters (CI image).
+        for pat in (
+            r"^[a-z]+[a-z]+(a|b)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?:a|b)[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # Disjoint alternatives really pin the split.
+        assert _regex_is_catastrophic_shape(r"^([0-9])[a-z]+[a-z]+(\.|,)[a-z]+[a-z]+$") is False
+
+    def test_backreference_separator_bridges_the_chain(self) -> None:
+        # A backreference's character set is unknowable statically, so the gate must not
+        # read it as a boundary: measured 1564 ms (`\1`) and 2018 ms (`(?P=g)`) per query
+        # at 253 characters (CI image). Conservative bridge: the chain survives it.
+        for pat in (
+            r"^([a-z])[a-z]+[a-z]+\1[a-z]+[a-z]+@x\.com$",
+            r"^(?P<g>[a-z])[a-z]+[a-z]+(?P=g)[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+
+    def test_long_chain_without_a_pair_is_rejected(self) -> None:
+        # PR #2361 review: pair-adjacency alone under-covers. Four quantifiers connected
+        # only by floating separators cost 1753 ms per query at 253 characters (CI image);
+        # three cost 23 ms -- under the evict ceiling and the accepted warn-layer residual,
+        # and rejecting three would drop the issue's admitted single-gap shapes.
+        assert _regex_is_catastrophic_shape(r"^[a-z]+a[a-z]+a[a-z]+a[a-z]+@x\.com$") is True
+        assert _regex_is_catastrophic_shape(r"^[a-z]+a[a-z]+a[a-z]+@x\.com$") is False
+
+    def test_atomic_group_body_is_not_a_backtracking_run(self) -> None:
+        # Atomicity forbids backtracking INSIDE the body -- `^(?>[a-z]+[a-z]+[a-z]+)@...`
+        # costs 0.00 ms at 253 characters (CI image), so its body must never be read as a
+        # joinable run (the no-false-positive constraint) -- while the atomic group AS a
+        # floating separator stays the rejected 1558 ms shape.
+        assert _regex_is_catastrophic_shape(r"^(?>[a-z]+[a-z]+[a-z]+)@x\.com$") is False
+        assert _regex_is_catastrophic_shape(r"^[a-z]+[a-z]+(?>a)[a-z]+[a-z]+@x\.com$") is True
+
     def test_scoped_flags_group_body_is_scanned(self) -> None:
         # A `(?i:...)` group is entered like `(?:...)`: skipping it wholesale would hide a
-        # run from the scan entirely (measured 1532 ms per query at 253 characters for the
-        # first row), and a quantified single-atom spelling IS that atom's quantifier.
+        # run from the scan entirely (measured 1532 ms per query at 253 characters, CI
+        # image, for the first row), and a quantified single-atom spelling IS that atom's
+        # quantifier.
         assert _regex_is_catastrophic_shape(r"^(?i:[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$") is True
         assert _regex_is_catastrophic_shape(r"^(?i:[a-z])+(?i:[a-z])+(?i:[a-z])+@x\.com$") is True
 
