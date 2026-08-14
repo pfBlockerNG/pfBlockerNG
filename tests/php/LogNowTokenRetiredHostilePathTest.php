@@ -86,4 +86,18 @@ final class LogNowTokenRetiredHostilePathTest extends TestCase
 		$this->assertSame(1, $result['exit'], "retired-token scan must ignore inherited Git context:\n{$result['stdout']}{$result['stderr']}");
 		$this->assertStringContainsString('src/café.inc:2', $result['stdout'] . $result['stderr']);
 	}
+
+	public function testRetiredTokenScanRejectsEmptyTrackedSet(): void
+	{
+		$environment = pfb_test_scrubbed_git_env();
+		$result = pfb_test_run_process(['git', '-C', $this->root, 'rm', '-q', '--cached', 'src/café.inc'], 10.0, $environment);
+		$this->assertSame(0, $result['exit'], 'scratch git rm failed: ' . $result['stderr']);
+
+		$phpunit = dirname(__DIR__, 2) . '/vendor/bin/phpunit';
+		$test = $this->root . '/tests/php/LogNowTokenRetiredTest.php';
+		$result = pfb_test_run_process([$phpunit, '--colors=never', '--no-configuration', $test], 10.0, $environment);
+
+		$this->assertSame(1, $result['exit'], "retired-token scan must reject an empty tracked set:\n{$result['stdout']}{$result['stderr']}");
+		$this->assertStringContainsString('an empty scan must not pass', $result['stdout'] . $result['stderr']);
+	}
 }
