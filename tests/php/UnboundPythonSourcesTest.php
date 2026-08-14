@@ -60,7 +60,6 @@ final class UnboundPythonSourcesTest extends TestCase
 			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => PfbToggle::Off,
-			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			// issue #1255: DNSBL Wildcard Blocking (TLD) toggle; OFF by default here.
 			'dnsbl_tld_wildcard' => '',

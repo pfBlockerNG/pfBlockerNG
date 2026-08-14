@@ -238,7 +238,6 @@ $pfb['dnsblarchive']	= '/usr/local/etc/pfb_dnsbl_cache.tar';
 // it. See pfb_pending_changes_marker().
 $pfb['pending_marker']	= '/usr/local/etc/pfb_pending_changes';
 
-$pfb['dnsbl_tld_data']	= '/usr/local/pkg/pfblockerng/dnsbl_tld';
 $pfb['dnsbl_conf']	= '/var/unbound/pfb_dnsbl_lighty.conf';
 $pfb['dnsbl_cert']	= '/var/unbound/dnsbl_cert.pem';
 $pfb['unbound_py_conf']	= '/var/unbound/pfb_unbound.ini';

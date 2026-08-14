@@ -4198,7 +4198,7 @@ class TestTldWildcardClassifyTwoLabelPublicSuffix:
     """
 
     # A realistic oracle shape: bare single-label TLDs coexist with 2-label
-    # suffixes, exactly as the real PSL-derived dnsbl_tld ships them (see
+    # suffixes, exactly as the real PSL-derived dnsbl_psl ships them (see
     # tests/fixtures/adr06_golden/tld_master.txt: com/net/org/co.uk on adjacent
     # lines). "xn--p1ai.xn--80asehdb" is a synthetic-but-PSL-shaped (per-label
     # punycode, ADR-08/#914 "xn-- stays iTLD") 2-label suffix -- classify() treats
@@ -4303,7 +4303,7 @@ class TestTldWildcardClassifyMultiLabelPublicSuffix:
     case rather than living alongside it.
 
     All suffix chains below are REAL entries from the shipped oracle
-    (src/usr/local/pkg/pfblockerng/dnsbl_tld) except the 5-label chain -- the
+    (src/usr/local/pkg/pfblockerng/dnsbl_psl) except the 5-label chain -- the
     real oracle ships zero 4-dot (5-label) suffix lines as of #1476, so that one
     is synthetic but PSL-shaped: one level deeper than the real
     edu.au/act.edu.au and k12.ma.us/pvt.k12.ma.us nesting used below.

@@ -170,11 +170,14 @@ class TestManifestBridgeRoundTrip:
 # gone, wherever it moved.
 # --------------------------------------------------------------------------- #
 class TestSemantic6SubstringGuard:
-    def test_g1_dnsbl_tld_data_and_remove_survive_verbatim_in_inc(self) -> None:
-        # ADR SS2.3 Semantic 6's own example pair: a `dnsbl_tld`-prefixed
-        # rename must not catch these two path vars.
+    def test_g1_dnsbl_tld_remove_survives_verbatim_in_inc(self) -> None:
+        # ADR SS2.3 Semantic 6's own example pair originally pinned both
+        # `dnsbl_tld_data` and `dnsbl_tld_remove` against a naive `dnsbl_tld`-
+        # prefixed rename; `dnsbl_tld_data` was retired with the shipped
+        # dnsbl_tld file by issue #1541 (dnsbl_psl is the sole PSL authority
+        # now). `dnsbl_tld_remove` is a live /tmp cleanup path var, unrelated
+        # to the retired filename, and must still survive verbatim.
         inc = _read(SRC_INC)
-        assert "$pfb['dnsbl_tld_data']" in inc
         assert "$pfb['dnsbl_tld_remove']" in inc
 
     def test_g2_classify_siblings_survive_verbatim_in_py(self) -> None:

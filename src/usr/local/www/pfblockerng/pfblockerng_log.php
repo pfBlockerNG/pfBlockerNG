@@ -162,8 +162,8 @@ $pfb_logtypes = array(	'defaultlogs'	=> array('name'		=> 'Log Files',
 						'download'	=> TRUE,
 						'clear'		=> FALSE
 						),
-			'dnsbl_tld'	=> array('name'		=> 'DNSBL TLD List',
-						'ext'		=> array('dnsbl_tld'),
+			'dnsbl_psl'	=> array('name'		=> 'DNSBL Public Suffix List',
+						'ext'		=> array('dnsbl_psl'),
 						'logdir'	=> '/usr/local/pkg/pfblockerng/',
 						'download'	=> TRUE,
 						'clear'		=> FALSE

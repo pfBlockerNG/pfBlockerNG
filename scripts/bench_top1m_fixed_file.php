@@ -32,7 +32,6 @@ $GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 	'dbdir'               => "{$sandbox}/db",
 	'dnsbl_top1m'         => 'on',
 	'dnsbl_tld_wildcard'  => '',
-	'dnsbl_tld_data'      => "{$sandbox}/does_not_exist",
 	'dnsbl_unlock'        => "{$sandbox}/dnsbl_unlock",
 	'dnsblconfig'         => [
 		'tld_wildcard_blacklist' => '',

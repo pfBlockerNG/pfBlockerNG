@@ -1089,20 +1089,26 @@ $dnsbl_text = 'This is an <strong>Advanced process</strong> to determine if all 
 		<span class="text-danger">Click infoblock</span> before enabling this feature!&emsp;
 		<div id="dnsbl_tld_info" class="infoblock">
 
-		<strong>Definition: TLD</strong> -
-		&emsp;represents the last segment of a domain name. IE: example.com (TLD = com), example.uk.com (TLD = uk.com)<br /><br />
+		<strong>Definition: Public suffix</strong> -
+		&emsp;a domain suffix under which the public may register names, per the
+		<a href="https://publicsuffix.org/" target="_blank" rel="noopener noreferrer">Public Suffix List</a>. IE: <strong>com</strong>,
+		<strong>co.uk</strong>, <strong>github.io</strong><br /><br />
 
+		<strong>Definition: Registrable domain</strong> -
+		&emsp;a public suffix plus exactly one additional label. IE: example.com (suffix = com), example.co.uk (suffix = co.uk)<br /><br />
 
-		When enabled and after all downloads for DNSBL Feeds have completed; TLD will process the Domains.<br />
-		TLD uses a predetermined list of TLDs, to determine if the listed Domains should be wildcard blocked (Block all sub-Domains).<br />
-		The predetermined TLD list can be found in &emsp;<u>/usr/local/pkg/pfblockerng/dnsbl_tld</u><br /><br />
+		When enabled and after all downloads for DNSBL Feeds have completed; this process will classify the listed Domains.<br />
+		A Domain listed at its <strong>registrable domain</strong> is wildcard blocked (Block all sub-Domains).<br />
+		A Domain that is itself a <strong>public suffix</strong> is <strong>never</strong> wildcard blocked (blocking it would block every registrant under it).<br />
+		A Domain listed <strong>deeper</strong> than its registrable domain stays an exact block (only that specific name).<br />
+		The Public Suffix List authority can be found in &emsp;<u>/usr/local/pkg/pfblockerng/dnsbl_psl</u><br /><br />
 
-		To exclude a TLD/Domain from the TLD process, add the TLD/Domain to the <strong>TLD Exclusion</strong> custom list:<br />
-		&#8226&emsp;This only excludes the domain from the TLD process, it doesn\'t whitelist the domain.<br />
+		To exclude a suffix/Domain from this process, add it to the <strong>TLD Exclusion</strong> custom list:<br />
+		&#8226&emsp;This only excludes the domain from the process, it doesn\'t whitelist the domain.<br />
 		&#8226&emsp;Only the specific Sub-Domains/Domains listed in the DNSBL Feeds will be blocked.<br />
 		&#8226&emsp;Changes to the TLD Exclusion take effect on the next DNSBL update.<br /><br />
 		<strong>Note:</strong>
-		&emsp;A specific sub-Domain added to the <strong>Custom Domain Whitelist</strong> is exempted from a TLD
+		&emsp;A specific sub-Domain added to the <strong>Custom Domain Whitelist</strong> is exempted from a
 		Wildcard Blocked domain (that exact name resolves).<br />
 		&emsp;&emsp;&emsp;&emsp;To exempt the whole domain (all sub-Domains), add it to the TLD Exclusion, or add a wildcard Whitelist entry for the domain.<br /><br />
 

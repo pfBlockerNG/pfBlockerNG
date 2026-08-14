@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""update_public_suffix_list.py -- refresh dnsbl_tld and dnsbl_psl from the Public Suffix List.
+"""update_public_suffix_list.py -- refresh dnsbl_psl from the Public Suffix List.
 
-src/usr/local/pkg/pfblockerng/dnsbl_tld is the flat, one-suffix-per-line master list
-_dnsbl_load_tld_wildcard_master() (pfb_unbound.py) keys registrable domains against,
-staged into the Unbound chroot as pfb_py_tld.txt (the legacy PHP tld_analysis()
-consumer was retired by ADR-65). This script refreshes it from the authoritative
-upstream source, while dnsbl_psl preserves both ICANN and PRIVATE rule sections
-for the PSL resolver. The tld output intentionally drops PRIVATE entries and
-wildcard/exception syntax (issue #1272).
+src/usr/local/pkg/pfblockerng/dnsbl_psl is the SOLE shipped PSL artifact (issue
+#1541): a self-describing authority carrying both the ICANN and PRIVATE
+sections, with exact, wildcard ('*.') and exception ('!') rule syntax intact.
+It is consumed by the pure PSL resolver (pfb_unbound.py's parse_psl_rules) to
+derive each domain's registrable parent for DNSBL Wildcard Blocking. This
+script refreshes it from the authoritative upstream source.
 
 Data source
 -----------
 https://publicsuffix.org/list/public_suffix_list.dat -- the ICANN section runs
-between the '// ===BEGIN ICANN DOMAINS===' / '// ===END ICANN DOMAINS===' marker
-lines; comments outside those markers are ignored. The PRIVATE section is
-validated and retained in dnsbl_psl, but omitted from dnsbl_tld.
+between the '// ===BEGIN ICANN DOMAINS===' / '// ===END ICANN DOMAINS==='
+marker lines, and the PRIVATE section between the matching PRIVATE markers;
+comments outside those markers are ignored.
 
 Conversion
 ----------
@@ -27,21 +26,22 @@ whitespace, an RFC 3454 Table B.1 "commonly mapped to nothing" character
 (zero-width space, BOM, variation selectors, ...) after stripping, a category-Cc
 control character (NUL, DEL, ...), a category-Cn (unassigned) codepoint, or any
 label past the 63-octet DNS cap, ASCII or not -- PSL never ships any of these.
+A non-comment line that is not valid PSL rule syntax (malformed wildcard/
+exception marker, stray metacharacter, ...) raises instead of being silently
+skipped -- a malformed fetch must never be published.
 
 Output format
 -------------
 A '#'-prefixed header (source URL + the upstream VERSION/COMMIT comment values,
-or 'unknown' if either is absent) followed by one suffix per line in
-dnsbl_tld, in PSL source order (the file is NOT sorted). dnsbl_psl contains the
-same header plus both normalized PSL sections and their wildcard/exception rules.
-The tld consumer skips '' and '#'-prefixed lines
-(pfb_unbound.py's _dnsbl_load_tld_wildcard_master()).
+or 'unknown' if either is absent) followed by the normalized ICANN section
+between its BEGIN/END markers and the normalized PRIVATE section between its
+own markers, each preserving exact, wildcard, and exception rule syntax.
 
 Churn guard: the header's VERSION timestamp moves on every upstream commit even
 when no suffix actually changed, so a plain run compares the GENERATED BODY
-(non-'#' lines) against the existing file's body -- identical bodies leave the
-file untouched (no weekly header-only diff); a real body change rewrites the
-whole file (header + body).
+(non-'#', non-blank lines) against the existing file's body -- an identical
+body leaves the file untouched (no weekly header-only diff); a real body
+change rewrites the whole file (header + body).
 
 Usage
 -----
@@ -66,19 +66,22 @@ PSL_URL = "https://publicsuffix.org/list/public_suffix_list.dat"
 
 BEGIN_MARKER = "// ===BEGIN ICANN DOMAINS==="
 END_MARKER = "// ===END ICANN DOMAINS==="
+PRIVATE_BEGIN_MARKER = "// ===BEGIN PRIVATE DOMAINS==="
+PRIVATE_END_MARKER = "// ===END PRIVATE DOMAINS==="
 
-# Plausibility floor: the live ICANN section holds ~6,900 suffixes. A fetch that
-# returns far fewer (an empty-but-200 body, a captive-portal/proxy interstitial, a
-# truncated response) must NEVER overwrite dnsbl_tld -- a blanked/truncated master
-# list silently breaks every TLD-Allow lookup. Refuse below this floor instead.
+# Plausibility floors: the live ICANN section holds ~6,900 rules and the PRIVATE
+# section several thousand more. A fetch that returns far fewer (an
+# empty-but-200 body, a captive-portal/proxy interstitial, a truncated
+# response) must NEVER overwrite dnsbl_psl -- a blanked/truncated authority
+# silently breaks every DNSBL Wildcard Blocking lookup. Refuse below these
+# floors instead.
 MIN_PLAUSIBLE_SUFFIXES = 5000
 MIN_PLAUSIBLE_PRIVATE_SUFFIXES = 1000
 
-DEFAULT_TLD_FILE = Path(__file__).resolve().parent.parent.parent / "src/usr/local/pkg/pfblockerng/dnsbl_tld"
 DEFAULT_PSL_FILE = Path(__file__).resolve().parent.parent.parent / "src/usr/local/pkg/pfblockerng/dnsbl_psl"
 
 HEADER_TEMPLATE = (
-    "# Public Suffix List (ICANN section only) - https://publicsuffix.org/list/public_suffix_list.dat\n"
+    "# Public Suffix List (ICANN and PRIVATE sections) - https://publicsuffix.org/list/public_suffix_list.dat\n"
     "# VERSION: {version}\n"
     "# COMMIT: {commit}\n"
     "# Regenerated by scripts/misc/update_public_suffix_list.py - do not edit by hand.\n"
@@ -103,27 +106,6 @@ def extract_header(lines: list[str]) -> tuple[str, str]:
         elif line.startswith("// COMMIT:"):
             commit = line.split(":", 1)[1].strip()
     return version, commit
-
-
-def extract_icann_lines(lines: list[str]) -> list[str]:
-    """Return the raw lines strictly between the ICANN BEGIN/END markers.
-
-    Raises SystemExit if either marker is missing -- a captive-portal/HTML page or a
-    truncated fetch must never be silently treated as an empty ICANN section.
-    """
-    try:
-        begin = lines.index(BEGIN_MARKER)
-    except ValueError:
-        raise SystemExit(f"Refusing to rewrite: '{BEGIN_MARKER}' marker not found in the fetched PSL.") from None
-    try:
-        end = lines.index(END_MARKER, begin + 1)
-    except ValueError:
-        raise SystemExit(f"Refusing to rewrite: '{END_MARKER}' marker not found (truncated fetch?).") from None
-    return lines[begin + 1 : end]
-
-
-PRIVATE_BEGIN_MARKER = "// ===BEGIN PRIVATE DOMAINS==="
-PRIVATE_END_MARKER = "// ===END PRIVATE DOMAINS==="
 
 
 def extract_psl_sections(lines: list[str]) -> tuple[list[str], list[str]]:
@@ -192,13 +174,13 @@ def _punycode_label(label: str) -> str:
 
 
 def convert_suffix(line: str) -> str | None:
-    """Convert one ICANN-section PSL line to a dnsbl_tld suffix, or None to skip it.
+    """Convert one PSL rule TOKEN (no '*.'/'!' prefix -- see convert_psl_rule) to
+    its normalized DNS suffix form, or None to skip it.
 
-    Skips blank lines, '//' comments, '*.' wildcard rules, and '!' exception rules
-    (owner decision, issue #1272 -- no parser/format extension for either), plus any
-    malformed line carrying whitespace/ignorable characters (see _has_blank_or_ignorable_char)
-    or a label the idna codec rejects (past the 63-octet DNS cap, ASCII or not --
-    issue #1306) -- PSL never ships either. A dot-less bare TLD passes through
+    Skips blank lines and '//' comments, plus any malformed line carrying
+    whitespace/ignorable characters (see _has_blank_or_ignorable_char) or a label
+    the idna codec rejects (past the 63-octet DNS cap, ASCII or not -- issue
+    #1306) -- PSL never ships either. A dot-less bare TLD passes through
     unchanged (issue #1068: consumers key it under its own full value).
     """
     if not line or line.startswith("//") or line.startswith("*.") or line.startswith("!"):
@@ -245,11 +227,6 @@ def convert_psl_rule(line: str) -> str | None:
     return prefix + ("." if prefix == "*" else "") + converted
 
 
-def build_body(icann_lines: list[str]) -> list[str]:
-    """Convert every ICANN-section line to its dnsbl_tld suffix, dropping skips."""
-    return [suffix for line in icann_lines if (suffix := convert_suffix(line)) is not None]
-
-
 def build_psl_section(lines: list[str]) -> list[str]:
     """Normalize PSL rules while retaining exact, wildcard, and exception syntax."""
     rules = [rule for line in lines if (rule := convert_psl_rule(line)) is not None]
@@ -263,11 +240,11 @@ def build_psl_section(lines: list[str]) -> list[str]:
 
 
 def require_plausible(body: list[str]) -> None:
-    """Refuse to proceed if the parsed ICANN suffix count is implausibly small."""
+    """Refuse to proceed if the parsed ICANN rule count is implausibly small."""
     if len(body) < MIN_PLAUSIBLE_SUFFIXES:
         raise SystemExit(
-            f"Refusing to rewrite: parsed only {len(body)} ICANN suffixes "
-            f"(< {MIN_PLAUSIBLE_SUFFIXES}); a truncated/empty response must not overwrite dnsbl_tld."
+            f"Refusing to rewrite: parsed only {len(body)} ICANN rules "
+            f"(< {MIN_PLAUSIBLE_SUFFIXES}); a truncated/empty response must not overwrite dnsbl_psl."
         )
 
 
@@ -279,22 +256,11 @@ def require_private_plausible(body: list[str]) -> None:
         )
 
 
-def existing_body(text: str) -> list[str]:
-    """Non-'#' lines of an existing dnsbl_tld file -- the churn-guard comparison basis."""
-    return [line for line in text.splitlines() if not line.startswith("#")]
-
-
-def render_output(version: str, commit: str, body: list[str]) -> str:
-    """Render the full dnsbl_tld file content: header then one suffix per line."""
-    header = HEADER_TEMPLATE.format(version=version, commit=commit).rstrip("\n")
-    return header + "\n" + "\n".join(body).rstrip("\n") + "\n"
-
-
 def render_psl_output(version: str, commit: str, icann: list[str], private: list[str]) -> str:
     """Render the self-describing authority consumed by the pure PSL resolver."""
-    header = HEADER_TEMPLATE.replace("ICANN section only", "ICANN and PRIVATE sections")
+    header = HEADER_TEMPLATE.format(version=version, commit=commit)
     return (
-        header.format(version=version, commit=commit)
+        header
         + BEGIN_MARKER
         + "\n"
         + "\n".join(icann)
@@ -332,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="exit non-zero if dnsbl_tld and dnsbl_psl are out of date; changes nothing",
+        help="exit non-zero if dnsbl_psl is out of date; changes nothing",
     )
     args = parser.parse_args(argv)
 
@@ -343,36 +309,28 @@ def main(argv: list[str] | None = None) -> int:
     lines = normalise_lines(fetched)
     version, commit = extract_header(lines)
     icann_lines, private_lines = extract_psl_sections(lines)
-    body = build_body(icann_lines)
     psl_icann = build_psl_section(icann_lines)
     psl_private = build_psl_section(private_lines)
-    require_plausible(body)
+    require_plausible(psl_icann)
     require_private_plausible(psl_private)
 
-    old_tld = DEFAULT_TLD_FILE.read_text(encoding="utf-8") if DEFAULT_TLD_FILE.exists() else ""
     old_psl = DEFAULT_PSL_FILE.read_text(encoding="utf-8") if DEFAULT_PSL_FILE.exists() else ""
-    tld_changed = existing_body(old_tld) != body
     authority_body = (
         [BEGIN_MARKER] + psl_icann + [END_MARKER, PRIVATE_BEGIN_MARKER] + psl_private + [PRIVATE_END_MARKER]
     )
     psl_changed = existing_psl_body(old_psl) != authority_body
     if args.check:
-        if tld_changed:
-            print(f"dnsbl_tld is OUT OF DATE ({len(body)} ICANN suffixes vs {len(existing_body(old_tld))} shipped).")
         if psl_changed:
             print(f"dnsbl_psl is OUT OF DATE ({len(psl_icann)} ICANN/{len(psl_private)} PRIVATE rules).")
-        if not tld_changed and not psl_changed:
-            print("dnsbl_tld and dnsbl_psl are up to date (bodies unchanged).")
-        return 1 if tld_changed or psl_changed else 0
+        else:
+            print("dnsbl_psl is up to date (body unchanged).")
+        return 1 if psl_changed else 0
 
     if psl_changed:
         _atomic_write(DEFAULT_PSL_FILE, render_psl_output(version, commit, psl_icann, psl_private))
         print(f"dnsbl_psl regenerated: {len(psl_icann)} ICANN/{len(psl_private)} PRIVATE rules.")
-    if tld_changed:
-        _atomic_write(DEFAULT_TLD_FILE, render_output(version, commit, body))
-        print(f"dnsbl_tld regenerated: {len(body)} ICANN suffixes.")
-    if not tld_changed and not psl_changed:
-        print("dnsbl_tld and dnsbl_psl are up to date (bodies unchanged).")
+    else:
+        print("dnsbl_psl is up to date (body unchanged).")
     return 0
 
 

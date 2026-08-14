@@ -33,7 +33,6 @@ final class DnsblManifestAtomicGenerationTest extends TestCase
 			'unbound_py_top1m'   => "{$this->tmp}/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => 'off',
-			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'whitelist' => ''],

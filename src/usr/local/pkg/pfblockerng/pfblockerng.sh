@@ -320,14 +320,15 @@ aliastables() {
 # wiped on reboot, so DNSBL comes up dead; this keeps it alive across reboot with PURE FILE
 # OPS (no reload/restart), kept SEPARATE from the IP aliastables flow above (different
 # lifecycles). stage = copy the SHIPPED set (PFB_PY_SHIPPED) from /usr/local into the chroot
-# (re-run on every save/restore, never restored stale); teardown = remove the SHIPPED set
-# plus its mapped TLD copy; save = stage then archive the
+# (re-run on every save/restore, never restored stale); teardown = remove the SHIPPED set;
+# save = stage then archive the
 # GENERATED set plus exact TOP1M detector sidecars; restore = boot earlyshellcmd, untar
 # the cached files THEN stage. Naming contract: a new generated file MUST keep the
 # pfb_unbound*/pfb_py_* prefix; a new shipped file goes in PFB_PY_SHIPPED (the port's plist
-# is GENERATED from the stagedir, so packaging needs nothing) -- a NAME-MAPPED shipped file
-# (source basename != chroot basename) is the sole exception: it needs its own explicit
-# stage/save/teardown handling instead; see dnsbl_psl. Order matters: a module goes
+# is GENERATED from the stagedir, so packaging needs nothing) -- dnsbl_psl rides
+# PFB_PY_SHIPPED with the same source/chroot basename like every other entry; no
+# NAME-MAPPED shipped file (source basename != chroot basename) remains (issue #1541
+# retired the last one, dnsbl_tld). Order matters: a module goes
 # BEFORE the file that imports it, so a
 # load racing the staging loop never sees the importer without its dependency.
 dnsbl_cache() {

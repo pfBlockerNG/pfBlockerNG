@@ -29,7 +29,6 @@ $GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 	'unbound_py_sources' => "{$sandbox}/pfb_py_sources.json",
 	'dbdir'              => "{$sandbox}/db",
 	'dnsbl_top1m'        => 'off',
-	'dnsbl_tld_data'     => "{$sandbox}/does_not_exist",
 	'dnsbl_unlock'       => "{$sandbox}/dnsbl_unlock",
 	'dnsblconfig'        => [
 		'tld_wildcard_blacklist' => '',

@@ -13,7 +13,7 @@ on:
   workflow_run:
     workflows:
       - "HSTS preload refresh (pfb_py_hsts)"
-      - "PSL Refresh (dnsbl_tld)"
+      - "PSL Refresh (dnsbl_psl)"
       - "Smoke fan-out (all CI legs, live pfSense VM)"
       - "TLD List Refresh"
       - "UI tests fan-out (all CI legs, live pfSense VM)"

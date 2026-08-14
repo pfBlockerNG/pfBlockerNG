@@ -60,7 +60,6 @@ final class Adr62DnsblCorpusManifestTest extends TestCase
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => PfbToggle::On,
 			'dnsbl_tld_wildcard' => 'on',
-			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsblconfig'        => [
 				'tld_wildcard_blacklist' => base64_encode("zip"),

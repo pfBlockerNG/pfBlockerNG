@@ -202,7 +202,6 @@ final class DnsblStagingGenerationGuardTest extends TestCase
 			'unbound_py_sources' => "{$tmp}/pfb_py_sources.json",
 			'dbdir'              => "{$tmp}/db",
 			'dnsbl_top1m'        => 'off',
-			'dnsbl_tld_data'     => "{$tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$tmp}/dnsbl_unlock",
 			'dnsblconfig'        => ['tld_wildcard_blacklist' => '', 'tld_wildcard_exclusion' => '', 'whitelist' => ''],
 		]);
