@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""update_public_suffix_list.py -- refresh dnsbl_tld from the Public Suffix List.
+"""update_public_suffix_list.py -- refresh dnsbl_tld and dnsbl_psl from the Public Suffix List.
 
 src/usr/local/pkg/pfblockerng/dnsbl_tld is the flat, one-suffix-per-line master list
 _dnsbl_load_tld_wildcard_master() (pfb_unbound.py) keys registrable domains against,
@@ -69,8 +69,10 @@ END_MARKER = "// ===END ICANN DOMAINS==="
 # truncated response) must NEVER overwrite dnsbl_tld -- a blanked/truncated master
 # list silently breaks every TLD-Allow lookup. Refuse below this floor instead.
 MIN_PLAUSIBLE_SUFFIXES = 5000
+MIN_PLAUSIBLE_PRIVATE_SUFFIXES = 1000
 
 DEFAULT_TLD_FILE = Path(__file__).resolve().parent.parent.parent / "src/usr/local/pkg/pfblockerng/dnsbl_tld"
+DEFAULT_PSL_FILE = Path(__file__).resolve().parent.parent.parent / "src/usr/local/pkg/pfblockerng/dnsbl_psl"
 
 HEADER_TEMPLATE = (
     "# Public Suffix List (ICANN section only) - https://publicsuffix.org/list/public_suffix_list.dat\n"
@@ -115,6 +117,25 @@ def extract_icann_lines(lines: list[str]) -> list[str]:
     except ValueError:
         raise SystemExit(f"Refusing to rewrite: '{END_MARKER}' marker not found (truncated fetch?).") from None
     return lines[begin + 1 : end]
+
+
+PRIVATE_BEGIN_MARKER = "// ===BEGIN PRIVATE DOMAINS==="
+PRIVATE_END_MARKER = "// ===END PRIVATE DOMAINS==="
+
+
+def extract_psl_sections(lines: list[str]) -> tuple[list[str], list[str]]:
+    """Return ICANN and PRIVATE rule lines, requiring the four PSL markers."""
+    markers = (BEGIN_MARKER, END_MARKER, PRIVATE_BEGIN_MARKER, PRIVATE_END_MARKER)
+    positions: list[int] = []
+    for marker in markers:
+        found = [index for index, line in enumerate(lines) if line == marker]
+        if len(found) != 1:
+            raise SystemExit(f"Refusing to rewrite: expected exactly one '{marker}' marker.")
+        positions.append(found[0])
+    begin, end, private_begin, private_end = positions
+    if not begin < end < private_begin < private_end:
+        raise SystemExit("Refusing to rewrite: PSL section markers are out of order.")
+    return lines[begin + 1 : end], lines[private_begin + 1 : private_end]
 
 
 def _has_blank_or_ignorable_char(text: str) -> bool:
@@ -175,9 +196,35 @@ def convert_suffix(line: str) -> str | None:
         return None
 
 
+def convert_psl_rule(line: str) -> str | None:
+    """Normalize one PSL exact, wildcard, or exception rule."""
+    line = line.strip()
+    if not line or line.startswith("//"):
+        return None
+    token = line.split(None, 1)[0]
+    prefix = ""
+    if token[:1] in ("*", "!"):
+        prefix, token = token[0], token[1:]
+    if prefix == "*" and not token.startswith("."):
+        return None
+    if token.startswith("."):
+        token = token[1:]
+    if not token or any(char in token for char in "!*"):
+        return None
+    converted = convert_suffix(token)
+    if converted is None:
+        return None
+    return prefix + ("." if prefix == "*" else "") + converted
+
+
 def build_body(icann_lines: list[str]) -> list[str]:
     """Convert every ICANN-section line to its dnsbl_tld suffix, dropping skips."""
     return [suffix for line in icann_lines if (suffix := convert_suffix(line)) is not None]
+
+
+def build_psl_section(lines: list[str]) -> list[str]:
+    """Normalize PSL rules while retaining exact, wildcard, and exception syntax."""
+    return [rule for line in lines if (rule := convert_psl_rule(line)) is not None]
 
 
 def require_plausible(body: list[str]) -> None:
@@ -189,6 +236,14 @@ def require_plausible(body: list[str]) -> None:
         )
 
 
+def require_private_plausible(body: list[str]) -> None:
+    if len(body) < MIN_PLAUSIBLE_PRIVATE_SUFFIXES:
+        raise SystemExit(
+            f"Refusing to rewrite: parsed only {len(body)} PRIVATE suffixes "
+            f"(< {MIN_PLAUSIBLE_PRIVATE_SUFFIXES}); a truncated/empty response must not overwrite dnsbl_psl."
+        )
+
+
 def existing_body(text: str) -> list[str]:
     """Non-'#' lines of an existing dnsbl_tld file -- the churn-guard comparison basis."""
     return [line for line in text.splitlines() if not line.startswith("#")]
@@ -197,6 +252,31 @@ def existing_body(text: str) -> list[str]:
 def render_output(version: str, commit: str, body: list[str]) -> str:
     """Render the full dnsbl_tld file content: header then one suffix per line."""
     return HEADER_TEMPLATE.format(version=version, commit=commit) + "\n".join(body) + "\n"
+
+
+def render_psl_output(version: str, commit: str, icann: list[str], private: list[str]) -> str:
+    """Render the self-describing authority consumed by the pure PSL resolver."""
+    header = HEADER_TEMPLATE.replace("ICANN section only", "ICANN and PRIVATE sections")
+    return (
+        header.format(version=version, commit=commit)
+        + BEGIN_MARKER
+        + "\n"
+        + "\n".join(icann)
+        + "\n"
+        + END_MARKER
+        + "\n"
+        + PRIVATE_BEGIN_MARKER
+        + "\n"
+        + "\n".join(private)
+        + "\n"
+        + PRIVATE_END_MARKER
+        + "\n\n"
+    )
+
+
+def existing_psl_body(text: str) -> list[str]:
+    """Return authority body lines, excluding generated comments."""
+    return [line for line in text.splitlines() if line and not line.startswith("#")]
 
 
 # ── Network (excluded from unit tests) ─────────────────────────────────────
@@ -222,20 +302,37 @@ def main(argv: list[str] | None = None) -> int:
 
     lines = normalise_lines(fetch_psl())
     version, commit = extract_header(lines)
-    body = build_body(extract_icann_lines(lines))
+    icann_lines, private_lines = extract_psl_sections(lines)
+    body = build_body(icann_lines)
+    psl_icann = build_psl_section(icann_lines)
+    psl_private = build_psl_section(private_lines)
     require_plausible(body)
+    require_private_plausible(psl_private)
 
-    old_text = DEFAULT_TLD_FILE.read_text(encoding="utf-8") if DEFAULT_TLD_FILE.exists() else ""
-    if existing_body(old_text) == body:
-        print("dnsbl_tld is up to date (body unchanged).")
-        return 0
-
+    old_tld = DEFAULT_TLD_FILE.read_text(encoding="utf-8") if DEFAULT_TLD_FILE.exists() else ""
+    old_psl = DEFAULT_PSL_FILE.read_text(encoding="utf-8") if DEFAULT_PSL_FILE.exists() else ""
+    tld_changed = existing_body(old_tld) != body
+    authority_body = (
+        [BEGIN_MARKER] + psl_icann + [END_MARKER, PRIVATE_BEGIN_MARKER] + psl_private + [PRIVATE_END_MARKER]
+    )
+    psl_changed = existing_psl_body(old_psl) != authority_body
     if args.check:
-        print(f"dnsbl_tld is OUT OF DATE ({len(body)} ICANN suffixes vs {len(existing_body(old_text))} shipped).")
-        return 1
+        if tld_changed:
+            print(f"dnsbl_tld is OUT OF DATE ({len(body)} ICANN suffixes vs {len(existing_body(old_tld))} shipped).")
+        if psl_changed:
+            print(f"dnsbl_psl is OUT OF DATE ({len(psl_icann)} ICANN/{len(psl_private)} PRIVATE rules).")
+        if not tld_changed and not psl_changed:
+            print("dnsbl_tld and dnsbl_psl are up to date (bodies unchanged).")
+        return 1 if tld_changed or psl_changed else 0
 
-    DEFAULT_TLD_FILE.write_text(render_output(version, commit, body), encoding="utf-8")
-    print(f"dnsbl_tld regenerated: {len(body)} ICANN suffixes.")
+    if tld_changed:
+        DEFAULT_TLD_FILE.write_text(render_output(version, commit, body), encoding="utf-8")
+        print(f"dnsbl_tld regenerated: {len(body)} ICANN suffixes.")
+    if psl_changed:
+        DEFAULT_PSL_FILE.write_text(render_psl_output(version, commit, psl_icann, psl_private), encoding="utf-8")
+        print(f"dnsbl_psl regenerated: {len(psl_icann)} ICANN/{len(psl_private)} PRIVATE rules.")
+    if not tld_changed and not psl_changed:
+        print("dnsbl_tld and dnsbl_psl are up to date (bodies unchanged).")
     return 0
 
 

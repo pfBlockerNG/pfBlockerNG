@@ -24,6 +24,12 @@ _spec.loader.exec_module(upsl)
 _SHIPPED_TLD_FILE = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng/dnsbl_tld"
 
 
+@pytest.fixture(autouse=True)
+def _small_private_floor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_PRIVATE_SUFFIXES", 1, raising=False)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", tmp_path / "dnsbl_psl", raising=False)
+
+
 # --------------------------------------------------------------------------- #
 # issue #1272 red->green proof: the shipped dnsbl_tld predates this sync
 # script (byte-identical since the repo's initial commit) and still carries
@@ -193,8 +199,66 @@ def test_existing_body_strips_only_hash_lines() -> None:
 # --------------------------------------------------------------------------- #
 
 _FAKE_FETCH_BODY = (
-    "// VERSION: new\n// COMMIT: newsha\n// ===BEGIN ICANN DOMAINS===\nac\ncom\n// ===END ICANN DOMAINS===\n"
+    "// VERSION: new\n// COMMIT: newsha\n// ===BEGIN ICANN DOMAINS===\nac\ncom\n"
+    "// ===END ICANN DOMAINS===\n// ===BEGIN PRIVATE DOMAINS===\nprivate.example\n"
+    "// ===END PRIVATE DOMAINS===\n"
 )
+
+
+def test_build_psl_authority_keeps_order_markers_and_rule_syntax() -> None:
+    assert hasattr(upsl, "build_psl_section")
+    assert hasattr(upsl, "extract_psl_sections")
+    assert hasattr(upsl, "render_psl_output")
+    lines = upsl.normalise_lines(
+        "// ===BEGIN ICANN DOMAINS===\nCom\n*.CK\n!WWW.CK\n// ===END ICANN DOMAINS===\n"
+        "// ===BEGIN PRIVATE DOMAINS===\nGitHub.IO\n// ===END PRIVATE DOMAINS===\n"
+    )
+    sections = upsl.extract_psl_sections(lines)
+    assert upsl.build_psl_section(sections[0]) == ["com", "*.ck", "!www.ck"]
+    assert upsl.build_psl_section(sections[1]) == ["github.io"]
+    rendered = upsl.render_psl_output("v", "c", ["com"], ["github.io"])
+    assert "// ===BEGIN ICANN DOMAINS===" in rendered
+    assert "// ===END ICANN DOMAINS===" in rendered
+    assert "// ===BEGIN PRIVATE DOMAINS===" in rendered
+    assert "// ===END PRIVATE DOMAINS===" in rendered
+    assert rendered.splitlines()[-5:] == [
+        "// ===END ICANN DOMAINS===",
+        "// ===BEGIN PRIVATE DOMAINS===",
+        "github.io",
+        "// ===END PRIVATE DOMAINS===",
+        "",
+    ]
+
+
+def test_main_generates_self_describing_psl_without_touching_tld_on_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tld_target = tmp_path / "dnsbl_tld"
+    psl_target = tmp_path / "dnsbl_psl"
+    tld_target.write_text("# old\nac\ncom\n", encoding="utf-8")
+    psl_target.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "fetch_psl", _fake_fetch)
+    before_tld = tld_target.read_bytes()
+    before_psl = psl_target.read_bytes()
+    assert upsl.main(["--check"]) == 1
+    assert tld_target.read_bytes() == before_tld
+    assert psl_target.read_bytes() == before_psl
+
+
+def test_main_writes_psl_authority_when_body_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tld_target = tmp_path / "dnsbl_tld"
+    psl_target = tmp_path / "dnsbl_psl"
+    tld_target.write_text("# old\nac\ncom\n", encoding="utf-8")
+    psl_target.write_text("old\n", encoding="utf-8")
+    monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", tld_target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
+    monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
+    monkeypatch.setattr(upsl, "fetch_psl", _fake_fetch)
+    assert upsl.main([]) == 0
+    assert "private.example" in psl_target.read_text(encoding="utf-8")
 
 
 def _fake_fetch(timeout: float = 15) -> str:
@@ -223,7 +287,14 @@ def test_main_check_exits_zero_and_untouched_when_body_unchanged(
     existing = "# old header\n# COMMIT: old\nac\ncom\n"
     target = tmp_path / "dnsbl_tld"
     target.write_text(existing, encoding="utf-8")
+    psl_target = tmp_path / "dnsbl_psl"
+    psl_target.write_text(
+        "# header\n// ===BEGIN ICANN DOMAINS===\nac\ncom\n// ===END ICANN DOMAINS===\n"
+        "// ===BEGIN PRIVATE DOMAINS===\nprivate.example\n// ===END PRIVATE DOMAINS===\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(upsl, "DEFAULT_TLD_FILE", target)
+    monkeypatch.setattr(upsl, "DEFAULT_PSL_FILE", psl_target)
     monkeypatch.setattr(upsl, "MIN_PLAUSIBLE_SUFFIXES", 1)
     monkeypatch.setattr(upsl, "fetch_psl", _fake_fetch)
     before_mtime = target.stat().st_mtime_ns
