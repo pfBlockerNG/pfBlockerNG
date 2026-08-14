@@ -174,7 +174,7 @@ host toolchain. `PFB_ALLOW_HOST=1` opts back into a host run when that is what y
 want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which happened
 after the fact.
 
-Every suite is green in the image — pytest 5197 passed, PHPUnit 5242 tests with no
+Every suite is green in the image — pytest 5204 passed, PHPUnit 5242 tests with no
 failures, shellspec 1331 examples — so a red there is yours. What differs between the
 image and a macOS host is which tests *skip*, not which fail: its locale and `file(1)`
 classify a few inputs differently, one case needs a PHP build whose `php://memory` can

@@ -57,13 +57,14 @@ from pathlib import Path
 # it before parsing; a genuinely truncated/malformed report still fails below.
 _XML_ILLEGAL_CONTROL = re.compile(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
-# An allowlist line is "<id>  # <reason>", split on the first WHITESPACE-PRECEDED '#'.
-# A bare `partition("#")` would truncate any id carrying one of its own -- a pytest
-# parametrised id can (test_x[a#b]) -- into an id no run produces, leaving that skip
-# impossible to record. Reasons keep their own '#' (an issue reference) for the same
-# reason. The one shape this cannot express is an id containing a SPACED '#', which only
-# a shellspec description could produce; the header of the allowlist says so.
-_ENTRY = re.compile(r"^(?P<id>\S.*?)\s+#\s*(?P<reason>\S.*)$")
+# An allowlist line is "<id>  # <reason>", split on the LAST '#' that has whitespace on
+# both sides. The suites own the id and put unspaced '#' in it -- a pytest parametrised id
+# (test_x[a#b]) and PHPUnit's unnamed data-set naming (`testFoo with data set #0`) both do
+# -- so a split on the first '#' truncates the id into one no run produces, and the skip it
+# names can never be recorded. We own the reason, so the one shape ruled out is a reason
+# carrying a spaced '#'; that surfaces as an id carrying one, which is a parse error below.
+_ENTRY = re.compile(r"^(?P<id>.*\S)\s+#\s+(?P<reason>\S.*)$")
+_SPACED_HASH = re.compile(r"\s#\s")
 
 
 # pytest and PHPUnit write <skipped>; shellspec 0.28.1 writes <skip> (probed against its
@@ -135,7 +136,10 @@ def parse_allowlist(path: Path) -> dict[str, str]:
         entry = _ENTRY.match(line)
         if entry is None:
             raise AllowlistError(f"{path}:{lineno}: allowlist entry has no trailing '# reason': {raw!r}")
-        reasons[entry.group("id")] = entry.group("reason").strip()
+        entry_id = entry.group("id")
+        if _SPACED_HASH.search(entry_id):
+            raise AllowlistError(f"{path}:{lineno}: a reason may not contain a spaced '#': {raw!r}")
+        reasons[entry_id] = entry.group("reason").strip()
     return reasons
 
 
