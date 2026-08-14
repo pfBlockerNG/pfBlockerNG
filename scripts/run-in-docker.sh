@@ -41,8 +41,8 @@
 # Env:
 #   PFB_IMAGE   full image ref (default: ghcr.io/pfblockerng/ci-runner:<VERSION>)
 #   PFB_VM      non-empty -> use the ci-runner-vm image (qemu, oras, Playwright)
-#   PFB_BUILD   non-empty -> build the image locally instead of pulling (needs no
-#               credentials, which is the point while the packages are private)
+#   PFB_BUILD   non-empty -> build the image locally instead of pulling (the way to
+#               test a Dockerfile edit before its series is published)
 #   PFB_ALLOW_HOST  non-empty -> run on the host when no container can be reached,
 #               instead of refusing (the pre-#2350 behaviour; still says why)
 #   PFB_DOCKER_ARGS  extra args for `docker run` (e.g. "-e FOO=bar --network none")
@@ -99,22 +99,21 @@ if [ -z "$common" ]; then
 	common="$(git rev-parse --git-common-dir)"
 	case "$common" in
 	/*) ;;
-	*) common="$(pwd)/${common}" ;;
+	*) common="$(pwd -P)/${common}" ;;
 	esac
 fi
-common="$(CDPATH='' cd "$common" && pwd)"
+common="$(CDPATH='' cd "$common" && pwd -P)"
 
 # The image tracks the series the checkout names, so the wrapper cannot drift from the
 # toolchain the gates use. PFB_IMAGE overrides it outright — which is also the escape
 # hatch on a checkout that has no VERSION, so the file is only required when it is the
 # thing actually being read.
 #
-# The published packages are currently PRIVATE, so pulling needs a GHCR login that a
-# fresh machine will not have. This resolves against what is already on the box first
-# and only reaches for the registry as a fallback, so a locally built image just works
-# and nobody waits on an auth error to find that out. Both the bare series tag and the
-# per-arch tag the build job produces are accepted, since a local build of one image
-# usually carries the arch suffix.
+# The published packages are PUBLIC, so a pull needs no GHCR login. This still resolves
+# against what is already on the box first and only reaches for the registry as a
+# fallback, so a locally built image just works and no run waits on the network to find
+# that out. Both the bare series tag and the per-arch tag the build job produces are
+# accepted, since a local build of one image usually carries the arch suffix.
 image_name='ci-runner'
 [ -n "${PFB_VM:-}" ] && image_name='ci-runner-vm'
 
@@ -158,11 +157,11 @@ if [ -z "$selected" ]; then
 			selected="$image"
 		else
 			# The one fallback with a cure the caller can apply, so it names it.
-			fallback "${image} is absent locally and could not be pulled (the packages are private; PFB_BUILD=1 builds it)" "$@"
+			fallback "${image} is absent locally and could not be pulled (PFB_BUILD=1 builds it locally)" "$@"
 		fi
 	else
-		# Building is the reliable path while the packages are private: the Dockerfile is
-		# right here, and it is the same recipe the publish workflow runs. A build that
+		# Building is how a Dockerfile edit gets tested before its series exists: the
+		# recipe is right here, and it is the one the publish workflow runs. A build that
 		# fails is still just "no container available" — the command runs on the host, and
 		# docker has already printed the reason above, so the line here only has to say
 		# which stage gave up.
@@ -210,6 +209,11 @@ fi
 # all — a two-value flag would leave a plain host run indistinguishable from a fallback.
 # Word-splitting tty_args/git_mount/PFB_DOCKER_ARGS is intentional — they are
 # argument lists, not single arguments.
+# Every path here is PHYSICAL. git answers with symlinks resolved, so the mount is a
+# resolved path, and a logical working directory would name something the mount does not
+# cover: on macOS /tmp is a symlink to /private/tmp, so a checkout entered through /tmp
+# used to run in an empty /tmp directory inside the image, where a suite collects nothing
+# and reports success (issue #2362).
 # shellcheck disable=SC2086
 exec docker run --rm --init ${tty_args} \
 	--user "$(id -u):$(id -g)" \
@@ -217,7 +221,7 @@ exec docker run --rm --init ${tty_args} \
 	--env PFB_RUNNER=container \
 	--volume "${root}:${root}" \
 	${git_mount:+--volume "${git_mount}:${git_mount}"} \
-	--workdir "$(pwd)" \
+	--workdir "$(pwd -P)" \
 	${PFB_DOCKER_ARGS:-} \
 	"$image" \
 	"$@"

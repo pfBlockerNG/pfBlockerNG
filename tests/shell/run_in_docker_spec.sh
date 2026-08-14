@@ -101,6 +101,40 @@ STUB_EOF
     The stderr should not include 'host'
   End
 
+  # ── the working directory has to be inside the mount (issue #2362) ────────── #
+  #
+  # The mount path comes from git, which answers with symlinks resolved; the working
+  # directory used to come from the shell's logical `pwd`, which does not. On macOS /tmp
+  # is a symlink to /private/tmp, so a checkout entered through /tmp was MOUNTED at
+  # /private/tmp and then RUN in a /tmp directory that exists in the image and is empty.
+  # Nothing failed: pytest reported "no tests collected", phpunit found no suite, and a
+  # gate that never saw the repository read as a green run.
+
+  symlinked_repo() {
+    mkdir -p "${WORK}/real/sub"
+    ( cd "${WORK}/real" && git_fixture init -q . )
+    ln -s "${WORK}/real" "${WORK}/alias"
+    # The physical answer git will give, resolved the same way for the assertion — the
+    # temp root itself is a symlink on macOS, so this cannot be spelled literally.
+    REAL_SUB="$(CDPATH='' cd "${WORK}/real/sub" && pwd -P)"
+  }
+
+  wrapper_via_symlink() {
+    ( cd "${WORK}/alias/sub" && PATH="$STUB_PATH" PFB_IMAGE=stub-image "$SCRIPT" "$@" )
+  }
+
+  It 'runs in the mounted directory when the tree is entered through a symlink'
+    export STUB_INSPECT_RC=0
+    symlinked_repo
+    When call wrapper_via_symlink true
+    The status should be success
+    # The working directory is the mounted path, not the alias the caller typed...
+    The output should include "--workdir ${REAL_SUB}"
+    # ...and the alias appears nowhere, so nothing is mounted or entered under a name
+    # that resolves differently inside the container than it does outside.
+    The output should not include "${WORK}/alias"
+  End
+
   # ── every way of not getting a container is now a refusal ─────────────────── #
   #
   # 125 and not 1: the exit status has to be distinguishable from the wrapped command's
@@ -127,8 +161,8 @@ STUB_EOF
   End
 
   It 'refuses, saying so, when the image is absent and cannot be pulled'
-    # The live case on a machine with no GHCR login: the packages are private, so an
-    # unauthenticated pull 401s. The reason is only useful if it also names the cure.
+    # The live case on a machine that is offline or naming a series the registry does
+    # not carry. The reason is only useful if it also names the cure.
     export STUB_INSPECT_RC=1 STUB_PULL_RC=1
     When call wrapper sh -c "echo ran > '${WORK}/host_ran'"
     The status should equal 125
