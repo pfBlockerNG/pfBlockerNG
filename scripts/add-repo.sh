@@ -398,7 +398,9 @@ found_any=0
 # shellcheck disable=SC2086
 for pkg_name in $PKG_NAMES; do
     if "${PKG_BIN}" rquery -r "${REPO_NAME}" '%n %v' "${pkg_name}" 2>/dev/null | grep -q .; then
-        found="$("${PKG_BIN}" rquery -r "${REPO_NAME}" '%n-%v' "${pkg_name}" 2>/dev/null | head -n1)"
+        # rquery lists EVERY version the catalogue retains, in catalogue order —
+        # report the newest one, which is what `pkg install` would resolve.
+        found="$("${PKG_BIN}" rquery -r "${REPO_NAME}" '%n-%v' "${pkg_name}" 2>/dev/null | sort -V | tail -n1)"
         printf '==> OK: %s available from '\''%s'\''\n' "${found}" "${REPO_NAME}"
         printf '    Install:  %s install %s\n' "${PKG_BIN}" "${pkg_name}"
         found_any=1

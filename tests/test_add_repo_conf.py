@@ -131,6 +131,7 @@ def _run_add_repo(
     catalogue_empty: bool = False,
     update_fails: bool = False,
     detection_fails: bool = False,
+    rquery_lines: tuple[str, ...] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
@@ -153,12 +154,18 @@ def _run_add_repo(
                          to refresh, including the one being switched away from.
     ``detection_fails``  ``/etc/version`` is blank, so the generator hook cannot
                          resolve a varver and never writes the conf's marker line.
+
+    ``rquery_lines`` replaces the stub's default single-package `rquery` answer with
+    the given lines verbatim — a catalogue that retains several versions of the one
+    canonical package answers with one line per version.
     """
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir, exist_ok=True)
 
     fake_pkg = os.path.join(bin_dir, "pkg")
-    rquery_reply = "" if catalogue_empty else "  printf 'pfSense-pkg-pfBlockerNG 4.0.0\\n'\n"
+    if rquery_lines is None:
+        rquery_lines = () if catalogue_empty else ("pfSense-pkg-pfBlockerNG 4.0.0",)
+    rquery_reply = "".join(f"  printf '{line}\\n'\n" for line in rquery_lines)
     update_reply = "  exit 1\n" if update_fails else "  exit 0\n"
     with open(fake_pkg, "w") as fh:
         fh.write(
@@ -501,6 +508,29 @@ def test_conf_written_once_invariant() -> None:
         content_second = conf_path.read_text()
         assert content_first == content_second, (
             f"Second run must produce identical conf (idempotent):\nFirst:\n{content_first}\nSecond:\n{content_second}"
+        )
+
+
+def test_verify_reports_newest_version_when_catalogue_carries_several() -> None:
+    """The ``==> OK:`` verify line names the NEWEST catalogue version of the package.
+
+    Live repro (2026-08-15): the stable ce-2.8 catalogue retains 3.3.0 alongside
+    3.3.2, ``pkg rquery`` lists every version, and the verify step reported the
+    FIRST row — telling the user 3.3.0 is what they would get. ``pkg install``
+    resolves the highest version, so the report must name that one.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            rquery_lines=(
+                "pfSense-pkg-pfBlockerNG-3.3.0",
+                "pfSense-pkg-pfBlockerNG-3.3.2",
+            ),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "==> OK: pfSense-pkg-pfBlockerNG-3.3.2 available" in proc.stdout, (
+            f"verify line must report the newest catalogue version:\n{proc.stdout}"
         )
 
 
