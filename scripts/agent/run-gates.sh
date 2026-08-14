@@ -193,6 +193,12 @@ main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
 	scrub_git_env "$0"
+	# The wrapper honours PFB_ALLOW_HOST, and run_gate suppresses a PASSING gate's output
+	# entirely -- so an inherited PFB_ALLOW_HOST would restore the silent host fallback
+	# here: rows of GATE PASS with nothing on screen naming the toolchain that produced
+	# them. This runner's verdict is a CI-parity verdict by definition, so it drops the
+	# variable outright; the escape hatch stays on the wrapper for ad-hoc use.
+	unset PFB_ALLOW_HOST
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--worktree) worktree=$2; shift 2 ;;

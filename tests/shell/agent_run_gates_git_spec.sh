@@ -156,6 +156,26 @@ Describe 'run-gates.sh over a C-quoted path'
       The contents of file "$repo/wrapper.log" should include 'mypy tests/'
     End
 
+    It 'drops an inherited PFB_ALLOW_HOST so no gate can silently grade on the host'
+      # The wrapper honours PFB_ALLOW_HOST by design, and run_gate suppresses a PASSING
+      # gate's output entirely -- so an exported PFB_ALLOW_HOST would put the silent host
+      # fallback straight back: rows of GATE PASS with nothing on screen saying which
+      # toolchain produced them. This runner's verdict is a CI-parity verdict by
+      # definition, so it drops the variable; the escape hatch stays on the wrapper for
+      # ad-hoc use.
+      mkdir -p "$repo/scripts"
+      printf '#!/bin/sh\nprintf "allow_host=%%s\\n" "${PFB_ALLOW_HOST:-unset}" >&2\nexit 1\n' \
+        > "$repo/scripts/run-in-docker.sh"
+      chmod +x "$repo/scripts/run-in-docker.sh"
+      printf 'x = 1\n' > "$repo/scripts/mod.py"
+      gitc add -A
+      gitc commit -q -m python
+      When run sh -c "PFB_ALLOW_HOST=1 sh '$SCRIPT' --worktree '$repo' --diff base"
+      The status should equal 1
+      The output should include 'allow_host=unset'
+      The output should not include 'allow_host=1'
+    End
+
     It 'fails the gate when the container is unreachable instead of skipping it'
       # The defect this pins: a missing host tool used to report `GATE SKIP`, and a
       # skipped gate reads greener than a failed one. With the run routed through the
