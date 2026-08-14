@@ -377,7 +377,7 @@ class TestCatastrophicShapeHeuristic:
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
     def test_grouped_mandatory_separator_spellings(self) -> None:
-        # PR #2361 review: the bare separator's grouped spellings float identically.
+        # The bare separator's grouped spellings float identically (issue #2082).
         # Measured per query at 253 characters (CI image): 1529 / 1539 / 721 / 786 ms.
         for pat in (
             r"^[a-z]+[a-z]+(a){3}[a-z]+[a-z]+@x\.com$",
@@ -402,8 +402,8 @@ class TestCatastrophicShapeHeuristic:
         assert _regex_is_catastrophic_shape(r"^([0-9])[a-z]+[a-z]+(\.|,)[a-z]+[a-z]+$") is False
 
     def test_alternation_separator_with_a_parenthesised_branch(self) -> None:
-        # PR #2361 review round 2: a parenthesised branch pushed `(a|(b))` off the
-        # bare-alternation path into the entered scan, whose bare `|` reset the chain.
+        # A parenthesised branch must stay on the alternation-separator path: entering the
+        # group would read its bare `|` as a boundary and reset the chain.
         # Measured 1478 / 1463 / 1451 ms per query at 253 characters (CI image).
         for pat in (
             r"^[a-z]+[a-z]+(a|(b))[a-z]+[a-z]+@x\.com$",
@@ -434,7 +434,7 @@ class TestCatastrophicShapeHeuristic:
             assert _regex_is_catastrophic_shape(pat) is True, pat
 
     def test_long_chain_without_a_pair_is_rejected(self) -> None:
-        # PR #2361 review: pair-adjacency alone under-covers. Four quantifiers connected
+        # Pair-adjacency alone under-covers. Four quantifiers connected
         # only by floating separators cost 1753 ms per query at 253 characters (CI image);
         # three cost 23 ms -- under the evict ceiling and the accepted warn-layer residual,
         # and rejecting three would drop the issue's admitted single-gap shapes.
