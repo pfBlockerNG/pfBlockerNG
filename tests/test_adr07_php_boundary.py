@@ -40,11 +40,6 @@ from typing import Any, Iterable
 import pfb_unbound as P
 import tests.test_adr07_decision_spec as spec
 
-# A minimal public-suffix oracle (matches the emit_wire test): com/net/org are
-# public suffixes, so example.com is the registrable parent (zone classify groups
-# subdomains there).
-_TLD_MASTER = ["com", "net", "org"]
-
 
 # ABP-anchored / hosts IP detection -- the Python mirror of the PHP
 # pfb_dnsbl_abp_extract_ip() the download loop uses for DNSBL-IP coexistence.

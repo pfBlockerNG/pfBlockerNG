@@ -200,8 +200,9 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     The result of "tar_list()" should not include 'pfb_dnsbl_regex_rules.py'
     # ... nor the shipped PSL authority (issue #1541): staged into the chroot by
     # `dc stage` above, but SHIPPED -- outside the pfb_unbound*/pfb_py_* archive
-    # globs and re-staged from /usr/local on restore. A widened save glob that
-    # started archiving it would reinstate a stale authority; this row catches that.
+    # globs and re-staged from /usr/local on restore. Archiving it would
+    # reinstate a stale authority on restore; this row pins that the staged
+    # copy stays out of the archive.
     The result of "tar_list()" should not include 'dnsbl_psl'
     cleanup_sandbox
   End
