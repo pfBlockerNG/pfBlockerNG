@@ -24,7 +24,11 @@ _BEFORE = "{ sec = 1751500000, usec = 123456 }"
 _AFTER = "{ sec = 1751500090, usec = 654321 }"
 
 
-def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("require_pkg_metadata", [None, False, True])
+def test_reboot_vm_waits_for_changed_boottime_before_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+    require_pkg_metadata: bool | None,
+) -> None:
     class FakeVM:
         ssh_key_path = "/tmp/id_ed25519"
         host = "127.0.0.1"
@@ -64,13 +68,26 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(monkeypatch: pyte
 
     monkeypatch.setattr(helpers.subprocess, "run", fake_run)
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
-    monkeypatch.setattr(helpers, "wait_boot_complete", lambda vm: None)
+    boot_waits: list[tuple[helpers.SmokeVM, bool]] = []
+
+    def fake_wait_boot_complete(
+        candidate: helpers.SmokeVM,
+        *,
+        require_pkg_metadata: bool = True,
+    ) -> None:
+        boot_waits.append((candidate, require_pkg_metadata))
+
+    monkeypatch.setattr(helpers, "wait_boot_complete", fake_wait_boot_complete)
     monkeypatch.setattr(helpers, "wait_unbound_ready", lambda vm: None)
     cron_guards: list[object] = []
     monkeypatch.setattr(helpers, "_write_cron_disable_flag", lambda vm: cron_guards.append(vm))
 
-    helpers.reboot_vm(vm, timeout=5)
+    if require_pkg_metadata is None:
+        helpers.reboot_vm(vm, timeout=5)
+    else:
+        helpers.reboot_vm(vm, timeout=5, require_pkg_metadata=require_pkg_metadata)
 
     assert ready_calls
     assert fake_vm.boottime_reads == 4
+    assert boot_waits == [(vm, False if require_pkg_metadata is None else require_pkg_metadata)]
     assert cron_guards == [vm]
