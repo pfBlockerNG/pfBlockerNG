@@ -149,9 +149,9 @@ jobs:
         # the identical command shape and requires nonzero before trusting the
         # real report below (testing.md's red-canary rule).
         run: |
-          python3 scripts/check-skip-allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
+          python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
             && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
-          python3 scripts/check-skip-allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt /tmp/pytest-junit.xml
+          python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt /tmp/pytest-junit.xml
 
       - name: Branch coverage (informational)
         # Issue #38: measure BRANCH coverage of pfb_unbound.py (line coverage hides
@@ -432,9 +432,9 @@ jobs:
         # specs (tests/shell/agent_run_gates_git_spec.sh and siblings, by design)
         # -- the checker heals that before parsing; see its module docstring.
         run: |
-          python3 scripts/check-skip-allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
+          python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
             && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
-          python3 scripts/check-skip-allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt /tmp/shellspec-report/results_junit.xml
+          python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt /tmp/shellspec-report/results_junit.xml
 
       - name: Run parity-guard on .github/workflows
         # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
@@ -659,9 +659,9 @@ jobs:
         # real report below (testing.md's red-canary rule). This job is matrixed
         # over PHP 8.3/8.5, so the gate runs once per PHP version too.
         run: |
-          python3 scripts/check-skip-allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
+          python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
             && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
-          python3 scripts/check-skip-allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt /tmp/phpunit-junit.xml
+          python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt /tmp/phpunit-junit.xml
 
   markdownlint:
     name: markdownlint

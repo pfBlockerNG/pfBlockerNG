@@ -1,4 +1,4 @@
-"""Tests for scripts/check-skip-allowlist.py (issue #2359).
+"""Tests for scripts/check_skip_allowlist.py (issue #2359).
 
 PROBLEM PINNED
 --------------
@@ -28,7 +28,7 @@ from pathlib import Path
 
 import pytest
 
-_TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check-skip-allowlist.py"
+_TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_skip_allowlist.py"
 _spec = importlib.util.spec_from_file_location("check_skip_allowlist", _TOOL)
 assert _spec is not None and _spec.loader is not None
 csa = importlib.util.module_from_spec(_spec)
@@ -369,7 +369,7 @@ def test_workflow_wires_report_flag_and_gate_step_per_job() -> None:
         run_step = next(s for s in steps if s["name"] == run_step_name)
         gate_step = next(s for s in steps if s["name"] == "Skip allowlist")
         assert f"--suite {suite}" in gate_step["run"]
-        assert "check-skip-allowlist.py" in gate_step["run"]
+        assert "check_skip_allowlist.py" in gate_step["run"]
         assert "tests/skip-allowlist.txt" in gate_step["run"]
         assert "skip-allowlist-canary.xml" in gate_step["run"], "gate step must prove its own red path"
         if flag_prefix:

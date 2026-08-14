@@ -174,7 +174,7 @@ host toolchain. `PFB_ALLOW_HOST=1` opts back into a host run when that is what y
 want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which happened
 after the fact.
 
-Every suite is green in the image — pytest 5039 passed, PHPUnit 5234 tests with no
+Every suite is green in the image — pytest 5197 passed, PHPUnit 5242 tests with no
 failures, shellspec 1331 examples — so a red there is yours. What differs between the
 image and a macOS host is which tests *skip*, not which fail: its locale and `file(1)`
 classify a few inputs differently, one case needs a PHP build whose `php://memory` can
@@ -184,7 +184,7 @@ that used to join them are gone (#2356), and `/usr/bin/tar` in the image is bsdt
 is on the appliance.
 
 CI gates the skip *set*, not just its count (issue #2359): each suite's job writes a
-JUnit report and a `Skip allowlist` step runs `scripts/check-skip-allowlist.py` against
+JUnit report and a `Skip allowlist` step runs `scripts/check_skip_allowlist.py` against
 `tests/skip-allowlist.txt` (one file, shared by all three suites — ids are prefixed
 `pytest:` / `phpunit:` / `shellspec:`). A test that starts skipping and is not on that
 file fails the build. To add a legitimately new skip, add its id as its own line in
