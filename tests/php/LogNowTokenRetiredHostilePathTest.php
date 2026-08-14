@@ -36,7 +36,7 @@ final class LogNowTokenRetiredHostilePathTest extends TestCase
 		$phpunit = dirname(__DIR__, 2) . '/vendor/bin/phpunit';
 		$test = $this->root . '/tests/php/LogNowTokenRetiredTest.php';
 
-		$result = pfb_test_run_process([$phpunit, '--colors=never', '--no-configuration', $test], 10.0);
+		$result = pfb_test_run_process([$phpunit, '--colors=never', '--no-configuration', $test], 10.0, pfb_test_scrubbed_git_env());
 
 		$this->assertSame(1, $result['exit'], "retired-token scan must fail for the hostile tracked path:\n{$result['stdout']}{$result['stderr']}");
 		$this->assertStringContainsString('src/café.inc:2', $result['stdout'] . $result['stderr']);
