@@ -1,40 +1,40 @@
 # Public Suffix List — maintenance (dev-only)
 
-Scope: maintain vendored `dnsbl_tld` public-suffix master list. Load when:
-refresh or audit `dnsbl_tld` / `pfb_py_tld.txt` against publicsuffix.org.
+Scope: maintain vendored `dnsbl_psl` Public Suffix List authority. Load when:
+refresh or audit `dnsbl_psl` against publicsuffix.org.
 
-`src/usr/local/pkg/pfblockerng/dnsbl_tld` = flat one-suffix-per-line public-suffix
-master list. `_dnsbl_load_tld_wildcard_master()` (`pfb_unbound.py`) use it — staged into
-Unbound chroot as `pfb_py_tld.txt` by `pfblockerng.sh` — to derive each domain's registrable
-parent for DNSBL Wildcard Blocking (TLD). (Legacy PHP consumer replaced by
-manifest/Python classification plus in-memory PHP stats finalizer.) This note record how to
-keep current. Sibling of [`tld-lists.md`](tld-lists.md) (issue #1272).
+`src/usr/local/pkg/pfblockerng/dnsbl_psl` = the SOLE shipped PSL artifact (issue #1541):
+a self-describing authority carrying both ICANN and PRIVATE sections, exact/wildcard
+(`*.`)/exception (`!`) rule syntax preserved. Consumed by the pure PSL resolver
+(`pfb_unbound.py`'s `parse_psl_rules`) to derive each domain's registrable parent for
+DNSBL Wildcard Blocking. This note record how to keep current. Sibling of
+[`tld-lists.md`](tld-lists.md) (issue #1272; single-authority retirement issue #1541).
 
 ## Sources
 
-- `https://publicsuffix.org/list/public_suffix_list.dat` — authoritative suffix set, ICANN
-  section only (between `// ===BEGIN ICANN DOMAINS===` / `// ===END ICANN DOMAINS===`
-  markers).
+- `https://publicsuffix.org/list/public_suffix_list.dat` — authoritative suffix set, both
+  ICANN section (between `// ===BEGIN ICANN DOMAINS===` / `// ===END ICANN DOMAINS===`
+  markers) and PRIVATE section (matching PRIVATE markers).
 - **License:** MPL 2.0 — <https://mozilla.org/MPL/2.0/>.
 
 ## What is automated vs manual
 
-- **`dnsbl_tld` regenerated from Public Suffix List** by
+- **`dnsbl_psl` regenerated from Public Suffix List** by
   `scripts/misc/update_public_suffix_list.py`. Punycode-encode any non-ASCII label,
-  lowercase defensively, rewrite file in place (header + one suffix per line, PSL
-  source order).
+  lowercase defensively, preserve exact/wildcard/exception rule syntax, rewrite file in
+  place (header + both sections between their own BEGIN/END markers).
 - **Churn guard skip header-only refresh:** upstream `VERSION`/`COMMIT` header move
-  on every PSL commit even when no suffix changed, so run compare generated
+  on every PSL commit even when no rule changed, so run compare generated
   body against shipped file's body and leave file untouched when match — no
   weekly no-op diff.
 
-## Out of scope (owner decision, issue #1272)
+## Contract preserved (unlike the retired dnsbl_tld flat list)
 
-- **PRIVATE-section suffixes** (`blogspot.*`, `github.io`, …) excluded — DNSBL
-  oracle want plain public-suffix contract, not private-registry entries.
-- **PSL wildcard (`*.`) and exception (`!`) rules** excluded — `dnsbl_tld` = flat
-  exact-match list, no format extension for either. Skip wildcard rule only
-  narrow suffix depth matched under that label; never cause over-block.
+- **Both ICANN and PRIVATE sections shipped** — `blogspot.*`, `github.io`, … land in
+  the PRIVATE section, distinct from ICANN.
+- **PSL wildcard (`*.`) and exception (`!`) rules preserved**, not dropped — the
+  authority format keeps their prefix syntax intact so the resolver can distinguish
+  exact/wildcard/exception semantics per public-suffix rule.
 
 ## Refreshing
 
@@ -49,5 +49,7 @@ keep current. Sibling of [`tld-lists.md`](tld-lists.md) (issue #1272).
   (rewrite file) or `python3 scripts/misc/update_public_suffix_list.py --check` (exit 1
   and status line if out of date, no write).
 - **Safety:** script refuse to rewrite when fetched ICANN section yield fewer than
-  `MIN_PLAUSIBLE_SUFFIXES` (5000) suffixes, or when ICANN BEGIN/END markers missing,
-  so empty/truncated/captive-portal response never silently blank master list.
+  `MIN_PLAUSIBLE_SUFFIXES` (5000) rules, fetched PRIVATE section yield fewer than
+  `MIN_PLAUSIBLE_PRIVATE_SUFFIXES` (1000) rules, or when any of the four BEGIN/END
+  markers missing/duplicated/out of order, so empty/truncated/captive-portal response
+  never silently blank the authority.

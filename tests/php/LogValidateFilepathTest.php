@@ -10,7 +10,7 @@ use PHPUnit\Framework\TestCase;
  * The defect: the validator admitted any file whose dirname was ANY logtype's
  * logdir, ignoring each logtype's own 'ext' filename whitelist and its
  * 'clear'/'download' capability flags. '/usr/local/pkg/pfblockerng/' is a
- * whitelisted logdir (dnsbl_tld / dnsbl_safe, both clear => FALSE), so a holder
+ * whitelisted logdir (dnsbl_psl / dnsbl_safe, both clear => FALSE), so a holder
  * of the grantable WebCfg pfBlockerNG privilege could clear= (unlink) or
  * download= (read) package source such as pfblockerng.inc.
  *
@@ -83,9 +83,9 @@ final class LogValidateFilepathTest extends TestCase
 				'download' => TRUE,
 				'clear'    => FALSE,
 			],
-			'dnsbl_tld' => [
+			'dnsbl_psl' => [
 				'logdir'   => '/usr/local/pkg/pfblockerng/',
-				'ext'      => ['dnsbl_tld'],
+				'ext'      => ['dnsbl_psl'],
 				'download' => TRUE,
 				'clear'    => FALSE,
 			],
@@ -154,13 +154,13 @@ final class LogValidateFilepathTest extends TestCase
 
 	// --- capability flags bind to the matching logtype, not the union ---------
 
-	public function testClearOfDnsblTldFileIsRejectedBecauseItsLogtypeForbidsClear(): void
+	public function testClearOfDnsblPslFileIsRejectedBecauseItsLogtypeForbidsClear(): void
 	{
-		// The file itself IS the dnsbl_tld logtype's own file (download works,
+		// The file itself IS the dnsbl_psl logtype's own file (download works,
 		// below) -- but that logtype carries clear => FALSE.
 		$this->assertFalse(
-			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_tld', $this->logtypes(), 'clear'),
-			'clear of dnsbl_tld must be rejected: its logtype has clear => FALSE'
+			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_psl', $this->logtypes(), 'clear'),
+			'clear of dnsbl_psl must be rejected: its logtype has clear => FALSE'
 		);
 	}
 
@@ -177,11 +177,11 @@ final class LogValidateFilepathTest extends TestCase
 
 	// --- legitimate requests keep passing --------------------------------------
 
-	public function testDownloadOfDnsblTldFileIsAllowedByItsOwnLogtype(): void
+	public function testDownloadOfDnsblPslFileIsAllowedByItsOwnLogtype(): void
 	{
 		$this->assertTrue(
-			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_tld', $this->logtypes(), 'download'),
-			'download of dnsbl_tld must pass: its own logtype matches and allows download'
+			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_psl', $this->logtypes(), 'download'),
+			'download of dnsbl_psl must pass: its own logtype matches and allows download'
 		);
 	}
 
@@ -237,8 +237,8 @@ final class LogValidateFilepathTest extends TestCase
 			'load must pass on etiprep despite clear => FALSE: load carries no flag'
 		);
 		$this->assertTrue(
-			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_tld', $this->logtypes(), 'load'),
-			'load must pass on dnsbl_tld despite clear => FALSE: load carries no flag'
+			pfb_validate_filepath('/usr/local/pkg/pfblockerng/dnsbl_psl', $this->logtypes(), 'load'),
+			'load must pass on dnsbl_psl despite clear => FALSE: load carries no flag'
 		);
 	}
 

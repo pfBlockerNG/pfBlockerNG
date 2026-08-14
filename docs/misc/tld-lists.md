@@ -31,4 +31,4 @@ Each entry is `'<tld>' => '<LABEL>'`. On refresh script keeps existing label **v
 
 Fetching lists at runtime / on package update is possible future enhancement, explicitly deferred (issue #872). Arrays remain static, reviewed snapshot.
 
-For separate `dnsbl_tld` public-suffix master list (DNSBL Wildcard Blocking), see sibling doc [`public-suffix-list.md`](public-suffix-list.md) (issue #1272).
+For separate `dnsbl_psl` Public Suffix List authority (DNSBL Wildcard Blocking), see sibling doc [`public-suffix-list.md`](public-suffix-list.md) (issue #1272; single-authority retirement issue #1541).

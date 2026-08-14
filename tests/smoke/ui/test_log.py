@@ -5,7 +5,7 @@ inactive listed ``wizard.log`` as test-owned scratch; every scratch file is
 removed in ``finally``. Clear-shape coverage for ``py_error.log`` and
 ``dnsbl.log`` is hermetic in ``LogValidateFilepathTest.php`` so active logs are
 never modified by this live suite. Security rejects remain read-only checks for
-package files, ``/etc/passwd``, and the legitimate ``dnsbl_tld`` download.
+package files, ``/etc/passwd``, and the legitimate ``dnsbl_psl`` download.
 """
 
 from __future__ import annotations
@@ -36,10 +36,10 @@ LOG_DIR = "/var/log/pfblockerng"
 EVIL_PATH = "/etc/passwd"
 
 # The validator binds the pkg-dir logtypes to exact extension patterns and their
-# capability flags, so package source must reject while dnsbl_tld still downloads.
+# capability flags, so package source must reject while dnsbl_psl still downloads.
 PKG_DIR = "/usr/local/pkg/pfblockerng"
 PKG_SOURCE = f"{PKG_DIR}/pfblockerng.inc"
-DNSBL_TLD_FILE = f"{PKG_DIR}/dnsbl_tld"
+DNSBL_PSL_FILE = f"{PKG_DIR}/dnsbl_psl"
 
 
 def _csrf(webui: WebUI) -> str:
@@ -405,40 +405,40 @@ def test_clear_rejects_package_source_in_whitelisted_dir(webui: WebUI, smoke_vm:
     assert _cat(vm, PKG_SOURCE) == before, "pfblockerng.inc content changed after a rejected clear"
 
 
-def test_clear_rejects_dnsbl_tld_whose_logtype_forbids_clear(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """The listed dnsbl_tld file remains read-only because its type forbids clear."""
+def test_clear_rejects_dnsbl_psl_whose_logtype_forbids_clear(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """The listed dnsbl_psl file remains read-only because its type forbids clear."""
     vm = smoke_vm
-    before = _cat(vm, DNSBL_TLD_FILE)
-    assert before, "could not read the dnsbl_tld file before the rejected clear"
-    before_size = _size(vm, DNSBL_TLD_FILE)
+    before = _cat(vm, DNSBL_PSL_FILE)
+    assert before, "could not read the dnsbl_psl file before the rejected clear"
+    before_size = _size(vm, DNSBL_PSL_FILE)
 
     token = _csrf(webui)
-    resp = _post_clear(webui, token, DNSBL_TLD_FILE)
+    resp = _post_clear(webui, token, DNSBL_PSL_FILE)
     assert not looks_like_login_page(resp.text), "clear POST returned the login form (session lost)"
     assert "Invalid filename/path" in resp.text, f"reject envelope missing the message: {resp.text!r}"
     code, _ = _decode_load_body(resp.text)
-    assert code == "3", f"dnsbl_tld clear was not rejected with code 3: {resp.text!r}"
-    assert _exists(vm, DNSBL_TLD_FILE), "dnsbl_tld file removed by a clear its logtype forbids (validator failed!)"
-    assert _size(vm, DNSBL_TLD_FILE) == before_size, "dnsbl_tld file truncated by a forbidden clear (validator failed!)"
-    assert _cat(vm, DNSBL_TLD_FILE) == before, "dnsbl_tld file content changed after a clear its logtype forbids"
+    assert code == "3", f"dnsbl_psl clear was not rejected with code 3: {resp.text!r}"
+    assert _exists(vm, DNSBL_PSL_FILE), "dnsbl_psl file removed by a clear its logtype forbids (validator failed!)"
+    assert _size(vm, DNSBL_PSL_FILE) == before_size, "dnsbl_psl file truncated by a forbidden clear (validator failed!)"
+    assert _cat(vm, DNSBL_PSL_FILE) == before, "dnsbl_psl file content changed after a clear its logtype forbids"
 
 
-def test_download_allows_dnsbl_tld_file_its_logtype_owns(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
-    """The listed dnsbl_tld file remains available through its own download type."""
+def test_download_allows_dnsbl_psl_file_its_logtype_owns(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:
+    """The listed dnsbl_psl file remains available through its own download type."""
     vm = smoke_vm
-    before = _cat(vm, DNSBL_TLD_FILE)
-    assert before, "could not read the dnsbl_tld file before download"
+    before = _cat(vm, DNSBL_PSL_FILE)
+    assert before, "could not read the dnsbl_psl file before download"
 
     token = _csrf(webui)
-    resp = _post_download(webui, token, DNSBL_TLD_FILE)
+    resp = _post_download(webui, token, DNSBL_PSL_FILE)
     assert not looks_like_login_page(resp.text), "download POST returned the login form (session lost)"
-    assert "Invalid filename/path" not in resp.text, f"legit dnsbl_tld download was rejected: {resp.text!r}"
-    assert resp.text == _cat(vm, DNSBL_TLD_FILE), (
-        "download body != on-box dnsbl_tld file (handler must stream the real file)"
+    assert "Invalid filename/path" not in resp.text, f"legit dnsbl_psl download was rejected: {resp.text!r}"
+    assert resp.text == _cat(vm, DNSBL_PSL_FILE), (
+        "download body != on-box dnsbl_psl file (handler must stream the real file)"
     )
     disp = resp.headers.get("Content-Disposition", "")
-    assert 'attachment; filename="dnsbl_tld"' in disp, f"unexpected Content-Disposition: {disp!r}"
-    assert _cat(vm, DNSBL_TLD_FILE) == before, "download altered the dnsbl_tld file (must be read-only)"
+    assert 'attachment; filename="dnsbl_psl"' in disp, f"unexpected Content-Disposition: {disp!r}"
+    assert _cat(vm, DNSBL_PSL_FILE) == before, "download altered the dnsbl_psl file (must be read-only)"
 
 
 def test_download_rejects_path_outside_allowed_dirs(webui: WebUI, smoke_vm: helpers.SmokeVM) -> None:

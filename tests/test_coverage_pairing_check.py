@@ -155,7 +155,7 @@ def test_docs_only_diff_is_neutral() -> None:
 # decision, so the test states it independently and a silent widening of the
 # tool's own set cannot rewrite the expectation it is checked against.
 _EXEMPT_DATA_PATHS = (
-    "src/usr/local/pkg/pfblockerng/dnsbl_tld",
+    "src/usr/local/pkg/pfblockerng/dnsbl_psl",
     "src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt",
     "src/usr/local/www/pfblockerng/vendor/codemirror/MANIFEST.sha256",
 )

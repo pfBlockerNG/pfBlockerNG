@@ -44,7 +44,6 @@ final class DnsblManifestPublishFailureNoticeTest extends TestCase
 			'unbound_py_sources' => "{$this->tmp}/readonly/pfb_py_sources.json",
 			'dbdir'              => "{$this->tmp}/db",
 			'dnsbl_top1m'        => 'off',
-			'dnsbl_tld_data'     => "{$this->tmp}/does_not_exist",
 			'dnsbl_unlock'       => "{$this->tmp}/dnsbl_unlock",
 			'dnsbl_tld_wildcard' => '',
 			'dnsblconfig'        => [

@@ -47,15 +47,11 @@ final class DnsblInterchangeRetirementTest extends TestCase
 
 	public function testTldModeNeverWritesInterchangeFilesButKeepsAliasAndStatBookkeeping(): void
 	{
-		$tldMaster = "{$this->tmp}/tld_master.txt";
-		file_put_contents($tldMaster, "com\n");
-
 		$GLOBALS['pfb'] = array_merge($GLOBALS['pfb'] ?? [], [
 			'log'              => "{$this->tmp}/pfblockerng.log",
 			'errlog'           => "{$this->tmp}/error.log",
 			'dnsdir'           => "{$this->tmp}/dnsbl",
 			'dnsbl_file'       => "{$this->tmp}/pfb_dnsbl",
-			'dnsbl_tld_data'   => $tldMaster,
 			'unbound_py_data'  => "{$this->tmp}/pfb_py_data.txt",
 			'unbound_py_zone'  => "{$this->tmp}/pfb_py_zone.txt",
 			'domain_max_cnt'   => 1000000,

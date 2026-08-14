@@ -34,7 +34,7 @@ The exact paths in ``_DATA_ONLY`` are neutral the same way (issue #2132):
 machine-regenerated upstream snapshots whose shape is already pinned by
 shipped-file tests, so a regeneration diff has no hand-authored change to pair
 with. Exempt on that provenance, NOT on "encodes no behaviour" —
-``pfb_py_hsts.txt`` decides NULL-vs-VIP on a DNSBL hit and ``dnsbl_tld`` is the
+``pfb_py_hsts.txt`` decides NULL-vs-VIP on a DNSBL hit and ``dnsbl_psl`` is the
 public-suffix oracle — so do not extend the set to a hand-maintained file that
 merely looks like data (``pfb_dnsbl.*.conf``, the feed/ASN catalogs, the
 ``*_global_usage`` provider definitions all stay gated).
@@ -73,7 +73,7 @@ _FIX_HINT = (
 _DATA_ONLY = frozenset(
     {
         # Public Suffix List snapshot; regenerated weekly by psl-refresh.yml.
-        "src/usr/local/pkg/pfblockerng/dnsbl_tld",
+        "src/usr/local/pkg/pfblockerng/dnsbl_psl",
         # Chromium HSTS preload snapshot; regenerated weekly by hsts-refresh.yml.
         "src/usr/local/pkg/pfblockerng/pfb_py_hsts.txt",
         # Vendored-asset digest manifest; guarded by its own webassets drift job.
