@@ -388,8 +388,12 @@ def test_addwhitelistdom_writes_whitelist_and_entry_delete_removes_it(
     finally:
         helpers.php_eval(
             vm,
+            "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
             f"config_set_path('{CFG_WHITELIST}', '{original}');\n"
             "write_config('pfBlockerNG smoke: restore suppression');\n"
+            "pfb_unbound_python_whitelist('alerts');\n"
+            "pfb_unbound_python_sources_whitelist();\n"
+            "pfb_reload_unbound('enabled', FALSE, FALSE, TRUE);\n"
             "echo 'OK';",
         )
 
