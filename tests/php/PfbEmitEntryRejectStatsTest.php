@@ -164,6 +164,59 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 		$this->assertSame('', file_get_contents($log), 'corrupt JSON must emit nothing, never throw');
 	}
 
+	public function testIssue2371SuffixBucketsEmitTheirOwnCanonicalLines(): void
+	{
+		// Given: an artifact row carrying the #2371 suffix_drop/suffix_demote
+		// buckets alongside a zero legacy pair (Python emits them sparsely --
+		// only present when they fired -- but the reader must not assume
+		// every key exists).
+		$log = $this->seedLogSinks();
+		$stats = $this->statsFile(json_encode([
+			['feed' => 'FeedC', 'group' => 'GroupC', 'suffix_drop' => 2, 'suffix_demote' => 1],
+		]));
+
+		// When: the artifact is read.
+		pfb_emit_entry_reject_stats($stats);
+
+		// Then: one canonical line per #2371 bucket, exact shape.
+		$logContents = (string) file_get_contents($log);
+		$expectedDrop = pfb_validate_log_line('FeedC', 'entries', 'suffix_drop', '2');
+		$expectedDemote = pfb_validate_log_line('FeedC', 'entries', 'suffix_demote', '1');
+		$this->assertMatchesRegularExpression(
+			$this->stampedLinePattern($expectedDrop),
+			$logContents,
+			"expected <{$expectedDrop}> in <{$logContents}>"
+		);
+		$this->assertMatchesRegularExpression(
+			$this->stampedLinePattern($expectedDemote),
+			$logContents,
+			"expected <{$expectedDemote}> in <{$logContents}>"
+		);
+	}
+
+	public function testIssue2371AbsentSuffixBucketsEmitNoLines(): void
+	{
+		// Given: a legacy-shaped row that never carries the #2371 keys at all
+		// (the pre-#2371 artifact shape).
+		$log = $this->seedLogSinks();
+		$stats = $this->statsFile(json_encode([
+			['feed' => 'FeedD', 'group' => 'GroupD', 'shape' => 1],
+		]));
+
+		pfb_emit_entry_reject_stats($stats);
+
+		$logContents = (string) file_get_contents($log);
+		$this->assertDoesNotMatchRegularExpression(
+			$this->stampedLinePattern(pfb_validate_log_line('FeedD', 'entries', 'suffix_drop', '0')),
+			$logContents,
+			"an absent bucket must not log a line, got <{$logContents}>"
+		);
+		$this->assertMatchesRegularExpression(
+			$this->stampedLinePattern(pfb_validate_log_line('FeedD', 'entries', 'shape', '1')),
+			$logContents
+		);
+	}
+
 	public function testNonScalarFieldsAreSkippedSilently(): void
 	{
 		// Given: syntactically valid JSON whose values have hostile SHAPES -- an
