@@ -176,6 +176,52 @@ def test_published_datetime_prefers_created_annotation() -> None:
     )
 
 
+def test_published_datetime_falls_back_to_build_record_epoch() -> None:
+    """Scenario: release builds embed pfb_build_record but no `created` annotation.
+
+    Given a .pkg whose only annotation is `pfb_build_record` (the release/nightly
+    builders stamp the record, and nothing stamps `created` — issue #2375),
+    When the published datetime is computed,
+    Then the record's `source_date_epoch` wins over the checkout mtime,
+    And a bare `created` annotation still takes precedence over the record,
+    And a malformed/incomplete record falls back to mtime instead of crashing.
+    """
+    import json
+
+    commit_epoch = datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp()
+    republish_mtime = datetime(2026, 8, 14, 22, 5, tzinfo=timezone.utc).timestamp()
+    record = json.dumps({"source_date_epoch": int(commit_epoch), "source_sha": "f" * 40})
+    manifest_record_only = {"annotations": {"pfb_build_record": record}}
+    assert gl.published_datetime(manifest_record_only, republish_mtime) == "2026-08-14 19:32 UTC"
+    # `created` still wins when both are present.
+    created_epoch = datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc).timestamp()
+    both = {"annotations": {"created": str(int(created_epoch)), "pfb_build_record": record}}
+    assert gl.published_datetime(both, republish_mtime) == "2026-08-01 00:00 UTC"
+    # Malformed record JSON, record without the key, non-numeric epoch -> mtime fallback.
+    for bad in ("{not json", json.dumps({}), json.dumps({"source_date_epoch": "nope"})):
+        assert (
+            gl.published_datetime({"annotations": {"pfb_build_record": bad}}, republish_mtime) == "2026-08-14 22:05 UTC"
+        )
+
+
+def test_commit_sha_falls_back_to_build_record_source_sha() -> None:
+    """Scenario: the Commit column must work for record-only packages too.
+
+    Given a manifest with no `commit` annotation but a pfb_build_record carrying
+    `source_sha`, the resolved sha is the record's; a bare `commit` annotation wins
+    when present; no annotation and no/bad record resolve to the empty string.
+    """
+    import json
+
+    sha = "f2c5650a1768c5df2bf05fd2cd4ae938a2f566a8"
+    record = json.dumps({"source_sha": sha})
+    assert gl.commit_sha({"annotations": {"pfb_build_record": record}}) == sha
+    assert gl.commit_sha({"annotations": {"commit": "deadbeef", "pfb_build_record": record}}) == "deadbeef"
+    assert gl.commit_sha({"annotations": {}}) == ""
+    assert gl.commit_sha({}) == ""
+    assert gl.commit_sha({"annotations": {"pfb_build_record": "{not json"}}) == ""
+
+
 def test_commit_cell_links_valid_sha_and_dashes_missing() -> None:
     """The Commit column links a short SHA to GitHub, and degrades safely.
 

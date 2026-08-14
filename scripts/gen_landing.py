@@ -114,6 +114,23 @@ def artifact_datetime(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _build_record(manifest: dict) -> dict:
+    """The embedded ``pfb_build_record`` annotation, parsed — ``{}`` when absent/bad.
+
+    Release and nightly builders stamp the provenance record but nothing stamps the
+    bare ``created``/``commit`` annotations (issue #2375), so the record is the one
+    place a published .pkg actually carries its source epoch and SHA.
+    """
+    raw = (manifest.get("annotations") or {}).get("pfb_build_record")
+    if not raw:
+        return {}
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return record if isinstance(record, dict) else {}
+
+
 def published_datetime(manifest: dict, mtime_epoch: float) -> str:
     """The artifact's creation datetime (UTC, minute precision).
 
@@ -121,15 +138,29 @@ def published_datetime(manifest: dict, mtime_epoch: float) -> str:
     baked into the .pkg at build time, so it reflects when the artifact's CODE was
     created and survives every daily republish/re-download (a nightly is rebuilt and a
     release asset re-downloaded each run, which would otherwise reset the mtime to
-    'today'). Fall back to the .pkg's mtime only when the annotation is absent.
+    'today'). No build site stamps ``created`` today (issue #2375), so next prefer
+    the embedded build record's ``source_date_epoch``. Fall back to the .pkg's mtime
+    only when neither is readable.
     """
-    created = (manifest.get("annotations") or {}).get("created")
-    if created is not None:
+    annotations = manifest.get("annotations") or {}
+    for epoch in (annotations.get("created"), _build_record(manifest).get("source_date_epoch")):
+        if epoch is None:
+            continue
         try:
-            return artifact_datetime(float(created))
+            return artifact_datetime(float(epoch))
         except (TypeError, ValueError, OverflowError, OSError):
-            pass  # malformed or out-of-range annotation — fall back to mtime
+            continue  # malformed or out-of-range — try the next source
     return artifact_datetime(mtime_epoch)
+
+
+def commit_sha(manifest: dict) -> str:
+    """The source SHA for the Commit column — ``commit`` annotation, else the
+    build record's ``source_sha``, else "" (rendered as an em dash downstream)."""
+    sha = (manifest.get("annotations") or {}).get("commit", "")
+    if sha:
+        return sha
+    record_sha = _build_record(manifest).get("source_sha", "")
+    return record_sha if isinstance(record_sha, str) else ""
 
 
 def commit_cell(sha: str) -> str:
@@ -217,7 +248,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "abi": abi,
                     "size": os.path.getsize(path),
                     "published": published_datetime(man, os.path.getmtime(path)),
-                    "commit": (man.get("annotations") or {}).get("commit", ""),
+                    "commit": commit_sha(man),
                     # PHP/Python the build targets, read from its RUN_DEPENDS — the fallback
                     # for an ABI the matrix doesn't cover (the matrix value wins when joined).
                     "php": _dep_flavor(deps, ("php",)),
