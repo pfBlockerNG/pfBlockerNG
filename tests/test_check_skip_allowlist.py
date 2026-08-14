@@ -256,9 +256,9 @@ def test_canary_fixture_carries_both_skip_element_shapes() -> None:
 
 
 def test_allowlist_id_may_contain_a_hash(tmp_path: Path) -> None:
-    """A pytest parametrised id can carry a '#', so the reason delimiter is the first
-    WHITESPACE-preceded '#' rather than the first '#' anywhere on the line. A bare split
-    would truncate the id, and the skip it names could then never be recorded."""
+    """A pytest parametrised id can carry a '#', so the reason is separated by TWO OR MORE
+    spaces before the '#' rather than by any '#' on the line. A bare split would truncate
+    the id, and the skip it names could then never be recorded."""
     allow = _write(tmp_path, "allow.txt", "pytest:C::test_x[a#b]  # tracked reason\n")
     assert csa.parse_allowlist(allow) == {"pytest:C::test_x[a#b]": "tracked reason"}
 
@@ -278,14 +278,24 @@ def test_allowlist_id_may_contain_a_spaced_hash(tmp_path: Path) -> None:
     }
 
 
-def test_allowlist_reason_may_not_contain_a_spaced_hash(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    """The delimiter is the LAST spaced '#', so a reason carrying one would silently move
-    the split and record an id no run produces. Reasons are ours to write, ids are the
-    suite's, so this is a parse error rather than a guess."""
+def test_allowlist_id_may_contain_a_spaced_hash_from_a_parameter(tmp_path: Path) -> None:
+    """A pytest parameter value can contain " # " -- pytest renders it into the id
+    verbatim. The separator is therefore TWO-OR-MORE spaces before the '#', the convention
+    every entry in the file already uses, so no id shape any suite generates is
+    unrecordable."""
+    allow = _write(tmp_path, "allow.txt", "pytest:C::test_x[see # this]  # parametrised skip\n")
+    assert csa.parse_allowlist(allow) == {"pytest:C::test_x[see # this]": "parametrised skip"}
+
+
+def test_allowlist_single_space_before_the_hash_is_a_parse_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One space cannot be told apart from a '#' inside an id, so it is refused rather than
+    guessed -- and the message says what the separator has to be."""
     report = _report(tmp_path, "r.xml", '<testcase classname="C" name="a"><skipped/></testcase>')
-    allow = _write(tmp_path, "allow.txt", "pytest:C::a  # tracked # reason\n")
+    allow = _write(tmp_path, "allow.txt", "pytest:C::a # tracked reason\n")
     assert csa.main(["--suite", "pytest", "--allowlist", str(allow), str(report)]) == 2
-    assert "spaced" in capsys.readouterr().err
+    assert "two spaces" in capsys.readouterr().err
 
 
 def test_allowlist_reason_may_contain_a_hash(tmp_path: Path) -> None:
