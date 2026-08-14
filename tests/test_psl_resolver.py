@@ -126,3 +126,34 @@ def test_parser_accepts_duplicate_overlapping_rules_without_changing_precedence(
     rules = pfb_unbound.parse_psl_rules(authority)
     assert pfb_unbound.resolve_public_suffix("example.com", rules).public_suffix == "com"
     assert pfb_unbound.resolve_public_suffix("a.ck", rules).public_suffix == "a.ck"
+
+
+def test_resolver_throughput_is_indexed_not_linear_scan() -> None:
+    """Resolution must be O(name labels), never a scan over all ~10k shipped rules.
+
+    The DNSBL build classifies every feed entry and TLD-Allow resolves on the live
+    DNS query path, so a per-lookup scan over the full rule set (measured ~3.6 ms
+    per resolve, ~30 minutes for a 500k-entry build) is a defect. 2000 resolves
+    against the SHIPPED authority must finish comfortably inside 2 seconds; the
+    indexed matcher needs ~0.1 s, the linear scan needs ~7 s.
+    """
+    import pathlib
+    import time
+
+    shipped = pathlib.Path(__file__).resolve().parents[1] / "src/usr/local/pkg/pfblockerng/dnsbl_psl"
+    rules = pfb_unbound.parse_psl_rules(shipped.read_text(encoding="utf-8"))
+    names = [
+        "example.com",
+        "foo.bar.co.uk",
+        "tenant.github.io",
+        "deep.a.b.c.example.org",
+        "evil.foo.ck",
+        "host.one.two.three.example.nom.br",
+        "no-rule.zz-unknown",
+        "x.act.edu.au",
+    ] * 250
+    started = time.perf_counter()
+    for name in names:
+        pfb_unbound.resolve_public_suffix(name, rules)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 2.0, f"2000 resolves took {elapsed:.2f}s; matcher is scanning rules per lookup"
