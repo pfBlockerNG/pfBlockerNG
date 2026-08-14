@@ -18,8 +18,19 @@ final class LogNowTokenRetiredTest extends TestCase
 	{
 		$repoRoot = dirname(__DIR__, 2);
 
-		exec('git -C ' . escapeshellarg($repoRoot) . " ls-files -- 'src/*.php' 'src/*.inc' 2>&1", $files, $exit);
-		$this->assertSame(0, $exit, 'git ls-files must succeed to enumerate tracked src/ files; got: ' . implode("\n", $files));
+		$proc = proc_open(
+			['git', '-C', $repoRoot, 'ls-files', '-z', '--', 'src/*.php', 'src/*.inc'],
+			[1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+			$pipes
+		);
+		$this->assertIsResource($proc, 'git ls-files must start to enumerate tracked src/ files');
+		$stdout = (string) stream_get_contents($pipes[1]);
+		$stderr = (string) stream_get_contents($pipes[2]);
+		fclose($pipes[1]);
+		fclose($pipes[2]);
+		$exit = proc_close($proc);
+		$this->assertSame(0, $exit, "git ls-files must succeed to enumerate tracked src/ files; got: {$stderr}");
+		$files = array_filter(explode("\0", $stdout), static fn(string $path): bool => $path !== '');
 
 		$violations = [];
 		foreach ($files as $relpath) {
