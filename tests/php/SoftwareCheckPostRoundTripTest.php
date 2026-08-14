@@ -25,43 +25,48 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 {
 	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_software.php';
 
-	/** The config path the page's setting is stored at. */
-	private const PATH = 'installedpackages/pfblockerng/config/0/pfb_software_check';
-
 	/**
 	 * The value the rendered checkbox posts when ticked: the Form_Checkbox call's 5th
 	 * argument, or pfSense's default when the page omits it.
+	 *
+	 * Read from the comment-stripped, whitespace-collapsed source so a reformat of the call
+	 * (one line, re-indented, a comment between arguments) cannot change the answer.
 	 */
 	private function postedWhenChecked(): string
 	{
-		$source = (string) file_get_contents(self::PAGE);
-		$open   = strpos($source, "new Form_Checkbox(\n\t'pfb_software_check',");
-		$this->assertNotFalse($open, 'the Software page must build its check-for-updates checkbox');
+		$source = php_strip_whitespace(self::PAGE);
+		$found  = preg_match(
+			"/new Form_Checkbox\\(\\s*'pfb_software_check'\\s*,((?:[^()]|\\([^()]*\\))*)\\)/",
+			$source,
+			$m
+		);
+		$this->assertSame(1, $found, 'the Software page must build its check-for-updates checkbox');
 
-		$close = strpos($source, '))', $open);
-		$this->assertNotFalse($close, 'unterminated Form_Checkbox call for pfb_software_check');
-		$args = substr($source, $open, $close - $open);
-
-		// 4 constructor arguments before the value: name, title, description, checked.
-		$parts = array_map('trim', explode(',', $args));
-		if (count($parts) < 5 || $parts[4] === '') {
+		// name is consumed by the pattern, so what remains is title, description, checked
+		// and — when the page passes it — the posted value.
+		$args = array_map('trim', explode(',', $m[1]));
+		if (count($args) < 4 || $args[3] === '') {
 			return 'yes'; // pfSense's Form_Checkbox default.
 		}
 
-		return trim($parts[4], "'\"");
+		return trim($args[3], "'\"");
 	}
 
-	/** The page's save filter, asserted to still be the one modelled here. */
+	/**
+	 * The page's save filter, applied through the SAME constant the page names, so swapping
+	 * the page to another filter cannot leave this modelling the old one.
+	 */
 	private function saveFilter(string $posted): string
 	{
 		$source = php_strip_whitespace(self::PAGE);
-		$this->assertStringContainsString(
-			"pfb_filter(\$_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: ''",
+		$found  = preg_match(
+			"/pfb_filter\\(\\\$_POST\\['pfb_software_check'\\] \\?\\? '', (PFB_FILTER_[A-Z_]+), 'software'\\) \\?: ''/",
 			$source,
-			'the modelled save expression no longer matches the page'
+			$m
 		);
+		$this->assertSame(1, $found, 'the modelled save expression no longer matches the page');
 
-		return pfb_filter($posted, PFB_FILTER_ON_OFF, 'software') ?: '';
+		return pfb_filter($posted, constant($m[1]), 'software') ?: '';
 	}
 
 	private bool $hadConfig = FALSE;
@@ -142,8 +147,8 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 		);
 		$this->assertSame(
 			$posted,
-			pfb_filter($posted, PFB_FILTER_ON_OFF, 'software'),
-			'the posted token must survive the save path unchanged'
+			$this->saveFilter($posted),
+			'the posted token must survive the page\'s own save path unchanged'
 		);
 	}
 }

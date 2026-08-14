@@ -4923,9 +4923,13 @@ function pfb_channel_for_install(?string $repo, ?string $pkgname): ?string {
 function pfb_software_cache_matches_install(array $cache, string $pkgname, string $repo): bool {
 	// The cache is a JSON file on disk, so a non-scalar can reach either half; casting one
 	// to string emits "Array to string conversion" on every call before returning the same
-	// FALSE (issue #2367). Neither can identify an install, so both are refused here.
-	$cached_name = $cache['pkgname'] ?? '';
-	if (!is_scalar($cached_name) || (string) $cached_name !== $pkgname) {
+	// FALSE (issue #2367). A half that is present but not scalar names nothing, so it is
+	// refused before the cast -- including JSON null, which would otherwise coalesce to ''
+	// and match an install whose own name is empty.
+	if (array_key_exists('pkgname', $cache) && !is_scalar($cache['pkgname'])) {
+		return FALSE;
+	}
+	if ((string) ($cache['pkgname'] ?? '') !== $pkgname) {
 		return FALSE;
 	}
 	if (!array_key_exists('repo', $cache)) {
@@ -5162,7 +5166,18 @@ function pfb_software_read_cache(): array {
 		return array();
 	}
 	$data = json_decode($raw, TRUE);
-	return is_array($data) ? $data : array();
+	if (!is_array($data)) {
+		return array();
+	}
+	// Every consumer reads these values through a (string) cast -- the orchestrator's
+	// latest/last_notified, the page's displayed fields, the install matcher. A non-scalar
+	// value (a hand-edit, a future writer) makes each of those casts emit "Array to string
+	// conversion" once per call, so it is dropped HERE rather than guarded at each site,
+	// where the next site added would be unguarded again (issue #2367). Every key this
+	// package writes is a scalar, so nothing it produces is lost.
+	return array_filter($data, static function ($value): bool {
+		return is_scalar($value);
+	});
 }
 
 /*

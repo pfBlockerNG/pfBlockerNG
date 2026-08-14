@@ -393,6 +393,17 @@ def test_toggle_flow_changes_effective_config(
             helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
 
 
+def _pin_posted_value(rendered: dict[str, str], flow: ToggleFlow) -> bool:
+    """Assert a CHECKED box submits the token its save path accepts; report whether it ran."""
+    if flow.field not in rendered:
+        return False
+    assert rendered[flow.field] == flow.on, (
+        f"{flow.name}: the rendered checkbox posts {rendered[flow.field]!r}; the save path "
+        f"accepts only {flow.on!r}, so a ticked Save would persist disabled"
+    )
+    return True
+
+
 def test_software_page_toggle_post_roundtrip(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -417,20 +428,26 @@ def test_software_page_toggle_post_roundtrip(
             # What the RENDERED box posts, not what this test would like it to post: the
             # checkbox carried pfSense's default 'yes' for a release, which the save path
             # rejects, so every Save persisted disabled while a hardcoded 'on' POST here
-            # kept passing (issue #2367).
-            if flow.field in rendered:
-                assert rendered[flow.field] == flow.on, (
-                    f"the rendered checkbox posts {rendered[flow.field]!r}; the save path accepts "
-                    f"only {flow.on!r}, so a ticked Save would persist disabled"
-                )
+            # kept passing (issue #2367). A checkbox submits nothing while unchecked, so the
+            # pin runs on whichever GET below finds it checked -- and `pinned` makes "never
+            # checked, never asserted" a failure instead of a silent pass.
+            pinned = _pin_posted_value(rendered, flow)
             _set_and_confirm(webui, smoke_vm, flow, flipped)
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text
-            assert (flow.field in scrape_form_fields(page.text)) is (flipped == flow.on)
+            rendered = scrape_form_fields(page.text)
+            assert (flow.field in rendered) is (flipped == flow.on)
+            pinned = _pin_posted_value(rendered, flow) or pinned
             _set_and_confirm(webui, smoke_vm, flow, original)
             page = webui.get(flow.page)
             assert "pfb-software-panel" in page.text
-            assert (flow.field in scrape_form_fields(page.text)) is (original == flow.on)
+            rendered = scrape_form_fields(page.text)
+            assert (flow.field in rendered) is (original == flow.on)
+            pinned = _pin_posted_value(rendered, flow) or pinned
+            assert pinned, (
+                "no GET rendered the checkbox checked, so the posted-value pin never ran "
+                "(issue #2367's whole point is the value a checked box submits)"
+            )
         helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
         assert helpers.config_get_state(smoke_vm, flow.config_path) == original_state
     finally:

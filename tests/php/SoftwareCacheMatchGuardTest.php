@@ -69,6 +69,30 @@ final class SoftwareCacheMatchGuardTest extends TestCase
 	}
 
 	/**
+	 * A present-but-null half is refused the same way an array one is. JSON's null reaches
+	 * PHP as null, and coalescing it to '' before the guard would let a cache that names
+	 * nothing match an install whose own name is empty — the asymmetry the guard exists to
+	 * remove, since the repo half already refuses null.
+	 */
+	public function testNullHalvesAreRefusedLikeAnyOtherNonScalar(): void
+	{
+		[$name_verdict, $name_seen] = $this->match(
+			['pkgname' => NULL, 'repo' => 'pfblockerng-stable'],
+			'',
+			'pfblockerng-stable'
+		);
+		$this->assertFalse($name_verdict, 'a null pkgname names no install, empty live name or not');
+		$this->assertSame([], $name_seen, 'the matcher must not emit a diagnostic: ' . implode(' | ', $name_seen));
+
+		[$repo_verdict] = $this->match(
+			['pkgname' => 'pfSense-pkg-pfBlockerNG', 'repo' => NULL],
+			'pfSense-pkg-pfBlockerNG',
+			''
+		);
+		$this->assertFalse($repo_verdict, 'a null repo names no catalogue, empty live repo or not');
+	}
+
+	/**
 	 * The branches that must not change: a matching cache still matches, a repo-less cache
 	 * (every box that predates #2148) is still adopted, and a real mismatch is still refused.
 	 */
