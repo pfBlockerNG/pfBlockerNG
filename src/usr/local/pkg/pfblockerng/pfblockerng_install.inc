@@ -181,6 +181,10 @@ foreach (array($pfb['dnsbl_cache'], "{$pfb['dnsbl_cache']}-wal", "{$pfb['dnsbl_c
 }
 rmdir_recursive("{$pfb['dbdir']}/dnsblalias");
 
+// issue #1541: the pre-PSL chroot oracle copy is unowned after upgrade and its
+// basename matches the pfb_py_* cache-save glob -- remove it once here.
+unlink_if_exists('/var/unbound/pfb_py_tld.txt');
+
 update_status(" done.\nStarting Firewall filter Service...");
 start_service('pfb_filter');
 

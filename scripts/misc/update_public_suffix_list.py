@@ -201,15 +201,15 @@ def convert_suffix(line: str) -> str | None:
 def convert_psl_rule(line: str) -> str | None:
     """Normalize one PSL exact, wildcard, or exception rule.
 
-    Only blank/comment lines are ignored. Any non-comment that is not valid PSL
-    syntax raises ``ValueError`` so a malformed fetch cannot be published.
+    Blank/comment lines are ignored. Per the PSL spec (and matching the runtime
+    parser), the rule is the token up to the first whitespace -- the remainder
+    is ignored. A malformed token raises ``ValueError`` so a malformed fetch
+    cannot be published.
     """
     line = line.strip()
     if not line or line.startswith("//"):
         return None
-    if any(char.isspace() for char in line):
-        raise ValueError(f"malformed PSL rule: {line!r}")
-    token = line
+    token = line.split(None, 1)[0]
     prefix = ""
     if token[:1] in ("*", "!"):
         prefix, token = token[0], token[1:]
@@ -309,8 +309,11 @@ def main(argv: list[str] | None = None) -> int:
     lines = normalise_lines(fetched)
     version, commit = extract_header(lines)
     icann_lines, private_lines = extract_psl_sections(lines)
-    psl_icann = build_psl_section(icann_lines)
-    psl_private = build_psl_section(private_lines)
+    try:
+        psl_icann = build_psl_section(icann_lines)
+        psl_private = build_psl_section(private_lines)
+    except ValueError as exc:
+        raise SystemExit(f"Refusing to rewrite: malformed PSL rule in the fetched list ({exc}).") from exc
     require_plausible(psl_icann)
     require_private_plausible(psl_private)
 

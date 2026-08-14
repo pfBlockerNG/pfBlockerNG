@@ -60,7 +60,6 @@ def _run_build(
         ]
     }
     config: dict[str, Any] = {
-        "tld_wildcard_master": [],
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],

@@ -131,28 +131,28 @@ def _reset_regex_runtime_state() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# tld_wildcard_classify -- label-depth branches (>5, ==5, single-label fall-through)
+# tld_wildcard_classify -- depth outcomes at populated-rule boundaries
 # --------------------------------------------------------------------------- #
 class TestClassifyDepthBranches:
-    def test_more_than_five_labels_is_exact_data(self) -> None:
-        # >5 labels: no public-suffix search runs -> exact DATA (the dcnt>5 arm).
-        cls, key = tld_wildcard_classify("a.b.c.d.e.f.example", pfb_unbound.PslRules(), set())
+    def test_deeper_than_registrable_is_exact_data(self) -> None:
+        # Deeper than the registrable domain -> exact DATA.
+        cls, key = tld_wildcard_classify("a.b.c.d.e.f.example", _psl_rules("example"), set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "a.b.c.d.e.f.example")
 
     def test_five_labels_registrable_parent_is_zone(self) -> None:
-        # dcnt==5 arm: a 4-label public suffix makes the whole 5-label name the zone.
+        # A 4-label public suffix makes the whole 5-label name the zone.
         rules = _psl_rules("b.c.d.com")
         cls, key = tld_wildcard_classify("a.b.c.d.com", rules, set())
         assert (cls, key) == (DNSBL_CLASS_ZONE, "a.b.c.d.com")
 
-    def test_five_labels_unknown_suffix_is_exact_data(self) -> None:
-        # dcnt==5 arm, suffix NOT public -> exact DATA (the `or ""` fallthrough).
-        cls, key = tld_wildcard_classify("a.b.c.d.com", pfb_unbound.PslRules(), set())
+    def test_five_labels_shallow_suffix_is_exact_data(self) -> None:
+        # Suffix is only "com": the 5-label name is deeper than its registrable domain.
+        cls, key = tld_wildcard_classify("a.b.c.d.com", _psl_rules("com"), set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "a.b.c.d.com")
 
-    def test_single_label_falls_through_to_data(self) -> None:
-        # dcnt==1: no depth arm matches -> dfound stays "" -> exact DATA.
-        cls, key = tld_wildcard_classify("com", pfb_unbound.PslRules(), set())
+    def test_bare_public_suffix_is_exact_data(self) -> None:
+        # A bare public suffix has no registrable parent -> exact DATA.
+        cls, key = tld_wildcard_classify("com", _psl_rules("com"), set())
         assert (cls, key) == (DNSBL_CLASS_DATA, "com")
 
 

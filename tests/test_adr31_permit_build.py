@@ -106,7 +106,6 @@ _RAW_BLOCK = "block.raw"
 _RAW_PERMIT = "permit.raw"
 
 _BASE_CONFIG: dict[str, Any] = {
-    "tld_wildcard_master": [],
     "tld_wildcard_blacklist": [],
     "tld_wildcard_exclusion": [],
     "user_whitelist": [],

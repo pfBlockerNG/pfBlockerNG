@@ -65,7 +65,6 @@ def _build(
         ],
     }
     config = {
-        "tld_wildcard_master": _TLD_MASTER,
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": list(user_whitelist),

@@ -198,8 +198,10 @@ Describe 'pfblockerng.sh dnsbl_cache (#468)'
     # neither the pfb_unbound*/pfb_py_* archive glob, so it is shipped, not
     # generated -- re-staged from /usr/local on restore, same as the others.
     The result of "tar_list()" should not include 'pfb_dnsbl_regex_rules.py'
-    # ... nor the name-mapped TLD oracle (issue #1255: matches the pfb_py_* glob
-    # but is shipped, not generated -- archiving it would reinstate a stale oracle).
+    # ... nor the shipped PSL authority (issue #1541): staged into the chroot by
+    # `dc stage` above, but SHIPPED -- outside the pfb_unbound*/pfb_py_* archive
+    # globs and re-staged from /usr/local on restore. A widened save glob that
+    # started archiving it would reinstate a stale authority; this row catches that.
     The result of "tar_list()" should not include 'dnsbl_psl'
     cleanup_sandbox
   End

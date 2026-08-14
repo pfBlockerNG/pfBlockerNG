@@ -150,6 +150,7 @@ class TestTldWildcardOracleGating:
 
     def setup_method(self) -> None:
         pfb_unbound.pfb["python_tld_wildcard"] = False
+        pfb_unbound.pfb["tld_allow"] = False
         pfb_unbound.pfb["pfb_py_psl"] = ""
 
     def test_oracle_not_loaded_when_flag_off_even_if_file_exists(self, tmp_path: Any) -> None:
@@ -182,8 +183,9 @@ class TestTldWildcardOracleGating:
 
         assert config["psl_rules"].icann_exact == ("com", "net")
 
-    def test_oracle_empty_when_flag_on_but_file_missing(self, tmp_path: Any) -> None:
-        # Fail-safe: ON but no oracle staged yet -> empty, never a raise/crash.
+    def test_oracle_load_fails_closed_when_flag_on_but_file_missing(self, tmp_path: Any) -> None:
+        # Fail-closed: ON but no authority staged -> ValueError, never a silent
+        # empty authority that would disable PSL policy without a signal.
         pfb_unbound.pfb["python_tld_wildcard"] = True
         pfb_unbound.pfb["pfb_py_psl"] = str(tmp_path / "does_not_exist")
 

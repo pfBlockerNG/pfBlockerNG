@@ -124,6 +124,12 @@ PAGE_TABLE: tuple[Page, ...] = (
             # pfb_regex_list live-highlighting asset is wired on the page. Present because
             # the gating pfb_syntax_highlight toggle defaults on for a fresh box.
             "vendor/codemirror/cm-regex.min.js",
+            # issue #1541: the renamed PSL-era controls and both PRIVATE-policy
+            # toggles render with their outcome-based labels.
+            "Wildcard Blocking",
+            "Recognize Shared-Hosting Suffixes (PSL PRIVATE)",
+            "Allow Only Selected Domain Suffixes",
+            "Allow Shared-Hosting Suffixes (PSL PRIVATE)",
         ),
     ),
     # feeds.php is split into IPv4/IPv6/DNSBL ?type sub-tabs (ADR-16 Phase 3). Each type
