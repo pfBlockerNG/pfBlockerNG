@@ -621,10 +621,8 @@ def test_version_t_broken_fails_loud_with_no_mutation() -> None:
 
 def test_empty_catalogue_fails_no_mutation_peer_conf_untouched() -> None:
     """A peer conf from an already-successful nightly bootstrap must survive an edge
-    bootstrap whose catalogue turns out empty. Note: the hook regenerates EVERY conf
-    that exists on every run (not just the channel being bootstrapped today), so the
-    peer must be resolved (deterministic, byte-identical on re-regeneration) rather
-    than an invalid placeholder that a real hook run would legitimately rewrite."""
+    bootstrap whose catalogue turns out empty — byte-identical, and with no package
+    mutation logged."""
     with tempfile.TemporaryDirectory() as root:
         seed = _run_install(root, "nightly", catalog=("1.0.0",))
         assert seed.returncode == 0, seed.stdout + seed.stderr
@@ -638,6 +636,25 @@ def test_empty_catalogue_fails_no_mutation_peer_conf_untouched() -> None:
         assert _conf_path(root, "nightly").read_text() == peer_before, "a pre-existing peer conf must survive"
         new_lines = _pkg_log(root).read_text()[len(log_before) :].splitlines()
         assert not any(ln.startswith(("install", "delete")) for ln in new_lines), new_lines
+
+
+def test_failed_run_against_another_base_url_never_rewrites_a_peer_conf() -> None:
+    """A run pointed at a different catalogue base (a fork or a staged prefix) that
+    fails before its target is proven must leave a peer channel's conf byte-identical:
+    the generator hook is driven for THIS channel's conf only, never for the peers,
+    so a bad base URL cannot re-point a working subscription before retirement."""
+    with tempfile.TemporaryDirectory() as root:
+        seed = _run_install(root, "stable", catalog=("1.0.0",))
+        assert seed.returncode == 0, seed.stdout + seed.stderr
+        peer_before = _conf_path(root, "stable").read_text()
+        assert _BASE_URL in peer_before
+
+        proc = _run_install(root, "nightly", catalog=(), extra_env={"PFB_BASE_URL": f"{_BASE_URL}-staged"})
+
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert not _conf_path(root, "nightly").exists(), "the stub conf this run created must be removed"
+        peer_after = _conf_path(root, "stable").read_text()
+        assert peer_after == peer_before, f"peer conf rewritten:\n--- before\n{peer_before}\n--- after\n{peer_after}"
 
 
 def test_empty_catalogue_leaves_a_pre_existing_target_conf_in_place() -> None:

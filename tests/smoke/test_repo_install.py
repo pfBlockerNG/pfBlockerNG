@@ -3582,8 +3582,10 @@ def test_channel_installer_replaces_the_legacy_devel_identity(
     channel = "stable"
     reset_channel_subscription(repo_vm)
 
-    # GIVEN: subscribed to the legacy release repo, carrying only the -devel identity.
-    run_add_repo_sh(repo_vm, channel_catalogs.base_url)  # no --channel => the legacy release repo
+    # GIVEN: subscribed to the legacy release repo (a hand-written pfblockerng.conf —
+    # add-repo.sh no longer accepts the legacy channel), carrying only the -devel identity.
+    write_repo_conf(repo_vm, f"{channel_catalogs.root}/release/{channel_catalogs.varver}", ours_priority=100)
+    pkg_update(repo_vm)
     pkg_install_qualified(repo_vm, OURS_REPO_NAME, LEGACY_DEVEL_PKG_NAME)
     names_before = installed_pfblockerng_names(repo_vm)
     assert names_before == [LEGACY_DEVEL_PKG_NAME], f"BEFORE: expected only the legacy identity, found {names_before}"
