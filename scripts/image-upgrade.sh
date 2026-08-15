@@ -291,6 +291,43 @@ ssh_guest() {
     fi
 }
 
+# pfb_pkg_update_retry BEGIN
+# pfb_pkg_update_retry LOGFILE CONTEXT — refresh the pkg catalogue (`pkg update
+# -f`), retrying while pkg reports its own database busy/locked and dying on
+# any other failure. Shared by the --branch path and the --upgrade-pkgs path so
+# both honour the same PKG_LOCK_RETRIES/PKG_LOCK_INTERVAL knobs and fail
+# identically on a stuck lock or a genuine refresh error. CONTEXT names the
+# caller in the non-lock failure message.
+pfb_pkg_update_retry() {
+    _pkr_log="$1"; _pkr_context="$2"
+    true > "$_pkr_log"
+    _pkr_retries="${PKG_LOCK_RETRIES:-12}"
+    _pkr_interval="${PKG_LOCK_INTERVAL:-5}"
+    case "$_pkr_retries" in '' | *[!0-9]*) _pkr_retries=0 ;; esac
+    [ "$_pkr_retries" -ge 1 ] || die "PKG_LOCK_RETRIES must be a positive integer"
+    [ "$_pkr_retries" -le 12 ] || die "PKG_LOCK_RETRIES must be between 1 and 12"
+    case "$_pkr_interval" in *[!0-9]*) die "PKG_LOCK_INTERVAL must be a non-negative integer" ;; esac
+    [ "$_pkr_interval" -le 5 ] || die "PKG_LOCK_INTERVAL must be between 0 and 5"
+    _pkr_try=1
+    while true; do
+        _pkr_rc=0
+        _pkr_out=$(ssh_guest 'pkg update -f' 2>&1) || _pkr_rc=$?
+        printf '%s\n' "$_pkr_out" | tee -a "$_pkr_log"
+        [ "$_pkr_rc" -eq 0 ] && return 0
+        case "$_pkr_out" in
+            *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
+            *) die "pkg catalogue refresh failed after ${_pkr_context} (see $_pkr_log)" ;;
+        esac
+        if [ "$_pkr_try" -ge "$_pkr_retries" ]; then
+            die "pkg catalogue refresh still locked after ${_pkr_retries} attempts (see $_pkr_log)"
+        fi
+        warn "pkg catalogue refresh: pkg database locked; retry ${_pkr_try}/${_pkr_retries} in ${_pkr_interval}s"
+        _pkr_try=$((_pkr_try + 1))
+        sleep "$_pkr_interval"
+    done
+}
+# pfb_pkg_update_retry END
+
 # pfb_switch_branch BEGIN
 # pfb_switch_branch NAME LOG_DIR — validate NAME against Netgate's live branch
 # catalogue, then persist and apply it through pfSense's supported config path.
@@ -336,32 +373,7 @@ pfb_switch_branch() {
     fi
 
     log "branch switch confirmed — refreshing pkg catalogue (pkg update -f)"
-    _psb_pkg_log="${_psb_log_dir}/pkg-update-branch.log"
-    true > "$_psb_pkg_log"
-    _psb_retries="${PKG_LOCK_RETRIES:-12}"
-    _psb_interval="${PKG_LOCK_INTERVAL:-5}"
-    case "$_psb_retries" in '' | *[!0-9]*) _psb_retries=0 ;; esac
-    [ "$_psb_retries" -ge 1 ] || die "PKG_LOCK_RETRIES must be a positive integer"
-    [ "$_psb_retries" -le 12 ] || die "PKG_LOCK_RETRIES must be between 1 and 12"
-    case "$_psb_interval" in *[!0-9]*) die "PKG_LOCK_INTERVAL must be a non-negative integer" ;; esac
-    [ "$_psb_interval" -le 5 ] || die "PKG_LOCK_INTERVAL must be between 0 and 5"
-    _psb_try=1
-    while true; do
-        _psb_rc=0
-        _psb_out=$(ssh_guest 'pkg update -f' 2>&1) || _psb_rc=$?
-        printf '%s\n' "$_psb_out" | tee -a "$_psb_pkg_log"
-        [ "$_psb_rc" -eq 0 ] && return 0
-        case "$_psb_out" in
-            *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
-            *) die "pkg catalogue refresh failed after branch switch (see $_psb_pkg_log)" ;;
-        esac
-        if [ "$_psb_try" -ge "$_psb_retries" ]; then
-            die "pkg catalogue refresh still locked after ${_psb_retries} attempts (see $_psb_pkg_log)"
-        fi
-        warn "pkg catalogue refresh: pkg database locked; retry ${_psb_try}/${_psb_retries} in ${_psb_interval}s"
-        _psb_try=$((_psb_try + 1))
-        sleep "$_psb_interval"
-    done
+    pfb_pkg_update_retry "${_psb_log_dir}/pkg-update-branch.log" "branch switch"
 }
 # pfb_switch_branch END
 
@@ -435,6 +447,48 @@ pfb_pkg_refresh_verdict() {
     printf '%s\n' fail-closed
 }
 # pfb_pkg_refresh_verdict END
+
+# pfb_refresh_pkgs BEGIN
+# pfb_refresh_pkgs LOG_DIR — --upgrade-pkgs body, extracted verbatim (today's
+# semantics, unchanged) so the spec can drive it directly. Sets the global
+# PKG_WAS_UPGRADED (0 up to date, 1 after an applied upgrade).
+pfb_refresh_pkgs() {
+    _prp_log_dir="$1"
+
+    log "refreshing package catalogue (pkg update -f)"
+    # pkg update may print output; connection stays up (not a reboot command).
+    ssh_guest 'pkg update -f' 2>&1 | tee "${_prp_log_dir}/pkg-update.log" || true
+
+    # Dry-run detect: pkg prints "Your packages are up to date" when nothing is
+    # pending; otherwise it prints an upgrade plan (Number of packages to be
+    # upgraded / to be installed / to be reinstalled, etc.).  Parse the output —
+    # do NOT rely solely on exit code, as pkg(8) exit semantics vary by version.
+    log "checking for pending package upgrades (pkg upgrade -n)"
+    _prp_dry=$(ssh_guest 'pkg upgrade -n' 2>&1 | tee "${_prp_log_dir}/pkg-upgrade-dryrun.log" || true)
+    _prp_verdict=$(pfb_pkg_refresh_verdict "$_prp_dry")
+    if [ "$_prp_verdict" = up-to-date ]; then
+        log "packages already up to date — skipping pkg upgrade + reboot"
+        PKG_WAS_UPGRADED=0
+    elif [ "$_prp_verdict" = fail-closed ]; then
+        die "pkg upgrade -n did not report a plan or an up-to-date result (see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
+    else
+        log "package upgrades pending — running pkg upgrade -y"
+        # Do not pipe: tee's 0 would hide a failed apply (#1844 same class).
+        if ! ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' >"${_prp_log_dir}/pkg-upgrade.log" 2>&1; then
+            cat "${_prp_log_dir}/pkg-upgrade.log"
+            die "pkg upgrade -y failed (see ${_prp_log_dir}/pkg-upgrade.log)"
+        fi
+        cat "${_prp_log_dir}/pkg-upgrade.log"
+        log "rebooting after pkg upgrade"
+        # /sbin/reboot drops the connection — expected; ignore the exit code.
+        ssh_guest '/sbin/reboot' 2>/dev/null || true
+        log "waiting for SSH after pkg-upgrade reboot..."
+        wait_guest_ssh 300
+        log "box is back after pkg-upgrade reboot"
+        PKG_WAS_UPGRADED=1
+    fi
+}
+# pfb_refresh_pkgs END
 
 # pfb_publish_decision BEGIN
 # PKG_WAS_UPGRADED OLD_VER POST_VER CHECK_CURRENT(0|1) -> skip-os | run-os | nothing-to-publish | fail-closed
@@ -709,38 +763,7 @@ log "current version on box: ${OLD_VER:-unknown}"
 # --- optional: upgrade baked deps (pkg update -f + conditional pkg upgrade) -
 PKG_WAS_UPGRADED=0
 if [ "$UPGRADE_PKGS" -eq 1 ]; then
-    log "refreshing package catalogue (pkg update -f)"
-    # pkg update may print output; connection stays up (not a reboot command).
-    ssh_guest 'pkg update -f' 2>&1 | tee "$LOCAL_DIR/pkg-update.log" || true
-
-    # Dry-run detect: pkg prints "Your packages are up to date" when nothing is
-    # pending; otherwise it prints an upgrade plan (Number of packages to be
-    # upgraded / to be installed / to be reinstalled, etc.).  Parse the output —
-    # do NOT rely solely on exit code, as pkg(8) exit semantics vary by version.
-    log "checking for pending package upgrades (pkg upgrade -n)"
-    _pkg_dry=$(ssh_guest 'pkg upgrade -n' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade-dryrun.log" || true)
-    _pkg_verdict=$(pfb_pkg_refresh_verdict "$_pkg_dry")
-    if [ "$_pkg_verdict" = up-to-date ]; then
-        log "packages already up to date — skipping pkg upgrade + reboot"
-        PKG_WAS_UPGRADED=0
-    elif [ "$_pkg_verdict" = fail-closed ]; then
-        die "pkg upgrade -n did not report a plan or an up-to-date result (see $LOCAL_DIR/pkg-upgrade-dryrun.log)"
-    else
-        log "package upgrades pending — running pkg upgrade -y"
-        # Do not pipe: tee's 0 would hide a failed apply (#1844 same class).
-        if ! ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' >"$LOCAL_DIR/pkg-upgrade.log" 2>&1; then
-            cat "$LOCAL_DIR/pkg-upgrade.log"
-            die "pkg upgrade -y failed (see $LOCAL_DIR/pkg-upgrade.log)"
-        fi
-        cat "$LOCAL_DIR/pkg-upgrade.log"
-        log "rebooting after pkg upgrade"
-        # /sbin/reboot drops the connection — expected; ignore the exit code.
-        ssh_guest '/sbin/reboot' 2>/dev/null || true
-        log "waiting for SSH after pkg-upgrade reboot..."
-        wait_guest_ssh 300
-        log "box is back after pkg-upgrade reboot"
-        PKG_WAS_UPGRADED=1
-    fi
+    pfb_refresh_pkgs "$LOCAL_DIR"
 fi
 
 # --- optional: switch the pfSense update branch ----------------------------

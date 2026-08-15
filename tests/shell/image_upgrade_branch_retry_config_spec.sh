@@ -25,6 +25,7 @@ Describe 'image-upgrade.sh branch refresh retry configuration'
           "pkg update -f") printf "catalogue refreshed\n" ;;
         esac
       }
+      eval "$(sed -n "/^# pfb_pkg_update_retry BEGIN/,/^# pfb_pkg_update_retry END/p" "$1")"
       eval "$(sed -n "/^# pfb_switch_branch BEGIN/,/^# pfb_switch_branch END/p" "$1")"
       PKG_LOCK_RETRIES="$_retries"
       PKG_LOCK_INTERVAL="$_interval"
