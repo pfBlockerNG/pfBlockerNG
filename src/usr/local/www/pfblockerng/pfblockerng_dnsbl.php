@@ -1152,7 +1152,7 @@ $psl_feed_policy_options = array(
 );
 $psl_feed_policy_help = '<ul>'
 	. '<li><strong>Ignore entirely</strong> - the feed entry is dropped (counted in the reject stats).</li>'
-	. '<li><strong>Block the suffix apex only</strong> - only the exact suffix name is blocked; every registrant under it stays reachable.</li>'
+	. '<li><strong>Block the suffix apex only</strong> - only the exact suffix name is blocked; this entry no longer affects names under the suffix (other list entries still apply).</li>'
 	. '<li><strong>Honor list rules</strong> - the list is honored as written, including an explicit ABP wildcard rule that may still blanket the suffix.</li>'
 	. '</ul>'
 	. 'A Custom List or a sovereign ABP list entry is never affected by this policy. Intentional whole-suffix blocking belongs in '

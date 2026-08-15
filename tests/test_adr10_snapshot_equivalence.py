@@ -51,7 +51,7 @@ _CONTAINER_KEYS = frozenset(
         "tld_allow_roots",
         "psl_include_private",
         "psl_allow_private",
-        # issue #2371: feed-at-suffix PSL policy fields (plumbing only, no consumer yet).
+        # issue #2371: feed-at-suffix PSL policy fields (enforced in build()).
         "psl_feed_private_policy",
         "psl_feed_icann_policy",
     }

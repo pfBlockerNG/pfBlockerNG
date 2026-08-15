@@ -154,7 +154,7 @@ enum PfbIdnMode: string implements PfbStoredEnum
 // pre-#2371 behaviour). Absent, present '', and any unknown/junk stored token all
 // read as Honor -- fail-safe, same "never silently drop or demote" principle as
 // PfbToggle's Off/PfbIdnMode's Off fallback. Step 1 of #2371 registers and plumbs
-// this enum only; no enforcement consumer reads it yet.
+// this enum only; pfb_unbound.py build() enforces the stored policy.
 enum PfbFeedSuffixPolicy: string implements PfbStoredEnum
 {
 	use PfbStoredEnumAdapter;
@@ -1326,7 +1326,7 @@ function pfb_cfg_registry(): array
 		// never via this registry default; a fresh install is instead seeded 'apex' by
 		// pfb_psl_feed_policy_is_fresh_install() + pfblockerng_install.inc's post-registry-
 		// pass write (owner decision 2026-08-14: apex/apex for new installs, honor/honor
-		// grandfathered for existing ones). No enforcement consumer yet (#2371 Step 2).
+		// grandfathered for existing ones). pfb_unbound.py build() enforces the policy.
 		'dnsbl/pfb_psl_feed_private_policy' => [
 			'default'        => '',
 			'read_adapter'   => 'pfb_cfg_feed_suffix_policy_read',

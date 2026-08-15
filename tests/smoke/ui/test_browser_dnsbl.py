@@ -551,10 +551,25 @@ def test_gateway_dnsbl_feed_suffix_policy_save_roundtrip(
     """
     page = browser_page
 
-    original_private = helpers.config_get(smoke_vm, _CFG_FEED_PRIVATE_POLICY) or "honor"
-    original_icann = helpers.config_get(smoke_vm, _CFG_FEED_ICANN_POLICY) or "honor"
+    # issue #1947: capture exact presence + raw token so the teardown restores the
+    # stored state VERBATIM (an absent key stays absent, never materialised 'honor').
+    original_private_state = helpers.config_get_state(smoke_vm, _CFG_FEED_PRIVATE_POLICY)
+    original_icann_state = helpers.config_get_state(smoke_vm, _CFG_FEED_ICANN_POLICY)
+    original_private = original_private_state[1] if original_private_state[0] else "honor"
+    original_icann = original_icann_state[1] if original_icann_state[0] else "honor"
     flipped_private = "apex" if original_private != "apex" else "honor"
     flipped_icann = "ignore" if original_icann != "ignore" else "honor"
+
+    # #2371 matrix row 15: pre-existing legacy keys must survive the saves
+    # byte-identically -- capture sentinel states up front.
+    legacy_sentinels = {
+        path: helpers.config_get_state(smoke_vm, path)
+        for path in (
+            "installedpackages/pfblockerngdnsblsettings/config/0/tld_wildcard",
+            "installedpackages/pfblockerngdnsblsettings/config/0/tld_allow",
+            "installedpackages/pfblockerngdnsblsettings/config/0/pfb_psl_include_private",
+        )
+    }
 
     try:
         # ---- FLIP: POST both selects to a non-default, DISTINCT value ---- #
@@ -623,14 +638,17 @@ def test_gateway_dnsbl_feed_suffix_policy_save_roundtrip(
         expect(sel_icann_restore).to_have_value(original_icann, timeout=JS_TIMEOUT_MS)
         _shot(page, screenshot_dir, "gateway_dnsbl_feed_suffix_policy_after_restore")
 
+        # Matrix row 15: the legacy sentinel keys are byte-identical after both saves.
+        for path, state in legacy_sentinels.items():
+            assert helpers.config_get_state(smoke_vm, path) == state, (
+                f"legacy key {path} changed across the feed-suffix-policy saves"
+            )
+
     finally:
-        # Belt-and-suspenders: restore both fields to their original stored token on any
-        # mid-flip abort (config_set writes the raw token verbatim -- both original
-        # values captured above are already-canonical PfbFeedSuffixPolicy tokens).
-        if helpers.config_get(smoke_vm, _CFG_FEED_PRIVATE_POLICY) != original_private:
-            helpers.config_set(smoke_vm, _CFG_FEED_PRIVATE_POLICY, original_private)
-        if helpers.config_get(smoke_vm, _CFG_FEED_ICANN_POLICY) != original_icann:
-            helpers.config_set(smoke_vm, _CFG_FEED_ICANN_POLICY, original_icann)
+        # issue #1947: restore the exact captured presence/raw state on any exit --
+        # an originally-absent key is deleted again, never left materialised.
+        helpers.config_restore_state(smoke_vm, _CFG_FEED_PRIVATE_POLICY, original_private_state)
+        helpers.config_restore_state(smoke_vm, _CFG_FEED_ICANN_POLICY, original_icann_state)
 
 
 # --------------------------------------------------------------------------- #

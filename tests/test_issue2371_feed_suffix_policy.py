@@ -68,6 +68,7 @@ def _run_build(
     group: str = "GRP",
     log_flag: str = "1",
     psl_wildcard_enabled: bool = True,
+    include_private: bool = True,
 ) -> P.BuildResult:
     raw_key = "feed.raw"
     manifest = {
@@ -84,6 +85,7 @@ def _run_build(
     config: dict[str, Any] = {
         "psl_rules": _rules(),
         "psl_wildcard_enabled": psl_wildcard_enabled,
+        "psl_include_private": include_private,
         "tld_wildcard_blacklist": [],
         "tld_wildcard_exclusion": [],
         "user_whitelist": [],
@@ -473,8 +475,47 @@ class TestAllowAndRegexUntouched:
 
 
 # --------------------------------------------------------------------------- #
-# Row 13: #1541 regression pins stay green -- exercised via the shared suites
-# in the verification command list (test_pfb_unbound.py suffix-apex classes,
-# test_adr21_abp_per_line.py, test_adr31_precedence_oracle.py), not restated
-# here.
+# The #1541 apex/ABP-anchor invariants live in test_pfb_unbound.py's
+# suffix-apex classes, test_adr21_abp_per_line.py, and
+# test_adr31_precedence_oracle.py; this file adds only the policy axis.
 # --------------------------------------------------------------------------- #
+
+
+# --------------------------------------------------------------------------- #
+# PR #2378 review F1: PRIVATE recognition OFF must not let 'apex' leak a ZONE.
+# --------------------------------------------------------------------------- #
+
+
+class TestPlainSuffixPolicyWithPrivateRecognitionOff:
+    """With PSL PRIVATE recognition OFF the classifier's ICANN-only view sees a
+    PRIVATE apex as a registrable domain and would wildcard it. The policy's
+    view is the FULL PSL, so 'apex' demotes that would-be ZONE to an exact apex
+    block; 'ignore' still drops; 'honor' keeps the classifier's outcome."""
+
+    def test_private_apex_demotes_classifier_zone_and_tallies(self) -> None:
+        result = _run_build(["github.io"], private_policy="apex", icann_policy="honor", include_private=False)
+        assert "github.io" not in result.zone_db
+        assert result.data_db["github.io"]["band"] == P.PRIO_FEED_BLOCK
+        assert _reject_row(result)["suffix_demote"] == 1
+
+    def test_private_ignore_still_drops_and_tallies(self) -> None:
+        result = _run_build(["github.io"], private_policy="ignore", icann_policy="honor", include_private=False)
+        assert "github.io" not in result.data_db
+        assert "github.io" not in result.zone_db
+        assert _reject_row(result)["suffix_drop"] == 1
+
+    def test_private_honor_keeps_classifier_zone(self) -> None:
+        result = _run_build(["github.io"], private_policy="honor", icann_policy="honor", include_private=False)
+        assert "github.io" in result.zone_db
+        assert _reject_row(result).get("suffix_demote", 0) == 0
+
+    def test_user_provenance_keeps_zone_even_under_apex(self) -> None:
+        result = _run_build(
+            ["github.io"],
+            private_policy="apex",
+            icann_policy="apex",
+            include_private=False,
+            provenance="user",
+        )
+        assert "github.io" in result.zone_db
+        assert _reject_row(result, feed="FEED", group="GRP").get("suffix_demote", 0) == 0

@@ -166,13 +166,19 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 
 	public function testIssue2371SuffixBucketsEmitTheirOwnCanonicalLines(): void
 	{
-		// Given: an artifact row carrying the #2371 suffix_drop/suffix_demote
-		// buckets alongside a zero legacy pair (Python emits them sparsely --
-		// only present when they fired -- but the reader must not assume
-		// every key exists).
+		// Given: an artifact row shaped the way the Python writer actually
+		// emits it -- shape/wire_cap ALWAYS present (zero included), the #2371
+		// suffix buckets present only because they fired.
 		$log = $this->seedLogSinks();
 		$stats = $this->statsFile(json_encode([
-			['feed' => 'FeedC', 'group' => 'GroupC', 'suffix_drop' => 2, 'suffix_demote' => 1],
+			[
+				'feed' => 'FeedC',
+				'group' => 'GroupC',
+				'shape' => 0,
+				'wire_cap' => 0,
+				'suffix_drop' => 2,
+				'suffix_demote' => 1,
+			],
 		]));
 
 		// When: the artifact is read.
@@ -197,10 +203,10 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 	public function testIssue2371AbsentSuffixBucketsEmitNoLines(): void
 	{
 		// Given: a legacy-shaped row that never carries the #2371 keys at all
-		// (the pre-#2371 artifact shape).
+		// (the pre-#2371 artifact shape: shape/wire_cap always written).
 		$log = $this->seedLogSinks();
 		$stats = $this->statsFile(json_encode([
-			['feed' => 'FeedD', 'group' => 'GroupD', 'shape' => 1],
+			['feed' => 'FeedD', 'group' => 'GroupD', 'shape' => 1, 'wire_cap' => 0],
 		]));
 
 		pfb_emit_entry_reject_stats($stats);
@@ -210,6 +216,11 @@ final class PfbEmitEntryRejectStatsTest extends TestCase
 			$this->stampedLinePattern(pfb_validate_log_line('FeedD', 'entries', 'suffix_drop', '0')),
 			$logContents,
 			"an absent bucket must not log a line, got <{$logContents}>"
+		);
+		$this->assertStringNotContainsString(
+			'suffix_demote',
+			$logContents,
+			"an absent suffix_demote bucket must not log a line, got <{$logContents}>"
 		);
 		$this->assertMatchesRegularExpression(
 			$this->stampedLinePattern(pfb_validate_log_line('FeedD', 'entries', 'shape', '1')),
