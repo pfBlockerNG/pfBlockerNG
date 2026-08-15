@@ -289,7 +289,12 @@ final class CfgRegistryGrandfatherGateTest extends TestCase
 	public function testPslPolicyKeysHaveNoLegacyNameOrGrandfatherSeed(): void
 	{
 		$registry = pfb_cfg_registry();
-		foreach (['dnsbl/pfb_psl_include_private', 'dnsbl/pfb_psl_allow_private'] as $key) {
+		foreach ([
+			'dnsbl/pfb_psl_include_private',
+			'dnsbl/pfb_psl_allow_private',
+			'dnsbl/pfb_psl_feed_private_policy',
+			'dnsbl/pfb_psl_feed_icann_policy',
+		] as $key) {
 			$this->assertArrayHasKey($key, $registry);
 			$this->assertArrayNotHasKey('old_name', $registry[$key]);
 			$this->assertArrayNotHasKey('grandfather', $registry[$key]);

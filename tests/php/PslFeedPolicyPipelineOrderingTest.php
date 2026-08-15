@@ -27,9 +27,13 @@ final class PslFeedPolicyPipelineOrderingTest extends TestCase
 	}
 
 	/**
-	 * Reproduces pfblockerng_install.inc's exact call order for a genuinely fresh
-	 * install: capture freshness BEFORE any mutation, run migrations, run the
-	 * registry pass, THEN apply the #2371 seed only if freshness was TRUE.
+	 * RE-IMPLEMENTS pfblockerng_install.inc's documented call order for a
+	 * genuinely fresh install (capture freshness BEFORE any mutation, run
+	 * migrations, run the registry pass, THEN apply the #2371 seed only if
+	 * freshness was TRUE) -- it does not execute the installer file, which
+	 * cannot be include()'d off-appliance. The real file's ordering is pinned
+	 * separately by testInstallerCallsTheSeamAfterRegistryWriteback below;
+	 * only the two together prove ordering safety.
 	 */
 	private function runInstallSequence(): array
 	{
@@ -178,6 +182,15 @@ final class PslFeedPolicyPipelineOrderingTest extends TestCase
 		$path = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
 		$source = php_strip_whitespace($path);
 		$this->assertNotSame('', $source, 'installer source must be readable');
+
+		$capture = strpos($source, 'pfb_psl_feed_policy_is_fresh_install(');
+		$this->assertNotFalse($capture, 'installer must capture freshness via pfb_psl_feed_policy_is_fresh_install()');
+
+		// Migrations run through pfb_install_settings_family_finalize()'s seam
+		// (its $migrations callable defaults to pfb_run_migrations).
+		$migrations = strpos($source, 'pfb_install_settings_family_finalize(');
+		$this->assertNotFalse($migrations, 'installer must run the migration registry via its finalize seam');
+		$this->assertLessThan($migrations, $capture, 'freshness must be captured BEFORE any migration mutates a section');
 
 		$writeback = strpos($source, 'pfb_install_registry_writeback($pfb_registry_sections);');
 		$this->assertNotFalse($writeback, 'installer must dispatch its registry pass through the writeback seam');

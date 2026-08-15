@@ -1529,10 +1529,10 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["tld_allow_list"] = []
     pfb["psl_include_private"] = True
     pfb["psl_allow_private"] = False
-    # issue #2371: feed-at-suffix PSL policy, per PSL section. Default "honor" (today's
-    # pre-#2371 behaviour) -- the ini load below recomputes this from the loaded value,
-    # validated against {"ignore", "apex", "honor"}, else "honor". No consumer yet
-    # (Step 2 of #2371 adds enforcement).
+    # issue #2371: feed-at-suffix PSL policy, per PSL section. Default "honor" -- the
+    # ini load below recomputes this from the loaded value, validated against
+    # {"ignore", "apex", "honor"}, else "honor"; build() enforces it on FEED entries
+    # at suffix boundaries.
     pfb["psl_feed_private_policy"] = "honor"
     pfb["psl_feed_icann_policy"] = "honor"
     pfb["python_tld_seg"] = 0
@@ -4073,7 +4073,7 @@ class Snapshot:
     psl_allow_private: bool = False
     # issue #2371: feed-at-suffix PSL policy, per PSL section. "honor" default keeps every
     # hand-built legacy Snapshot fixture (this file and its tests) decision-identical
-    # without passing these explicitly. No consumer yet (Step 2 of #2371).
+    # without passing these explicitly; build() reads them from the manifest config.
     psl_feed_private_policy: str = "honor"
     psl_feed_icann_policy: str = "honor"
     # issue #1074: identity of this snapshot for decisionDB memo stamping; auto-assigned,
@@ -5424,10 +5424,14 @@ def build(
             # Only BLOCK is produced by the lite path (ABP-ready seam; module header).
             if entry.kind != DNSBL_KIND_BLOCK:
                 continue
-            # issue #2371: FEED entry AT a suffix boundary, state 'ignore' -> drop
-            # (tallied). 'apex'/'honor' need no plain-path change: an exact apex
-            # DATA block is already today's outcome (#1541 never wildcards a
-            # plain suffix entry).
+            # issue #2371: FEED entry AT a suffix boundary, judged against the
+            # FULL PSL (the policy's view is independent of the PRIVATE
+            # recognition toggle): 'ignore' -> drop (tallied); 'apex' -> any
+            # ZONE the classifier yields is demoted back to an exact apex DATA
+            # block (tallied) -- with PRIVATE recognition OFF the ICANN-only
+            # classifier sees a PRIVATE apex as a registrable domain and would
+            # otherwise blanket the suffix.
+            policy = None
             if provenance == RULE_PROV_FEED and psl_feed_policy_active:
                 policy = _dnsbl_suffix_feed_policy(domain, psl_rules, psl_feed_private_policy, psl_feed_icann_policy)
                 if policy == "ignore":
@@ -5444,7 +5448,10 @@ def build(
             # Non-ABP block: band 1 (downloaded feed) or 5 (USER Custom_List); never
             # $important (the plain path has no $options grammar).
             payload = {"log": log_flag, "index": idx, "important": False, "band": block_band}
-            if cls == DNSBL_CLASS_ZONE:
+            if cls == DNSBL_CLASS_ZONE and policy == "apex":
+                _tally_reject(rejects, feed, group, "suffix_demote")
+                data_db[domain] = payload
+            elif cls == DNSBL_CLASS_ZONE:
                 zone_db[key] = payload  # last-wins (dict; ADR-06 SS2 attribution change)
             else:
                 data_db[key] = payload

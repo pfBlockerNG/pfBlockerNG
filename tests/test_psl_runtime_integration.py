@@ -271,7 +271,7 @@ def test_snapshot_containers_capture_psl_policy_without_global_reads() -> None:
         tld_allow_roots=("io",),
         psl_include_private=False,
         psl_allow_private=True,
-        # issue #2371: feed-at-suffix PSL policy fields (plumbing only, no consumer yet).
+        # issue #2371: feed-at-suffix PSL policy fields (enforced in build()).
         psl_feed_private_policy="ignore",
         psl_feed_icann_policy="apex",
     )
