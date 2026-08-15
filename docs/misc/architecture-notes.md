@@ -1135,7 +1135,11 @@ Full design: ADR-39.
   Deployment is atomic per run: `publish-pkg-repo.sh` stages ONLY the touched
   `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
   publisher failure, so a partial or failed run cannot erase another channel
-  (pinned by `tests/shell/publish_pkg_repo_spec.sh`). Trust model is unchanged
+  (pinned by `tests/shell/publish_pkg_repo_spec.sh`). On a catalogue no-op it still
+  regenerates the two deterministic client scripts (`gen_landing.py
+  --client-scripts-only`) and commits exactly `docs/add-repo.sh` +
+  `docs/migrate-channel.sh` iff their bytes drifted (issue #2408) — the timestamped
+  landing/browse/autoindex pages remain publish-only. Trust model is unchanged
   (`signature_type: none`, HTTPS/TLS to the Pages host — no catalogue-signing key); the landing
   page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
   single-repository subscription, and the explicit repository-qualified downgrade rule. The

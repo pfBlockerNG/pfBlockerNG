@@ -1175,6 +1175,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = ap.parse_args(argv)
     if args.client_scripts_only:
+        if args.matrix:
+            ap.error("--client-scripts-only writes no landing page — --matrix cannot apply")
         write_add_repo(args.site, args.add_repo)
         write_migrate_channel(args.site, args.add_repo)
         print("client scripts written: add-repo.sh, migrate-channel.sh")

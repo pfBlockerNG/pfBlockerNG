@@ -16,6 +16,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 # Load scripts/gen_landing.py (a script path, not an installed module).
 _SPEC = importlib.util.spec_from_file_location(
     "gen_landing", Path(__file__).resolve().parent.parent / "scripts" / "gen_landing.py"
@@ -2052,3 +2054,23 @@ def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path
     assert sorted(p.name for p in site.iterdir()) == ["add-repo.sh", "migrate-channel.sh"]
     embedded = (site / "add-repo.sh").read_text()
     assert f"cat <<'{gl._HOOK_HEREDOC}'" in embedded, "the boot hook must be embedded, not left as the stub body"
+
+
+def test_main_client_scripts_only_rejects_matrix(tmp_path: Path) -> None:
+    """``--client-scripts-only`` with ``--matrix`` is a usage error, not a silent ignore.
+
+    The matrix drives the landing page's per-edition tables, which this mode never
+    writes — accepting both would let a caller believe the matrix was applied.
+    """
+    site = tmp_path / "site"
+    site.mkdir()
+    matrix_file = tmp_path / "matrix.json"
+    matrix_file.write_text("[]")
+
+    with pytest.raises(SystemExit) as exc:
+        gl.main(
+            [str(site), "https://x/pkg", str(_ADD_REPO_REAL), "--client-scripts-only", "--matrix", str(matrix_file)]
+        )
+
+    assert exc.value.code == 2
+    assert list(site.iterdir()) == [], "a usage error must write nothing"
