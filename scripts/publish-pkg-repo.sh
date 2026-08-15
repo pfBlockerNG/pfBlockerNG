@@ -42,8 +42,7 @@
 #            the staged path while nothing else on the site moves. No landing
 #            regen: staging is never served as the site. The catalogue-no-op
 #            path is the ONE exception — it still regenerates + pushes every
-#            deterministic client script (docs/add-repo.sh,
-#            docs/migrate-channel.sh, and the four docs/install-<channel>.sh
+#            deterministic client script (the four docs/install-<channel>.sh
 #            per-channel installers; issue #2408, issue #2416, shared with
 #            "direct") even though nothing was staged, and reports
 #            GITHUB_OUTPUT noop=true.
@@ -115,11 +114,10 @@
 set -eu
 
 # Every deterministic client script gen_landing.py publishes at the site root:
-# the legacy add-repo.sh/migrate-channel.sh two-script bootstrap (issue #2148,
-# kept for one deprecation cycle) plus the four per-channel installers (issue
-# #2416). Single source of truth for both the catalogue-NOOP `git add` list and
-# the direct/promote stage_paths list below.
-CLIENT_SCRIPTS="add-repo.sh migrate-channel.sh install-stable.sh install-testing.sh install-edge.sh install-nightly.sh"
+# the four per-channel installers (issue #2416) — the SOLE client entry point.
+# Single source of truth for both the catalogue-NOOP `git add` list and the
+# direct/promote stage_paths list below.
+CLIENT_SCRIPTS="install-stable.sh install-testing.sh install-edge.sh install-nightly.sh"
 
 PUBLISH_KIND="${PUBLISH_KIND:-tagged}"
 case "$PUBLISH_KIND" in
@@ -316,7 +314,7 @@ landing_regen_and_stage() {
         '[.[] | {abi: "FreeBSD:\(.freebsd_major):*", pfsense_version, variant, php_version, py_flavor}]' \
         >"$landing_matrix_file"
     python3 "${PFB_SRC}/scripts/gen_landing.py" \
-        "${PKG_REPO}/docs" "$BASE_URL" "${PFB_SRC}/scripts/add-repo.sh" \
+        "${PKG_REPO}/docs" "$BASE_URL" \
         --matrix "$landing_matrix_file"
     rm -f "$landing_matrix_file"
     true >"${PKG_REPO}/docs/.nojekyll"
@@ -325,7 +323,11 @@ landing_regen_and_stage() {
     [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
     [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
     for client_script in $CLIENT_SCRIPTS; do
-        [ -f "${PKG_REPO}/docs/${client_script}" ] && stage_paths="${stage_paths} docs/${client_script}"
+        if [ ! -f "${PKG_REPO}/docs/${client_script}" ]; then
+            echo "::error::gen_landing.py did not write docs/${client_script} (CLIENT_SCRIPTS/generator drift)" >&2
+            exit 1
+        fi
+        stage_paths="${stage_paths} docs/${client_script}"
     done
     for target in $touched; do
         stage_paths="${stage_paths} docs/${target}"
@@ -493,7 +495,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 # landing/browse/autoindex pages embed a generation timestamp, and
                 # writing them on a no-op would manufacture a commit on every run.
                 python3 "${PFB_SRC}/scripts/gen_landing.py" \
-                    "${PKG_REPO}/docs" "$BASE_URL" "${PFB_SRC}/scripts/add-repo.sh" \
+                    "${PKG_REPO}/docs" "$BASE_URL" \
                     --client-scripts-only
                 client_script_paths=""
                 for client_script in $CLIENT_SCRIPTS; do

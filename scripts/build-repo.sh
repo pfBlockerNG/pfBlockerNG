@@ -37,9 +37,9 @@
 set -eu
 
 # ── The shared client repo-conf template ─────────────────────────────────────
-# Single source of the client stanza — add-repo.sh, build-repo-portable.py, and
-# the README reuse this exact shape (byte-identical; pinned by
-# tests/test_add_repo_conf.py). url carries the LITERAL ${ABI} pkg(8) variable
+# Single source of the client stanza — build-repo-portable.py and the README
+# reuse this exact shape (byte-identical; pinned by
+# tests/test_repo_conf_generators.py). url carries the LITERAL ${ABI} pkg(8) variable
 # (expanded by pkg itself, never shell-interpolated), so one conf auto-follows
 # an OS upgrade. priority sits above the base Netgate `pfSense` repo (ships 0)
 # because priority — not version — decides cross-repo resolution; that is the
@@ -50,7 +50,7 @@ CONF_PRIORITY=100
 # Per-channel repo-conf stanza key (issue #2147 step B): the four channels
 # (stable/testing/edge/nightly) plus the legacy `release` default all carry the
 # ONE canonical pfSense-pkg-pfBlockerNG identity — this only picks the stanza
-# name + URL path segment. Mirrors add-repo.sh's CHANNEL case.
+# name + URL path segment. Mirrors install-common.sh's PROJECT_CONFS keying.
 _conf_repo_name() {
     case "$1" in
         release) printf 'pfblockerng' ;;
@@ -71,7 +71,7 @@ print_conf() {
     channel="${2:-release}"
     repo="$(_conf_repo_name "${channel}")"
     cat <<EOF
-# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
+# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install-${channel}.sh to change.
 # pfBlockerNG (${channel} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
 # fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,

@@ -401,17 +401,14 @@ is installing a retained older version rather than re-deploying a site.
   **`https://pfblockerng.github.io/pkg/stable/ce-2.8`**.
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
-  in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the
-  bootstrap (`scripts/add-repo.sh`) and the inline conf in the README reuse byte-for-byte.
+  in a FreeBSD VM) is the fidelity fallback, and both share the exact `--print-conf` shape
+  the inline conf in the README reuses byte-for-byte.
 - **Client scripts.** The Pages root serves one self-contained `install-<channel>.sh` per
-  channel (issue #2416), published by `scripts/gen_landing.py` from
-  `scripts/channel-install/install-<channel>.sh` + the shared state machine
+  channel (issue #2416) — the SOLE client entry point — published by `scripts/gen_landing.py`
+  from `scripts/channel-install/install-<channel>.sh` + the shared state machine
   `install-common.sh` (subscription, install/move, legacy-identity replacement, and
   verification, folded into one idempotent script — no repository-only step that can leave a
   box subscribed but not installed). The boot-time regenerator hook is embedded the same way.
-  `scripts/add-repo.sh` and `scripts/migrate-channel.sh` — the prior two-script flow — keep
-  publishing for one deprecation cycle so existing links and docs stay valid, but are no
-  longer the documented entry point.
 - **Triggers.** `pfBlockerNG/pkg` carries no workflow of its own — it holds the served tree and
   GitHub Pages publishes it from `main`. This repo does the publishing: the `publish-pkg-repo`
   job in `release-published.yml` runs on the real `release: published` event, and

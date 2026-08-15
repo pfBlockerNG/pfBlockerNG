@@ -32,9 +32,8 @@ gl = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(gl)
 
 # Paths to the real scripts — used wherever tests exercise the live integration
-# (write_site + write_add_repo) rather than fake fixtures.
+# (write_site + write_channel_installers) rather than fake fixtures.
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
-_ADD_REPO_REAL = _SCRIPTS_DIR / "add-repo.sh"
 
 _CANON = gl.CANONICAL_EMITTED_IDENTITY  # "pfSense-pkg-pfBlockerNG" — the ONE channel-agnostic identity
 
@@ -417,8 +416,8 @@ def test_write_site_record_only_pkg_drives_listing_and_landing(tmp_path: Path, m
     assert "commit" not in annotations
     assert pfb_pkg.PFB_BUILD_RECORD_KEY in annotations
 
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
     assert n == 1
 
     listing = (cell / "index.html").read_text()
@@ -445,8 +444,8 @@ def test_write_site_out_of_range_created_on_project_pkg_falls_back(tmp_path: Pat
     _write_pkg(pkg, annotations={"created": "1e309"})
     os.utime(pkg, (_FILE_MTIME, _FILE_MTIME))
 
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
     assert n == 1
     listing = (cell / "index.html").read_text()
     assert _MTIME_DATE in _autoindex_row(listing, pkg.name)
@@ -617,8 +616,8 @@ def test_collect_packages_and_write_site_skip_unknown_top_level_dir(tmp_path: Pa
     assert {p["version"] for p in pkgs} == {"1.0.0"}
 
     monkeypatch.setattr(gl, "read_compact_manifest", fake_read)
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://x/pkg", str(_ADD_REPO_REAL))
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+    n = gl.write_site(str(site), "https://x/pkg")
 
     assert n == 1
     index_html = (site / "index.html").read_text()
@@ -1284,8 +1283,8 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
     """Each of the four channels gets its own card — title, audience prose, badge.
 
     An empty site is unpublished on every channel (issue #2382): cards keep the
-    "not yet published" blurb and must not ship add-repo / pkg install / conf
-    snippets.
+    "not yet published" blurb and must not ship an install recipe, a bare pkg
+    install, or a conf snippet.
     """
     base = "https://pfblockerng.github.io/pkg"
     page = gl.render_page(base, [], _stub_conf)
@@ -1305,7 +1304,6 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
         assert f"{ch}-conf-snippet" not in page
         # install-<ch>.sh present iff the channel is published — none are here.
         assert f"install-{ch}.sh" not in page
-    assert "add-repo.sh" not in page
     assert "pkg install" not in page
     # Nightly keeps its stability badge.
     assert '<span class="badge">not for daily use</span>' in page
@@ -1362,11 +1360,11 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert "stable-conf-snippet" not in page
     assert "edge-conf-snippet" not in page
     # Published channels (testing, nightly) get the ONE-line per-channel installer
-    # recipe (issue #2416) — no add-repo.sh, no migrate-channel.sh, no bare pkg install.
-    assert f"fetch -qo - {base}/install-testing.sh | sh" in page
-    assert f"fetch -qo - {base}/install-nightly.sh | sh" in page
-    assert "add-repo.sh" not in page
-    assert "migrate-channel.sh" not in page
+    # recipe (issue #2416) — the SOLE recipe, no bare pkg install.
+    # Anchored to the <pre> element boundary so a trailing `sh -s --` (or any other
+    # tail) fails this assertion rather than slipping past a bare substring check.
+    assert f"<pre>fetch -qo - {base}/install-testing.sh | sh</pre>" in page
+    assert f"<pre>fetch -qo - {base}/install-nightly.sh | sh</pre>" in page
     assert "pkg install" not in page
     assert "testing-conf-snippet" in page
     assert "nightly-conf-snippet" in page
@@ -1446,9 +1444,7 @@ def test_render_page_empty_channel_shows_not_yet_published_for_every_card() -> N
     """Empty site: four unpublished cards, zero recipes, zero manual conf, zero copy buttons."""
     page = gl.render_page("https://x/pkg", [], _stub_conf)
     assert page.count("not yet published") == 4
-    assert "add-repo.sh" not in page
     assert "pkg install" not in page
-    assert "migrate-channel.sh" not in page
     assert "install-stable.sh" not in page
     assert "install-testing.sh" not in page
     assert "install-edge.sh" not in page
@@ -1496,7 +1492,6 @@ def test_unpublished_nightly_card_has_no_install_recipe() -> None:
     # slice up to the published-packages heading.
     nightly = nightly.split("<h2>Published packages</h2>", 1)[0]
     assert "not yet published" in nightly
-    assert "add-repo.sh" not in nightly
     assert "install-nightly.sh" not in nightly
     assert "--channel nightly" not in nightly
     assert "pkg install" not in nightly
@@ -1505,15 +1500,14 @@ def test_unpublished_nightly_card_has_no_install_recipe() -> None:
 
 def test_published_card_recipe_is_the_one_line_channel_installer() -> None:
     """Published stable: the card's ONE recipe is the piped per-channel installer —
-    no add-repo.sh, no migrate-channel.sh, no bare `pkg install` — plus the manual-conf
-    details (issue #2416: the four per-channel installers replace the two-script
-    add-repo+migrate-channel bootstrap on the landing cards)."""
+    no bare `pkg install` — plus the manual-conf details (issue #2416: the four
+    per-channel installers are the SOLE client entry point on the landing cards)."""
     pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
     base = "https://pfblockerng.github.io/pkg"
     page = gl.render_page(base, pkgs, _stub_conf)
-    assert f"fetch -qo - {base}/install-stable.sh | sh" in page
-    assert "add-repo.sh" not in page
-    assert "migrate-channel.sh" not in page
+    # Anchored to the <pre> element boundary so a trailing `sh -s --` (or any other
+    # tail) fails this assertion rather than slipping past a bare substring check.
+    assert f"<pre>fetch -qo - {base}/install-stable.sh | sh</pre>" in page
     assert "pkg install" not in page
     assert "stable-conf-snippet" in page
     assert "Manual conf (advanced)" in page
@@ -1604,9 +1598,9 @@ def test_write_site_keeps_dependency_packages_browsable(tmp_path: Path, monkeypa
         },
     }
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifests[os.path.basename(p)])
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
 
     assert n == 1  # the count is pfBlockerNG packages, not everything published
     listing = (site / "stable" / "ce-2.8" / "index.html").read_text()
@@ -1624,9 +1618,9 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
 
     manifest = {"name": _CANON, "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
 
     assert n == 1
     # Landing page (root) links to the browse entry; browse.html exists and lists the top dirs.
@@ -1663,9 +1657,9 @@ def test_write_site_never_indexes_docs_staging(tmp_path: Path, monkeypatch: Any)
 
     manifest = {"name": _CANON, "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
 
     # The staged package never counts toward a real channel (it sits under an
     # unrecognized top-level dir, exactly like any other stray future dir).
@@ -1690,16 +1684,14 @@ def test_write_site_empty_site_root_renders_four_empty_cards_exit_zero(tmp_path:
     cards, no crash, write_site returns 0 (the CLI's exit-0 equivalent)."""
     site = tmp_path / "site"
     site.mkdir()
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://x/pkg", str(_ADD_REPO_REAL))
+    n = gl.write_site(str(site), "https://x/pkg")
 
     assert n == 0
     index_html = (site / "index.html").read_text()
     assert index_html.count("not yet published") == 4
-    assert "add-repo.sh" not in index_html
     assert "pkg install" not in index_html
-    assert "migrate-channel.sh" not in index_html
     assert "-conf-snippet" not in index_html
     assert '<button class="copy"' not in index_html
 
@@ -1735,9 +1727,9 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
         return {"name": _CANON, "version": "9.9.9", "abi": abi}
 
     monkeypatch.setattr(gl, "read_compact_manifest", fake_manifest)
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://x/pkg/", str(_ADD_REPO_REAL))
+    n = gl.write_site(str(site), "https://x/pkg/")
 
     # Packages found wherever they live (both novel locations), not by an assumed path.
     assert n == 2
@@ -2109,205 +2101,28 @@ def test_eol_versions_section_present_in_rendered_page_with_route_only() -> None
     assert "3.2.16" not in eol_block
 
 
-# ── Contract guard: _conf_via_addrepo ↔ add-repo.sh --print-conf ─────────────
-# These tests exercise the REAL add-repo.sh (no monkeypatching) so that any
-# future change to add-repo.sh's --print-conf required-arg/--channel contract
-# immediately breaks the unit suite instead of reaching the live publish workflow.
+# ── Contract guard: _conf_via_portable ↔ build-repo-portable.py --print-conf ──
+# This test exercises the REAL build-repo-portable.py (no monkeypatching) so that
+# any future change to its --print-conf required-arg/--channel contract immediately
+# breaks the unit suite instead of reaching the live publish workflow.
 
 
-def test_conf_via_addrepo_matches_real_add_repo_contract() -> None:
-    """_conf_via_addrepo shells the real add-repo.sh with `--channel <ch>` and must produce
-    a valid, per-channel conf.
+def test_conf_via_portable_matches_real_build_repo_portable_contract() -> None:
+    """_conf_via_portable shells the real build-repo-portable.py with `--channel <ch>`
+    and must produce a valid, per-channel conf.
 
-    Guards the gen_landing<->add-repo --print-conf contract: on the old code (missing
-    --catalog-path) add-repo.sh exited 2 and raised CalledProcessError, breaking the
-    pfBlockerNG/pkg publish.yml in render_page. All four channels are exercised (branch
-    coverage) — every one of them now has its OWN repo/conf (issue #2147), unlike the
-    legacy shared release repo.
+    Guards the gen_landing<->build-repo-portable.py --print-conf contract: a future
+    change to its required-arg/--channel contract must break here, not reach the
+    live publish workflow. All four channels are exercised (branch coverage) — every
+    one of them has its OWN repo/conf (issue #2147).
     """
-    addrepo: str = str(Path(__file__).resolve().parent.parent / "scripts" / "add-repo.sh")
     base: str = "https://pfblockerng.github.io/pkg"
 
     for channel in gl.CH_ORDER:
-        conf: str = gl._conf_via_addrepo(addrepo, base, channel)
+        conf: str = gl._conf_via_portable(base, channel)
         assert conf, f"{channel} conf must be non-empty"
         assert f"pfblockerng-{channel}: {{" in conf
         assert f"{base}/{channel}/<varver>" in conf
-
-
-# ── Piped-invocation: published add-repo.sh embeds hook + installs correctly ─
-
-
-def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monkeypatch: Any) -> None:
-    """Scenario: the published add-repo.sh installs the hook when piped into sh.
-
-    Background:
-      The repository copy of add-repo.sh resolves its sibling hook via
-      ``dirname "$0"``, which fails when the script is piped (``$0`` is ``sh``).
-      gen_landing.py's write_site() generates a site/add-repo.sh that embeds
-      the hook via a single-quoted heredoc so it is self-contained.
-
-    Given a fresh tmp directory with NO rc.d sibling hook present,
-      And write_site produces site/add-repo.sh with the hook embedded,
-      And the script text is fed to sh via stdin
-      (``sh -s -- --base-url ... --channel stable``),
-    When add-repo.sh runs in the piped / non-checkout context,
-    Then the hook file is installed on disk (HOOK_SRC absent, embedded path used),
-      And the installed hook is executable and contains the rc.d PROVIDE pragma,
-      And the staged conf file contains the ``Generated at boot`` marker
-          (proving the hook ran via the onestart step in add-repo.sh).
-
-    Before-state: hook file absent before the script runs.
-    """
-    import subprocess
-
-    # ── Given ────────────────────────────────────────────────────────────────
-
-    # Build the site tree (empty — we only need write_site to emit add-repo.sh).
-    site = tmp_path / "site"
-    site.mkdir()
-
-    # Stub _conf_via_addrepo so write_site doesn't need a real pkg environment.
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
-
-    base = f"file://{site}"
-    gl.write_site(str(site), base, str(_ADD_REPO_REAL))
-
-    # The published add-repo.sh must exist and pass sh -n.
-    published = site / "add-repo.sh"
-    assert published.exists(), "write_site must produce site/add-repo.sh"
-    published_text = published.read_text()
-    assert published_text.startswith("#!/bin/sh"), "add-repo.sh must start with #!/bin/sh"
-    sh_n = subprocess.run(["sh", "-n"], input=published_text, text=True, capture_output=True)
-    assert sh_n.returncode == 0, f"sh -n failed on published add-repo.sh:\n{sh_n.stderr}"
-    # Hook content is embedded — the stub error text must be gone.
-    assert "no embedded hook in this copy" not in published_text, (
-        "pfb_emit_embedded_hook stub was NOT replaced by gen_landing.py"
-    )
-    # The rc.d PROVIDE pragma from the real hook must be present inside the function.
-    assert "PROVIDE: pfblockerng_repo_generate" in published_text, (
-        "embedded hook body must contain the rc.d PROVIDE pragma"
-    )
-
-    # ── Fixture: a CE 2.8.1 box rooted at tmp_path/root ─────────────────────
-
-    root = tmp_path / "root"
-
-    # pkg stub: answers 'pkg config abi' with a real ABI, and 'pkg rquery' with a package
-    # line so the bootstrap reaches its success path — a bootstrap whose catalogue verify
-    # fails removes the conf it staged (issue #2148), which is exactly what this test
-    # asserts got written.
-    bin_dir = root / "bin"
-    bin_dir.mkdir(parents=True)
-    fake_pkg = bin_dir / "pkg"
-    fake_pkg.write_text(
-        "#!/bin/sh\n"
-        'if [ "$1" = "version" ] && [ "$2" = "-t" ]; then\n'
-        '  if [ "$3" = "$4" ]; then printf "=\\n"; exit 0; fi\n'
-        '  _first=$(printf "%s\\n%s\\n" "$3" "$4" | sort -V | head -n1)\n'
-        '  if [ "$_first" = "$3" ]; then printf "<\\n"; else printf ">\\n"; fi\n'
-        "  exit 0\n"
-        "fi\n"
-        'case "$1" in\n'
-        "  rquery)\n"
-        '    fmt=""\n'
-        '    for _a in "$@"; do case "$_a" in %*) fmt="$_a" ;; esac; done\n'
-        '    case "$fmt" in\n'
-        '      %v) printf "4.0.0\\n" ;;\n'
-        '      %n-%v) printf "pfSense-pkg-pfBlockerNG-4.0.0\\n" ;;\n'
-        '      *) printf "pfSense-pkg-pfBlockerNG 4.0.0\\n" ;;\n'
-        "    esac\n"
-        "    exit 0 ;;\n"
-        "esac\n"
-        "case \"$*\" in\n  'config abi') printf 'FreeBSD:15:amd64' ;;\nesac\n"
-        "exit 0\n"
-    )
-    fake_pkg.chmod(0o755)
-
-    # CE 2.8.1 box fixture: /etc/version + /etc/product_label (no 'Plus' -> CE).
-    etc = root / "etc"
-    etc.mkdir()
-    (etc / "version").write_text("2.8.1\n")
-    (etc / "product_label").write_text("pfSense\n")
-
-    # Before-state: no hook installed yet.
-    hook_path = root / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
-    assert not hook_path.exists(), "hook must not exist before the script runs"
-
-    # ── When: pipe the published add-repo.sh into sh (no sibling hook present) ─
-
-    env = {
-        **{k: v for k, v in os.environ.items()},
-        "PFBLOCKERNG_ROOT": str(root),
-        "PKG_BIN": str(fake_pkg),
-    }
-    result = subprocess.run(
-        ["sh", "-s", "--", "--base-url", base, "--channel", "stable"],
-        input=published_text,
-        text=True,
-        capture_output=True,
-        env=env,
-        # Run from a directory with NO rc.d/ sibling so HOOK_SRC (which resolves to
-        # cwd/rc.d/... when piped, since $0 is "sh") is absent — forcing the embedded
-        # path, the real production bootstrap. Without this the test would lean on the
-        # runner's cwd happening to lack an rc.d/ sibling.
-        cwd=str(tmp_path),
-    )
-
-    # ── Then ─────────────────────────────────────────────────────────────────
-
-    # The hook was installed (embedded path taken — no sibling was present).
-    assert hook_path.exists(), (
-        f"hook not installed at {hook_path}\nadd-repo stdout:\n{result.stdout}\nadd-repo stderr:\n{result.stderr}"
-    )
-    assert os.access(str(hook_path), os.X_OK), "installed hook must be executable"
-    hook_content = hook_path.read_text()
-    assert "PROVIDE: pfblockerng_repo_generate" in hook_content, "installed hook must contain the rc.d PROVIDE pragma"
-
-    # The staged conf contains the 'Generated at boot' marker, proving the hook
-    # was executed successfully by add-repo.sh's onestart step. --channel stable
-    # must write pfblockerng-stable.conf with the stable/ce-2.8 URL, never the
-    # unpublished release/ tree (issues #2384, #2390).
-    conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
-    assert conf_path.exists(), (
-        f"conf not written at {conf_path}\nadd-repo stdout:\n{result.stdout}\nadd-repo stderr:\n{result.stderr}"
-    )
-    conf_text = conf_path.read_text()
-    assert "Generated at boot by pfblockerng_repo_generate" in conf_text, (
-        f"conf missing the 'Generated at boot' marker:\n{conf_text}"
-    )
-    assert "pfblockerng-stable: {" in conf_text, conf_text
-    assert "/stable/ce-2.8" in conf_text, conf_text
-    assert "/release/" not in conf_text
-    assert not (root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf").exists()
-
-
-def test_write_site_publishes_migrate_channel_beside_the_bootstrap(tmp_path: Path, monkeypatch: Any) -> None:
-    """The migration script is served from the Pages root, exactly like add-repo.sh.
-
-    A user switching channels reaches the site, not a git checkout, so both halves of
-    the operation must be fetchable from the same base URL. Unlike add-repo.sh,
-    migrate-channel.sh has no sibling file to embed — it is published verbatim, and a
-    byte-for-byte comparison is what stops the published copy drifting from the tested
-    repository copy.
-    """
-    import subprocess
-
-    site = tmp_path / "site"
-    site.mkdir()
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
-
-    gl.write_site(str(site), f"file://{site}", str(_ADD_REPO_REAL))
-
-    published = site / "migrate-channel.sh"
-    assert published.exists(), "write_site must publish site/migrate-channel.sh"
-    assert os.access(str(published), os.X_OK), "the published migration script must be executable"
-    published_text = published.read_text()
-    assert published_text == (_SCRIPTS_DIR / "migrate-channel.sh").read_text(), (
-        "the published migrate-channel.sh must be byte-identical to the repository copy"
-    )
-    sh_n = subprocess.run(["sh", "-n"], input=published_text, text=True, capture_output=True)
-    assert sh_n.returncode == 0, f"sh -n failed on published migrate-channel.sh:\n{sh_n.stderr}"
 
 
 # ── _embed_common: splice install-common.sh into a channel installer stub ─────
@@ -2358,22 +2173,22 @@ def test_embed_common_rejects_common_text_containing_the_heredoc_delimiter() -> 
 
 def test_write_site_publishes_the_four_channel_installers(tmp_path: Path, monkeypatch: Any) -> None:
     """write_site() publishes a self-contained install-<channel>.sh for each of the four
-    channels (issue #2416): install-common.sh is spliced into the thin per-channel stub
-    (its PFB_EMBED_COMMON block replaces the `. install-common.sh` sourcing line so the
-    published script needs no sibling file on disk), then the boot hook is embedded into
-    the result exactly like add-repo.sh's own splice. add-repo.sh and migrate-channel.sh
-    keep publishing alongside it for one deprecation cycle.
+    channels (issue #2416) — the SOLE client entry point: install-common.sh is spliced
+    into the thin per-channel stub (its PFB_EMBED_COMMON block replaces the
+    `. install-common.sh` sourcing line so the published script needs no sibling file on
+    disk), then the boot hook is embedded via the same PFB_EMBED_HOOK splice technique.
     """
     import subprocess
 
     site = tmp_path / "site"
     site.mkdir()
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    gl.write_site(str(site), f"file://{site}", str(_ADD_REPO_REAL))
+    gl.write_site(str(site), f"file://{site}")
 
-    assert (site / "add-repo.sh").exists(), "add-repo.sh must still be published (deprecation cycle)"
-    assert (site / "migrate-channel.sh").exists(), "migrate-channel.sh must still be published (deprecation cycle)"
+    assert sorted(p.name for p in site.iterdir() if p.name.startswith("install-")) == sorted(gl.CLIENT_SCRIPTS), (
+        "write_site must publish EXACTLY the four per-channel installers, no legacy scripts"
+    )
 
     for channel in gl.CH_ORDER:
         published = site / f"install-{channel}.sh"
@@ -2382,7 +2197,7 @@ def test_write_site_publishes_the_four_channel_installers(tmp_path: Path, monkey
         text = published.read_text()
         assert gl._COMMON_EMBED_BEGIN not in text, "the PFB_EMBED_COMMON marker must not survive publishing"
         assert gl._COMMON_EMBED_END not in text, "the PFB_EMBED_COMMON marker must not survive publishing"
-        assert 'install-common.sh"' not in text, "the published installer must not source a sibling file"
+        assert '$0")/install-common.sh"' not in text, "the published installer must not source a sibling file"
         assert 'pfb_channel_install "$@"' in text
         assert f"cat <<'{gl._HOOK_HEREDOC}'" in text, "the boot hook must be embedded, not left as the stub body"
         assert "PROVIDE: pfblockerng_repo_generate" in text, "embedded hook body must contain the rc.d PROVIDE pragma"
@@ -2405,10 +2220,10 @@ def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tm
 
     site = tmp_path / "site"
     site.mkdir()
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
     base = f"file://{site}"
-    gl.write_site(str(site), base, str(_ADD_REPO_REAL))
+    gl.write_site(str(site), base)
     published_text = (site / "install-stable.sh").read_text()
 
     root = tmp_path / "root"
@@ -2463,37 +2278,181 @@ def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tm
     assert f'url: "{base}/stable/ce-2.8"' in conf_text
 
 
+def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkout_source(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """B1 (issue #2416): piped, ``$0`` is ``sh``, so install-common.sh's
+    dirname-derived ``PFB_COMMON_DIR`` resolves to the CALLER's cwd — not a checkout
+    directory. A user following the published one-liner from ``/usr/local/etc/pkg``
+    (``ROOT=""``) makes ``PFB_COMMON_DIR/../rc.d/...`` collide with the on-box
+    installed hook path itself: the state machine would ``cmp`` the stale on-box
+    hook against itself, report "up to date", and never refresh it. The sibling hook
+    must only be trusted when install-common.sh's OWN file sits beside it too (the
+    genuine-checkout signal) — otherwise the embedded copy is used.
+
+    Before-state: a stale hook is pre-seeded at the on-box path. After a piped run
+    from a cwd whose "../rc.d/..." resolves to that SAME path, the installed hook
+    must be the real embedded copy, byte-identical to the repository source.
+    """
+    import subprocess
+
+    from tests.test_channel_install import _PKG_STUB, _seed_box
+
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    base = f"file://{site}"
+    gl.write_site(str(site), base)
+    published_text = (site / "install-stable.sh").read_text()
+
+    root = tmp_path / "root"
+    root.mkdir()
+    _seed_box(str(root))
+
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    fake_pkg = bin_dir / "pkg"
+    fake_pkg.write_text(_PKG_STUB)
+    fake_pkg.chmod(0o755)
+
+    catalog_dir = root / "catalog"
+    catalog_dir.mkdir()
+    (catalog_dir / "pfblockerng-stable").write_text("4.0.0\n")
+
+    # Before-state: a STALE hook already "installed" on-box.
+    hook_path = root / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
+    hook_path.parent.mkdir(parents=True)
+    hook_path.write_text("#!/bin/sh\n# STALE\n")
+    assert hook_path.read_text() == "#!/bin/sh\n# STALE\n", "before-state: the stale hook must be in place"
+
+    # cwd = the "installed" pkg dir a user following `fetch | sh` from would be in —
+    # its "../rc.d/..." IS the on-box hook path (the collision the bug exploits).
+    cwd = root / "usr" / "local" / "etc" / "pkg"
+    cwd.mkdir(parents=True)
+
+    env = {
+        **os.environ,
+        "PFBLOCKERNG_ROOT": str(root),
+        "PKG_BIN": str(fake_pkg),
+        "PFB_TEST_ROOT": str(root),
+        "PFB_BASE_URL": base,
+    }
+    result = subprocess.run(
+        ["sh", "-s"],
+        input=published_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=str(cwd),
+    )
+
+    assert result.returncode == 0, (
+        f"install-stable.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    real_hook = (_SCRIPTS_DIR / "rc.d" / "pfblockerng_repo_generate.sh").read_text()
+    assert hook_path.read_text() == real_hook, (
+        "the stale on-box hook must be replaced by the embedded copy, never mistaken for a checkout sibling\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
+def test_write_site_bakes_the_sites_base_url_into_every_published_installer(tmp_path: Path, monkeypatch: Any) -> None:
+    """B3/F3 (issue #2416): a fork publishing from a non-default base (or a staged
+    prefix) must ship installers whose OWN ``PFB_BASE_URL`` default points at ITS
+    base — not the hardcoded upstream default baked into the repository copy of
+    install-common.sh. Without a ``PFB_BASE_URL`` override, a piped run must
+    resolve the conf against the site's real base.
+    """
+    import subprocess
+
+    from tests.test_channel_install import _PKG_STUB, _seed_box
+
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    fork_base = "https://fork.example.org/mypkg"
+    gl.write_site(str(site), fork_base)
+
+    for channel in gl.CH_ORDER:
+        text = (site / f"install-{channel}.sh").read_text()
+        assert f'PFB_BASE_URL="${{PFB_BASE_URL:-{fork_base}}}"' in text, (
+            f"install-{channel}.sh must default PFB_BASE_URL to the site's own base, not upstream's"
+        )
+
+    # Running the published installer piped, with NO PFB_BASE_URL override, must
+    # resolve the conf against the FORK's base — proving the baked default (not
+    # just its text) drives the run.
+    published_text = (site / "install-stable.sh").read_text()
+
+    root = tmp_path / "root"
+    root.mkdir()
+    _seed_box(str(root))
+
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    fake_pkg = bin_dir / "pkg"
+    fake_pkg.write_text(_PKG_STUB)
+    fake_pkg.chmod(0o755)
+
+    catalog_dir = root / "catalog"
+    catalog_dir.mkdir()
+    (catalog_dir / "pfblockerng-stable").write_text("4.0.0\n")
+
+    env = {
+        **{k: v for k, v in os.environ.items() if k != "PFB_BASE_URL"},
+        "PFBLOCKERNG_ROOT": str(root),
+        "PKG_BIN": str(fake_pkg),
+        "PFB_TEST_ROOT": str(root),
+    }
+    result = subprocess.run(
+        ["sh", "-s"],
+        input=published_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, (
+        f"install-stable.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
+    conf_text = conf_path.read_text()
+    assert f'url: "{fork_base}/stable/ce-2.8"' in conf_text, conf_text
+
+
 # ── write_site / CLI interface — call-compatible with publish-pkg-repo.sh ─────
 
 
 def test_write_site_signature_matches_publish_pkg_repo_call_site() -> None:
-    """Pins the write_site(site, base, addrepo, matrix=None) signature that
-    publish-pkg-repo.sh's `python3 gen_landing.py <site> <base> <addrepo> --matrix <f>`
+    """Pins the write_site(site, base, matrix=None) signature that
+    publish-pkg-repo.sh's `python3 gen_landing.py <site> <base> --matrix <f>`
     invocation (via main()) depends on — a rename/reorder here breaks production silently.
     """
     sig = inspect.signature(gl.write_site)
-    assert list(sig.parameters) == ["site", "base", "addrepo", "matrix"]
+    assert list(sig.parameters) == ["site", "base", "matrix"]
     assert sig.parameters["matrix"].default is None
 
 
 def test_main_cli_accepts_the_production_positional_and_matrix_flag_shape(tmp_path: Path, monkeypatch: Any) -> None:
     """main(argv) accepts exactly the shape publish-pkg-repo.sh invokes:
-    <site> <base_url> <add_repo> --matrix <file>."""
+    <site> <base_url> --matrix <file>."""
     site = tmp_path / "site"
     site.mkdir()
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text("[]")
-    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    rc = gl.main([str(site), "https://x/pkg", str(_ADD_REPO_REAL), "--matrix", str(matrix_file)])
+    rc = gl.main([str(site), "https://x/pkg", "--matrix", str(matrix_file)])
 
     assert rc == 0
     assert (site / "index.html").is_file()
 
 
 def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path) -> None:
-    """``--client-scripts-only`` publishes ONLY the deterministic client scripts: the two
-    legacy scripts (one deprecation cycle) plus the four per-channel installers.
+    """``--client-scripts-only`` publishes ONLY the deterministic client scripts: the
+    four per-channel installers — the SOLE client entry point (issue #2416).
 
     publish-pkg-repo.sh's catalogue-NOOP path (issue #2408) uses this mode to ship a
     script-only fix; writing any timestamped landing/browse/autoindex page here would
@@ -2502,12 +2461,10 @@ def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path
     site = tmp_path / "site"
     site.mkdir()
 
-    rc = gl.main([str(site), "https://x/pkg", str(_ADD_REPO_REAL), "--client-scripts-only"])
+    rc = gl.main([str(site), "https://x/pkg", "--client-scripts-only"])
 
     assert rc == 0
     assert sorted(p.name for p in site.iterdir()) == sorted(gl.CLIENT_SCRIPTS)
-    embedded = (site / "add-repo.sh").read_text()
-    assert f"cat <<'{gl._HOOK_HEREDOC}'" in embedded, "the boot hook must be embedded, not left as the stub body"
     for channel in gl.CH_ORDER:
         installer = (site / f"install-{channel}.sh").read_text()
         assert f"cat <<'{gl._HOOK_HEREDOC}'" in installer, (
@@ -2527,9 +2484,7 @@ def test_main_client_scripts_only_rejects_matrix(tmp_path: Path) -> None:
     matrix_file.write_text("[]")
 
     with pytest.raises(SystemExit) as exc:
-        gl.main(
-            [str(site), "https://x/pkg", str(_ADD_REPO_REAL), "--client-scripts-only", "--matrix", str(matrix_file)]
-        )
+        gl.main([str(site), "https://x/pkg", "--client-scripts-only", "--matrix", str(matrix_file)])
 
     assert exc.value.code == 2
     assert list(site.iterdir()) == [], "a usage error must write nothing"

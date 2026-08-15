@@ -1036,16 +1036,19 @@ on a version change and can only be corrected by a **separate, later** pkg run �
 one-pkg-run lag. The boot-time generator hook below closes that lag.
 
 **`rc.d` generator hook (`scripts/rc.d/pfblockerng_repo_generate.sh`).** Installed on-box by
-`add-repo.sh` into `/usr/local/etc/rc.d/`; runs at every boot. It is a pure conf **regenerator**:
-for each of our conf files that exists, it detects the box's `<varver>` (arch-less, issue #1806)
-and **unconditionally overwrites** the conf with the canonical body (channel-correct URL + a marker
-comment). **No `pkg` call, no network, no snapshot, no reconcile, no parse-and-compare** —
-re-deriving the conf from scratch is strictly simpler than diffing and patching one in place, and
-never wrong. Key properties:
+the per-channel `install-<channel>.sh` (issue #2416) into `/usr/local/etc/rc.d/`; runs at
+every boot. It is a pure conf **regenerator**: for each of the four channel conf files that
+exists, it detects the box's `<varver>` (arch-less, issue #1806) and **unconditionally
+overwrites** the conf with the canonical body (channel-correct URL + a marker comment). The
+legacy shared release conf (`pfblockerng.conf`, pre-#2148) is retired by the installers and
+NEVER regenerated — a leftover survives byte-unchanged. **No `pkg` call, no network, no
+snapshot, no reconcile, no parse-and-compare** — re-deriving the conf from scratch is
+strictly simpler than diffing and patching one in place, and never wrong. Key properties:
 
-- **Self-guarding:** a conf is regenerated only if it already exists; if neither the release nor
-  the nightly conf is present the hook is a complete no-op (an orphaned hook left after the user
-  removes our repo is inert, and a channel the user never bootstrapped is never created).
+- **Self-guarding:** a channel conf is regenerated only if it already exists; if none of the
+  four channel confs is present the hook is a complete no-op (an orphaned hook left after
+  the user removes our repo is inert, and a channel the user never bootstrapped is never
+  created).
 - **Ordering:** `REQUIRE: FILESYSTEMS` (so `/usr/local` is mounted) and `BEFORE: NETWORKING` — it
   runs *before* anything that could invoke `pkg` over the network, so the conf is already correct
   by the time the box first reaches for a catalog. Running this early is safe precisely because it
@@ -1061,8 +1064,8 @@ never wrong. Key properties:
   the hook no longer calls `pkg config abi` at all (it used to read the arch leaf; there is no
   arch leaf to read any more) — one fewer moving part, and it no longer needs `pkg` on the PATH.
 - **Byte-identical output:** the conf body the hook writes is byte-for-byte identical to
-  `add-repo.sh --print-conf`, `build-repo.sh --print-conf`, and `build-repo-portable.py
-  --print-conf` (drift-pinned by `tests/test_add_repo_conf.py` across all four producers).
+  `build-repo.sh --print-conf` and `build-repo-portable.py --print-conf` (drift-pinned by
+  `tests/test_repo_conf_generators.py` across the three producers).
 - **Detection-failure safety:** if the version cannot be resolved the hook leaves the existing
   conf **unchanged** (warns) rather than writing a malformed URL.
 - **Always `exit 0`:** every code path ends in `exit 0`. A non-zero exit would wedge the rc.d
@@ -1079,19 +1082,18 @@ never wrong. Key properties:
     the boot-environment clone, so a non-package hook placed there persists across the very
     upgrade it heals (maintainer-confirmed from long operational use).
 
-**Published one-file bootstrap (`site/install-<channel>.sh`, issue #2416).** The repository
-copies (`scripts/channel-install/install-<channel>.sh`, sourcing the shared
-`install-common.sh`, which in turn shells out to the sibling `scripts/rc.d/
-pfblockerng_repo_generate.sh`) all resolve siblings via `dirname "$0"`, which fails when
-**piped** into `sh` (`$0` is then `sh`, not the script path). `gen_landing.py`'s
+**Published one-file bootstrap (`site/install-<channel>.sh`, issue #2416) — the SOLE client
+entry point.** The repository copies (`scripts/channel-install/install-<channel>.sh`,
+sourcing the shared `install-common.sh`, which in turn shells out to the sibling
+`scripts/rc.d/pfblockerng_repo_generate.sh`) all resolve siblings via `dirname "$0"`, which
+fails when **piped** into `sh` (`$0` is then `sh`, not the script path). `gen_landing.py`'s
 `write_channel_installers()` publishes a self-contained `site/install-<channel>.sh` per
-channel via TWO splices: `install-common.sh`'s own text replaces the per-channel stub's
-`PFB_EMBED_COMMON` block first, then the hook body is spliced into THAT text's
-`PFB_EMBED_HOOK` block exactly like `write_add_repo` does for `add-repo.sh` — a
-single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so none of the hook's dollar-signs or
-backticks are expanded. `scripts/add-repo.sh`/`migrate-channel.sh` publish the same way for
-one deprecation cycle. Published at `pfblockerng.github.io/pkg/install-<channel>.sh`, what
-the README's one-liners point to.
+channel via TWO splices: `install-common.sh`'s own text (its `PFB_BASE_URL` default baked
+to the site's own base first, issue #2416 B3/F3) replaces the per-channel stub's
+`PFB_EMBED_COMMON` block, then the hook body is spliced into THAT text's `PFB_EMBED_HOOK`
+block — a single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so none of the hook's
+dollar-signs or backticks are expanded. Published at
+`pfblockerng.github.io/pkg/install-<channel>.sh`, what the README's one-liners point to.
 
 Full design: ADR-39.
 
@@ -1163,9 +1165,9 @@ Full design: ADR-39.
   `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
   publisher failure, so a partial or failed run cannot erase another channel
   (pinned by `tests/shell/publish_pkg_repo_spec.sh`). On a catalogue no-op it still
-  regenerates the six deterministic client scripts (`gen_landing.py
-  --client-scripts-only`: `add-repo.sh` + `migrate-channel.sh` plus the four
-  `install-<channel>.sh`, issue #2416) and commits whichever drifted (issue #2408) — the timestamped
+  regenerates the four deterministic client scripts (`gen_landing.py
+  --client-scripts-only`: the four `install-<channel>.sh`, issue #2416) and commits
+  whichever drifted (issue #2408) — the timestamped
   landing/browse/autoindex pages remain publish-only. Trust model is unchanged
   (`signature_type: none`, HTTPS/TLS to the Pages host — no catalogue-signing key); the landing
   page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
@@ -1182,22 +1184,23 @@ Full design: ADR-39.
   those attached dep `.pkg` assets into the served catalogue itself — `publish_catalogues.py`
   verifies each one against its ROUTE row's ABI and `publish_release.py` drops it into the same
   destination as the canonical package.
-- **Generators + bootstrap:** `scripts/build-repo-portable.py` (primary catalog gen),
-  `scripts/build-repo.sh` (fallback + `--print-conf` conf template),
-  `scripts/add-repo.sh` (client bootstrap; `priority: 100` — one equal priority across every
-  project channel repo, above Netgate's 0, though a box enables only one project channel repo
-  at a time (issue #2251); `pkg update` + verify). All three `--print-conf`
-  producers take `--channel <stable|testing|edge|nightly>` (repo `pfblockerng-<channel>`, conf
-  `pfblockerng-<channel>.conf`, URL `<base>/<channel>/<varver>`, issue #2147). Live bootstrap
-  covers all four channels plus the legacy default (`pfblockerng.conf`, the old bundled release
-  repo), and enforces single-repository subscription by retiring every other project conf; the
-  rc.d hook regenerates each of the five confs that EXISTS, so a channel the box switched away
-  from stays gone across a pfSense OS upgrade (issue #2148). The emitted conf is byte-identical
-  across the producers
-  (drift-pinned in `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
+- **Generators:** `scripts/build-repo-portable.py` (primary catalog gen) and
+  `scripts/build-repo.sh` (fallback + `--print-conf` conf template) both emit the client
+  repo-conf; `priority: 100` — one equal priority across every project channel repo, above
+  Netgate's 0, though a box enables only one project channel repo at a time (issue #2251).
+  Both `--print-conf` producers take `--channel <stable|testing|edge|nightly>` (repo
+  `pfblockerng-<channel>`, conf `pfblockerng-<channel>.conf`, URL
+  `<base>/<channel>/<varver>`, issue #2147). Live bootstrap (`install-<channel>.sh`, below)
+  covers all four channels plus the legacy default (`pfblockerng.conf`, the old bundled
+  release repo, pre-#2148, retired and left untouched — issue #2416), and enforces
+  single-repository subscription by retiring every other project conf; the rc.d hook
+  regenerates each of the four channel confs that EXISTS, so a channel the box switched
+  away from stays gone across a pfSense OS upgrade (issue #2148). The emitted conf is
+  byte-identical across the producers (drift-pinned in `tests/test_repo_conf_generators.py`
+  and `tests/test_build_repo_portable.py`).
 - **Channel switching is one state machine (issue #2416):** `install-<channel>.sh`
-  (`install-common.sh`'s `pfb_channel_install()`) folds what were two operations —
-  `add-repo.sh` moving the SUBSCRIPTION, `migrate-channel.sh` moving the INSTALLED
+  (`install-common.sh`'s `pfb_channel_install()`) — the SOLE client entry point — folds what
+  were once two separate operations — moving the SUBSCRIPTION and moving the INSTALLED
   PACKAGE — into one idempotent run, check-then-act at every step: install/refresh the
   boot hook; resolve THIS channel's conf through it; `pkg update -f -r <repo>`; pick the
   OFFERED version by reducing `pkg rquery`'s offerings pairwise through `pkg version -t`
@@ -1212,8 +1215,7 @@ Full design: ADR-39.
   1 environment, 2 usage, 4 target unavailable (a conf stub THIS run created is removed
   on the way out), 5 a pkg delete/install failed, 6 post-install verification failed.
   `PFB_BASE_URL` (default the Pages root) overrides the catalog base for a fork or a
-  staged pre-announce URL. `add-repo.sh`/`migrate-channel.sh` keep publishing and
-  working, unchanged, for one deprecation cycle.
+  staged pre-announce URL.
   On the box, channel provenance is read from the INSTALLED REPO, never the package name:
   `pfb_channel_from_repo_name()` maps `pfblockerng-<ch>` → channel and
   `pfb_software_is_our_build()` accepts all five project repos, so a stable/testing/edge

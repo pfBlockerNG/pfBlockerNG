@@ -32,9 +32,7 @@ phpunit:PfbFeedNormalizeTest::testBomAndZwjAreStrippedAsNonPrintable  # platform
 phpunit:PfbFeedNormalizeTest::testInteriorNbspIsDataWhileTrailingNbspIsTrimmed  # platform locale data (PHP 8.3 and 8.5)
 phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse  # PHP 8.3's php://memory can fail flock(); absent from the PHP 8.5 report (informational there)
 
-# pytest -- 6 observed via scripts/run-in-docker.sh (own uid, not CI's uid 1001).
-pytest:tests.test_add_repo_conf::test_no_abi_placeholder_in_any_generator_output[build-repo.sh-channel_args1]  # build-repo.sh has no --nightly alias in --print-conf mode
-pytest:tests.test_add_repo_conf::test_no_abi_placeholder_in_any_generator_output[build-repo-portable.py-channel_args1]  # build-repo-portable.py has no --nightly alias (channels use --channel)
+# pytest -- 4 observed via scripts/run-in-docker.sh (own uid, not CI's uid 1001).
 pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present in the image
 pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present in the image
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the image is Linux
