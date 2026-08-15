@@ -103,7 +103,8 @@ def test_cross_version_leg_passes_expect_freebsd_major(tmp_path: Path) -> None:
 
 def test_missing_freebsd_version_omits_expect_freebsd_major(tmp_path: Path) -> None:
     """An empty matrix.freebsd_version (unreachable on the live matrix) must not
-    derive a garbage major — the flag is simply omitted."""
+    derive a garbage major — the flag is simply omitted. Pins the omission only;
+    the digits guard itself is proven by the non-digit sibling test."""
     argv = _run_upgrade(tmp_path, from_tag="2.8", target_tag="2.9", force_flag="", freebsd_version="")
     assert "--expect-freebsd-major" not in argv
 
