@@ -32,6 +32,7 @@ def test_active_repository_checks_exclude_legacy() -> None:
     assert "grep -v '^legacy/'" in precommit
     assert "grep -v '^legacy/'" in gate_runner
     assert '"legacy/**"' in markdownlint
+    assert '"tests/fixtures/**"' in markdownlint
     assert '"legacy"' in pyproject
     assert "--default-path tests/shell" in shellspec
     assert "<directory>tests/php</directory>" in phpunit
