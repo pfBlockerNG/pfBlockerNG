@@ -123,6 +123,22 @@ def _print_conf_sh(script: Path, catalog_path: str = _CE_28, base_url: str = _PA
     return proc.stdout
 
 
+def _pkg_log(root: str) -> Path:
+    """Invocation log written by the fake ``pkg`` stub under ``root``."""
+    return Path(root) / "pkg-invocations.log"
+
+
+def _parse_rquery_line(line: str) -> tuple[str, str]:
+    """Split a stub rquery fixture line into ``(name, version)``."""
+    if " " in line:
+        name, ver = line.split(" ", 1)
+        return name, ver
+    prefix = "pfSense-pkg-pfBlockerNG-"
+    if line.startswith(prefix):
+        return "pfSense-pkg-pfBlockerNG", line[len(prefix) :]
+    return line, line
+
+
 def _run_add_repo(
     root: str,
     *,
@@ -130,48 +146,117 @@ def _run_add_repo(
     extra_args: tuple[str, ...] = (),
     catalogue_empty: bool = False,
     update_fails: bool = False,
+    unscoped_update_fails: bool = False,
+    version_t_broken: bool = False,
     detection_fails: bool = False,
     rquery_lines: tuple[str, ...] | None = None,
+    installed_names: tuple[str, ...] = (),
+    extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run add-repo.sh with PFBLOCKERNG_ROOT=root.
 
     PKG_BIN is overridden to a stub that answers `pkg rquery` with a plausible
-    package line, so the bootstrap reaches its success path; every other subcommand
-    is a silent success. The generator hook no longer calls `pkg` at all (arch-less
-    catalog; issue #1806 — it used to read `pkg config abi` only to derive the
-    now-retired per-arch leaf), so `rquery` is the only answer that matters.
-    add-repo.sh installs the generator hook into ``root`` and runs it; the hook
-    resolves the conf from ``root/etc/product_label`` (CE here — no "Plus") and
-    ``root/etc/version`` (2.8.1).
+    package line, implements `pkg version -t` (issue #2393), and logs every
+    invocation to ``root/pkg-invocations.log``. The generator hook no longer
+    calls `pkg` at all (arch-less catalog; issue #1806). add-repo.sh installs
+    the generator hook into ``root`` and runs it; the hook resolves the conf
+    from ``root/etc/product_label`` (CE here — no "Plus") and ``root/etc/version``
+    (2.8.1).
 
-    The three keyword flags each select one of the bootstrap's failure gates, all of
+    The keyword flags each select one of the bootstrap's failure gates, all of
     which must leave the box's repository configuration exactly as they found it
-    (issue #2148):
+    (issue #2148) when they fire *before* the new catalogue verifies:
 
     ``catalogue_empty``  `rquery` yields nothing — the channel has no build for this
                          box's variant.
-    ``update_fails``     `pkg update` exits non-zero — any enabled repository failed
-                         to refresh, including the one being switched away from.
+    ``update_fails``     `pkg update` exits non-zero even when scoped with ``-r``.
+    ``unscoped_update_fails``
+                         unscoped `pkg update` exits 1 (a leftover peer 404);
+                         ``update -f -r <repo>`` still succeeds.
+    ``version_t_broken`` `pkg version -t` prints garbage so the comparator guard
+                         must fail loud.
     ``detection_fails``  ``/etc/version`` is blank, so the generator hook cannot
                          resolve a varver and never writes the conf's marker line.
 
     ``rquery_lines`` replaces the stub's default single-package `rquery` answer with
-    the given lines verbatim — a catalogue that retains several versions of the one
+    the given lines — a catalogue that retains several versions of the one
     canonical package answers with one line per version.
+
+    ``installed_names`` is what ``pkg query -g '%n' 'pfSense-pkg-pfBlockerNG*'``
+    prints (issue #2381 install-hint).
     """
     bin_dir = os.path.join(root, "bin")
     os.makedirs(bin_dir, exist_ok=True)
 
     fake_pkg = os.path.join(bin_dir, "pkg")
+    log_path = _pkg_log(root)
     if rquery_lines is None:
         rquery_lines = () if catalogue_empty else ("pfSense-pkg-pfBlockerNG 4.0.0",)
-    rquery_reply = "".join(f"  printf '{line}\\n'\n" for line in rquery_lines)
-    update_reply = "  exit 1\n" if update_fails else "  exit 0\n"
+    pairs = [_parse_rquery_line(line) for line in rquery_lines]
+    # One case block that prints every offered version for the requested format.
+    rquery_fmt_body = ""
+    for name, ver in pairs:
+        rquery_fmt_body += (
+            '    case "$fmt" in\n'
+            f'      "%v") printf "%s\\n" "{ver}" ;;\n'
+            f'      "%n-%v") printf "%s\\n" "{name}-{ver}" ;;\n'
+            f'      "%n %v"|*) printf "%s\\n" "{name} {ver}" ;;\n'
+            "    esac\n"
+        )
+    installed_prints = "".join(f'    printf "%s\\n" "{n}"\n' for n in installed_names)
+    update_fail_line = "  exit 1\n" if update_fails else ""
+    unscoped_guard = ""
+    if unscoped_update_fails and not update_fails:
+        unscoped_guard = (
+            '  _saw_r=0\n'
+            '  _prev=""\n'
+            '  for _a in "$@"; do\n'
+            '    if [ "$_prev" = "-r" ]; then _saw_r=1; fi\n'
+            '    _prev="$_a"\n'
+            "  done\n"
+            '  if [ "$_saw_r" -eq 0 ]; then exit 1; fi\n'
+        )
+    version_t_body = (
+        '  printf "?\\n"\n  exit 0\n'
+        if version_t_broken
+        else (
+            '  _a="$3"; _b="$4"\n'
+            '  if [ "$_a" = "$_b" ]; then printf "=\\n"; exit 0; fi\n'
+            '  _first=$(printf "%s\\n%s\\n" "$_a" "$_b" | sort -V | head -n1)\n'
+            '  if [ "$_first" = "$_a" ]; then printf "<\\n"; else printf ">\\n"; fi\n'
+            "  exit 0\n"
+        )
+    )
     with open(fake_pkg, "w") as fh:
         fh.write(
             "#!/bin/sh\n# fake pkg stub for tests\n"
-            f'if [ "$1" = "rquery" ]; then\n{rquery_reply}  exit 0\nfi\n'
-            f'if [ "$1" = "update" ]; then\n{update_reply}fi\n'
+            f'printf "%s\\n" "$*" >> "{log_path}"\n'
+            'if [ "$1" = "version" ] && [ "$2" = "-t" ]; then\n'
+            f"{version_t_body}"
+            "fi\n"
+            'if [ "$1" = "rquery" ]; then\n'
+            '  fmt=""\n'
+            '  for _a in "$@"; do\n'
+            '    case "$_a" in %*) fmt="$_a" ;; esac\n'
+            "  done\n"
+            f"{rquery_fmt_body}"
+            "  exit 0\n"
+            "fi\n"
+            'if [ "$1" = "update" ]; then\n'
+            f"{unscoped_guard}"
+            f"{update_fail_line}"
+            "  exit 0\n"
+            "fi\n"
+            'if [ "$1" = "query" ]; then\n'
+            '  case "$*" in\n'
+            '    *"%n"*)\n'
+            f"{installed_prints}"
+            "      exit 0 ;;\n"
+            '    *"%v"*) printf "3.2.14_2\\n"; exit 0 ;;\n'
+            '    *"%R"*) printf "pfSense\\n"; exit 0 ;;\n'
+            "  esac\n"
+            "  exit 0\n"
+            "fi\n"
             "exit 0\n"
         )
     os.chmod(fake_pkg, 0o755)
@@ -189,6 +274,7 @@ def _run_add_repo(
         **os.environ,
         "PFBLOCKERNG_ROOT": root,
         "PKG_BIN": fake_pkg,
+        **(extra_env or {}),
     }
     argv = ["sh", str(_ADD_REPO), *(["--nightly"] if nightly else []), *extra_args]
     return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
@@ -206,37 +292,32 @@ def _field(conf: str, key: str) -> str:
 # --------------------------------------------------------------------------- #
 
 
-def test_release_conf_byte_identical_across_all_three_generators() -> None:
-    """The release conf from add-repo.sh == build-repo.sh == build-repo-portable.py, byte-for-byte.
+def test_release_conf_byte_identical_across_producer_generators() -> None:
+    """Producer --print-conf still defaults to the legacy release tree, byte-for-byte.
 
-    All three generators receive the SAME ``--catalog-path`` and ``--base-url`` so the
-    resolved URL is deterministic and byte-identical output is meaningful.
-
-    Before-state: before this test, no conf file exists (pure --print-conf mode, no writes).
+    add-repo.sh no longer emits a release conf (``--channel`` is required and
+    ``release`` is rejected — issue #2384). The catalogue producers keep their
+    internal default for assembling unpublished/legacy trees.
     """
-    add = _print_conf_sh(_ADD_REPO)  # default = release channel
     build = _print_conf_sh(_BUILD_REPO)
     portable = _print_conf_portable()
 
-    # Before-state assertion: all three produce the SAME non-empty conf.
-    assert add, "add-repo.sh --print-conf produced empty output"
     assert build, "build-repo.sh --print-conf produced empty output"
     assert portable, "build-repo-portable.py --print-conf produced empty output"
-
-    # byte-identity
-    assert add == build, f"add-repo.sh and build-repo.sh drifted:\nadd:\n{add}\nbuild:\n{build}"
-    assert add == portable, f"add-repo.sh and build-repo-portable.py drifted:\nadd:\n{add}\nportable:\n{portable}"
+    assert build == portable, (
+        f"build-repo.sh and build-repo-portable.py drifted:\nbuild:\n{build}\nportable:\n{portable}"
+    )
 
 
 def test_release_conf_byte_identical_plus_26_03() -> None:
-    """Byte-identity holds for a Plus 26.03 box (second representative case)."""
+    """Producer byte-identity holds for a Plus 26.03 box (second representative case)."""
     cat = _PLUS_2603
-    add = _print_conf_sh(_ADD_REPO, cat)
     build = _print_conf_sh(_BUILD_REPO, cat)
     portable = _print_conf_portable(cat)
 
-    assert add == build, f"add-repo.sh vs build-repo.sh mismatch (plus-26.03):\nadd:\n{add}\nbuild:\n{build}"
-    assert add == portable, f"add-repo.sh vs portable mismatch (plus-26.03):\nadd:\n{add}\nportable:\n{portable}"
+    assert build == portable, (
+        f"build-repo.sh vs portable mismatch (plus-26.03):\nbuild:\n{build}\nportable:\n{portable}"
+    )
 
 
 def _hook_conf_env(repos: str) -> dict[str, str]:
@@ -289,7 +370,7 @@ def test_hook_output_byte_identical_to_print_conf_release() -> None:
     """
     with tempfile.TemporaryDirectory() as root:
         hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", channel="release")
-    print_conf = _print_conf_sh(_ADD_REPO, _CE_28)
+    print_conf = _print_conf_sh(_BUILD_REPO, _CE_28)
     assert hook_conf == print_conf, f"hook vs --print-conf drift:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
 
 
@@ -345,12 +426,12 @@ def test_hook_orphan_guard_holds_for_every_channel(channel: str) -> None:
 @pytest.mark.parametrize(
     ("catalog_path", "channel_args", "repo_name", "expected_url"),
     [
-        # CE 2.8 — release channel
+        # CE 2.8 — stable channel
         (
             _CE_28,
-            (),
-            "pfblockerng",
-            f"{_PAGES_BASE}/release/{_CE_28}",
+            ("--channel", "stable"),
+            "pfblockerng-stable",
+            f"{_PAGES_BASE}/stable/{_CE_28}",
         ),
         # CE 2.8 — nightly channel
         (
@@ -359,12 +440,12 @@ def test_hook_orphan_guard_holds_for_every_channel(channel: str) -> None:
             "pfblockerng-nightly",
             f"{_PAGES_BASE}/nightly/{_CE_28}",
         ),
-        # Plus 26.03 — release channel
+        # Plus 26.03 — stable channel
         (
             _PLUS_2603,
-            (),
-            "pfblockerng",
-            f"{_PAGES_BASE}/release/{_PLUS_2603}",
+            ("--channel", "stable"),
+            "pfblockerng-stable",
+            f"{_PAGES_BASE}/stable/{_PLUS_2603}",
         ),
         # Plus 26.03 — nightly channel
         (
@@ -407,7 +488,7 @@ def test_add_repo_conf_resolved_url_shape(
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("channel_args", [(), ("--nightly",)])
+@pytest.mark.parametrize("channel_args", [("--channel", "stable"), ("--nightly",)])
 @pytest.mark.parametrize(
     "generator",
     ["add-repo.sh", "build-repo.sh", "build-repo-portable.py"],
@@ -417,20 +498,21 @@ def test_no_abi_placeholder_in_any_generator_output(generator: str, channel_args
 
     ADR-39 contracts: the URL is fully resolved at bootstrap; the ${ABI} expansion
     trick from ADR-17/20 is retired because one ABI can map to multiple pfSense
-    versions (varver keying is mandatory).
+    versions (varver keying is mandatory). add-repo.sh requires ``--channel``
+    (issue #2384); producers may still default to release when no channel is given.
     """
     cat = _CE_28
     if generator == "add-repo.sh":
         conf = _print_conf_sh(_ADD_REPO, cat, _PAGES_BASE, *channel_args)
     elif generator == "build-repo.sh":
-        # build-repo.sh only has a release channel --print-conf
-        if channel_args:
+        # build-repo.sh --print-conf accepts --channel but not the --nightly alias.
+        if channel_args == ("--nightly",):
             pytest.skip("build-repo.sh does not support --nightly in --print-conf mode")
-        conf = _print_conf_sh(_BUILD_REPO, cat)
+        conf = _print_conf_sh(_BUILD_REPO, cat, _PAGES_BASE, *channel_args)
     else:
-        if channel_args:
+        if channel_args == ("--nightly",):
             pytest.skip("build-repo-portable.py has no --nightly alias (channels use --channel)")
-        conf = _print_conf_portable(cat)
+        conf = _print_conf_portable(cat, _PAGES_BASE, channel="stable")
 
     assert "${ABI}" not in conf, f"{generator} {channel_args}: found ${{ABI}} in conf:\n{conf}"
 
@@ -443,8 +525,8 @@ def test_no_abi_placeholder_in_any_generator_output(generator: str, channel_args
 @pytest.mark.parametrize(
     ("channel_args", "repo_name", "other_repo"),
     [
-        ((), "pfblockerng", "pfblockerng-nightly"),
-        (("--nightly",), "pfblockerng-nightly", "pfblockerng"),
+        (("--channel", "stable"), "pfblockerng-stable", "pfblockerng-nightly"),
+        (("--nightly",), "pfblockerng-nightly", "pfblockerng-stable"),
     ],
 )
 def test_add_repo_conf_fields_per_channel(
@@ -454,7 +536,7 @@ def test_add_repo_conf_fields_per_channel(
 ) -> None:
     """Both channels carry priority 100, mirror_type/signature_type none, enabled yes.
 
-    Default (no arg) -> ``pfblockerng`` (stable + devel); --nightly ->
+    ``--channel stable`` -> ``pfblockerng-stable``; --nightly ->
     ``pfblockerng-nightly``.  The OTHER repo name must not appear as a stanza key.
     """
     conf = _print_conf_sh(_ADD_REPO, _CE_28, _PAGES_BASE, *channel_args)
@@ -487,13 +569,13 @@ def test_conf_written_once_invariant() -> None:
     Then  the conf is byte-identical (no re-bootstrap drift).
     """
     with tempfile.TemporaryDirectory() as root:
-        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
+        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
 
         # Given: conf does not exist (before-state)
         assert not conf_path.exists(), "conf should not exist before the first run"
 
         # When: first run writes the conf
-        _run_add_repo(root)
+        _run_add_repo(root, extra_args=("--channel", "stable"))
         assert conf_path.exists(), "conf should be written by add-repo.sh"
         content_first = conf_path.read_text()
 
@@ -502,7 +584,7 @@ def test_conf_written_once_invariant() -> None:
         assert "${ABI}" not in content_first
 
         # When: second run
-        _run_add_repo(root)
+        _run_add_repo(root, extra_args=("--channel", "stable"))
 
         # Then: identical conf
         content_second = conf_path.read_text()
@@ -514,11 +596,44 @@ def test_conf_written_once_invariant() -> None:
 def test_verify_reports_newest_version_when_catalogue_carries_several() -> None:
     """The ``==> OK:`` verify line names the NEWEST catalogue version of the package.
 
-    Live repro (2026-08-15): the stable ce-2.8 catalogue retains 3.3.0 alongside
-    3.3.2, ``pkg rquery`` lists every version, and the verify step reported the
-    FIRST row — telling the user 3.3.0 is what they would get. ``pkg install``
-    resolves the highest version, so the report must name that one.
+    Catalogue order is newest-first here so a regression that takes the last
+    rquery line (or drops ``pkg version -t``) cannot stay green (issue #2393).
     """
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            rquery_lines=(
+                "pfSense-pkg-pfBlockerNG-3.3.2",
+                "pfSense-pkg-pfBlockerNG-3.3.0",
+            ),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "==> OK: pfSense-pkg-pfBlockerNG-3.3.2 available" in proc.stdout, (
+            f"verify line must report the newest catalogue version:\n{proc.stdout}"
+        )
+        log = _pkg_log(root).read_text()
+        assert "version -t" in log, f"verify must call pkg version -t, log was:\n{log}"
+
+
+def test_verify_picks_portrevision_via_pkg_version_t() -> None:
+    """``pkg version -t`` must prefer PORTREVISION ``_2`` over ``_1`` of the same PORTVERSION."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            rquery_lines=(
+                "pfSense-pkg-pfBlockerNG-3.3.2_2",
+                "pfSense-pkg-pfBlockerNG-3.3.2_1",
+            ),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "==> OK: pfSense-pkg-pfBlockerNG-3.3.2_2 available" in proc.stdout, proc.stdout
+        assert "version -t" in _pkg_log(root).read_text()
+
+
+def test_verify_fails_if_pkg_version_t_is_unusable() -> None:
+    """A comparator that answers nothing must fail loud, not silently keep the first line."""
     with tempfile.TemporaryDirectory() as root:
         proc = _run_add_repo(
             root,
@@ -527,11 +642,10 @@ def test_verify_reports_newest_version_when_catalogue_carries_several() -> None:
                 "pfSense-pkg-pfBlockerNG-3.3.0",
                 "pfSense-pkg-pfBlockerNG-3.3.2",
             ),
+            version_t_broken=True,
         )
-        assert proc.returncode == 0, proc.stderr
-        assert "==> OK: pfSense-pkg-pfBlockerNG-3.3.2 available" in proc.stdout, (
-            f"verify line must report the newest catalogue version:\n{proc.stdout}"
-        )
+        assert proc.returncode != 0, proc.stdout
+        assert "version -t" in (proc.stdout + proc.stderr)
 
 
 # --------------------------------------------------------------------------- #
@@ -539,46 +653,55 @@ def test_verify_reports_newest_version_when_catalogue_carries_several() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_default_writes_release_conf_then_nightly_replaces_it() -> None:
-    """The default writes ONLY the shared release conf; --nightly then REPLACES it.
+def test_omitted_channel_exits_2_and_writes_no_release_conf() -> None:
+    """No ``--channel`` is a usage error — never write the unpublished ``release/`` tree.
 
-    Scenario:
-    Given a fresh root (no conf files),
-    When  add-repo.sh runs with no argument,
-    Then  only ``pfblockerng.conf`` exists (no nightly conf, no legacy split conf);
-    When  add-repo.sh --nightly runs into the same root,
-    Then  ``pfblockerng-nightly.conf`` is the box's ONLY project conf — the release
-          conf is retired, because a box subscribes to one channel at a time.
+    Issue #2384: the old implicit default targeted ``…/release/`` (404 on live Pages).
     """
     with tempfile.TemporaryDirectory() as root:
-        repos = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos"
-        release = repos / "pfblockerng.conf"
-        nightly = repos / "pfblockerng-nightly.conf"
-        legacy_split = repos / "pfblockerng-devel.conf"
+        proc = _run_add_repo(root)
+        assert proc.returncode == 2, proc.stderr
+        assert "--channel is required" in proc.stderr, proc.stderr
+        repos = _repos_dir(root)
+        present = sorted(p.name for p in repos.glob("pfblockerng*.conf")) if repos.is_dir() else []
+        assert present == [], f"omitted --channel must write no project conf, found: {present}"
+        assert not (repos / "pfblockerng.conf").exists()
 
-        # Given: fresh root — no conf files (before-state)
-        assert not release.exists()
+
+def test_print_conf_requires_channel() -> None:
+    """``--print-conf`` without ``--channel`` is a usage error (no implicit release)."""
+    proc = subprocess.run(
+        ["sh", str(_ADD_REPO), "--print-conf", "--catalog-path", _CE_28],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 2, proc.stderr
+    assert "--channel is required" in proc.stderr, proc.stderr
+    assert "release/" not in proc.stdout
+
+
+def test_stable_then_nightly_replaces_the_subscription() -> None:
+    """``--channel stable`` writes ONLY the stable conf; --nightly then REPLACES it."""
+    with tempfile.TemporaryDirectory() as root:
+        repos = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos"
+        stable = repos / "pfblockerng-stable.conf"
+        nightly = repos / "pfblockerng-nightly.conf"
+        release = repos / "pfblockerng.conf"
+
+        assert not stable.exists()
         assert not nightly.exists()
 
-        # When: default (no arg) → only the shared release conf
-        _run_add_repo(root)
-        assert release.exists(), "default must write the shared pfblockerng.conf"
-        assert not legacy_split.exists(), "default must NOT write a split pfblockerng-devel.conf"
-        assert not nightly.exists(), "default must NOT write the nightly conf"
-        release_bytes = release.read_text()
-        assert _PAGES_BASE in release_bytes, "release conf must contain the Pages base URL"
-        assert "${ABI}" not in release_bytes, "release conf must not contain ${ABI}"
+        _run_add_repo(root, extra_args=("--channel", "stable"))
+        assert stable.exists(), "--channel stable must write pfblockerng-stable.conf"
+        assert not release.exists(), "must not write the unpublished release conf"
+        assert not nightly.exists()
+        assert "/stable/" in stable.read_text()
 
-        # When: --nightly → takes over the subscription
         _run_add_repo(root, nightly=True)
         assert nightly.exists(), "--nightly must write pfblockerng-nightly.conf"
-        assert not release.exists(), "--nightly must retire the release subscription it replaced"
-        assert not legacy_split.exists(), "no pfblockerng-devel.conf is ever created"
-
-        # After-state: nightly conf has its own URL prefix
-        nightly_content = nightly.read_text()
-        assert "/nightly/" in nightly_content, "nightly conf must use the nightly/ channel path"
-        assert "${ABI}" not in nightly_content, "nightly conf must not contain ${ABI}"
+        assert not stable.exists(), "--nightly must retire the stable subscription it replaced"
+        assert "/nightly/" in nightly.read_text()
 
 
 # --------------------------------------------------------------------------- #
@@ -596,13 +719,13 @@ def test_primary_url_is_pages_url_not_worker() -> None:
           contain pkg.pfblockerng.workers.dev (the retired Worker).
     """
     with tempfile.TemporaryDirectory() as root:
-        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
+        conf_path = Path(root) / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
 
         # Given: conf absent (before-state)
         assert not conf_path.exists()
 
         # When: run add-repo.sh
-        _run_add_repo(root)
+        _run_add_repo(root, extra_args=("--channel", "stable"))
 
         # Then: conf written with Pages URL, not the old Worker URL
         assert conf_path.exists()
@@ -645,7 +768,7 @@ def test_add_repo_base_url_requires_a_value() -> None:
 @pytest.mark.parametrize(
     ("argv", "needle"),
     [
-        (["sh", str(_ADD_REPO), "--print-conf"], "catalog-path"),
+        (["sh", str(_ADD_REPO), "--print-conf", "--channel", "stable"], "catalog-path"),
         (["sh", str(_BUILD_REPO), "--print-conf"], "catalog-path"),
         ([sys.executable, str(_BUILD_REPO_PORTABLE), "--print-conf"], "catalog-path"),
     ],
@@ -781,7 +904,7 @@ def test_add_repo_live_bootstrap_leaves_other_channels_absent(channel: str) -> N
         )
 
 
-@pytest.mark.parametrize("previous", ["release", "stable", "nightly"])
+@pytest.mark.parametrize("previous", ["stable", "nightly"])
 def test_add_repo_live_bootstrap_replaces_a_previously_enabled_channel(previous: str) -> None:
     """Single-repository subscription: bootstrapping a channel retires the other one.
 
@@ -791,7 +914,7 @@ def test_add_repo_live_bootstrap_replaces_a_previously_enabled_channel(previous:
     repositories enabled at the same equal priority.
     """
     with tempfile.TemporaryDirectory() as root:
-        _run_add_repo(root, extra_args=() if previous == "release" else ("--channel", previous))
+        _run_add_repo(root, extra_args=("--channel", previous))
         previous_conf = _repos_dir(root) / _CHANNEL_CONF_NAMES[previous]
         assert previous_conf.exists(), f"before-state: the box must be subscribed to {previous}"
 
@@ -943,10 +1066,11 @@ def test_add_repo_help_advertises_the_canonical_identity_only() -> None:
     at a package no channel catalogue carries.
     """
     proc = subprocess.run(["sh", str(_ADD_REPO), "--help"], capture_output=True, text=True, check=True)
-    assert "pfSense-pkg-pfBlockerNG-devel" not in proc.stdout, (
-        f"--help must not advertise the retired -devel identity:\n{proc.stdout}"
+    assert "pkg install -y -r pfblockerng-" in proc.stdout, proc.stdout
+    assert "migrate-channel.sh --channel" in proc.stdout, proc.stdout
+    assert "pkg install pfSense-pkg-pfBlockerNG" not in proc.stdout, (
+        f"--help must not print a bare pkg install:\n{proc.stdout}"
     )
-    assert "pkg install pfSense-pkg-pfBlockerNG" in proc.stdout, proc.stdout
     for channel in _CHANNELS:
         assert channel in proc.stdout, f"--help must name the {channel!r} channel:\n{proc.stdout}"
 
@@ -1019,7 +1143,7 @@ def test_channel_bogus_rejected_with_valid_list(argv: list[str]) -> None:
     ids=["add-repo.sh", "build-repo.sh", "build-repo-portable.py"],
 )
 def test_channel_release_rejected(argv: list[str]) -> None:
-    """`--channel release` is REJECTED — release is the legacy default, not a four-channel name."""
+    """`--channel release` is REJECTED — release is not one of the four channel names."""
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert proc.returncode == 2, proc.stderr
 
@@ -1053,3 +1177,110 @@ def test_print_conf_channel_still_requires_catalog_path(argv: list[str]) -> None
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert proc.returncode != 0, proc.stderr
     assert "catalog-path" in proc.stderr.lower(), proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# #2384 leftover 404 peer / scoped update
+# #2381 install hint
+# #2397 SIGINT after retirement
+# --------------------------------------------------------------------------- #
+
+
+def test_leftover_release_conf_does_not_block_stable_switch() -> None:
+    """A leftover ``pfblockerng.conf`` pointed at unpublished ``release/`` must not
+    fail-close a ``--channel stable`` subscribe (issue #2384).
+
+    Unscoped ``pkg update -f`` would 404 on the leftover peer. The stub fails
+    any update that is not ``-r``-scoped; the switch must still succeed and
+    invoke ``update -f -r pfblockerng-stable``.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        repos = _repos_dir(root)
+        repos.mkdir(parents=True)
+        leftover = repos / "pfblockerng.conf"
+        leftover.write_text(
+            "pfblockerng: {\n"
+            f'  url: "{_PAGES_BASE}/release/ce-2.8",\n'
+            "  enabled: yes\n"
+            "}\n"
+        )
+
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            unscoped_update_fails=True,
+        )
+
+        assert proc.returncode == 0, proc.stderr
+        assert (repos / "pfblockerng-stable.conf").exists()
+        assert not leftover.exists(), "leftover release conf must be retired after verify"
+        log = _pkg_log(root).read_text()
+        assert "update -f -r pfblockerng-stable" in log, f"update must be repo-scoped:\n{log}"
+        assert re.search(r"(?m)^update -f$", log) is None, f"must not run unscoped update -f:\n{log}"
+
+
+def test_install_hint_is_repo_qualified_when_nothing_is_installed() -> None:
+    """A clean box is told to ``pkg install -y -r pfblockerng-<ch> …``, never bare install."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(root, extra_args=("--channel", "stable"))
+        assert proc.returncode == 0, proc.stderr
+        combined = proc.stdout + proc.stderr
+        assert "pkg install -y -r pfblockerng-stable pfSense-pkg-pfBlockerNG" in combined
+        assert "pkg install pfSense-pkg-pfBlockerNG" not in combined
+        assert "migrate-channel.sh" not in combined
+
+
+def test_install_hint_points_at_migrate_when_a_package_is_installed() -> None:
+    """Any leftover ``pfSense-pkg-pfBlockerNG*`` must print migrate-channel, not pkg install."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            installed_names=("pfSense-pkg-pfBlockerNG-devel",),
+        )
+        assert proc.returncode == 0, proc.stderr
+        combined = proc.stdout + proc.stderr
+        assert "pfSense-pkg-pfBlockerNG-devel" in combined
+        assert "migrate-channel.sh --channel stable" in combined
+        assert "pkg install pfSense-pkg-pfBlockerNG" not in combined
+        assert "pkg install -y -r" not in combined
+
+
+def test_sigint_after_retiring_peer_keeps_the_target_conf() -> None:
+    """SIGINT after the first peer ``rm`` must keep the verified target (issue #2397).
+
+    Before the fix, abort_unstaged deleted the new conf (no backup on a first
+    subscribe) after nightly was already gone — zero project repos.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        first = _run_add_repo(root, extra_args=("--channel", "nightly"))
+        assert first.returncode == 0, first.stderr
+        assert (_repos_dir(root) / "pfblockerng-nightly.conf").exists()
+
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "edge"),
+            extra_env={"PFB_ADD_REPO_RETIRE_HOOK": "kill -s INT $$"},
+        )
+        assert proc.returncode == 130, proc.stdout + proc.stderr
+        present = {p.name for p in _repos_dir(root).glob("pfblockerng*.conf")}
+        assert present, "SIGINT after retirement must never leave zero project confs"
+        assert "pfblockerng-edge.conf" in present, f"verified target must remain, found {present}"
+
+
+def test_sigint_after_drop_conf_backup_keeps_the_target_conf() -> None:
+    """SIGINT after ``drop_conf_backup`` must still keep the verified target."""
+    with tempfile.TemporaryDirectory() as root:
+        first = _run_add_repo(root, extra_args=("--channel", "nightly"))
+        assert first.returncode == 0, first.stderr
+
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "edge"),
+            extra_env={"PFB_ADD_REPO_DONE_HOOK": "kill -s INT $$"},
+        )
+        assert proc.returncode == 130, proc.stdout + proc.stderr
+        present = {p.name for p in _repos_dir(root).glob("pfblockerng*.conf")}
+        assert present, "SIGINT after drop_conf_backup must never leave zero project confs"
+        assert "pfblockerng-edge.conf" in present, f"verified target must remain, found {present}"
+        assert "pfblockerng-nightly.conf" not in present

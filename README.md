@@ -69,8 +69,18 @@ Run the bootstrap **on the firewall** over SSH (as root), picking the channel yo
 want, then install the package:
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --channel stable
-pkg install pfSense-pkg-pfBlockerNG
+fetch -qo /tmp/add-repo.sh https://pfblockerng.github.io/pkg/add-repo.sh &&
+sh /tmp/add-repo.sh --channel stable &&
+pkg install -y -r pfblockerng-stable pfSense-pkg-pfBlockerNG
+```
+
+If pfBlockerNG is already installed (Netgate Package Manager, `pfSense-pkg-pfBlockerNG-devel`, or any leftover suffix), subscribe then migrate — `pkg install` will not move an existing package onto the new repository:
+
+```sh
+fetch -qo /tmp/add-repo.sh https://pfblockerng.github.io/pkg/add-repo.sh &&
+sh /tmp/add-repo.sh --channel stable &&
+fetch -qo /tmp/migrate-channel.sh https://pfblockerng.github.io/pkg/migrate-channel.sh &&
+sh /tmp/migrate-channel.sh --channel stable
 ```
 
 The bootstrap detects your pfSense edition and version, configures the matching
@@ -107,8 +117,10 @@ repository it came from and offers no upgrade across repositories, so a
 firewall that only gains a new conf silently keeps running its old build.
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/add-repo.sh | sh -s -- --channel edge
-fetch -qo - https://pfblockerng.github.io/pkg/migrate-channel.sh | sh -s -- --channel edge
+fetch -qo /tmp/add-repo.sh https://pfblockerng.github.io/pkg/add-repo.sh &&
+sh /tmp/add-repo.sh --channel edge &&
+fetch -qo /tmp/migrate-channel.sh https://pfblockerng.github.io/pkg/migrate-channel.sh &&
+sh /tmp/migrate-channel.sh --channel edge
 ```
 
 `add-repo.sh` moves the subscription; `migrate-channel.sh` moves the installed
