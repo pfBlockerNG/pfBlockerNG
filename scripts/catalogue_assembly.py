@@ -221,6 +221,104 @@ def _protected_versions(site_root: Path, channel: str, varver: str, *, engine: E
     return frozenset(versions)
 
 
+def _files_byte_identical(a: Path, b: Path) -> bool:
+    """True iff ``a`` and ``b`` hold the same bytes. Size first — a new build
+    almost always differs there, so most calls never read either file."""
+    if a.stat().st_size != b.stat().st_size:
+        return False
+    return a.read_bytes() == b.read_bytes()
+
+
+def _canonical_filename(manifest: Mapping[str, object]) -> str:
+    return f"{manifest['name']}-{manifest['version']}.pkg"
+
+
+def _iter_canonical_packages(catalogue_dir: Path, *, engine: Engine) -> list[tuple[Path, str]]:
+    """Canonical ``.pkg`` files in ``catalogue_dir`` as ``(path, filename)``.
+
+    Catalog descriptor files and non-canonical (dependency) packages are skipped,
+    matching ``_protected_versions`` / ``prune_retained`` so a dependency can
+    never be copied or compared as a containment source.
+    """
+    pfb_pkg = engine.pfb_pkg
+    brp = engine.build_repo_portable
+    found: list[tuple[Path, str]] = []
+    for path in sorted(catalogue_dir.glob("*.pkg")):
+        if not path.is_file() or path.name in brp._CATALOG_PKG_FILES:
+            continue
+        manifest = pfb_pkg.read_compact_manifest(path)
+        if manifest.get("name") != pfb_pkg.CANONICAL_EMITTED_IDENTITY:
+            continue
+        found.append((path, _canonical_filename(manifest)))
+    return found
+
+
+def backfill_from_slower_channels(
+    site_root: str | Path,
+    channel: str,
+    varver: str,
+    *,
+    engine: Engine,
+) -> dict[Path, list[tuple[str, str]]]:
+    """Copy every canonical package still retained on a slower tagged channel
+    for this ``varver`` onto ``channel`` (byte-identical).
+
+    Nightly is untagged and independent: this function never copies from it or
+    into it (``_SLOWER_CHANNELS["nightly"]`` is empty, and a nightly destination
+    returns immediately). A same-name, different-byte collision — dest vs source,
+    or two slower sources disagreeing with each other — is a hard error.
+
+    Returns a ``source_index`` fragment: each newly-copied source path maps to
+    the ``(channel, varver)`` destinations that now hold those bytes (every
+    slower origin that carried the package, plus ``channel``). Already-identical
+    destinations are left untouched and omitted from the result.
+    """
+    site_root = Path(site_root)
+    if channel == "nightly":
+        _validate_channel(channel)
+        _validate_varver(varver, engine)
+        return {}
+
+    dest_dir = _catalogue_dir(site_root, channel, varver, engine)
+    # name -> first source, then every slower (channel, path) that carries it
+    first_source: dict[str, Path] = {}
+    origins: dict[str, list[tuple[str, Path]]] = {}
+    for slower_channel in _SLOWER_CHANNELS[channel]:
+        if slower_channel == "nightly":
+            continue
+        slower_dir = site_root / slower_channel / varver
+        if not slower_dir.is_dir():
+            continue
+        for path, name in _iter_canonical_packages(slower_dir, engine=engine):
+            existing = first_source.get(name)
+            if existing is not None and not _files_byte_identical(existing, path):
+                raise CatalogueAssemblyError(
+                    f"{name}: slower channels disagree on bytes for {varver} — "
+                    f"{existing} sha256={hashlib.sha256(existing.read_bytes()).hexdigest()}, "
+                    f"{path} sha256={hashlib.sha256(path.read_bytes()).hexdigest()}"
+                )
+            if existing is None:
+                first_source[name] = path
+            origins.setdefault(name, []).append((slower_channel, path))
+
+    copied: dict[Path, list[tuple[str, str]]] = {}
+    for name, src in first_source.items():
+        dest = dest_dir / name
+        if dest.is_file():
+            if _files_byte_identical(dest, src):
+                continue
+            raise CatalogueAssemblyError(
+                f"{dest}: already publishes a different build of {name} — "
+                f"existing sha256={hashlib.sha256(dest.read_bytes()).hexdigest()}, "
+                f"incoming sha256={hashlib.sha256(src.read_bytes()).hexdigest()}"
+            )
+        shutil.copy2(src, dest)
+        destinations = [(slower, varver) for slower, _path in origins[name]]
+        destinations.append((channel, varver))
+        copied[src.resolve()] = destinations
+    return copied
+
+
 def prune_retained(
     site_root: str | Path,
     channel: str,
