@@ -79,7 +79,7 @@ Describe 'image-upgrade.sh pre-push artifact verification'
       eval "$(sed -n "/^# pfb_verify_artifact BEGIN/,/^# pfb_verify_artifact END/p" "$1")"
       pfb_boot_artifact_version() { printf "%s\n%s\n%s\n" "$_booted" "$_abi" "$_kern"; }
       mkdir -p "$2/globdir"
-      : > "$2/globdir/16"
+      true > "$2/globdir/16"
       cd "$2/globdir"
       pfb_verify_artifact "$2/out.qcow2" "$_tag"
       printf "REACHED-AFTER-VERIFY\n"
