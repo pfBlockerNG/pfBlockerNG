@@ -1483,6 +1483,9 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         dest_channel = base_url.rsplit("/", 1)[-1]
         assert dest_channel in CHANNELS, f"live base URL does not end in a known channel: {base_url!r}"
         assert expected_channel in CHANNELS, f"{LIVE_EXPECTED_CHANNEL_ENV} is not a known channel: {expected_channel!r}"
+        assert CHANNELS.index(dest_channel) >= CHANNELS.index(expected_channel), (
+            f"dest {dest_channel!r} is faster than primary {expected_channel!r}"
+        )
         expected_origin = channel_repo_name(dest_channel)
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
