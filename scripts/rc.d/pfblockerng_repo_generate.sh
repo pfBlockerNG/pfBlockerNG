@@ -1,6 +1,6 @@
 #!/bin/sh
 # /usr/local/etc/rc.d/pfblockerng_repo_generate.sh — boot-time repo-conf
-# regenerator (ADR-39). Installed by add-repo.sh.
+# regenerator (ADR-39). Installed by the per-channel install-<ch>.sh scripts (and the legacy add-repo.sh).
 #
 # WHAT IT DOES (and nothing more): for each pfBlockerNG pkg-repo conf file that
 # EXISTS, it detects this box's pfSense edition/version and UNCONDITIONALLY
