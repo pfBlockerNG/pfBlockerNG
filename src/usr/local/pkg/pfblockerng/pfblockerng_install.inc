@@ -581,10 +581,10 @@ $pfb_ip_section   = PfbConfig::readSection('installedpackages/pfblockerngipsetti
 $settings = array(	'enable_dup', 'enable_agg', 'suppression', 'enable_log', 'maxmind_locale', 'database_cc',
 			'inbound_interface', 'inbound_deny_action', 'outbound_interface', 'outbound_deny_action',
 			'enable_float', 'pass_order', 'autorule_suffix', 'killstates' );
-$has_migratable = false;
+$has_migratable = FALSE;
 foreach ($settings as $setting) {
 	if (array_key_exists($setting, $pfb_gen_section)) {
-		$has_migratable = true;
+		$has_migratable = TRUE;
 		break;
 	}
 }

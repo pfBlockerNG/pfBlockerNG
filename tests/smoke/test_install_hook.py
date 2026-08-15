@@ -127,7 +127,9 @@ def test_install_hook_succeeds(smoke_vm: SmokeVM) -> None:
     supp_lines = [line for line in out.splitlines() if line.startswith("SUPPRESSION=")]
     assert supp_lines, f"fresh-install suppression probe missing:\n{out}"
     supp = supp_lines[-1].split("=", 1)[1]
+    # Absence (__ABSENT__) is the intended pass: the General->IP copy did not
+    # fire. The registry may later write the registered default ('on'); an
+    # empty string is the planted-blank bug.
     assert supp != "", (
-        "fresh install planted ip/suppression as empty (General->IP copy fired "
-        f"on schedule-seeded General):\n{out}"
+        f"fresh install planted ip/suppression as empty (General->IP copy fired on schedule-seeded General):\n{out}"
     )

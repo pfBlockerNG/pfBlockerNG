@@ -135,6 +135,6 @@ final class InstallGeneralToIpMigrationTest extends TestCase
 			'schedule keys in General are not IP leftovers -- do not plant the 14 blank IP keys');
 		$gen = $GLOBALS['config']['installedpackages']['pfblockerng']['config'][0];
 		$this->assertSame('on', $gen['pfb_scheduled_feed_updates'] ?? null);
-		$this->assertArrayNotHasKey('suppression', $this->ipSection());
+		$this->assertSame('v4', $gen['settings_family'] ?? null);
 	}
 }
