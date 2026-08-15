@@ -64,6 +64,7 @@ Describe 'image-upgrade.sh update-branch selection'
       # New code exposes its helper between these markers. On the old code the
       # extraction is empty and the unchanged main-flow block still executes,
       # giving a genuine RED against its pkg_list_repos() behavior.
+      eval "$(sed -n "/^# pfb_pkg_update_retry BEGIN/,/^# pfb_pkg_update_retry END/p" "$1")"
       eval "$(sed -n "/^# pfb_switch_branch BEGIN/,/^# pfb_switch_branch END/p" "$1")"
       PKG_LOCK_RETRIES=2
       PKG_LOCK_INTERVAL=0
