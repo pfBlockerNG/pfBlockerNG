@@ -96,9 +96,9 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     as two separate branches (it needs the two distinct diagnostics), while the
     resolver calls the single composed ``_regex_is_catastrophic_shape``.
 
-    Sharing the literals only closes the literal-drift row. This closes the row the
-    #1711 parity tests actually existed for: a rule wired into one composition and
-    not the other silently reopens "the save page accepts it, the resolver drops it".
+    Sharing the literals only closes the literal-drift row. This pin is the
+    shape/budget axis only. Compile and control-character rejects are covered
+    by DnsblRegexEntryErrorTest (PHP probe) and are skipped here.
     """
     import io
 
@@ -153,17 +153,17 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     blocks = ("(", ")", "(?:", "[a-z]", "a", ".", "+", "*", "{2}", "|", "\\", "$")
     corpus += ["".join(combination) for combination in itertools.product(blocks, repeat=4)]
 
+    compared = {True: 0, False: 0}
     for pattern in corpus:
         probe_rejects = main_rejects_shape(pattern)
         if probe_rejects is None:
             continue
+        compared[probe_rejects] += 1
         assert probe_rejects == _regex_is_catastrophic_shape(pattern), (
             f"probe and resolver disagree on {pattern!r}: "
             f"probe rejects={probe_rejects}, resolver rejects={_regex_is_catastrophic_shape(pattern)}"
         )
-    # Guard against a vacuously one-sided corpus.
-    assert any(_regex_is_catastrophic_shape(pattern) for pattern in corpus)
-    assert any(not _regex_is_catastrophic_shape(pattern) for pattern in corpus)
+    assert compared[True] and compared[False], f"corpus never exercised both verdicts: {compared}"
 
 
 def test_probe_and_resolver_both_reject_an_adjacent_quantifier_run() -> None:
