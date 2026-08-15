@@ -6,6 +6,7 @@ whose extra_pkgs is empty. These cases are hermetic (no network).
 
 from __future__ import annotations
 
+import importlib
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,18 +19,27 @@ for _p in (_SCRIPTS, _TESTS):
         sys.path.insert(0, str(_p))
 
 import publish_release as pr
-import test_publish_release as tpr
 
-# Pre-#2383 twin tests create textproc/py311-twin deps against Plus rows
-# whose extra_pkgs is []. After row-scoping those deps match no target.
-# ROW_PLUS_07 is a shallow copy of ROW_PLUS_03, so they share the list.
 _TWIN_ORIGIN = "textproc/py-twin"
-_plus_extras = tpr.ROW_PLUS_03.get("extra_pkgs")
-if not isinstance(_plus_extras, list):
-    _plus_extras = []
-    tpr.ROW_PLUS_03["extra_pkgs"] = _plus_extras
-if _TWIN_ORIGIN not in _plus_extras:
-    _plus_extras.append(_TWIN_ORIGIN)
+
+
+def _declare_twin_on_plus_rows() -> None:
+    """Pre-#2383 twin tests create textproc/py311-twin deps against Plus rows
+    whose extra_pkgs is []. After row-scoping those deps match no target.
+    ROW_PLUS_07 is a shallow copy of ROW_PLUS_03, so they share the list."""
+    for modname in ("tests.test_publish_release", "test_publish_release"):
+        try:
+            mod = importlib.import_module(modname)
+        except ImportError:
+            continue
+        extras = getattr(mod, "ROW_PLUS_03", {}).get("extra_pkgs")
+        if not isinstance(extras, list):
+            continue
+        if _TWIN_ORIGIN not in extras:
+            extras.append(_TWIN_ORIGIN)
+
+
+_declare_twin_on_plus_rows()
 
 
 def _dep(origin: str) -> SimpleNamespace:
