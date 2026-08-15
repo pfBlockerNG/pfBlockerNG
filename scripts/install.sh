@@ -168,19 +168,22 @@ pfb_channel_install() {
         die 1 "'${PKG_BIN}' not found — run this ON a pfSense box, or set PKG_BIN"
 
     # 2. Boot-time generator hook: install/refresh only if missing or different.
-    #    HOOK_SRC is trusted ONLY when this IS a checkout — i.e. install.sh's own
-    #    file sits beside it too. Piped ($0 is "sh"), SCRIPT_DIR resolves to the
-    #    caller's cwd instead: from /usr/local/etc/pkg (ROOT="") that cwd's
-    #    "rc.d/..." collides with ON_BOX_HOOK itself, so trusting HOOK_SRC there
-    #    would `cmp` the on-box hook against itself and never refresh a stale one.
+    #    Try the EMBEDDED hook first: the published artifact's own filename IS
+    #    install.sh, so a downloaded copy saved beside a stale on-box hook (in
+    #    /usr/local/etc, where ROOT="") would make "-f SCRIPT_DIR/install.sh"
+    #    true for a non-checkout copy too — trusting that check first would then
+    #    `cmp` the on-box hook against HOOK_SRC, its own collided path, and never
+    #    refresh a stale one. HOOK_SRC (the checkout sibling) is consulted only
+    #    when the embedded hook is the repository stub (pfb_emit_embedded_hook
+    #    fails); die if neither source is available.
     _hook_tmp="$(mktemp "${TMPDIR:-/tmp}/pfb-hook.XXXXXX")" || die 1 "mktemp failed while staging the boot hook"
-    if [ -f "${SCRIPT_DIR}/install.sh" ] && [ -f "${HOOK_SRC}" ]; then
+    if pfb_emit_embedded_hook >"${_hook_tmp}" 2>/dev/null; then
+        :
+    elif [ -f "${HOOK_SRC}" ]; then
         cp "${HOOK_SRC}" "${_hook_tmp}"
     else
-        pfb_emit_embedded_hook >"${_hook_tmp}" || {
-            rm -f "${_hook_tmp}"
-            exit 1
-        }
+        rm -f "${_hook_tmp}"
+        die 1 "no embedded hook in this copy and no checkout sibling at ${HOOK_SRC} — run the published install.sh, or run from a checkout"
     fi
     if [ -f "${ON_BOX_HOOK}" ] && cmp -s "${_hook_tmp}" "${ON_BOX_HOOK}"; then
         # "Up to date" means the BYTES match — never that the mode is already

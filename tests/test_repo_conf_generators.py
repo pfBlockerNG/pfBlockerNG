@@ -31,7 +31,7 @@ Tests below pin:
 
 Bootstrap/live-install/verify/version-pick coverage now lives in
 tests/test_channel_install.py, exercising the current SOLE client entry point,
-install-<channel>.sh.
+install.sh --channel <channel>.
 """
 
 from __future__ import annotations
@@ -152,6 +152,20 @@ def test_release_conf_byte_identical_across_producer_generators() -> None:
     assert build == portable, (
         f"build-repo.sh and build-repo-portable.py drifted:\nbuild:\n{build}\nportable:\n{portable}"
     )
+
+
+def test_release_default_body_never_names_release_as_a_channel() -> None:
+    """N1 (issue #2416 review): the legacy ``release`` default's header line must
+    never read "re-run install.sh --channel release to change" — install.sh
+    REJECTS ``--channel release`` explicitly (issue #2384; ``release`` is not one
+    of the four channels). The un-actionable clause must not name a channel
+    install.sh refuses.
+    """
+    build = _print_conf_sh(_BUILD_REPO)
+    portable = _print_conf_portable()
+
+    assert "--channel release" not in build, build
+    assert "--channel release" not in portable, portable
 
 
 def test_release_conf_byte_identical_plus_26_03() -> None:

@@ -70,8 +70,13 @@ print_conf() {
     base="$1"
     channel="${2:-release}"
     repo="$(_conf_repo_name "${channel}")"
+    # install.sh --channel rejects "release" (issue #2384) — the legacy release
+    # default's hint keeps a literal <channel> placeholder instead of naming a
+    # channel install.sh refuses.
+    channel_hint="${channel}"
+    [ "${channel}" = "release" ] && channel_hint='<channel>'
     cat <<EOF
-# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install.sh --channel ${channel} to change.
+# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install.sh --channel ${channel_hint} to change.
 # pfBlockerNG (${channel} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
 # fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
