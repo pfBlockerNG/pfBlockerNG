@@ -90,7 +90,10 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
             "/sbin/reboot") return 0 ;;
           esac
         }
+        eval "$(sed -n "/^# pfb_abi_major BEGIN/,/^# pfb_abi_major END/p" "$1")"
+        eval "$(sed -n "/^# pfb_kern_major BEGIN/,/^# pfb_kern_major END/p" "$1")"
         eval "$(sed -n "/^# pfb_pkg_refresh_verdict BEGIN/,/^# pfb_pkg_refresh_verdict END/p" "$1")"
+        eval "$(sed -n "/^# pfb_pkg_update_retry BEGIN/,/^# pfb_pkg_update_retry END/p" "$1")"
         eval "$(sed -n "/^# pfb_refresh_pkgs BEGIN/,/^# pfb_refresh_pkgs END/p" "$1")"
         PKG_LOCK_RETRIES=2
         PKG_LOCK_INTERVAL=0
@@ -118,6 +121,78 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
     The contents of file "$CALLS" should include '/sbin/reboot'
   End
 
+  # C3
+  It 'fails closed when pkg upgrade -n reports a major OS version crossing'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Major OS version upgrade detected, aborting.' 0 0 '' '' '' ''
+    The status should be failure
+    The stderr should include 'FreeBSD major'
+    The output should not include 'REACHED-AFTER-REFRESH'
+    The contents of file "$CALLS" should not include 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y'
+  End
+
+  # C4
+  It 'fails closed when pkg upgrade -n reports a wrong-architecture plan'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'wrong architecture: FreeBSD:15:* instead of FreeBSD:16:amd64' 0 0 '' '' '' ''
+    The status should be failure
+    The stderr should include 'FreeBSD major'
+    The output should not include 'REACHED-AFTER-REFRESH'
+    The contents of file "$CALLS" should not include 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y'
+  End
+
+  # C5
+  It 'fails closed when pkg upgrade -y itself fails (no || true swallow)'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 0 1 '' '' '' ''
+    The status should be failure
+    The stderr should include 'pkg upgrade'
+    The output should not include 'REACHED-AFTER-REFRESH'
+  End
+
+  # C6
+  It 'fails closed when the post-reboot ABI major differs from the snapshot'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 0 0 '' '' 'FreeBSD:16:amd64' '16.0-RELEASE'
+    The status should be failure
+    The stderr should include 'FreeBSD:16:amd64'
+    The stderr should include 'FreeBSD:15:amd64'
+    The output should not include 'REACHED-AFTER-REFRESH'
+  End
+
+  # C7
+  It 'fails closed when pkg update -f itself rewrote the ABI major, before any dry-run'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Your packages are up to date.' 0 0 '' 'FreeBSD:16:amd64' '' ''
+    The status should be failure
+    The stderr should include 'FreeBSD:16:amd64'
+    The stderr should include 'FreeBSD:15:amd64'
+    The output should not include 'REACHED-AFTER-REFRESH'
+    The contents of file "$CALLS" should not include 'pkg upgrade -n'
+  End
+
+  # C8
+  It 'fails closed when the initial pkg config ABI cannot be read'
+    When call run_refresh '' '15.0-RELEASE' 'Your packages are up to date.' 0 0 '' '' '' ''
+    The status should be failure
+    The stderr should include 'could not read'
+    The output should not include 'REACHED-AFTER-REFRESH'
+  End
+
+  # C9
+  It 'retries a transient pkg database lock on pkg update -f and continues'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Your packages are up to date.' 0 0 'transient-lock' '' '' ''
+    The status should be success
+    The stderr should include 'pkg database locked'
+    The output should include 'PKG_WAS_UPGRADED=0'
+    The output should include 'REACHED-AFTER-REFRESH'
+    The contents of file "${WORK}/pkg-update.log" should include 'Cannot get an exclusive lock'
+    The contents of file "${WORK}/pkg-update.log" should include 'catalogue refreshed'
+  End
+
+  # C10
+  It 'fails closed on a non-lock pkg update -f error (no || true swallow)'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Your packages are up to date.' 0 0 'other-error' '' '' ''
+    The status should be failure
+    The stderr should include 'pkg catalogue refresh failed'
+    The output should not include 'REACHED-AFTER-REFRESH'
+  End
+
   # C11 — wiring: exactly one call site, and the extraction markers exist.
   It 'wires pfb_refresh_pkgs into the --upgrade-pkgs branch exactly once'
     When call grep -c '^    pfb_refresh_pkgs "\$LOCAL_DIR"$' "$SCRIPT"
@@ -127,5 +202,31 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
   It 'exposes the pfb_refresh_pkgs extraction markers'
     When call grep -cE '^# pfb_refresh_pkgs (BEGIN|END)$' "$SCRIPT"
     The output should equal 2
+  End
+
+  # Hostile: a `\r`-laced dry-run line still matches the up-to-date phrase.
+  It 'tolerates CRLF-mangled dry-run output when packages are up to date'
+    dry="$(printf 'Your packages are up to date.\r')"
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' "$dry" 0 0 '' '' '' ''
+    The status should be success
+    The output should include 'PKG_WAS_UPGRADED=0'
+  End
+
+  # Hostile: pkg config ABI answering a bare "?" (no `:` fields) is unreadable,
+  # same as empty — never treated as a major that happens to compare unequal.
+  It 'fails closed when pkg config ABI answers a bare "?"'
+    When call run_refresh '?' '15.0-RELEASE' 'Your packages are up to date.' 0 0 '' '' '' ''
+    The status should be failure
+    The stderr should include 'could not read'
+  End
+
+  # Hostile: post-reboot kernel major with no dot (e.g. 15-STABLE) never
+  # coincidentally strcmp-matches a numeric ABI major — it fails closed.
+  It 'fails closed when the post-reboot kernel major has no dot to parse'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 0 0 '' '' '' '15-STABLE'
+    The status should be failure
+    The stderr should include '15-STABLE'
+    The stderr should include 'FreeBSD:15:amd64'
+    The output should not include 'REACHED-AFTER-REFRESH'
   End
 End

@@ -448,45 +448,105 @@ pfb_pkg_refresh_verdict() {
 }
 # pfb_pkg_refresh_verdict END
 
+# pfb_abi_major BEGIN
+# pfb_abi_major ABI — the FreeBSD major from `pkg config ABI` output
+# (FreeBSD:MAJOR:arch, e.g. FreeBSD:16:amd64 -> 16); empty when ABI carries no
+# second `:`-field (unset/garbled pkg config output — caller fails closed).
+pfb_abi_major() {
+    printf '%s\n' "$1" | awk -F: '{ print $2 }'
+}
+# pfb_abi_major END
+
+# pfb_kern_major BEGIN
+# pfb_kern_major UNAME_R — the text before the first `.` in `uname -r` (e.g.
+# 15.0-RELEASE -> 15). A value with no dot (e.g. 15-STABLE) is returned whole,
+# so it fails a major-version compare instead of coincidentally matching.
+pfb_kern_major() {
+    printf '%s\n' "$1" | cut -d. -f1
+}
+# pfb_kern_major END
+
 # pfb_refresh_pkgs BEGIN
-# pfb_refresh_pkgs LOG_DIR — --upgrade-pkgs body, extracted verbatim (today's
-# semantics, unchanged) so the spec can drive it directly. Sets the global
-# PKG_WAS_UPGRADED (0 up to date, 1 after an applied upgrade).
+# pfb_refresh_pkgs LOG_DIR — --upgrade-pkgs body: refresh the pkg catalogue and
+# apply any pending upgrade, gated on the FreeBSD ABI/kernel major staying put
+# throughout. The same-version daily refresh (image-refresh.yml, from==to) is
+# the one path that runs unattended with nobody watching the plan; letting it
+# swallow a repo-flip-driven ABI change (issue #2242) or a pkg-reported major
+# crossing installs foreign-major packages onto the running tag (issue #2299).
+# Sets the global PKG_WAS_UPGRADED (0 up to date, 1 after an applied upgrade).
 pfb_refresh_pkgs() {
     _prp_log_dir="$1"
 
+    _prp_abi0=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>&1 | tr -d '\r')
+    _prp_abi0_major=$(pfb_abi_major "$_prp_abi0")
+    [ -n "$_prp_abi0_major" ] \
+        || die "could not read pkg ABI before pkg update -f (got: ${_prp_abi0:-<empty>})"
+    _prp_kern0=$(ssh_guest 'uname -r' 2>&1 | tr -d '\r')
+    _prp_kern0_major=$(pfb_kern_major "$_prp_kern0")
+    [ -n "$_prp_kern0_major" ] \
+        || die "could not read kernel version before pkg update -f (got: ${_prp_kern0:-<empty>})"
+
     log "refreshing package catalogue (pkg update -f)"
-    # pkg update may print output; connection stays up (not a reboot command).
-    ssh_guest 'pkg update -f' 2>&1 | tee "${_prp_log_dir}/pkg-update.log" || true
+    pfb_pkg_update_retry "${_prp_log_dir}/pkg-update.log" "pkg refresh"
+
+    _prp_abi1=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>&1 | tr -d '\r')
+    _prp_abi1_major=$(pfb_abi_major "$_prp_abi1")
+    [ -n "$_prp_abi1_major" ] \
+        || die "could not read pkg ABI after pkg update -f (got: ${_prp_abi1:-<empty>})"
+    if [ "$_prp_abi1_major" != "$_prp_abi0_major" ]; then
+        die "pkg ABI ${_prp_abi1} after pkg update -f, was ${_prp_abi0} — refusing to continue (issue #2299)"
+    fi
 
     # Dry-run detect: pkg prints "Your packages are up to date" when nothing is
-    # pending; otherwise it prints an upgrade plan (Number of packages to be
-    # upgraded / to be installed / to be reinstalled, etc.).  Parse the output —
-    # do NOT rely solely on exit code, as pkg(8) exit semantics vary by version.
+    # pending; otherwise it prints an upgrade plan, or — the case this gate
+    # exists for — a FreeBSD major-crossing refusal. Parse the output; do NOT
+    # rely solely on exit code, pkg(8) exit semantics vary by version.
     log "checking for pending package upgrades (pkg upgrade -n)"
-    _prp_dry=$(ssh_guest 'pkg upgrade -n' 2>&1 | tee "${_prp_log_dir}/pkg-upgrade-dryrun.log" || true)
+    _prp_dry_rc=0
+    _prp_dry=$(ssh_guest 'pkg upgrade -n' 2>&1) || _prp_dry_rc=$?
+    printf '%s\n' "$_prp_dry" | tee "${_prp_log_dir}/pkg-upgrade-dryrun.log"
+    case "$_prp_dry" in
+        *'Major OS version upgrade detected'* | *'wrong architecture'*)
+            die "pkg upgrade -n reports a FreeBSD major crossing (issue #2299; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
+            ;;
+    esac
     _prp_verdict=$(pfb_pkg_refresh_verdict "$_prp_dry")
+    if [ "$_prp_verdict" != up-to-date ] && [ "$_prp_dry_rc" -ne 0 ]; then
+        die "pkg upgrade -n failed (rc=${_prp_dry_rc}; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
+    fi
+
     if [ "$_prp_verdict" = up-to-date ]; then
         log "packages already up to date — skipping pkg upgrade + reboot"
         PKG_WAS_UPGRADED=0
-    elif [ "$_prp_verdict" = fail-closed ]; then
-        die "pkg upgrade -n did not report a plan or an up-to-date result (see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
-    else
-        log "package upgrades pending — running pkg upgrade -y"
-        # Do not pipe: tee's 0 would hide a failed apply (#1844 same class).
-        if ! ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' >"${_prp_log_dir}/pkg-upgrade.log" 2>&1; then
-            cat "${_prp_log_dir}/pkg-upgrade.log"
-            die "pkg upgrade -y failed (see ${_prp_log_dir}/pkg-upgrade.log)"
-        fi
-        cat "${_prp_log_dir}/pkg-upgrade.log"
-        log "rebooting after pkg upgrade"
-        # /sbin/reboot drops the connection — expected; ignore the exit code.
-        ssh_guest '/sbin/reboot' 2>/dev/null || true
-        log "waiting for SSH after pkg-upgrade reboot..."
-        wait_guest_ssh 300
-        log "box is back after pkg-upgrade reboot"
-        PKG_WAS_UPGRADED=1
+        return 0
     fi
+    if [ "$_prp_verdict" = fail-closed ]; then
+        die "pkg upgrade -n did not report a plan or an up-to-date result (see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
+    fi
+
+    log "package upgrades pending — running pkg upgrade -y"
+    # Do not pipe: tee's 0 would hide a failed apply (#1844 same class).
+    if ! ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' >"${_prp_log_dir}/pkg-upgrade.log" 2>&1; then
+        cat "${_prp_log_dir}/pkg-upgrade.log"
+        die "pkg upgrade -y failed (see ${_prp_log_dir}/pkg-upgrade.log)"
+    fi
+    cat "${_prp_log_dir}/pkg-upgrade.log"
+    log "rebooting after pkg upgrade"
+    # /sbin/reboot drops the connection — expected; ignore the exit code.
+    ssh_guest '/sbin/reboot' 2>/dev/null || true
+    log "waiting for SSH after pkg-upgrade reboot..."
+    wait_guest_ssh 300
+    log "box is back after pkg-upgrade reboot"
+
+    _prp_abi2=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>&1 | tr -d '\r')
+    _prp_abi2_major=$(pfb_abi_major "$_prp_abi2")
+    _prp_kern2=$(ssh_guest 'uname -r' 2>&1 | tr -d '\r')
+    _prp_kern2_major=$(pfb_kern_major "$_prp_kern2")
+    if [ "$_prp_abi2_major" != "$_prp_abi0_major" ] || [ "$_prp_abi2_major" != "$_prp_kern2_major" ]; then
+        die "pkg ABI ${_prp_abi2} (kernel ${_prp_kern2}) after pkg-upgrade reboot, was ${_prp_abi0} — refusing to continue (issue #2299)"
+    fi
+
+    PKG_WAS_UPGRADED=1
 }
 # pfb_refresh_pkgs END
 
