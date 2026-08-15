@@ -59,21 +59,27 @@ cr-hold`. `.coderabbit.yaml` skips auto-review on `cr-hold`.
 `@coderabbitai pause` and `@coderabbitai review` are **one PR, at
 review time only**:
 
-1. Quota notice → the Action labels every open PR `cr-hold`. Agents
-   do **not** comment on the siblings.
-2. After the window: remove `cr-hold` from **one** PR, post
-   `@coderabbitai pause` **once** on that PR (required: `@review` is
-   a no-op unless auto-review is paused — #2430), then
-   `@coderabbitai review` **once**. Leave every other PR labeled.
+1. Quota notice → the Action labels every **other** open PR
+   `cr-hold`. Agents do **not** comment on the siblings.
+2. A scheduled job (every 15 minutes) removes `cr-hold` from open
+   PRs once no live "Next review available in" remains. Agents may
+   also `gh pr edit N --remove-label cr-hold` on **one** PR after
+   the window, then `@coderabbitai pause` once and `@coderabbitai
+   review` once on that PR.
 3. Never `@coderabbitai pause` or `review` on a PR that still has
    `cr-hold`, and never on a PR whose latest CR comment is a live
    quota countdown.
 4. `@coderabbitai resume` only when product behaviour changed after
    a finished review **and** no quota window is live.
 
-`.coderabbit.yaml` already turns off incremental auto-review and
-status-only comments so a later push does not spend a slot or post
-"Review skipped".
+`.coderabbit.yaml` turns off incremental auto-review: only the
+first auto-look of a PR runs unless someone posts `@coderabbitai
+review`. That is a deliberate spend trade — APPLY commits are not
+auto-reviewed. `review_status: false` hides "Review skipped"
+status widgets. Quota notices are **not** those widgets: on #2430
+Fair Usage arrived as `rate limited by coderabbit.ai` / `Review
+limit reached` in the summarize comment, which still fires
+`issue_comment` for the hold workflow.
 
 ## Mute while a quota window is live
 
