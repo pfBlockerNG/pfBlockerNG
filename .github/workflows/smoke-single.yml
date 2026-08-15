@@ -96,6 +96,18 @@ on:
         description: "Expected installed version for the live Nightly package. Required with smoke_nightly_live_url."
         required: false
         default: ""
+      smoke_repo_live_url:
+        description: "Live channel Pages base URL for test_install_from_live_pages_url (e.g. https://pfblockerng.github.io/pkg/stable). Blank -> SKIP."
+        required: false
+        default: ""
+      smoke_repo_expected_source_sha:
+        description: "Expected pfb_build_record source SHA for the live channel package. Required with smoke_repo_live_url."
+        required: false
+        default: ""
+      smoke_repo_expected_version:
+        description: "Expected installed version for the live channel package. Required with smoke_repo_live_url."
+        required: false
+        default: ""
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default pfBlockerNG/FreeBSD-ports). Point a pre-merge run at a ports branch carrying a new plist entry."
         required: false
@@ -195,6 +207,21 @@ on:
         default: ""
       smoke_nightly_expected_version:
         description: "Expected installed version for the live Nightly package."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_live_url:
+        description: "Live channel Pages base URL for test_install_from_live_pages_url. Blank -> SKIP."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_expected_source_sha:
+        description: "Expected pfb_build_record source SHA for the live channel package."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_expected_version:
+        description: "Expected installed version for the live channel package."
         required: false
         type: string
         default: ""
@@ -687,6 +714,11 @@ jobs:
           SMOKE_NIGHTLY_LIVE_URL: ${{ inputs.smoke_nightly_live_url }}
           SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_nightly_expected_source_sha }}
           SMOKE_NIGHTLY_EXPECTED_VERSION: ${{ inputs.smoke_nightly_expected_version }}
+          # Live channel Pages URL for test_install_from_live_pages_url (issue #2389).
+          # Unset (blank) -> the test SKIPS; set post-publish to a staged or live channel root.
+          SMOKE_REPO_LIVE_URL: ${{ inputs.smoke_repo_live_url }}
+          SMOKE_REPO_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_repo_expected_source_sha }}
+          SMOKE_REPO_EXPECTED_VERSION: ${{ inputs.smoke_repo_expected_version }}
           # Turn on the in-test hermetic egress block (after deploy, see fixture).
           SMOKE_BLOCK_EGRESS: "1"
           # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +

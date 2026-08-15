@@ -26,6 +26,13 @@ permissions:
   packages: read
   contents: read
 
+# issue #2389 / #2391: two publishes racing would both stage under docs/staging
+# and stomp each other's promote/discard — serialize the whole pipeline (stage
+# through promote) rather than just the push at the end.
+concurrency:
+  group: release-published-pkg-repo
+  cancel-in-progress: false
+
 jobs:
   # ── 0. Classify the published tag ────────────────────────────────────────
   # Everything downstream needs is derived from the tag plus its explicit channel
@@ -47,6 +54,13 @@ jobs:
       release_tag: ${{ steps.classify.outputs.tag }}
       source_repository: ${{ steps.classify.outputs.source_repository }}
       destinations: ${{ steps.classify.outputs.destinations }}
+      # issue #2389: gate-before-announce identity. channel names the job in
+      # human-readable logs (validate-live-pages-install/promote-pkg-repo below);
+      # portversion/source_sha are the expected identity the live-install gate
+      # asserts against the STAGED catalogue before anything is promoted.
+      channel: ${{ steps.classify.outputs.channel }}
+      portversion: ${{ steps.classify.outputs.portversion }}
+      source_sha: ${{ steps.classify.outputs.source_sha }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -123,6 +137,7 @@ jobs:
             echo "channel=${release_channel}"
             echo "source=${release_line}"
             echo "portversion=${portversion}"
+            echo "source_sha=${COMMIT}"
             echo "destinations=${DESTINATIONS}"
           } >> "$GITHUB_OUTPUT"
           echo "Published ${TAG}: channel=${release_channel} source=${release_line} portversion=${portversion}"
@@ -137,7 +152,7 @@ jobs:
   # that branch directly (build_type: legacy), so the push IS the deployment. See
   # scripts/publish-pkg-repo.sh, the only thing here that touches git.
   publish-pkg-repo:
-    name: Publish the pkg catalogue
+    name: Stage the pkg catalogue
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/pfblockerng/ci-runner:9
@@ -151,6 +166,19 @@ jobs:
     permissions:
       packages: read
       contents: read
+    # issue #2389: this job only STAGES (PUBLISH_STAGE: stage below) — nothing is
+    # announced under <channel>/<varver> or on the landing page until
+    # promote-pkg-repo runs the SAME script in `promote` mode, downstream of a
+    # green validate-live-pages-install. staging_prefix/touched/noop are the
+    # per-run identity that gate + promote/discard consume without re-deriving
+    # them (pin-consumed-downstream, #2387); route_matrix carries the ROUTE
+    # step's already-fetched matrix through so promote-pkg-repo never re-reads
+    # the live ci-metadata ref itself.
+    outputs:
+      staging_prefix: ${{ steps.stage.outputs.staging_prefix }}
+      touched: ${{ steps.stage.outputs.touched }}
+      noop: ${{ steps.stage.outputs.noop }}
+      route_matrix: ${{ steps.route.outputs.route_matrix }}
     steps:
       - name: Checkout pfBlockerNG (the engine + orchestration scripts — TRUSTED ref)
         uses: actions/checkout@v6
@@ -229,7 +257,8 @@ jobs:
           ROUTE_MATRIX=$(sh scripts/read-version-matrix.sh --print-route | jq -c .)
           echo "route_matrix=${ROUTE_MATRIX}" >> "$GITHUB_OUTPUT"
 
-      - name: Publish the pkg catalogue
+      - name: Stage the pkg catalogue
+        id: stage
         env:
           SOURCE_REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
           RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
@@ -238,6 +267,11 @@ jobs:
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
           BASE_URL: https://pfblockerng.github.io/pkg
+          # issue #2389: stage under docs/staging/<seg>/<channel>/<varver> instead
+          # of publishing directly — nothing is visible under <channel>/<varver>
+          # or on the landing page until promote-pkg-repo runs the SAME script in
+          # `promote` mode, after a green live-install gate.
+          PUBLISH_STAGE: stage
         # Path env vars are exported HERE, not in the env: map above — GitHub
         # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
         # there reaches the job as a literal dollar-string (issue #2231). The
@@ -248,3 +282,204 @@ jobs:
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           export ASSETS_DIR="$RUNNER_TEMP/assets"
           sh scripts/publish-pkg-repo.sh
+
+  # ── 2. Prepare the live-install gate matrix (issue #2389) ──────────────────
+  # Cross-references what STAGE actually touched (needs.publish-pkg-repo.outputs.touched)
+  # against the ci-metadata CI matrix's ci:true legs, so validate-live-pages-install below
+  # boots exactly one live VM per (destination channel, testable varver) pair this run
+  # actually changed — never the whole matrix, never a stale one. A publish that touched
+  # something untestable (no matching CI leg) or something outside the tag's own
+  # destinations (state drift between resolve and stage) fails loudly here rather than
+  # silently promoting unverified. Skipped entirely on a catalogue no-op (issue #2408):
+  # nothing staged means nothing to gate or promote.
+  prepare-live-gate:
+    name: Prepare the live-install gate matrix
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:9
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --init --user 1001:1001
+    env:
+      HOME: /tmp
+    needs: [resolve, publish-pkg-repo]
+    if: needs.publish-pkg-repo.outputs.noop != 'true'
+    permissions:
+      packages: read
+      contents: read
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      leg_count: ${{ steps.build.outputs.leg_count }}
+    steps:
+      - name: Checkout pfBlockerNG (TRUSTED ref)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: same rule as resolve/publish-pkg-repo above — pin the
+          # revision the workflow itself came from, never the released tag's tree.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the CI matrix
+        id: ci
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Build the live-install gate matrix
+        id: build
+        env:
+          DESTINATIONS: ${{ needs.resolve.outputs.destinations }}
+          TOUCHED: ${{ needs.publish-pkg-repo.outputs.touched }}
+          CI_MATRIX: ${{ steps.ci.outputs.ci_matrix }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json
+          import os
+
+          from scripts.live_gate_matrix import compute_live_gate_matrix
+
+          destinations = json.loads(os.environ["DESTINATIONS"])
+          touched = json.loads(os.environ["TOUCHED"])
+          ci_matrix = json.loads(os.environ["CI_MATRIX"])
+
+          matrix, untestable, drifted = compute_live_gate_matrix(destinations, touched, ci_matrix)
+
+          problems = False
+          if drifted:
+              print(f"::error::touched target(s) outside resolve's destinations (state drift): {drifted}")
+              problems = True
+          if untestable:
+              print(f"::error::touched target(s) with no matching CI leg to live-install-test: {untestable}")
+              problems = True
+          if not matrix:
+              print("::error::prepare-live-gate produced an empty matrix — a publish that touched nothing testable must never silently promote")
+              problems = True
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
+              fh.write(f"leg_count={len(matrix)}\n")
+
+          if problems:
+              raise SystemExit(1)
+          PY
+
+  # ── 3. Live Pages pkg install — the gate itself (issue #2389) ──────────────
+  # Installs the CANONICAL package from the STAGED catalogue (not yet visible under
+  # <channel>/<varver>) on a real pfSense VM per leg prepare-live-gate selected, and
+  # asserts its identity (source SHA + version) against what resolve classified. Only
+  # a green run here lets promote-pkg-repo move the staged tree into place.
+  validate-live-pages-install:
+    name: Live Pages install (${{ matrix.channel }} ${{ matrix.pfsense_version }})
+    needs: [resolve, publish-pkg-repo, prepare-live-gate]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare-live-gate.outputs.matrix) }}
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      pfsense_version: ${{ matrix.pfsense_version }}
+      image_name: ${{ matrix.image_name }}
+      mac: ${{ matrix.mac }}
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+      pytest_marker: repo
+      pytest_filter: test_install_from_live_pages_url
+      smoke_repo_live_url: https://pfblockerng.github.io/pkg/${{ needs.publish-pkg-repo.outputs.staging_prefix }}/${{ matrix.channel }}
+      smoke_repo_expected_source_sha: ${{ needs.resolve.outputs.source_sha }}
+      smoke_repo_expected_version: ${{ needs.resolve.outputs.portversion }}
+      # SECURITY: same trusted-ref rule as resolve/publish-pkg-repo above — the smoke
+      # harness (test code) must come from the workflow's own revision, never the
+      # released tag's tree actions/checkout otherwise defaults a `release` event to
+      # (smoke-single.yml's own checkout step documents the same default, issue #1859).
+      checkout_ref: ${{ github.workflow_sha }}
+    secrets: inherit
+
+  # ── 4. Promote the pkg catalogue — the actual announce (issue #2389) ───────
+  # This is the ONLY job that makes a publish visible: the catalogue only becomes
+  # reachable under <channel>/<varver> and the landing page only regenerates once
+  # this job runs the SAME script in `promote` mode. A red or skipped live-install
+  # gate flips PUBLISH_STAGE to `discard` instead — the staged tree is deleted and
+  # this job then fails the run (below) so nothing was silently announced.
+  promote-pkg-repo:
+    name: Promote the pkg catalogue
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/pfblockerng/ci-runner:9
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --init --user 1001:1001
+    env:
+      HOME: /tmp
+    needs: [resolve, publish-pkg-repo, prepare-live-gate, validate-live-pages-install]
+    if: always() && needs.publish-pkg-repo.result == 'success' && needs.publish-pkg-repo.outputs.noop != 'true'
+    permissions:
+      packages: read
+      contents: read
+    steps:
+      - name: Checkout pfBlockerNG (the engine + orchestration scripts — TRUSTED ref)
+        uses: actions/checkout@v6
+        with:
+          # SECURITY: same rule as resolve/publish-pkg-repo above — pin the
+          # revision the workflow itself came from, never the released tag's tree.
+          ref: ${{ github.workflow_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Generate GitHub App token (pkg)
+        id: app-token
+        # Same App/token shape as the stage job above — this job pushes the
+        # promote (or discard) commit, so it needs its own fresh token.
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-contents: write
+
+      - name: Checkout pfBlockerNG/pkg
+        uses: actions/checkout@v6
+        with:
+          repository: pfBlockerNG/pkg
+          ref: main
+          token: ${{ steps.app-token.outputs.token }}
+          persist-credentials: true # publish-pkg-repo.sh pushes via this token
+          path: pkg-repo
+          fetch-depth: 1
+
+      - name: Promote or discard the staged pkg catalogue
+        env:
+          SOURCE_REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
+          RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          DESTINATIONS: ${{ needs.resolve.outputs.destinations }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          ROUTE_MATRIX: ${{ needs.publish-pkg-repo.outputs.route_matrix }}
+          BASE_URL: https://pfblockerng.github.io/pkg
+          STAGING_PREFIX: ${{ needs.publish-pkg-repo.outputs.staging_prefix }}
+          # promote iff BOTH the matrix-prep and every live-install leg it fanned
+          # out over came back green; anything else (a red leg, a red prep, a
+          # cancelled run reaching here via always()) discards the staged tree.
+          PUBLISH_STAGE: ${{ (needs.prepare-live-gate.result == 'success' && needs.validate-live-pages-install.result == 'success') && 'promote' || 'discard' }}
+          # Diagnostics only — which channel/how many gated legs this run is
+          # promoting or discarding.
+          CHANNEL: ${{ needs.resolve.outputs.channel }}
+          LEG_COUNT: ${{ needs.prepare-live-gate.outputs.leg_count }}
+        # Path env vars are exported HERE, not in the env: map above — GitHub
+        # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
+        # there reaches the job as a literal dollar-string (issue #2231). The
+        # run body is where a shell expands the container-translated value.
+        run: |
+          set -eu
+          echo "PUBLISH_STAGE=${PUBLISH_STAGE} channel=${CHANNEL} gated_legs=${LEG_COUNT:-0}"
+          export PFB_SRC="$GITHUB_WORKSPACE"
+          export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
+          sh scripts/publish-pkg-repo.sh
+          if [ "$PUBLISH_STAGE" = discard ]; then
+            echo "::error::live Pages install gate failed — staging discarded, nothing announced"
+            exit 1
+          fi

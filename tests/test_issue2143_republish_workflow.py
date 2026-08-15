@@ -16,11 +16,17 @@ from _workflow_steps import extract_step
 REPUBLISH = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
 PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
 
-# Per-workflow forwarded VALUE expressions for the "Publish the pkg catalogue"
-# step's identity keys — release-published.yml resolves them from the
-# `resolve` job's outputs, pkg-republish.yml from its own dispatch inputs plus
-# the ambient repository. A key-name-only assertion would still pass if either
-# were forwarded from the WRONG source.
+# Per-workflow forwarded VALUE expressions for the pkg-catalogue-dispatch step's
+# identity keys — release-published.yml resolves them from the `resolve` job's
+# outputs, pkg-republish.yml from its own dispatch inputs plus the ambient
+# repository. A key-name-only assertion would still pass if either were
+# forwarded from the WRONG source. release-published.yml renamed its step
+# "Stage the pkg catalogue" (issue #2389: gate-before-announce); pkg-republish.yml's
+# is untouched and stays "Publish the pkg catalogue".
+_STEP_NAMES = {
+    PUBLISHED: "Stage the pkg catalogue",
+    REPUBLISH: "Publish the pkg catalogue",
+}
 _IDENTITY_VALUES = {
     PUBLISHED: {
         "SOURCE_REPOSITORY": "${{ needs.resolve.outputs.source_repository }}",
@@ -47,9 +53,9 @@ def test_manual_republish_requires_exact_release_identity() -> None:
 def test_republish_and_published_callbacks_forward_exact_run_identity() -> None:
     # The retired `gh workflow run publish.yml -f <name>=<value>` dispatch was replaced
     # by an in-repo job that forwards the same identity via env vars on the
-    # "Publish the pkg catalogue" step.
+    # pkg-catalogue-dispatch step (see _STEP_NAMES).
     for workflow, expected in _IDENTITY_VALUES.items():
-        step = extract_step(workflow, "Publish the pkg catalogue")
+        step = extract_step(workflow, _STEP_NAMES[workflow])
         for key, value in expected.items():
             assert f"{key}: {value}" in step
         assert f"SOURCE_RUN_ID: {_SOURCE_RUN_ID_VALUE}" in step

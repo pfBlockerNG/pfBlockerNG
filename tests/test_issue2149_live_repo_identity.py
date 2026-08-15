@@ -21,6 +21,17 @@ def test_smoke_single_exposes_nightly_provenance_inputs() -> None:
     assert "SMOKE_NIGHTLY_EXPECTED_VERSION: ${{ inputs.smoke_nightly_expected_version }}" in workflow
 
 
+def test_smoke_single_exposes_repo_live_inputs() -> None:
+    """Actions callers can supply the generic-channel live-install inputs (issue #2389)
+    release-published.yml's validate-live-pages-install job feeds."""
+    workflow = (Path(__file__).parents[1] / ".github/workflows/smoke-single.yml").read_text()
+    for name in ("smoke_repo_live_url", "smoke_repo_expected_source_sha", "smoke_repo_expected_version"):
+        assert workflow.count(f"      {name}:") == 2
+    assert "SMOKE_REPO_LIVE_URL: ${{ inputs.smoke_repo_live_url }}" in workflow
+    assert "SMOKE_REPO_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_repo_expected_source_sha }}" in workflow
+    assert "SMOKE_REPO_EXPECTED_VERSION: ${{ inputs.smoke_repo_expected_version }}" in workflow
+
+
 @pytest.mark.parametrize(
     ("actual_version", "record", "message"),
     [
