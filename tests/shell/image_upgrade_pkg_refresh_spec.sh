@@ -85,4 +85,10 @@ Describe 'image-upgrade.sh publish decision after a package apply'
     The status should be success
     The output should equal 'run-os'
   End
+
+  It 'fail-closes when apply succeeded but the version probe is empty'
+    When call run_decision 1 26.07 '' 1
+    The status should be success
+    The output should equal 'fail-closed'
+  End
 End

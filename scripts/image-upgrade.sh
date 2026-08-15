@@ -445,6 +445,11 @@ pfb_publish_decision() {
     _old=$2
     _post=$3
     _current=$4
+    if [ "$_pkg" -eq 1 ] && [ -z "$_post" ]; then
+        # Verified apply but no version string — do not publish OLD_VER as a guess.
+        printf '%s\n' fail-closed
+        return 0
+    fi
     if [ "$_pkg" -eq 1 ] && [ -n "$_post" ] && [ "$_post" != "$_old" ]; then
         printf '%s\n' skip-os
         return 0
@@ -766,6 +771,9 @@ fi
 _decision=$(pfb_publish_decision "${PKG_WAS_UPGRADED}" "${OLD_VER}" "${_post_pkg_ver}" "${_check_current}")
 SKIP_OS_UPGRADE=0
 NEW_VER=""
+if [ "$_decision" = fail-closed ]; then
+    die "post-apply version probe empty; not publishing a guess at '${OLD_VER}'"
+fi
 if [ "$_decision" = nothing-to-publish ]; then
     log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
     exit 0
