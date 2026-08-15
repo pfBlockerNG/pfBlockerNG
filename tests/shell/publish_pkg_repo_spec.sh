@@ -389,16 +389,15 @@ JSON
   End
 
   # --- leftover dest autoindex from a rejected push (issue #2407) -----------
-  # checkout -B restores tracked files but leaves an untracked dest index
-  # from a previous attempt. A site-wide find of every docs/**/index.html
-  # would stage that leftover without its .pkgs. These examples plant the
-  # leftover before the script runs; the commit must not include it. The
-  # file may be cleaned (git clean -fd -- docs) or stay untracked — either
-  # is correct. G1 debris/README stay uncommitted. Re-introducing an
-  # unscope find that still walks leftover dests turns the first example
-  # RED if the leftover survives into landing_regen_and_stage.
+  # Dual defense: `git clean -fd -- docs` after checkout -B, and dest
+  # autoindex staging via `git ls-files` (already-tracked only), never a
+  # site-wide find. Each pin below is independent — dropping only one
+  # defense must turn that pin RED.
 
-  It 'does not stage an untracked leftover dest autoindex from a previous rejected push'
+  It 'cleans an untracked leftover dest autoindex off disk after checkout -B'
+    # Clean pin: leftover must not exist on disk after ADVANCE. Dropping
+    # `git clean -fd -- docs` leaves the untracked dest (ls-files will not
+    # stage it) and this example goes RED. G1 debris/README stay uncommitted.
     mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
     printf 'orphan autoindex\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
     echo dirty >> "${base}/pkg-repo/README.txt"
@@ -409,6 +408,7 @@ JSON
     The status should equal 0
     The output should include 'ADVANCE'
     The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/nightly/ce-2.8/index.html" should not be exist
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
     The variable committed should not include 'docs/nightly/ce-2.8/index.html'
     The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
@@ -421,7 +421,9 @@ JSON
     The variable porcelain should include 'debris.txt'
   End
 
-  It 'does not stage leftover dest payload next to an orphan autoindex'
+  It 'cleans leftover dest payload next to an orphan autoindex and never tracks it'
+    # Clean pin for the leftover .pkg as well: both paths gone from disk.
+    # marker.pkg must also stay out of the commit and the index.
     mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
     printf 'orphan autoindex\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
     printf 'leftover\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/marker.pkg"
@@ -431,11 +433,37 @@ JSON
     The status should equal 0
     The output should include 'ADVANCE'
     The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/nightly/ce-2.8/index.html" should not be exist
+    The path "${base}/pkg-repo/docs/nightly/ce-2.8/marker.pkg" should not be exist
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
     The variable committed should not include 'docs/nightly/ce-2.8/index.html'
     The variable committed should not include 'docs/nightly/ce-2.8/marker.pkg'
     tracked_leftover="$(git_fixture -C "${base}/pkg-repo" ls-files -- docs/nightly/ce-2.8)"
     The variable tracked_leftover should equal ''
+  End
+
+  It 'stages a rewrite of an already-tracked dest autoindex that this run did not touch'
+    # ls-files dest-level pin: origin already tracks docs/nightly/ce-2.8/index.html
+    # and this run only touches edge/ce-2.8. gen_landing rewrites every existing
+    # dest autoindex; only the ls-files dest-index stage picks this one up.
+    # Dropping that stage leaves the rewrite unstaged and this example goes RED,
+    # even if git clean remains (the file is tracked, so clean cannot remove it).
+    # Distinct from the touched-channel docs/edge/index.html rewrite below.
+    mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
+    printf 'old dest index\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/nightly/ce-2.8/index.html \
+        && git_fixture commit -q -m preseed-nightly-dest-index \
+        && git_fixture push -q origin main )
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
+    The variable committed should include 'docs/nightly/ce-2.8/index.html'
+    rewritten="$(git_fixture -C "${base}/pkg-repo" show HEAD:docs/nightly/ce-2.8/index.html)"
+    The variable rewritten should equal 'autoindex stub: nightly/ce-2.8'
   End
 
   It 'still stages a rewrite of an already-tracked channel autoindex'
