@@ -63,7 +63,7 @@ The five-minute "drop CodeRabbit on quota" rule is **retired**. Full path:
 Judge availability per-PR with **10-minute acknowledgement window** anchored on PR's creation time, polled via `scripts/agent/wait-reviewer.sh --until ack` (self-exiting; result file's LAST line is verdict). PR already older than 10 minutes with no CodeRabbit message → conclude NOACK immediately.
 
 - **ACK is a real review** (finished body or inline review on the head SHA) → wait for `--until finished` if not already terminal, then triage.
-- **ACK is only a quota notice** → do **not** drop. Parse "Next review available in", wait `N + 30s` (self-terminating, [`waits.md`](waits.md)), then **one** `@coderabbitai review`. Never nudge while that countdown is live. A second quota notice after that nudge: wait that window once more, then record a miss. Details in coderabbit.md.
+- **ACK is only a quota notice** → do **not** drop. Apply `cr-hold` to every **other** open PR immediately (stops quota-notice spam). Parse "Next review available in", wait `N + 30s` (self-terminating, [`waits.md`](waits.md)), remove `cr-hold` from **this** PR only, then **one** `@coderabbitai review`. Never nudge while that countdown is live. Details in coderabbit.md.
 - **NOACK** → nudge **once** (`@coderabbitai review`), then re-run ack wait with a fresh 10-minute window anchored on *now* (`--since`). Still silent → CodeRabbit unavailable; three-leg carries the review step. Never a second no-ack nudge.
 - **Spend:** after a finished review, do not `@coderabbitai review` for format-only / comment-only / mechanical APPLY. Every quota notice triggers the spend inspection in coderabbit.md before the next PR opens.
 

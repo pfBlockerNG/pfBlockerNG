@@ -17,8 +17,12 @@ reviews:
     ignore_title_keywords:
       - "WIP"
       - "[skip review]"
+    # !label = skip auto-review. cr-hold is the Fair Usage mute
+    # (quota notices otherwise land on every open PR). WIP stays
+    # for unfinished work. See .agents/policy/coderabbit.md.
     labels:
       - "!WIP"
+      - "!cr-hold"
 
   path_filters:
     # Documentation and historical artifacts.
