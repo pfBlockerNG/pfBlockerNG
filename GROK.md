@@ -22,6 +22,11 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 - Reviews use an independent spawned reviewer per `.agents/policy/landing.md`.
   Grok has no in-repo custom-agent files; spawn `general-purpose` (or `explore` /
   `plan`) rather than inventing a fourth role tree.
+- Ticket work loads `.agents/policy/workflow.md` and `.agents/policy/issues.md`.
+  Correlated work hangs off one parent ticket (native sub-issues). Claim/WIP by
+  assigning the issue to yourself before any edit (`gh issue edit N --add-assignee @me`);
+  native assignee replaced the `WIP` label. Wayfinder-labelled tickets use the
+  wayfinder skill; do not invent a second map.
 
 ## Communication
 

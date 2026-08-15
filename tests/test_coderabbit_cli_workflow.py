@@ -15,5 +15,8 @@ def test_cli_workflow_is_dispatch_only() -> None:
     assert "CODERABBIT_API_KEY" in text
     assert "coderabbit_cli_report.py" in text
     assert " --agent" in text
+    assert 'pull/${{ inputs.pr }}/head' in text
+    assert "gh pr checkout" not in text
+    assert "GH_TOKEN: ${{ github.token }}" in text
     assert "gh pr comment" not in text
     assert "rate limit" not in text.lower()

@@ -37,7 +37,12 @@ jobs:
       - name: Check out the pull request
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh pr checkout "${{ inputs.pr }}"
+        run: |
+          # pull/N/head survives branch deletion after rebase-merge.
+          # persist-credentials is false, so fetch via the job token.
+          git fetch "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            "pull/${{ inputs.pr }}/head"
+          git checkout --detach FETCH_HEAD
       - name: Install CodeRabbit CLI
         run: |
           curl -fsSL https://cli.coderabbit.ai/install.sh | sh
@@ -45,6 +50,7 @@ jobs:
       - name: Run CLI review
         env:
           CODERABBIT_API_KEY: ${{ secrets.CODERABBIT_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           BASE=$(gh pr view "${{ inputs.pr }}" --json baseRefName --jq .baseRefName)

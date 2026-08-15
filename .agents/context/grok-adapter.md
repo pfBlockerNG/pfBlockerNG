@@ -39,5 +39,9 @@ Grok specifics:
   skipped. Skills already discovered from `.agents/skills/` — do not copy them
   under `.grok/skills/`.
 - **Reviews** use an independent spawned reviewer per `.agents/policy/landing.md`.
+- **Tickets:** load [`workflow.md`](../policy/workflow.md) and
+  [`issues.md`](../policy/issues.md). Parent ticket coordinates correlated work
+  (native sub-issues). WIP is the assignee, not a label — `gh issue edit N
+  --add-assignee @me` before any work. Wayfinder issues use the wayfinder skill.
 - `work-branch.sh --worktree` resolve primary checkout from session worktree exactly
   as for other clients.
