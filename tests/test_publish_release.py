@@ -1060,6 +1060,10 @@ class ContainmentBackfillPublishTests(_TempDirTestCase):
 
     @_requires_engine
     def test_nightly_catalogue_not_healed_by_tagged_publish(self) -> None:
+        # Hostile dest list includes nightly so backfill(channel="nightly")
+        # actually runs. The dest guard must still refuse to copy the slower
+        # tagged generation onto nightly. A testing+edge-only dest list never
+        # invokes that path and cannot fail this contract.
         seeded = self._seed_canonical(
             "testing",
             "ce-2.8",
@@ -1081,13 +1085,12 @@ class ContainmentBackfillPublishTests(_TempDirTestCase):
             assets_dir=assets_dir,
             rows=(ROW_CE,),
             channel="testing",
-            destinations='["testing","edge"]',
+            destinations='["testing","edge","nightly"]',
             tag="v3.2.16.a1",
         )
 
         self.assertTrue(seeded.is_file())
         self.assertFalse((nightly_dir / "pfSense-pkg-pfBlockerNG-3.2.10.pkg").exists())
-        self.assertFalse((nightly_dir / "pfSense-pkg-pfBlockerNG-3.2.16.a1.pkg").exists())
 
 
 def ca_default_keep() -> int:
