@@ -4,8 +4,8 @@ The generator turns a built four-channel catalogue tree (stable/testing/edge/nig
 issue #2147) into a styled index: channel install cards, a Version x ABI table read
 from each .pkg manifest, and per-dir listings that show packages but hide pkg(8) catalog
 plumbing. Most cases inject the manifest reader or exercise pure render helpers. The
-record-epoch HTML pin (issue #2401) builds a real libpkg fixture so the listing
-and landing rows cannot stay green behind a stubbed reader.
+record-epoch HTML pin (issue #2401) builds a real libpkg fixture for the listing
+and landing rows.
 """
 
 from __future__ import annotations
@@ -345,15 +345,12 @@ def test_artifact_epoch_prefers_created_then_record_then_mtime() -> None:
     ) == float(_RECORD_EPOCH)
     assert gl.artifact_epoch({"annotations": {"created": "1e309"}}, float(_FILE_MTIME)) == float(_FILE_MTIME)
     assert gl.artifact_epoch({}, float(_FILE_MTIME)) == float(_FILE_MTIME)
+    assert gl.artifact_epoch({"annotations": ["not", "a", "map"]}, float(_FILE_MTIME)) == float(_FILE_MTIME)
+    assert gl.artifact_epoch({"annotations": "created=1"}, float(_FILE_MTIME)) == float(_FILE_MTIME)
 
 
 def test_published_datetime_and_display_epoch_share_artifact_epoch(tmp_path: Path, monkeypatch: Any) -> None:
-    """Mutating the shared resolver must move BOTH surfaces (issue #2401).
-
-    Today a copy lives in published_datetime and another in _display_epoch, so
-    changing only the table path leaves the listing green. After the share, a
-    stubbed artifact_epoch is what both callers format / return.
-    """
+    """Both display surfaces call artifact_epoch (issue #2401)."""
     src_pub = inspect.getsource(gl.published_datetime)
     src_disp = inspect.getsource(gl._display_epoch)
     assert "artifact_epoch(" in src_pub
@@ -407,11 +404,10 @@ def test_catalog_pkg_keeps_mtime_when_manifest_reader_returns_record(tmp_path: P
 
 
 def test_write_site_record_only_pkg_drives_listing_and_landing(tmp_path: Path, monkeypatch: Any) -> None:
-    """A real compact-manifest fixture (record only, no created/commit) drives write_site.
+    """A real record-only compact-manifest fixture drives write_site (issue #2401).
 
     The cell listing and the landing Published / Commit cells show the record
-    epoch / source_sha, not the file mtime. read_compact_manifest is not stubbed
-    — that is how #2375's acceptance escaped.
+    epoch / source_sha, not the file mtime.
     """
     site, cell = _record_only_cell(tmp_path / "site")
     # Prove the archive is a real record-only compact manifest before rendering.

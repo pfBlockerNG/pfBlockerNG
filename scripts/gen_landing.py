@@ -129,7 +129,10 @@ def _build_record(manifest: dict) -> dict:
     bare ``created``/``commit`` annotations (issue #2375), so the record is the one
     place a published .pkg actually carries its source epoch and SHA.
     """
-    raw = (manifest.get("annotations") or {}).get("pfb_build_record")
+    annotations = manifest.get("annotations")
+    if not isinstance(annotations, dict):
+        return {}
+    raw = annotations.get("pfb_build_record")
     if not raw:
         return {}
     try:
@@ -145,7 +148,9 @@ def artifact_epoch(manifest: dict, mtime: float) -> float:
     Shared by the landing table (``published_datetime``) and the autoindex
     (``_display_epoch``) so the two surfaces cannot drift (issue #2401).
     """
-    annotations = manifest.get("annotations") or {}
+    annotations = manifest.get("annotations")
+    if not isinstance(annotations, dict):
+        annotations = {}
     for epoch in (annotations.get("created"), _build_record(manifest).get("source_date_epoch")):
         if epoch is None:
             continue
