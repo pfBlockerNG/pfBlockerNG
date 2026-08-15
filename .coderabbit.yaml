@@ -1,14 +1,57 @@
-# CodeRabbit configuration. Keep automated review focused on maintained code,
-# tests, and tooling; documentation/history and copied third-party content do
-# not produce actionable findings here.
+# CodeRabbit configuration.
+#
+# Reviews are beneficial and stay advisory (they never gate merge). Each
+# automatic incremental review still spends one Fair Usage slot, so keep
+# auto-review on the first look plus one follow-up, then pause. Nudge with
+# `@coderabbitai review` only when product behaviour changed after that.
+# See .agents/policy/landing.md "CodeRabbit availability".
 reviews:
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+    # Default is 5. Format-only / review-fix pushes on an active PR were
+    # burning the hourly allowance before the next product PR opened.
+    auto_pause_after_reviewed_commits: 2
+    ignore_title_keywords:
+      - "WIP"
+      - "[skip review]"
+    labels:
+      - "!WIP"
+
   path_filters:
     # Documentation and historical artifacts.
     - "!**/*.md"
     - "!docs/**"
     - "!legacy/**"
-    # Vendored agent content and bundled web dependencies.
-    - "!.agents/skills/**"
+    # Agent policy and vendored content.
+    - "!.agents/**"
     - "!.claude/skills/**"
     - "!plugins/**"
     - "!src/usr/local/www/pfblockerng/vendor/**"
+
+  path_instructions:
+    - path: ".github/workflows/**"
+      instructions: >-
+        Fail closed on missing package artifacts. Upload and download
+        artifact actions must share one major. Do not invent undeclared
+        workflow_call inputs. Nightly BUILD must clone ports at the
+        prepare SHA, not PORTS_REF.
+    - path: "scripts/publish*.py"
+      instructions: >-
+        Destination folder is not pfb_build_record.channel after
+        containment fan-out: record.channel stays the tag primary.
+        extra_pkgs attach and evict by ROUTE row, not ABI alone.
+        Nightly destinations never mix with tagged dests.
+    - path: "scripts/catalogue_assembly.py"
+      instructions: >-
+        Backfill copies slower tagged channels onto faster dests before
+        prune. Nightly is neither a source nor a dest. Undeclared extra
+        .pkgs on a dest this run targets must be unlinked before
+        regenerate.
+    - path: "tests/**"
+      instructions: >-
+        A negative assertion needs a fixture that can fail it. Do not
+        treat ABI-only dest isolation as extra_pkgs row-scope coverage.
+        Do not monkeypatch the production reader a write_site date pin
+        is supposed to exercise.
