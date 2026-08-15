@@ -400,16 +400,34 @@ def _manual_conf_details(conf_fn: Callable[[str], str], channel: str) -> str:
     )
 
 
-def _bootstrap_install(base: str, channel: str) -> str:
-    """A channel's unified command: the bootstrap one-liner + its `pkg install`.
+def _bootstrap_new_install(base: str, channel: str) -> str:
+    """File-form bootstrap + repo-qualified install for a clean box (issues #2381, #2390).
 
-    All four channels install the SAME canonical package (issue #2147) — `--channel
-    <ch>` selects the catalogue, uniformly across every card (not a nightly-only flag).
+    On-disk ``fetch`` then ``sh /tmp/add-repo.sh``, joined with ``&&`` so a failed
+    subscribe does not run ``pkg install``. ``-r pfblockerng-<channel>`` so the
+    install cannot resolve against Netgate. The pipe form (``fetch | sh -s``) is
+    not the published recipe: some ash builds re-read a function-body heredoc
+    from current stdin at call time.
     """
     return (
-        f"fetch -qo - {base}/add-repo.sh \\\n"
-        f"  | sh -s -- --base-url {base} --channel {channel}\n"
-        f"pkg install {CANONICAL_EMITTED_IDENTITY}"
+        f"fetch -qo /tmp/add-repo.sh {base}/add-repo.sh &&\n"
+        f"sh /tmp/add-repo.sh --base-url {base} --channel {channel} &&\n"
+        f"pkg install -y -r pfblockerng-{channel} {CANONICAL_EMITTED_IDENTITY}"
+    )
+
+
+def _bootstrap_existing_install(base: str, channel: str) -> str:
+    """File-form bootstrap + migrate-channel for an already-installed package.
+
+    ``pkg install`` does not move an existing ``pfSense-pkg-pfBlockerNG`` (or
+    leftover ``-devel`` / suffixed identity) onto the new repository. Existing
+    installs must run migrate-channel.sh after add-repo (issue #2381).
+    """
+    return (
+        f"fetch -qo /tmp/add-repo.sh {base}/add-repo.sh &&\n"
+        f"sh /tmp/add-repo.sh --base-url {base} --channel {channel} &&\n"
+        f"fetch -qo /tmp/migrate-channel.sh {base}/migrate-channel.sh &&\n"
+        f"sh /tmp/migrate-channel.sh --channel {channel}"
     )
 
 
@@ -456,18 +474,27 @@ _CARD_META: dict[str, dict[str, str]] = {
 
 
 def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    """One channel's install card: audience prose + the unified bootstrap/install command
-    + a collapsed manual-conf snippet. Every channel installs the ONE canonical package
-    (issue #2147) — channel is catalogue placement, never a name suffix."""
+    """One channel's install card: audience prose, and — only when published —
+    the new-install recipe, the existing-install migrate path, and a collapsed
+    manual-conf snippet. An unpublished channel keeps title/badge/blurb/"not yet
+    published" and ships no add-repo / pkg install / conf snippet (issue #2382)."""
     meta = _CARD_META[channel]
     badge = f" {meta['badge']}" if meta["badge"] else ""
-    return (
+    body = (
         f'<div class="card {channel}"><h3>{meta["title"]}{badge}</h3>'
         f'<p class="ver">{_ver_or_empty(latest, channel)}</p>'
         f'<p class="blurb">{meta["blurb"]}</p>'
-        f"{_copyable(_esc(_bootstrap_install(base, channel)))}"
-        f"{_manual_conf_details(conf_fn, channel)}</div>"
     )
+    if latest.get(channel):
+        devel = f"{CANONICAL_EMITTED_IDENTITY}-devel"
+        body += (
+            '<p class="blurb">New install:</p>'
+            f"{_copyable(_esc(_bootstrap_new_install(base, channel)))}"
+            f'<p class="blurb">Existing install (Netgate or leftover <code>{_esc(devel)}</code>):</p>'
+            f"{_copyable(_esc(_bootstrap_existing_install(base, channel)))}"
+            f"{_manual_conf_details(conf_fn, channel)}"
+        )
+    return f"{body}</div>"
 
 
 def _is_wildcard_abi(abi: str) -> bool:

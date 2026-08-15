@@ -6,10 +6,12 @@
 # edition/version, runs the hook once to resolve the conf now, then runs
 # `pkg update` and VERIFIES the package is visible from the channel's repo —
 # after which
-#   pkg install pfSense-pkg-pfBlockerNG   (or -y, no -f, no -r)
-# resolves deps and installs the pfBlockerNG build, and the stock
-# webConfigurator Install pulls it too via cross-repo resolution (ADR §2;
-# install is not repo-locked). Invocation forms: see --help.
+#   pkg install -y -r pfblockerng-<channel> pfSense-pkg-pfBlockerNG
+# resolves deps and installs the pfBlockerNG build from THIS channel. A box
+# that already has any pfSense-pkg-pfBlockerNG* (Netgate, -devel, leftover
+# suffix) must run migrate-channel.sh --channel <ch> instead — a bare
+# `pkg install` is a no-op on an already-installed name and will not move
+# %R. Invocation forms: see --help.
 #
 # WHY A HOOK DOES THE DETECTION: a pfSense OS upgrade can change the box's
 # edition/version (which moves the catalog subtree). The rc.d hook
@@ -33,7 +35,10 @@
 #   the box, reporting each removal — but only AFTER the new channel's catalogue is
 #   proven to serve this box, so a channel with no build for this edition/version
 #   can never strand a box by taking its working subscription with it. A run that
-#   fails leaves the repository configuration exactly as it found it.
+#   fails BEFORE the new catalogue verifies leaves the repository configuration
+#   exactly as it found it. AFTER verify, an interrupt keeps the proven new conf
+#   (peer retirement is one-way — restoring deleted peers would re-enable two
+#   equal-priority project repos).
 #
 #   Moving FORWARD is: re-run with the new `--channel`, then upgrade normally —
 #   ordinary `pkg` resolution applies only when the target version is higher
@@ -45,14 +50,10 @@
 #   (`pfSense-pkg-pfBlockerNG-devel`, `-nightly`) onto a channel is the job of the
 #   sibling `migrate-channel.sh`; this script configures repositories only.
 #
-#   LEGACY (unchanged; still the behaviour with NO argument): sets up the RELEASE
-#   repo `pfblockerng` — one shared catalog carrying BOTH the stable and devel
-#   packages, exactly like Netgate ships `pfSense-pkg-pfBlockerNG` and `-devel`
-#   from its single `pfSense` repo (the two packages CONFLICT — install one, see
-#   --help). `--channel release` is REJECTED — release is this legacy default,
-#   not one of the four channel names.
+#   `--channel` is REQUIRED (stable|testing|edge|nightly). There is no default:
+#   the old implicit `release/` tree is unpublished and `--channel release` is
+#   rejected. `--nightly` stays the alias for `--channel nightly`.
 #
-#   default                       -> conf pfblockerng.conf,          repo `pfblockerng`          (legacy release)
 #   --nightly / --channel nightly -> conf pfblockerng-nightly.conf,  repo `pfblockerng-nightly`
 #   --channel stable              -> conf pfblockerng-stable.conf,   repo `pfblockerng-stable`
 #   --channel testing             -> conf pfblockerng-testing.conf,  repo `pfblockerng-testing`
@@ -80,6 +81,12 @@
 #                     redirect conf/hook writes to a temp dir.
 #   PKG_BIN           pkg binary path (default: /usr/local/sbin/pkg); override
 #                     in tests to stub out pkg.
+#   PFB_ADD_REPO_RETIRE_HOOK
+#                     test-only: command run once after the first peer conf is
+#                     removed (used to inject SIGINT after retirement).
+#   PFB_ADD_REPO_DONE_HOOK
+#                     test-only: command run after drop_conf_backup (used to
+#                     inject SIGINT after a successful switch).
 
 set -eu
 
@@ -110,7 +117,7 @@ HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
 pfb_emit_embedded_hook() {
     # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by gen_landing.py at website-build time.
     printf 'add-repo: no embedded hook in this copy. Run from a checkout, or use the\n' >&2
-    printf '  published one-file bootstrap: fetch -qo - %s/add-repo.sh | sh\n' "${DEFAULT_BASE_URL}" >&2
+    printf '  published one-file bootstrap: fetch -qo /tmp/add-repo.sh %s/add-repo.sh && sh /tmp/add-repo.sh --channel <ch>\n' "${DEFAULT_BASE_URL}" >&2
     return 1
     # PFB_EMBED_HOOK_END
 }
@@ -122,7 +129,7 @@ CONF_PRIORITY=100
 # The marker the hook writes as the conf's first line (the verify target).
 CONF_MARKER="Generated at boot by pfblockerng_repo_generate"
 
-CHANNEL="release"
+CHANNEL=""
 PRINT_CONF=0
 BASE_URL="$DEFAULT_BASE_URL"
 CATALOG_PATH=""
@@ -135,32 +142,35 @@ Usage:
   add-repo.sh --channel stable|testing|edge|nightly
                                              subscribe to that channel, pkg update, verify
   add-repo.sh --nightly                      alias for --channel nightly
-  add-repo.sh                                legacy: the pre-channel shared release repo
   add-repo.sh --print-conf --channel <ch> --catalog-path <varver>
                                              print the repo conf to stdout and exit (no writes)
-  add-repo.sh --base-url <url> [--channel <ch>]
+  add-repo.sh --base-url <url> --channel <ch>
                                              override the catalog base (forks/staging)
+
+--channel is required (stable, testing, edge, or nightly). There is no default:
+the old implicit release/ tree is unpublished. --channel release is rejected.
 
 A box subscribes to EXACTLY ONE project channel repository: every channel serves the
 same canonical package at the same priority, and each channel's catalogue strictly
 contains its slower channels' files, so one repository is always sufficient.
 Subscribing therefore retires any other pfBlockerNG channel conf on the box.
 
-After subscribing, install the one canonical package:
-  pkg install pfSense-pkg-pfBlockerNG
+After subscribing:
+  New install:
+    pkg install -y -r pfblockerng-<channel> pfSense-pkg-pfBlockerNG
+  Existing install (Netgate, pfSense-pkg-pfBlockerNG-devel, or any leftover suffix):
+    migrate-channel.sh --channel <channel>
 
-To move to another channel, re-run with the new --channel and upgrade. Moving BACK to
-an older build is an explicit repository-qualified operation, e.g.
+To move to another channel, re-run with the new --channel then migrate-channel.sh.
+Moving BACK to an older build is an explicit repository-qualified operation, e.g.
   pkg install -f -r pfblockerng-edge pfSense-pkg-pfBlockerNG-<older-version>
 USAGE
 }
 
 # ── Arg parsing ────────────────────────────────────────────────────────────────
-# The channel is a FLAG, not a positional: default is the legacy release repo;
-# --channel <stable|testing|edge|nightly> selects a four-channel repo (issue #2147)
-# and --nightly stays the alias for --channel nightly. (The legacy release repo has
-# no stable/devel switch — both live in it; you pick the package at `pkg install`
-# time.)
+# The channel is a FLAG, not a positional. --channel is required
+# (stable|testing|edge|nightly); --nightly stays the alias for --channel nightly.
+# There is no implicit release default (issue #2384).
 while [ $# -gt 0 ]; do
     case "$1" in
         --nightly)      CHANNEL="nightly"; shift ;;
@@ -180,13 +190,16 @@ while [ $# -gt 0 ]; do
             BASE_URL="$2"; shift 2 ;;
         -h|--help)      usage; exit 0 ;;
         -*) printf 'add-repo: unknown option: %s (see --help)\n' "$1" >&2; exit 2 ;;
-        *)  printf 'add-repo: unexpected argument '\''%s'\'' — the channel is a flag (--nightly / --channel); the release repo is the default. See --help.\n' "$1" >&2; exit 2 ;;
+        *)  printf 'add-repo: unexpected argument '\''%s'\'' — the channel is a flag (--nightly / --channel). See --help.\n' "$1" >&2; exit 2 ;;
     esac
 done
 
+[ -n "${CHANNEL}" ] || {
+    printf 'add-repo: --channel is required (stable, testing, edge, or nightly); there is no default\n' >&2
+    exit 2
+}
+
 # ── Per-channel identity ───────────────────────────────────────────────────────
-# release (default) -> repo `pfblockerng`,          conf pfblockerng.conf,          `release/` subtree (legacy)
-#                      carries BOTH pfSense-pkg-pfBlockerNG (stable) and ...-devel
 # nightly           -> repo `pfblockerng-nightly`,  conf pfblockerng-nightly.conf,  `nightly/` subtree
 # stable            -> repo `pfblockerng-stable`,   conf pfblockerng-stable.conf,   `stable/` subtree
 # testing           -> repo `pfblockerng-testing`,  conf pfblockerng-testing.conf,  `testing/` subtree
@@ -195,8 +208,9 @@ done
 # `pfSense-pkg-pfBlockerNG` identity — channel is catalogue placement, not a
 # package-name suffix (the `-nightly` spelling is a native ports RECIPE name; the
 # published nightly artifact is canonical). PKG_NAMES: the package(s) the verify
-# step checks + the install hints printed. Only the legacy release repo carries
-# two; every channel repo carries exactly the canonical one.
+# step checks. Every channel repo carries exactly the canonical one. The legacy
+# `release` identity is kept only so an already-on-disk pfblockerng.conf can
+# still be named in PROJECT_CONFS for retirement; --channel release is rejected.
 case "$CHANNEL" in
     release)
         REPO_NAME="pfblockerng"
@@ -317,12 +331,13 @@ fi
 printf '==> Staging %s conf at %s (hook will resolve it)\n' "${CHANNEL}" "${CONF_PATH}"
 printf '# pfBlockerNG %s repo conf — pending boot-time generation (ADR-39).\n' "${CHANNEL}" > "${CONF_PATH}"
 
-# Undo everything THIS run did to the repository configuration, so a failed bootstrap
-# leaves the box exactly as it found it: a conf this run created is removed, and a conf
-# it truncated is restored byte-for-byte. Either way the box keeps a working
-# subscription — losing one is the destruction this ordering exists to prevent.
-# $1 = exit status (default 1; the signal trap passes 130).
+# Undo everything THIS run did to the repository configuration, so a failed
+# bootstrap BEFORE verify leaves the box exactly as it found it: a conf this
+# run created is removed, and a conf it truncated is restored byte-for-byte.
+# After verify the INT trap no longer calls this (issue #2397).
+# $1 = exit status (default 1; the pre-verify signal trap passes 130).
 abort_unstaged() {
+    _abort_rc="${1:-1}"
     if [ -n "${CONF_BACKUP}" ]; then
         mv -f "${CONF_BACKUP}" "${CONF_PATH}"
         CONF_BACKUP=""
@@ -331,7 +346,7 @@ abort_unstaged() {
         rm -f "${CONF_PATH}"
         printf '  Removed the conf this run staged; your previous subscription is untouched.\n' >&2
     fi
-    exit "${1:-1}"
+    exit "${_abort_rc}"
 }
 
 # On success the backup is redundant — drop it so no stray file is left in the repos dir.
@@ -372,23 +387,20 @@ fi
 printf '==> Conf resolved:\n'
 sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}" >&2
 
-# 5. pkg update (refresh catalogs, including the pfBlockerNG repo), then VERIFY a
-#    pfBlockerNG package is visible FROM the pfBlockerNG repo (not merely that pkg
-#    update ran). `pkg rquery -r <repo>` queries that ONE repo's catalog, so a
-#    still-enabled previous channel cannot mask a missing package here. Every
-#    channel repo carries the one canonical package; only the legacy release repo
-#    carries two (stable may not be published yet) — finding EITHER proves that
-#    repo loaded. Exit non-zero (fail loud) only if NONE present.
-# `pkg update` exits non-zero when ANY enabled repository fails to refresh — including
-# the channel this run is switching AWAY from, whose catalogue may be exactly what went
-# unpublished. Under `set -e` that would abort here: after the conf was staged, before
-# retirement, leaving the box subscribed to TWO project repositories at equal priority.
-# Route it through the same cleanup as every other failure instead.
-printf '==> pkg update (refreshing catalogs, including the pfBlockerNG repo)\n'
-env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f >/dev/null || {
-    printf 'add-repo: %s update -f failed — catalogs were not refreshed.\n' "${PKG_BIN}" >&2
-    printf '  A repository is unreachable or serving an unreadable catalog.\n' >&2
-    printf '  Inspect with: %s -d update   (traces the catalog fetch)\n' "${PKG_BIN}" >&2
+# 5. pkg update scoped to THIS repo, then VERIFY a pfBlockerNG package is visible
+#    FROM the pfBlockerNG repo (not merely that pkg update ran). `pkg rquery -r
+#    <repo>` queries that ONE repo's catalog, so a still-enabled previous channel
+#    cannot mask a missing package here. An unscoped `pkg update -f` would fail
+#    closed if ANY enabled repository 404s — including a leftover pfblockerng.conf
+#    pointed at unpublished release/ — and abort the switch (issue #2384). Scope
+#    to REPO_NAME so a dead peer cannot veto the target.
+printf '==> pkg update -f -r %s (refreshing the staged pfBlockerNG catalog)\n' "${REPO_NAME}"
+env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" update -f -r "${REPO_NAME}" || {
+    printf 'add-repo: %s update -f -r %s failed — the staged catalog was not refreshed.\n' \
+        "${PKG_BIN}" "${REPO_NAME}" >&2
+    printf '  Repo '\''%s'\'' is unreachable or serving an unreadable catalog.\n' "${REPO_NAME}" >&2
+    printf '  Inspect with: %s -d update -r %s   (traces the catalog fetch)\n' \
+        "${PKG_BIN}" "${REPO_NAME}" >&2
     abort_unstaged
 }
 
@@ -397,12 +409,32 @@ found_any=0
 # Word-splitting the space-separated package list is intentional.
 # shellcheck disable=SC2086
 for pkg_name in $PKG_NAMES; do
-    if "${PKG_BIN}" rquery -r "${REPO_NAME}" '%n %v' "${pkg_name}" 2>/dev/null | grep -q .; then
-        # rquery lists EVERY version the catalogue retains, in catalogue order —
-        # report the newest one, which is what `pkg install` would resolve.
-        found="$("${PKG_BIN}" rquery -r "${REPO_NAME}" '%n-%v' "${pkg_name}" 2>/dev/null | sort -V | tail -n1)"
+    # rquery lists EVERY version the catalogue retains, in catalogue order.
+    # Pick the highest with `pkg version -t` — the comparator `pkg install`
+    # itself resolves by (issue #2393). sort -V is the wrong tool for
+    # PORTREVISION `_N` and pkg-safe prereleases.
+    TARGET_VERSION=""
+    for _offered in $("${PKG_BIN}" rquery -r "${REPO_NAME}" '%v' "${pkg_name}" 2>/dev/null || true); do
+        if [ -z "${TARGET_VERSION}" ]; then
+            TARGET_VERSION="${_offered}"
+            continue
+        fi
+        # A comparator that answers nothing would silently degrade this loop
+        # back to "keep the first line". Name the real cause instead.
+        _order="$("${PKG_BIN}" version -t "${_offered}" "${TARGET_VERSION}" 2>/dev/null || true)"
+        case "${_order}" in
+        '>') TARGET_VERSION="${_offered}" ;;
+        '<' | '=') ;;
+        *)
+            printf 'add-repo: %s version -t gave no usable answer comparing '\''%s'\'' and '\''%s'\'' — cannot tell which build %s would install\n' \
+                "${PKG_BIN}" "${_offered}" "${TARGET_VERSION}" "${REPO_NAME}" >&2
+            abort_unstaged
+            ;;
+        esac
+    done
+    if [ -n "${TARGET_VERSION}" ]; then
+        found="${pkg_name}-${TARGET_VERSION}"
         printf '==> OK: %s available from '\''%s'\''\n' "${found}" "${REPO_NAME}"
-        printf '    Install:  %s install %s\n' "${PKG_BIN}" "${pkg_name}"
         found_any=1
     fi
 done
@@ -410,22 +442,64 @@ if [ "${found_any}" -eq 0 ]; then
     printf 'add-repo: no pfBlockerNG package visible from repo '\''%s'\'' after pkg update.\n' "${REPO_NAME}" >&2
     printf '  Checked conf: %s\n' "${CONF_PATH}" >&2
     printf '  The catalog may not be published yet for this box'\''s variant, or the URL is unreachable.\n' >&2
-    printf '  Inspect with: %s -d update   (traces the catalog fetch)\n' "${PKG_BIN}" >&2
+    printf '  Inspect with: %s -d update -r %s   (traces the catalog fetch)\n' \
+        "${PKG_BIN}" "${REPO_NAME}" >&2
     abort_unstaged
+fi
+
+# The target catalogue is proven. From here an interrupt must KEEP the new
+# conf: abort_unstaged would delete it (no backup on a first subscribe) after
+# peers are already gone, leaving zero project repos (issue #2397).
+trap 'drop_conf_backup; exit 130' INT HUP TERM
+
+# Install hint: a leftover Netgate / -devel / suffixed identity is NOT moved
+# by this script (repos-only contract). Point those boxes at migrate-channel.sh
+# and never print a bare `pkg install pfSense-pkg-pfBlockerNG` (issue #2381).
+_installed="$("${PKG_BIN}" query -g '%n' 'pfSense-pkg-pfBlockerNG*' 2>/dev/null || true)"
+_installed="$(printf '%s\n' "${_installed}" | grep -v '^[[:space:]]*$' || true)"
+if [ -n "${_installed}" ]; then
+    printf '==> Repositories are configured; the running package has not moved.\n'
+    printf '%s\n' "${_installed}" | while IFS= read -r _iname; do
+        [ -n "${_iname}" ] || continue
+        _iver="$("${PKG_BIN}" query '%v' "${_iname}" 2>/dev/null || true)"
+        _irepo="$("${PKG_BIN}" query '%R' "${_iname}" 2>/dev/null || true)"
+        printf '    Installed: %s-%s (from repo %s)\n' \
+            "${_iname}" "${_iver:-unknown}" "${_irepo:-unknown}"
+    done
+    printf '    Next: fetch -qo /tmp/migrate-channel.sh %s/migrate-channel.sh &&\n' "${BASE_URL%/}"
+    printf '          sh /tmp/migrate-channel.sh --channel %s\n' "${CHANNEL}"
+else
+    printf '    Install:  pkg install -y -r %s pfSense-pkg-pfBlockerNG\n' "${REPO_NAME}"
 fi
 
 # 6. Only now enforce single-repository subscription: the target is proven usable, so
 #    retiring every OTHER project conf cannot strand the box. After this the box is
 #    subscribed to exactly one channel and `pkg` never has to choose between two
 #    equal-priority project repositories. Reported, never silent.
-printf '%s\n' "${PROJECT_CONFS}" | while IFS= read -r _other_conf; do
+#    The loop stays in this shell (here-doc, not a pipe) so a test-only retire
+#    hook can SIGINT the same process that holds the post-verify trap.
+while IFS= read -r _other_conf; do
     [ -n "${_other_conf}" ] || continue
     [ "${_other_conf}" = "${CONF_NAME}" ] && continue
     [ -f "${REPOS_DIR}/${_other_conf}" ] || continue
     printf '==> Retiring %s — a box subscribes to ONE pfBlockerNG channel\n' \
         "${REPOS_DIR}/${_other_conf}"
     rm -f "${REPOS_DIR}/${_other_conf}"
-done
+    if [ -n "${PFB_ADD_REPO_RETIRE_HOOK:-}" ]; then
+        _retire_hook="${PFB_ADD_REPO_RETIRE_HOOK}"
+        PFB_ADD_REPO_RETIRE_HOOK=""
+        # Test-only seam (issue #2397): inject SIGINT after the first peer rm.
+        eval "${_retire_hook}"
+    fi
+done <<EOF
+${PROJECT_CONFS}
+EOF
 drop_conf_backup
+
+if [ -n "${PFB_ADD_REPO_DONE_HOOK:-}" ]; then
+    _done_hook="${PFB_ADD_REPO_DONE_HOOK}"
+    PFB_ADD_REPO_DONE_HOOK=""
+    eval "${_done_hook}"
+fi
 
 printf '==> Done — conf at %s\n' "${CONF_PATH}"

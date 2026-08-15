@@ -1089,9 +1089,12 @@ def _stub_conf(channel: str) -> str:
 
 
 def test_render_page_renders_all_four_channel_cards_with_correct_content() -> None:
-    """Row 1 of the coverage matrix: each of the four channels gets its own card — title,
-    audience prose anchor, the canonical install command, a `--channel <ch>` bootstrap
-    line, and its own manual-conf naming (via the injected conf_fn)."""
+    """Each of the four channels gets its own card — title, audience prose, badge.
+
+    An empty site is unpublished on every channel (issue #2382): cards keep the
+    "not yet published" blurb and must not ship add-repo / pkg install / conf
+    snippets.
+    """
     base = "https://pfblockerng.github.io/pkg"
     page = gl.render_page(base, [], _stub_conf)
 
@@ -1106,17 +1109,14 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
         assert f'<div class="card {ch}">' in page
         assert f"<h3>{title}" in page
         assert audience_anchor[ch] in page.lower()
-        # The uniform bootstrap flag + the ONE canonical install command.
-        assert f"--base-url {base} --channel {ch}" in page
-        assert f"pkg install {_CANON}" in page
-        # The per-channel manual conf snippet, injected via _stub_conf.
-        assert f"{ch}-conf-snippet" in page
-    # Every card installs the SAME package name — never a suffixed one.
-    assert f"{_CANON}-devel" not in page
-    assert f"{_CANON}-nightly" not in page
+        assert f"--channel {ch}" not in page
+        assert f"{ch}-conf-snippet" not in page
+    assert "add-repo.sh" not in page
+    assert "pkg install" not in page
     # Nightly keeps its stability badge.
     assert '<span class="badge">not for daily use</span>' in page
     assert "<code>YYYYMMDDHHMMSS.&lt;7-character source SHA&gt;</code>" in page
+    assert page.count("not yet published") == 4
 
 
 def test_render_page_shows_latest_and_empty_stable() -> None:
@@ -1161,20 +1161,26 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     # not the whole page (the .tablewrap rule is what makes that scroll possible).
     assert '<div class="tablewrap"><table>' in page
     assert ".tablewrap{overflow-x:auto" in page
-    # Stable has no package -> empty state, NOT a bogus version (its line in the stable card).
+    # Stable (and edge) have no package -> empty state, no install recipe.
     assert "not yet published" in page
-    # One card per channel, each with a UNIFIED command: the bootstrap one-liner + that
-    # channel's `pkg install`, in the SAME snippet — every channel installs the ONE
-    # canonical package (issue #2147), selected via `--channel <ch>`.
-    assert f"sh -s -- --base-url {base} --channel stable\npkg install {_CANON}</pre>" in page
-    assert f"sh -s -- --base-url {base} --channel testing\npkg install {_CANON}</pre>" in page
-    assert f"sh -s -- --base-url {base} --channel edge\npkg install {_CANON}</pre>" in page
-    assert f"sh -s -- --base-url {base} --channel nightly\npkg install {_CANON}</pre>" in page
-    # One bootstrap per card.
-    assert page.count(f"fetch -qo - {base}/add-repo.sh") == 4
-    # The manual conf came from the injected conf function — one per channel.
-    for ch in gl.CH_ORDER:
-        assert f"{ch}-conf-snippet" in page
+    assert "--channel stable" not in page
+    assert "--channel edge" not in page
+    assert "stable-conf-snippet" not in page
+    assert "edge-conf-snippet" not in page
+    # Published channels (testing, nightly) get file-form recipes, &&-joined,
+    # repo-qualified install, and a migrate path (issues #2381, #2390).
+    assert f"fetch -qo /tmp/add-repo.sh {base}/add-repo.sh &amp;&amp;" in page
+    assert f"sh /tmp/add-repo.sh --base-url {base} --channel testing &amp;&amp;" in page
+    assert f"pkg install -y -r pfblockerng-testing {_CANON}" in page
+    assert f"sh /tmp/add-repo.sh --base-url {base} --channel nightly &amp;&amp;" in page
+    assert f"pkg install -y -r pfblockerng-nightly {_CANON}" in page
+    assert "migrate-channel.sh --channel testing" in page
+    assert "migrate-channel.sh --channel nightly" in page
+    assert "fetch -qo -" not in page
+    assert "sh -s --" not in page
+    assert "pkg install pfSense-pkg-pfBlockerNG</pre>" not in page
+    assert "testing-conf-snippet" in page
+    assert "nightly-conf-snippet" in page
     # The badge/title casing fix: no CSS capitalize that would mangle `pfSense-pkg-...`.
     assert "text-transform:capitalize" not in page
     # Card order follows CH_ORDER.
@@ -1218,15 +1224,16 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     assert '<div class="snip">' in page
     btn = '<button class="copy" type="button" aria-label="Copy to clipboard">Copy</button>'
     assert btn in page
-    # A representative unified command is wrapped: button precedes its own <pre>, content intact
-    # (bootstrap + install in ONE snippet).
-    assert f"{btn}<pre>fetch -qo -" in page
-    assert f"\npkg install {_CANON}</pre>" in page
-    assert f"{btn}<pre>stable-conf-snippet</pre>" in page
+    # Only published channels (testing here) get copyable recipes + manual conf.
+    assert f"{btn}<pre>fetch -qo /tmp/add-repo.sh" in page
+    assert f"pkg install -y -r pfblockerng-testing {_CANON}</pre>" in page
+    assert "migrate-channel.sh --channel testing" in page
+    assert f"{btn}<pre>testing-conf-snippet</pre>" in page
+    assert "stable-conf-snippet" not in page
 
-    # Exactly the eight card snippets are copyable — a unified command + a manual conf in
-    # each of the four channel cards. Inline <code> is not copyable.
-    assert page.count('<button class="copy"') == 8
+    # Three copyable snippets on the one published card: new-install, existing-install,
+    # manual conf. Unpublished cards have none.
+    assert page.count('<button class="copy"') == 3
 
     # The styling + the behaviour that make the button work are shipped inline (static page).
     assert ".copy{" in page and ".snip{position:relative}" in page
@@ -1248,10 +1255,14 @@ def test_render_page_table_empty_when_no_packages() -> None:
 
 
 def test_render_page_empty_channel_shows_not_yet_published_for_every_card() -> None:
-    """Row 3 of the coverage matrix, plus the hostile empty-site-root row: with no packages
-    at all, every one of the four cards renders the empty state — exactly once each."""
+    """Empty site: four unpublished cards, zero recipes, zero manual conf, zero copy buttons."""
     page = gl.render_page("https://x/pkg", [], _stub_conf)
     assert page.count("not yet published") == 4
+    assert "add-repo.sh" not in page
+    assert "pkg install" not in page
+    assert "migrate-channel.sh" not in page
+    assert "-conf-snippet" not in page
+    assert '<button class="copy"' not in page
 
 
 def test_render_page_shared_version_across_stable_testing_edge() -> None:
@@ -1282,6 +1293,36 @@ def test_render_page_edge_ahead_of_testing_and_stable_shows_divergence() -> None
     assert '<p class="ver">Latest <code>4.0.0</code></p>' in page
     assert '<p class="ver">Latest <code>4.0.1.b1</code></p>' in page
     assert '<p class="ver">Latest <code>4.1.0.a1</code></p>' in page
+
+
+def test_unpublished_nightly_card_has_no_install_recipe() -> None:
+    """Issue #2382: unpublished Nightly keeps the badge/blurb and ships no recipe."""
+    pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
+    page = gl.render_page("https://pfblockerng.github.io/pkg", pkgs, _stub_conf)
+    nightly = page[page.index('"card nightly"') :]
+    # The nightly card ends at the next footer-ish boundary; search the nightly
+    # slice up to the published-packages heading.
+    nightly = nightly.split("<h2>Published packages</h2>", 1)[0]
+    assert "not yet published" in nightly
+    assert "add-repo.sh" not in nightly
+    assert "--channel nightly" not in nightly
+    assert "pkg install" not in nightly
+    assert "nightly-conf-snippet" not in nightly
+
+
+def test_published_stable_card_is_file_form_and_has_migrate() -> None:
+    """Published stable: file-form fetch, &&, -r pfblockerng-stable, migrate-channel."""
+    pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
+    base = "https://pfblockerng.github.io/pkg"
+    page = gl.render_page(base, pkgs, _stub_conf)
+    assert f"fetch -qo /tmp/add-repo.sh {base}/add-repo.sh &amp;&amp;" in page
+    assert f"sh /tmp/add-repo.sh --base-url {base} --channel stable &amp;&amp;" in page
+    assert f"pkg install -y -r pfblockerng-stable {_CANON}" in page
+    assert "migrate-channel.sh --channel stable" in page
+    assert f"{_CANON}-devel" in page
+    assert "stable-conf-snippet" in page
+    assert "fetch -qo -" not in page
+    assert "sh -s --" not in page
 
 
 def test_render_page_omits_internal_trust_and_channel_model() -> None:
@@ -1462,6 +1503,11 @@ def test_write_site_empty_site_root_renders_four_empty_cards_exit_zero(tmp_path:
     assert n == 0
     index_html = (site / "index.html").read_text()
     assert index_html.count("not yet published") == 4
+    assert "add-repo.sh" not in index_html
+    assert "pkg install" not in index_html
+    assert "migrate-channel.sh" not in index_html
+    assert "-conf-snippet" not in index_html
+    assert '<button class="copy"' not in index_html
 
 
 def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any) -> None:
@@ -1909,9 +1955,9 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
 
     Given a fresh tmp directory with NO rc.d sibling hook present,
       And write_site produces site/add-repo.sh with the hook embedded,
-      And the script text is fed to sh via stdin (``sh -s -- --base-url ...``),
-    When add-repo.sh runs in the piped / non-checkout context (the legacy default
-      bootstrap — mechanics unchanged by the four-channel landing migration),
+      And the script text is fed to sh via stdin
+      (``sh -s -- --base-url ... --channel stable``),
+    When add-repo.sh runs in the piped / non-checkout context,
     Then the hook file is installed on disk (HOOK_SRC absent, embedded path used),
       And the installed hook is executable and contains the rc.d PROVIDE pragma,
       And the staged conf file contains the ``Generated at boot`` marker
@@ -1962,7 +2008,23 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
     fake_pkg = bin_dir / "pkg"
     fake_pkg.write_text(
         "#!/bin/sh\n"
-        "case \"$1\" in\n  rquery) printf 'pfSense-pkg-pfBlockerNG 4.0.0\\n'; exit 0 ;;\nesac\n"
+        'if [ "$1" = "version" ] && [ "$2" = "-t" ]; then\n'
+        '  if [ "$3" = "$4" ]; then printf "=\\n"; exit 0; fi\n'
+        '  _first=$(printf "%s\\n%s\\n" "$3" "$4" | sort -V | head -n1)\n'
+        '  if [ "$_first" = "$3" ]; then printf "<\\n"; else printf ">\\n"; fi\n'
+        "  exit 0\n"
+        "fi\n"
+        "case \"$1\" in\n"
+        "  rquery)\n"
+        '    fmt=""\n'
+        '    for _a in "$@"; do case "$_a" in %*) fmt="$_a" ;; esac; done\n'
+        '    case "$fmt" in\n'
+        '      %v) printf "4.0.0\\n" ;;\n'
+        '      %n-%v) printf "pfSense-pkg-pfBlockerNG-4.0.0\\n" ;;\n'
+        '      *) printf "pfSense-pkg-pfBlockerNG 4.0.0\\n" ;;\n'
+        "    esac\n"
+        "    exit 0 ;;\n"
+        "esac\n"
         "case \"$*\" in\n  'config abi') printf 'FreeBSD:15:amd64' ;;\nesac\n"
         "exit 0\n"
     )
@@ -1986,7 +2048,7 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
         "PKG_BIN": str(fake_pkg),
     }
     result = subprocess.run(
-        ["sh", "-s", "--", "--base-url", base],
+        ["sh", "-s", "--", "--base-url", base, "--channel", "stable"],
         input=published_text,
         text=True,
         capture_output=True,
@@ -2009,8 +2071,10 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
     assert "PROVIDE: pfblockerng_repo_generate" in hook_content, "installed hook must contain the rc.d PROVIDE pragma"
 
     # The staged conf contains the 'Generated at boot' marker, proving the hook
-    # was executed successfully by add-repo.sh's onestart step.
-    conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf"
+    # was executed successfully by add-repo.sh's onestart step. --channel stable
+    # must write pfblockerng-stable.conf with the stable/ce-2.8 URL, never the
+    # unpublished release/ tree (issues #2384, #2390).
+    conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
     assert conf_path.exists(), (
         f"conf not written at {conf_path}\nadd-repo stdout:\n{result.stdout}\nadd-repo stderr:\n{result.stderr}"
     )
@@ -2018,6 +2082,10 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
     assert "Generated at boot by pfblockerng_repo_generate" in conf_text, (
         f"conf missing the 'Generated at boot' marker:\n{conf_text}"
     )
+    assert "pfblockerng-stable: {" in conf_text, conf_text
+    assert "/stable/ce-2.8" in conf_text, conf_text
+    assert "/release/" not in conf_text
+    assert not (root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng.conf").exists()
 
 
 def test_write_site_publishes_migrate_channel_beside_the_bootstrap(tmp_path: Path, monkeypatch: Any) -> None:
