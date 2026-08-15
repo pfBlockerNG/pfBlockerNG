@@ -83,6 +83,26 @@ final class DnsblPslPolicyUiTest extends TestCase
 		] as $term) {
 			$this->assertStringContainsString($term, $source, "feed-suffix-policy UI must contain '{$term}'");
 		}
+
+		// The option ARRAY itself must carry all three value => label pairs: the
+		// labels are also quoted in the help bullets, so a bare substring check
+		// cannot see an option vanish from the <select>. Pin the array literal.
+		$this->assertSame(
+			1,
+			preg_match('/\$psl_feed_policy_options\s*=\s*array\s*\((.*?)\);/s', $source, $optionsArray),
+			'the $psl_feed_policy_options array literal must exist'
+		);
+		foreach ([
+			"'ignore'" => "'Ignore entirely'",
+			"'apex'" => "'Block the suffix apex only'",
+			"'honor'" => "'Honor list rules'",
+		] as $value => $label) {
+			$this->assertMatchesRegularExpression(
+				'/' . preg_quote($value, '/') . '\s*=>\s*' . preg_quote($label, '/') . '/',
+				$optionsArray[1],
+				"select option {$value} => {$label} must live in the options array itself"
+			);
+		}
 	}
 
 	/** Both selects are gateway-backed reads/writes; never a config_*_path bypass. */
