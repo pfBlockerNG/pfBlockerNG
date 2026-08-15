@@ -1124,7 +1124,9 @@ Full design: ADR-39.
   was not a no-op) runs `PUBLISH_STAGE=promote` on green (staged dirs moved into place, staging
   tree dropped, landing regenerated, one push — the announce) or `PUBLISH_STAGE=discard` on any red
   leg (staging tree dropped, run fails). A stage-mode run whose catalogue is a no-op still ships a
-  drifted client-script refresh and reports `noop=true`, which skips the gate. Workflow-level
+  drifted client-script refresh and reports `noop=true`, which skips the gate. A target the publisher
+  reports as updated but whose bytes did not change (`git status --porcelain` empty) is dropped from
+  staging; a promote whose prefix holds no `<channel>/<varver>` fails loudly. Workflow-level
   `concurrency` serialises publishes. `PUBLISH_STAGE=direct` (default) keeps today's single-push
   path for `nightly.yml` (publish-then-gate, PR #2404) and `pkg-republish.yml`; nightly with any
   other value is a usage error. `smoke-single.yml` exposes the generic `smoke_repo_live_url` /

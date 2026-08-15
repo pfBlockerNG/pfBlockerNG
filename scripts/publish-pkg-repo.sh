@@ -89,9 +89,10 @@
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=promote only:
 #   RELEASE_TAG, DESTINATIONS  the promote commit message's own trailers
 #   ROUTE_MATRIX             landing_regen_and_stage's tagged-mode matrix source
-#                        Never SOURCE_REPOSITORY/RELEASE_ID/ASSETS_DIR — promote
-#                        never runs publish_release.py (issue #2389 fix-round-1
-#                        F1): the workflow's promote-pkg-repo job exports neither.
+#                        Never ASSETS_DIR — promote never runs publish_release.py,
+#                        and the workflow's promote-pkg-repo job does not export it
+#                        (issue #2389); SOURCE_REPOSITORY/RELEASE_ID are exported
+#                        there but unused by promote, so they are not required.
 #
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=discard only:
 #   (none beyond the unconditional PFB_SRC/PKG_REPO/SOURCE_RUN_ID/BASE_URL and
@@ -137,9 +138,9 @@ case "$PUBLISH_KIND" in
         # Required-var set depends on PUBLISH_STAGE: direct/stage run the publisher
         # (needs the full publish_release.py intake); promote only regenerates the
         # landing page + writes a commit trailer (needs a strict subset); discard
-        # needs nothing here at all (issue #2389 fix-round-1 F1) — the workflow's
-        # promote-pkg-repo job exports neither SOURCE_REPOSITORY/RELEASE_ID nor
-        # ASSETS_DIR, so requiring them unconditionally broke every promote/discard.
+        # needs nothing here at all (issue #2389) — the workflow's promote-pkg-repo
+        # job never exports ASSETS_DIR, so requiring it unconditionally broke every
+        # promote/discard; only what each mode reads is required.
         case "$PUBLISH_STAGE" in
             direct | stage)
                 : "${SOURCE_REPOSITORY:?SOURCE_REPOSITORY is required}"
