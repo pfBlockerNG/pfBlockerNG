@@ -53,5 +53,5 @@ reviews:
       instructions: >-
         A negative assertion needs a fixture that can fail it. Do not
         treat ABI-only dest isolation as extra_pkgs row-scope coverage.
-        Do not monkeypatch the production reader a write_site date pin
-        is supposed to exercise.
+        A write_site date pin must call production read_compact_manifest
+        on a real compact-manifest fixture. Do not monkeypatch that reader.
