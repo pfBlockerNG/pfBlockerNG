@@ -10,11 +10,26 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
-_SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
-if str(_SCRIPTS) not in sys.path:
-    sys.path.insert(0, str(_SCRIPTS))
+_ROOT = Path(__file__).resolve().parents[1]
+_SCRIPTS = _ROOT / "scripts"
+_TESTS = _ROOT / "tests"
+for _p in (_SCRIPTS, _TESTS):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 import publish_release as pr
+import test_publish_release as tpr
+
+# Pre-#2383 twin tests create textproc/py311-twin deps against Plus rows
+# whose extra_pkgs is []. After row-scoping those deps match no target.
+# ROW_PLUS_07 is a shallow copy of ROW_PLUS_03, so they share the list.
+_TWIN_ORIGIN = "textproc/py-twin"
+_plus_extras = tpr.ROW_PLUS_03.get("extra_pkgs")
+if not isinstance(_plus_extras, list):
+    _plus_extras = []
+    tpr.ROW_PLUS_03["extra_pkgs"] = _plus_extras
+if _TWIN_ORIGIN not in _plus_extras:
+    _plus_extras.append(_TWIN_ORIGIN)
 
 
 def _dep(origin: str) -> SimpleNamespace:
