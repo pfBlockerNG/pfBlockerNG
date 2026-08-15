@@ -11,10 +11,11 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
   symlinks onto it — no Grok-specific copy exists or should be created. Grok also
   scans `.grok/skills/` if one is added.
 - No repo session hooks are wired. Mode capsules ride this file and
-  `.grok/rules/harness.md`, which Grok auto-loads.
+  `.grok/rules/harness.md`, which Grok auto-loads (`<dir>/.grok/rules/` always
+  scanned — Grok 1.0.4 user-guide `12-project-rules.md`).
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
-  `GROK_SESSION_ID` and `GROK_AGENT`, which the Grok CLI exports into every shell
-  it spawns. Never unset to dodge guard it trips.
+  `GROK_SESSION_ID` and `GROK_AGENT` (probed on 1.0.4, 2026-08-15: exported into
+  nested sh/bash). Never unset to dodge guard it trips.
 - Human owner stays author, committer, signer. `Co-authored-by:` trailer for
   Grok emitted only from locally configured `coauthor.grok.*` identity; none
   configured → disclose authorship in PR body instead.

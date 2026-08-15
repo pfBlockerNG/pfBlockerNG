@@ -105,8 +105,9 @@ PFB_TAG_UPDATES
 # Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
 # 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
 # agent sets COPILOT_AGENT_PROMPT. Grok CLI exports GROK_AGENT=1 and
-# GROK_SESSION_ID (probed 2026-08-15). Same shape as CLAUDECODE and
-# CODEX_THREAD_ID — nothing is installed, and no process tree is inspected.
+# GROK_SESSION_ID (probed on 1.0.4, 2026-08-15: inherited by nested sh/bash
+# and visible to git hooks). Same shape as CLAUDECODE and CODEX_THREAD_ID —
+# nothing is installed, and no process tree is inspected.
 copilot_session() {
 	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
 }
