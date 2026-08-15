@@ -108,7 +108,7 @@ def _tracked(root: Path) -> list[str]:
 @pytest.mark.parametrize(
     ("rel", "budget"),
     [
-        ("AGENTS.md", 10_752),
+        ("AGENTS.md", 10_240),
         ("CLAUDE.md", 8_192),
         ("GROK.md", 8_192),
         (".agents/policy/new-policy.md", 12_288),
@@ -147,7 +147,7 @@ def test_size_over_budget_fires_and_at_budget_passes(tmp_path: Path) -> None:
 def test_nested_stub_over_budget_fires_root_files_use_own_budget(tmp_path: Path) -> None:
     root = tmp_path
     _write(root, "www/CLAUDE.md", "x" * 401)
-    _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 10,752
+    _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 10,240
     violations = ccb.check_sizes(root, ["www/CLAUDE.md", "AGENTS.md"])
     assert violations == ["www/CLAUDE.md: 401 bytes > budget 400"]
 
@@ -758,6 +758,7 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
         "AGENTS.md",
         "CLAUDE.md",
         "GROK.md",
+        ".github/copilot-instructions.md",
         ".claude/settings.json",
         "scripts/check_context_budget.py",
         ".agents/policy/alpha.md",
@@ -765,6 +766,7 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
         "docs/misc/architecture-notes.md",
         "tests/smoke/CLAUDE.md",
         ".claude/rules/smoke.md",
+        ".grok/rules/harness.md",
         ".claude/hooks/statusline.sh",
     ],
 )

@@ -2,8 +2,8 @@
 # Grok attribution and agent detection in the git hooks (issue #2439).
 #
 # Grok CLI exports GROK_AGENT=1 and GROK_SESSION_ID into every shell it
-# spawns — inherited by nested shells and visible to git hooks (probed
-# 2026-08-15 by dumping the environment inside a real session). So the
+# spawns — inherited by nested shells and visible to git hooks (probed on
+# 1.0.4, 2026-08-15: nested sh/bash `env | grep ^GROK_`). So the
 # client is detected exactly as Claude (CLAUDECODE), Codex (CODEX_THREAD_ID),
 # and Copilot (COPILOT_CLI) are: environment variables, nothing installed,
 # no process inspection.

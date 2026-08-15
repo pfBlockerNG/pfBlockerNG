@@ -8,7 +8,7 @@ Every surface has a byte budget so the hot context cannot silently re-accrete
 table references must carry a `Scope:` + `Load-when:` header so it stays
 routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
-- `AGENTS.md` (bootstrap)                          10,752 B
+- `AGENTS.md` (bootstrap)                          10,240 B
 - `CLAUDE.md` / `GROK.md` (thin vendor adapters)    8,192 B
 - `.agents/policy/*.md` / `.agents/context/*.md`   12,288 B default; grandfathered
   ratchet caps for the pre-taxonomy files (landing 26,000, agent-roles 19,000,
@@ -32,9 +32,10 @@ registered DYNAMIC_CAPSULE_PRODUCERS entry, and a recognized reference the
 checker cannot statically resolve and read fails closed (#1501).
 
 CONDITIONAL: in --staged / --diff mode the checks run IF AND ONLY IF the change
-touches a context surface (AGENTS.md, CLAUDE.md, GROK.md, .agents/policy/,
-.agents/context/, docs/misc/, .claude/rules/, .claude/hooks/, scripts/,
-.claude/settings.json, any nested CLAUDE.md/AGENTS.md/GROK.md, or this checker);
+touches a context surface (AGENTS.md, CLAUDE.md, GROK.md,
+.github/copilot-instructions.md, .agents/policy/, .agents/context/, docs/misc/,
+.claude/rules/, .grok/rules/, .claude/hooks/, scripts/, .claude/settings.json,
+any nested CLAUDE.md/AGENTS.md/GROK.md, or this checker);
 otherwise it reports the skip and exits 0. --all checks unconditionally.
 
 Usage:
@@ -59,7 +60,7 @@ from pathlib import Path
 
 from _git_paths import nul_listing
 
-BOOTSTRAP_BUDGET = 10_752
+BOOTSTRAP_BUDGET = 10_240
 ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
 STUB_BUDGET = 400
@@ -483,8 +484,23 @@ def _git(root: Path, *args: str) -> str:
 
 # The CI workflow (.github/workflows/context-budget.yml) path-filters on these same
 # surfaces; pinned by tests/test_context_budget.py::test_ci_workflow_paths_match_checker_triggers.
-_TRIGGER_FILES = ("AGENTS.md", "CLAUDE.md", "GROK.md", SETTINGS, "scripts/check_context_budget.py")
-_TRIGGER_DIRS = (".agents/policy/", ".agents/context/", "docs/misc/", ".claude/rules/", ".claude/hooks/", "scripts/")
+_TRIGGER_FILES = (
+    "AGENTS.md",
+    "CLAUDE.md",
+    "GROK.md",
+    ".github/copilot-instructions.md",
+    SETTINGS,
+    "scripts/check_context_budget.py",
+)
+_TRIGGER_DIRS = (
+    ".agents/policy/",
+    ".agents/context/",
+    "docs/misc/",
+    ".claude/rules/",
+    ".grok/rules/",
+    ".claude/hooks/",
+    "scripts/",
+)
 
 
 def touches_context_surface(changed: list[str]) -> bool:

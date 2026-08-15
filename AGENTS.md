@@ -140,22 +140,17 @@ one-line status marker `<emoji> ***ID***(***#PR***): ***Title***` (~28 chars; �
 
 ## Vendor adapters
 
-Vendor-specific surfaces live in each vendor's own adapter, never in this neutral file:
+Vendor-specific surfaces live in each vendor's own adapter, never in this neutral file.
+Read the named adapter at session start:
 
-- **Claude Code** → `CLAUDE.md` (import this file via `@AGENTS.md`; hold Claude-only
-  surfaces — hooks in `.claude/settings.json`, skills at `.claude/skills/` symlinked from
-  `.agents/skills/`, git-hook marker `CLAUDECODE=1`).
-- **Codex** → `.agents/context/codex-adapter.md`. Codex read this bootstrap native but not
-  that file; **read it at session start** for canonical-noun → Codex translation table and
-  Codex specifics (subagents, attribution, resume, hook/marker surfaces).
-- **GitHub Copilot** → `.github/copilot-instructions.md` (thin adapter Copilot load
-  itself; it point here) plus `.agents/context/copilot-adapter.md` for canonical-noun →
-  Copilot translation table and Copilot specifics (custom agents in `.github/agents/`, repo
-  hooks in `.github/hooks/`, pid session marker git hooks read, attribution).
-  **Read both at session start.**
-- **Grok** → `GROK.md` (thin adapter) plus `.agents/context/grok-adapter.md`.
-  Grok load this bootstrap native. Git-hook markers `GROK_SESSION_ID` /
-  `GROK_AGENT`. **Read both at session start.**
+- **Claude Code** → `CLAUDE.md` (`@AGENTS.md` import; hooks `.claude/settings.json`,
+  skills `.claude/skills/` → `.agents/skills/`, marker `CLAUDECODE=1`).
+- **Codex** → `.agents/context/codex-adapter.md` (native bootstrap; noun table,
+  subagents, attribution, resume, hook/marker).
+- **GitHub Copilot** → `.github/copilot-instructions.md` plus
+  `.agents/context/copilot-adapter.md` (custom agents `.github/agents/`, attribution).
+- **Grok** → `GROK.md` plus `.agents/context/grok-adapter.md` (native bootstrap;
+  markers `GROK_SESSION_ID` / `GROK_AGENT`).
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die. Drop
 articles/filler/pleasantries/hedging; fragments OK; technical terms exact; code unchanged.
