@@ -519,3 +519,13 @@ class TestPlainSuffixPolicyWithPrivateRecognitionOff:
         )
         assert "github.io" in result.zone_db
         assert _reject_row(result, feed="FEED", group="GRP").get("suffix_demote", 0) == 0
+
+    def test_private_honor_not_demoted_while_icann_policy_arms_the_gate(self) -> None:
+        # Mixed-policy axis: the entry's OWN section policy is honor, the OTHER
+        # section's non-honor value merely keeps the policy machinery active. A
+        # demotion guard that fires on any active policy (not the entry's own
+        # apex) would wrongly demote this classifier ZONE.
+        result = _run_build(["github.io"], private_policy="honor", icann_policy="apex", include_private=False)
+        assert "github.io" in result.zone_db
+        assert "github.io" not in result.data_db
+        assert _reject_row(result).get("suffix_demote", 0) == 0
