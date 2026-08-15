@@ -104,6 +104,9 @@
 #                    Default OFF; pass this flag to enable. build-image.yml does NOT
 #                    pass this flag (it calls this script directly), so callers that
 #                    only want the pfSense-upgrade step are unaffected.
+#                    Fail-closed (issue #2299): pkg's ABI and the kernel's FreeBSD
+#                    major must stay put across the refresh; a plan that crosses a
+#                    major, or a failed pkg update/upgrade, aborts the run.
 #   --branch NAME    switch the pfSense update branch to NAME before running the OS
 #                    upgrade. pfSense stores the selected branch in config.xml key
 #                    system/pkg_repo_conf_path; applying the change calls
