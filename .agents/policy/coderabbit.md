@@ -49,60 +49,50 @@ auto-review spends).
   CodeRabbit; use `cr-hold`. Drafts are also skipped
   (`drafts: false`).
 
-## Pause automatic reviews (agents must do this)
+## Do not spam pause comments
 
-CodeRabbit auto-review on every push spends a Fair Usage slot and
-can post a quota notice. `@coderabbitai review` is ignored unless
-auto-review is paused.
+Broadcasting `@coderabbitai pause` on every open PR is the spam
+we are avoiding. Mute is a **label**, applied by the
+`coderabbit-hold` workflow (no comment) or by `gh pr edit --add-label
+cr-hold`. `.coderabbit.yaml` skips auto-review on `cr-hold`.
 
-Any agent in a multi-PR burst, or that sees a quota notice:
+`@coderabbitai pause` and `@coderabbitai review` are **one PR, at
+review time only**:
 
-1. Post **`@coderabbitai pause`** as a top-level comment on **this**
-   PR and on every other open product/CI PR. One pause per PR is
-   enough; do not pause-loop.
-2. Then apply `cr-hold` as below (label mute is the backup if pause
-   is late or ignored).
-3. After the quota window: remove `cr-hold` from **one** PR (leave
-   it paused), then post **`@coderabbitai review`**. Pause stays on
-   so the review command is accepted.
-4. **`@coderabbitai resume`** only when product behaviour changed
-   after a finished review **and** no quota window is live. Never
-   resume to retry a quota miss — use `review` while still paused.
-5. Leave the PR paused through format-only / ruff / mechanical
-   APPLY pushes. That is the point of pause.
+1. Quota notice → the Action labels every open PR `cr-hold`. Agents
+   do **not** comment on the siblings.
+2. After the window: remove `cr-hold` from **one** PR, post
+   `@coderabbitai pause` **once** on that PR (required: `@review` is
+   a no-op unless auto-review is paused — #2430), then
+   `@coderabbitai review` **once**. Leave every other PR labeled.
+3. Never `@coderabbitai pause` or `review` on a PR that still has
+   `cr-hold`, and never on a PR whose latest CR comment is a live
+   quota countdown.
+4. `@coderabbitai resume` only when product behaviour changed after
+   a finished review **and** no quota window is live.
 
-`auto_pause_after_reviewed_commits: 2` in `.coderabbit.yaml` is a
-backstop, not a substitute. Agents still pause explicitly.
+`.coderabbit.yaml` already turns off incremental auto-review and
+status-only comments so a later push does not spend a slot or post
+"Review skipped".
 
 ## Mute while a quota window is live
 
 Any agent (this one or another) that sees a quota notice, or that
 opens a PR knowing a window is still counting down:
 
-1. **`@coderabbitai pause` first** (section above) on every in-flight
-   product/CI PR.
-2. **Immediately** `gh label create cr-hold` if missing, then
-   `gh pr edit N --add-label cr-hold` on every **other** open
-   product/CI PR and on any PR you are about to open. Do this
-   **before** the next `gh pr create` / push that would trigger
-   auto-review.
-3. New PRs during the window: add `cr-hold` in the same command
-   as create (`gh pr create --label cr-hold`), or open as **draft**
-   then label then undraft only after the window. Comment
-   `@coderabbitai pause` as soon as the PR exists. Never open a
-   ready, unlabeled, non-draft, unpaused PR while a countdown is live.
-4. Leave `cr-hold` on siblings until **their** turn for the one
-   post-window `@coderabbitai review`. Removing it from every PR
-   at once just recreates the burst.
-5. When the window elapses: remove `cr-hold` from **one** PR
-   (keep it paused), post exactly one `@coderabbitai review` there,
-   wait FINISHED. Then the next PR. Do not strip the label from
-   the rest yet.
-6. After a finished review, put `cr-hold` back only if a new
-   quota notice appeared; otherwise leave it off that PR. Stay
-   paused unless step 4 of "Pause automatic reviews" says resume.
-7. `cr-hold` is not "work unfinished". Three-leg, CI, and landing
-   continue. Pause + `cr-hold` only mute CodeRabbit auto-review.
+1. Let the `coderabbit-hold` workflow label open PRs, or
+   `gh pr edit N --add-label cr-hold` yourself. **No pause comments
+   on the siblings.**
+2. New PRs during the window: `gh pr create --label cr-hold` (or
+   open as draft). Never open a ready, unlabeled, non-draft PR
+   while a countdown is live.
+3. Leave `cr-hold` on siblings until **their** turn. Removing it
+   from every PR at once just recreates the burst.
+4. When the window elapses: remove `cr-hold` from **one** PR,
+   `@coderabbitai pause` once on that PR, then `@coderabbitai
+   review` once. Do not comment on the rest.
+5. `cr-hold` is not "work unfinished". Three-leg, CI, and landing
+   continue.
 
 ## Required path (every future PR)
 
@@ -113,11 +103,10 @@ opens a PR knowing a window is still counting down:
    head SHA) → triage every finding per landing.md. Stop here.
 3. **ACK is only a quota notice** ("Review limit reached" /
    `rate limited by coderabbit.ai` and no finished review):
-   1. `@coderabbitai pause` this PR and every other open product
-      PR. `@coderabbitai review` is a no-op unless auto-review is
-      paused.
-   2. Apply `cr-hold` to every **other** open PR now (mute
-      section above) so siblings do not collect the same notice.
+   1. Do not comment on siblings. The hold workflow (or
+      `gh pr edit --add-label cr-hold`) mutes them.
+   2. Apply `cr-hold` to every **other** open PR if the Action
+      has not yet (mute section above).
    3. Parse **Next review available in** (`N` minutes or hours).
       Unparsable → treat as 15 minutes, once.
    4. Arm a **self-terminating** wait for `N + 30s`
