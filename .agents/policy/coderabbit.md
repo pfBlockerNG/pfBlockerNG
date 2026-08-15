@@ -61,25 +61,58 @@ review time only**:
 
 1. Quota notice → the Action labels every **other** open PR
    `cr-hold`. Agents do **not** comment on the siblings.
-2. A scheduled job (every 15 minutes) removes `cr-hold` from open
-   PRs once no live "Next review available in" remains. Agents may
-   also `gh pr edit N --remove-label cr-hold` on **one** PR after
-   the window, then `@coderabbitai pause` once and `@coderabbitai
-   review` once on that PR.
+2. The same workflow **polls a reconstructed ledger**, not a
+   CodeRabbit API (none exposes Fair Usage). It records finished
+   review times from `coderabbitai[bot]` comments, applies the
+   published rolling-hour + 7-day Fair Usage table, and holds
+   when `used >= allowance - 1` (one spare slot). Cron `*/15` is
+   the backstop: "Reviews are available now" is a **reply** to a
+   human comment, not a self-firing expiry event (see #2435).
+   When the ledger is clear and no quota is live, it removes
+   `cr-hold` from **one** oldest held PR. Incremental auto-review
+   pauses after two reviewed commits, so one APPLY look is not a
+   burst. Agents may also un-hold one PR by hand and
+   `@coderabbitai review` it.
 3. Never `@coderabbitai pause` or `review` on a PR that still has
    `cr-hold`, and never on a PR whose latest CR comment is a live
    quota countdown.
 4. `@coderabbitai resume` only when product behaviour changed after
    a finished review **and** no quota window is live.
 
-`.coderabbit.yaml` turns off incremental auto-review: only the
-first auto-look of a PR runs unless someone posts `@coderabbitai
-review`. That is a deliberate spend trade — APPLY commits are not
-auto-reviewed. `review_status: false` hides "Review skipped"
-status widgets. Quota notices are **not** those widgets: on #2430
-Fair Usage arrived as `rate limited by coderabbit.ai` / `Review
-limit reached` in the summarize comment, which still fires
+`.coderabbit.yaml` pauses incremental auto-review after two
+reviewed commits (`auto_pause_after_reviewed_commits: 2`): first
+look plus the APPLY round. Turning incrementals off dropped the
+APPLY review — that is where the #2432 / #2434 defects lived.
+Format-only pushes after pause do not spend a slot.
+`review_status: false` hides "Review skipped" status widgets.
+Quota notices are **not** those widgets: on #2430 Fair Usage
+arrived as `rate limited by coderabbit.ai` / `Review limit
+reached` in the summarize comment, which still fires
 `issue_comment` for the hold workflow.
+
+## Owner override and substitute reviewer
+
+Only the **repo owner** may spend a CodeRabbit slot anyway, or
+swap CodeRabbit for someone else on one PR. Agents never add
+`cr-go` and never invent a substitute.
+
+1. **Override the mute** — owner adds the `cr-go` label
+   (`gh pr edit N --add-label cr-go`). The hold Action will not
+   put `cr-hold` on that PR and will strip `cr-hold` if both are
+   present. Auto-review can run. Use when the owner wants
+   CodeRabbit on this PR *now* and accepts the Fair Usage cost.
+2. **Substitute reviewer** — owner names who reviews instead
+   (another agent, a human). Agents do **not**
+   `@coderabbitai review` on that PR. Three-leg still runs.
+   Record `CR-SUBSTITUTE: <who> reviewed <SHA>` on the PR.
+   Merge gate treats that record as the CodeRabbit stand-in for
+   that head. Do not invent a substitute; only when the owner
+   asked.
+
+A CLI-in-CI second channel (separate hourly CLI column) is
+tracked on #2436. Do not add an API-key job until the owner
+decides; Fair Usage weekly taper may still be per-developer
+across channels.
 
 ## Mute while a quota window is live
 

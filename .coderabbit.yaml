@@ -1,17 +1,18 @@
 # CodeRabbit configuration.
 #
 # Reviews are beneficial and stay advisory (they never gate merge).
-# First look only (no incremental auto-review). Quota mute is the
-# cr-hold label via coderabbit-hold.yml — do not broadcast pause
+# First look plus one incremental (the APPLY round). Quota mute is
+# the cr-hold label via coderabbit-hold.yml — do not broadcast pause
 # comments. Path: .agents/policy/coderabbit.md.
 reviews:
   auto_review:
     enabled: true
     drafts: false
-    # First look only. Incremental auto-review on every push is what
-    # burned Fair Usage. APPLY / ruff commits are not auto-reviewed;
-    # ask explicitly with a paused `@coderabbitai review`.
-    auto_incremental_review: false
+    # Pause after the first look and one incremental. Turning
+    # incrementals off dropped the APPLY review — that is where
+    # the #2432 / #2434 defects lived. Format-only pushes after
+    # pause do not spend a slot.
+    auto_pause_after_reviewed_commits: 2
     ignore_title_keywords:
       - "WIP"
       - "[skip review]"

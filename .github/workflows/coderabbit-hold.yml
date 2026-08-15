@@ -1,12 +1,16 @@
 # Silent Fair Usage mute. Labels only — never comment.
-# apply: quota notice -> cr-hold on every OTHER open PR
-# release: every 15m, drop cr-hold once no live quota remains
+# apply: quota notice -> cr-hold on every OTHER open PR (instant, no checkout)
+# poll: reconstruct finished-review times, apply published rolling-hour table,
+#       hold when at budget or quota, else release one oldest PR.
+# cron is the backstop: "Reviews are available now" is reply-only, not an expiry event.
 # Policy: .agents/policy/coderabbit.md
 name: CodeRabbit hold
 
 on:
   issue_comment:
     types: [created, edited]
+  pull_request:
+    types: [opened, ready_for_review, reopened, labeled, unlabeled]
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
@@ -38,81 +42,44 @@ jobs:
           gh label create cr-hold --repo "${GITHUB_REPOSITORY}" \
             --description 'Mute CodeRabbit auto-review while Fair Usage is live' \
             --color C4A000 >/dev/null 2>&1 || true
-          gh pr list --repo "${GITHUB_REPOSITORY}" --state open --json number \
-            --jq '.[].number' | while read -r n; do
+          gh label create cr-go --repo "${GITHUB_REPOSITORY}" \
+            --description 'Owner override: do not mute CodeRabbit on this PR' \
+            --color 1D76DB >/dev/null 2>&1 || true
+          gh pr list --repo "${GITHUB_REPOSITORY}" --state open --limit 100 \
+            --json number,labels --jq '.[] | "\(.number) \([.labels[].name] | join(","))"' \
+            | while read -r n labs; do
             [ "${n}" = "${SOURCE}" ] && continue
+            case ",${labs}," in *,cr-go,*) continue ;; esac
             gh pr edit "${n}" --repo "${GITHUB_REPOSITORY}" --add-label cr-hold
           done
 
-  release-cr-hold:
-    name: Drop cr-hold after the quota window
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+  poll-cr-limit:
+    name: Poll review budget and apply or release
+    if: >-
+      github.event_name == 'schedule' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'pull_request' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        github.event.comment.user.login == 'coderabbitai[bot]' &&
+        (
+          contains(github.event.comment.body, 'Review limit reached') ||
+          contains(github.event.comment.body, 'rate limited by coderabbit') ||
+          contains(github.event.comment.body, 'Reviews are available now') ||
+          contains(github.event.comment.body, 'Actionable comments posted') ||
+          contains(github.event.comment.body, 'No actionable comments were generated')
+        )
+      )
     runs-on: ubuntu-latest
     steps:
-      - name: Remove cr-hold when no live quota notice remains
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Recompute Fair Usage mute from review ledger
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          python3 - <<'PY'
-          import json, os, re, subprocess
-          from datetime import datetime, timedelta, timezone
-
-          repo = os.environ["GITHUB_REPOSITORY"]
-
-          def gh_json(args):
-              out = subprocess.check_output(["gh"] + args, text=True)
-              return json.loads(out) if out.strip() else []
-
-          quota_re = re.compile(
-              r"Review limit reached|rate limited by coderabbit", re.I
-          )
-          avail_re = re.compile(
-              r"Next review available in:\s*\**\s*(\d+)\s*(minute|hour)", re.I
-          )
-
-          prs = gh_json(["pr", "list", "--repo", repo, "--state", "open",
-                         "--json", "number,labels"])
-          now = datetime.now(timezone.utc)
-          live = False
-          for pr in prs:
-              n = pr["number"]
-              comments = gh_json([
-                  "api", f"repos/{repo}/issues/{n}/comments?per_page=100"
-              ])
-              cr = [c for c in comments
-                    if (c.get("user") or {}).get("login") == "coderabbitai[bot]"]
-              if not cr:
-                  continue
-              last = max(cr, key=lambda c: c.get("created_at") or "")
-              body = last.get("body") or ""
-              if not quota_re.search(body):
-                  continue
-              created = datetime.fromisoformat(
-                  last["created_at"].replace("Z", "+00:00")
-              )
-              m = avail_re.search(body)
-              minutes = 15
-              if m:
-                  minutes = int(m.group(1))
-                  if m.group(2).lower().startswith("hour"):
-                      minutes *= 60
-              if created + timedelta(minutes=minutes, seconds=30) > now:
-                  live = True
-                  break
-
-          if live:
-              print("quota still live; leaving cr-hold")
-              raise SystemExit(0)
-
-          held = [p["number"] for p in prs
-                  if any(l.get("name") == "cr-hold" for l in p.get("labels") or [])]
-          for n in held:
-              subprocess.check_call([
-                  "gh", "pr", "edit", str(n), "--repo", repo,
-                  "--remove-label", "cr-hold",
-              ])
-              print(f"removed cr-hold from #{n}")
-          if not held:
-              print("no cr-hold labels")
-          PY
+          CODERABBIT_PLAN: pro+
+          CODERABBIT_SPARE_SLOTS: "1"
+        run: python3 scripts/agent/coderabbit_hold.py poll --repo "${GITHUB_REPOSITORY}"
