@@ -108,6 +108,10 @@ on:
         description: "Expected installed version for the live channel package. Required with smoke_repo_live_url."
         required: false
         default: ""
+      smoke_repo_expected_channel:
+        description: "Expected pfb_build_record.channel (tag primary). Required with smoke_repo_live_url. Dest folder is not the channel."
+        required: false
+        default: ""
       ports_repo:
         description: "FreeBSD-ports repo carrying the port + Mk framework (blank = build-pkg-linux default pfBlockerNG/FreeBSD-ports). Point a pre-merge run at a ports branch carrying a new plist entry."
         required: false
@@ -222,6 +226,11 @@ on:
         default: ""
       smoke_repo_expected_version:
         description: "Expected installed version for the live channel package."
+        required: false
+        type: string
+        default: ""
+      smoke_repo_expected_channel:
+        description: "Expected pfb_build_record.channel (tag primary). Required with smoke_repo_live_url. Dest folder is not the channel."
         required: false
         type: string
         default: ""
@@ -719,6 +728,7 @@ jobs:
           SMOKE_REPO_LIVE_URL: ${{ inputs.smoke_repo_live_url }}
           SMOKE_REPO_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_repo_expected_source_sha }}
           SMOKE_REPO_EXPECTED_VERSION: ${{ inputs.smoke_repo_expected_version }}
+          SMOKE_REPO_EXPECTED_CHANNEL: ${{ inputs.smoke_repo_expected_channel }}
           # Turn on the in-test hermetic egress block (after deploy, see fixture).
           SMOKE_BLOCK_EGRESS: "1"
           # Per-step state snapshots/diffs (config.xml + unbound.conf + logs +

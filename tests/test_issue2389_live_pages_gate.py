@@ -81,6 +81,7 @@ def test_release_published_live_gate_installs_from_staged_url_per_leg() -> None:
     assert "staging_prefix }}/${{ matrix.channel }}" in job
     assert "smoke_repo_expected_source_sha: ${{ needs.resolve.outputs.source_sha }}" in job
     assert "smoke_repo_expected_version: ${{ needs.resolve.outputs.portversion }}" in job
+    assert "smoke_repo_expected_channel: ${{ needs.resolve.outputs.channel }}" in job
     assert "fromJson(needs.prepare-live-gate.outputs.matrix)" in job
     assert "fail-fast: false" in job
 
