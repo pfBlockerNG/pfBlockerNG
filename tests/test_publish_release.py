@@ -1060,10 +1060,11 @@ class ContainmentBackfillPublishTests(_TempDirTestCase):
 
     @_requires_engine
     def test_nightly_catalogue_not_healed_by_tagged_publish(self) -> None:
-        # Hostile dest list includes nightly so backfill(channel="nightly")
-        # actually runs. The dest guard must still refuse to copy the slower
-        # tagged generation onto nightly. A testing+edge-only dest list never
-        # invokes that path and cannot fail this contract.
+        # publish_release rejects nightly dests (kind!=tagged). This case pins
+        # that a tagged dest list does not walk an existing nightly tree.
+        # backfill(channel="nightly") is catalogue_assembly's pin
+        # (test_nightly_destination_copies_nothing). Mixing nightly into
+        # tagged dests is IntakeError (test below).
         seeded = self._seed_canonical(
             "testing",
             "ce-2.8",
@@ -1085,12 +1086,29 @@ class ContainmentBackfillPublishTests(_TempDirTestCase):
             assets_dir=assets_dir,
             rows=(ROW_CE,),
             channel="testing",
-            destinations='["testing","edge","nightly"]',
+            destinations='["testing","edge"]',
             tag="v3.2.16.a1",
         )
 
         self.assertTrue(seeded.is_file())
         self.assertFalse((nightly_dir / "pfSense-pkg-pfBlockerNG-3.2.10.pkg").exists())
+        self.assertFalse((nightly_dir / "pfSense-pkg-pfBlockerNG-3.2.16.a1.pkg").exists())
+
+    @_requires_engine
+    def test_tagged_destinations_cannot_include_nightly(self) -> None:
+        assets_dir = self.new_assets_dir()
+        assets_dir.mkdir()
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps({"x.pkg": "0" * 64}), encoding="utf-8")
+        with self.assertRaises(pc.IntakeError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets_dir,
+                rows=(ROW_CE,),
+                channel="testing",
+                destinations='["testing","edge","nightly"]',
+                tag="v3.2.16.a1",
+            )
+        self.assertIn("nightly must not be combined", str(ctx.exception))
 
 
 def ca_default_keep() -> int:
