@@ -1,0 +1,41 @@
+# Silent Fair Usage mute. When CodeRabbit posts a quota notice, label every
+# open PR `cr-hold` so auto-review does not fire on the rest.
+# Labels only — never comment, never @coderabbitai (that is the spam).
+# Agents remove `cr-hold` from one PR after the window, then
+# `@coderabbitai pause` (if needed) + `@coderabbitai review` on that PR only.
+# Policy: .agents/policy/coderabbit.md
+name: CodeRabbit hold
+
+on:
+  issue_comment:
+    types: [created, edited]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  apply-cr-hold:
+    name: Label open PRs cr-hold
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.user.login, 'coderabbit') &&
+      (
+        contains(github.event.comment.body, 'Review limit reached') ||
+        contains(github.event.comment.body, 'rate limited by coderabbit')
+      )
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add cr-hold to every open PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          gh label create cr-hold --repo "${GITHUB_REPOSITORY}" \
+            --description 'Mute CodeRabbit auto-review while Fair Usage is live' \
+            --color C4A000 >/dev/null 2>&1 || true
+          gh pr list --repo "${GITHUB_REPOSITORY}" --state open --json number \
+            --jq '.[].number' | while read -r n; do
+            gh pr edit "${n}" --repo "${GITHUB_REPOSITORY}" --add-label cr-hold
+          done
