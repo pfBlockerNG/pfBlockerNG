@@ -328,10 +328,8 @@ jobs:
           export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
           UPGRADE_PKGS_FLAG=
           [ "$FROM_TAG" = "$TARGET_TAG" ] && UPGRADE_PKGS_FLAG=--upgrade-pkgs
-          EXPECT_MAJOR_ARGS=
-          if [ "$FROM_TAG" = "$TARGET_TAG" ]; then
-            EXPECT_MAJOR_ARGS="--expect-freebsd-major ${FREEBSD_VERSION%%.*}"
-          fi
+          EXPECT_MAJOR=
+          [ "$FROM_TAG" = "$TARGET_TAG" ] && EXPECT_MAJOR="${FREEBSD_VERSION%%.*}"
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
@@ -344,7 +342,7 @@ jobs:
             --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
             --facts-out "$PWD/box-facts.env" \
             ${UPGRADE_PKGS_FLAG:+"$UPGRADE_PKGS_FLAG"} \
-            $EXPECT_MAJOR_ARGS
+            ${EXPECT_MAJOR:+--expect-freebsd-major "$EXPECT_MAJOR"}
 
       # ── Activation PR: box-verified matrix update (issue #1837) ────────────
       # The upgrade leg is the only moment automation has SSH into a live box
