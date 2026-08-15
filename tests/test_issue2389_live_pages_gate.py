@@ -31,8 +31,10 @@ def test_nightly_post_publish_passes_live_identity() -> None:
     assert "smoke_nightly_live_url: https://pfblockerng.github.io/pkg/nightly" in job
     assert "smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}" in job
     assert "smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}" in job
-    # smoke_repo_* is the generic channel input; smoke-single.yml on this
-    # branch does not declare it yet. The Nightly URL rides smoke_nightly_*.
+    # smoke_repo_* is the GENERIC channel input (smoke-single.yml declares it,
+    # issue #2389) -- Nightly simply never passes it: its own URL rides
+    # smoke_nightly_*, and Nightly stays publish-then-gate (out of #2389 scope),
+    # never staged, so it has no staging_prefix to build a smoke_repo_live_url from.
     assert "smoke_repo_live_url:" not in job
 
 
@@ -45,3 +47,73 @@ def test_scheduled_repo_install_does_not_pass_live_urls() -> None:
         "SMOKE_NIGHTLY_LIVE_URL",
     ):
         assert name not in workflow
+
+
+# --------------------------------------------------------------------------- #
+# release-published.yml: stage -> live-install gate -> promote (issue #2389)
+# --------------------------------------------------------------------------- #
+
+
+def test_release_published_stages_before_gate() -> None:
+    job = _extract_job(_workflow("release-published.yml"), "publish-pkg-repo")
+    assert "PUBLISH_STAGE: stage" in job
+    assert "id: stage" in job
+    for out in ("staging_prefix", "touched", "noop", "route_matrix"):
+        assert re.search(rf"^      {out}:", job, re.MULTILINE), f"publish-pkg-repo missing output {out!r}:\n{job}"
+
+
+def test_release_published_resolve_exports_gate_identity() -> None:
+    job = _extract_job(_workflow("release-published.yml"), "resolve")
+    for out in ("source_sha", "portversion", "channel"):
+        assert re.search(rf"^      {out}:", job, re.MULTILINE), f"resolve missing output {out!r}:\n{job}"
+    assert 'echo "source_sha=${COMMIT}"' in job
+
+
+def test_release_published_live_gate_installs_from_staged_url_per_leg() -> None:
+    job = _extract_job(_workflow("release-published.yml"), "validate-live-pages-install")
+    assert "needs: [resolve, publish-pkg-repo, prepare-live-gate]" in job
+    assert "uses: ./.github/workflows/smoke-single.yml" in job
+    assert "pytest_marker: repo" in job
+    assert "pytest_filter: test_install_from_live_pages_url" in job
+    assert "staging_prefix }}/${{ matrix.channel }}" in job
+    assert "smoke_repo_expected_source_sha: ${{ needs.resolve.outputs.source_sha }}" in job
+    assert "smoke_repo_expected_version: ${{ needs.resolve.outputs.portversion }}" in job
+    assert "fromJson(needs.prepare-live-gate.outputs.matrix)" in job
+    assert "fail-fast: false" in job
+
+
+def test_release_published_promotes_only_after_green_gate() -> None:
+    job = _extract_job(_workflow("release-published.yml"), "promote-pkg-repo")
+    assert "needs: [resolve, publish-pkg-repo, prepare-live-gate, validate-live-pages-install]" in job
+    assert "if: always() && needs.publish-pkg-repo.result == 'success'" in job
+    assert "'promote'" in job
+    assert "'discard'" in job
+    assert "STAGING_PREFIX: ${{ needs.publish-pkg-repo.outputs.staging_prefix }}" in job
+    assert "ROUTE_MATRIX: ${{ needs.publish-pkg-repo.outputs.route_matrix }}" in job
+    assert "exit 1" in job
+
+
+def test_release_published_serialises_publishes() -> None:
+    text = _workflow("release-published.yml")
+    assert re.search(r"^concurrency:\n  group: \S+\n  cancel-in-progress: false\n", text, re.MULTILINE), text
+
+
+def test_release_published_prepare_live_gate_fails_on_untestable_target() -> None:
+    job = _extract_job(_workflow("release-published.yml"), "prepare-live-gate")
+    assert "::error::prepare-live-gate produced an empty matrix" in job
+    assert "::error::touched target(s) with no matching CI leg to live-install-test" in job
+    assert "::error::touched target(s) outside resolve's destinations (state drift)" in job
+
+
+def test_release_published_prepare_live_gate_uses_shared_matrix_builder() -> None:
+    """The matrix step imports the SAME pure function tests/test_live_gate_matrix.py
+    exercises directly -- never a re-implementation embedded in the YAML."""
+    job = _extract_job(_workflow("release-published.yml"), "prepare-live-gate")
+    assert "from scripts.live_gate_matrix import compute_live_gate_matrix" in job
+    assert "TOUCHED: ${{ needs.publish-pkg-repo.outputs.touched }}" in job
+
+
+def test_default_live_base_url_is_stable() -> None:
+    from tests.smoke import test_repo_install as repo_install
+
+    assert repo_install.DEFAULT_LIVE_BASE_URL == "https://pfblockerng.github.io/pkg/stable"

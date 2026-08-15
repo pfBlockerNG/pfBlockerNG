@@ -30,9 +30,10 @@ def test_published_callback_dispatches_exact_release_identity() -> None:
     assert "release_id" in PUBLISHED
     assert "release_tag" in PUBLISHED
     assert "source_repository" in PUBLISHED
-    # The in-repo "Publish the pkg catalogue" step replaced the retired
+    # The in-repo "Stage the pkg catalogue" step (renamed from "Publish the pkg
+    # catalogue" by issue #2389's gate-before-announce rework) replaced the retired
     # `gh workflow run publish.yml -f <name>=<value>` dispatch to pfBlockerNG/pkg.
-    step = extract_step(PUBLISHED, "Publish the pkg catalogue")
+    step = extract_step(PUBLISHED, "Stage the pkg catalogue")
     assert "RELEASE_ID: ${{ needs.resolve.outputs.release_id }}" in step
     assert "DESTINATIONS: ${{ needs.resolve.outputs.destinations }}" in step
     assert "gh release list" not in PUBLISHED
