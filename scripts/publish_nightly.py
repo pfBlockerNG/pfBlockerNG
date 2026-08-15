@@ -331,10 +331,14 @@ def _route_targets(
         if varver in targets:
             raise PublishNightlyError(f"two ROUTE build rows resolve to the same varver {varver!r}")
 
+        # Canonical fan-out is per-major; extra_pkgs deps attach only to
+        # ROUTE rows that declare their origin (issue #2383).
         dependencies: list[pc.VerifiedAsset] = []
         for dep in leg.dependencies:
             if not brp._pkg_matches_abi(dep.manifest, f"FreeBSD:{major}:*"):
                 raise PublishNightlyError(f"{dep.declared_name!r}: dependency ABI does not match FreeBSD major {major}")
+            if not pr._row_declares_dep(row, dep):
+                continue
             dependencies.append(dep)
 
         targets[varver] = pr._Target(row=row, canonical=leg.canonical, dependencies=dependencies)
