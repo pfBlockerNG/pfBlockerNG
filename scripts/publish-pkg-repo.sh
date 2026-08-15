@@ -20,7 +20,8 @@
 # is `exit 1` on the spot, before any git add ever runs. There is no
 # `git add -A` / `git add .` anywhere below — only the exact touched (channel,
 # varver) directories the publisher reports, plus the landing page's own
-# output and docs/.nojekyll.
+# output and docs/.nojekyll; on a catalogue no-op, only the two regenerated
+# client scripts (issue #2408).
 #
 # On a rejected push (another run advanced origin/main first), the ENTIRE cycle
 # reruns from a fresh sync — not a rebase of the local commit — because
@@ -155,83 +156,107 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     trap - EXIT
     rm -f "$out_file"
 
+    script_refresh=0
     if [ -z "$touched" ]; then
-        echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
-        exit 0
-    fi
+        # --- catalogue unchanged: the client scripts may still have drifted ---
+        # docs/add-repo.sh and docs/migrate-channel.sh are generated from the
+        # PFB_SRC checkout, not from the release assets, so a script-only fix
+        # must ship even when every destination already matches (issue #2408).
+        # Only the deterministic script pair is regenerated here — the
+        # landing/browse/autoindex pages embed a generation timestamp, and
+        # writing them on a no-op would manufacture a commit on every run.
+        python3 "${PFB_SRC}/scripts/gen_landing.py" \
+            "${PKG_REPO}/docs" "$BASE_URL" "${PFB_SRC}/scripts/add-repo.sh" \
+            --client-scripts-only
+        git -C "$PKG_REPO" add -- docs/add-repo.sh docs/migrate-channel.sh
+        if git -C "$PKG_REPO" diff --cached --quiet; then
+            echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
+            exit 0
+        fi
+        echo "publish-pkg-repo: catalogue unchanged — client script(s) drifted; committing a script refresh."
+        script_refresh=1
+    else
+        # --- landing page regen — only for an actual publish ---------------
+        # Never on the catalogue-NOOP path above: gen_landing.py's page output
+        # embeds a generation timestamp, so running it there would manufacture
+        # a diff (and therefore a commit) on every run even when no catalogue
+        # changed.
+        #
+        # landing_matrix.json's abi expression (pinned by
+        # tests/shell/publish_pkg_repo_spec.sh): freebsd_major alone feeds the
+        # CPU-wildcarded ABI string. The retired `arch` matrix field is never
+        # interpolated — every published .pkg is NO_ARCH, so the honest ABI is the
+        # wildcard the packages themselves carry, never a per-arch value. The two
+        # modes share this ONE transform, differing only in the matrix array's
+        # source: tagged's pinned $ROUTE_MATRIX, nightly's own handoff-carried
+        # route_matrix (the handoff is what this run actually verified against —
+        # never a freshly re-read live matrix, which could have moved since).
+        case "$PUBLISH_KIND" in
+            tagged) landing_input="$ROUTE_MATRIX" ;;
+            nightly) landing_input="$(jq -ec '.route_matrix' "$HANDOFF_FILE")" ;;
+        esac
+        landing_matrix_file=$(mktemp)
+        printf '%s' "$landing_input" | jq -c \
+            '[.[] | {abi: "FreeBSD:\(.freebsd_major):*", pfsense_version, variant, php_version, py_flavor}]' \
+            >"$landing_matrix_file"
+        python3 "${PFB_SRC}/scripts/gen_landing.py" \
+            "${PKG_REPO}/docs" "$BASE_URL" "${PFB_SRC}/scripts/add-repo.sh" \
+            --matrix "$landing_matrix_file"
+        rm -f "$landing_matrix_file"
+        true >"${PKG_REPO}/docs/.nojekyll"
 
-    # --- landing page regen — only for an actual publish -------------------
-    # Skipped entirely on a no-op above: gen_landing.py embeds a generation
-    # timestamp, so running it unconditionally would manufacture a diff (and
-    # therefore a commit) on every run even when no catalogue changed.
-    #
-    # landing_matrix.json's abi expression (pinned by
-    # tests/shell/publish_pkg_repo_spec.sh): freebsd_major alone feeds the
-    # CPU-wildcarded ABI string. The retired `arch` matrix field is never
-    # interpolated — every published .pkg is NO_ARCH, so the honest ABI is the
-    # wildcard the packages themselves carry, never a per-arch value. The two
-    # modes share this ONE transform, differing only in the matrix array's
-    # source: tagged's pinned $ROUTE_MATRIX, nightly's own handoff-carried
-    # route_matrix (the handoff is what this run actually verified against —
-    # never a freshly re-read live matrix, which could have moved since).
-    case "$PUBLISH_KIND" in
-        tagged) landing_input="$ROUTE_MATRIX" ;;
-        nightly) landing_input="$(jq -ec '.route_matrix' "$HANDOFF_FILE")" ;;
-    esac
-    landing_matrix_file=$(mktemp)
-    printf '%s' "$landing_input" | jq -c \
-        '[.[] | {abi: "FreeBSD:\(.freebsd_major):*", pfsense_version, variant, php_version, py_flavor}]' \
-        >"$landing_matrix_file"
-    python3 "${PFB_SRC}/scripts/gen_landing.py" \
-        "${PKG_REPO}/docs" "$BASE_URL" "${PFB_SRC}/scripts/add-repo.sh" \
-        --matrix "$landing_matrix_file"
-    rm -f "$landing_matrix_file"
-    true >"${PKG_REPO}/docs/.nojekyll"
-
-    # --- stage EXACTLY what changed — never -A / . --------------------------
-    stage_paths="docs/.nojekyll"
-    [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
-    [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
-    # write_site() also publishes the two client scripts into the site root — the
-    # landing page's bootstrap one-liner and its channel-switch snippet fetch them
-    # from there, so an unstaged copy serves a 404 into `sh`.
-    [ -f "${PKG_REPO}/docs/add-repo.sh" ] && stage_paths="${stage_paths} docs/add-repo.sh"
-    [ -f "${PKG_REPO}/docs/migrate-channel.sh" ] && stage_paths="${stage_paths} docs/migrate-channel.sh"
-    for target in $touched; do
-        stage_paths="${stage_paths} docs/${target}"
-    done
-    # gen_landing.py's all_dirs() regenerates a per-directory autoindex at
-    # EVERY existing level, not just this run's touched targets — stage every
-    # directory's index.html too, matching what actually changed on disk.
-    docs_root="${PKG_REPO}/docs"
-    dir_indexes=$(find "$docs_root" -mindepth 1 -type d -print | while IFS= read -r d; do
-        [ -f "${d}/index.html" ] && printf 'docs/%s/index.html\n' "${d#"${docs_root}/"}"
-    done)
-    stage_paths="${stage_paths}
+        # --- stage EXACTLY what changed — never -A / . ----------------------
+        stage_paths="docs/.nojekyll"
+        [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
+        [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
+        # write_site() also publishes the two client scripts into the site root — the
+        # landing page's bootstrap one-liner and its channel-switch snippet fetch them
+        # from there, so an unstaged copy serves a 404 into `sh`.
+        [ -f "${PKG_REPO}/docs/add-repo.sh" ] && stage_paths="${stage_paths} docs/add-repo.sh"
+        [ -f "${PKG_REPO}/docs/migrate-channel.sh" ] && stage_paths="${stage_paths} docs/migrate-channel.sh"
+        for target in $touched; do
+            stage_paths="${stage_paths} docs/${target}"
+        done
+        # gen_landing.py's all_dirs() regenerates a per-directory autoindex at
+        # EVERY existing level, not just this run's touched targets — stage every
+        # directory's index.html too, matching what actually changed on disk.
+        docs_root="${PKG_REPO}/docs"
+        dir_indexes=$(find "$docs_root" -mindepth 1 -type d -print | while IFS= read -r d; do
+            [ -f "${d}/index.html" ] && printf 'docs/%s/index.html\n' "${d#"${docs_root}/"}"
+        done)
+        stage_paths="${stage_paths}
 ${dir_indexes}"
-    # shellcheck disable=SC2086  # stage_paths is a controlled, space/newline-separated pathspec list
-    git -C "$PKG_REPO" add -- $stage_paths
+        # shellcheck disable=SC2086  # stage_paths is a controlled, space/newline-separated pathspec list
+        git -C "$PKG_REPO" add -- $stage_paths
 
-    if git -C "$PKG_REPO" diff --cached --quiet; then
-        echo "publish-pkg-repo: NOOP — the publisher reported changes but nothing is staged; discarding."
-        git -C "$PKG_REPO" reset --quiet
-        exit 0
+        if git -C "$PKG_REPO" diff --cached --quiet; then
+            echo "publish-pkg-repo: NOOP — the publisher reported changes but nothing is staged; discarding."
+            git -C "$PKG_REPO" reset --quiet
+            exit 0
+        fi
     fi
 
-    case "$PUBLISH_KIND" in
-        tagged)
-            commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\n' \
-                "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID")
-            ;;
-        nightly)
-            # jq -er: a missing/null pkg_version aborts here (via
-            # set -e) before any commit — same containment rule as a non-zero
-            # exit from the publisher itself further up.
-            nightly_pkg_version=$(jq -er '.pkg_version' "$HANDOFF_FILE")
-            commit_message=$(printf 'publish: nightly %s -> ["nightly"]\n\npfBlockerNG-Nightly-Version: %s\npfBlockerNG-Source-Run-Id: %s\n' \
-                "$nightly_pkg_version" "$nightly_pkg_version" "$SOURCE_RUN_ID")
-            ;;
-    esac
+    if [ "$script_refresh" -eq 1 ]; then
+        # Mode-independent: the refresh carries no release/nightly identity —
+        # its content comes from PFB_SRC, so the run id is the whole provenance.
+        commit_message=$(printf 'publish: refresh client scripts\n\npfBlockerNG-Source-Run-Id: %s\n' \
+            "$SOURCE_RUN_ID")
+    else
+        case "$PUBLISH_KIND" in
+            tagged)
+                commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\n' \
+                    "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID")
+                ;;
+            nightly)
+                # jq -er: a missing/null pkg_version aborts here (via
+                # set -e) before any commit — same containment rule as a non-zero
+                # exit from the publisher itself further up.
+                nightly_pkg_version=$(jq -er '.pkg_version' "$HANDOFF_FILE")
+                commit_message=$(printf 'publish: nightly %s -> ["nightly"]\n\npfBlockerNG-Nightly-Version: %s\npfBlockerNG-Source-Run-Id: %s\n' \
+                    "$nightly_pkg_version" "$nightly_pkg_version" "$SOURCE_RUN_ID")
+                ;;
+        esac
+    fi
     # Fixed bot identity via per-invocation -c flags, not repo config: a bare CI
     # checkout carries no git identity, and this script must not depend on one
     # being configured elsewhere (matches release.yml/module-durations.yml's

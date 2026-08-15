@@ -1164,7 +1164,21 @@ def main(argv: list[str] | None = None) -> int:
         "php_version, py_flavor}) — splits the packages table by pfSense edition. Omitted -> "
         "a single 'Other builds' table from manifest data.",
     )
+    ap.add_argument(
+        "--client-scripts-only",
+        action="store_true",
+        help="write only the two deterministic client scripts (add-repo.sh, "
+        "migrate-channel.sh); no landing/browse/autoindex pages. Used by "
+        "publish-pkg-repo.sh's catalogue-NOOP path (issue #2408) — the pages embed a "
+        "generation timestamp, so writing them there would manufacture a commit on "
+        "every run.",
+    )
     args = ap.parse_args(argv)
+    if args.client_scripts_only:
+        write_add_repo(args.site, args.add_repo)
+        write_migrate_channel(args.site, args.add_repo)
+        print("client scripts written: add-repo.sh, migrate-channel.sh")
+        return 0
     matrix = None
     if args.matrix:
         with open(args.matrix) as fh:
