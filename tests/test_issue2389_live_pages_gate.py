@@ -27,6 +27,7 @@ def test_nightly_post_publish_passes_live_identity() -> None:
     assert "needs: [prepare, publish-pkg-repo]" in job
     assert "uses: ./.github/workflows/smoke-single.yml" in job
     assert "pytest_marker: repo" in job
+    assert "pytest_filter: test_install_from_live_nightly_url" in job
     assert "smoke_nightly_live_url: https://pfblockerng.github.io/pkg/nightly" in job
     assert "smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}" in job
     assert "smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}" in job
