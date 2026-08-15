@@ -248,6 +248,9 @@ Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
     When run script "$SCRIPT" --help
     The status should be success
     The output should include "require the EXPORTED artifact's pkg ABI major"
+    # the header's LAST lines: a numeric sed range drifts as options are added
+    The output should include '--force          overwrite the target tag'
+    The output should include 'Auth: as in image-publish.sh'
   End
 End
 
