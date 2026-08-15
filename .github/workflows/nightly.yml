@@ -322,6 +322,16 @@ jobs:
               )"
             done
           fi
+          DEP_COPIED=0
+          for RESULT_PKG in result/*.pkg; do
+            [ -f "$RESULT_PKG" ] || continue
+            [ "$(basename "$RESULT_PKG")" = "$PKG_NAME" ] && continue
+            DEP_COPIED=$((DEP_COPIED + 1))
+          done
+          if [ "$DEP_COPIED" -ne "$ORIGIN_COUNT" ]; then
+            echo "::error::dep .pkg count ($DEP_COPIED) != extra_pkgs ($ORIGIN_COUNT)"
+            exit 1
+          fi
 
           jq -n \
             --argjson matrix_row "$MATRIX_ROW" \

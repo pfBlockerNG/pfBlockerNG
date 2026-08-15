@@ -232,11 +232,27 @@ def _wrap_dependency_pkg(
 # --------------------------------------------------------------------------- #
 
 
+_CHARSET_DEP_SPEC: tuple[str, str] = ("py311-charset-normalizer", "3.4.0")
+_CHARSET_ORIGIN = "textproc/py-charset-normalizer"
+
+
 @dataclass(frozen=True)
 class _LegSpec:
     row: dict[str, object]
-    dep_specs: Sequence[tuple[str, str]] = ()
+    # None = derive from row extra_pkgs (issue #2405: count must match).
+    dep_specs: Sequence[tuple[str, str]] | None = None
     source_date_epoch: int = _EPOCH
+
+
+def _resolved_dep_specs(spec: _LegSpec) -> Sequence[tuple[str, str]]:
+    if spec.dep_specs is not None:
+        return spec.dep_specs
+    extras = list(spec.row.get("extra_pkgs") or [])
+    if extras == [_CHARSET_ORIGIN]:
+        return (_CHARSET_DEP_SPEC,)
+    if extras:
+        raise AssertionError(f"fixture has no default dep for extra_pkgs={extras!r}")
+    return ()
 
 
 def _make_record(snapshot: _Snapshot, row: dict[str, object], epoch: int = _EPOCH) -> dict[str, object]:
@@ -260,7 +276,7 @@ def _build_leg_result(snapshot: Any, spec: _LegSpec, *, assets_root: Path) -> di
     canonical_name = f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{snapshot.pkg_version}.pkg"
     _path, digest = _wrap_canonical_pkg(legdir, record, local_name=canonical_name)
     dep_artifacts = []
-    for name, version in spec.dep_specs:
+    for name, version in _resolved_dep_specs(spec):
         dep_name = f"{name}-{version}.pkg"
         _dep_path, dep_digest = _wrap_dependency_pkg(
             legdir, name=name, version=version, abi=f"FreeBSD:{major}:*", local_name=dep_name
@@ -519,7 +535,7 @@ class StaleTests(_TempDirTestCase):
 
 # --------------------------------------------------------------------------- #
 # T5 — retention: keep+1 canonical generations published sequentially, oldest
-# evicted, a dependency introduced on the FIRST (evicted) generation survives.
+# evicted; the charset extra (declared on every CE row, issue #2405) survives.
 # --------------------------------------------------------------------------- #
 
 
@@ -534,11 +550,10 @@ class RetentionTests(_TempDirTestCase):
             snapshot = _snapshot(build_date=date(2026, 8, 1 + seq))
             if seq == 0:
                 first_version = snapshot.pkg_version
-            dep_specs = [("py311-charset-normalizer", "3.4.0")] if seq == 0 else ()
             results_dir = self.new_results_dir()
             handoff = _build_handoff(
                 snapshot,
-                legs=[_LegSpec(row=ROW_CE15, dep_specs=dep_specs)],
+                legs=[_LegSpec(row=ROW_CE15)],
                 route_rows=[ROW_CE15],
                 assets_root=results_dir,
             )
