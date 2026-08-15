@@ -616,6 +616,28 @@ def test_verify_reports_newest_version_when_catalogue_carries_several() -> None:
         assert "version -t" in log, f"verify must call pkg version -t, log was:\n{log}"
 
 
+def test_verify_reports_newest_version_when_catalogue_is_oldest_first() -> None:
+    """Reverse rquery order must still report 3.3.2 (issue #2393).
+
+    Newest-first fixtures stay green if verify takes the first line. Oldest-first
+    is the row that goes red if ``pkg version -t`` is ignored.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            rquery_lines=(
+                "pfSense-pkg-pfBlockerNG-3.3.0",
+                "pfSense-pkg-pfBlockerNG-3.3.2",
+            ),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "==> OK: pfSense-pkg-pfBlockerNG-3.3.2 available" in proc.stdout, (
+            f"verify must pick newest even when rquery lists oldest first:\n{proc.stdout}"
+        )
+        assert "version -t" in _pkg_log(root).read_text()
+
+
 def test_verify_picks_portrevision_via_pkg_version_t() -> None:
     """``pkg version -t`` must prefer PORTREVISION ``_2`` over ``_1`` of the same PORTVERSION."""
     with tempfile.TemporaryDirectory() as root:
@@ -625,6 +647,22 @@ def test_verify_picks_portrevision_via_pkg_version_t() -> None:
             rquery_lines=(
                 "pfSense-pkg-pfBlockerNG-3.3.2_2",
                 "pfSense-pkg-pfBlockerNG-3.3.2_1",
+            ),
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert "==> OK: pfSense-pkg-pfBlockerNG-3.3.2_2 available" in proc.stdout, proc.stdout
+        assert "version -t" in _pkg_log(root).read_text()
+
+
+def test_verify_picks_portrevision_when_rquery_lists_older_revision_first() -> None:
+    """PORTREVISION pick must not depend on rquery order."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_add_repo(
+            root,
+            extra_args=("--channel", "stable"),
+            rquery_lines=(
+                "pfSense-pkg-pfBlockerNG-3.3.2_1",
+                "pfSense-pkg-pfBlockerNG-3.3.2_2",
             ),
         )
         assert proc.returncode == 0, proc.stderr
