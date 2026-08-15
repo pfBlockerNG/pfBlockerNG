@@ -427,8 +427,7 @@ def test_already_up_to_date_performs_zero_mutations() -> None:
 
 
 def test_up_to_date_hook_gets_chmod_755_even_when_bytes_are_identical() -> None:
-    """CodeRabbit finding on install-common.sh step 2 (carried into install.sh): "up
-    to date" only means the HOOK BYTES match — never that the mode is already
+    """ "Up to date" only means the HOOK BYTES match — never that the mode is already
     correct. A byte-identical hook left at 0644 (e.g. a restored config backup, or a
     tar extraction that dropped the exec bit) must still be made executable, or it
     never runs at boot."""
@@ -635,8 +634,7 @@ def test_resume_with_conf_present_but_hook_absent() -> None:
 
 
 def test_stale_foreign_conf_rejected_when_detection_fails() -> None:
-    """CodeRabbit finding on install-common.sh step 3 (carried into install.sh): the
-    boot MARKER alone is not enough — the hook leaves an EXISTING conf UNCHANGED
+    """The boot MARKER alone is not enough — the hook leaves an EXISTING conf UNCHANGED
     when detection fails, so a pre-existing conf carrying the marker but resolving
     to ANOTHER base's URL (a stale conf from a fork, a staged prefix, or a restored
     config backup) must still be rejected — never silently accepted and converged
