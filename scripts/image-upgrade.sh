@@ -299,8 +299,9 @@ ssh_guest() {
 # -f`), retrying while pkg reports its own database busy/locked and dying on
 # any other failure. Shared by the --branch path and the --upgrade-pkgs path so
 # both honour the same PKG_LOCK_RETRIES/PKG_LOCK_INTERVAL knobs and fail
-# identically on a stuck lock or a genuine refresh error. CONTEXT names the
-# caller in the non-lock failure message.
+# identically on a stuck lock or a genuine refresh error. CONTEXT is inserted
+# verbatim after "failed" in the non-lock failure message and carries its own
+# preposition (e.g. "after branch switch", "during --upgrade-pkgs").
 pfb_pkg_update_retry() {
     _pkr_log="$1"; _pkr_context="$2"
     true > "$_pkr_log"
@@ -319,7 +320,7 @@ pfb_pkg_update_retry() {
         [ "$_pkr_rc" -eq 0 ] && return 0
         case "$_pkr_out" in
             *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
-            *) die "pkg catalogue refresh failed after ${_pkr_context} (see $_pkr_log)" ;;
+            *) die "pkg catalogue refresh failed ${_pkr_context} (see $_pkr_log)" ;;
         esac
         if [ "$_pkr_try" -ge "$_pkr_retries" ]; then
             die "pkg catalogue refresh still locked after ${_pkr_retries} attempts (see $_pkr_log)"
@@ -376,7 +377,7 @@ pfb_switch_branch() {
     fi
 
     log "branch switch confirmed — refreshing pkg catalogue (pkg update -f)"
-    pfb_pkg_update_retry "${_psb_log_dir}/pkg-update-branch.log" "branch switch"
+    pfb_pkg_update_retry "${_psb_log_dir}/pkg-update-branch.log" "after branch switch"
 }
 # pfb_switch_branch END
 
@@ -454,9 +455,10 @@ pfb_pkg_refresh_verdict() {
 # pfb_abi_major BEGIN
 # pfb_abi_major ABI — the FreeBSD major from `pkg config ABI` output
 # (FreeBSD:MAJOR:arch, e.g. FreeBSD:16:amd64 -> 16); empty when ABI carries no
-# second `:`-field (unset/garbled pkg config output — caller fails closed).
+# second `:`-field, or that field is not all-digits (unset/garbled pkg config
+# output — caller fails closed).
 pfb_abi_major() {
-    printf '%s\n' "$1" | awk -F: '{ print $2 }'
+    printf '%s\n' "$1" | awk -F: '$2 ~ /^[0-9]+$/ { print $2 }'
 }
 # pfb_abi_major END
 
@@ -476,23 +478,34 @@ pfb_kern_major() {
 # the one path that runs unattended with nobody watching the plan; letting it
 # swallow a repo-flip-driven ABI change (issue #2242) or a pkg-reported major
 # crossing installs foreign-major packages onto the running tag (issue #2299).
+# uname -r is the reference because it is the ALREADY-BOOTED kernel's major;
+# libpkg's own version is not snapshotted here — its package ABI is covered by
+# the post-reboot `pkg query '%n %q'` sweep below.
 # Sets the global PKG_WAS_UPGRADED (0 up to date, 1 after an applied upgrade).
 pfb_refresh_pkgs() {
     _prp_log_dir="$1"
 
-    _prp_abi0=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>&1 | tr -d '\r')
+    # 2>/dev/null + last-non-empty-line: ssh_guest always prints its
+    # known-hosts warning on stderr, and a foreign-major pkg binary warns on
+    # stderr too — either would corrupt a `2>&1` capture into a multi-line
+    # value (issue #2299).
+    _prp_abi0=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>/dev/null | tr -d '\r' | awk 'NF { v = $0 } END { print v }')
     _prp_abi0_major=$(pfb_abi_major "$_prp_abi0")
     [ -n "$_prp_abi0_major" ] \
         || die "could not read pkg ABI before pkg update -f (got: ${_prp_abi0:-<empty>})"
-    _prp_kern0=$(ssh_guest 'uname -r' 2>&1 | tr -d '\r')
+    _prp_kern0=$(ssh_guest 'uname -r' 2>/dev/null | tr -d '\r' | awk 'NF { v = $0 } END { print v }')
     _prp_kern0_major=$(pfb_kern_major "$_prp_kern0")
     [ -n "$_prp_kern0_major" ] \
         || die "could not read kernel version before pkg update -f (got: ${_prp_kern0:-<empty>})"
+    # Catch an already-mismatched box (e.g. a prior repo flip) before touching
+    # pkg at all — pkg update -f is not the place to discover it.
+    [ "$_prp_abi0_major" = "$_prp_kern0_major" ] \
+        || die "pkg ABI ${_prp_abi0} does not match kernel ${_prp_kern0} before pkg update -f — refusing to continue (issue #2299)"
 
     log "refreshing package catalogue (pkg update -f)"
-    pfb_pkg_update_retry "${_prp_log_dir}/pkg-update.log" "pkg refresh"
+    pfb_pkg_update_retry "${_prp_log_dir}/pkg-update.log" "during --upgrade-pkgs"
 
-    _prp_abi1=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>&1 | tr -d '\r')
+    _prp_abi1=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>/dev/null | tr -d '\r' | awk 'NF { v = $0 } END { print v }')
     _prp_abi1_major=$(pfb_abi_major "$_prp_abi1")
     [ -n "$_prp_abi1_major" ] \
         || die "could not read pkg ABI after pkg update -f (got: ${_prp_abi1:-<empty>})"
@@ -503,20 +516,30 @@ pfb_refresh_pkgs() {
     # Dry-run detect: pkg prints "Your packages are up to date" when nothing is
     # pending; otherwise it prints an upgrade plan, or — the case this gate
     # exists for — a FreeBSD major-crossing refusal. Parse the output; do NOT
-    # rely solely on exit code, pkg(8) exit semantics vary by version.
+    # rely solely on exit code: real pkg(8) exits 1 whenever a plan is PENDING
+    # (upstream pkg.c: dry_run -> rc=false) and 0 only when up to date, so a
+    # pending plan's rc=1 is normal, not a failure.
     log "checking for pending package upgrades (pkg upgrade -n)"
     _prp_dry_rc=0
     _prp_dry=$(ssh_guest 'pkg upgrade -n' 2>&1) || _prp_dry_rc=$?
     printf '%s\n' "$_prp_dry" | tee "${_prp_log_dir}/pkg-upgrade-dryrun.log"
     case "$_prp_dry" in
-        *'Major OS version upgrade detected'* | *'wrong architecture'*)
+        *'Major OS version upgrade detected'* | *'wrong architecture'* | \
+        *'Newer FreeBSD version'* | *'IGNORE_OSVERSION'*)
             die "pkg upgrade -n reports a FreeBSD major crossing (issue #2299; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
             ;;
     esac
+    # The phrase gate above only catches pkg's own wording; a plan can also
+    # just LIST a foreign-major package (an outdated pkg binary restricts the
+    # dry-run to pkg's own self-upgrade, masking the real plan until -y
+    # re-execs) — so scan every FreeBSD:<major>: token in the plan too.
+    for _prp_tok in $(printf '%s\n' "$_prp_dry" | grep -oE 'FreeBSD:[0-9]+:'); do
+        _prp_tok_major=$(printf '%s' "$_prp_tok" | cut -d: -f2)
+        if [ "$_prp_tok_major" != "$_prp_abi0_major" ]; then
+            die "pkg upgrade -n plan references FreeBSD:${_prp_tok_major}: (base is FreeBSD:${_prp_abi0_major}:) — refusing to continue (issue #2299; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
+        fi
+    done
     _prp_verdict=$(pfb_pkg_refresh_verdict "$_prp_dry")
-    if [ "$_prp_verdict" != up-to-date ] && [ "$_prp_dry_rc" -ne 0 ]; then
-        die "pkg upgrade -n failed (rc=${_prp_dry_rc}; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
-    fi
 
     if [ "$_prp_verdict" = up-to-date ]; then
         log "packages already up to date — skipping pkg upgrade + reboot"
@@ -524,7 +547,7 @@ pfb_refresh_pkgs() {
         return 0
     fi
     if [ "$_prp_verdict" = fail-closed ]; then
-        die "pkg upgrade -n did not report a plan or an up-to-date result (see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
+        die "pkg upgrade -n did not report a plan or an up-to-date result (rc=${_prp_dry_rc}; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
     fi
 
     log "package upgrades pending — running pkg upgrade -y"
@@ -534,6 +557,15 @@ pfb_refresh_pkgs() {
         die "pkg upgrade -y failed (see ${_prp_log_dir}/pkg-upgrade.log)"
     fi
     cat "${_prp_log_dir}/pkg-upgrade.log"
+    # The real cross-major plan can surface only here (pkg self-upgraded and
+    # re-exec'd under -y) — scan the applied log for the same phrases, before
+    # the reboot that would otherwise commit a foreign-major install.
+    case "$(cat "${_prp_log_dir}/pkg-upgrade.log")" in
+        *'Major OS version upgrade detected'* | *'wrong architecture'* | \
+        *'Newer FreeBSD version'* | *'IGNORE_OSVERSION'*)
+            die "pkg upgrade -y reports a FreeBSD major crossing (issue #2299; see ${_prp_log_dir}/pkg-upgrade.log)"
+            ;;
+    esac
     log "rebooting after pkg upgrade"
     # /sbin/reboot drops the connection — expected; ignore the exit code.
     ssh_guest '/sbin/reboot' 2>/dev/null || true
@@ -541,12 +573,23 @@ pfb_refresh_pkgs() {
     wait_guest_ssh 300
     log "box is back after pkg-upgrade reboot"
 
-    _prp_abi2=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>&1 | tr -d '\r')
+    _prp_abi2=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>/dev/null | tr -d '\r' | awk 'NF { v = $0 } END { print v }')
     _prp_abi2_major=$(pfb_abi_major "$_prp_abi2")
-    _prp_kern2=$(ssh_guest 'uname -r' 2>&1 | tr -d '\r')
+    _prp_kern2=$(ssh_guest 'uname -r' 2>/dev/null | tr -d '\r' | awk 'NF { v = $0 } END { print v }')
     _prp_kern2_major=$(pfb_kern_major "$_prp_kern2")
     if [ "$_prp_abi2_major" != "$_prp_abi0_major" ] || [ "$_prp_abi2_major" != "$_prp_kern2_major" ]; then
         die "pkg ABI ${_prp_abi2} (kernel ${_prp_kern2}) after pkg-upgrade reboot, was ${_prp_abi0} — refusing to continue (issue #2299)"
+    fi
+
+    # The box-level ABI/kernel check above is not enough: pkg upgrade -y can
+    # install a foreign-major package without moving the box's own reported
+    # ABI/kernel major, so sweep every installed package's ABI directly.
+    _prp_pkg_abis=$(ssh_guest '/usr/local/sbin/pkg query "%n %q"' 2>/dev/null | tr -d '\r')
+    [ -n "$_prp_pkg_abis" ] \
+        || die "could not read installed package ABIs after pkg-upgrade reboot (issue #2299)"
+    _prp_bad_abis=$(printf '%s\n' "$_prp_pkg_abis" | awk -v want="$_prp_abi0_major" '{ split($2, a, ":"); if (a[2] != want) print }')
+    if [ -n "$_prp_bad_abis" ]; then
+        die "installed package(s) report a foreign FreeBSD ABI major after pkg-upgrade reboot (base ${_prp_abi0_major}; issue #2299): $(printf '%s\n' "$_prp_bad_abis" | head -n 10)"
     fi
 
     PKG_WAS_UPGRADED=1
