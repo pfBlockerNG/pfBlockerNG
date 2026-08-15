@@ -594,10 +594,16 @@ pfb_refresh_pkgs() {
     # The box-level ABI/kernel check above is not enough: pkg upgrade -y can
     # install a foreign-major package without moving the box's own reported
     # ABI/kernel major, so sweep every installed package's ABI directly.
-    _prp_pkg_abis=$(ssh_guest '/usr/local/sbin/pkg query "%n %q"' 2>/dev/null | tr -d '\r')
+    _prp_query_rc=0
+    _prp_pkg_abis=$(ssh_guest '/usr/local/sbin/pkg query "%n %q"' 2>/dev/null) || _prp_query_rc=$?
+    _prp_pkg_abis=$(printf '%s\n' "$_prp_pkg_abis" | tr -d '\r')
+    [ "$_prp_query_rc" -eq 0 ] \
+        || die "pkg query of installed package ABIs failed (rc=${_prp_query_rc}) after pkg-upgrade reboot — refusing to trust a partial list (issue #2299)"
     [ -n "$_prp_pkg_abis" ] \
         || die "could not read installed package ABIs after pkg-upgrade reboot (issue #2299)"
-    _prp_bad_abis=$(printf '%s\n' "$_prp_pkg_abis" | awk -v want="$_prp_abi0_major" '{ split($2, a, ":"); if (a[2] != want) print }')
+    # A fully wildcarded ABI (FreeBSD:*:*) is arch- and major-independent; blank
+    # lines are not packages.
+    _prp_bad_abis=$(printf '%s\n' "$_prp_pkg_abis" | awk -v want="$_prp_abi0_major" 'NF { split($2, a, ":"); if (a[2] != want && a[2] != "*") print }')
     if [ -n "$_prp_bad_abis" ]; then
         die "installed package(s) report a foreign FreeBSD ABI major after pkg-upgrade reboot (base ${_prp_abi0_major}; issue #2299): $(printf '%s\n' "$_prp_bad_abis" | head -n 10)"
     fi
