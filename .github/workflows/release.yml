@@ -1363,7 +1363,7 @@ jobs:
         run: |
           set -eu
 
-          PKGS=$(find pkgs -name "*.pkg" 2>/dev/null | head -20)
+          PKGS=$(find pkgs -type f -name "*.pkg" 2>/dev/null | head -20)
           if [ -z "$PKGS" ]; then
             echo "::error::No .pkg artifacts to attach — download failed or build-pkgs-portable produced none."
             echo "Check the download and build-pkgs-portable job logs for details."

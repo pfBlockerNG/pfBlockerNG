@@ -494,12 +494,14 @@ def test_release_yml_upload_and_download_artifact_majors_match() -> None:
     """issue #2385: a download-artifact major behind upload-artifact misses the
     .pkg artifacts and used to publish a Release with none attached."""
     text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    uploads = {m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "upload"}
-    downloads = {m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "download"}
+    uploads = [m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "upload"]
+    downloads = [m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "download"]
     assert uploads, "release.yml must use actions/upload-artifact"
     assert downloads, "release.yml must use actions/download-artifact"
-    assert uploads == downloads, (
-        f"upload-artifact majors {sorted(uploads)} must equal download-artifact majors {sorted(downloads)}"
+    assert len(set(uploads)) == 1, f"upload-artifact majors {sorted(set(uploads))} must be uniform"
+    assert len(set(downloads)) == 1, f"download-artifact majors {sorted(set(downloads))} must be uniform"
+    assert uploads[0] == downloads[0], (
+        f"upload-artifact major {uploads[0]} must equal download-artifact major {downloads[0]}"
     )
 
 
@@ -509,8 +511,10 @@ def test_attach_pkgs_empty_pkgs_fails_the_step(tmp_path: Path) -> None:
     empty_branch = re.search(r'if \[ -z "\$PKGS" \]; then(?P<body>.*?)\n\s*fi', script, re.DOTALL)
     assert empty_branch is not None, script
     assert "exit 0" not in empty_branch.group("body"), empty_branch.group("body")
+    assert re.search(r'find pkgs -type f -name "\*\.pkg"', script), script
 
     (tmp_path / "pkgs").mkdir()
+    (tmp_path / "pkgs" / "empty.pkg").mkdir()
     completed = subprocess.run(
         ["dash", "-c", script],
         cwd=tmp_path,
