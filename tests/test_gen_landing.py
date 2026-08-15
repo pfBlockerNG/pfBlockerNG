@@ -2014,7 +2014,7 @@ def test_published_add_repo_embeds_hook_and_installs_piped(tmp_path: Path, monke
         '  if [ "$_first" = "$3" ]; then printf "<\\n"; else printf ">\\n"; fi\n'
         "  exit 0\n"
         "fi\n"
-        "case \"$1\" in\n"
+        'case "$1" in\n'
         "  rquery)\n"
         '    fmt=""\n'
         '    for _a in "$@"; do case "$_a" in %*) fmt="$_a" ;; esac; done\n'
