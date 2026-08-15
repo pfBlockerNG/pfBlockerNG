@@ -1412,6 +1412,44 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
     assert "browse.html" not in browse.split("<tbody>")[1]
 
 
+def test_write_site_never_indexes_docs_staging(tmp_path: Path, monkeypatch: Any) -> None:
+    """A staged (not-yet-gated) tree under docs/staging/<seg>/<channel>/<varver>/ (issue
+    #2389's stage->gate->promote flow) stays SERVED as plain files, but write_site must
+    never emit an autoindex under it and must never link it from the root/browse
+    listing -- a concurrent `direct` publish (nightly.yml, pkg-republish.yml -- both
+    outside release-published.yml's concurrency group) during a stage window would
+    otherwise make the un-gated staged tree browsable."""
+    site = tmp_path / "site"
+    _touch(site / "edge" / "ce-2.8" / "FreeBSD:15:amd64" / f"{_CANON}-3.2.16.pkg")
+    _touch(site / "edge" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg")
+    _touch(site / "staging" / "10-1" / "stable" / "ce-2.8" / "meta.conf")
+    _touch(site / "staging" / "10-1" / "stable" / "ce-2.8" / "data.pkg")
+    _touch(site / "staging" / "10-1" / "stable" / "ce-2.8" / "packagesite.pkg")
+
+    manifest = {"name": _CANON, "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
+    monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+
+    # The staged package never counts toward a real channel (it sits under an
+    # unrecognized top-level dir, exactly like any other stray future dir).
+    assert n == 1
+    # The staged files themselves are untouched -- still served, just not indexed.
+    assert (site / "staging" / "10-1" / "stable" / "ce-2.8" / "meta.conf").is_file()
+    # No autoindex anywhere under docs/staging.
+    assert not list(site.glob("staging/**/index.html"))
+    assert not (site / "staging" / "index.html").is_file()
+    # Root/browse listing carries no link to staging at all.
+    root_index = (site / "index.html").read_text()
+    browse = (site / "browse.html").read_text()
+    assert "staging" not in root_index
+    assert 'href="./staging/"' not in browse
+    # A real channel is unaffected — still gets its own autoindex + browse link.
+    assert (site / "edge" / "ce-2.8" / "index.html").is_file()
+    assert 'href="./edge/"' in browse
+
+
 def test_write_site_empty_site_root_renders_four_empty_cards_exit_zero(tmp_path: Path, monkeypatch: Any) -> None:
     """Hostile row: an empty site root (no channel dirs at all) still renders — four empty
     cards, no crash, write_site returns 0 (the CLI's exit-0 equivalent)."""

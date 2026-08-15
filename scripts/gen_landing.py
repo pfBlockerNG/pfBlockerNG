@@ -38,6 +38,14 @@ from pfb_pkg import CANONICAL_EMITTED_IDENTITY, pkg_version_sort_key, read_compa
 # (channel_of_path), never from its name.
 CH_ORDER: list[str] = ["stable", "testing", "edge", "nightly"]
 _CHANNELS: frozenset[str] = frozenset(CH_ORDER)
+# publish-pkg-repo.sh's PUBLISH_STAGE=stage relocates a not-yet-gated publish under
+# this top-level dir (issue #2389) -- files there stay served, but this generator
+# never indexes or links it: it is unreachable from a fresh checkout of the site
+# until promote-pkg-repo.sh's `promote` mode moves it into a real channel, and a
+# concurrent `direct` publish (nightly.yml/pkg-republish.yml, both outside
+# release-published.yml's own concurrency group) could otherwise regenerate this
+# page mid-stage and make the un-gated tree browsable.
+STAGING_TOP_DIR = "staging"
 # Embed markers in add-repo.sh that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
 _HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
@@ -926,10 +934,20 @@ def render_page(
     )
 
 
+def _is_staging_path(rel: str) -> bool:
+    """True for ``STAGING_TOP_DIR`` itself or anything under it (issue #2389)."""
+    return rel.replace(os.sep, "/").split("/", 1)[0] == STAGING_TOP_DIR
+
+
 def all_dirs(site: str) -> list[str]:
-    """Every directory under ``site`` (relative path, "/"-separated), excluding the site root,
-    sorted. Used to emit a browsable autoindex at EVERY level (GitHub Pages has no autoindex)."""
-    out = [os.path.relpath(d, site) for d, _x, _f in os.walk(site) if os.path.relpath(d, site) != "."]
+    """Every directory under ``site`` (relative path, "/"-separated), excluding the site root
+    and the un-gated ``STAGING_TOP_DIR`` subtree, sorted. Used to emit a browsable autoindex
+    at EVERY level (GitHub Pages has no autoindex)."""
+    out = [
+        os.path.relpath(d, site)
+        for d, _x, _f in os.walk(site)
+        if os.path.relpath(d, site) != "." and not _is_staging_path(os.path.relpath(d, site))
+    ]
     return sorted(out)
 
 
@@ -1139,6 +1157,7 @@ def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = N
     with open(os.path.join(site, "index.html"), "w") as fh:
         fh.write(render_page(base, pkgs, conf_fn, matrix))
     root_subdirs, root_files = _dir_entries(site, "")
+    root_subdirs = [d for d in root_subdirs if d != STAGING_TOP_DIR]
     with open(os.path.join(site, "browse.html"), "w") as fh:
         fh.write(render_autoindex("", root_subdirs, root_files, is_root=True))
     # An autoindex index.html in every directory (intermediate + leaf), so each level is browsable.
