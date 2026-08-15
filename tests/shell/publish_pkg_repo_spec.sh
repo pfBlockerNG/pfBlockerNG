@@ -139,8 +139,8 @@ with open(os.path.join(site, "browse.html"), "w") as fh:
 # Mirrors the real generator's all_dirs()/write_site(): a per-directory
 # autoindex at EVERY existing level, not just this run's touched targets. The
 # site-wide walk is the property being pinned, so the stub must walk it too.
-# Skips docs/staging (issue #2389 F4: gen_landing.py never indexes it) so the
-# F5 spec examples can exercise a real index-less directory under docs/.
+# Skips docs/staging (issue #2389: gen_landing.py never indexes it) so the
+# spec examples can exercise a real index-less directory under docs/.
 for dirpath, _dirs, _files in os.walk(site):
     rel = os.path.relpath(dirpath, site)
     if rel == "." or rel == "staging" or rel.startswith("staging" + os.sep):
@@ -346,7 +346,7 @@ JSON
   End
 
   It 'a stray index-less docs/staging dir (leftover from a crashed stage run) never aborts the dir_indexes collector'
-    # gen_landing.py never writes an index.html under docs/staging (issue #2389 F4)
+    # gen_landing.py never writes an index.html under docs/staging (issue #2389)
     # -- reachable here because a `direct` publish (this script's default mode,
     # used by nightly.yml/pkg-republish.yml) can run while a stray docs/staging
     # tree is still sitting on disk from an earlier crashed "stage" run.
