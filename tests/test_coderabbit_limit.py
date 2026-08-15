@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -117,6 +118,14 @@ def test_decode_gh_pages_joins_concatenated_arrays() -> None:
     assert decode_gh_pages(raw) == [{"id": 1}, {"id": 2}]
 
 
+def test_decode_does_not_rewrite_body_containing_join_marker() -> None:
+    body = 'manifest["config"]["user_whitelist"] and grep \'^[-+][^-+]\' then ][ leftover'
+    payload = json.dumps([{"id": 5291612057, "body": body}])
+    assert "][" in payload
+    rows = decode_gh_pages(payload)
+    assert rows == [{"id": 5291612057, "body": body}]
+
+
 def test_format_contains_the_numbers_an_agent_needs() -> None:
     from scripts.agent.coderabbit_limit import format_report
 
@@ -125,4 +134,4 @@ def test_format_contains_the_numbers_an_agent_needs() -> None:
     assert "10 PR / 10 CLI / 10 IDE" in text
     assert "remaining 9" in text
     assert "recommend: open" in text
-    assert "Lower bound" in text
+    assert "allowance shown may be optimistic" in text
