@@ -296,6 +296,33 @@ def _flavor_signature(manifest: dict) -> str:
     return ",".join(sorted(flavored))
 
 
+_PY_FLAVOR_ORIGIN = re.compile(r"^(py)(?:\d+)?-")
+
+
+def _origin_key(value: object) -> tuple[str, str] | None:
+    """(category, unflavored last) for a port origin. Same rule as publish_release."""
+    if not isinstance(value, str) or "/" not in value:
+        return None
+    category, last = value.rsplit("/", 1)
+    if not category or not last:
+        return None
+    stripped = _PY_FLAVOR_ORIGIN.sub("", last, count=1)
+    return (category, stripped or last)
+
+
+def _row_declares_origin(row: Mapping[str, object], origin: object) -> bool:
+    """True iff this matrix row lists ``origin`` in extra_pkgs (issue #2403)."""
+    extras = row.get("extra_pkgs")
+    if not isinstance(extras, list):
+        return False
+    if origin in extras:
+        return True
+    key = _origin_key(origin)
+    if key is None:
+        return False
+    return any(_origin_key(extra) == key for extra in extras)
+
+
 def _pkg_matches_abi(manifest: dict, row_abi: str) -> bool:
     """True if a pre-supplied package's manifest ABI belongs to ``row_abi``'s
     FreeBSD major (OS+major only — the CPU/arch segment is never compared).
@@ -1067,14 +1094,17 @@ def build_repo_matrix(
       source when ``build_nightly`` is True, regardless of ``release_pkgs``.
       When ``None`` (the default), the existing build-from-source path is used unchanged.
 
-    ``dep_pkgs`` (optional, issue #1806) — pre-built dependency .pkg files (e.g.
-      py311-charset-normalizer, built by build-dep-pkg-portable.py) folded into BOTH
-      the release AND nightly catalogs of every build-role matrix entry whose ABI
-      matches (OS+major; see ``_pkg_matches_abi`` — a NO_ARCH dep's abi is CPU-
-      wildcarded). Folded AFTER retention (``retain_by_channel`` / ``_retain_newest``)
-      — NEVER before, or a dep would compete with real releases/nightlies for a
-      retention slot. Route-only (frozen EOL) entries never receive a dep pkg. A
-      dep pkg whose ABI matches no catalog it actually landed in is a hard
+    ``dep_pkgs`` (optional, issue #1806 / #2403) — pre-built dependency .pkg files
+      (e.g. py311-charset-normalizer, built by build-dep-pkg-portable.py) folded
+      into BOTH the release AND nightly catalogs of every build-role matrix entry
+      whose ABI matches (OS+major; see ``_pkg_matches_abi`` — a NO_ARCH dep's abi
+      is CPU-wildcarded) AND whose ``extra_pkgs`` declares the dep's origin (same
+      ``_row_declares_origin`` rule as ``publish_release`` / ``publish_nightly`` —
+      same-major ABI is not enough). Folded AFTER retention
+      (``retain_by_channel`` / ``_retain_newest``) — NEVER before, or a dep would
+      compete with real releases/nightlies for a retention slot. Route-only
+      (frozen EOL) entries never receive a dep pkg. A dep pkg that ABI-matches
+      and is declared by no catalog it actually landed in is a hard
       ``BuildRepoError`` (fail loud, never a silent drop) — matched is tracked only
       at the point a dep is folded into an EMITTED catalog, never merely because its
       ABI matched a row (issue #1806 gate-A finding: a matched-but-unemitted dep must
@@ -1178,7 +1208,9 @@ def build_repo_matrix(
             # in an emitted catalog (below), never merely because it matched this row —
             # marking it matched here unconditionally would let a matched-but-never-emitted
             # dep escape the end-of-run unmatched check (issue #1806 gate-A finding).
-            dep_for_abi = [p for p, m in dep_entries if _pkg_matches_abi(m, abi)]
+            dep_for_abi = [
+                p for p, m in dep_entries if _pkg_matches_abi(m, abi) and _row_declares_origin(entry, m.get("origin"))
+            ]
 
             if release_pkgs is not None:
                 # --- consume mode: serve release/<varver>/ from caller-supplied pre-built .pkg ---

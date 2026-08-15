@@ -22,6 +22,7 @@ validation would otherwise refuse to construct them honestly.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import io
 import itertools
 import json
@@ -100,8 +101,10 @@ def _row(
 
 
 ROW_CE15 = _row(freebsd_major="15", pfsense_version="2.8", variant="CE", extra_pkgs=["textproc/py-charset-normalizer"])
+ROW_CE15_NO_EXTRA = _row(freebsd_major="15", pfsense_version="2.8", variant="CE")
 ROW_PLUS16_03 = _row(freebsd_major="16", pfsense_version="26.03", variant="Plus")
 ROW_PLUS16_07 = _row(freebsd_major="16", pfsense_version="26.07", variant="Plus")
+ROW_PLUS15_03 = _row(freebsd_major="15", pfsense_version="26.03", variant="Plus")
 ROW_ROUTE_ONLY_17 = _row(freebsd_major="17", pfsense_version="17.0", variant="CE", role="route-only")
 
 
@@ -1050,6 +1053,160 @@ class IdentityPostConditionTests(_TempDirTestCase):
         ):
             _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
         self.assertIn("multi-destination identity violation", str(ctx.exception))
+
+
+def _packagesite_names(catalogue_dir: Path) -> set[str]:
+    catalog = catalogue_dir / "packagesite.pkg"
+    data = _ENGINE.pfb_pkg.zstd_decompress(catalog.read_bytes())
+    with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+        member = tf.extractfile("packagesite.yaml")
+        assert member is not None
+        raw = member.read().decode()
+    return {json.loads(line)["name"] for line in raw.splitlines() if line}
+
+
+_CHARSET_PKG = "py311-charset-normalizer-3.4.0.pkg"
+_CHARSET_NAME = "py311-charset-normalizer"
+
+
+class ExtraPkgsEvictionTests(_TempDirTestCase):
+    """issue #2402: Nightly dest leftovers are unlinked before regenerate."""
+
+    def _plant_charset(self, dest_dir: Path, *, major: str) -> None:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        _wrap_dependency_pkg(
+            dest_dir,
+            name=_CHARSET_NAME,
+            version="3.4.0",
+            abi=f"FreeBSD:{major}:*",
+            local_name=_CHARSET_PKG,
+        )
+
+    @_requires_engine
+    def test_stale_plus_extra_evicted_on_new_canonical(self) -> None:
+        first = _snapshot(build_date=date(2026, 8, 4))
+        results_1 = self.new_results_dir()
+        handoff_1 = _build_handoff(
+            first, legs=[_LegSpec(row=ROW_PLUS16_03)], route_rows=[ROW_PLUS16_03], assets_root=results_1
+        )
+        _run(handoff=handoff_1, results_dir=results_1, pkg_repo=self.pkg_repo)
+        dest = self.pkg_repo / "docs" / "nightly" / "plus-26.03"
+        self._plant_charset(dest, major="16")
+
+        second = _snapshot(build_date=date(2026, 8, 5))
+        results_2 = self.new_results_dir()
+        handoff_2 = _build_handoff(
+            second, legs=[_LegSpec(row=ROW_PLUS16_03)], route_rows=[ROW_PLUS16_03], assets_root=results_2
+        )
+        report = _run(handoff=handoff_2, results_dir=results_2, pkg_repo=self.pkg_repo)
+        self.assertFalse(report.noop)
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertTrue((dest / f"pfSense-pkg-pfBlockerNG-{second.pkg_version}.pkg").is_file())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_stale_plus_extra_evicted_on_exact_republish(self) -> None:
+        snapshot = _snapshot()
+        results_1 = self.new_results_dir()
+        handoff = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_PLUS16_03)], route_rows=[ROW_PLUS16_03], assets_root=results_1
+        )
+        first = _run(handoff=handoff, results_dir=results_1, pkg_repo=self.pkg_repo)
+        self.assertFalse(first.noop)
+        dest = self.pkg_repo / "docs" / "nightly" / "plus-26.03"
+        self._plant_charset(dest, major="16")
+
+        results_2 = self.new_results_dir()
+        handoff_2 = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_PLUS16_03)], route_rows=[ROW_PLUS16_03], assets_root=results_2
+        )
+        second = _run(handoff=handoff_2, results_dir=results_2, pkg_repo=self.pkg_repo)
+        self.assertFalse(second.noop)
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_declared_ce_extra_kept_on_new_canonical(self) -> None:
+        first = _snapshot(build_date=date(2026, 8, 4))
+        results_1 = self.new_results_dir()
+        handoff_1 = _build_handoff(
+            first,
+            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
+            route_rows=[ROW_CE15],
+            assets_root=results_1,
+        )
+        _run(handoff=handoff_1, results_dir=results_1, pkg_repo=self.pkg_repo)
+        dest = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+
+        second = _snapshot(build_date=date(2026, 8, 5))
+        results_2 = self.new_results_dir()
+        handoff_2 = _build_handoff(second, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_2)
+        _run(handoff=handoff_2, results_dir=results_2, pkg_repo=self.pkg_repo)
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+        self.assertIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_undeclared_ce_extra_evicted_when_row_drops_extra_pkgs(self) -> None:
+        first = _snapshot(build_date=date(2026, 8, 4))
+        results_1 = self.new_results_dir()
+        handoff_1 = _build_handoff(
+            first,
+            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
+            route_rows=[ROW_CE15],
+            assets_root=results_1,
+        )
+        _run(handoff=handoff_1, results_dir=results_1, pkg_repo=self.pkg_repo)
+        dest = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+
+        second = _snapshot(build_date=date(2026, 8, 5))
+        results_2 = self.new_results_dir()
+        handoff_2 = _build_handoff(
+            second, legs=[_LegSpec(row=ROW_CE15_NO_EXTRA)], route_rows=[ROW_CE15_NO_EXTRA], assets_root=results_2
+        )
+        _run(handoff=handoff_2, results_dir=results_2, pkg_repo=self.pkg_repo)
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+
+class SameMajorDestScopeTests(_TempDirTestCase):
+    """issue #2403: one Nightly major fans to CE + Plus; extra follows extra_pkgs."""
+
+    @_requires_engine
+    def test_same_major_dep_not_published_to_row_with_empty_extra_pkgs(self) -> None:
+        snapshot = _snapshot()
+        results_dir = self.new_results_dir()
+        handoff = _build_handoff(
+            snapshot,
+            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
+            route_rows=[ROW_CE15, ROW_PLUS15_03],
+            assets_root=results_dir,
+        )
+        captured: dict[str, set[str]] = {}
+        orig = pr._drop_assets
+
+        def _spy(dest_dir: Path, asset_map: dict) -> bool:
+            captured[dest_dir.name] = set(asset_map)
+            return orig(dest_dir, asset_map)
+
+        with mock.patch.object(pr, "_drop_assets", side_effect=_spy):
+            _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+
+        self.assertIn(_CHARSET_PKG, captured["ce-2.8"])
+        self.assertNotIn(_CHARSET_PKG, captured["plus-26.03"])
+        docs = self.pkg_repo / "docs" / "nightly"
+        self.assertTrue((docs / "ce-2.8" / _CHARSET_PKG).is_file())
+        self.assertFalse((docs / "plus-26.03" / _CHARSET_PKG).exists())
+        self.assertIn(_CHARSET_NAME, _packagesite_names(docs / "ce-2.8"))
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(docs / "plus-26.03"))
+
+    @_requires_engine
+    def test_route_targets_continue_filter_required_for_same_major_plus(self) -> None:
+        """Nightly dest attach must skip a dest whose row does not declare the extra."""
+        source = inspect.getsource(pn._route_targets)
+        self.assertIn("_row_declares_dep", source)
+        self.assertIn("continue", source)
 
 
 if __name__ == "__main__":
