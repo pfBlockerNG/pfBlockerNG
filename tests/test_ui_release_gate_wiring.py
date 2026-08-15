@@ -474,9 +474,7 @@ def test_build_pkgs_portable_leg_step_carries_row_identity_and_abi() -> None:
 # --------------------------------------------------------------------------- #
 
 
-_ARTIFACT_ACTION_RE = re.compile(
-    r"uses:\s+actions/(?P<kind>upload|download)-artifact@v(?P<major>\d+)"
-)
+_ARTIFACT_ACTION_RE = re.compile(r"uses:\s+actions/(?P<kind>upload|download)-artifact@v(?P<major>\d+)")
 
 
 def test_attach_pkgs_downloads_every_leg_by_pattern_with_merge() -> None:
