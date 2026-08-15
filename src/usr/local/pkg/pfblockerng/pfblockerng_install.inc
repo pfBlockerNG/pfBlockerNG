@@ -574,27 +574,34 @@ update_status(" General Tab -> IP Tab settings...");
 
 $pfb_gen_section  = PfbConfig::readSection('installedpackages/pfblockerng/config/0');
 $pfb_ip_section   = PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0');
-// issue #1772: gate on the OPERATOR view -- a marker-only General section (only
-// the installer's own settings_family, seeded before this region on every
-// install) is a genuinely fresh install; migrating it seeded 14 phantom blank
-// keys into the IP section. Same chokepoint as the #1770/#1771/#1775 reads.
-if (!empty(pfb_gconfig_operator_view($pfb_gen_section)) && empty($pfb_ip_section)) {
+// issue #1772: gate on the 14 source keys, not operator-view emptiness.
+// pfb_schedule_migrate() (via pfb_install_settings_family_finalize, above)
+// seeds schedule keys into General on a virgin box; those survive
+// pfb_gconfig_operator_view() and must not count as pre-existing IP settings.
+$settings = array(	'enable_dup', 'enable_agg', 'suppression', 'enable_log', 'maxmind_locale', 'database_cc',
+			'inbound_interface', 'inbound_deny_action', 'outbound_interface', 'outbound_deny_action',
+			'enable_float', 'pass_order', 'autorule_suffix', 'killstates' );
+$has_migratable = false;
+foreach ($settings as $setting) {
+	if (array_key_exists($setting, $pfb_gen_section)) {
+		$has_migratable = true;
+		break;
+	}
+}
+if ($has_migratable && empty($pfb_ip_section)) {
 
 	$pfb['gconfig'] = $pfb_gen_section;
 	$pfb['iconfig'] = $pfb_ip_section;
 
-	$settings = array(	'enable_dup', 'enable_agg', 'suppression', 'enable_log', 'maxmind_locale', 'database_cc',
-				'inbound_interface', 'inbound_deny_action', 'outbound_interface', 'outbound_deny_action',
-				'enable_float', 'pass_order', 'autorule_suffix', 'killstates' );
-
 	foreach ($settings as $setting) {
-		// issue #1772: ?? -- an absent key copies as '' with no
-		// Undefined-array-key warning, and a stored '0' migrates as '0'
-		// (the empty('0') falsiness class, issues #1787/#1792).
-		$pfb['iconfig'][$setting] = $pfb['gconfig'][$setting] ?? '';
-		if (isset($pfb['gconfig'][$setting])) {
-			unset($pfb['gconfig'][$setting]);
+		if (!array_key_exists($setting, $pfb['gconfig'])) {
+			continue;
 		}
+		// issue #1772: copy only keys that exist so a stored '0' stays '0'
+		// (the empty('0') falsiness class, issues #1787/#1792) and absent
+		// keys are not planted as ''.
+		$pfb['iconfig'][$setting] = $pfb['gconfig'][$setting];
+		unset($pfb['gconfig'][$setting]);
 	}
 	// issue #1921: pre-pass legacy reshape -- raw write-back keeps bystander values
 	// byte-identical for pfb_registry_pass()'s rename/grandfather decisions.

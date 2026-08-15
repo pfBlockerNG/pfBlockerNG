@@ -115,4 +115,26 @@ final class InstallGeneralToIpMigrationTest extends TestCase
 		$this->assertSame('v4', $gen['settings_family'] ?? null,
 			'the installer marker must survive a real migration untouched');
 	}
+
+	public function testScheduleSeededGeneralDoesNotPlantBlankIpKeys(): void
+	{
+		// Current installer order: pfb_schedule_migrate() writes these
+		// into General before this region. They are not IP-tab leftovers.
+		$this->seedGeneralSection([
+			'settings_family' => 'v4',
+			'pfb_scheduled_feed_updates' => 'on',
+			'pfb_schedule_weekday' => '7',
+			'pfb_schedule_hour' => '0',
+			'pfb_schedule_minute' => '0',
+			'skipfeed' => '',
+		]);
+
+		pfb_install_oracle_gen_to_ip_region();
+
+		$this->assertSame([], $this->ipSection(),
+			'schedule keys in General are not IP leftovers -- do not plant the 14 blank IP keys');
+		$gen = $GLOBALS['config']['installedpackages']['pfblockerng']['config'][0];
+		$this->assertSame('on', $gen['pfb_scheduled_feed_updates'] ?? null);
+		$this->assertArrayNotHasKey('suppression', $this->ipSection());
+	}
 }
