@@ -2,10 +2,10 @@
 #
 # Reviews are beneficial and stay advisory (they never gate merge). Each
 # automatic incremental review still spends one Fair Usage slot, so keep
-# auto-review on the first look plus one follow-up, then pause. Nudge with
-# `@coderabbitai review` only when product behaviour changed after that.
-# Path for quota notices, wait-then-nudge, and spend tightening:
-# .agents/policy/coderabbit.md (landing.md only names the hook).
+# auto-review on the first look plus one follow-up, then pause. Agents
+# must `@coderabbitai pause` during a Fair Usage window or a multi-PR
+# burst — `@coderabbitai review` is ignored unless auto-review is paused.
+# Path: .agents/policy/coderabbit.md (landing.md only names the hook).
 reviews:
   auto_review:
     enabled: true
