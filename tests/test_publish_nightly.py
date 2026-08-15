@@ -1203,7 +1203,7 @@ class SameMajorDestScopeTests(_TempDirTestCase):
 
     @_requires_engine
     def test_route_targets_continue_filter_required_for_same_major_plus(self) -> None:
-        """Drop the Nightly `_row_declares_dep` continue and this dest case REDS."""
+        """Nightly dest attach must skip a dest whose row does not declare the extra."""
         source = inspect.getsource(pn._route_targets)
         self.assertIn("_row_declares_dep", source)
         self.assertIn("continue", source)
