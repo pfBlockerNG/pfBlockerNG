@@ -330,8 +330,11 @@ def _pushed_matrix(tmp_path: Path) -> dict[str, Any]:
 
 class TestActivationPr:
     """Scenario (issue #1837): after a publish, the leg's matrix entry is
-    activated (ci: true) with the box-verified versions, via ONE tracker/* PR;
-    freebsd_version only follows the box when the MAJOR changed."""
+    activated (ci: true) with the box-verified php/py versions, via ONE
+    tracker/* PR. A FreeBSD major mismatch between the guest and the matrix
+    row refuses to activate (::error:: + exit 1, no write) instead of
+    rewriting freebsd_version/freebsd_major; either side being unrecorded
+    warns without blocking the activation (issue #2242)."""
 
     _last_proc: subprocess.CompletedProcess[str] | None = None
 
@@ -414,6 +417,35 @@ class TestActivationPr:
         assert "16" in proc.stdout
         assert "push" not in git_log
         assert "pr create" not in gh_log
+
+    def test_missing_matrix_freebsd_major_warns_and_proceeds(self, tmp_path: Path) -> None:
+        """issue #2242 C7: an empty side of the major comparison must not go silent —
+        the step warns naming the missing side, but still activates (unlike a real
+        mismatch, which hard-stops)."""
+        matrix = json.loads(json.dumps(PLUS_2607_MATRIX))
+        del matrix["versions"][1]["freebsd_major"]
+        facts = FACTS_857.replace("freebsd_major=16", "freebsd_major=17")
+        git_log, gh_log, cwd = self._run(tmp_path, facts=facts, matrix=matrix)
+        proc = self._last_proc
+        assert proc is not None
+        assert proc.returncode == 0
+        assert "::warning::" in proc.stdout
+        assert "17" in proc.stdout
+        assert "--force origin tracker/matrix-activate-plus-26.07" in git_log
+        assert "pr create" in gh_log
+
+    def test_missing_guest_freebsd_major_warns_and_proceeds(self, tmp_path: Path) -> None:
+        """issue #2242 C7: the guest side can also be empty (a facts probe that
+        never resolved it) — same warn-and-proceed contract."""
+        facts = FACTS_857.replace("freebsd_major=16\n", "")
+        git_log, gh_log, _ = self._run(tmp_path, facts=facts)
+        proc = self._last_proc
+        assert proc is not None
+        assert proc.returncode == 0
+        assert "::warning::" in proc.stdout
+        assert "16" in proc.stdout
+        assert "--force origin tracker/matrix-activate-plus-26.07" in git_log
+        assert "pr create" in gh_log
 
     def test_active_and_accurate_entry_does_nothing(self, tmp_path: Path) -> None:
         facts = (

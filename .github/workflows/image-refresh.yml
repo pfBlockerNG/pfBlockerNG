@@ -355,6 +355,9 @@ jobs:
       # rewriting freebsd_major/freebsd_version (issue #2242).
       # Matrix writes remain auto-PR ONLY — never a ci-metadata push.
       # Contract pinned by tests/test_image_refresh_plan_contract.py.
+      # continue-on-error is deliberate: the image already published, so a failure here
+      # (including the refusal above) surfaces as an ::error:: annotation with no PR,
+      # never a red run.
       - name: Open activation PR (box-verified matrix update)
         continue-on-error: true
         env:
@@ -392,11 +395,19 @@ jobs:
           fi
 
           # The matrix is human-curated; a surprise major means a broken guest,
-          # not new truth — hard stop before any write (issue #2242).
+          # not new truth — hard stop before any write (issue #2242). An EMPTY side
+          # (unreachable on the live matrix, but must not go silent) warns naming
+          # which side is missing and proceeds as today rather than refusing.
           cur_major=$(printf '%s' "$ENTRY" | jq -r '.freebsd_major // ""')
           if [ -n "$freebsd_major" ] && [ -n "$cur_major" ] && [ "$freebsd_major" != "$cur_major" ]; then
             echo "::error::${CHANNEL} ${FAMILY}: guest reports FreeBSD major ${freebsd_major} (${freebsd_version}) but the matrix row says ${cur_major} — refusing to activate; the matrix is human-curated and a surprise major means a broken guest, not new truth (issue #2242)"
             exit 1
+          elif [ -z "$freebsd_major" ] && [ -n "$cur_major" ]; then
+            echo "::warning::${CHANNEL} ${FAMILY}: guest reported no freebsd_major fact — cannot verify against matrix major ${cur_major} (issue #2242)"
+          elif [ -n "$freebsd_major" ] && [ -z "$cur_major" ]; then
+            echo "::warning::${CHANNEL} ${FAMILY}: matrix row has no freebsd_major recorded — cannot verify against guest major ${freebsd_major} (issue #2242)"
+          elif [ -z "$freebsd_major" ] && [ -z "$cur_major" ]; then
+            echo "::warning::${CHANNEL} ${FAMILY}: neither guest nor matrix report a freebsd_major fact — skipping major verification (issue #2242)"
           fi
 
           NEWM=$(mktemp)
