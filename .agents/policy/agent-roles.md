@@ -109,7 +109,7 @@ fresh native sub-agent it spawn with role's contract; Codex kinds: `agent` =
 - **Context & skills:** bootstrap (AGENTS.md) and its routed annexes, prior handoffs;
   fresh-session workflow ([`workflow.md`](workflow.md)). Floor:
   [`delegation.md`](delegation.md) always; `issues.md` on issue work, `landing.md` when
-  landing, `waits.md` when wait armed.
+  landing, `coderabbit.md` on any PR or Fair Usage notice, `waits.md` when wait armed.
 - **Stop & escalation:** genuine user fork ⇒ ask user; falsified premise ⇒ stop
   and re-plan, loud. Never silent patch plan.
 - **Independence:** not independent of work item, but producer≠gater: per-step

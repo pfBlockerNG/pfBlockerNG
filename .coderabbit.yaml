@@ -4,7 +4,8 @@
 # automatic incremental review still spends one Fair Usage slot, so keep
 # auto-review on the first look plus one follow-up, then pause. Nudge with
 # `@coderabbitai review` only when product behaviour changed after that.
-# See .agents/policy/landing.md "CodeRabbit availability".
+# Path for quota notices, wait-then-nudge, and spend tightening:
+# .agents/policy/coderabbit.md (landing.md only names the hook).
 reviews:
   auto_review:
     enabled: true
