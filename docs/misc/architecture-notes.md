@@ -1109,6 +1109,27 @@ Full design: ADR-39.
   directories. Routing comes from the dispatch's ordered `destinations` tuple; there is no
   latest-release discovery. `nightly.yml`'s own `publish-pkg-repo` job runs the same script with
   `PUBLISH_KIND=nightly` (`scripts/publish_nightly.py`) off the verified nightly handoff.
+- **Gate-before-announce for tagged publishes (issue #2389):** `docs/` on `pkg` `main` IS the
+  Pages site, so a plain publish announces the moment it pushes. `release-published.yml` therefore
+  runs `publish-pkg-repo.sh` with `PUBLISH_STAGE=stage`: the publisher runs against the real tree
+  (containment-aware pruning stays correct), every touched `<channel>/<varver>` is relocated under
+  `docs/staging/<run_id>-<attempt>/` with the original bytes restored in place, no landing/client
+  script regen, one push. `prepare-live-gate` (`scripts/live_gate_matrix.py`) fans the CI legs
+  whose varver was touched out per destination; `validate-live-pages-install` runs `smoke-single.yml`
+  (`pytest_marker: repo`, `test_install_from_live_pages_url`) per leg against
+  `https://pfblockerng.github.io/pkg/staging/<seg>/<channel>` with expected version = portversion and
+  expected `pfb_build_record.source_sha` = the tag commit — the staged URL's last segment is the
+  channel, so `build-repo-portable.py --print-conf` derives the real `pfblockerng-<channel>` repo
+  name and the box's `%R` matches. `promote-pkg-repo` (`always()`, only when the stage succeeded and
+  was not a no-op) runs `PUBLISH_STAGE=promote` on green (staged dirs moved into place, staging
+  tree dropped, landing regenerated, one push — the announce) or `PUBLISH_STAGE=discard` on any red
+  leg (staging tree dropped, run fails). A stage-mode run whose catalogue is a no-op still ships a
+  drifted client-script refresh and reports `noop=true`, which skips the gate. Workflow-level
+  `concurrency` serialises publishes. `PUBLISH_STAGE=direct` (default) keeps today's single-push
+  path for `nightly.yml` (publish-then-gate, PR #2404) and `pkg-republish.yml`; nightly with any
+  other value is a usage error. `smoke-single.yml` exposes the generic `smoke_repo_live_url` /
+  `smoke_repo_expected_source_sha` / `smoke_repo_expected_version` inputs beside the nightly trio;
+  `DEFAULT_LIVE_BASE_URL` in `tests/smoke/test_repo_install.py` is Stable.
 - **Four-channel catalogue model (issue #2147):** the served tree is
   `<channel>/<varver>/` with channels exactly `stable` / `testing` / `edge` / `nightly`
   (`scripts/catalogue_assembly.py`'s closed set; the legacy bundled `release/<varver>/` layout is
