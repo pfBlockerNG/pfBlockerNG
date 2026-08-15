@@ -29,6 +29,10 @@ permissions:
 # issue #2389 / #2391: two publishes racing would both stage under docs/staging
 # and stomp each other's promote/discard — serialize the whole pipeline (stage
 # through promote) rather than just the push at the end.
+# cancel-in-progress: false never cancels the CURRENTLY-running publish, but a
+# third run queuing behind an already-queued (not yet started) second run still
+# cancels that pending second one — its own re-dispatch (re-run the workflow)
+# is what carries that release through, not this run.
 concurrency:
   group: release-published-pkg-repo
   cancel-in-progress: false
@@ -167,14 +171,14 @@ jobs:
       packages: read
       contents: read
     # issue #2389: this job only STAGES (the "Stage the pkg catalogue" step below
-    # pins PUBLISH_STAGE to the stage mode) — nothing is announced under
-    # <channel>/<varver> or on the landing page until
-    # promote-pkg-repo runs the SAME script in `promote` mode, downstream of a
-    # green validate-live-pages-install. staging_prefix/touched/noop are the
-    # per-run identity that gate + promote/discard consume without re-deriving
-    # them (pin-consumed-downstream, #2387); route_matrix carries the ROUTE
-    # step's already-fetched matrix through so promote-pkg-repo never re-reads
-    # the live ci-metadata ref itself.
+    # pins PUBLISH_STAGE to the stage mode) — it is NOT the deploy/announce.
+    # Nothing is visible under <channel>/<varver> or on the landing page until
+    # promote-pkg-repo — the actual deploy/announce step — runs the SAME script
+    # in `promote` mode, downstream of a green validate-live-pages-install.
+    # staging_prefix/touched/noop are the per-run identity that gate +
+    # promote/discard consume without re-deriving them (pin-consumed-downstream,
+    # #2387); route_matrix carries the ROUTE step's already-fetched matrix
+    # through so promote-pkg-repo never re-reads the live ci-metadata ref itself.
     outputs:
       staging_prefix: ${{ steps.stage.outputs.staging_prefix }}
       touched: ${{ steps.stage.outputs.touched }}
@@ -392,9 +396,10 @@ jobs:
       smoke_repo_expected_source_sha: ${{ needs.resolve.outputs.source_sha }}
       smoke_repo_expected_version: ${{ needs.resolve.outputs.portversion }}
       # SECURITY: same trusted-ref rule as resolve/publish-pkg-repo above — the smoke
-      # harness (test code) must come from the workflow's own revision, never the
-      # released tag's tree actions/checkout otherwise defaults a `release` event to
-      # (smoke-single.yml's own checkout step documents the same default, issue #1859).
+      # harness (test code) must come from the workflow's own revision
+      # (github.workflow_sha), never the released tag's tree that actions/checkout
+      # would default a `release` event to otherwise (smoke-single.yml's own
+      # checkout step documents the same default, issue #1859).
       checkout_ref: ${{ github.workflow_sha }}
     secrets: inherit
 
@@ -481,6 +486,6 @@ jobs:
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           sh scripts/publish-pkg-repo.sh
           if [ "$PUBLISH_STAGE" = discard ]; then
-            echo "::error::live Pages install gate failed — staging discarded, nothing announced"
+            echo "::error::live Pages install gate did not pass (prepare-live-gate or validate-live-pages-install failed/cancelled) — staging discarded, nothing announced"
             exit 1
           fi
