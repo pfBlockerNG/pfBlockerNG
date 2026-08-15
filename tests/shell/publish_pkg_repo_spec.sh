@@ -844,4 +844,285 @@ HOOK
     The variable seen should equal '[{"abi":"FreeBSD:16:*","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]'
     The variable seen should not include '"pfsense_version":"2.8"'
   End
+
+  # --- PUBLISH_STAGE=stage|promote|discard (issue #2389 S1, gate-before-announce) --
+  # docs/ on `main` IS the Pages site, so a plain tagged publish commits the
+  # catalogue and the landing page atomically and nothing can be live-gated before
+  # announce. common_env's SOURCE_RUN_ID is "10:1" (colon, matching the real
+  # release-published.yml workflow) -- PUBLISH_STAGE=stage translates it to the
+  # dash-form staging segment "10-1" throughout these examples.
+
+  It 's1: stage relocates a touched target under docs/staging/<segment>, restoring the original at its real location'
+    export PUBLISH_STAGE=stage
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg" should be exist
+    marker="$(cat "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg")"
+    The variable marker should equal 'edge/ce-2.8'
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should not be exist
+    original="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf")"
+    The variable original should equal 'seed'
+    The path "${base}/pkg-repo/docs/index.html" should not be exist
+    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
+    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
+    The variable committed should include 'docs/staging/10-1/edge/ce-2.8/marker.pkg'
+    The variable committed should not include 'docs/index.html'
+    The variable committed should not include 'docs/add-repo.sh'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: stage v4.0.0.b1 -> ["edge"]'
+    The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+    The variable msg should include 'pfBlockerNG-Staging-Prefix: staging/10-1'
+  End
+
+  It 's2: stage lands a brand-new target only under staging, with no real docs/<channel> created'
+    export PUBLISH_STAGE=stage
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=stable/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8/marker.pkg" should be exist
+    # "does not exist in the COMMITTED tree" (git never tracks empty directories,
+    # so an incidental empty docs/stable/ leftover on the filesystem, from the
+    # publisher's own os.makedirs before the mv, is not itself a defect).
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should not include 'docs/stable/'
+    tree_entries="$(git_fixture -C "${base}/pkg-repo" ls-tree -r --name-only HEAD)"
+    The variable tree_entries should not include 'docs/stable/'
+  End
+
+  It 's3: stage GITHUB_OUTPUT carries staging_prefix, touched, and noop=false'
+    export PUBLISH_STAGE=stage
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    out="$(cat "$GITHUB_OUTPUT")"
+    The variable out should include 'staging_prefix=staging/10-1'
+    The variable out should include 'touched=["edge/ce-2.8"]'
+    The variable out should include 'noop=false'
+  End
+
+  It 's4: stage full no-op (nothing touched, scripts current) writes noop=true and prints STAGE NOOP'
+    export PUBLISH_STAGE=stage
+    printf '#!/bin/sh\n# add-repo stub\n' >"${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' >"${base}/pkg-repo/docs/migrate-channel.sh"
+    (cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main)
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export FAKE_MODE=noop
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The output should include 'STAGE NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+    out="$(cat "$GITHUB_OUTPUT")"
+    The variable out should include 'noop=true'
+  End
+
+  It 's5: stage removes a stale docs/staging tree from an earlier crashed run in the same commit as the new one'
+    export PUBLISH_STAGE=stage
+    mkdir -p "${base}/pkg-repo/docs/staging/OLD/edge/ce-2.8"
+    echo stale >"${base}/pkg-repo/docs/staging/OLD/edge/ce-2.8/old.pkg"
+    (cd "${base}/pkg-repo" && git_fixture add docs/staging \
+        && git_fixture commit -q -m preseed-stale-staging && git_fixture push -q origin main)
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging/OLD" should not be exist
+    The path "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg" should be exist
+    changed="$(git_fixture -C "${base}/pkg-repo" show --name-status --format= HEAD)"
+    The variable changed should include 'docs/staging/OLD/edge/ce-2.8/old.pkg'
+    The variable changed should include 'docs/staging/10-1/edge/ce-2.8/marker.pkg'
+    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count main)"
+    The variable commit_count should equal 3
+  End
+
+  It 's6: stage translates a colon-bearing SOURCE_RUN_ID into a dash-form staging segment'
+    export PUBLISH_STAGE=stage
+    export SOURCE_RUN_ID='20:3'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging/20-3/edge/ce-2.8/marker.pkg" should be exist
+    The path "${base}/pkg-repo/docs/staging/20:3" should not be exist
+    out="$(cat "$GITHUB_OUTPUT")"
+    The variable out should include 'staging_prefix=staging/20-3'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'pfBlockerNG-Staging-Prefix: staging/20-3'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 20:3'
+  End
+
+  It 's7 (hostile): stage rejects a SOURCE_RUN_ID that is not a safe path segment, before any git call'
+    export PUBLISH_STAGE=stage
+    export SOURCE_RUN_ID='../evil run'
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::SOURCE_RUN_ID must match'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  seed_staged_tree() {
+    mkdir -p "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8"
+    printf 'edge/ce-2.8' >"${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg"
+    (cd "${base}/pkg-repo" && git_fixture add docs/staging \
+        && git_fixture commit -q -m preseed-staged && git_fixture push -q origin main)
+  }
+
+  It 'p1: promote moves a staged tree live, regenerates the landing page, and never sweeps unrelated dirty/untracked files'
+    seed_staged_tree
+    echo dirty >>"${base}/pkg-repo/README.txt"
+    echo stray >"${base}/pkg-repo/debris.txt"
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should be exist
+    marker="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg")"
+    The variable marker should equal 'edge/ce-2.8'
+    The path "${base}/pkg-repo/docs/staging" should not be exist
+    The path "${base}/pkg-repo/docs/index.html" should be exist
+    landing="$(cat "${base}/pkg-repo/docs/index.html")"
+    The variable landing should equal 'landing stub'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: v4.0.0.b1 -> ["edge"]'
+    The variable msg should include 'pfBlockerNG-Promoted-From: staging/10-1'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should not include 'README.txt'
+    The variable committed should not include 'debris.txt'
+    porcelain="$(git_fixture -C "${base}/pkg-repo" status --porcelain)"
+    The variable porcelain should include 'README.txt'
+    The variable porcelain should include 'debris.txt'
+  End
+
+  It 'p2: promote never invokes the publisher'
+    seed_staged_tree
+    cat >"${base}/fake-src/scripts/publish_release.py" <<'PY'
+import sys
+with open(sys.argv[sys.argv.index("--pkg-repo") + 1] + "/PUBLISHER_WAS_CALLED", "w") as fh:
+    fh.write("called")
+sys.exit(1)
+PY
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/PUBLISHER_WAS_CALLED" should not be exist
+  End
+
+  It 'p3: promote refuses when STAGING_PREFIX is unset, before any git call'
+    export PUBLISH_STAGE=promote
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::STAGING_PREFIX is required'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'p4: promote fails with ::error:: when STAGING_PREFIX points at nothing staged'
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/nope
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::'
+    The stderr should include 'nothing to promote'
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'p5 (hostile): promote rejects a STAGING_PREFIX that is not a bare staging/<segment>, before any git call'
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX='staging/../evil'
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::STAGING_PREFIX must match staging/'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'd1: discard drops a staged tree, commits the removal, and leaves the real target untouched'
+    seed_staged_tree
+    export PUBLISH_STAGE=discard
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The output should not include 'DISCARD NOOP'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging" should not be exist
+    original="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf")"
+    The variable original should equal 'seed'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: discard staging/10-1'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count main)"
+    The variable commit_count should equal 3
+  End
+
+  It 'd2: discard with nothing staged is a safe no-op'
+    export PUBLISH_STAGE=discard
+    export STAGING_PREFIX=staging/nope
+    When run script "$script"
+    The status should equal 0
+    The output should include 'DISCARD NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'k1: rejects PUBLISH_STAGE other than direct under PUBLISH_KIND=nightly, before any git call'
+    nightly_env
+    export PUBLISH_STAGE=stage
+    When run script "$script"
+    The status should equal 1
+    The stderr should include "::error::PUBLISH_STAGE must be 'direct' when PUBLISH_KIND=nightly"
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'k2: rejects an invalid PUBLISH_STAGE value before any git call'
+    export PUBLISH_STAGE=bogus
+    When run script "$script"
+    The status should equal 1
+    The stderr should include "::error::PUBLISH_STAGE must be 'direct', 'stage', 'promote', or 'discard', got 'bogus'"
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'k3: PUBLISH_STAGE unset still defaults to direct behaviour'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
+    The variable msg should not include 'pfBlockerNG-Staging-Prefix'
+  End
 End
