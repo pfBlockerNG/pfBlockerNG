@@ -985,6 +985,27 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  It 's8: stage mode client-script refresh (nothing touched, scripts drifted) still emits noop=true'
+    # The workflow (S2) keys its live-gate dispatch on GITHUB_OUTPUT noop != 'true'
+    # -- a script-only refresh has nothing staged to gate, so it must report
+    # noop=true (touched=[]) even though a real commit landed on main (ADVANCE).
+    export PUBLISH_STAGE=stage
+    seed_refresh_drift
+    export FAKE_MODE=noop
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    out="$(cat "$GITHUB_OUTPUT")"
+    The variable out should include 'staging_prefix=staging/10-1'
+    The variable out should include 'touched=[]'
+    The variable out should include 'noop=true'
+  End
+
   seed_staged_tree() {
     mkdir -p "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8"
     printf 'edge/ce-2.8' >"${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg"
@@ -1064,6 +1085,27 @@ PY
     The stderr should include '::error::STAGING_PREFIX must match staging/'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'p6: promote creates a brand-new channel directory absent from the seed tree'
+    mkdir -p "${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8"
+    printf 'stable/ce-2.8' >"${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8/marker.pkg"
+    (cd "${base}/pkg-repo" && git_fixture add docs/staging \
+        && git_fixture commit -q -m preseed-staged-new-channel && git_fixture push -q origin main)
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/stable/ce-2.8/marker.pkg" should be exist
+    marker="$(cat "${base}/pkg-repo/docs/stable/ce-2.8/marker.pkg")"
+    The variable marker should equal 'stable/ce-2.8'
+    The path "${base}/pkg-repo/docs/staging" should not be exist
+    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count main)"
+    The variable commit_count should equal 3
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'pfBlockerNG-Promoted-From: staging/10-1'
   End
 
   It 'd1: discard drops a staged tree, commits the removal, and leaves the real target untouched'

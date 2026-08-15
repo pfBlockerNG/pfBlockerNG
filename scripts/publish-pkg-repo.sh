@@ -491,8 +491,16 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     if push_out=$(git -C "$PKG_REPO" push origin HEAD:main 2>&1); then
         printf '%s\n' "$push_out" >&2
         echo "publish-pkg-repo: ADVANCE — pushed $(git -C "$PKG_REPO" rev-parse HEAD)"
-        if [ "$PUBLISH_STAGE" = stage ] && [ "$stage_commit" -eq 1 ]; then
-            emit_stage_outputs false
+        if [ "$PUBLISH_STAGE" = stage ]; then
+            # stage_commit=0 here means the ADVANCE was a script-only refresh
+            # (script_refresh=1: touched was empty, but the client scripts had
+            # drifted) — there is nothing to gate, so this is a noop from the
+            # caller's point of view even though a commit landed.
+            if [ "$stage_commit" -eq 1 ]; then
+                emit_stage_outputs false
+            else
+                emit_stage_outputs true
+            fi
         fi
         exit 0
     fi
