@@ -30,9 +30,9 @@ def test_nightly_post_publish_passes_live_identity() -> None:
     assert "smoke_nightly_live_url: https://pfblockerng.github.io/pkg/nightly" in job
     assert "smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}" in job
     assert "smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}" in job
-    assert "smoke_repo_live_url: https://pfblockerng.github.io/pkg/nightly" in job
-    assert "smoke_repo_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}" in job
-    assert "smoke_repo_expected_version: ${{ needs.prepare.outputs.pkg_version }}" in job
+    # smoke_repo_* is the generic channel input; smoke-single.yml on this
+    # branch does not declare it yet. The Nightly URL rides smoke_nightly_*.
+    assert "smoke_repo_live_url:" not in job
 
 
 def test_scheduled_repo_install_does_not_pass_live_urls() -> None:
