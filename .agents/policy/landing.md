@@ -134,6 +134,7 @@ Proceed to merge ONLY when review step finished cleanly:
 - **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to merge while any item lack outcome.
 - **No external reviewer** (CodeRabbit dropped, nobody else reviewed): note skip in audit trail; three legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before merge — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
+- **CodeRabbit mute at merge:** if the PR still has `cr-hold` (or `WIP`) **and** the head SHA has no finished CodeRabbit review, do not merge. Strip the label and either wait out the quota path in [`coderabbit.md`](coderabbit.md) or record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). `cr-hold` does **not** block an explicit `@coderabbitai review`.
 - Unresolved, contested, or user-decision findings → stop and report; do not merge.
 
 ## Merge step

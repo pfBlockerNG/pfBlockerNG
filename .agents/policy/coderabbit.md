@@ -112,7 +112,9 @@ opens a PR knowing a window is still counting down:
    4. Arm a **self-terminating** wait for `N + 30s`
       ([`waits.md`](waits.md): cap inside the wait, never a bare
       unbounded sleep). If `N` exceeds the waits.md two-hour
-      ladder, wait the ladder, then one nudge anyway.
+      ladder, wait the ladder, then **record a miss** — do not
+      nudge. A late nudge during a still-open window refreshes
+      the countdown (fixed floor above).
    5. When the wait ends, remove `cr-hold` from **this** PR only
       (it must already be paused), then post **exactly one**
       top-level `@coderabbitai review`. If the PR is not paused,
@@ -171,10 +173,10 @@ A CodeRabbit MCP connection does **not** raise review quota
 When a merged SHA had only a quota notice (or no CR engagement)
 and no later finished review of that SHA:
 
-- Record `SHA  title  PR#` on the landing audit.
-- Later sessions review those SHAs CodeRabbit-style (correctness,
-  hostile inputs, test honesty) newest-first, Grok-authored first
-  when the session produced them, then backwards.
+- Append one line to [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md)
+  (`SHA  title  PR#`). Newest first.
+- Later sessions review that list CodeRabbit-style (correctness,
+  hostile inputs, test honesty) newest first.
 - Do not start the older 481-commit tail unless a current cluster
   requires it.
 
