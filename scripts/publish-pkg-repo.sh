@@ -26,7 +26,9 @@
 # On a rejected push (another run advanced origin/main first), the ENTIRE cycle
 # reruns from a fresh sync — not a rebase of the local commit — because
 # the publisher's retention/regeneration must see the racing run's tree, not
-# stale local state.
+# stale local state. checkout -B restores tracked files; `git clean -fd -- docs`
+# drops untracked leftovers under docs/ (issue #2407) so a dest autoindex
+# without its .pkgs cannot survive into landing_regen_and_stage.
 #
 # PUBLISH_STAGE additionally selects WHEN a tagged catalogue commit becomes the
 # live Pages site (issue #2389 — gate-before-announce). docs/ on `main` IS the
@@ -290,8 +292,11 @@ promote_from_staging() {
 }
 
 # Shared by "direct" (non-noop) and "promote": regenerate the landing page and
-# stage exactly the landing output plus every $touched target's directory, the
-# same explicit-pathspec discipline as the rest of this script.
+# stage the landing output, every $touched target's directory, that dest's
+# channel-level autoindex, and already-tracked dest/channel autoindexes
+# gen_landing rewrote. Never a site-wide find of every docs/**/index.html —
+# an untracked leftover dest from a rejected push is not this run's
+# (issue #2407).
 landing_regen_and_stage() {
     case "$PUBLISH_KIND" in
         tagged) landing_input="$ROUTE_MATRIX" ;;
@@ -314,22 +319,17 @@ landing_regen_and_stage() {
     [ -f "${PKG_REPO}/docs/migrate-channel.sh" ] && stage_paths="${stage_paths} docs/migrate-channel.sh"
     for target in $touched; do
         stage_paths="${stage_paths} docs/${target}"
+        ch="${target%%/*}"
+        [ -f "${PKG_REPO}/docs/${ch}/index.html" ] && stage_paths="${stage_paths} docs/${ch}/index.html"
     done
-    docs_root="${PKG_REPO}/docs"
-    # `if`/`fi`, never `[ -f ... ] && printf` — the last directory `find` enumerates
-    # (order is not alphabetical; whatever readdir(3) returns) can legitimately have
-    # no index.html (gen_landing.py never writes one under docs/staging, issue
-    # #2389), and an `&&`-chained test's own falsy status becomes the whole `while`
-    # loop's exit status on its last iteration, which `set -e` then treats as this
-    # `dir_indexes=$(...)` assignment failing — aborting the script AFTER the
-    # publisher already ran and BEFORE any git add/commit (issue #2389).
-    dir_indexes=$(find "$docs_root" -mindepth 1 -type d -print | while IFS= read -r d; do
-        if [ -f "${d}/index.html" ]; then
-            printf 'docs/%s/index.html\n' "${d#"${docs_root}/"}"
-        fi
-    done)
-    stage_paths="${stage_paths}
-${dir_indexes}"
+    # Already-tracked dest/channel autoindexes only. ls-files cannot name a
+    # dest that is not in the index, so a leftover dest autoindex cannot
+    # appear here (issue #2407).
+    tracked_indexes=$(git -C "$PKG_REPO" ls-files -- 'docs/*/index.html' 'docs/*/*/index.html')
+    if [ -n "$tracked_indexes" ]; then
+        stage_paths="${stage_paths}
+${tracked_indexes}"
+    fi
     # shellcheck disable=SC2086  # stage_paths is a controlled, space/newline-separated pathspec list
     git -C "$PKG_REPO" add -- $stage_paths
 }
@@ -355,6 +355,10 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     echo "publish-pkg-repo: sync attempt ${attempt}/${MAX_PUSH_ATTEMPTS} — fetching origin/main"
     git -C "$PKG_REPO" fetch --quiet origin main
     git -C "$PKG_REPO" checkout --quiet -B main origin/main
+    # checkout -B restores tracked files. Untracked leftovers from a rejected
+    # push (dest autoindex without its .pkgs) survive unless cleaned. Scope
+    # to docs/ so G1 debris at the repo root stays untracked (issue #2407).
+    git -C "$PKG_REPO" clean -fd -- docs
 
     stage_commit=0
 

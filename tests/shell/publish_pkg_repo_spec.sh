@@ -388,6 +388,73 @@ JSON
     The variable porcelain should include 'debris.txt'
   End
 
+  # --- leftover dest autoindex from a rejected push (issue #2407) -----------
+  # checkout -B restores tracked files but leaves an untracked dest index
+  # from a previous attempt. A site-wide find of every docs/**/index.html
+  # would stage that leftover without its .pkgs. These examples plant the
+  # leftover before the script runs; the commit must not include it. The
+  # file may be cleaned (git clean -fd -- docs) or stay untracked — either
+  # is correct. G1 debris/README stay uncommitted. Re-introducing an
+  # unscope find that still walks leftover dests turns the first example
+  # RED if the leftover survives into landing_regen_and_stage.
+
+  It 'does not stage an untracked leftover dest autoindex from a previous rejected push'
+    mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
+    printf 'orphan autoindex\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
+    echo dirty >> "${base}/pkg-repo/README.txt"
+    echo stray > "${base}/pkg-repo/debris.txt"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
+    The variable committed should not include 'docs/nightly/ce-2.8/index.html'
+    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
+    The variable committed should not include 'README.txt'
+    The variable committed should not include 'debris.txt'
+    tracked_leftover="$(git_fixture -C "${base}/pkg-repo" ls-files -- docs/nightly/ce-2.8/index.html)"
+    The variable tracked_leftover should equal ''
+    porcelain="$(git_fixture -C "${base}/pkg-repo" status --porcelain)"
+    The variable porcelain should include 'README.txt'
+    The variable porcelain should include 'debris.txt'
+  End
+
+  It 'does not stage leftover dest payload next to an orphan autoindex'
+    mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
+    printf 'orphan autoindex\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
+    printf 'leftover\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/marker.pkg"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
+    The variable committed should not include 'docs/nightly/ce-2.8/index.html'
+    The variable committed should not include 'docs/nightly/ce-2.8/marker.pkg'
+    tracked_leftover="$(git_fixture -C "${base}/pkg-repo" ls-files -- docs/nightly/ce-2.8)"
+    The variable tracked_leftover should equal ''
+  End
+
+  It 'still stages a rewrite of an already-tracked channel autoindex'
+    printf 'old channel index\n' > "${base}/pkg-repo/docs/edge/index.html"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/edge/index.html \
+        && git_fixture commit -q -m preseed-channel-index \
+        && git_fixture push -q origin main )
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
+    The variable committed should include 'docs/edge/index.html'
+    rewritten="$(cat "${base}/pkg-repo/docs/edge/index.html")"
+    The variable rewritten should equal 'autoindex stub: edge'
+  End
+
   # --- the script must be self-sufficient for git identity -----------------
 
   It 'commits with a fixed bot identity even when no git identity is configured anywhere'
