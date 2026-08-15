@@ -522,8 +522,7 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
         target.write_bytes(pkg_bytes)
         # Preserve the source .pkg's mtime so the published artifact reflects its real
         # build time — a cache-restored nightly keeps its original datetime instead of
-        # jumping to this catalog-regeneration run. The landing page reads this mtime
-        # as the artifact's publish date.
+        # jumping to this catalog-regeneration run.
         os.utime(target, (src_mtime, src_mtime))
         catalog_objs.append(
             catalog_object(manifest, pkg_name=canonical, sum_=pkg_checksum(pkg_bytes), pkgsize=len(pkg_bytes))
