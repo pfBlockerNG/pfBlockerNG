@@ -112,6 +112,15 @@ import sys
 
 site = sys.argv[1]
 argv = sys.argv[1:]
+if "--client-scripts-only" in argv:
+    # Mirrors the real generator's script-only mode (issue #2408): ONLY the two
+    # client scripts are written — no landing/browse/autoindex output.
+    with open(os.path.join(site, "add-repo.sh"), "w") as fh:
+        fh.write("#!/bin/sh\n# add-repo stub\n")
+    with open(os.path.join(site, "migrate-channel.sh"), "w") as fh:
+        fh.write("#!/bin/sh\n# migrate-channel stub\n")
+    print("client scripts stub written")
+    sys.exit(0)
 # Records the exact --matrix file this run was fed, byte for byte, when
 # FAKE_LANDING_MATRIX_RECORD is set — publish-pkg-repo.sh's own job (not
 # gen_landing.py's) is choosing that file's SOURCE (tagged: $ROUTE_MATRIX;
@@ -395,13 +404,60 @@ JSON
 
   # --- no-op path --------------------------------------------------------
 
-  It 'commits nothing on a no-op run'
+  It 'commits nothing on a no-op run with current client scripts'
+    # The catalogue-NOOP path still regenerates the two client scripts
+    # (issue #2408) — pre-seed them byte-identical to the stub generator's
+    # output so the full-NOOP branch is reached honestly, not via drift.
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0
     The output should include 'NOOP'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'ships a client-script refresh when the catalogue is a no-op but the scripts drifted'
+    # The seed tree carries NO committed client scripts — maximal drift. A
+    # catalogue no-op must still publish the pair: the scripts are generated
+    # from PFB_SRC, not from release assets, so a script-only fix was
+    # otherwise unshippable via a republish of an already-published release
+    # (issue #2408).
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    # The wrapper's own no-op verdict must not appear; the publisher's
+    # "NOOP: every destination already matches" line legitimately does.
+    The output should not include 'publish-pkg-repo: NOOP'
+    The stderr should include 'main'
+    The result of function remote_head_now should not equal "$original_remote_head"
+    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
+    The variable committed should include 'docs/add-repo.sh'
+    The variable committed should include 'docs/migrate-channel.sh'
+  End
+
+  It 'a client-script refresh stages ONLY the two scripts and says so in the commit'
+    # No landing/browse/autoindex page may ride along (they embed a generation
+    # timestamp — regenerating them on a no-op would manufacture a commit every
+    # run), and the commit subject + run-id trailer must identify the refresh.
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
+    The variable committed should not include 'docs/index.html'
+    The variable committed should not include 'docs/browse.html'
+    The variable committed should not include 'README.txt'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: refresh client scripts'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
   End
 
   It 'commits nothing when a reported touched target leaves the tree unchanged'
@@ -674,6 +730,15 @@ HOOK
 
   It 'n5: nightly mode NOOP output commits nothing'
     nightly_env
+    # Same pre-seed as the tagged no-op example: the catalogue-NOOP path
+    # regenerates the client scripts (issue #2408), so a true no-op needs them
+    # current in the seed tree.
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0

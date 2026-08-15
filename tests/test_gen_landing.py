@@ -2034,3 +2034,21 @@ def test_main_cli_accepts_the_production_positional_and_matrix_flag_shape(tmp_pa
 
     assert rc == 0
     assert (site / "index.html").is_file()
+
+
+def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path) -> None:
+    """``--client-scripts-only`` publishes ONLY the two deterministic client scripts.
+
+    publish-pkg-repo.sh's catalogue-NOOP path (issue #2408) uses this mode to ship a
+    script-only fix; writing any timestamped landing/browse/autoindex page here would
+    manufacture a commit on every republish run instead.
+    """
+    site = tmp_path / "site"
+    site.mkdir()
+
+    rc = gl.main([str(site), "https://x/pkg", str(_ADD_REPO_REAL), "--client-scripts-only"])
+
+    assert rc == 0
+    assert sorted(p.name for p in site.iterdir()) == ["add-repo.sh", "migrate-channel.sh"]
+    embedded = (site / "add-repo.sh").read_text()
+    assert f"cat <<'{gl._HOOK_HEREDOC}'" in embedded, "the boot hook must be embedded, not left as the stub body"
