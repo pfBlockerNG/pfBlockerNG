@@ -90,6 +90,21 @@ ROW_PLUS_03: dict[str, object] = {
 
 ROW_PLUS_07: dict[str, object] = {**ROW_PLUS_03, "pfsense_version": "26.07"}
 
+# Twin dest tests declare textproc/py-twin themselves (issue #2403). Own lists —
+# never mutate ROW_PLUS_03["extra_pkgs"] at import.
+ROW_PLUS_03_TWIN: dict[str, object] = {**ROW_PLUS_03, "extra_pkgs": ["textproc/py-twin"]}
+ROW_PLUS_07_TWIN: dict[str, object] = {**ROW_PLUS_07, "extra_pkgs": ["textproc/py-twin"]}
+
+# Same-major dest scope (issue #2403): Plus shares CE's FreeBSD major, extra_pkgs=[].
+ROW_PLUS_SAME_MAJOR: dict[str, object] = {
+    **ROW_PLUS_03,
+    "freebsd_version": "15.0-RELEASE",
+    "freebsd_major": "15",
+    "extra_pkgs": [],
+}
+
+ROW_CE_NO_EXTRA: dict[str, object] = {**ROW_CE, "extra_pkgs": []}
+
 ROW_ROUTE_ONLY_17: dict[str, object] = {
     "pfsense_version": "17.0",
     "channel": "CE",
@@ -649,10 +664,10 @@ class TargetResolutionTests(_TempDirTestCase):
         (issue #2231)."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(
-            assets_dir, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
+            assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
         )
         twin_digests: list[str] = []
-        for row, filler in ((ROW_PLUS_03, b"built-by-leg-one"), (ROW_PLUS_07, b"built-by-leg-two")):
+        for row, filler in ((ROW_PLUS_03_TWIN, b"built-by-leg-one"), (ROW_PLUS_07_TWIN, b"built-by-leg-two")):
             declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
             _path, digest = _wrap_dependency_pkg(
                 assets_dir,
@@ -670,7 +685,7 @@ class TargetResolutionTests(_TempDirTestCase):
             _run(
                 pkg_repo=self.pkg_repo,
                 assets_dir=assets_dir,
-                rows=(ROW_PLUS_03, ROW_PLUS_07),
+                rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN),
                 tag="v4.0.0.b1",
             )
         self.assertIn("different bytes", str(ctx.exception))
@@ -685,9 +700,9 @@ class TargetResolutionTests(_TempDirTestCase):
         matching varver — never a conflict."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(
-            assets_dir, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
+            assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
         )
-        for row in (ROW_PLUS_03, ROW_PLUS_07):
+        for row in (ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN):
             declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
             _path, digest = _wrap_dependency_pkg(
                 assets_dir,
@@ -702,7 +717,7 @@ class TargetResolutionTests(_TempDirTestCase):
         report = _run(
             pkg_repo=self.pkg_repo,
             assets_dir=assets_dir,
-            rows=(ROW_PLUS_03, ROW_PLUS_07),
+            rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN),
             tag="v4.0.0.b1",
         )
         self.assertFalse(report.noop)
@@ -1234,6 +1249,204 @@ class MainCliTests(_TempDirTestCase):
             code = pr.main(argv)
         self.assertEqual(code, 1)
         self.assertIn("::error::", err.getvalue())
+
+
+def _packagesite_names(catalogue_dir: Path) -> set[str]:
+    """Manifest `name` of every member in the dest's packagesite.pkg."""
+    catalog = catalogue_dir / "packagesite.pkg"
+    data = _ENGINE.pfb_pkg.zstd_decompress(catalog.read_bytes())
+    with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+        member = tf.extractfile("packagesite.yaml")
+        assert member is not None
+        raw = member.read().decode()
+    return {json.loads(line)["name"] for line in raw.splitlines() if line}
+
+
+_CHARSET_PKG = "py311-charset-normalizer-3.4.0.pkg"
+_CHARSET_NAME = "py311-charset-normalizer"
+
+
+class ExtraPkgsEvictionTests(_TempDirTestCase):
+    """issue #2402: undeclared dest leftovers are unlinked before regenerate."""
+
+    def _plant_charset(self, dest_dir: Path, *, major: str) -> None:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        _wrap_dependency_pkg(
+            dest_dir,
+            name=_CHARSET_NAME,
+            version="3.4.0",
+            abi=f"FreeBSD:{major}:*",
+            local_name=_CHARSET_PKG,
+        )
+
+    @_requires_engine
+    def test_stale_plus_extra_evicted_on_new_canonical(self) -> None:
+        assets_1 = self.new_assets_dir()
+        _populate_assets_dir(assets_1, rows=(ROW_PLUS_03,), source_tag="v4.0.0.b1", include_dependency=False)
+        _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_1,
+            rows=(ROW_PLUS_03,),
+            tag="v4.0.0.b1",
+        )
+        dest = self.pkg_repo / "docs" / "edge" / "plus-26.03"
+        self._plant_charset(dest, major="16")
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+
+        assets_2 = self.new_assets_dir()
+        _populate_assets_dir(assets_2, rows=(ROW_PLUS_03,), source_tag="v4.0.0.b2", include_dependency=False)
+        report = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_2,
+            rows=(ROW_PLUS_03,),
+            tag="v4.0.0.b2",
+        )
+        self.assertFalse(report.noop)
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertTrue((dest / "pfSense-pkg-pfBlockerNG-4.0.0.b2.pkg").is_file())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_stale_plus_extra_evicted_on_exact_republish(self) -> None:
+        assets = self.new_assets_dir()
+        _populate_assets_dir(assets, rows=(ROW_PLUS_03,), source_tag="v4.0.0.b1", include_dependency=False)
+        first = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets,
+            rows=(ROW_PLUS_03,),
+            tag="v4.0.0.b1",
+        )
+        self.assertFalse(first.noop)
+        dest = self.pkg_repo / "docs" / "edge" / "plus-26.03"
+        self._plant_charset(dest, major="16")
+
+        second_assets = self.new_assets_dir()
+        _populate_assets_dir(second_assets, rows=(ROW_PLUS_03,), source_tag="v4.0.0.b1", include_dependency=False)
+        second = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=second_assets,
+            rows=(ROW_PLUS_03,),
+            tag="v4.0.0.b1",
+        )
+        self.assertFalse(second.noop)
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_declared_ce_extra_kept_on_new_canonical(self) -> None:
+        assets_1 = self.new_assets_dir()
+        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1")
+        _run(pkg_repo=self.pkg_repo, assets_dir=assets_1, rows=(ROW_CE,), tag="v4.0.0.b1")
+        dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+
+        assets_2 = self.new_assets_dir()
+        _populate_assets_dir(assets_2, rows=(ROW_CE,), source_tag="v4.0.0.b2", include_dependency=False)
+        _run(pkg_repo=self.pkg_repo, assets_dir=assets_2, rows=(ROW_CE,), tag="v4.0.0.b2")
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+        self.assertIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_undeclared_ce_extra_evicted_when_row_drops_extra_pkgs(self) -> None:
+        assets_1 = self.new_assets_dir()
+        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1")
+        _run(pkg_repo=self.pkg_repo, assets_dir=assets_1, rows=(ROW_CE,), tag="v4.0.0.b1")
+        dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+
+        assets_2 = self.new_assets_dir()
+        _populate_assets_dir(assets_2, rows=(ROW_CE_NO_EXTRA,), source_tag="v4.0.0.b2", include_dependency=False)
+        _run(pkg_repo=self.pkg_repo, assets_dir=assets_2, rows=(ROW_CE_NO_EXTRA,), tag="v4.0.0.b2")
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_untargeted_dest_extra_left_in_place(self) -> None:
+        assets = self.new_assets_dir()
+        _populate_assets_dir(assets, rows=(ROW_PLUS_03,), source_tag="v4.0.0.b1", include_dependency=False)
+        _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets,
+            rows=(ROW_PLUS_03,),
+            tag="v4.0.0.b1",
+        )
+        other = self.pkg_repo / "docs" / "testing" / "plus-26.03"
+        self._plant_charset(other, major="16")
+        second_assets = self.new_assets_dir()
+        _populate_assets_dir(second_assets, rows=(ROW_PLUS_03,), source_tag="v4.0.0.b2", include_dependency=False)
+        _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=second_assets,
+            rows=(ROW_PLUS_03,),
+            tag="v4.0.0.b2",
+        )
+        self.assertTrue((other / _CHARSET_PKG).is_file())
+
+
+class SameMajorDestScopeTests(_TempDirTestCase):
+    """issue #2403: same-major CE extra must not land on Plus extra_pkgs=[]."""
+
+    @_requires_engine
+    def test_same_major_dep_not_published_to_row_with_empty_extra_pkgs(self) -> None:
+        rows = (ROW_CE, ROW_PLUS_SAME_MAJOR)
+        assets = self.new_assets_dir()
+        _populate_assets_dir(assets, channel="stable", rows=rows, source_tag="v4.0.0")
+        captured: dict[str, set[str]] = {}
+        orig = pr._drop_assets
+
+        def _spy(dest_dir: Path, asset_map: dict) -> bool:
+            captured[f"{dest_dir.parent.name}/{dest_dir.name}"] = set(asset_map)
+            return orig(dest_dir, asset_map)
+
+        with mock.patch.object(pr, "_drop_assets", side_effect=_spy):
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets,
+                rows=rows,
+                channel="stable",
+                tag="v4.0.0",
+                destinations='["stable", "testing", "edge"]',
+            )
+
+        extra = _CHARSET_PKG
+        for channel in ("stable", "testing", "edge"):
+            self.assertIn(extra, captured[f"{channel}/ce-2.8"], channel)
+            self.assertNotIn(extra, captured[f"{channel}/plus-26.03"], channel)
+            ce_dir = self.pkg_repo / "docs" / channel / "ce-2.8"
+            plus_dir = self.pkg_repo / "docs" / channel / "plus-26.03"
+            self.assertTrue((ce_dir / extra).is_file(), channel)
+            self.assertFalse((plus_dir / extra).exists(), channel)
+            self.assertIn(_CHARSET_NAME, _packagesite_names(ce_dir))
+            self.assertNotIn(_CHARSET_NAME, _packagesite_names(plus_dir))
+
+    @_requires_engine
+    def test_undeclared_twin_dep_against_empty_plus_extra_pkgs_rejected(self) -> None:
+        """No import-time mutation: Plus extra_pkgs=[] does not accept py311-twin."""
+        assets = self.new_assets_dir()
+        digests = _populate_assets_dir(
+            assets, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
+        )
+        for row in (ROW_PLUS_03, ROW_PLUS_07):
+            declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
+            _path, digest = _wrap_dependency_pkg(
+                assets,
+                name="py311-twin",
+                version="1.0.0",
+                abi="FreeBSD:16:*",
+                local_name=declared,
+            )
+            digests[declared] = digest
+        (assets / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+        with self.assertRaises(pr.PublishReleaseError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets,
+                rows=(ROW_PLUS_03, ROW_PLUS_07),
+                tag="v4.0.0.b1",
+            )
+        self.assertIn("matches no varver targeted", str(ctx.exception))
+        for varver in ("plus-26.03", "plus-26.07"):
+            self.assertFalse((self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").exists())
 
 
 if __name__ == "__main__":

@@ -410,6 +410,8 @@ def publish(
         asset_map = pr._asset_map(target)
         dest_dir = site_root / _CHANNEL / varver
         changed = pr._drop_assets(dest_dir, asset_map)
+        if pr._evict_undeclared_deps(dest_dir, engine=engine, row=target.row):
+            changed = True
         if not changed and not pr._catalogue_descriptor_complete(dest_dir, engine):
             changed = True
         for src in asset_map.values():
