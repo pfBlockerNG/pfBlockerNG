@@ -33,6 +33,7 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
   # / other-error / unset=succeeds). UPGRADE_Y_OUT overrides `pkg upgrade -y`'s
   # stdout (default: a plain "applying upgrades" line) so a scenario can plant
   # the FreeBSD-major phrase in the POST-`-y` log (issue #2299, F3a).
+  # PKG_QUERY_RC (arg 13, default 0) is `pkg query`'s exit status.
   # PKG_QUERY_OUT overrides `pkg query "%n %q"`'s stdout (default: one package
   # reporting ABI0, so unrelated scenarios that reach the post-reboot sweep
   # stay green). NOISE is 'ssh-banner' (every ssh_guest call also writes the
@@ -41,7 +42,7 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
   # value (issue #2299, F2).
   run_refresh() {
     _abi0="$1" _kern0="$2" _dry="$3" _dryrc="$4" _upgraderc="$5" _updmode="$6" _abi1="$7" _abi2="$8" _kern2="$9" \
-    _upgy_out="${10}" _pkgquery_out="${11}" _noise="${12}" \
+    _upgy_out="${10}" _pkgquery_out="${11}" _noise="${12}" _pkgquery_rc="${13:-0}" \
       sh -c '
         set -e
         log()  { printf "==> %s\n" "$*"; }
@@ -104,6 +105,7 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
             "/sbin/reboot") return 0 ;;
             '"'"'/usr/local/sbin/pkg query "%n %q"'"'"')
               printf "%s\n" "$_pkgquery_out"
+              return "$_pkgquery_rc"
               ;;
           esac
         }
@@ -251,6 +253,22 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
   It 'succeeds when every post-reboot installed package matches the box major'
     When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 1 0 '' '' '' '' \
       '' "$(printf 'pkgA FreeBSD:15:amd64\npkgB FreeBSD:15:*')"
+    The status should be success
+    The output should include 'PKG_WAS_UPGRADED=1'
+    The output should include 'REACHED-AFTER-REFRESH'
+  End
+
+  It 'fails closed when the post-reboot pkg query exits non-zero even with partial output'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 1 0 '' '' '' '' \
+      '' 'pkgA FreeBSD:15:amd64' '' 1
+    The status should be failure
+    The stderr should include 'pkg query'
+    The output should not include 'REACHED-AFTER-REFRESH'
+  End
+
+  It 'ignores blank lines and fully wildcarded ABIs in the post-reboot package sweep'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 1 0 '' '' '' '' \
+      '' "$(printf 'pkgA FreeBSD:15:amd64\n\npkgC FreeBSD:*:*')"
     The status should be success
     The output should include 'PKG_WAS_UPGRADED=1'
     The output should include 'REACHED-AFTER-REFRESH'
