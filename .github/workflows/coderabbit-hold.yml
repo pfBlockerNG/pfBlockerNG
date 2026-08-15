@@ -1,12 +1,15 @@
-# Silent Fair Usage mute. When CodeRabbit posts a quota notice, label every
-# open PR cr-hold so auto-review does not fire on the rest.
-# Labels only — never comment (that is the spam).
+# Silent Fair Usage mute. Labels only — never comment.
+# apply: quota notice -> cr-hold on every OTHER open PR
+# release: every 15m, drop cr-hold once no live quota remains
 # Policy: .agents/policy/coderabbit.md
 name: CodeRabbit hold
 
 on:
   issue_comment:
     types: [created, edited]
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,19 +18,21 @@ permissions:
 
 jobs:
   apply-cr-hold:
-    name: Label open PRs cr-hold
+    name: Label sibling PRs cr-hold
     if: >-
+      github.event_name == 'issue_comment' &&
       github.event.issue.pull_request &&
-      contains(github.event.comment.user.login, 'coderabbit') &&
+      github.event.comment.user.login == 'coderabbitai[bot]' &&
       (
         contains(github.event.comment.body, 'Review limit reached') ||
         contains(github.event.comment.body, 'rate limited by coderabbit')
       )
     runs-on: ubuntu-latest
     steps:
-      - name: Add cr-hold to every open PR
+      - name: Add cr-hold to every open PR except the trigger
         env:
           GH_TOKEN: ${{ github.token }}
+          SOURCE: ${{ github.event.issue.number }}
         run: |
           set -eu
           gh label create cr-hold --repo "${GITHUB_REPOSITORY}" \
@@ -35,5 +40,79 @@ jobs:
             --color C4A000 >/dev/null 2>&1 || true
           gh pr list --repo "${GITHUB_REPOSITORY}" --state open --json number \
             --jq '.[].number' | while read -r n; do
+            [ "${n}" = "${SOURCE}" ] && continue
             gh pr edit "${n}" --repo "${GITHUB_REPOSITORY}" --add-label cr-hold
           done
+
+  release-cr-hold:
+    name: Drop cr-hold after the quota window
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove cr-hold when no live quota notice remains
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          from datetime import datetime, timedelta, timezone
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+
+          def gh_json(args):
+              out = subprocess.check_output(["gh"] + args, text=True)
+              return json.loads(out) if out.strip() else []
+
+          quota_re = re.compile(
+              r"Review limit reached|rate limited by coderabbit", re.I
+          )
+          avail_re = re.compile(
+              r"Next review available in:\s*\**\s*(\d+)\s*(minute|hour)", re.I
+          )
+
+          prs = gh_json(["pr", "list", "--repo", repo, "--state", "open",
+                         "--json", "number,labels"])
+          now = datetime.now(timezone.utc)
+          live = False
+          for pr in prs:
+              n = pr["number"]
+              comments = gh_json([
+                  "api", f"repos/{repo}/issues/{n}/comments?per_page=100"
+              ])
+              cr = [c for c in comments
+                    if (c.get("user") or {}).get("login") == "coderabbitai[bot]"]
+              if not cr:
+                  continue
+              last = max(cr, key=lambda c: c.get("created_at") or "")
+              body = last.get("body") or ""
+              if not quota_re.search(body):
+                  continue
+              created = datetime.fromisoformat(
+                  last["created_at"].replace("Z", "+00:00")
+              )
+              m = avail_re.search(body)
+              minutes = 15
+              if m:
+                  minutes = int(m.group(1))
+                  if m.group(2).lower().startswith("hour"):
+                      minutes *= 60
+              if created + timedelta(minutes=minutes, seconds=30) > now:
+                  live = True
+                  break
+
+          if live:
+              print("quota still live; leaving cr-hold")
+              raise SystemExit(0)
+
+          held = [p["number"] for p in prs
+                  if any(l.get("name") == "cr-hold" for l in p.get("labels") or [])]
+          for n in held:
+              subprocess.check_call([
+                  "gh", "pr", "edit", str(n), "--repo", repo,
+                  "--remove-label", "cr-hold",
+              ])
+              print(f"removed cr-hold from #{n}")
+          if not held:
+              print("no cr-hold labels")
+          PY
