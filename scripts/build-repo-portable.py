@@ -1373,9 +1373,13 @@ def print_conf(resolved_url: str, *, channel: str = "release") -> None:
     """
     url = resolved_url.rstrip("/")
     repo_name = _CHANNEL_REPO_NAMES[channel]
+    # install.sh --channel rejects "release" (issue #2384) — the legacy release
+    # default's hint keeps a literal <channel> placeholder instead of naming a
+    # channel install.sh refuses.
+    channel_hint = "<channel>" if channel == "release" else channel
     sys.stdout.write(
         f"# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit;"
-        f" re-run install.sh --channel {channel} to change.\n"
+        f" re-run install.sh --channel {channel_hint} to change.\n"
         f"# pfBlockerNG ({channel} channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
         "# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"

@@ -1096,19 +1096,41 @@ def _embed_hook(script_text: str, hook_text: str) -> str:
 _BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"'
 
 
+def _shell_single_quote(value: str) -> str:
+    """POSIX single-quote *value* as inert shell DATA: ``'`` becomes ``'\\''``.
+
+    A single-quoted literal undergoes no expansion at all — the one safe way to
+    land an externally-configured string (a base URL) inside a shell script's own
+    source text without risking it being read back as executable syntax.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 def _bake_base_url(script_text: str, base: str) -> str:
     """Replace install.sh's hardcoded ``PFB_BASE_URL`` default with *base*.
 
     Raises if the line is not found EXACTLY once — a drifted install.sh must fail
     the site build loudly rather than silently publish an installer that still
     defaults to the upstream URL.
+
+    *base* is baked in as a single-quoted ``PFB_DEFAULT_BASE_URL`` literal, then
+    referenced through a second, unquoted ``${PFB_BASE_URL:-${PFB_DEFAULT_BASE_URL}}``
+    line — never interpolated directly inside the ``${:-...}`` word: dash keeps a
+    quote character embedded THERE literal instead of removing it (``x=; echo
+    "${x:-'a b'}"`` prints ``'a b'``, quotes and all), so quoting inline would not
+    stop expansion of a base containing ``$(...)`` or backticks. Splitting the
+    literal into its own single-quoted assignment first closes that: single quotes
+    suppress all expansion at assignment time, and the ``${VAR:-...}`` reference
+    that follows just copies the already-safe value, never re-parsing it.
     """
     count = script_text.count(_BASE_URL_DEFAULT_LINE)
     if count != 1:
         raise ValueError(
             f"expected exactly one PFB_BASE_URL default line in install.sh, found {count}: {_BASE_URL_DEFAULT_LINE!r}"
         )
-    replacement = f'PFB_BASE_URL="${{PFB_BASE_URL:-{base}}}"'
+    replacement = (
+        f'PFB_DEFAULT_BASE_URL={_shell_single_quote(base)}\nPFB_BASE_URL="${{PFB_BASE_URL:-${{PFB_DEFAULT_BASE_URL}}}}"'
+    )
     return script_text.replace(_BASE_URL_DEFAULT_LINE, replacement, 1)
 
 

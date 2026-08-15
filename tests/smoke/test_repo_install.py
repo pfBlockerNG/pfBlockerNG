@@ -1526,7 +1526,7 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
     finally:
         reset_channel_subscription(repo_vm)
         repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
-        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install.sh", timeout=60.0)
+        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install*.sh", timeout=60.0)
         restore_pages_hosts(repo_vm, prior_hosts)
 
 
@@ -2647,11 +2647,9 @@ def test_rename_pkg_rewrites_both_manifests_and_keeps_the_payload(tmp_path: Path
 def test_project_conf_names_match_the_shipped_scripts() -> None:
     """HERMETIC (no VM): the conf set this module sweeps IS the set install.sh manages.
 
-    ``PROJECT_CONF_NAMES`` drives both the per-channel parametrization and every
-    "exactly one project conf" assertion below. Add a fifth channel to install.sh's
-    ``PROJECT_CONFS`` without adding it here and the live cases keep passing while
-    silently covering one channel less and leaving its conf unswept — a coverage
-    hole that looks exactly like green.
+    ``PROJECT_CONF_NAMES`` must list every conf name install.sh's ``PROJECT_CONFS``
+    declares — it drives both the per-channel parametrization and every "exactly
+    one project conf" assertion below.
     """
     block = re.search(r'(?ms)^PROJECT_CONFS="(.*?)"', INSTALL_SH.read_text())
     assert block is not None, "install.sh: no PROJECT_CONFS list to compare against"
@@ -2849,7 +2847,7 @@ def channel_catalogs(repo_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory)
         # issue #2416 follow-up — the per-channel cases below stage install.sh
         # beside the other spike scripts; sweep every published one so none survives
         # into a later module sharing this guest.
-        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install.sh", timeout=60.0)
+        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install*.sh", timeout=60.0)
 
 
 # --------------------------------------------------------------------------- #

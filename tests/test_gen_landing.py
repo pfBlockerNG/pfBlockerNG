@@ -2125,6 +2125,45 @@ def test_conf_via_portable_matches_real_build_repo_portable_contract() -> None:
         assert f"{base}/{channel}/<varver>" in conf
 
 
+# ── _embed_hook: splice the boot hook into install.sh's stub body ─────────────
+
+
+def test_embed_hook_missing_markers_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="embed markers"):
+        gl._embed_hook("#!/bin/sh\nno markers here\n", "hook body\n")
+
+
+def test_embed_hook_misordered_markers_raises_value_error() -> None:
+    script_text = f"{gl._HOOK_EMBED_END}\n{gl._HOOK_EMBED_BEGIN}\n"
+    with pytest.raises(ValueError, match="embed markers"):
+        gl._embed_hook(script_text, "hook body\n")
+
+
+def test_embed_hook_rejects_hook_text_containing_the_heredoc_delimiter() -> None:
+    script_text = f"{gl._HOOK_EMBED_BEGIN}\nstub\n{gl._HOOK_EMBED_END}\n"
+    hostile_hook = f"echo {gl._HOOK_HEREDOC}\n"
+    with pytest.raises(ValueError, match="heredoc delimiter"):
+        gl._embed_hook(script_text, hostile_hook)
+
+
+def test_embed_hook_keeps_the_marker_lines_around_the_heredoc_in_the_output() -> None:
+    """Unlike the retired ``_embed_common`` (which replaced its whole marked block,
+    markers included), ``_embed_hook`` keeps the BEGIN/END marker lines themselves —
+    only the stub body between them is replaced by the heredoc."""
+    script_text = f'#!/bin/sh\n{gl._HOOK_EMBED_BEGIN}\nstub body\n{gl._HOOK_EMBED_END}\npfb_channel_install "$@"\n'
+    hook_text = "pfb_hook_body() {\n    :\n}\n"
+
+    out = gl._embed_hook(script_text, hook_text)
+
+    assert gl._HOOK_EMBED_BEGIN in out
+    assert gl._HOOK_EMBED_END in out
+    assert "stub body" not in out
+    assert f"cat <<'{gl._HOOK_HEREDOC}'" in out
+    assert hook_text in out
+    assert out.startswith("#!/bin/sh\n")
+    assert out.endswith('pfb_channel_install "$@"\n')
+
+
 def test_write_site_publishes_install_script(tmp_path: Path, monkeypatch: Any) -> None:
     """write_site() publishes a self-contained install.sh (issue #2416 follow-up) —
     the SOLE client entry point for all four channels: the boot hook is embedded via
@@ -2229,18 +2268,19 @@ def test_published_installer_runs_piped_with_embedded_hook(tmp_path: Path, monke
 def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """B1 (issue #2416): piped, ``$0`` is ``sh``, so install.sh's dirname-derived
-    ``SCRIPT_DIR`` resolves to the CALLER's cwd — not a checkout directory. A user
-    following the published one-liner from ``/usr/local/etc/pkg`` (``ROOT=""``)
-    makes ``SCRIPT_DIR/rc.d/...`` collide with the on-box installed hook path
-    itself: the state machine would ``cmp`` the stale on-box hook against itself,
-    report "up to date", and never refresh it. The sibling hook must only be
-    trusted when install.sh's OWN file sits beside it too (the genuine-checkout
-    signal) — otherwise the embedded copy is used.
+    """B1/F1 (issue #2416): the guard's genuine-checkout signal was ``-f
+    SCRIPT_DIR/install.sh`` — but the published artifact's own filename IS
+    install.sh, so ANY copy sitting in SCRIPT_DIR satisfies it, checkout or not.
+    From cwd ``/usr/local/etc`` (``ROOT=""``), ``SCRIPT_DIR/rc.d/...`` collides
+    with the on-box installed hook path itself: with a leftover downloaded
+    install.sh also sitting there (e.g. from an earlier ``fetch -o``), the old
+    guard would ``cmp`` the stale on-box hook against ITSELF, report "up to
+    date", and never refresh it — even though this run is piped fresh from the
+    network. The embedded hook must be tried FIRST, unconditionally.
 
-    Before-state: a stale hook is pre-seeded at the on-box path. After a piped run
-    from a cwd whose "rc.d/..." resolves to that SAME path, the installed hook
-    must be the real embedded copy, byte-identical to the repository source.
+    Before-state: a stale hook AND a leftover install.sh copy are pre-seeded at
+    the collision path. After a piped run from that cwd, the installed hook must
+    be the real embedded copy, byte-identical to the repository source.
     """
     import subprocess
 
@@ -2274,10 +2314,12 @@ def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source
     hook_path.write_text("#!/bin/sh\n# STALE\n")
     assert hook_path.read_text() == "#!/bin/sh\n# STALE\n", "before-state: the stale hook must be in place"
 
-    # cwd = the "installed" pkg dir a user following `fetch | sh` from would be in —
-    # its "rc.d/..." IS the on-box hook path (the collision the bug exploits).
-    cwd = root / "usr" / "local" / "etc" / "pkg"
-    cwd.mkdir(parents=True)
+    # cwd = /usr/local/etc directly — its "rc.d/..." IS the on-box hook path (the
+    # real collision; NOT /usr/local/etc/pkg, one level off). A leftover install.sh
+    # copy also sits here (an earlier manual download), satisfying the old guard's
+    # "-f SCRIPT_DIR/install.sh" even though THIS run is piped fresh.
+    cwd = root / "usr" / "local" / "etc"
+    (cwd / "install.sh").write_text(published_text)
 
     env = {
         **os.environ,
@@ -2305,6 +2347,81 @@ def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source
     )
 
 
+def test_published_installer_saved_to_disk_still_replaces_a_stale_on_box_hook(tmp_path: Path, monkeypatch: Any) -> None:
+    """F1 (issue #2416): the same collision, hit by running the published artifact
+    BY PATH rather than piped — e.g. ``fetch -o install.sh ... && sh install.sh``,
+    saved straight into ``/usr/local/etc``. ``$0`` is the saved file itself here
+    (not "sh"), so ``SCRIPT_DIR`` is ``/usr/local/etc`` directly from dirname —
+    the old guard's ``-f SCRIPT_DIR/install.sh`` is trivially true (it's the file
+    being run) AND ``-f HOOK_SRC`` is true (HOOK_SRC collides with the stale
+    on-box hook itself). The embedded hook must still be tried first.
+
+    Before-state: a stale hook is pre-seeded at the on-box path, which is also
+    where the published install.sh is saved. After running it BY PATH, the
+    installed hook must be the real embedded copy.
+    """
+    import subprocess
+
+    from tests.test_channel_install import _PKG_STUB, _seed_box
+
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    base = f"file://{site}"
+    gl.write_site(str(site), base)
+    published_text = (site / "install.sh").read_text()
+
+    root = tmp_path / "root"
+    root.mkdir()
+    _seed_box(str(root))
+
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    fake_pkg = bin_dir / "pkg"
+    fake_pkg.write_text(_PKG_STUB)
+    fake_pkg.chmod(0o755)
+
+    catalog_dir = root / "catalog"
+    catalog_dir.mkdir()
+    (catalog_dir / "pfblockerng-stable").write_text("4.0.0\n")
+
+    # Before-state: a STALE hook already "installed" on-box.
+    hook_path = root / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
+    hook_path.parent.mkdir(parents=True)
+    hook_path.write_text("#!/bin/sh\n# STALE\n")
+    assert hook_path.read_text() == "#!/bin/sh\n# STALE\n", "before-state: the stale hook must be in place"
+
+    # The published install.sh SAVED right beside the on-box hook's own directory.
+    saved_install = root / "usr" / "local" / "etc" / "install.sh"
+    saved_install.write_text(published_text)
+    saved_install.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "PFBLOCKERNG_ROOT": str(root),
+        "PKG_BIN": str(fake_pkg),
+        "PFB_TEST_ROOT": str(root),
+        "PFB_BASE_URL": base,
+    }
+    result = subprocess.run(
+        ["sh", str(saved_install), "--channel", "stable"],
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+
+    assert result.returncode == 0, (
+        f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    real_hook = (_SCRIPTS_DIR / "rc.d" / "pfblockerng_repo_generate.sh").read_text()
+    assert hook_path.read_text() == real_hook, (
+        "the stale on-box hook must be replaced by the embedded copy, even when install.sh is saved to disk\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+
 def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_path: Path, monkeypatch: Any) -> None:
     """B3/F3 (issue #2416): a fork publishing from a non-default base (or a staged
     prefix) must ship an installer whose OWN ``PFB_BASE_URL`` default points at ITS
@@ -2324,8 +2441,11 @@ def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_pa
     gl.write_site(str(site), fork_base)
 
     text = (site / "install.sh").read_text()
-    assert f'PFB_BASE_URL="${{PFB_BASE_URL:-{fork_base}}}"' in text, (
+    assert f"PFB_DEFAULT_BASE_URL='{fork_base}'" in text, (
         "install.sh must default PFB_BASE_URL to the site's own base, not upstream's"
+    )
+    assert 'PFB_BASE_URL="${PFB_BASE_URL:-${PFB_DEFAULT_BASE_URL}}"' in text, (
+        "the baked default must be referenced through a variable, never interpolated inline"
     )
 
     # Running the published installer piped, with NO PFB_BASE_URL override, must
@@ -2367,6 +2487,76 @@ def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_pa
     conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
     conf_text = conf_path.read_text()
     assert f'url: "{fork_base}/stable/ce-2.8"' in conf_text, conf_text
+
+
+def test_write_site_bakes_a_base_url_containing_shell_metacharacters_as_inert_data(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    """CR (issue #2416 review): ``_bake_base_url`` interpolates *base* into
+    install.sh's own source text — a base built from ``$(...)``, backticks, ``'``,
+    ``"``, or ``&`` must land as inert shell DATA, never executable shell syntax.
+    A fork's configured base URL is config, not code; the published installer
+    must run it through unchanged and execute nothing from it.
+    """
+    import subprocess
+
+    from tests.test_channel_install import _PKG_STUB, _seed_box
+
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    probe = tmp_path / "pwned"
+    evil_base = f"https://evil.example.org/$(touch {probe})`touch {probe}`'\"&"
+    gl.write_site(str(site), evil_base)
+
+    published_text = (site / "install.sh").read_text()
+    sh_n = subprocess.run(["sh", "-n"], input=published_text, text=True, capture_output=True)
+    assert sh_n.returncode == 0, f"sh -n failed on install.sh with an injected base:\n{sh_n.stderr}"
+
+    root = tmp_path / "root"
+    root.mkdir()
+    _seed_box(str(root))
+
+    bin_dir = root / "bin"
+    bin_dir.mkdir()
+    fake_pkg = bin_dir / "pkg"
+    fake_pkg.write_text(_PKG_STUB)
+    fake_pkg.chmod(0o755)
+
+    catalog_dir = root / "catalog"
+    catalog_dir.mkdir()
+    (catalog_dir / "pfblockerng-stable").write_text("4.0.0\n")
+
+    # No PFB_BASE_URL override — the piped run must resolve the BAKED default,
+    # proving the value (not just its escaped text) is what the shell sees.
+    env = {
+        **{k: v for k, v in os.environ.items() if k != "PFB_BASE_URL"},
+        "PFBLOCKERNG_ROOT": str(root),
+        "PKG_BIN": str(fake_pkg),
+        "PFB_TEST_ROOT": str(root),
+    }
+    result = subprocess.run(
+        ["sh", "-s", "--", "--channel", "stable"],
+        input=published_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=str(tmp_path),
+    )
+    assert result.returncode == 0, (
+        f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+    assert not probe.exists(), (
+        "the base URL's embedded shell metacharacters must never execute — probe file must be absent\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
+
+    conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
+    conf_text = conf_path.read_text()
+    assert f'url: "{evil_base}/stable/ce-2.8"' in conf_text, (
+        f"the conf must carry the LITERAL base string, unexpanded:\n{conf_text}"
+    )
 
 
 # ── write_site / CLI interface — call-compatible with publish-pkg-repo.sh ─────
