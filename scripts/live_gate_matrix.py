@@ -31,6 +31,13 @@ def _load_build_repo_portable() -> Any:
     its ONE source of truth for varver derivation (``catalog_name_from_version``) --
     never re-implemented here. Same loader idiom as
     scripts/build-dep-pkg-portable.py's ``_load_build_pkg_portable``."""
+    # build-repo-portable.py itself does `from pfb_pkg import ...`, resolvable only
+    # with scripts/ on sys.path. Only tests/conftest.py puts it there -- a bare
+    # `python3 -c "from scripts.live_gate_matrix import ..."` (release-published.yml's
+    # own prepare-live-gate step) has no conftest, so this insert is load-bearing
+    # outside pytest, same idiom as scripts/publish_release.py's own sys.path guard.
+    if str(_THIS_DIR) not in sys.path:
+        sys.path.insert(0, str(_THIS_DIR))
     spec = importlib.util.spec_from_file_location("build_repo_portable", _BUILD_REPO_PORTABLE_PATH)
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
