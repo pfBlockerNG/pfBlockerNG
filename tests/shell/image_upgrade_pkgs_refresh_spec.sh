@@ -215,6 +215,16 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
     The contents of file "$CALLS" should not include '/sbin/reboot'
   End
 
+  It 'fails closed when the pkg upgrade -y log merely lists a foreign-major package'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 1' 1 0 '' '' '' '' \
+      'pkg: 1.21.3_8 -> 2.1.0 [FreeBSD:16:amd64]'
+    The status should be failure
+    The stderr should include 'FreeBSD:16:'
+    The stderr should include 'pkg-upgrade.log'
+    The output should not include 'REACHED-AFTER-REFRESH'
+    The contents of file "$CALLS" should not include '/sbin/reboot'
+  End
+
   # C6
   It 'fails closed when the post-reboot ABI major differs from the snapshot'
     When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Number of packages to be upgraded: 3' 1 0 '' '' 'FreeBSD:16:amd64' '16.0-RELEASE'

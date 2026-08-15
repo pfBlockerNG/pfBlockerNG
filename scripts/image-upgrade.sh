@@ -472,6 +472,20 @@ pfb_kern_major() {
 # pfb_kern_major END
 
 # pfb_refresh_pkgs BEGIN
+# pfb_refuse_foreign_major TEXT BASE_MAJOR WHAT LOG — die when TEXT names any
+# FreeBSD:<major>: token whose major is not BASE_MAJOR. Applied to the dry-run
+# plan AND the applied -y log: an outdated pkg binary restricts the dry-run to
+# pkg's own self-upgrade, so a foreign-major listing can first appear in either.
+pfb_refuse_foreign_major() {
+    _prf_text=$1; _prf_base=$2; _prf_what=$3; _prf_log=$4
+    for _prf_tok in $(printf '%s\n' "$_prf_text" | grep -oE 'FreeBSD:[0-9]+:'); do
+        _prf_major=$(printf '%s' "$_prf_tok" | cut -d: -f2)
+        if [ "$_prf_major" != "$_prf_base" ]; then
+            die "${_prf_what} references FreeBSD:${_prf_major}: (base is FreeBSD:${_prf_base}:) — refusing to continue (issue #2299; see ${_prf_log})"
+        fi
+    done
+}
+
 # pfb_refresh_pkgs LOG_DIR — --upgrade-pkgs body: refresh the pkg catalogue and
 # apply any pending upgrade, gated on the FreeBSD ABI/kernel major staying put
 # throughout. The same-version daily refresh (image-refresh.yml, from==to) is
@@ -533,12 +547,7 @@ pfb_refresh_pkgs() {
     # just LIST a foreign-major package (an outdated pkg binary restricts the
     # dry-run to pkg's own self-upgrade, masking the real plan until -y
     # re-execs) — so scan every FreeBSD:<major>: token in the plan too.
-    for _prp_tok in $(printf '%s\n' "$_prp_dry" | grep -oE 'FreeBSD:[0-9]+:'); do
-        _prp_tok_major=$(printf '%s' "$_prp_tok" | cut -d: -f2)
-        if [ "$_prp_tok_major" != "$_prp_abi0_major" ]; then
-            die "pkg upgrade -n plan references FreeBSD:${_prp_tok_major}: (base is FreeBSD:${_prp_abi0_major}:) — refusing to continue (issue #2299; see ${_prp_log_dir}/pkg-upgrade-dryrun.log)"
-        fi
-    done
+    pfb_refuse_foreign_major "$_prp_dry" "$_prp_abi0_major" "pkg upgrade -n plan" "${_prp_log_dir}/pkg-upgrade-dryrun.log"
     _prp_verdict=$(pfb_pkg_refresh_verdict "$_prp_dry")
 
     if [ "$_prp_verdict" = up-to-date ]; then
@@ -566,6 +575,7 @@ pfb_refresh_pkgs() {
             die "pkg upgrade -y reports a FreeBSD major crossing (issue #2299; see ${_prp_log_dir}/pkg-upgrade.log)"
             ;;
     esac
+    pfb_refuse_foreign_major "$(cat "${_prp_log_dir}/pkg-upgrade.log")" "$_prp_abi0_major" "pkg upgrade -y log" "${_prp_log_dir}/pkg-upgrade.log"
     log "rebooting after pkg upgrade"
     # /sbin/reboot drops the connection — expected; ignore the exit code.
     ssh_guest '/sbin/reboot' 2>/dev/null || true
