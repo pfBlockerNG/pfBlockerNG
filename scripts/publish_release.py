@@ -148,32 +148,40 @@ class _Target:
     dependencies: list[pc.VerifiedAsset] = field(default_factory=list)
 
 
-def _origin_stem(value: object) -> str | None:
-    """Last path component of an origin, with a py / pyNNN flavor prefix stripped.
+def _origin_key(value: object) -> tuple[str, str] | None:
+    """(category, unflavored last) for a port origin.
 
     extra_pkgs lists port origins (textproc/py-charset-normalizer). Some
     manifests and test fixtures use the flavored package origin
     (textproc/py311-charset-normalizer). Those name the same extra.
+    Category is part of the identity: www/py-foo is not textproc/py-foo
+    (issue #2403).
     """
     if not isinstance(value, str) or "/" not in value:
         return None
-    last = value.rsplit("/", 1)[-1]
+    category, last = value.rsplit("/", 1)
+    if not category or not last:
+        return None
     stripped = _PY_FLAVOR_ORIGIN.sub("", last, count=1)
-    return stripped or last
+    return (category, stripped or last)
+
+
+def _row_declares_origin(row: Mapping[str, object], origin: object) -> bool:
+    """True iff this ROUTE/BUILD row lists ``origin`` in extra_pkgs."""
+    extras = row.get("extra_pkgs")
+    if not isinstance(extras, list):
+        return False
+    if origin in extras:
+        return True
+    key = _origin_key(origin)
+    if key is None:
+        return False
+    return any(_origin_key(extra) == key for extra in extras)
 
 
 def _row_declares_dep(row: Mapping[str, object], dep: pc.VerifiedAsset) -> bool:
     """True iff this ROUTE/BUILD row lists the dependency's origin in extra_pkgs."""
-    extras = row.get("extra_pkgs")
-    if not isinstance(extras, list):
-        return False
-    origin = dep.manifest.get("origin")
-    if origin in extras:
-        return True
-    stem = _origin_stem(origin)
-    if stem is None:
-        return False
-    return any(_origin_stem(extra) == stem for extra in extras)
+    return _row_declares_origin(row, dep.manifest.get("origin"))
 
 
 def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Target]:
@@ -200,8 +208,8 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
         ]
         if not matched:
             raise PublishReleaseError(
-                f"dependency asset {dep.declared_name!r} ABI-matches no varver targeted "
-                "by this run's own canonical assets"
+                f"dependency asset {dep.declared_name!r} matches no varver targeted "
+                "by this run's own canonical assets (ABI + extra_pkgs declaration)"
             )
         for varver in matched:
             targets[varver].dependencies.append(dep)
@@ -230,6 +238,32 @@ def _files_identical(a: Path, b: Path) -> bool:
     if a.stat().st_size != b.stat().st_size:
         return False
     return a.read_bytes() == b.read_bytes()
+
+
+def _evict_undeclared_deps(dest_dir: Path, *, engine: pc.Engine, row: Mapping[str, object]) -> bool:
+    """Unlink non-catalog, non-canonical .pkg files this dest row does not declare.
+
+    issue #2402: prune_retained never touches dependency .pkg files, so a stray
+    extra already on an undeclaring dest survives attach and is re-indexed.
+    Scoped to this dest directory only. A declared leftover is kept even when
+    this run did not re-attach it.
+    """
+    if not dest_dir.is_dir():
+        return False
+    brp = engine.build_repo_portable
+    pfb_pkg = engine.pfb_pkg
+    evicted = False
+    for path in sorted(dest_dir.glob("*.pkg")):
+        if not path.is_file() or path.name in brp._CATALOG_PKG_FILES:
+            continue
+        manifest = pfb_pkg.read_compact_manifest(path)
+        if manifest.get("name") == pfb_pkg.CANONICAL_EMITTED_IDENTITY:
+            continue
+        if _row_declares_origin(row, manifest.get("origin")):
+            continue
+        path.unlink()
+        evicted = True
+    return evicted
 
 
 def _drop_assets(dest_dir: Path, asset_map: Mapping[str, Path]) -> bool:
@@ -282,6 +316,8 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
         for channel in intake.destinations:
             dest_dir = site_root / channel / varver
             changed = _drop_assets(dest_dir, asset_map)
+            if _evict_undeclared_deps(dest_dir, engine=engine, row=target.row):
+                changed = True
             if not changed and not _catalogue_descriptor_complete(dest_dir, engine):
                 changed = True
             # Heal historical holes before prune: copy every canonical version
