@@ -931,9 +931,7 @@ def test_software_check_picks_newest_retained_catalog_version(repo_vm: SmokeVM, 
         build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg, high_pkg])
         pkg_update_our_repo(repo_vm, OURS_REPO_NAME)
 
-        rquery = _ssh_check(
-            repo_vm, "pkg", "rquery", "-r", OURS_REPO_NAME, "%v", PKG_NAME, timeout=60.0
-        ).stdout.strip()
+        rquery = _ssh_check(repo_vm, "pkg", "rquery", "-r", OURS_REPO_NAME, "%v", PKG_NAME, timeout=60.0).stdout.strip()
         lines = [line.strip() for line in rquery.splitlines() if line.strip()]
         assert low in lines and high in lines, f"catalog must retain both versions, rquery={rquery!r}"
 
