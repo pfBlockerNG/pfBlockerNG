@@ -68,7 +68,7 @@ under the **Apache License 2.0**.
 Run this **on the firewall** over SSH (as root), picking the channel you want:
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/install-stable.sh | sh
+fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel stable
 ```
 
 One command from **any** starting state: a fresh firewall, an existing Netgate
@@ -82,17 +82,17 @@ package catalog, and keeps it correct automatically across pfSense OS upgrades.
 The repository takes precedence over the Netgate catalog, so the
 webConfigurator's **Install**/**Update** buttons pick up its builds too.
 
-Four channels are available. They all publish the **same** package name —
-`pfSense-pkg-pfBlockerNG` — from separate catalogs, so a firewall subscribes to
-**exactly one** channel and the script removes any other pfBlockerNG
-repository it finds:
+Four channels are available, selected with `--channel`. They all publish the
+**same** package name — `pfSense-pkg-pfBlockerNG` — from separate catalogs, so
+a firewall subscribes to **exactly one** channel and the script removes any
+other pfBlockerNG repository it finds:
 
-| Channel | Script | For |
-|---------|--------|-----|
-| **Stable** | `install-stable.sh` | Production use |
-| **Testing** | `install-testing.sh` | Prereleases validating the next stable |
-| **Edge** | `install-edge.sh` | Prereleases opening the next release family |
-| **Nightly** | `install-nightly.sh` | Bleeding edge, rebuilt from the development tip |
+| Channel | `--channel` | For |
+|---------|-------------|-----|
+| **Stable** | `stable` | Production use |
+| **Testing** | `testing` | Prereleases validating the next stable |
+| **Edge** | `edge` | Prereleases opening the next release family |
+| **Nightly** | `nightly` | Bleeding edge, rebuilt from the development tip |
 
 Choose **stable** unless you specifically want to track prerelease builds.
 
@@ -105,11 +105,11 @@ Once installed, the interface lives in the webConfigurator under
 
 ### Switching channels
 
-Run the target channel's script — the same one-liner as
-[Installation](#installation), just pointed at a different channel:
+Run the same one-liner as [Installation](#installation), just with a
+different `--channel`:
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/install-edge.sh | sh
+fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel edge
 ```
 
 It moves the subscription, moves the installed package onto it, replaces a

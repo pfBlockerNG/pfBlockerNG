@@ -112,11 +112,11 @@ import sys
 
 site = sys.argv[1]
 argv = sys.argv[1:]
-# Four deterministic client scripts since issue #2416: the per-channel installers
-# are the SOLE client entry point. Stub body text is the script's own base name
-# (sans .sh) so existing pre-seeded fixture bytes below ("# install-stable stub\n"
-# etc.) keep matching byte-for-byte.
-CLIENT_SCRIPTS = ("install-stable.sh", "install-testing.sh", "install-edge.sh", "install-nightly.sh")
+# ONE deterministic client script since issue #2416 follow-up: install.sh,
+# --channel parameterized, is the SOLE client entry point. Stub body text is the
+# script's own base name (sans .sh) so existing pre-seeded fixture bytes below
+# ("# install stub\n") keep matching byte-for-byte.
+CLIENT_SCRIPTS = ("install.sh",)
 
 
 def _write_client_scripts(site):
@@ -265,13 +265,13 @@ PY
     git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "UNRESOLVABLE-main"
   }
 
-  # The four deterministic client scripts (issue #2416: the per-channel installers
-  # are the SOLE client entry point), and their sorted docs/-relative path list —
-  # shared by every preseed/assertion below so the count only needs bumping in one
-  # place.
-  CLIENT_SCRIPT_NAMES="install-stable.sh install-testing.sh install-edge.sh install-nightly.sh"
-  CLIENT_SCRIPT_PATHS="docs/install-stable.sh docs/install-testing.sh docs/install-edge.sh docs/install-nightly.sh"
-  SORTED_CLIENT_SCRIPT_PATHS="docs/install-edge.sh docs/install-nightly.sh docs/install-stable.sh docs/install-testing.sh"
+  # The one deterministic client script (issue #2416 follow-up: install.sh,
+  # --channel parameterized, is the SOLE client entry point), and its docs/-relative
+  # path — shared by every preseed/assertion below so a future addition only needs
+  # bumping in one place.
+  CLIENT_SCRIPT_NAMES="install.sh"
+  CLIENT_SCRIPT_PATHS="docs/install.sh"
+  SORTED_CLIENT_SCRIPT_PATHS="docs/install.sh"
 
   # Writes every client-script stub, byte-identical to the fake gen_landing.py's
   # own output, into docs/ — used to preseed a "current scripts" state.
@@ -341,14 +341,14 @@ JSON
     # CodeRabbit finding: landing_regen_and_stage's `[ -f ... ] && stage_paths=...`
     # SKIPS a missing client script instead of failing — a drifted generator/wrapper
     # pairing (CLIENT_SCRIPTS names a script the generator no longer writes) would
-    # silently ship four-minus-one scripts forever, never caught. The wrapper must
-    # die instead, naming the missing file, and commit nothing.
+    # silently ship no script at all, never caught. The wrapper must die instead,
+    # naming the missing file, and commit nothing.
     export FAKE_MODE=success
     export FAKE_TOUCHED=edge/ce-2.8
-    export FAKE_OMIT_CLIENT_SCRIPT=install-nightly.sh
+    export FAKE_OMIT_CLIENT_SCRIPT=install.sh
     When run script "$script"
     The status should not equal 0
-    The stderr should include 'install-nightly.sh'
+    The stderr should include 'install.sh'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
   End
@@ -381,14 +381,10 @@ JSON
     The path "${base}/pkg-repo/docs/edge/index.html" should be exist
     committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
     The variable committed should include 'docs/edge/index.html'
-    # write_site() publishes every client script into the site root on the same
-    # walk; the landing page's install one-liners fetch them from there, so an
-    # unstaged copy means the published site serves a 404 into `sh` for whichever
-    # it omits (issue #2416).
-    The variable committed should include 'docs/install-stable.sh'
-    The variable committed should include 'docs/install-testing.sh'
-    The variable committed should include 'docs/install-edge.sh'
-    The variable committed should include 'docs/install-nightly.sh'
+    # write_site() publishes the client script into the site root on the same
+    # walk; the landing page's install one-liner fetches it from there, so an
+    # unstaged copy means the published site serves a 404 into `sh` (issue #2416).
+    The variable committed should include 'docs/install.sh'
   End
 
   It 'a stray index-less docs/staging dir (leftover from a crashed stage run) never aborts the dir_indexes collector'
@@ -643,17 +639,12 @@ JSON
     The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
   End
 
-  It 'a drift in only one per-channel installer still ships a client-script refresh'
-    # issue #2416 made install-<channel>.sh the SOLE client entry point — every one
-    # of the four per-channel installers must be regenerated + staged on a
-    # catalogue no-op. Pre-seed three of the four current and leave
-    # install-nightly.sh (the LAST name in CLIENT_SCRIPT_PATHS) stale: the refresh
-    # is reached, and the resulting commit touches ONLY the one script that
-    # actually drifted, iff the wrapper's no-op-path `git add` covers EVERY name in
-    # CLIENT_SCRIPT_PATHS — drifting the last element is what a dropped-last-name
-    # regression in that list would miss.
-    write_client_script_stubs
-    printf '#!/bin/sh\n# stale install-nightly\n' > "${base}/pkg-repo/docs/install-nightly.sh"
+  It 'a stale single client script still ships a refresh that touches only it'
+    # issue #2416 follow-up made install.sh the SOLE client entry point. Pre-seed it
+    # stale (byte-different from the stub generator's current output) with nothing
+    # else dirty: the refresh is reached, and the resulting commit touches ONLY
+    # that one script.
+    printf '#!/bin/sh\n# stale install\n' > "${base}/pkg-repo/docs/install.sh"
     # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
     ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
         && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
@@ -665,7 +656,7 @@ JSON
     The stderr should include 'main'
     The result of function remote_head_now should not equal "$original_remote_head"
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/install-nightly.sh'
+    The variable committed should equal 'docs/install.sh'
   End
 
   It 'commits nothing when a reported touched target leaves the tree unchanged'
@@ -1065,21 +1056,15 @@ HOOK
     original="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf")"
     The variable original should equal 'seed'
     The path "${base}/pkg-repo/docs/index.html" should not be exist
-    # No landing regen during "stage" (staging is never served) — NONE of the
-    # four client scripts (already on disk/tracked from the preseed above) is
-    # touched, staged, or re-committed by this run. Every candidate path was
-    # materialized above so each negative assertion can actually fail.
+    # No landing regen during "stage" (staging is never served) — the client script
+    # (already on disk/tracked from the preseed above) is not touched, staged, or
+    # re-committed by this run. Every candidate path was materialized above so each
+    # negative assertion can actually fail.
     committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
     The variable committed should include 'docs/staging/10-1/edge/ce-2.8/marker.pkg'
     The variable committed should not include 'docs/index.html'
-    The path "${base}/pkg-repo/docs/install-stable.sh" should be exist
-    The path "${base}/pkg-repo/docs/install-testing.sh" should be exist
-    The path "${base}/pkg-repo/docs/install-edge.sh" should be exist
-    The path "${base}/pkg-repo/docs/install-nightly.sh" should be exist
-    The variable committed should not include 'docs/install-stable.sh'
-    The variable committed should not include 'docs/install-testing.sh'
-    The variable committed should not include 'docs/install-edge.sh'
-    The variable committed should not include 'docs/install-nightly.sh'
+    The path "${base}/pkg-repo/docs/install.sh" should be exist
+    The variable committed should not include 'docs/install.sh'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: stage v4.0.0.b1 -> ["edge"]'
     The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'

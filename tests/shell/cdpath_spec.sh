@@ -13,12 +13,12 @@ Describe 'script path derivation'
     done <<'EOF'
 scripts/bench_ip_recompute.sh|REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 scripts/build-leg.sh|SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
-scripts/channel-install/install-common.sh|PFB_COMMON_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 scripts/deploy.sh|REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 scripts/git-env-scrub-guard.sh|_SELF_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 scripts/image-publish.sh|SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 scripts/image-upgrade.sh|SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 scripts/install-from-repo.sh|REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
+scripts/install.sh|SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 scripts/local-smoke.sh|REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 scripts/publish-smoke-image.sh|SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
 scripts/resolve-legs.sh|_RL_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"

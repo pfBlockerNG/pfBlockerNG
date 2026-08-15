@@ -72,7 +72,7 @@ CONF_PRIORITY = 100
 # Per-channel repo-conf stanza key (issue #2147 step B): the four channels
 # (stable/testing/edge/nightly) plus the legacy "release" default all carry the
 # ONE canonical pfSense-pkg-pfBlockerNG identity — channel only picks the
-# stanza name + URL path segment. Mirrors install-common.sh's PROJECT_CONFS keying.
+# stanza name + URL path segment. Mirrors install.sh's PROJECT_CONFS keying.
 _CHANNEL_REPO_NAMES = {
     "release": "pfblockerng",
     "nightly": "pfblockerng-nightly",
@@ -1375,7 +1375,7 @@ def print_conf(resolved_url: str, *, channel: str = "release") -> None:
     repo_name = _CHANNEL_REPO_NAMES[channel]
     sys.stdout.write(
         f"# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit;"
-        f" re-run install-{channel}.sh to change.\n"
+        f" re-run install.sh --channel {channel} to change.\n"
         f"# pfBlockerNG ({channel} channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
         "# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"
