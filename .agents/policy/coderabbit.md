@@ -77,8 +77,12 @@ Format-only pushes after pause do not spend a slot.
 
 Only the **repo owner**, in conversation, may spend a slot anyway
 or name another reviewer. No labels. Agents never invent a
-substitute. Three-leg still runs. CLI-in-CI is #2436 (needs a
-burst test + an Agentic API key before anyone builds it).
+substitute. Three-leg still runs. CLI-in-CI is #2436:
+`.github/workflows/coderabbit-cli.yml` is **dispatch-only** (not
+on push) so it cannot walk the PR Fair Usage band by itself.
+Needs secret `CODERABBIT_API_KEY` (Agentic key). Findings are
+file-level. Burst-test the hourly columns before enabling
+per-push.
 
 ## Required path (every future PR)
 
