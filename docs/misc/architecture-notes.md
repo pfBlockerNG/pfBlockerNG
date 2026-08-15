@@ -1079,17 +1079,19 @@ never wrong. Key properties:
     the boot-environment clone, so a non-package hook placed there persists across the very
     upgrade it heals (maintainer-confirmed from long operational use).
 
-**Published one-file bootstrap (`site/add-repo.sh`).** The repository copy of
-`scripts/add-repo.sh` installs the `rc.d` hook by copying the sibling file
-`scripts/rc.d/pfblockerng_repo_generate.sh` via `dirname "$0"`. That path resolution
-fails when the script is **piped** into `sh` (e.g. `fetch … | sh`) because `$0` is then
-`sh`, not the script path. `gen_landing.py`'s `write_site()` generates a self-contained
-`site/add-repo.sh` by splicing the hook body between the `PFB_EMBED_HOOK_BEGIN` /
-`PFB_EMBED_HOOK_END` marker comments inside `pfb_emit_embedded_hook()` — using a
-**single-quoted heredoc** (`cat <<'PFB_HOOK_HEREDOC'`) so none of the hook's dollar-signs
-or backticks are expanded. The installed file is identical to the repository sibling.
-The published file lives at `pfblockerng.github.io/pkg/add-repo.sh` and is what the
-landing page's copy-paste one-liners point to.
+**Published one-file bootstrap (`site/install-<channel>.sh`, issue #2416).** The repository
+copies (`scripts/channel-install/install-<channel>.sh`, sourcing the shared
+`install-common.sh`, which in turn shells out to the sibling `scripts/rc.d/
+pfblockerng_repo_generate.sh`) all resolve siblings via `dirname "$0"`, which fails when
+**piped** into `sh` (`$0` is then `sh`, not the script path). `gen_landing.py`'s
+`write_channel_installers()` publishes a self-contained `site/install-<channel>.sh` per
+channel via TWO splices: `install-common.sh`'s own text replaces the per-channel stub's
+`PFB_EMBED_COMMON` block first, then the hook body is spliced into THAT text's
+`PFB_EMBED_HOOK` block exactly like `write_add_repo` does for `add-repo.sh` — a
+single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so none of the hook's dollar-signs or
+backticks are expanded. `scripts/add-repo.sh`/`migrate-channel.sh` publish the same way for
+one deprecation cycle. Published at `pfblockerng.github.io/pkg/install-<channel>.sh`, what
+the README's one-liners point to.
 
 Full design: ADR-39.
 
@@ -1161,9 +1163,9 @@ Full design: ADR-39.
   `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
   publisher failure, so a partial or failed run cannot erase another channel
   (pinned by `tests/shell/publish_pkg_repo_spec.sh`). On a catalogue no-op it still
-  regenerates the two deterministic client scripts (`gen_landing.py
-  --client-scripts-only`) and commits exactly `docs/add-repo.sh` +
-  `docs/migrate-channel.sh` iff their bytes drifted (issue #2408) — the timestamped
+  regenerates the six deterministic client scripts (`gen_landing.py
+  --client-scripts-only`: `add-repo.sh` + `migrate-channel.sh` plus the four
+  `install-<channel>.sh`, issue #2416) and commits whichever drifted (issue #2408) — the timestamped
   landing/browse/autoindex pages remain publish-only. Trust model is unchanged
   (`signature_type: none`, HTTPS/TLS to the Pages host — no catalogue-signing key); the landing
   page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
@@ -1193,22 +1195,25 @@ Full design: ADR-39.
   from stays gone across a pfSense OS upgrade (issue #2148). The emitted conf is byte-identical
   across the producers
   (drift-pinned in `tests/test_add_repo_conf.py` + `tests/test_build_repo_portable.py`).
-- **Channel switching is two operations, not one:** `scripts/add-repo.sh --channel <ch>` moves
-  the SUBSCRIPTION; `scripts/migrate-channel.sh --channel <ch>` moves the INSTALLED PACKAGE.
-  Both are published at the Pages root by `scripts/gen_landing.py` (`write_add_repo` /
-  `write_migrate_channel`). The second is load-bearing, not tidiness: measured on CE 2.8.1 /
-  `pkg` 1.21.3, `pkg upgrade` never leaves the repository a package was installed from while
-  that repo is enabled and still offers it — neither `CONSERVATIVE_UPGRADE=false` nor a higher
-  `priority:` changes that — so a box that only gains a conf silently keeps its old build. And
-  every channel catalogue publishes the ONE canonical `pfSense-pkg-pfBlockerNG`, so a legacy
-  suffixed identity (`-devel`, `-nightly`/`-NIGHTLY`) has no upgrade path until it is replaced.
-  `migrate-channel.sh` fails BEFORE any mutation on a mismatched subscription, no/multiple/
-  unrecognised installed identity, or a target catalogue that does not offer the canonical
-  package; it then runs `pkg install -f -r <repo>` (canonical, wrong repo — also the reverse
-  move, since the target may be OLDER) or `pkg delete` + `pkg install -r <repo>` (legacy
-  identity), and verifies identity, `%R`, version, the `pkg info -l` payload, and the surviving
-  `installedpackages/pfblockerng` section before reporting success. Distinct exit codes per
-  failure class; pinned by `tests/shell/migrate_channel_spec.sh`.
+- **Channel switching is one state machine (issue #2416):** `install-<channel>.sh`
+  (`install-common.sh`'s `pfb_channel_install()`) folds what were two operations —
+  `add-repo.sh` moving the SUBSCRIPTION, `migrate-channel.sh` moving the INSTALLED
+  PACKAGE — into one idempotent run, check-then-act at every step: install/refresh the
+  boot hook; resolve THIS channel's conf through it; `pkg update -f -r <repo>`; pick the
+  OFFERED version by reducing `pkg rquery`'s offerings pairwise through `pkg version -t`
+  (never catalogue order, issue #2393 residual — the same comparator `pkg install`
+  itself uses); only once that target is proven reachable, retire every OTHER project
+  conf and delete any OTHER installed identity (legacy suffix, a fork); install or
+  repository-qualified reinstall (`-r <repo>`, `-f` for a reinstall/downgrade — crossing
+  release families prints a WARNING and proceeds); then re-read every claim from `pkg`
+  and verify identity, `%R`, version, the `pkg info -l` payload, and the surviving
+  `installedpackages/pfblockerng` section. A converged box re-run performs zero pkg
+  mutations (byte-identical conf + hook). Exit codes: 0 ok (including a reported no-op),
+  1 environment, 2 usage, 4 target unavailable (a conf stub THIS run created is removed
+  on the way out), 5 a pkg delete/install failed, 6 post-install verification failed.
+  `PFB_BASE_URL` (default the Pages root) overrides the catalog base for a fork or a
+  staged pre-announce URL. `add-repo.sh`/`migrate-channel.sh` keep publishing and
+  working, unchanged, for one deprecation cycle.
   On the box, channel provenance is read from the INSTALLED REPO, never the package name:
   `pfb_channel_from_repo_name()` maps `pfblockerng-<ch>` → channel and
   `pfb_software_is_our_build()` accepts all five project repos, so a stable/testing/edge

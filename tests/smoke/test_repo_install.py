@@ -2930,6 +2930,10 @@ def channel_catalogs(repo_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory)
         # add-repo.sh installs the generator hook at the PRODUCTION rc.d path; drop it so
         # a staged hook never survives into a later module sharing this guest.
         repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
+        # issue #2416 — the per-channel installer cases below stage install-<ch>.sh
+        # beside the other spike scripts; sweep every published one so none survives
+        # into a later module sharing this guest.
+        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install-*.sh", timeout=60.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -3331,4 +3335,549 @@ def test_migrate_channel_refuses_an_unsubscribed_channel_before_mutating(
     )
     assert pkg_installed_version_of(repo_vm, CANONICAL_PKG_NAME) is None, (
         "the refused migration installed the canonical package anyway"
+    )
+
+
+# ============================================================================ #
+# issue #2416 — the per-channel installer, published                           #
+#                                                                              #
+# One self-contained install-<channel>.sh per channel replaces the two-step    #
+# add-repo.sh + migrate-channel.sh flow: EVERY starting state (fresh box,      #
+# legacy -devel, a Netgate-origin canonical install, another channel) folds    #
+# into ONE idempotent state machine (install-common.sh), published by          #
+# gen_landing.py exactly the way the live website build does it                #
+# (--client-scripts-only, no landing/browse pages). These cases run the        #
+# PUBLISHED form -- hook and install-common.sh embedded, no sibling file on    #
+# disk -- piped into /bin/sh on the guest, the `fetch | sh` shape a user       #
+# actually runs. Each starting state gets its own case, and every case         #
+# proves a second run is a true no-op (conf/hook bytes + installed version     #
+# unchanged, "Already up to date" reported, no install/reinstall/delete        #
+# line).                                                                       #
+#                                                                              #
+# Marker: @pytest.mark.repo (inherited from pytestmark).                       #
+# Dispatch: gh workflow run smoke-single.yml -f pytest_marker=repo             #
+# ============================================================================ #
+
+# Runner-side path to the generator under test (scripts/gen_landing.py is invoked as a
+# subprocess with THIS process's interpreter, mirroring how every other runner-side
+# script in this module is driven — build-repo-portable.py, build-repo.sh — never
+# imported directly).
+GEN_LANDING_PY = Path(__file__).resolve().parents[2] / "scripts" / "gen_landing.py"
+
+# The four stdout markers install-common.sh's converge step (9) guards every mutating
+# pkg call with; a no-op second run must print NONE of them.
+_MUTATION_MARKERS = ("==> Installing", "==> Reinstalling", "==> Removing")
+
+
+def run_channel_installer(
+    vm: SmokeVM,
+    channel: str,
+    base_url: str,
+    tmp_path: Path,
+    *,
+    timeout: float = 900.0,
+) -> subprocess.CompletedProcess[str]:
+    """Publish the SHIPPED ``install-<channel>.sh`` and run it PIPED on the guest.
+
+    Generates the self-contained published form the SAME way the live website build
+    does it (``gen_landing.py <site> <base> add-repo.sh --client-scripts-only``): hook
+    and install-common.sh embedded via the PFB_EMBED splices, no sibling file needed on
+    disk. ``base_url`` positional argument is a placeholder — ``--client-scripts-only``
+    never reads it, only ``write_channel_installers(site, addrepo)`` runs, and that
+    takes no base URL (the published script's own ``PFB_BASE_URL`` default is baked
+    into install-common.sh; the real override rides the ``PFB_BASE_URL`` ENV VAR the
+    guest run is launched with below, exactly like a user pointing at a fork).
+
+    Ships ``install-<channel>.sh`` to ``GUEST_SPIKE_DIR`` and runs it exactly the
+    ``fetch -qo - <url> | sh`` shape documented in the script's own usage() header: the
+    script's stdin IS the script text (install-common.sh's header explains why every
+    pkg(8) call redirects ITS OWN stdin from /dev/null — a child that read the
+    unredirected stdin would consume trailing script bytes). Returns WITHOUT raising —
+    the refusal case (case 5 below) asserts on a non-zero exit.
+    """
+    # --client-scripts-only always overwrites the same four install-<ch>.sh files, so one
+    # shared site dir per test is fine even across repeated/multi-channel calls.
+    site_dir = tmp_path / "site"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    gen = subprocess.run(
+        [
+            sys.executable,
+            str(GEN_LANDING_PY),
+            str(site_dir),
+            "unused",  # base_url positional — unread by --client-scripts-only
+            str(ADD_REPO_SH),
+            "--client-scripts-only",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120.0,
+        check=False,
+    )
+    if gen.returncode != 0:
+        raise RuntimeError(
+            f"gen_landing.py --client-scripts-only failed: rc={gen.returncode}\n"
+            f"stdout:\n{gen.stdout}\nstderr:\n{gen.stderr}"
+        )
+    local_script = site_dir / f"install-{channel}.sh"
+    assert local_script.is_file(), f"gen_landing.py did not publish {local_script.name}"
+
+    guest_path = f"{GUEST_SPIKE_DIR}/install-{channel}.sh"
+    _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)
+    _scp_to_guest(vm, local_script, guest_path)
+    return vm.ssh("/bin/sh", "-c", f"env PFB_BASE_URL='{base_url}' /bin/sh < {guest_path}", timeout=timeout)
+
+
+def _conf_bytes(vm: SmokeVM, path: str) -> str:
+    """The on-guest content of ``path`` (the byte-identity oracle for a no-op second run)."""
+    return _ssh_check(vm, "/bin/cat", path).stdout
+
+
+def _hook_bytes(vm: SmokeVM) -> str:
+    """The on-guest content of the installed generator hook (same oracle, for the hook)."""
+    return _conf_bytes(vm, GUEST_HOOK_PATH)
+
+
+def _pkg_state(vm: SmokeVM) -> tuple[list[str], str | None, str | None]:
+    """(installed pfBlockerNG identities, canonical ``%v``, canonical ``%R``) in one call."""
+    return (
+        installed_pfblockerng_names(vm),
+        pkg_installed_version_of(vm, CANONICAL_PKG_NAME),
+        pkg_repo_origin_of(vm, CANONICAL_PKG_NAME),
+    )
+
+
+def _assert_second_run_is_a_noop(
+    vm: SmokeVM,
+    channel: str,
+    base_url: str,
+    tmp_path: Path,
+    *,
+    conf_path: str,
+    conf_before: str,
+    hook_before: str,
+    version_before: str | None,
+) -> None:
+    """Re-run ``install-<channel>.sh`` on already-converged state: zero mutations.
+
+    Shared second-run assertion for every case below — "Already up to date" reported,
+    none of install-common.sh's mutating-step markers printed, and the conf, the hook,
+    and the installed version are BYTE/VALUE identical to what the first run left.
+    """
+    proc = run_channel_installer(vm, channel, base_url, tmp_path)
+    assert proc.returncode == 0, (
+        f"second run of install-{channel}.sh exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert "Already up to date" in proc.stdout, (
+        f"second run of install-{channel}.sh did not report convergence:\n{proc.stdout}"
+    )
+    for marker in _MUTATION_MARKERS:
+        assert marker not in proc.stdout, (
+            f"second run of install-{channel}.sh mutated the box ({marker!r} in stdout):\n{proc.stdout}"
+        )
+    assert _conf_bytes(vm, conf_path) == conf_before, f"second run of install-{channel}.sh changed the conf bytes"
+    assert _hook_bytes(vm) == hook_before, f"second run of install-{channel}.sh changed the hook bytes"
+    assert pkg_installed_version_of(vm, CANONICAL_PKG_NAME) == version_before, (
+        f"second run of install-{channel}.sh changed the installed version: {version_before!r} -> "
+        f"{pkg_installed_version_of(vm, CANONICAL_PKG_NAME)!r}"
+    )
+
+
+@pytest.mark.timeout(1800)
+@pytest.mark.parametrize("channel", ["stable", "edge"])
+def test_channel_installer_fresh_box_installs_from_the_channel(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    channel: str,
+    tmp_path: Path,
+) -> None:
+    """FRESH BOX: the published ``install-<channel>.sh``, piped, converges a box with
+    nothing installed and no project conf onto that channel — and a second run is a
+    true no-op.
+
+    Scenario: a fresh box subscribes and installs via the one-file installer.
+
+    Given nothing pfBlockerNG-shaped is installed and no project conf exists (BEFORE
+      asserted),
+    When  ``env PFB_BASE_URL=<file://catalogue> /bin/sh < install-<channel>.sh`` runs
+      (the published, self-contained form, piped exactly like ``fetch | sh``),
+    Then  it exits 0, reports ``==> Done``, the box carries EXACTLY the canonical
+      identity at the version this channel's catalogue serves, from this channel's
+      repository, subscribed to EXACTLY this channel's conf, and the boot-time
+      generator hook is present;
+    And   a second run reports ``==> Already up to date``, performs no mutating step,
+      and leaves the conf, the hook, and the installed version unchanged.
+    """
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: nothing installed, no project conf.
+    names_before = installed_pfblockerng_names(repo_vm)
+    assert names_before == [], f"BEFORE: expected nothing installed, found {names_before}"
+    confs_before = project_confs_present(repo_vm)
+    assert confs_before == set(), f"BEFORE: expected no project conf, found {sorted(confs_before)}"
+
+    # WHEN: the published installer, piped.
+    proc = run_channel_installer(repo_vm, channel, channel_catalogs.base_url, tmp_path)
+
+    # THEN: converged onto the channel.
+    assert proc.returncode == 0, (
+        f"install-{channel}.sh exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert "==> Done" in proc.stdout, f"install-{channel}.sh did not report completion:\n{proc.stdout}"
+    names_after, version_after, repo_after = _pkg_state(repo_vm)
+    assert names_after == [CANONICAL_PKG_NAME], f"AFTER: expected only {CANONICAL_PKG_NAME}, found {names_after}"
+    assert version_after == channel_catalogs.versions[channel], (
+        f"AFTER: installed version {version_after!r}, expected {channel_catalogs.versions[channel]!r}"
+    )
+    assert repo_after == channel_repo_name(channel), (
+        f"AFTER: installed from {repo_after!r}, expected {channel_repo_name(channel)!r}"
+    )
+    confs_after = project_confs_present(repo_vm)
+    assert confs_after == {channel_conf_name(channel)}, (
+        f"AFTER: expected only {channel_conf_name(channel)}, found {sorted(confs_after)}"
+    )
+    assert _ssh_check(repo_vm, "/bin/test", "-f", GUEST_HOOK_PATH).returncode == 0, (
+        f"AFTER: boot-time generator hook not present at {GUEST_HOOK_PATH}"
+    )
+
+    conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name(channel)}"
+    conf_before = _conf_bytes(repo_vm, conf_path)
+    hook_before = _hook_bytes(repo_vm)
+
+    # THEN (second run): a converged box performs no mutation.
+    _assert_second_run_is_a_noop(
+        repo_vm,
+        channel,
+        channel_catalogs.base_url,
+        tmp_path,
+        conf_path=conf_path,
+        conf_before=conf_before,
+        hook_before=hook_before,
+        version_before=version_after,
+    )
+
+
+@pytest.mark.timeout(1800)
+def test_channel_installer_replaces_the_legacy_devel_identity(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    tmp_path: Path,
+) -> None:
+    """LEGACY -devel: the published ``install-stable.sh`` REPLACES a box's legacy
+    suffixed identity with the canonical one, installed from the stable channel.
+
+    GIVEN mirrors ``test_migrate_channel_replaces_the_legacy_identity_with_the_canonical_one``'s:
+    a box subscribed to the legacy shared release repo, carrying only
+    ``pfSense-pkg-pfBlockerNG-devel``.
+
+    Scenario: a legacy-devel box converges via the one-file installer.
+
+    Given the box installed ``pfSense-pkg-pfBlockerNG-devel`` from the legacy
+      ``pfblockerng`` repo (BEFORE asserted),
+    When  ``install-stable.sh`` runs, piped,
+    Then  it exits 0, reports removing the legacy identity, the box carries EXACTLY the
+      canonical identity from the stable channel at the version that catalogue serves,
+      and exactly one project conf survives;
+    And   a second run is a true no-op.
+    """
+    channel = "stable"
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: subscribed to the legacy release repo, carrying only the -devel identity.
+    run_add_repo_sh(repo_vm, channel_catalogs.base_url)  # no --channel => the legacy release repo
+    pkg_install_qualified(repo_vm, OURS_REPO_NAME, LEGACY_DEVEL_PKG_NAME)
+    names_before = installed_pfblockerng_names(repo_vm)
+    assert names_before == [LEGACY_DEVEL_PKG_NAME], f"BEFORE: expected only the legacy identity, found {names_before}"
+
+    # WHEN: the published stable installer, piped.
+    proc = run_channel_installer(repo_vm, channel, channel_catalogs.base_url, tmp_path)
+
+    # THEN: the legacy identity is gone; the canonical one is installed from stable.
+    assert proc.returncode == 0, (
+        f"install-{channel}.sh exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert f"==> Removing {LEGACY_DEVEL_PKG_NAME}" in proc.stdout, (
+        f"install-{channel}.sh did not report removing the legacy identity:\n{proc.stdout}"
+    )
+    names_after, version_after, repo_after = _pkg_state(repo_vm)
+    assert names_after == [CANONICAL_PKG_NAME], f"AFTER: expected only {CANONICAL_PKG_NAME}, found {names_after}"
+    assert version_after == channel_catalogs.versions[channel], (
+        f"AFTER: installed version {version_after!r}, expected {channel_catalogs.versions[channel]!r}"
+    )
+    assert repo_after == channel_repo_name(channel), (
+        f"AFTER: installed from {repo_after!r}, expected {channel_repo_name(channel)!r}"
+    )
+    confs_after = project_confs_present(repo_vm)
+    assert confs_after == {channel_conf_name(channel)}, (
+        f"AFTER: expected only {channel_conf_name(channel)}, found {sorted(confs_after)}"
+    )
+
+    conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name(channel)}"
+    conf_before = _conf_bytes(repo_vm, conf_path)
+    hook_before = _hook_bytes(repo_vm)
+
+    # THEN (second run): a true no-op.
+    _assert_second_run_is_a_noop(
+        repo_vm,
+        channel,
+        channel_catalogs.base_url,
+        tmp_path,
+        conf_path=conf_path,
+        conf_before=conf_before,
+        hook_before=hook_before,
+        version_before=version_after,
+    )
+
+
+@pytest.mark.timeout(1800)
+def test_channel_installer_moves_a_canonical_install_between_channels(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    tmp_path: Path,
+) -> None:
+    """CHANNEL-TO-CHANNEL: the published installer moves an already-canonical install
+    across channels in BOTH directions — a same-release-family downgrade (edge -> stable,
+    ``_3`` -> ``_1``, no WARNING) and back up (stable -> edge, a forward move).
+
+    Scenario: switching channels via the one-file installer, both ways.
+
+    Given the box converged onto edge via ``install-edge.sh`` (BEFORE asserted: edge's
+      version, edge's repository),
+    When  ``install-stable.sh`` runs, piped — a downgrade WITHIN the same release
+      family (only the PORTREVISION differs),
+    Then  it exits 0, the box is at stable's OLDER version from stable's repository, the
+      edge conf is retired, and NO WARNING is printed (same family);
+    When  ``install-edge.sh`` runs again, piped,
+    Then  it exits 0, the box is back at edge's version from edge's repository;
+    And   a second run of ``install-edge.sh`` is a true no-op.
+    """
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: converged onto edge via the published installer.
+    proc_edge = run_channel_installer(repo_vm, "edge", channel_catalogs.base_url, tmp_path)
+    assert proc_edge.returncode == 0, (
+        f"install-edge.sh exited {proc_edge.returncode}\nstdout:\n{proc_edge.stdout}\nstderr:\n{proc_edge.stderr}"
+    )
+    _, version_before, repo_before = _pkg_state(repo_vm)
+    assert version_before == channel_catalogs.versions["edge"], (
+        f"BEFORE: expected edge {channel_catalogs.versions['edge']!r}, got {version_before!r}"
+    )
+    assert repo_before == channel_repo_name("edge"), (
+        f"BEFORE: installed from {repo_before!r}, expected {channel_repo_name('edge')!r}"
+    )
+
+    # WHEN: install-stable.sh, piped — a same-family downgrade.
+    proc_stable = run_channel_installer(repo_vm, "stable", channel_catalogs.base_url, tmp_path)
+
+    # THEN: moved onto stable's build/repository; edge conf retired; no WARNING.
+    assert proc_stable.returncode == 0, (
+        f"install-stable.sh exited {proc_stable.returncode}\n"
+        f"stdout:\n{proc_stable.stdout}\nstderr:\n{proc_stable.stderr}"
+    )
+    _, version_stable, repo_stable = _pkg_state(repo_vm)
+    assert version_stable == channel_catalogs.versions["stable"], (
+        f"AFTER stable: installed version {version_stable!r}, expected {channel_catalogs.versions['stable']!r}"
+    )
+    assert repo_stable == channel_repo_name("stable"), (
+        f"AFTER stable: installed from {repo_stable!r}, expected {channel_repo_name('stable')!r}"
+    )
+    confs_after_stable = project_confs_present(repo_vm)
+    assert confs_after_stable == {channel_conf_name("stable")}, (
+        f"AFTER stable: expected only {channel_conf_name('stable')}, found {sorted(confs_after_stable)}"
+    )
+    assert "WARNING" not in proc_stable.stderr, f"same-family downgrade printed a WARNING:\n{proc_stable.stderr}"
+
+    # WHEN: install-edge.sh again, piped — a forward move back onto edge.
+    proc_edge_again = run_channel_installer(repo_vm, "edge", channel_catalogs.base_url, tmp_path)
+    assert proc_edge_again.returncode == 0, (
+        f"install-edge.sh (2nd) exited {proc_edge_again.returncode}\n"
+        f"stdout:\n{proc_edge_again.stdout}\nstderr:\n{proc_edge_again.stderr}"
+    )
+    _, version_edge_again, repo_edge_again = _pkg_state(repo_vm)
+    assert version_edge_again == channel_catalogs.versions["edge"], (
+        f"AFTER edge (2nd): installed version {version_edge_again!r}, expected {channel_catalogs.versions['edge']!r}"
+    )
+    assert repo_edge_again == channel_repo_name("edge"), (
+        f"AFTER edge (2nd): installed from {repo_edge_again!r}, expected {channel_repo_name('edge')!r}"
+    )
+
+    conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name('edge')}"
+    conf_before = _conf_bytes(repo_vm, conf_path)
+    hook_before = _hook_bytes(repo_vm)
+
+    # THEN (second run of install-edge.sh): a true no-op.
+    _assert_second_run_is_a_noop(
+        repo_vm,
+        "edge",
+        channel_catalogs.base_url,
+        tmp_path,
+        conf_path=conf_path,
+        conf_before=conf_before,
+        hook_before=hook_before,
+        version_before=version_edge_again,
+    )
+
+
+@pytest.mark.timeout(1800)
+def test_channel_installer_moves_a_netgate_install_onto_the_channel(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    tmp_path: Path,
+) -> None:
+    """NETGATE-ORIGIN: the published installer moves a canonically-named install that
+    came from a NON-project repository onto the channel — the shape a box gets from
+    the real Netgate package manager (or any other third party publishing the SAME
+    canonical identity).
+
+    The real Netgate ``pfSense`` repo carries no pfBlockerNG in this hermetic CE
+    catalogue (the ADR-17 kill-gate cases above note the same gap), so — mirroring
+    their DECOY technique — a controlled ``file://`` repo NOT among the project confs
+    stands in: it serves the SAME canonical identity, installed here by REPOSITORY
+    QUALIFICATION (``-r``, no priority contest needed — install-common.sh's own
+    installs are always ``-r``-qualified too).
+
+    Scenario: a Netgate-origin canonical install converges via the one-file installer.
+
+    Given the canonical identity installed from a repo that is NOT one of the four
+      project repos (BEFORE asserted),
+    When  ``install-testing.sh`` runs, piped,
+    Then  it exits 0, the box is at testing's version from testing's repository, still
+      carries EXACTLY the canonical identity, and the decoy conf — not a project conf —
+      is left untouched;
+    And   a second run is a true no-op.
+    """
+    channel = "testing"
+    decoy_repo_name = "netgate-decoy-canonical"
+    decoy_conf_path = f"{PKG_REPOS_DIR}/netgate-decoy-canonical.conf"
+    decoy_root = f"{GUEST_SPIKE_DIR}/netgate_decoy_canonical"
+
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"  # repo_vm already gated this
+
+    reset_channel_subscription(repo_vm)
+    try:
+        # GIVEN: the canonical identity installed from a NON-project decoy repo.
+        decoy_src = rename_pkg(Path(pkg), CANONICAL_PKG_NAME, tmp_path / "netgate_decoy_src")
+        dep_pkgs = _smoke_dep_pkg_paths()
+        decoy_dir = build_repo_via_portable_named(
+            repo_vm,
+            [decoy_src, *dep_pkgs],
+            tmp_path,
+            catalog_name="decoy",
+            guest_root=decoy_root,
+        )
+        _write_guest_file(repo_vm, decoy_conf_path, _repo_block(decoy_repo_name, decoy_dir, 100))
+        pkg_update(repo_vm)
+        pkg_install_qualified(repo_vm, decoy_repo_name, CANONICAL_PKG_NAME)
+
+        names_before, _, repo_before = _pkg_state(repo_vm)
+        assert names_before == [CANONICAL_PKG_NAME], f"BEFORE: expected only {CANONICAL_PKG_NAME}, found {names_before}"
+        assert repo_before == decoy_repo_name, (
+            f"BEFORE: expected the decoy repo {decoy_repo_name!r}, got {repo_before!r}"
+        )
+        assert repo_before not in {channel_repo_name(c) for c in CHANNELS}, (
+            f"BEFORE: the decoy repo name {repo_before!r} collides with a project repo — the case proves nothing"
+        )
+
+        # WHEN: the published testing installer, piped.
+        proc = run_channel_installer(repo_vm, channel, channel_catalogs.base_url, tmp_path)
+
+        # THEN: moved onto the channel's repository; the decoy conf is left alone.
+        assert proc.returncode == 0, (
+            f"install-{channel}.sh exited {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+        names_after, version_after, repo_after = _pkg_state(repo_vm)
+        assert names_after == [CANONICAL_PKG_NAME], f"AFTER: expected only {CANONICAL_PKG_NAME}, found {names_after}"
+        assert version_after == channel_catalogs.versions[channel], (
+            f"AFTER: installed version {version_after!r}, expected {channel_catalogs.versions[channel]!r}"
+        )
+        assert repo_after == channel_repo_name(channel), (
+            f"AFTER: installed from {repo_after!r}, expected {channel_repo_name(channel)!r}"
+        )
+        assert _ssh_check(repo_vm, "/bin/test", "-f", decoy_conf_path).returncode == 0, (
+            f"AFTER: the decoy conf {decoy_conf_path} was removed — it is not a project conf, "
+            "install-<channel>.sh must never touch it"
+        )
+
+        conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name(channel)}"
+        conf_before = _conf_bytes(repo_vm, conf_path)
+        hook_before = _hook_bytes(repo_vm)
+
+        # THEN (second run): a true no-op.
+        _assert_second_run_is_a_noop(
+            repo_vm,
+            channel,
+            channel_catalogs.base_url,
+            tmp_path,
+            conf_path=conf_path,
+            conf_before=conf_before,
+            hook_before=hook_before,
+            version_before=version_after,
+        )
+    finally:
+        repo_vm.ssh("/bin/rm", "-f", decoy_conf_path, timeout=60.0)
+        repo_vm.ssh("/bin/rm", "-rf", decoy_root, timeout=60.0)
+
+
+@pytest.mark.timeout(1800)
+def test_channel_installer_refuses_an_unpublished_channel_without_touching_the_box(
+    repo_vm: SmokeVM,
+    channel_catalogs: ChannelCatalogs,
+    tmp_path: Path,
+) -> None:
+    """UNPUBLISHED CHANNEL: the published installer REFUSES when its channel's
+    catalogue is not there, and touches NOTHING already on the box.
+
+    install-common.sh's own step 4 (``pkg update -f -r <repo>``) is what fails here —
+    a genuinely unreachable ``file://`` root has no catalogue to fetch — and the
+    conf stub the run itself created is removed on the way out (``CONF_CREATED``),
+    exactly like ``test_migrate_channel_refuses_an_unsubscribed_channel_before_mutating``
+    proves for the older two-script flow.
+
+    Scenario: install-nightly.sh with no nightly catalogue published.
+
+    Given the box converged onto stable via ``install-stable.sh`` (BEFORE asserted),
+      and no nightly conf exists,
+    When  ``install-nightly.sh`` runs, piped, with ``PFB_BASE_URL`` pointed at a root
+      that has no ``nightly/<varver>`` catalogue at all,
+    Then  it exits 4, the stable install is UNCHANGED (same version, same repository,
+      the stable conf byte-identical), and no nightly conf was left behind.
+    """
+    reset_channel_subscription(repo_vm)
+
+    # GIVEN: converged onto stable via the published installer.
+    proc_stable = run_channel_installer(repo_vm, "stable", channel_catalogs.base_url, tmp_path)
+    assert proc_stable.returncode == 0, (
+        f"install-stable.sh exited {proc_stable.returncode}\n"
+        f"stdout:\n{proc_stable.stdout}\nstderr:\n{proc_stable.stderr}"
+    )
+    _, version_before, repo_before = _pkg_state(repo_vm)
+    assert version_before == channel_catalogs.versions["stable"], (
+        f"BEFORE: expected stable {channel_catalogs.versions['stable']!r}, got {version_before!r}"
+    )
+    assert repo_before == channel_repo_name("stable"), (
+        f"BEFORE: installed from {repo_before!r}, expected {channel_repo_name('stable')!r}"
+    )
+    stable_conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name('stable')}"
+    conf_before = _conf_bytes(repo_vm, stable_conf_path)
+    nightly_conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name('nightly')}"
+    assert channel_conf_name("nightly") not in project_confs_present(repo_vm), (
+        "BEFORE: already subscribed to nightly — the refusal cannot be exercised"
+    )
+
+    # WHEN: install-nightly.sh, piped, at a base URL with no nightly catalogue.
+    missing_base_url = f"file://{channel_catalogs.root}-missing"
+    proc = run_channel_installer(repo_vm, "nightly", missing_base_url, tmp_path)
+
+    # THEN: refused; the stable install is untouched; no nightly conf survives.
+    assert proc.returncode == 4, (
+        f"expected exit 4 (target unavailable), got {proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    _, version_after, repo_after = _pkg_state(repo_vm)
+    assert version_after == version_before, (
+        f"the refusal changed the installed version: {version_before!r} -> {version_after!r}"
+    )
+    assert repo_after == repo_before, f"the refusal changed the installed repo: {repo_before!r} -> {repo_after!r}"
+    assert _conf_bytes(repo_vm, stable_conf_path) == conf_before, "the refusal changed the stable conf bytes"
+    assert _ssh_check(repo_vm, "/bin/test", "-f", nightly_conf_path).returncode != 0, (
+        f"AFTER: the refusal left a stub nightly conf at {nightly_conf_path} — the created stub must be removed"
     )

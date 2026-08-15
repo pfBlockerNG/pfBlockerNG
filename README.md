@@ -65,40 +65,34 @@ under the **Apache License 2.0**.
 > main installation page: current versions, ready-to-copy commands, and older
 > releases, per pfSense edition.
 
-Run the bootstrap **on the firewall** over SSH (as root), picking the channel you
-want, then install the package:
+Run this **on the firewall** over SSH (as root), picking the channel you want:
 
 ```sh
-fetch -qo /tmp/add-repo.sh https://pfblockerng.github.io/pkg/add-repo.sh &&
-sh /tmp/add-repo.sh --channel stable &&
-pkg install -y -r pfblockerng-stable pfSense-pkg-pfBlockerNG
+fetch -qo - https://pfblockerng.github.io/pkg/install-stable.sh | sh
 ```
 
-If pfBlockerNG is already installed (Netgate Package Manager, `pfSense-pkg-pfBlockerNG-devel`, or any leftover suffix), subscribe then migrate — `pkg install` will not move an existing package onto the new repository:
+One command from **any** starting state: a fresh firewall, an existing Netgate
+Package Manager install, a legacy `pfSense-pkg-pfBlockerNG-devel` install, or an
+install already on a different channel. It subscribes the firewall to the
+channel, installs or moves the package onto it, and is safe to re-run — a
+firewall already converged performs no changes.
 
-```sh
-fetch -qo /tmp/add-repo.sh https://pfblockerng.github.io/pkg/add-repo.sh &&
-sh /tmp/add-repo.sh --channel stable &&
-fetch -qo /tmp/migrate-channel.sh https://pfblockerng.github.io/pkg/migrate-channel.sh &&
-sh /tmp/migrate-channel.sh --channel stable
-```
-
-The bootstrap detects your pfSense edition and version, configures the matching
+The script detects your pfSense edition and version, configures the matching
 package catalog, and keeps it correct automatically across pfSense OS upgrades.
 The repository takes precedence over the Netgate catalog, so the
 webConfigurator's **Install**/**Update** buttons pick up its builds too.
 
 Four channels are available. They all publish the **same** package name —
 `pfSense-pkg-pfBlockerNG` — from separate catalogs, so a firewall subscribes to
-**exactly one** channel and the bootstrap removes any other pfBlockerNG
+**exactly one** channel and the script removes any other pfBlockerNG
 repository it finds:
 
-| Channel | `--channel` | For |
-|---------|-------------|-----|
-| **Stable** | `stable` | Production use |
-| **Testing** | `testing` | Prereleases validating the next stable |
-| **Edge** | `edge` | Prereleases opening the next release family |
-| **Nightly** | `nightly` | Bleeding edge, rebuilt from the development tip |
+| Channel | Script | For |
+|---------|--------|-----|
+| **Stable** | `install-stable.sh` | Production use |
+| **Testing** | `install-testing.sh` | Prereleases validating the next stable |
+| **Edge** | `install-edge.sh` | Prereleases opening the next release family |
+| **Nightly** | `install-nightly.sh` | Bleeding edge, rebuilt from the development tip |
 
 Choose **stable** unless you specifically want to track prerelease builds.
 
@@ -111,25 +105,22 @@ Once installed, the interface lives in the webConfigurator under
 
 ### Switching channels
 
-Switching is **two** commands, and the second one is not optional. Adding a
-repository does not move an installed package: `pkg` keeps it pinned to the
-repository it came from and offers no upgrade across repositories, so a
-firewall that only gains a new conf silently keeps running its old build.
+Run the target channel's script — the same one-liner as
+[Installation](#installation), just pointed at a different channel:
 
 ```sh
-fetch -qo /tmp/add-repo.sh https://pfblockerng.github.io/pkg/add-repo.sh &&
-sh /tmp/add-repo.sh --channel edge &&
-fetch -qo /tmp/migrate-channel.sh https://pfblockerng.github.io/pkg/migrate-channel.sh &&
-sh /tmp/migrate-channel.sh --channel edge
+fetch -qo - https://pfblockerng.github.io/pkg/install-edge.sh | sh
 ```
 
-`add-repo.sh` moves the subscription; `migrate-channel.sh` moves the installed
-package onto it, replaces a legacy suffixed install
-(`pfSense-pkg-pfBlockerNG-devel`, `-nightly`) with the canonical package, and
-verifies the result — identity, source repository, version, installed files, and
-your pfBlockerNG configuration — before reporting success. It refuses to touch
-anything it cannot verify, and going **back** to a slower channel works the same
-way (that direction is a downgrade, which is exactly the operation it performs).
+It moves the subscription, moves the installed package onto it, replaces a
+legacy suffixed install (`pfSense-pkg-pfBlockerNG-devel`, `-nightly`) with the
+canonical package, and verifies the result — identity, source repository,
+version, installed files, and your pfBlockerNG configuration — before
+reporting success. It refuses to touch anything it cannot verify, and going
+**back** to a slower channel works the same way (that direction is a
+downgrade, which is exactly the operation it performs). Moving **across**
+release families (not just channels) prints a warning and proceeds — older
+builds may not understand configuration state a newer build wrote.
 
 > [!CAUTION]
 > Back up the pfSense configuration (**Diagnostics ▸ Backup & Restore**) before
@@ -228,9 +219,8 @@ generally lag this repository's releases.
 Installs made before the four-channel catalogs carry a suffixed package name —
 `pfSense-pkg-pfBlockerNG-devel` or `pfSense-pkg-pfBlockerNG-nightly`. Those
 names are no longer published, so they receive no further updates. Move one onto
-a channel with the two commands in
-[Switching channels](#switching-channels): `migrate-channel.sh` removes the
-legacy package, installs the canonical `pfSense-pkg-pfBlockerNG` from the
+a channel with the same one-liner as [Installation](#installation): it removes
+the legacy package, installs the canonical `pfSense-pkg-pfBlockerNG` from the
 channel you named, and verifies your configuration survived.
 
 ### Retained package versions

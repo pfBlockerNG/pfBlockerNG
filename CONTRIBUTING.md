@@ -403,13 +403,15 @@ is installing a retained older version rather than re-deploying a site.
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and is also the single `--print-conf` source the
   bootstrap (`scripts/add-repo.sh`) and the inline conf in the README reuse byte-for-byte.
-- **Client scripts.** The Pages root serves both halves of a channel switch, published by
-  `scripts/gen_landing.py` from their repository copies: `add-repo.sh` (subscription — writes
-  one channel conf, retires every other project conf, installs the boot-time regenerator hook)
-  and `migrate-channel.sh` (the installed package — repository-qualified replacement of a
-  legacy suffixed identity or a canonical build on the wrong repo, then verification). Both
-  take the same mandatory `--channel <stable|testing|edge|nightly>`. Adding a repository alone
-  never moves an installed package, so neither script substitutes for the other (issue #2148).
+- **Client scripts.** The Pages root serves one self-contained `install-<channel>.sh` per
+  channel (issue #2416), published by `scripts/gen_landing.py` from
+  `scripts/channel-install/install-<channel>.sh` + the shared state machine
+  `install-common.sh` (subscription, install/move, legacy-identity replacement, and
+  verification, folded into one idempotent script — no repository-only step that can leave a
+  box subscribed but not installed). The boot-time regenerator hook is embedded the same way.
+  `scripts/add-repo.sh` and `scripts/migrate-channel.sh` — the prior two-script flow — keep
+  publishing for one deprecation cycle so existing links and docs stay valid, but are no
+  longer the documented entry point.
 - **Triggers.** `pfBlockerNG/pkg` carries no workflow of its own — it holds the served tree and
   GitHub Pages publishes it from `main`. This repo does the publishing: the `publish-pkg-repo`
   job in `release-published.yml` runs on the real `release: published` event, and
