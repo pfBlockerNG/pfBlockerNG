@@ -22,10 +22,9 @@
 
 // ADR-19: the "Software" page — show the installed pfBlockerNG channel/version vs our-repo
 // latest (from the cron-maintained cache), toggle the "Check for new versions" setting, and
-// offer Check / Update / Uninstall. The Update and Uninstall actions are SHORTCUTS to pfSense's
-// base-system Package Manager (pkg_mgr_install.php): it runs pkg and streams its own progress
-// from a page that SURVIVES pfBlockerNG's own removal/upgrade, so this page never self-hosts a
-// pkg dispatch (no detached daemon, no live-tail endpoint, no state files to vanish mid-operation).
+// offer Check / Update / Uninstall. Update and Uninstall link to pfSense Package Manager
+// ONLY when %R is pfSense (Netgate). A pfblockerng-* origin is invisible there (issue #2380),
+// so those controls are disabled and the page prints the repo-qualified pkg CLI instead.
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
@@ -61,21 +60,23 @@ if (!isAllowedPage('pkg_mgr_installed.php')) {
 }
 
 // Resolve the installed package + channel ONCE (used by display + the action shortcuts).
-// issue #2148: channel is CATALOGUE placement — all four catalogues publish the canonical
-// 'pfSense-pkg-pfBlockerNG', so the repo the package came from names the channel, with the
-// name as the fallback for the legacy shared repo. pfb_channel_for_install() is that one
-// rule, shared with pfb_software_update_check() so the page label and the notice text
-// cannot drift apart.
+// issue #2148 / #2395: channel is CATALOGUE placement — all four catalogues publish the
+// canonical 'pfSense-pkg-pfBlockerNG'. Repo first, then pfb_build_record.channel, then a
+// leftover name suffix. pfb_channel_for_install() is that one rule, shared with
+// pfb_software_update_check() so the page label and the notice text cannot drift apart.
 $pfb_sw_pkgname	= pfb_pkg_installed_name();
 $pfb_sw_repo	= pfb_pkg_installed_repo($pfb_sw_pkgname);
-$pfb_sw_channel	= pfb_channel_for_install($pfb_sw_repo, $pfb_sw_pkgname);
+$pfb_sw_record	= ($pfb_sw_pkgname !== '')
+	? pfb_channel_from_build_record(pfb_pkg_annotation($pfb_sw_pkgname, 'pfb_build_record'))
+	: null;
+$pfb_sw_channel	= pfb_channel_for_install($pfb_sw_repo, $pfb_sw_pkgname, $pfb_sw_record);
 
 // The "Check for new versions" setting (default ENABLED — the registry default since
 // issue #1887). The accessor reads the gateway itself; no raw value handling here.
 $pfb_sw_check	= pfb_software_check_enabled();
 
 // Which (POST-guarded) action was requested. Only the cache-refreshing Check runs here now;
-// Update/Uninstall are plain links to pkg_mgr_install.php, not POST actions.
+// Update/Uninstall are links (or disabled CLI help), not POST actions.
 $pfb_sw_action = '';
 if ($_POST && !empty($_POST['pfb_sw_action'])) {
 	$pfb_sw_action = (string) $_POST['pfb_sw_action'];
@@ -207,43 +208,55 @@ $btn_check->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWidth
 $section->addInput(new Form_StaticText(null, $btn_check))
 	->setHelp('Check for a new version now.');
 
-// Update now — a LINK to pfSense's Package Manager (reinstallpkg = pfSense's own single-package
-// upgrade path; pkg resolves the newest candidate, which is ours by repo priority). The base page
-// runs pkg and streams progress from a page that survives the swap. Enabled only when an update
-// is available and the package name is known.
-$pfb_pkg_arg = rawurlencode((string) $pfb_sw_pkgname);
-// The href itself is the gate (an anchor's disabled/aria-disabled are advisory only, so a
-// stray activation must land nowhere actionable): a real reinstall target ONLY when an update
-// is available and the package name is known, else '#'. The disabled styling is the visual cue.
+// Update / Uninstall. Package Manager only sees %R=pfSense (issue #2380). A pfblockerng-*
+// origin is disabled here with the repo-qualified pkg CLI; never emit pkg_mgr_install.php
+// for that origin (those pages hide the package and a reinstall can resolve against -r pfSense).
+$pfb_sw_pkgmgr		= pfb_software_pkgmgr_usable($pfb_sw_repo);
+$pfb_sw_update_href	= pfb_software_update_href($pfb_sw_pkgname, $pfb_sw_repo, $update_available);
+$pfb_sw_uninstall_href	= pfb_software_uninstall_href($pfb_sw_pkgname, $pfb_sw_repo);
+$pfb_sw_cli_pkg		= ($pfb_sw_pkgname !== '') ? $pfb_sw_pkgname : 'pfSense-pkg-pfBlockerNG';
+$pfb_sw_cli_repo	= ($pfb_sw_repo !== '') ? $pfb_sw_repo : '<repo>';
+
 $btn_update = new Form_Button(
 	'pfb_sw_update',
 	'Update now',
-	($update_available && $pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=reinstallpkg&pkg={$pfb_pkg_arg}" : '#',
+	$pfb_sw_update_href,
 	'fa-solid fa-download'
 );
 $btn_update->removeClass('btn-primary')->addClass('btn-warning btn-xs')->setWidth(2);
-if (!$update_available || $pfb_sw_pkgname === '') {
+if ($pfb_sw_update_href === '#') {
 	$btn_update->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
+if ($pfb_sw_pkgmgr) {
+	$pfb_sw_update_help = 'Install the latest version via the pfSense Package Manager. Available only when an update is found.';
+} else {
+	$pfb_sw_update_help = 'Package Manager cannot see this origin. To update, run <code>pkg install -y -r '
+		. htmlspecialchars($pfb_sw_cli_repo) . ' ' . htmlspecialchars($pfb_sw_cli_pkg)
+		. '</code> from the shell.';
+}
 $section->addInput(new Form_StaticText(null, $btn_update))
-	->setHelp('Install the latest version via the pfSense Package Manager. Available only when an update is found.');
+	->setHelp($pfb_sw_update_help);
 
-// Uninstall — a link straight to pfSense's Package Manager delete flow (its own confirm step runs
-// there). #697: this is a `pkg delete`, which the pre-deinstall detects as a removal and fully tears
-// down (uninstall = OFF), so no intent marker is needed. (A package Update is `pkg install -f`, a
-// different op the pre-deinstall keeps live.)
+// Uninstall. #697: a `pkg delete` is a removal (pre-deinstall tears down). Package Manager
+// delete is only offered for a Netgate-origin install.
 $btn_uninstall = new Form_Button(
 	'pfb_sw_uninstall',
 	'Uninstall',
-	($pfb_sw_pkgname !== '') ? "/pkg_mgr_install.php?mode=delete&pkg={$pfb_pkg_arg}" : '#',
+	$pfb_sw_uninstall_href,
 	'fa-solid fa-trash-can'
 );
 $btn_uninstall->removeClass('btn-primary')->addClass('btn-danger btn-xs')->setWidth(2);
-if ($pfb_sw_pkgname === '') {
+if ($pfb_sw_uninstall_href === '#') {
 	$btn_uninstall->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
+if ($pfb_sw_pkgmgr) {
+	$pfb_sw_uninstall_help = 'Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).';
+} else {
+	$pfb_sw_uninstall_help = 'Package Manager cannot see this origin. To uninstall, run <code>pkg delete '
+		. htmlspecialchars($pfb_sw_cli_pkg) . '</code> from the shell.';
+}
 $section->addInput(new Form_StaticText(null, $btn_uninstall))
-	->setHelp('Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).');
+	->setHelp($pfb_sw_uninstall_help);
 $form->add($section);
 
 print($form);
@@ -253,8 +266,8 @@ print($form);
 //<![CDATA[
 events.push(function() {
 
-	// Check now is the only in-page action left — a cache refresh POSTed back to this page.
-	// Update / Uninstall are plain links to the Package Manager (no JS, no POST).
+	// Check now is the only in-page action — a cache refresh POSTed back to this page.
+	// Update / Uninstall are plain links to the Package Manager only when %R is pfSense.
 	$('#pfb_sw_check').click(function(e) {
 		e.preventDefault();
 		var f = document.forms[0];

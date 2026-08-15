@@ -278,7 +278,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 	 * is on. The orchestrator reads latest from the repo the package was INSTALLED from
 	 * (`pkg query %R`, injected here as $io['installed_repo']) — under single-repository
 	 * subscription that is the only repo it can upgrade within — and labels the cache
-	 * repo-first, name-fallback: pfb_channel_from_repo_name() ?? pfb_channel_from_pkgname().
+	 * repo, then build-record, then leftover name suffix (issue #2395).
 	 */
 
 	/**
@@ -468,9 +468,11 @@ final class SoftwareUpdateCheckTest extends TestCase
 			// note: NO 'latest' key -> forces the guarded live read.
 		]);
 
-		// Then: cached latest preserved, last_notified intact, no NEW notice.
+		// Then: cached latest preserved, last_notified intact, last_checked NOT advanced,
+		// no NEW notice (issue #2379).
 		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cached latest preserved when pkg locked');
 		$this->assertSame('3.2.0_9', $cache['last_notified'], 'after: de-dupe state intact');
+		$this->assertSame(100, $cache['last_checked'], 'after: last_checked must not advance on a failed live read');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice while locked');
 	}
 
@@ -501,6 +503,7 @@ final class SoftwareUpdateCheckTest extends TestCase
 		]);
 
 		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cached latest preserved when no DNS');
+		$this->assertSame(100, $cache['last_checked'], 'after: last_checked must not advance on a failed live read');
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice without DNS');
 	}
 
@@ -704,6 +707,24 @@ final class SoftwareUpdateCheckTest extends TestCase
 	}
 
 	/**
+	 * pfb_pkg_latest() must force-refresh the named catalog and pick newest via the
+	 * compare helper — not `$out[0]` and not `pkg update -r` without `-f` (issue #2379).
+	 */
+	public function testPkgLatestSourceForcesRefreshAndPicksNewest(): void
+	{
+		$src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc'
+		);
+		$start = strpos($src, 'function pfb_pkg_latest(');
+		$this->assertNotFalse($start, 'pfb_pkg_latest() is missing');
+		$end = strpos($src, "\nfunction ", $start + 1);
+		$body = $end === false ? substr($src, $start) : substr($src, $start, $end - $start);
+		$this->assertStringContainsString('update -f -r', $body, 'Software catalog reads must force-refresh');
+		$this->assertStringContainsString('pfb_pkg_newest_version($out)', $body, 'rquery lines must go through the newest-version picker');
+		$this->assertStringNotContainsString('$out[0]', $body, 'pfb_pkg_latest must not return the first rquery line');
+	}
+
+	/**
 	 * Same pre-#2148 cache, but the live read is unavailable (pkg locked / no DNS).
 	 * The cached latest must be served rather than regressing to '' — the exact
 	 * regression the offline guard exists to prevent.
@@ -730,6 +751,26 @@ final class SoftwareUpdateCheckTest extends TestCase
 		]);
 
 		$this->assertSame('3.2.0_9', $cache['latest'], 'the last-known latest must not regress to empty');
+		$this->assertSame(1, $cache['last_checked'], 'a failed live read must not rewrite last_checked');
+	}
+
+	/**
+	 * A sideloaded canonical package with a testing build-record must not be labelled
+	 * stable, and the injected annotation must reach the cache (issue #2395).
+	 */
+	public function testCanonicalNameUsesInjectedBuildRecordChannel(): void
+	{
+		$this->setCheck('on');
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.3.2',
+			'installed_repo' => '',
+			'record_channel' => 'testing',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.3.2',
+		]);
+		$this->assertSame('testing', $cache['channel'], 'annotation must beat the empty-suffix name');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'up to date: no notice');
 	}
 
 	/**

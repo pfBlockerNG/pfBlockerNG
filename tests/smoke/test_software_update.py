@@ -899,6 +899,62 @@ def test_software_positive_journey_on_our_repo_install(repo_vm: SmokeVM, tmp_pat
         repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
 
 
+@pytest.mark.timeout(600)
+def test_software_check_picks_newest_retained_catalog_version(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """issue #2379: Check now stores the newest rquery version, not ``$out[0]``.
+
+    Channel catalogues retain older builds. Stable's live shape is ``3.3.0`` then
+    ``3.3.2``. The shipped picker must take the newest line via ``pkg_version_compare()``.
+
+    Given ``<V>_9`` installed FROM our repo and a file:// catalog that retains both
+        ``<V>_1`` and ``<V>_9`` (older first),
+    When the shipped ``pfb_software_update_check`` runs,
+    Then cache ``latest`` is ``<V>_9`` (not the first rquery line) and Status is
+        up-to-date because Latest == installed.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
+    src = Path(pkg)
+    base_version = read_compact_version(src)
+    low = f"{base_version}_1"
+    high = f"{base_version}_9"
+    assert low != high
+
+    try:
+        install_our_build_at(repo_vm, high, src, tmp_path, "high")
+        assert pkg_installed_version(repo_vm) == high
+        assert pkg_repo_origin(repo_vm) == OURS_REPO_NAME
+
+        low_pkg = reversion_pkg(src, low, tmp_path / "low")
+        high_pkg = reversion_pkg(src, high, tmp_path / "high_retain")
+        # Older first so a $out[0] picker would report low.
+        build_guest_repo(repo_vm, UPGRADE_REPO_DIR, [low_pkg, high_pkg])
+        pkg_update_our_repo(repo_vm, OURS_REPO_NAME)
+
+        rquery = _ssh_check(
+            repo_vm, "pkg", "rquery", "-r", OURS_REPO_NAME, "%v", PKG_NAME, timeout=60.0
+        ).stdout.strip()
+        lines = [line.strip() for line in rquery.splitlines() if line.strip()]
+        assert low in lines and high in lines, f"catalog must retain both versions, rquery={rquery!r}"
+
+        clear_software_state(repo_vm)
+        set_software_check(repo_vm, "on")
+        run_update_check_on_box(repo_vm)
+
+        cache = read_software_cache(repo_vm)
+        assert cache.get("installed") == high, f"installed {cache.get('installed')!r} != {high!r}"
+        assert cache.get("latest") == high, (
+            f"latest must be the newest retained version {high!r}, not rquery $out[0]; "
+            f"got {cache.get('latest')!r} from lines {lines!r}"
+        )
+        assert cache.get("latest") != low, "picker must not take the older retained version"
+    finally:
+        clear_software_state(repo_vm)
+        clear_software_check(repo_vm)
+        pkg_delete(repo_vm)
+        repo_vm.ssh("/bin/rm", "-rf", UPGRADE_REPO_DIR, timeout=60.0)
+
+
 # --------------------------------------------------------------------------- #
 # (f) "Check for new versions" gating — disabled vs enabled, background vs manual, live
 # --------------------------------------------------------------------------- #
