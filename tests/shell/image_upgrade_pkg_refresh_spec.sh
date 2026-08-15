@@ -27,6 +27,18 @@ Describe 'image-upgrade.sh package-refresh verdict'
     The output should equal 'pending'
   End
 
+  It 'treats a removal-only plan as pending'
+    When call run_verdict 'Number of packages to be REMOVED: 1'
+    The status should be success
+    The output should equal 'pending'
+  End
+
+  It 'treats a downgrade plan as pending'
+    When call run_verdict 'Number of packages to be downgraded: 2'
+    The status should be success
+    The output should equal 'pending'
+  End
+
   It 'fail-closes on a fetch error with no plan'
     When call run_verdict 'pkg: http://example.test: Not Found'
     The status should be success
@@ -40,18 +52,37 @@ Describe 'image-upgrade.sh package-refresh verdict'
   End
 End
 
-Describe 'image-upgrade.sh skips the OS poll after a verified package apply'
+Describe 'image-upgrade.sh publish decision after a package apply'
   SCRIPT="${PFB_ROOT}/scripts/image-upgrade.sh"
 
-  It 'does not call pfb_call_site_upgrade when SKIP_OS_UPGRADE is set by the pkg path'
-    When call grep -n 'SKIP_OS_UPGRADE' "$SCRIPT"
+  run_decision() {
+    _pkg="$1" _old="$2" _post="$3" _cur="$4" sh -c '
+      eval "$(sed -n "/^# pfb_publish_decision BEGIN/,/^# pfb_publish_decision END/p" "$1")"
+      pfb_publish_decision "$_pkg" "$_old" "$_post" "$_cur"
+    ' _ "$SCRIPT"
+  }
+
+  It 'skips the OS poll when pkg already moved /etc/version'
+    When call run_decision 1 26.07-BETA 26.07-RC 0
     The status should be success
-    The output should include 'SKIP_OS_UPGRADE=1'
+    The output should equal 'skip-os'
   End
 
-  It 'does not pipe pkg upgrade -y into tee'
-    When call grep -n "pkg upgrade -y" "$SCRIPT"
+  It 'skips the OS poll when -c is current after a verified apply'
+    When call run_decision 1 26.07 26.07 1
     The status should be success
-    The output should not include 'pkg upgrade -y'"'"' 2>&1 | tee'
+    The output should equal 'skip-os'
+  End
+
+  It 'exits with nothing to publish when current and no apply'
+    When call run_decision 0 26.07 26.07 1
+    The status should be success
+    The output should equal 'nothing-to-publish'
+  End
+
+  It 'runs the OS upgrade when -c is not current'
+    When call run_decision 0 26.07 26.07 0
+    The status should be success
+    The output should equal 'run-os'
   End
 End

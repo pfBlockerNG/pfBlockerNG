@@ -428,13 +428,38 @@ pfb_pkg_refresh_verdict() {
         printf '%s\n' up-to-date
         return 0
     fi
-    if printf '%s' "$_dry" | grep -qE 'Number of packages to be (upgraded|installed|reinstalled)'; then
+    if printf '%s' "$_dry" | grep -qiE 'Number of packages to be (upgraded|installed|reinstalled|removed|downgraded)'; then
         printf '%s\n' pending
         return 0
     fi
     printf '%s\n' fail-closed
 }
 # pfb_pkg_refresh_verdict END
+
+# pfb_publish_decision BEGIN
+# PKG_WAS_UPGRADED OLD_VER POST_VER CHECK_CURRENT(0|1) -> skip-os | run-os | nothing-to-publish
+# A wording miss on pfSense-upgrade -c plus no version change is run-os (then die
+# if the version still does not move). Do not guess a publish.
+pfb_publish_decision() {
+    _pkg=$1
+    _old=$2
+    _post=$3
+    _current=$4
+    if [ "$_pkg" -eq 1 ] && [ -n "$_post" ] && [ "$_post" != "$_old" ]; then
+        printf '%s\n' skip-os
+        return 0
+    fi
+    if [ "$_current" -eq 1 ]; then
+        if [ "$_pkg" -eq 1 ]; then
+            printf '%s\n' skip-os
+        else
+            printf '%s\n' nothing-to-publish
+        fi
+        return 0
+    fi
+    printf '%s\n' run-os
+}
+# pfb_publish_decision END
 
 # pfb_verify_artifact BEGIN
 # pfb_verify_artifact FILE TAG — boot the EXPORTED qcow2 once and refuse to
@@ -725,31 +750,30 @@ fi
 # package apply -> nothing to publish. Current after a verified package apply,
 # or /etc/version already moved by pkg (BETA->RC), -> publish without
 # pfSense-upgrade or the version-change poll.
-SKIP_OS_UPGRADE=0
-NEW_VER=""
+_post_pkg_ver=""
 if [ "$PKG_WAS_UPGRADED" -eq 1 ]; then
     _post_pkg_ver=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
-    if [ -n "$_post_pkg_ver" ] && [ "$_post_pkg_ver" != "$OLD_VER" ]; then
-        NEW_VER="$_post_pkg_ver"
-        SKIP_OS_UPGRADE=1
-        log "package refresh moved /etc/version ${OLD_VER} -> ${NEW_VER}; skipping OS upgrade."
-    fi
 fi
-if [ "$SKIP_OS_UPGRADE" -eq 0 ]; then
+_check_current=0
+if [ "$PKG_WAS_UPGRADED" -eq 0 ] || [ -z "$_post_pkg_ver" ] || [ "$_post_pkg_ver" = "$OLD_VER" ]; then
     log "checking for an available OS upgrade (pfSense-upgrade -c)"
     UPGRADE_CHECK=$(pfb_call_site_check "$LOCAL_DIR/upgrade-check.log")
     printf '%s\n' "$UPGRADE_CHECK" | sed 's/^/    /'
     if printf '%s' "$UPGRADE_CHECK" | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
-        if [ "$PKG_WAS_UPGRADED" -eq 1 ]; then
-            NEW_VER=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
-            NEW_VER="${NEW_VER:-$OLD_VER}"
-            SKIP_OS_UPGRADE=1
-            log "no OS upgrade available — package refresh updated the image at '${NEW_VER}', continuing publish."
-        else
-            log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
-            exit 0
-        fi
+        _check_current=1
     fi
+fi
+_decision=$(pfb_publish_decision "${PKG_WAS_UPGRADED}" "${OLD_VER}" "${_post_pkg_ver}" "${_check_current}")
+SKIP_OS_UPGRADE=0
+NEW_VER=""
+if [ "$_decision" = nothing-to-publish ]; then
+    log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
+    exit 0
+fi
+if [ "$_decision" = skip-os ]; then
+    NEW_VER="${_post_pkg_ver:-$OLD_VER}"
+    SKIP_OS_UPGRADE=1
+    log "skipping OS upgrade — publishing package refresh at '${NEW_VER}'."
 fi
 
 if [ "$SKIP_OS_UPGRADE" -eq 0 ]; then
