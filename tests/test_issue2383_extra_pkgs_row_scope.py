@@ -64,7 +64,7 @@ def test_row_declares_dep_does_not_treat_abi_as_a_declaration() -> None:
 
 
 def test_build_targets_match_requires_row_declares_dep() -> None:
-    """Drop _row_declares_dep from _build_targets must RED the same-major dest case."""
+    """_build_targets must consult _row_declares_dep for dest extra attach."""
     source = inspect.getsource(pr._build_targets)
     assert "_row_declares_dep" in source
     assert "and _row_declares_dep" in source or "and pr._row_declares_dep" in source

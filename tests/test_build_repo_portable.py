@@ -4229,3 +4229,26 @@ def test_dep_pkgs_same_major_plus_empty_extra_pkgs_does_not_receive_ce_extra(tmp
     plus_names = _names_in(out / "release" / "plus-26.03" / "packagesite.pkg")
     assert "py311-charset-normalizer" in ce_names
     assert "py311-charset-normalizer" not in plus_names
+
+
+def test_dep_pkgs_category_mismatch_is_undeclared(tmp_path: Path) -> None:
+    """www/py-foo does not satisfy a textproc/py-foo extra_pkgs row."""
+    out = tmp_path / "site"
+    dep_pkg = tmp_path / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(
+        dep_pkg,
+        name="py311-charset-normalizer",
+        version="3.4.4",
+        abi="FreeBSD:15:*",
+        extra={"origin": "www/py311-charset-normalizer"},
+    )
+    ce = {**_CE, "extra_pkgs": ["textproc/py-charset-normalizer"]}
+
+    with pytest.raises(brp.BuildRepoError, match="ABI matches no emitted catalog"):
+        brp.build_repo_matrix(
+            [ce],
+            out,
+            builder=_stub_builder,
+            build_nightly=False,
+            dep_pkgs=[dep_pkg],
+        )
