@@ -56,7 +56,10 @@ def test_scheduled_repo_install_does_not_pass_live_urls() -> None:
 
 def test_release_published_stages_before_gate() -> None:
     job = _extract_job(_workflow("release-published.yml"), "publish-pkg-repo")
-    assert "PUBLISH_STAGE: stage" in job
+    # Anchored to the real env: line, not a doc comment mentioning the same text --
+    # a substring check here would pass on a comment alone even if the actual
+    # PUBLISH_STAGE value drifted away from "stage" (issue #2389 fix-round-1 F3).
+    assert re.search(r"^\s+PUBLISH_STAGE: stage\s*$", job, re.MULTILINE), job
     assert "id: stage" in job
     for out in ("staging_prefix", "touched", "noop", "route_matrix"):
         assert re.search(rf"^      {out}:", job, re.MULTILINE), f"publish-pkg-repo missing output {out!r}:\n{job}"

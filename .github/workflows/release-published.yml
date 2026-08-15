@@ -166,8 +166,9 @@ jobs:
     permissions:
       packages: read
       contents: read
-    # issue #2389: this job only STAGES (PUBLISH_STAGE: stage below) — nothing is
-    # announced under <channel>/<varver> or on the landing page until
+    # issue #2389: this job only STAGES (the "Stage the pkg catalogue" step below
+    # pins PUBLISH_STAGE to the stage mode) — nothing is announced under
+    # <channel>/<varver> or on the landing page until
     # promote-pkg-repo runs the SAME script in `promote` mode, downstream of a
     # green validate-live-pages-install. staging_prefix/touched/noop are the
     # per-run identity that gate + promote/discard consume without re-deriving
