@@ -1299,18 +1299,17 @@ jobs:
           retention-days: 7
 
   # ── 2c. Attach .pkg artifacts to the GitHub Release ──────────────────────
-  # Downloads the .pkg from every build-pkgs leg (even failed ones — we
-  # skip missing downloads) and appends the row-identified assets to the
-  # already-published GitHub Release.
+  # Downloads the .pkg from every successful build-pkgs-portable leg and
+  # appends the row-identified assets to the GitHub Release. An empty pkgs/
+  # (download miss or every leg failed) fails this job (issue #2385).
   #
   # DEPENDENCY EDGES: attach-pkgs needs [prepare-release, release,
   # build-pkgs-portable, read-matrix] with if: !cancelled(), so it runs regardless of a
   # build-pkgs-portable failure (see build-pkgs-portable's header comment above,
   # "A leg's build failure...", for the full transitive chain).
   #
-  # A build-pkgs-portable failure makes attach-pkgs skip that leg's artifact but
-  # attach the rest (or skip entirely if release also failed); the draft
-  # healthcheck then fails closed on the missing asset.
+  # A partial build-pkgs-portable failure still attaches the legs that
+  # uploaded; a total miss fails here rather than publishing no .pkg.
   attach-pkgs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
@@ -1323,9 +1322,9 @@ jobs:
     env:
       HOME: /tmp
     needs: [prepare-release, release, build-pkgs-portable, read-matrix]
-    # Run whenever release succeeded AND it was a real publish (not a dry-run);
-    # regardless of the build outcome. A build-pkgs-portable failure surfaces as a
-    # red leg but does not prevent attach-pkgs from completing with a warning.
+    # Run whenever release succeeded AND it was a real publish (not a dry-run),
+    # regardless of the build outcome. Empty or failed artifact download fails
+    # this job (issue #2385).
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.release.outputs.dry_run == 'false' }}
     permissions:
       packages: read
@@ -1345,31 +1344,30 @@ jobs:
         # py311-charset-normalizer) are deliberate release assets, frozen
         # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
         # story. The draft healthcheck counts them (EXPECTED_PKGS).
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           pattern: pfBlockerNG-relpkg-*
           merge-multiple: true
           path: pkgs/
-        continue-on-error: true
 
       - name: Append .pkg files to the GitHub Release
         # Upload the renamed .pkg files to the still-DRAFT release using
         # `gh release upload` (the release is published later, by hand, once the notes
         # are written — immutable-release repos only accept assets while it is a draft).
-        # This is idempotent: re-uploading an asset with --clobber replaces it. If
-        # pkgs/ has no .pkg files (all builds failed), this step emits a warning and
-        # succeeds without uploading anything.
+        # This is idempotent: re-uploading an asset with --clobber replaces it.
+        # If pkgs/ has no .pkg files (download miss or every build failed), this
+        # step fails closed so a Release is never published with no .pkg.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG:      ${{ needs.release.outputs.tag }}
         run: |
           set -eu
 
-          PKGS=$(find pkgs -name "*.pkg" 2>/dev/null | head -20)
+          PKGS=$(find pkgs -type f -name "*.pkg" 2>/dev/null | head -20)
           if [ -z "$PKGS" ]; then
-            echo "::warning::No .pkg artifacts to attach — the build-pkgs-portable leg may have failed."
-            echo "Check the build-pkgs-portable job logs for details."
-            exit 0
+            echo "::error::No .pkg artifacts to attach — download failed or build-pkgs-portable produced none."
+            echo "Check the download and build-pkgs-portable job logs for details."
+            exit 1
           fi
 
           # Recurse: each build-pkgs-portable leg uploads its own single-file

@@ -474,6 +474,9 @@ def test_build_pkgs_portable_leg_step_carries_row_identity_and_abi() -> None:
 # --------------------------------------------------------------------------- #
 
 
+_ARTIFACT_ACTION_RE = re.compile(r"uses:\s+actions/(?P<kind>upload|download)-artifact@v(?P<major>\d+)")
+
+
 def test_attach_pkgs_downloads_every_leg_by_pattern_with_merge() -> None:
     jobs = _jobs(RELEASE_WORKFLOW)
     steps = _split_into_steps(jobs["attach-pkgs"])
@@ -482,6 +485,44 @@ def test_attach_pkgs_downloads_every_leg_by_pattern_with_merge() -> None:
     step_text = "\n".join(target[0])
     assert "pattern: pfBlockerNG-relpkg-*" in step_text, step_text
     assert "merge-multiple: true" in step_text, step_text
+    assert "continue-on-error:" not in step_text, (
+        "attach-pkgs download must not continue-on-error (issue #2385):\n" + step_text
+    )
+
+
+def test_release_yml_upload_and_download_artifact_majors_match() -> None:
+    """issue #2385: a download-artifact major behind upload-artifact misses the
+    .pkg artifacts and used to publish a Release with none attached."""
+    text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    uploads = [m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "upload"]
+    downloads = [m.group("major") for m in _ARTIFACT_ACTION_RE.finditer(text) if m.group("kind") == "download"]
+    assert uploads, "release.yml must use actions/upload-artifact"
+    assert downloads, "release.yml must use actions/download-artifact"
+    assert len(set(uploads)) == 1, f"upload-artifact majors {sorted(set(uploads))} must be uniform"
+    assert len(set(downloads)) == 1, f"download-artifact majors {sorted(set(downloads))} must be uniform"
+    assert uploads[0] == downloads[0], (
+        f"upload-artifact major {uploads[0]} must equal download-artifact major {downloads[0]}"
+    )
+
+
+def test_attach_pkgs_empty_pkgs_fails_the_step(tmp_path: Path) -> None:
+    """issue #2385: empty pkgs/ (download miss) must fail attach, not exit 0."""
+    script = _step_run_script(_step(_jobs(RELEASE_WORKFLOW)["attach-pkgs"], "Append .pkg files"))
+    empty_branch = re.search(r'if \[ -z "\$PKGS" \]; then(?P<body>.*?)\n\s*fi', script, re.DOTALL)
+    assert empty_branch is not None, script
+    assert "exit 0" not in empty_branch.group("body"), empty_branch.group("body")
+    assert re.search(r'find pkgs -type f -name "\*\.pkg"', script), script
+
+    (tmp_path / "pkgs").mkdir()
+    (tmp_path / "pkgs" / "empty.pkg").mkdir()
+    completed = subprocess.run(
+        ["dash", "-c", script],
+        cwd=tmp_path,
+        env=os.environ | {"GH_TOKEN": "test-token", "TAG": "v4.0.0.a1"},
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
 
 
 def test_attach_pkgs_upload_step_runs_under_posix_sh(tmp_path: Path) -> None:

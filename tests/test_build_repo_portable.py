@@ -3956,7 +3956,9 @@ def test_cli_dep_pkgs_lands_in_release_and_nightly_same_abi_train(
 
     out = tmp_path / "site"
     mfile = tmp_path / "matrix.json"
-    mfile.write_text(json.dumps({"versions": [_CE, _PLUS]}))
+    ce = {**_CE, "extra_pkgs": ["net/py-charset-normalizer"]}
+    plus = {**_PLUS, "extra_pkgs": []}
+    mfile.write_text(json.dumps({"versions": [ce, plus]}))
 
     # Before-state: nothing built yet.
     assert not out.exists()
@@ -3999,7 +4001,8 @@ def test_cli_dep_pkgs_flag_is_repeatable(tmp_path: Path, monkeypatch: pytest.Mon
 
     out = tmp_path / "site"
     mfile = tmp_path / "matrix.json"
-    mfile.write_text(json.dumps({"versions": [_CE]}))
+    ce = {**_CE, "extra_pkgs": ["net/py-charset-normalizer", "net/py-idna"]}
+    mfile.write_text(json.dumps({"versions": [ce]}))
 
     rc = brp.main(
         [
@@ -4072,7 +4075,7 @@ def test_dep_pkgs_fold_after_retention_stable_pin_survives(tmp_path: Path) -> No
     # The ACTUAL production fold point: dep_pkgs never enters retain_by_channel's
     # candidate pool — it folds in strictly AFTER, so the stable pin is untouched.
     brp.build_repo_matrix(
-        [_CE],
+        [{**_CE, "extra_pkgs": ["net/py-charset-normalizer"]}],
         out,
         builder=_stub_builder,
         build_nightly=False,
@@ -4132,7 +4135,7 @@ def test_dep_pkgs_matched_but_never_emitted_still_raises(tmp_path: Path) -> None
 
     with pytest.raises(brp.BuildRepoError, match="dep"):
         brp.build_repo_matrix(
-            [_CE],
+            [{**_CE, "extra_pkgs": ["net/py-charset-normalizer"]}],
             out,
             builder=_stub_builder,
             build_nightly=False,
@@ -4169,7 +4172,12 @@ def test_dep_pkgs_route_only_entry_never_folds_dep_shared_major_build_entry_does
     # so it shares its major with the build entry below) + a build entry that shares
     # that SAME major (hypothetical: a Plus edition also targeting major 15).
     ce_eol_on_15 = {**_CE_EOL, "freebsd_major": "15"}
-    plus_on_15 = {**_PLUS, "pfsense_version": "15.0", "freebsd_major": "15"}
+    plus_on_15 = {
+        **_PLUS,
+        "pfsense_version": "15.0",
+        "freebsd_major": "15",
+        "extra_pkgs": ["net/py-charset-normalizer"],
+    }
 
     brp.build_repo_matrix(
         [ce_eol_on_15, plus_on_15],
@@ -4189,3 +4197,58 @@ def test_dep_pkgs_route_only_entry_never_folds_dep_shared_major_build_entry_does
     assert {o["name"] for o in route_only_objs} == {"pfBlockerNG-testing"}, (
         "a route-only entry must never receive a dep pkg, even sharing a major with a build entry"
     )
+
+
+def test_dep_pkgs_same_major_plus_empty_extra_pkgs_does_not_receive_ce_extra(tmp_path: Path) -> None:
+    """issue #2403: --dep-pkgs is dest-scoped by extra_pkgs, not ABI alone.
+
+    CE extra_pkgs declares textproc/py-charset-normalizer; Plus on the same
+    freebsd_major leaves extra_pkgs=[]. The extra must land only on CE.
+    """
+    out = tmp_path / "site"
+    dep_pkg = tmp_path / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(
+        dep_pkg,
+        name="py311-charset-normalizer",
+        version="3.4.4",
+        abi="FreeBSD:15:*",
+        extra={"origin": "textproc/py-charset-normalizer"},
+    )
+    ce = {**_CE, "extra_pkgs": ["textproc/py-charset-normalizer"]}
+    plus = {**_PLUS, "freebsd_major": "15", "extra_pkgs": []}
+
+    brp.build_repo_matrix(
+        [ce, plus],
+        out,
+        builder=_stub_builder,
+        build_nightly=False,
+        dep_pkgs=[dep_pkg],
+    )
+
+    ce_names = _names_in(out / "release" / "ce-2.8" / "packagesite.pkg")
+    plus_names = _names_in(out / "release" / "plus-26.03" / "packagesite.pkg")
+    assert "py311-charset-normalizer" in ce_names
+    assert "py311-charset-normalizer" not in plus_names
+
+
+def test_dep_pkgs_category_mismatch_is_undeclared(tmp_path: Path) -> None:
+    """www/py-foo does not satisfy a textproc/py-foo extra_pkgs row."""
+    out = tmp_path / "site"
+    dep_pkg = tmp_path / "py311-charset-normalizer-3.4.4.pkg"
+    make_pkg(
+        dep_pkg,
+        name="py311-charset-normalizer",
+        version="3.4.4",
+        abi="FreeBSD:15:*",
+        extra={"origin": "www/py311-charset-normalizer"},
+    )
+    ce = {**_CE, "extra_pkgs": ["textproc/py-charset-normalizer"]}
+
+    with pytest.raises(brp.BuildRepoError, match="ABI matches no emitted catalog"):
+        brp.build_repo_matrix(
+            [ce],
+            out,
+            builder=_stub_builder,
+            build_nightly=False,
+            dep_pkgs=[dep_pkg],
+        )

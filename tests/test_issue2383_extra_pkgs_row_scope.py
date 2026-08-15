@@ -1,12 +1,15 @@
-"""Issue #2383: extra_pkgs deps attach only to ROUTE rows that declare them.
+"""Issue #2383 / #2403: extra_pkgs deps attach only to ROUTE rows that declare them.
 
 Same-major ABI is not enough. A CE extra must not enter a Plus catalogue
-whose extra_pkgs is empty. These cases are hermetic (no network).
+whose extra_pkgs is empty. Category is part of the origin identity:
+www/py-foo must not satisfy textproc/py-foo. These cases are hermetic
+(no network). Twin dest tests own their extra_pkgs rows; this module
+must not mutate shared Plus fixtures at import.
 """
 
 from __future__ import annotations
 
-import importlib
+import inspect
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -19,27 +22,6 @@ for _p in (_SCRIPTS, _TESTS):
         sys.path.insert(0, str(_p))
 
 import publish_release as pr
-
-_TWIN_ORIGIN = "textproc/py-twin"
-
-
-def _declare_twin_on_plus_rows() -> None:
-    """Pre-#2383 twin tests create textproc/py311-twin deps against Plus rows
-    whose extra_pkgs is []. After row-scoping those deps match no target.
-    ROW_PLUS_07 is a shallow copy of ROW_PLUS_03, so they share the list."""
-    for modname in ("tests.test_publish_release", "test_publish_release"):
-        try:
-            mod = importlib.import_module(modname)
-        except ImportError:
-            continue
-        extras = getattr(mod, "ROW_PLUS_03", {}).get("extra_pkgs")
-        if not isinstance(extras, list):
-            continue
-        if _TWIN_ORIGIN not in extras:
-            extras.append(_TWIN_ORIGIN)
-
-
-_declare_twin_on_plus_rows()
 
 
 def _dep(origin: str) -> SimpleNamespace:
@@ -63,6 +45,26 @@ def test_row_declares_dep_accepts_py_flavor_package_origin() -> None:
     assert pr._row_declares_dep(row, _dep("textproc/py311-charset-normalizer")) is True
 
 
+def test_row_declares_dep_rejects_different_category() -> None:
+    """issue #2403: www/py-foo must not satisfy textproc/py-foo."""
+    row = {"extra_pkgs": ["textproc/py-charset-normalizer"]}
+    assert pr._row_declares_dep(row, _dep("www/py-charset-normalizer")) is False
+    assert pr._row_declares_dep(row, _dep("www/py311-charset-normalizer")) is False
+
+
+def test_row_declares_dep_rejects_non_py_last_component_other_category() -> None:
+    """A non-py last component in another category is not the extra."""
+    row = {"extra_pkgs": ["textproc/py-charset-normalizer"]}
+    assert pr._row_declares_dep(row, _dep("security/charset-normalizer")) is False
+
+
 def test_row_declares_dep_does_not_treat_abi_as_a_declaration() -> None:
     """Vacuity: a row with no extra_pkgs never declares, even for a real origin."""
     assert pr._row_declares_dep({"freebsd_major": "15"}, _dep("textproc/py-charset-normalizer")) is False
+
+
+def test_build_targets_match_requires_row_declares_dep() -> None:
+    """_build_targets must consult _row_declares_dep for dest extra attach."""
+    source = inspect.getsource(pr._build_targets)
+    assert "_row_declares_dep" in source
+    assert "and _row_declares_dep" in source or "and pr._row_declares_dep" in source
