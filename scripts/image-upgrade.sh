@@ -21,10 +21,13 @@
 #
 # Flow: pull the current image from GHCR (local) -> stream it to the Proxmox host
 # -> boot it under QEMU/KVM there (read-write, with internet) ->
-# [optional: pkg update -f + pkg upgrade, reboot, wait SSH back] ->
-# check for an available OS upgrade (pfSense-upgrade -c); if the box is already
-# current, exit 0 WITHOUT publishing -> else run pfSense-upgrade over an SSH jump
-# -> wait for /etc/version to change + reboot -> reconcile pfBlockerNG's baked
+# [optional: pkg update -f + verified pkg upgrade, reboot, wait SSH back] ->
+# check for an available OS upgrade (pfSense-upgrade -c). Current and no
+# verified package apply -> exit 0 without publishing. Current after a
+# verified package apply (or /etc/version already moved, e.g. BETA->RC) ->
+# publish without running pfSense-upgrade or the version-change poll.
+# Otherwise run pfSense-upgrade over an SSH jump -> wait for /etc/version
+# to change + reboot -> reconcile pfBlockerNG's baked
 # RUN_DEPENDS against the NEW version's matrix row (install what's missing, e.g.
 # after a py_flavor flip; shed stale old-flavor/extra packages; verify pkg info -e
 # + a python import probe, fail-closed) -> health-gate (webConfigurator HTTP
@@ -415,6 +418,24 @@ pfb_call_site_upgrade() {
 }
 # pfb_call_site END
 
+# pfb_pkg_refresh_verdict BEGIN
+# Dry-run text -> up-to-date | pending | fail-closed.
+# "pending" only when pkg printed an upgrade/install/reinstall plan.
+# Anything else (fetch error, lock, empty) is fail-closed — not a publish signal.
+pfb_pkg_refresh_verdict() {
+    _dry=$1
+    if printf '%s' "$_dry" | grep -q 'Your packages are up to date'; then
+        printf '%s\n' up-to-date
+        return 0
+    fi
+    if printf '%s' "$_dry" | grep -qE 'Number of packages to be (upgraded|installed|reinstalled)'; then
+        printf '%s\n' pending
+        return 0
+    fi
+    printf '%s\n' fail-closed
+}
+# pfb_pkg_refresh_verdict END
+
 # pfb_verify_artifact BEGIN
 # pfb_verify_artifact FILE TAG — boot the EXPORTED qcow2 once and refuse to
 # publish it unless the version it actually comes up with belongs to TAG's
@@ -664,12 +685,20 @@ if [ "$UPGRADE_PKGS" -eq 1 ]; then
     # do NOT rely solely on exit code, as pkg(8) exit semantics vary by version.
     log "checking for pending package upgrades (pkg upgrade -n)"
     _pkg_dry=$(ssh_guest 'pkg upgrade -n' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade-dryrun.log" || true)
-    if printf '%s' "$_pkg_dry" | grep -q 'Your packages are up to date'; then
+    _pkg_verdict=$(pfb_pkg_refresh_verdict "$_pkg_dry")
+    if [ "$_pkg_verdict" = up-to-date ]; then
         log "packages already up to date — skipping pkg upgrade + reboot"
         PKG_WAS_UPGRADED=0
+    elif [ "$_pkg_verdict" = fail-closed ]; then
+        die "pkg upgrade -n did not report a plan or an up-to-date result (see $LOCAL_DIR/pkg-upgrade-dryrun.log)"
     else
         log "package upgrades pending — running pkg upgrade -y"
-        ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' 2>&1 | tee "$LOCAL_DIR/pkg-upgrade.log" || true
+        # Do not pipe: tee's 0 would hide a failed apply (#1844 same class).
+        if ! ssh_guest 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y' >"$LOCAL_DIR/pkg-upgrade.log" 2>&1; then
+            cat "$LOCAL_DIR/pkg-upgrade.log"
+            die "pkg upgrade -y failed (see $LOCAL_DIR/pkg-upgrade.log)"
+        fi
+        cat "$LOCAL_DIR/pkg-upgrade.log"
         log "rebooting after pkg upgrade"
         # /sbin/reboot drops the connection — expected; ignore the exit code.
         ssh_guest '/sbin/reboot' 2>/dev/null || true
@@ -692,55 +721,61 @@ fi
 
 # --- check whether an OS upgrade is available ------------------------------
 # pfSense-upgrade -c reports the available version without applying it. Parsing
-# is best-effort (the wording varies by release); the AUTHORITATIVE signal is
-# the /etc/version change after the upgrade run below. If the check clearly says
-# the box is already current there is nothing to publish -> graceful no-op exit.
-log "checking for an available OS upgrade (pfSense-upgrade -c)"
-UPGRADE_CHECK=$(pfb_call_site_check "$LOCAL_DIR/upgrade-check.log")
-printf '%s\n' "$UPGRADE_CHECK" | sed 's/^/    /'
-if printf '%s' "$UPGRADE_CHECK" | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
-    if [ "$UPGRADE_PKGS" -eq 0 ] || [ "$PKG_WAS_UPGRADED" -eq 0 ]; then
-    log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
-    exit 0
+# is best-effort (the wording varies by release). Current and no verified
+# package apply -> nothing to publish. Current after a verified package apply,
+# or /etc/version already moved by pkg (BETA->RC), -> publish without
+# pfSense-upgrade or the version-change poll.
+SKIP_OS_UPGRADE=0
+NEW_VER=""
+if [ "$PKG_WAS_UPGRADED" -eq 1 ]; then
+    _post_pkg_ver=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
+    if [ -n "$_post_pkg_ver" ] && [ "$_post_pkg_ver" != "$OLD_VER" ]; then
+        NEW_VER="$_post_pkg_ver"
+        SKIP_OS_UPGRADE=1
+        log "package refresh moved /etc/version ${OLD_VER} -> ${NEW_VER}; skipping OS upgrade."
     fi
 fi
-
-# --- run the pfSense upgrade -----------------------------------------------
-log "running pfSense upgrade (this reboots the box; up to ${UPGRADE_TIMEOUT}s)"
-# Connection will drop when the box reboots — that is expected, so ignore it.
-# The lock retry still applies: a refused upgrade must never be mistaken for a
-# started one (issue #1844).
-pfb_call_site_upgrade "$LOCAL_DIR/upgrade.log"
-
-# --- wait for the new version to come up -----------------------------------
-log "waiting for the upgraded box to come back..."
-NEW_VER=""
-_elapsed=0
-sleep 20  # let the reboot begin so we don't read the pre-reboot version
-while [ "$_elapsed" -lt "$UPGRADE_TIMEOUT" ]; do
-    _v=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
-    if [ -n "$_v" ] && [ "$_v" != "$OLD_VER" ]; then
-        NEW_VER="$_v"
-        break
-    fi
-    sleep 15; _elapsed=$((_elapsed + 15))
-done
-if [ -z "$NEW_VER" ]; then
-    # Version unchanged: a graceful no-op only if pfSense-upgrade reports the box
-    # is already current (the pre-check missed it); otherwise a genuine stuck/failed
-    # upgrade — fail-closed.
-    if printf '%s\n%s' "$UPGRADE_CHECK" "$(cat "$LOCAL_DIR/upgrade.log" 2>/dev/null)" \
-        | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
-        if [ "$UPGRADE_PKGS" -eq 1 ] && [ "$PKG_WAS_UPGRADED" -eq 1 ]; then
-            NEW_VER="$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)"
+if [ "$SKIP_OS_UPGRADE" -eq 0 ]; then
+    log "checking for an available OS upgrade (pfSense-upgrade -c)"
+    UPGRADE_CHECK=$(pfb_call_site_check "$LOCAL_DIR/upgrade-check.log")
+    printf '%s\n' "$UPGRADE_CHECK" | sed 's/^/    /'
+    if printf '%s' "$UPGRADE_CHECK" | grep -qiE 'up.to.date|already.*(latest|current)|no [a-z ]*update'; then
+        if [ "$PKG_WAS_UPGRADED" -eq 1 ]; then
+            NEW_VER=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
             NEW_VER="${NEW_VER:-$OLD_VER}"
-            log "no OS upgrade applied — package refresh updated the image at '${NEW_VER}', continuing publish."
+            SKIP_OS_UPGRADE=1
+            log "no OS upgrade available — package refresh updated the image at '${NEW_VER}', continuing publish."
         else
-            log "no OS upgrade applied — box is current at '${OLD_VER}'; nothing to publish."
+            log "no OS upgrade available — box is current at '${OLD_VER}'; nothing to publish."
             exit 0
         fi
     fi
-    die "version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'; see $LOCAL_DIR/upgrade.log)"
+fi
+
+if [ "$SKIP_OS_UPGRADE" -eq 0 ]; then
+    # --- run the pfSense upgrade -----------------------------------------------
+    log "running pfSense upgrade (this reboots the box; up to ${UPGRADE_TIMEOUT}s)"
+    # Connection will drop when the box reboots — that is expected, so ignore it.
+    # The lock retry still applies: a refused upgrade must never be mistaken for a
+    # started one (issue #1844).
+    pfb_call_site_upgrade "$LOCAL_DIR/upgrade.log"
+
+    # --- wait for the new version to come up -----------------------------------
+    log "waiting for the upgraded box to come back..."
+    NEW_VER=""
+    _elapsed=0
+    sleep 20  # let the reboot begin so we don't read the pre-reboot version
+    while [ "$_elapsed" -lt "$UPGRADE_TIMEOUT" ]; do
+        _v=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
+        if [ -n "$_v" ] && [ "$_v" != "$OLD_VER" ]; then
+            NEW_VER="$_v"
+            break
+        fi
+        sleep 15; _elapsed=$((_elapsed + 15))
+    done
+    if [ -z "$NEW_VER" ]; then
+        die "version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'; see $LOCAL_DIR/upgrade.log)"
+    fi
 fi
 log "upgraded: ${OLD_VER} -> ${NEW_VER}"
 
