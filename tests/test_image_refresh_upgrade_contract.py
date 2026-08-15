@@ -30,7 +30,14 @@ def _upgrade_script() -> str:
     return "\n".join(body)
 
 
-def _run_upgrade(tmp_path: Path, *, from_tag: str, target_tag: str, force_flag: str) -> list[str]:
+def _run_upgrade(
+    tmp_path: Path,
+    *,
+    from_tag: str,
+    target_tag: str,
+    force_flag: str,
+    freebsd_version: str = "15.0-RELEASE",
+) -> list[str]:
     """Run the workflow body with a fake ``sh`` and return image-upgrade argv."""
     fake_sh = tmp_path / "sh"
     fake_sh.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" > "$ARGV_OUT"\n', encoding="utf-8")
@@ -48,6 +55,7 @@ def _run_upgrade(tmp_path: Path, *, from_tag: str, target_tag: str, force_flag: 
         "FORCE_FLAG": force_flag,
         "BRANCH": "",
         "SMOKE_IMAGE": "ghcr.io/pfblockerng/pfsense-ce",
+        "FREEBSD_VERSION": freebsd_version,
     }
     subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
     return argv_file.read_text(encoding="utf-8").splitlines()
@@ -72,3 +80,18 @@ def test_upgrade_flag_follows_version_transition_not_force(
     argv = _run_upgrade(tmp_path, from_tag=from_tag, target_tag=target_tag, force_flag=force_flag)
     assert ("--upgrade-pkgs" in argv) is upgrade_pkgs
     assert ("--force" in argv) is force
+
+
+def test_self_refresh_leg_passes_expect_freebsd_major(tmp_path: Path) -> None:
+    """Same-version legs derive --expect-freebsd-major from matrix.freebsd_version
+    (issue #2242) — the self-consistency check still applies even though this
+    leg's freebsd_version provenance is otherwise out of scope."""
+    argv = _run_upgrade(tmp_path, from_tag="2.8", target_tag="2.8", force_flag="", freebsd_version="15.0-RELEASE")
+    assert "--expect-freebsd-major" in argv
+    assert argv[argv.index("--expect-freebsd-major") + 1] == "15"
+
+
+def test_cross_version_leg_omits_expect_freebsd_major(tmp_path: Path) -> None:
+    """Direct/cross-version legs do not pass --expect-freebsd-major."""
+    argv = _run_upgrade(tmp_path, from_tag="2.8", target_tag="2.9", force_flag="", freebsd_version="16.0-RELEASE")
+    assert "--expect-freebsd-major" not in argv

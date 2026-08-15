@@ -333,6 +333,8 @@ class TestActivationPr:
     activated (ci: true) with the box-verified versions, via ONE tracker/* PR;
     freebsd_version only follows the box when the MAJOR changed."""
 
+    _last_proc: subprocess.CompletedProcess[str] | None = None
+
     def _run(
         self,
         tmp_path: Path,
@@ -342,6 +344,7 @@ class TestActivationPr:
         family: str = "26.07",
         pr_open: str = "",
         dry_run: str = "false",
+        expect_failure: bool = False,
     ) -> tuple[str, str, Path]:
         source = WORKFLOW.read_text(encoding="utf-8")
         step = source.split(f"      - name: {ACTIVATION_STEP}\n", 1)[1].split("\n      - name:", 1)[0]
@@ -376,7 +379,10 @@ class TestActivationPr:
             "VARIANT": "plus",
             "DRY_RUN": dry_run,
         }
-        subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, check=True, capture_output=True, text=True)
+        proc = subprocess.run(
+            ["bash", "-c", script], cwd=tmp_path, env=env, check=not expect_failure, capture_output=True, text=True
+        )
+        self._last_proc = proc
 
         def log(name: str) -> str:
             f = tmp_path / name
@@ -395,12 +401,19 @@ class TestActivationPr:
         # major unchanged (16) -> the human freebsd_version convention survives
         assert entry["freebsd_version"] == "16.0-RELEASE"
 
-    def test_major_change_rewrites_full_freebsd_version(self, tmp_path: Path) -> None:
+    def test_major_mismatch_refuses_to_activate(self, tmp_path: Path) -> None:
+        """issue #2242: a guest-reported FreeBSD major that disagrees with the
+        matrix row is a broken guest, not new truth — hard stop, no write."""
         facts = FACTS_857.replace("16.0-CURRENT", "17.0-CURRENT").replace("freebsd_major=16", "freebsd_major=17")
-        _, _, cwd = self._run(tmp_path, facts=facts)
-        entry = next(e for e in _pushed_matrix(cwd)["versions"] if e["pfsense_version"] == "26.07")
-        assert entry["freebsd_major"] == "17"
-        assert entry["freebsd_version"] == "17.0-CURRENT"
+        git_log, gh_log, _ = self._run(tmp_path, facts=facts, expect_failure=True)
+        proc = self._last_proc
+        assert proc is not None
+        assert proc.returncode != 0
+        assert "::error::" in proc.stdout
+        assert "17" in proc.stdout
+        assert "16" in proc.stdout
+        assert "push" not in git_log
+        assert "pr create" not in gh_log
 
     def test_active_and_accurate_entry_does_nothing(self, tmp_path: Path) -> None:
         facts = (
