@@ -73,6 +73,20 @@ Describe '.githooks/pre-commit PHP gates in the CI image'
     The stderr should not include 'skipped (tool not found)'
   End
 
+  It 'drops an inherited PFB_ALLOW_HOST so the PHP gates cannot silently grade on host PHP'
+    # The wrapper honours PFB_ALLOW_HOST by design, and that variable is commonly left
+    # exported by an ad-hoc run, direnv, or an agent shell. run-gates.sh drops it for
+    # the same reason (#2350); the hook's PHP block must too, or the "never against a
+    # host PHP" comment above the gates is a lie whenever the container is unreachable.
+    printf '#!/bin/sh\nprintf "allow_host=%%s\\n" "${PFB_ALLOW_HOST:-unset}"\nexit 0\n' \
+      > "$repo/scripts/run-in-docker.sh"
+    chmod +x "$repo/scripts/run-in-docker.sh"
+    When run sh -c "cd '$repo' && PFB_ALLOW_HOST=1 sh .githooks/pre-commit"
+    The status should equal 0
+    The output should include 'allow_host=unset'
+    The output should not include 'allow_host=1'
+  End
+
   It 'still blocks the PHP gates when the Composer vendor guard fails'
     # The guard is fail-closed and ordered before the style gates; routing them through
     # the image must not reorder that.
