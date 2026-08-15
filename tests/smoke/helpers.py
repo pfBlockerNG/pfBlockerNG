@@ -3660,12 +3660,18 @@ def reboot_vm(
     vm: SmokeVM,
     *,
     timeout: float = DEFAULT_BOOT_TIMEOUT,
-    require_pkg_metadata: bool = False,
+    require_pkg_metadata: bool = True,
 ) -> None:
     """Reboot, observe a changed ``kern.boottime``, then await full readiness.
 
     The boottime poll is the reboot event; ``timeout`` supplies independent salvage caps for
     that event and the subsequent readiness gate. No duration is asserted.
+
+    ``require_pkg_metadata`` defaults True: the reboot re-opens the same package-metadata ABI
+    transition window first boot has to wait out (``rc.update_pkg_metadata`` can still be
+    rewriting pkg's effective ABI after the guest answers SSH again), so every production
+    caller must wait on it too (issue #2242). Pass ``False`` only from a unit test proving the
+    flag itself.
     """
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
     # refusing to reboot saves the whole reboot+readiness cycle and leaves the box up in
