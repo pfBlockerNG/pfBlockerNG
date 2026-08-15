@@ -229,6 +229,12 @@ def build_handoff(
             leg_abi=f"FreeBSD:{major}:*",
             canonical_name=artifact["name"],
         )
+        # issue #2405: empty extra_pkgs still requires dep_artifacts == []
+        expected_deps = len(row.get("extra_pkgs") or [])
+        if len(dep_artifacts) != expected_deps:
+            raise ProvenanceError(
+                f"dep_artifacts count must match extra_pkgs (got {len(dep_artifacts)}, expected {expected_deps})"
+            )
         seen_majors.add(major)
         builds.append({"matrix_row": row, "record": record, "artifact": artifact, "dep_artifacts": dep_artifacts})
     if seen_majors != set(expected_rows):

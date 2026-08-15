@@ -158,6 +158,37 @@ def test_build_leg_ports_ref_pin_rejects_moving_branch() -> None:
         _assert_build_leg_pins_prepare_sha(mutated)
 
 
+_ORIGIN_COUNT_COMPARE = 'if [ "$DEP_COPIED" -ne "$ORIGIN_COUNT" ]; then'
+_DEP_PKG_GLOB = 'for DEP_PKG in "$DEP_PKG_DIR"/*.pkg;'
+
+
+def _assert_build_step_compares_dep_pkg_count(step: str) -> None:
+    """issue #2405: after the glob, ORIGIN_COUNT == copied dep *.pkg count."""
+    assert _DEP_PKG_GLOB in step
+    assert _ORIGIN_COUNT_COMPARE in step
+    assert step.index(_DEP_PKG_GLOB) < step.index(_ORIGIN_COUNT_COMPARE)
+    compare_tail = step[step.index(_ORIGIN_COUNT_COMPARE) :]
+    assert 'echo "::error::' in compare_tail
+    assert "exit 1" in compare_tail
+
+
+def test_build_step_compares_origin_count_to_copied_dep_pkgs() -> None:
+    """issue #2405: BUILD step compares ORIGIN_COUNT to copied dep *.pkg files."""
+    step = _build_and_verify_step(WORKFLOW.read_text(encoding="utf-8"))
+    _assert_build_step_compares_dep_pkg_count(step)
+    assert "result/*.pkg" in step
+
+
+def test_dropping_origin_count_compare_leaves_glob_and_goes_red() -> None:
+    """issue #2405: deleting the ORIGIN_COUNT compare, leaving the glob, is RED."""
+    step = _build_and_verify_step(WORKFLOW.read_text(encoding="utf-8"))
+    _assert_build_step_compares_dep_pkg_count(step)
+    mutated = step.replace(_ORIGIN_COUNT_COMPARE, "", 1)
+    assert _DEP_PKG_GLOB in mutated
+    with pytest.raises(AssertionError):
+        _assert_build_step_compares_dep_pkg_count(mutated)
+
+
 def test_build_step_builds_and_hands_off_dependency_packages() -> None:
     """issue #2146 S1: the BUILD leg also builds this leg's extra_pkgs dep
     .pkgs (issue #1806), with NO tagged-style rename, and folds them into
