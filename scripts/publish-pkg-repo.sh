@@ -38,7 +38,11 @@
 #            of leaving it at its real (channel, varver) location — restoring
 #            the original bytes there — so a live install can be gated against
 #            the staged path while nothing else on the site moves. No landing
-#            regen, no client-script regen: staging is never served as the site.
+#            regen: staging is never served as the site. The catalogue-no-op
+#            path is the ONE exception — it still regenerates + pushes the two
+#            deterministic client scripts (docs/add-repo.sh,
+#            docs/migrate-channel.sh; issue #2408, shared with "direct") even
+#            though nothing was staged, and reports GITHUB_OUTPUT noop=true.
 #   promote  move a previously staged tree (STAGING_PREFIX) into its real
 #            location and run the landing regen — this is the step that
 #            actually goes live. Never runs the publisher.
@@ -357,6 +361,14 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
         promote)
             # --- promote: move a staged tree live; never runs the publisher ---
             promote_from_staging
+            # A staged prefix carrying no (channel, varver) directory at all (a
+            # stray file, an empty tree) is not a valid promote — regenerating the
+            # landing page and committing would announce nothing while still
+            # advancing main, silently.
+            [ -n "$touched" ] || {
+                echo "::error::PUBLISH_STAGE=promote: no <channel>/<varver> under docs/${STAGING_PREFIX}" >&2
+                exit 1
+            }
             landing_regen_and_stage
             commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Promoted-From: %s\n' \
                 "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$STAGING_PREFIX")
@@ -435,6 +447,26 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             touched=$(grep '^updated ' "$out_file" | sed 's/^updated //') || true
             trap - EXIT
             rm -f "$out_file"
+
+            # --- stage: drop a phantom-touched target BEFORE it can be staged -----
+            # The publisher's own "updated <target>" report and the tree's real
+            # state can, in principle, disagree (a write that resolves to
+            # byte-identical content, a mid-fix regression). Filtering here, before
+            # stage_touched's own mv, means the empty-touched branch just below
+            # (unconditional for every mode) already handles "all dropped" as the
+            # ordinary STAGE NOOP case — no separate code path needed.
+            if [ "$PUBLISH_STAGE" = stage ] && [ -n "$touched" ]; then
+                real_touched=""
+                for target in $touched; do
+                    if [ -n "$(git -C "$PKG_REPO" status --porcelain -- "docs/${target}")" ]; then
+                        real_touched="${real_touched}${real_touched:+"
+"}${target}"
+                    else
+                        echo "publish-pkg-repo: stage — ${target} reported updated but unchanged; not staged"
+                    fi
+                done
+                touched="$real_touched"
+            fi
 
             script_refresh=0
             if [ -z "$touched" ]; then

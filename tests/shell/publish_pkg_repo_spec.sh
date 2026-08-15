@@ -1031,6 +1031,31 @@ HOOK
     The variable out should include 'noop=true'
   End
 
+  It 's9: stage drops a phantom-touched target (publisher reported it, the tree never changed) instead of staging it'
+    # publish_release.py's own touched-report and the tree's real state can, in
+    # principle, disagree (the "phantom" FAKE_MODE above exists for exactly this).
+    # Blindly relocating a phantom target under docs/staging would gate + eventually
+    # promote a "change" that never happened. edge/ce-2.8 already carries the seed
+    # bytes untouched, so `git status --porcelain -- docs/edge/ce-2.8` is empty --
+    # the target must be dropped before stage_touched's own mv, never staged.
+    export PUBLISH_STAGE=stage
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'publish-pkg-repo: stage — edge/ce-2.8 reported updated but unchanged; not staged'
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging" should not be exist
+    original="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf")"
+    The variable original should equal 'seed'
+    out="$(cat "$GITHUB_OUTPUT")"
+    The variable out should include 'touched=[]'
+    The variable out should include 'noop=true'
+  End
+
   seed_staged_tree() {
     mkdir -p "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8"
     printf 'edge/ce-2.8' >"${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg"
@@ -1143,6 +1168,20 @@ PY
     The output should include 'ADVANCE'
     The stderr should include 'main'
     The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should be exist
+  End
+
+  It 'p8: promote fails with ::error:: when the staged prefix holds only a stray file — no channel/varver to promote'
+    mkdir -p "${base}/pkg-repo/docs/staging/10-1"
+    echo stray >"${base}/pkg-repo/docs/staging/10-1/stray.txt"
+    (cd "${base}/pkg-repo" && git_fixture add docs/staging \
+        && git_fixture commit -q -m preseed-empty-staged && git_fixture push -q origin main)
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::PUBLISH_STAGE=promote: no <channel>/<varver> under docs/staging/10-1'
+    The result of function remote_head_now should equal "$original_remote_head"
   End
 
   It 'd1: discard drops a staged tree, commits the removal, and leaves the real target untouched'
