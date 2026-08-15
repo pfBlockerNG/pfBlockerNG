@@ -437,16 +437,20 @@ pfb_pkg_refresh_verdict() {
 # pfb_pkg_refresh_verdict END
 
 # pfb_publish_decision BEGIN
-# PKG_WAS_UPGRADED OLD_VER POST_VER CHECK_CURRENT(0|1) -> skip-os | run-os | nothing-to-publish
+# PKG_WAS_UPGRADED OLD_VER POST_VER CHECK_CURRENT(0|1) -> skip-os | run-os | nothing-to-publish | fail-closed
 # A wording miss on pfSense-upgrade -c plus no version change is run-os (then die
 # if the version still does not move). Do not guess a publish.
+# Empty POST after a verified apply is always fail-closed, including
+# ``1 <old> '' 0`` (OS upgrade available). We do not know what the box is
+# running; run-os would also be a guess. The next dispatch can upgrade.
 pfb_publish_decision() {
     _pkg=$1
     _old=$2
     _post=$3
     _current=$4
     if [ "$_pkg" -eq 1 ] && [ -z "$_post" ]; then
-        # Verified apply but no version string — do not publish OLD_VER as a guess.
+        # Verified apply but no version string — do not publish OLD_VER, and
+        # do not run-os either (CHECK_CURRENT is ignored here on purpose).
         printf '%s\n' fail-closed
         return 0
     fi
