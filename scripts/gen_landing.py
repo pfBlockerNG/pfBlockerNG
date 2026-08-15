@@ -46,10 +46,28 @@ _CHANNELS: frozenset[str] = frozenset(CH_ORDER)
 # release-published.yml's own concurrency group) could otherwise regenerate this
 # page mid-stage and make the un-gated tree browsable.
 STAGING_TOP_DIR = "staging"
-# Embed markers in add-repo.sh that delimit the hook placeholder body.
+# Embed markers in add-repo.sh (and every install-<channel>.sh, via install-common.sh)
+# that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
 _HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
 _HOOK_HEREDOC = "PFB_HOOK_HEREDOC"
+# Embed markers in each install-<channel>.sh that delimit the thin
+# `. install-common.sh` sourcing stub — gen_landing.py replaces the WHOLE block
+# (markers included) with install-common.sh's own text (issue #2416).
+_COMMON_EMBED_BEGIN = "# PFB_EMBED_COMMON_BEGIN"
+_COMMON_EMBED_END = "# PFB_EMBED_COMMON_END"
+# Every deterministic client script this generator publishes at the site root.
+# add-repo.sh/migrate-channel.sh are the legacy two-script bootstrap (issue #2148),
+# kept published for one deprecation cycle; the four install-<channel>.sh scripts
+# are their issue #2416 replacement — a single idempotent installer per channel.
+CLIENT_SCRIPTS: tuple[str, ...] = (
+    "add-repo.sh",
+    "migrate-channel.sh",
+    "install-stable.sh",
+    "install-testing.sh",
+    "install-edge.sh",
+    "install-nightly.sh",
+)
 # The source repo a .pkg is built from — base for the per-artifact commit link.
 SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 
@@ -416,37 +434,6 @@ def _manual_conf_details(conf_fn: Callable[[str], str], channel: str) -> str:
     )
 
 
-def _bootstrap_new_install(base: str, channel: str) -> str:
-    """File-form bootstrap + repo-qualified install for a clean box (issues #2381, #2390).
-
-    On-disk ``fetch`` then ``sh /tmp/add-repo.sh``, joined with ``&&`` so a failed
-    subscribe does not run ``pkg install``. ``-r pfblockerng-<channel>`` so the
-    install cannot resolve against Netgate. The pipe form (``fetch | sh -s``) is
-    not the published recipe: some ash builds re-read a function-body heredoc
-    from current stdin at call time.
-    """
-    return (
-        f"fetch -qo /tmp/add-repo.sh {base}/add-repo.sh &&\n"
-        f"sh /tmp/add-repo.sh --base-url {base} --channel {channel} &&\n"
-        f"pkg install -y -r pfblockerng-{channel} {CANONICAL_EMITTED_IDENTITY}"
-    )
-
-
-def _bootstrap_existing_install(base: str, channel: str) -> str:
-    """File-form bootstrap + migrate-channel for an already-installed package.
-
-    ``pkg install`` does not move an existing ``pfSense-pkg-pfBlockerNG`` (or
-    leftover ``-devel`` / suffixed identity) onto the new repository. Existing
-    installs must run migrate-channel.sh after add-repo (issue #2381).
-    """
-    return (
-        f"fetch -qo /tmp/add-repo.sh {base}/add-repo.sh &&\n"
-        f"sh /tmp/add-repo.sh --base-url {base} --channel {channel} &&\n"
-        f"fetch -qo /tmp/migrate-channel.sh {base}/migrate-channel.sh &&\n"
-        f"sh /tmp/migrate-channel.sh --channel {channel}"
-    )
-
-
 # Per-channel card copy: title, optional badge, and the audience/cadence prose. Fixed
 # content decisions for the four-channel model, issue #2147 step A (the landing page):
 # Stable = final tagged releases; Testing = nonzero-patch prereleases validating the
@@ -491,9 +478,15 @@ _CARD_META: dict[str, dict[str, str]] = {
 
 def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
     """One channel's install card: audience prose, and — only when published —
-    the new-install recipe, the existing-install migrate path, and a collapsed
-    manual-conf snippet. An unpublished channel keeps title/badge/blurb/"not yet
-    published" and ships no add-repo / pkg install / conf snippet (issue #2382)."""
+    the ONE-line per-channel installer recipe and a collapsed manual-conf snippet.
+    An unpublished channel keeps title/badge/blurb/"not yet published" and ships no
+    install recipe or conf snippet (issue #2382).
+
+    The recipe is the single piped ``install-<channel>.sh`` (issue #2416) — it folds
+    the old add-repo.sh (new install) + migrate-channel.sh (existing install) two-script
+    dance into one idempotent script that converges from ANY starting state, so the
+    card no longer needs to distinguish "new" from "existing" installs.
+    """
     meta = _CARD_META[channel]
     badge = f" {meta['badge']}" if meta["badge"] else ""
     body = (
@@ -502,12 +495,9 @@ def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Call
         f'<p class="blurb">{meta["blurb"]}</p>'
     )
     if latest.get(channel):
-        devel = f"{CANONICAL_EMITTED_IDENTITY}-devel"
         body += (
-            '<p class="blurb">New install:</p>'
-            f"{_copyable(_esc(_bootstrap_new_install(base, channel)))}"
-            f'<p class="blurb">Existing install (Netgate or leftover <code>{_esc(devel)}</code>):</p>'
-            f"{_copyable(_esc(_bootstrap_existing_install(base, channel)))}"
+            '<p class="blurb">Install, upgrade, or switch to this channel (any starting state):</p>'
+            f"{_copyable(_esc(f'fetch -qo - {base}/install-{channel}.sh | sh'))}"
             f"{_manual_conf_details(conf_fn, channel)}"
         )
     return f"{body}</div>"
@@ -1073,15 +1063,18 @@ def render_autoindex(
     )
 
 
-def _embed_hook(add_repo_text: str, hook_text: str) -> str:
-    """Splice *hook_text* into *add_repo_text* between the PFB_EMBED markers.
+def _embed_hook(script_text: str, hook_text: str) -> str:
+    """Splice *hook_text* into *script_text* between the PFB_EMBED_HOOK markers.
 
     The stub body (everything between the BEGIN and END marker lines, inclusive) is
     replaced with a single-quoted heredoc that prints the hook verbatim — no variable
     or command expansion in the emitted content, regardless of what the hook contains.
-    The resulting add-repo.sh is self-contained and safe to pipe into ``sh``.
+    The resulting script is self-contained and safe to pipe into ``sh``. Shared by
+    ``write_add_repo`` (splices directly into add-repo.sh) and ``write_channel_installers``
+    (splices into the common text ``_embed_common`` has already spliced into each
+    install-<channel>.sh — the PFB_EMBED_HOOK markers live in install-common.sh).
     """
-    lines = add_repo_text.splitlines(keepends=True)
+    lines = script_text.splitlines(keepends=True)
     begin_idx = next(
         (i for i, ln in enumerate(lines) if _HOOK_EMBED_BEGIN in ln),
         None,
@@ -1091,7 +1084,7 @@ def _embed_hook(add_repo_text: str, hook_text: str) -> str:
         None,
     )
     if begin_idx is None or end_idx is None or begin_idx >= end_idx:
-        raise ValueError(f"add-repo.sh is missing the embed markers ({_HOOK_EMBED_BEGIN!r} / {_HOOK_EMBED_END!r})")
+        raise ValueError(f"script is missing the embed markers ({_HOOK_EMBED_BEGIN!r} / {_HOOK_EMBED_END!r})")
     if _HOOK_HEREDOC in hook_text:
         raise ValueError(
             f"hook text contains the heredoc delimiter {_HOOK_HEREDOC!r} — choose a different delimiter or fix the hook"
@@ -1105,6 +1098,38 @@ def _embed_hook(add_repo_text: str, hook_text: str) -> str:
         lines[end_idx],
     ]
     return "".join(lines[:begin_idx] + heredoc_lines + lines[end_idx + 1 :])
+
+
+def _embed_common(channel_text: str, common_text: str) -> str:
+    """Splice *common_text* into *channel_text* between the PFB_EMBED_COMMON markers.
+
+    Unlike ``_embed_hook`` (which keeps its BEGIN/END marker lines and injects a
+    heredoc between them), the WHOLE marked block — both marker lines included — is
+    replaced with *common_text* verbatim: the markers only delimit the thin
+    ``. install-common.sh`` sourcing stub in the repository copy of each
+    install-<channel>.sh, and that sibling-file ``.`` cannot survive into a script
+    meant to be piped into ``sh`` (where ``$0`` is ``sh``, so sibling-file resolution
+    via ``dirname "$0"`` fails). The result still carries install-common.sh's own
+    PFB_EMBED_HOOK markers, which ``_embed_hook`` splices next.
+    """
+    lines = channel_text.splitlines(keepends=True)
+    begin_idx = next(
+        (i for i, ln in enumerate(lines) if _COMMON_EMBED_BEGIN in ln),
+        None,
+    )
+    end_idx = next(
+        (i for i, ln in enumerate(lines) if _COMMON_EMBED_END in ln),
+        None,
+    )
+    if begin_idx is None or end_idx is None or begin_idx >= end_idx:
+        raise ValueError(f"script is missing the embed markers ({_COMMON_EMBED_BEGIN!r} / {_COMMON_EMBED_END!r})")
+    if _HOOK_HEREDOC in common_text:
+        raise ValueError(
+            f"common text contains the heredoc delimiter {_HOOK_HEREDOC!r} — "
+            "choose a different delimiter or fix install-common.sh"
+        )
+    body = common_text if common_text.endswith("\n") else common_text + "\n"
+    return "".join(lines[:begin_idx] + [body] + lines[end_idx + 1 :])
 
 
 def write_add_repo(site: str, addrepo: str) -> None:
@@ -1145,6 +1170,42 @@ def write_migrate_channel(site: str, addrepo: str) -> None:
     with open(out_path, "w") as fh:
         fh.write(text)
     os.chmod(out_path, 0o755)
+
+
+def write_channel_installers(site: str, addrepo: str) -> list[str]:
+    """Write a self-contained ``install-<channel>.sh`` to *site*/install-<channel>.sh
+    for each of the four channels (issue #2416).
+
+    *addrepo* pins the resolution root exactly like ``write_add_repo``: the repository
+    copies live under ``<scripts_dir>/channel-install/`` (install-<channel>.sh,
+    install-common.sh) and ``<scripts_dir>/rc.d/`` (the boot hook), where
+    ``scripts_dir`` is ``addrepo``'s own directory. Each published script is built in
+    two splices: ``_embed_common`` replaces the thin per-channel stub's
+    ``. install-common.sh`` sourcing line with install-common.sh's own text, then
+    ``_embed_hook`` replaces THAT text's ``pfb_emit_embedded_hook`` stub body with the
+    boot hook via a single-quoted heredoc — the same technique ``write_add_repo`` uses,
+    so the result needs no sibling file when piped into ``sh``. Returns the file names
+    written, e.g. ``["install-stable.sh", "install-testing.sh", ...]``.
+    """
+    scripts_dir = os.path.dirname(os.path.abspath(addrepo))
+    channel_dir = os.path.join(scripts_dir, "channel-install")
+    hook_path = os.path.join(scripts_dir, "rc.d", "pfblockerng_repo_generate.sh")
+    with open(hook_path) as fh:
+        hook_text = fh.read()
+    with open(os.path.join(channel_dir, "install-common.sh")) as fh:
+        common_text = fh.read()
+    names: list[str] = []
+    for channel in CH_ORDER:
+        name = f"install-{channel}.sh"
+        with open(os.path.join(channel_dir, name)) as fh:
+            channel_text = fh.read()
+        out_text = _embed_hook(_embed_common(channel_text, common_text), hook_text)
+        out_path = os.path.join(site, name)
+        with open(out_path, "w") as fh:
+            fh.write(out_text)
+        os.chmod(out_path, 0o755)
+        names.append(name)
+    return names
 
 
 def _conf_via_addrepo(addrepo: str, base: str, channel: str) -> str:
@@ -1196,10 +1257,13 @@ def write_site(site: str, base: str, addrepo: str, matrix: list[dict] | None = N
         subdirs, files = _dir_entries(site, rel)
         with open(os.path.join(site, rel, "index.html"), "w") as fh:
             fh.write(render_autoindex(rel, subdirs, files))
-    # Publish a self-contained add-repo.sh with the hook embedded for `fetch | sh`,
-    # and its sibling migrate-channel.sh — both halves of a channel switch (issue #2148).
+    # Publish every deterministic client script: the legacy add-repo.sh (hook
+    # embedded for `fetch | sh`) + migrate-channel.sh (issue #2148, kept for one
+    # deprecation cycle), and their issue #2416 replacement — one self-contained
+    # install-<channel>.sh per channel.
     write_add_repo(site, addrepo)
     write_migrate_channel(site, addrepo)
+    write_channel_installers(site, addrepo)
     return len(pkgs)
 
 
@@ -1217,11 +1281,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument(
         "--client-scripts-only",
         action="store_true",
-        help="write only the two deterministic client scripts (add-repo.sh, "
-        "migrate-channel.sh); no landing/browse/autoindex pages. Used by "
-        "publish-pkg-repo.sh's catalogue-NOOP path (issue #2408) — the pages embed a "
-        "generation timestamp, so writing them there would manufacture a commit on "
-        "every run.",
+        help=f"write only the deterministic client scripts ({', '.join(CLIENT_SCRIPTS)}); "
+        "no landing/browse/autoindex pages. Used by publish-pkg-repo.sh's catalogue-NOOP "
+        "path (issue #2408) — the pages embed a generation timestamp, so writing them "
+        "there would manufacture a commit on every run.",
     )
     args = ap.parse_args(argv)
     if args.client_scripts_only:
@@ -1229,7 +1292,8 @@ def main(argv: list[str] | None = None) -> int:
             ap.error("--client-scripts-only writes no landing page — --matrix cannot apply")
         write_add_repo(args.site, args.add_repo)
         write_migrate_channel(args.site, args.add_repo)
-        print("client scripts written: add-repo.sh, migrate-channel.sh")
+        write_channel_installers(args.site, args.add_repo)
+        print(f"client scripts written: {', '.join(CLIENT_SCRIPTS)}")
         return 0
     matrix = None
     if args.matrix:

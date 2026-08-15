@@ -41,10 +41,12 @@
 #            the original bytes there — so a live install can be gated against
 #            the staged path while nothing else on the site moves. No landing
 #            regen: staging is never served as the site. The catalogue-no-op
-#            path is the ONE exception — it still regenerates + pushes the two
-#            deterministic client scripts (docs/add-repo.sh,
-#            docs/migrate-channel.sh; issue #2408, shared with "direct") even
-#            though nothing was staged, and reports GITHUB_OUTPUT noop=true.
+#            path is the ONE exception — it still regenerates + pushes every
+#            deterministic client script (docs/add-repo.sh,
+#            docs/migrate-channel.sh, and the four docs/install-<channel>.sh
+#            per-channel installers; issue #2408, issue #2416, shared with
+#            "direct") even though nothing was staged, and reports
+#            GITHUB_OUTPUT noop=true.
 #   promote  move a previously staged tree (STAGING_PREFIX) into its real
 #            location and run the landing regen — this is the step that
 #            actually goes live. Never runs the publisher.
@@ -111,6 +113,13 @@
 #                        staging/[0-9A-Za-z_-]+
 
 set -eu
+
+# Every deterministic client script gen_landing.py publishes at the site root:
+# the legacy add-repo.sh/migrate-channel.sh two-script bootstrap (issue #2148,
+# kept for one deprecation cycle) plus the four per-channel installers (issue
+# #2416). Single source of truth for both the catalogue-NOOP `git add` list and
+# the direct/promote stage_paths list below.
+CLIENT_SCRIPTS="add-repo.sh migrate-channel.sh install-stable.sh install-testing.sh install-edge.sh install-nightly.sh"
 
 PUBLISH_KIND="${PUBLISH_KIND:-tagged}"
 case "$PUBLISH_KIND" in
@@ -315,8 +324,9 @@ landing_regen_and_stage() {
     stage_paths="docs/.nojekyll"
     [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
     [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
-    [ -f "${PKG_REPO}/docs/add-repo.sh" ] && stage_paths="${stage_paths} docs/add-repo.sh"
-    [ -f "${PKG_REPO}/docs/migrate-channel.sh" ] && stage_paths="${stage_paths} docs/migrate-channel.sh"
+    for client_script in $CLIENT_SCRIPTS; do
+        [ -f "${PKG_REPO}/docs/${client_script}" ] && stage_paths="${stage_paths} docs/${client_script}"
+    done
     for target in $touched; do
         stage_paths="${stage_paths} docs/${target}"
         ch="${target%%/*}"
@@ -476,16 +486,21 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             script_refresh=0
             if [ -z "$touched" ]; then
                 # --- catalogue unchanged: the client scripts may still have drifted ---
-                # docs/add-repo.sh and docs/migrate-channel.sh are generated from the
-                # PFB_SRC checkout, not from the release assets, so a script-only fix
-                # must ship even when every destination already matches (issue #2408).
-                # Only the deterministic script pair is regenerated here — the
+                # Every client script (CLIENT_SCRIPTS) is generated from the PFB_SRC
+                # checkout, not from the release assets, so a script-only fix must ship
+                # even when every destination already matches (issue #2408, issue #2416).
+                # Only the deterministic script set is regenerated here — the
                 # landing/browse/autoindex pages embed a generation timestamp, and
                 # writing them on a no-op would manufacture a commit on every run.
                 python3 "${PFB_SRC}/scripts/gen_landing.py" \
                     "${PKG_REPO}/docs" "$BASE_URL" "${PFB_SRC}/scripts/add-repo.sh" \
                     --client-scripts-only
-                git -C "$PKG_REPO" add -- docs/add-repo.sh docs/migrate-channel.sh
+                client_script_paths=""
+                for client_script in $CLIENT_SCRIPTS; do
+                    client_script_paths="${client_script_paths} docs/${client_script}"
+                done
+                # shellcheck disable=SC2086  # client_script_paths is a controlled, space-separated pathspec list
+                git -C "$PKG_REPO" add -- $client_script_paths
                 if git -C "$PKG_REPO" diff --cached --quiet; then
                     if [ "$PUBLISH_STAGE" = stage ]; then
                         emit_stage_outputs true
