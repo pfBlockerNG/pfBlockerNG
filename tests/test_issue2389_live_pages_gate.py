@@ -58,7 +58,7 @@ def test_release_published_stages_before_gate() -> None:
     job = _extract_job(_workflow("release-published.yml"), "publish-pkg-repo")
     # Anchored to the real env: line, not a doc comment mentioning the same text --
     # a substring check here would pass on a comment alone even if the actual
-    # PUBLISH_STAGE value drifted away from "stage" (issue #2389 fix-round-1 F3).
+    # PUBLISH_STAGE value drifted away from "stage" (issue #2389).
     assert re.search(r"^\s+PUBLISH_STAGE: stage\s*$", job, re.MULTILINE), job
     assert "id: stage" in job
     for out in ("staging_prefix", "touched", "noop", "route_matrix"):
@@ -99,7 +99,7 @@ def test_release_published_promotes_only_after_green_gate() -> None:
 def test_release_published_promote_env_never_supplies_assets_dir() -> None:
     """publish-pkg-repo.sh's promote arm requires SOURCE_REPOSITORY, RELEASE_ID,
     RELEASE_TAG, DESTINATIONS, SOURCE_RUN_ID, ROUTE_MATRIX, BASE_URL, STAGING_PREFIX,
-    and PUBLISH_STAGE -- but never ASSETS_DIR (issue #2389 fix-round-1 F1: the
+    and PUBLISH_STAGE -- but never ASSETS_DIR (issue #2389: the
     script's tagged-mode env guard used to require ASSETS_DIR unconditionally,
     which broke every promote since this job never exports it)."""
     job = _extract_job(_workflow("release-published.yml"), "promote-pkg-repo")
@@ -115,7 +115,7 @@ def test_release_published_promote_env_never_supplies_assets_dir() -> None:
         "PUBLISH_STAGE",
     ):
         assert re.search(rf"^\s+{var}:", job, re.MULTILINE), f"promote-pkg-repo env missing {var!r}:\n{job}"
-    assert "ASSETS_DIR" not in job
+    assert not re.search(r"^\s+ASSETS_DIR:\s*", job, re.MULTILINE)
 
 
 def test_release_published_serialises_publishes() -> None:

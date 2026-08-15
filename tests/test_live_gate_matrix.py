@@ -34,6 +34,7 @@ def test_module_imports_outside_pytest_without_conftest_on_sys_path() -> None:
         env=env,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
 
@@ -141,7 +142,7 @@ def test_destination_with_no_touched_target_is_not_an_error() -> None:
 
 def test_leg_missing_image_name_or_mac_raises_instead_of_silently_defaulting() -> None:
     """read-version-matrix.sh already resolves image_name/mac for every real CI leg
-    (issue #2389 fix-round-1 F7) -- a leg missing either key is this function's own
+    (issue #2389) -- a leg missing either key is this function's own
     caller feeding it a malformed row, which must fail loudly, never silently
     install-test the wrong box under a fallback identity."""
     leg_no_image = {k: v for k, v in CE_LEG.items() if k != "image_name"}
