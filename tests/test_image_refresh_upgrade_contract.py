@@ -91,7 +91,25 @@ def test_self_refresh_leg_passes_expect_freebsd_major(tmp_path: Path) -> None:
     assert argv[argv.index("--expect-freebsd-major") + 1] == "15"
 
 
-def test_cross_version_leg_omits_expect_freebsd_major(tmp_path: Path) -> None:
-    """Direct/cross-version legs do not pass --expect-freebsd-major."""
+def test_cross_version_leg_passes_expect_freebsd_major(tmp_path: Path) -> None:
+    """issue #2242: cross-version legs ALSO pass --expect-freebsd-major —
+    matrix.freebsd_version is the TARGET row's value in both leg modes (the
+    version-tracker's direct-leg builder), so the self-consistency check applies
+    on every leg, not only same-version refreshes."""
     argv = _run_upgrade(tmp_path, from_tag="2.8", target_tag="2.9", force_flag="", freebsd_version="16.0-RELEASE")
+    assert "--expect-freebsd-major" in argv
+    assert argv[argv.index("--expect-freebsd-major") + 1] == "16"
+
+
+def test_missing_freebsd_version_omits_expect_freebsd_major(tmp_path: Path) -> None:
+    """An empty matrix.freebsd_version (unreachable on the live matrix) must not
+    derive a garbage major — the flag is simply omitted."""
+    argv = _run_upgrade(tmp_path, from_tag="2.8", target_tag="2.9", force_flag="", freebsd_version="")
+    assert "--expect-freebsd-major" not in argv
+
+
+def test_non_digit_freebsd_major_omits_expect_freebsd_major(tmp_path: Path) -> None:
+    """A freebsd_version with no leading digits (no dot to split on) must not
+    hand a non-numeric value to --expect-freebsd-major, which rejects it."""
+    argv = _run_upgrade(tmp_path, from_tag="2.8", target_tag="2.9", force_flag="", freebsd_version="15-STABLE")
     assert "--expect-freebsd-major" not in argv

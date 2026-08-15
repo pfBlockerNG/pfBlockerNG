@@ -297,8 +297,12 @@ jobs:
       #   2. Same-version refreshes pass --upgrade-pkgs: pkg update -f + pkg upgrade
       #      -n (dry-run detect); ONLY if upgrades pending → pkg upgrade -y + reboot
       #      + wait SSH. Cross-version legs omit it; pfSense-upgrade owns the transition.
-      #      Same-version legs also pass --expect-freebsd-major (from matrix.freebsd_version)
-      #      so the published artifact's pkg ABI major must match the matrix row (issue #2242).
+      #      EVERY leg passes --expect-freebsd-major, derived from matrix.freebsd_version
+      #      (the TARGET row's value in both leg modes): the published artifact's pkg ABI
+      #      major must match the matrix row, whether refreshing in place or crossing a
+      #      major (issue #2242). Omitted when the derived value isn't plain digits (an
+      #      empty/malformed freebsd_version) — the artifact's own ABI-vs-kernel
+      #      self-consistency check in pfb_verify_artifact still applies regardless.
       #   3. Runs pfSense-upgrade (reboots the box), waits for version to change.
       #   4. Health gate: polls up to 300 s for webConfigurator HTTP or pfctl live
       #      ruleset; fail-closed (die → no publish) if neither answers.
@@ -328,8 +332,10 @@ jobs:
           export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
           UPGRADE_PKGS_FLAG=
           [ "$FROM_TAG" = "$TARGET_TAG" ] && UPGRADE_PKGS_FLAG=--upgrade-pkgs
-          EXPECT_MAJOR=
-          [ "$FROM_TAG" = "$TARGET_TAG" ] && EXPECT_MAJOR="${FREEBSD_VERSION%%.*}"
+          EXPECT_MAJOR=${FREEBSD_VERSION%%.*}
+          case "$EXPECT_MAJOR" in
+            ''|*[!0-9]*) EXPECT_MAJOR= ;;
+          esac
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
