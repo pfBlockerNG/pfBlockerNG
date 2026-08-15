@@ -238,7 +238,7 @@ while [ $# -gt 0 ]; do
             shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,135p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,/^# Auth:/p' "$0"; exit 0 ;;
         *)                 die "unknown option: $1" ;;
     esac
 done
