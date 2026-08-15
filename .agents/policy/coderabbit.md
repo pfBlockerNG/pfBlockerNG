@@ -33,6 +33,39 @@ auto-review spends).
   Those incrementals are what burned the Aug 15 hourly allowance.
 - Do not enable usage-based billing or paste billing org IDs into
   comments. Billing is an owner decision.
+- **Mute auto-review while Fair Usage is live.** A quota notice on
+  one PR will otherwise fire on every other open PR and pollute
+  them with the same "Review limit reached" comment. The mute is
+  the `cr-hold` label (preferred) or a `WIP` title / `WIP` label /
+  `[skip review]` title — `.coderabbit.yaml` skips auto-review on
+  all of those. Do **not** retitle a ready PR as WIP just to mute
+  CodeRabbit; use `cr-hold`. Drafts are also skipped
+  (`drafts: false`).
+
+## Mute while a quota window is live
+
+Any agent (this one or another) that sees a quota notice, or that
+opens a PR knowing a window is still counting down:
+
+1. **Immediately** `gh label create cr-hold` if missing, then
+   `gh pr edit N --add-label cr-hold` on every **other** open
+   product/CI PR and on any PR you are about to open. Do this
+   **before** the next `gh pr create` / push that would trigger
+   auto-review.
+2. New PRs during the window: add `cr-hold` in the same command
+   as create (`gh pr create --label cr-hold`), or open as **draft**
+   then label then undraft only after the window. Never open a
+   ready, unlabeled, non-draft PR while a countdown is live.
+3. Leave `cr-hold` on siblings until **their** turn for the one
+   post-window `@coderabbitai review`. Removing it from every PR
+   at once just recreates the burst.
+4. When the window elapses: remove `cr-hold` from **one** PR,
+   post exactly one `@coderabbitai review` there, wait FINISHED.
+   Then the next PR. Do not strip the label from the rest yet.
+5. After a finished review, put `cr-hold` back only if a new
+   quota notice appeared; otherwise leave it off that PR.
+6. `cr-hold` is not "work unfinished". Three-leg, CI, and landing
+   continue. Only CodeRabbit auto-review is muted.
 
 ## Required path (every future PR)
 
@@ -43,18 +76,20 @@ auto-review spends).
    head SHA) → triage every finding per landing.md. Stop here.
 3. **ACK is only a quota notice** ("Review limit reached" /
    `rate limited by coderabbit.ai` and no finished review):
-   1. Parse **Next review available in** (`N` minutes or hours).
+   1. Apply `cr-hold` to every **other** open PR now (mute
+      section above) so siblings do not collect the same notice.
+   2. Parse **Next review available in** (`N` minutes or hours).
       Unparsable → treat as 15 minutes, once.
-   2. Arm a **self-terminating** wait for `N + 30s`
+   3. Arm a **self-terminating** wait for `N + 30s`
       ([`waits.md`](waits.md): cap inside the wait, never a bare
       unbounded sleep). If `N` exceeds the waits.md two-hour
       ladder, wait the ladder, then one nudge anyway.
-   3. When the wait ends, post **exactly one** top-level
-      `@coderabbitai review`.
-   4. Arm `--until finished`. **FINISHED** → triage.
-      **Another quota notice** → wait that new window **once**,
-      nudge **once** more, then stop. Record the miss (SHA +
-      title) on the landing audit. Do not loop.
+   4. When the wait ends, remove `cr-hold` from **this** PR only,
+      then post **exactly one** top-level `@coderabbitai review`.
+   5. Arm `--until finished`. **FINISHED** → triage.
+      **Another quota notice** → re-apply `cr-hold`, wait that
+      new window **once**, nudge **once** more, then stop.
+      Record the miss (SHA + title) on the landing audit. Do not loop.
 4. **NOACK** in ten minutes → one `@coderabbitai review`, fresh
    ten-minute ack window. Still silent → CodeRabbit unavailable;
    three-leg carries the review step. Never a second no-ack nudge.
@@ -83,7 +118,8 @@ tightening that is obvious **now** (same session, not "later"):
 | `@coderabbitai review` after ruff / comment APPLY / CR's own suggested diff | stop; landing spend rule already forbids it |
 | Third+ incremental on one PR | confirm `auto_pause_after_reviewed_commits` is 2; lower to 1 if incrementals are the burst |
 | Auto-review of `.md`, `.agents/`, `docs/`, `legacy/`, vendored trees | confirm `.coderabbit.yaml` `path_filters`; add the new tree |
-| Many product PRs in one hour | serialize: next PR stays draft or unopened until the in-flight PR's first finished CR review |
+| Many product PRs in one hour | serialize: next PR opens with `cr-hold` (or as draft) until the in-flight PR's first finished CR review |
+| Quota notice on every open PR | apply `cr-hold` to siblings immediately; do not let auto-review fire |
 | Nudge while a quota notice is still counting down | never; wait the stated window |
 
 Write one line on the PR audit: what spent the slots, what you
