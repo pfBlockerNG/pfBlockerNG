@@ -61,6 +61,7 @@ Judge availability per-PR with **10-minute acknowledgement window** anchored on 
 
 - **ACK** (any CodeRabbit message) → **quota fast-path first**: if ONLY content is rate-limit notice (no review content) whose own "Next review available in" time is **> 5 minutes**, drop CodeRabbit immediately — no finished-wait; surface skip. Notice quoting ≤ 5 minutes, or any real review content beside it, → wait for finished review.
 - **NOACK** → nudge **once** (`@coderabbitai review` as top-level comment), then re-run ack wait with fresh 10-minute window anchored on *now* (`--since`). ACK → proceed as above; still silent → CodeRabbit unavailable; adversarial review carry review step. Never second nudge.
+- **Spend quota on the first real look.** `.coderabbit.yaml` auto-pauses incremental reviews after two reviewed commits. After a finished review (not a quota notice), do **not** `@coderabbitai review` again for format-only, comment-only, or mechanical review-fix pushes — those commits are why Fair Usage tripped during the Aug 15 landing loop. Nudge again only when a later commit changes product behaviour, and never while the latest CodeRabbit comment is a quota notice whose wait is **> 5 minutes**.
 
 Waiting on finished review (`--until finished`; handle matching case-insensitive and anchored — never append `[bot]` yourself):
 
@@ -68,7 +69,7 @@ Waiting on finished review (`--until finished`; handle matching case-insensitive
 - **QUOTA `<mins>`** — reviewer did not review, is rate-limited. **5-minute rule**: `mins > 5` (or unparsable) → drop handle and continue; `mins ≤ 5` → wait ~5 minutes (self-exiting background sleep, never foreground), nudge once, re-arm in finished-only mode with `--since` now; ANY further problem on nudged wait → give up on CodeRabbit — never block on it twice. Before acting, eyeball PR for posted content (stale notice can sit beside completed review — content wins). Always surface skipped reviewer; skipped bot never reported as "PR clean".
 - **NOTPRESENT** — zero engagement within presence window (~5 min): handle not reviewing this PR; skip without blocking (not failure).
 - **DECLINE** (base isn't default branch) — post one comment asking for full review (`@coderabbitai trigger full review and tell me when you are finished`), re-arm **finished-only** with `--since` now (never re-trigger on repeat decline).
-- **PAUSE** (branch too active) — post `@coderabbitai resume` once, re-arm finished-only.
+- **PAUSE** (branch too active) — if the latest commits are format-only or mechanical review-fixes, leave paused (same spend rule as ACK). If product behaviour changed, post `@coderabbitai resume` once, re-arm finished-only.
 - **TIMEOUT** — first check for **silent pause** (walkthrough stuck with no terminal result): treat as PAUSE. Otherwise report and ask: keep waiting or proceed.
 - CodeRabbit acked but never finished → proceed on adversarial review, note timeout (nudge is no-ack only); late review folds in before merge gate.
 - Bot's wording drifts — diagnostics show finished/declined review the matcher missed: read comment body and adjust patterns instead of waiting out timeout.
