@@ -4,6 +4,8 @@ import itertools
 import re
 from pathlib import Path
 
+import pytest
+
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly.yml"
 ALERT_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly-failure-alert.yml"
 
@@ -110,6 +112,50 @@ def test_nightly_failure_alert_watches_snapshot_workflow() -> None:
     text = ALERT_WORKFLOW.read_text(encoding="utf-8")
 
     assert '- "Nightly snapshot"' in text
+
+
+def _build_and_verify_step(text: str) -> str:
+    start = text.index("      - name: Build and verify package")
+    end = text.index("\n      - name: Upload verified build", start)
+    return text[start:end]
+
+
+def _build_leg_invocation(step: str) -> str:
+    marker = 'sh "$TRUSTED_DIR/scripts/build-leg.sh"'
+    start = step.index(marker)
+    end = step.index(")", start)
+    return step[start:end]
+
+
+def _assert_build_leg_pins_prepare_sha(build_leg: str) -> None:
+    assert '--ports-ref "$PORTS_SHA"' in build_leg
+    assert '--ports-ref "$PORTS_REF"' not in build_leg
+
+
+def test_build_step_clones_ports_at_prepare_sha() -> None:
+    """issue #2406: BUILD clones prepare's PORTS_SHA; PORTS_REF is ls-remote only."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    step = _build_and_verify_step(text)
+    build_leg = _build_leg_invocation(step)
+
+    _assert_build_leg_pins_prepare_sha(build_leg)
+    assert 'if [ "$ACTUAL_PORTS_SHA" != "$PORTS_SHA" ]; then' in step
+
+    prepare_start = text.index("      - name: Resolve pinned source, Ports, and live matrices")
+    prepare_end = text.index("\n      - name: Expose pinned plan", prepare_start)
+    prepare = text[prepare_start:prepare_end]
+    assert prepare.count('git ls-remote "$PORTS_URL"') == 1
+    assert "refs/heads/${PORTS_REF}" in prepare
+    assert 'echo "ports_sha=$PORTS_SHA"' in prepare
+
+
+def test_build_leg_ports_ref_pin_rejects_moving_branch() -> None:
+    """issue #2406: swapping SHA for REF on the build-leg line is RED."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    build_leg = _build_leg_invocation(_build_and_verify_step(text))
+    mutated = build_leg.replace('--ports-ref "$PORTS_SHA"', '--ports-ref "$PORTS_REF"', 1)
+    with pytest.raises(AssertionError):
+        _assert_build_leg_pins_prepare_sha(mutated)
 
 
 def test_build_step_builds_and_hands_off_dependency_packages() -> None:

@@ -238,7 +238,6 @@ jobs:
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
           RUN_ID: nightly-${{ github.run_id }}-${{ matrix.freebsd_major }}
           PORTS_REPO: ${{ env.PORTS_REPO }}
-          PORTS_REF: ${{ env.PORTS_REF }}
         run: |
           set -eu
           export RUN_ROOT="$GITHUB_WORKSPACE/out"
@@ -263,7 +262,7 @@ jobs:
           PKG="$(
             sh "$TRUSTED_DIR/scripts/build-leg.sh" \
               --ports-repo "$PORTS_REPO" \
-              --ports-ref "$PORTS_REF" \
+              --ports-ref "$PORTS_SHA" \
               --channel nightly \
               --variant "$VARIANT" \
               --build-record build-record.json \
