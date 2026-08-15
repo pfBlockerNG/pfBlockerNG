@@ -8,4 +8,4 @@ Format: `` `SHA`  title  (#PR) ``
 
 Newest first.
 
-- *(none recorded yet — start here when a merge records a miss)*
+- `aaf8019d`  pkg Pages: one install-`<ch>`.sh per channel that converges the box from any starting state  (#2444) — CodeRabbit finished only on `ed359c69`; the fix-round heads (`91d33b35`, `aaf8019d`) got no finished review (one nudge already spent on a quota window; not re-spent).
