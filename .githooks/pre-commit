@@ -274,6 +274,10 @@ if [ "$staged_php" = 1 ]; then
 	# is nothing to gain from grading syntax and sniffs against it. An unreachable
 	# container is a FAILED gate here, not a skip: a skipped gate reads greener than a
 	# failed one, so an unreachable image blocks the commit until it is reachable.
+	# The wrapper honours PFB_ALLOW_HOST, and that variable is commonly left exported by
+	# an ad-hoc run, direnv, or an agent shell -- so drop it here, exactly as
+	# scripts/agent/run-gates.sh does; the escape hatch stays on the wrapper for ad-hoc use.
+	unset PFB_ALLOW_HOST
 
 	# php -l syntax check (output shown only for files that fail). One container
 	# invocation for the whole tree, not one per file.
