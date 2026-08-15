@@ -63,6 +63,29 @@ Describe 'image-upgrade.sh pre-push artifact verification'
     ' _ "$SCRIPT" "$WORK"
   }
 
+  # run_verify_glob BOOTED TAG ABI KERNEL — like run_verify, but first CDs into a
+  # scratch dir containing a file literally named "16": an unguarded
+  # `IFS=: set -- $_pva_abi` word-split lets an unquoted `*` field GLOB against real
+  # filenames in cwd instead of staying the literal text "*" (issue #2242).
+  run_verify_glob() {
+    _booted="$1" _tag="$2" _abi="$3" _kern="$4" sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      warn() { printf "WARNING: %s\n" "$*" >&2; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      LOCAL_DIR="$2"
+      EXPECT_FREEBSD_MAJOR=
+      . "$(dirname "$1")/image-lib.sh"
+      eval "$(sed -n "/^# pfb_verify_artifact BEGIN/,/^# pfb_verify_artifact END/p" "$1")"
+      pfb_boot_artifact_version() { printf "%s\n%s\n%s\n" "$_booted" "$_abi" "$_kern"; }
+      mkdir -p "$2/globdir"
+      : > "$2/globdir/16"
+      cd "$2/globdir"
+      pfb_verify_artifact "$2/out.qcow2" "$_tag"
+      printf "REACHED-AFTER-VERIFY\n"
+    ' _ "$SCRIPT" "$WORK"
+  }
+
   # run_verify_reap — drive the REAL boot helper (not the stub) into a wedged
   # boot and show where the verify VM pid ends up. cleanup() reaps $QPID from
   # the top-level shell: if the boot runs in a subshell/pipeline, the pid never
@@ -172,6 +195,20 @@ Describe 'image-upgrade.sh pre-push artifact verification'
     The stderr should include 'could not read pkg ABI'
     The output should not include 'REACHED-AFTER-VERIFY'
   End
+
+  It 'refuses to publish when the artifact never reports a kernel release'
+    When call run_verify 26.07-BETA 26.07 'FreeBSD:16:amd64' ''
+    The status should be failure
+    The stderr should include 'could not read kernel release'
+    The output should not include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'refuses to publish when the pkg ABI split would glob-match a real filename (issue #2242)'
+    When call run_verify_glob 26.07-BETA 26.07 'FreeBSD:*:amd64' '16.0-CURRENT'
+    The status should be failure
+    The stderr should include 'could not read pkg ABI'
+    The output should not include 'REACHED-AFTER-VERIFY'
+  End
 End
 
 Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
@@ -201,6 +238,16 @@ Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
     When call run_optparse --expect-freebsd-major 16
     The status should be success
     The output should include 'REACHED-AFTER-PARSE'
+  End
+
+  It '--help prints the whole header, past the old truncation point (issue #2242)'
+    # this option's own usage-doc line sits below the old sed cutoff -- a bare
+    # `--expect-freebsd-major` substring check would pass even truncated (the
+    # earlier flow narrative mentions the flag too), so assert the option-doc
+    # line itself, which exists only past the cutoff
+    When run script "$SCRIPT" --help
+    The status should be success
+    The output should include "require the EXPORTED artifact's pkg ABI major"
   End
 End
 

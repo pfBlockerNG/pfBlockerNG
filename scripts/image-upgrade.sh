@@ -238,7 +238,7 @@ while [ $# -gt 0 ]; do
             shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
-        -h|--help)         sed -n '2,115p' "$0"; exit 0 ;;
+        -h|--help)         sed -n '2,135p' "$0"; exit 0 ;;
         *)                 die "unknown option: $1" ;;
     esac
 done
@@ -669,7 +669,9 @@ pfb_publish_decision() {
 # Also refuses to publish when the artifact's own pkg ABI disagrees with its
 # kernel (a half-upgraded disk), or — when EXPECT_FREEBSD_MAJOR is set — when
 # the ABI major disagrees with the caller's expectation (issue #2242). The
-# artifact is the last word before a push.
+# artifact is the last word before a push. `uname -r` (the kernel that boots
+# the disk) is the reference for that self-consistency check; /bin/freebsd-version
+# is never read on the artifact.
 # FILE is the KVM host's out.qcow2 — the exact bytes the pushed local copy was
 # streamed from, so booting it there costs no second transfer. The boot writes
 # to that copy; the local one is already on disk and is what gets pushed.
@@ -695,8 +697,14 @@ pfb_verify_artifact() {
         || die "could not read kernel release from the exported artifact — refusing to publish"
     # abi_major: 2nd ':'-field of "FreeBSD:15:amd64"; kern_major: text before
     # the first '.' of "15.0-CURRENT" — both plain POSIX-parameter parsing.
+    # `set -f` disables globbing for the unquoted `$_pva_abi` word-split below: an
+    # ABI containing a literal `*` (e.g. a garbled probe) would otherwise glob-match
+    # a filename in cwd and silently hand back a real-looking digit major (issue #2242).
     # shellcheck disable=SC2086  # intentional: IFS=: word-splits the ABI string
-    _pva_abi_maj=$(IFS=:; set -- $_pva_abi; printf '%s' "${2:-}")
+    _pva_abi_maj=$(set -f; IFS=:; set -- $_pva_abi; printf '%s' "${2-}")
+    case "$_pva_abi_maj" in
+        '' | *[!0-9]*) die "could not read pkg ABI from the exported artifact — refusing to publish" ;;
+    esac
     _pva_kern_maj=${_pva_kern%%.*}
     if [ "$_pva_abi_maj" != "$_pva_kern_maj" ]; then
         die "exported artifact's pkg ABI ${_pva_abi} disagrees with its kernel ${_pva_kern} — refusing to publish (issue #2242)"
