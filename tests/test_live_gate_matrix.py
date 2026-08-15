@@ -13,6 +13,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from scripts.live_gate_matrix import compute_live_gate_matrix
 
 _ROOT = Path(__file__).resolve().parents[1]
@@ -135,3 +137,16 @@ def test_destination_with_no_touched_target_is_not_an_error() -> None:
     assert [row["channel"] for row in matrix] == ["stable"]
     assert untestable == []
     assert drifted == []
+
+
+def test_leg_missing_image_name_or_mac_raises_instead_of_silently_defaulting() -> None:
+    """read-version-matrix.sh already resolves image_name/mac for every real CI leg
+    (issue #2389 fix-round-1 F7) -- a leg missing either key is this function's own
+    caller feeding it a malformed row, which must fail loudly, never silently
+    install-test the wrong box under a fallback identity."""
+    leg_no_image = {k: v for k, v in CE_LEG.items() if k != "image_name"}
+    with pytest.raises(KeyError):
+        compute_live_gate_matrix(["stable"], ["stable/ce-2.8"], [leg_no_image])
+    leg_no_mac = {k: v for k, v in CE_LEG.items() if k != "mac"}
+    with pytest.raises(KeyError):
+        compute_live_gate_matrix(["stable"], ["stable/ce-2.8"], [leg_no_mac])
