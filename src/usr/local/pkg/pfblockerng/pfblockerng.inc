@@ -5135,7 +5135,7 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  * the shellout in thin wrappers keeps pfb_software_update_check() unit-testable (the
  * tests inject the installed/latest/installed-repo via its $io override rather than run
  * `pkg`). The pkg(8) port binary (libpkg) lives at /usr/local/sbin/pkg on every supported
- * target — this is the binary pfSense itself and our add-repo.sh/build-repo.sh shell to.
+ * target — this is the binary pfSense itself and our install-<ch>.sh/build-repo.sh shell to.
  * The base /usr/sbin/pkg bootstrap stub does NOT report the repository origin ('%R') the
  * same way, so the provenance gate read FALSE on a genuine our-repo install when it was
  * used; the port binary returns the recorded repo name (issue #2148: the legacy shared

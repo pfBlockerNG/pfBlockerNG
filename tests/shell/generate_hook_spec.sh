@@ -11,7 +11,10 @@
 # Behavioural contracts pinned here:
 #   orphan      — neither conf present → nothing written, pkg never invoked, exit 0.
 #   regenerate  — a present conf is overwritten with the resolved canonical body
-#                 (release → ce-..; nightly → plus-..) keyed by the conf filename.
+#                 (stable → ce-..; nightly → plus-..) keyed by the conf filename.
+#                 The legacy release conf (pfblockerng.conf) is retired by the
+#                 installers and never regenerated — a leftover survives byte-
+#                 unchanged (issue #2416).
 #   unconditional — a STALE-varver conf is rewritten to the box's current varver
 #                 (before: stale present; after: stale gone, current present).
 #   detection   — edition = "/etc/product_label contains 'Plus'": Plus vs CE; the
@@ -241,9 +244,13 @@ Describe 'generate hook — a subscribed channel never re-enables the one it rep
     End
 End
 
-# ── REGENERATE release (CE 2.8.1) ─────────────────────────────────────────────
+# ── LEGACY RELEASE CONF: retired, never regenerated (issue #2416) ────────────
 
-Describe 'generate hook — regenerate release conf (CE)'
+Describe 'generate hook — leaves a leftover legacy release conf untouched'
+    # Before #2416 the hook regenerated pfblockerng.conf (the pre-#2148 shared
+    # release repo). The per-channel install-<ch>.sh scripts retired it — a box
+    # that still carries a leftover from before the migration must not have it
+    # silently resurrected/rewritten at every boot; it is simply never touched.
     setup() {
         _r_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_rel.XXXXXX")"
         _make_box "${_r_dir}" "pfSense" "2.8.1"
@@ -253,20 +260,15 @@ Describe 'generate hook — regenerate release conf (CE)'
     Before 'setup'
     After  'cleanup'
 
-    It 'before-state: release conf is the unresolved stub; nightly is absent'
+    It 'before-state: a leftover release conf stub exists; nightly is absent'
       The contents of file "${PFB_RELEASE_CONF}" should include "pending"
       The path "${PFB_NIGHTLY_CONF}" should not be exist
     End
 
-    It 'overwrites the release conf with the resolved CE catalog body, exit 0'
+    It 'leaves the leftover release conf byte-unchanged, exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
-      The stderr should include "regenerated"
-      The contents of file "${PFB_RELEASE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/release/ce-2.8"'
-      The contents of file "${PFB_RELEASE_CONF}" should include "Generated at boot by pfblockerng_repo_generate"
-      The contents of file "${PFB_RELEASE_CONF}" should include "pfblockerng: {"
-      # The stub line is gone (full overwrite, not a patch).
-      The contents of file "${PFB_RELEASE_CONF}" should not include "pending"
+      The contents of file "${PFB_RELEASE_CONF}" should include "pending"
       # Orphan guard: the nightly conf the user never bootstrapped stays absent.
       The path "${PFB_NIGHTLY_CONF}" should not be exist
     End
@@ -274,7 +276,6 @@ Describe 'generate hook — regenerate release conf (CE)'
     It 'never invokes pkg at all (arch-less; issue #1806)'
       When run sh "${HOOK}" onestart
       The status should be success
-      The stderr should include "regenerated"
       The path "${PKG_STUB_LOG}" should not be exist
     End
 End
@@ -314,22 +315,22 @@ Describe 'generate hook — pre-release suffix strip (Plus BETA)'
     setup() {
         _pb_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_plusbeta.XXXXXX")"
         _make_box "${_pb_dir}" "pfSense Plus" "26.07-BETA"
-        printf '# stub pending\n' > "${PFB_RELEASE_CONF}"
+        printf '# stub pending\n' > "${PFB_STABLE_CONF}"
     }
     cleanup() { rm -rf "${_pb_dir}"; _unset_box; }
     Before 'setup'
     After  'cleanup'
 
-    It 'before-state: release conf is the unresolved stub'
-      The contents of file "${PFB_RELEASE_CONF}" should include "pending"
+    It 'before-state: stable conf is the unresolved stub'
+      The contents of file "${PFB_STABLE_CONF}" should include "pending"
     End
 
     It 'strips the -BETA suffix before major.minor, exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_RELEASE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/release/plus-26.07"'
-      The contents of file "${PFB_RELEASE_CONF}" should not include "plus-26.07-BETA"
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/stable/plus-26.07"'
+      The contents of file "${PFB_STABLE_CONF}" should not include "plus-26.07-BETA"
     End
 End
 
@@ -337,22 +338,22 @@ Describe 'generate hook — pre-release suffix strip (CE RC)'
     setup() {
         _cr_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_cerc.XXXXXX")"
         _make_box "${_cr_dir}" "pfSense" "2.9-RC"
-        printf '# stub pending\n' > "${PFB_RELEASE_CONF}"
+        printf '# stub pending\n' > "${PFB_EDGE_CONF}"
     }
     cleanup() { rm -rf "${_cr_dir}"; _unset_box; }
     Before 'setup'
     After  'cleanup'
 
-    It 'before-state: release conf is the unresolved stub'
-      The contents of file "${PFB_RELEASE_CONF}" should include "pending"
+    It 'before-state: edge conf is the unresolved stub'
+      The contents of file "${PFB_EDGE_CONF}" should include "pending"
     End
 
     It 'strips the -RC suffix before major.minor, exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_RELEASE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/release/ce-2.9"'
-      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.9-RC"
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/edge/ce-2.9"'
+      The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.9-RC"
     End
 End
 
@@ -363,10 +364,10 @@ Describe 'generate hook — unconditional rewrite of a stale-varver conf'
         _s_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_stale.XXXXXX")"
         _make_box "${_s_dir}" "pfSense" "2.8.1"
         # Seed a conf carrying a STALE varver (as if from before an OS upgrade).
-        cat > "${PFB_RELEASE_CONF}" <<'EOF'
+        cat > "${PFB_TESTING_CONF}" <<'EOF'
 # old generated body
-pfblockerng: {
-  url: "https://pfblockerng.github.io/pkg/release/ce-2.7",
+pfblockerng-testing: {
+  url: "https://pfblockerng.github.io/pkg/testing/ce-2.7",
   enabled: yes
 }
 EOF
@@ -376,16 +377,16 @@ EOF
     After  'cleanup'
 
     It 'before-state: conf carries the stale ce-2.7 varver, not the current ce-2.8'
-      The contents of file "${PFB_RELEASE_CONF}" should include "ce-2.7"
-      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.8"
+      The contents of file "${PFB_TESTING_CONF}" should include "ce-2.7"
+      The contents of file "${PFB_TESTING_CONF}" should not include "ce-2.8"
     End
 
     It 'rewrites the conf to the current ce-2.8 varver (stale gone), exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_RELEASE_CONF}" should include "ce-2.8"
-      The contents of file "${PFB_RELEASE_CONF}" should not include "ce-2.7"
+      The contents of file "${PFB_TESTING_CONF}" should include "ce-2.8"
+      The contents of file "${PFB_TESTING_CONF}" should not include "ce-2.7"
       # No pkg reconcile on an upgrade-driven varver change.
       The path "${PKG_STUB_LOG}" should not be exist
     End
@@ -400,7 +401,7 @@ Describe 'generate hook — fail-proof: detection failure leaves conf unchanged'
     setup_ev() {
         _ev_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_emptyver.XXXXXX")"
         _make_box "${_ev_dir}" "pfSense" ""
-        printf '# UNCHANGED-STUB\n' > "${PFB_RELEASE_CONF}"
+        printf '# UNCHANGED-STUB\n' > "${PFB_NIGHTLY_CONF}"
     }
     cleanup_ev() { rm -rf "${_ev_dir}"; _unset_box; }
 
@@ -409,14 +410,14 @@ Describe 'generate hook — fail-proof: detection failure leaves conf unchanged'
         After  'cleanup_ev'
 
         It 'before-state: conf is the unchanged stub'
-          The contents of file "${PFB_RELEASE_CONF}" should include "UNCHANGED-STUB"
+          The contents of file "${PFB_NIGHTLY_CONF}" should include "UNCHANGED-STUB"
         End
 
         It 'leaves the conf byte-unchanged, warns, and exits 0'
           When run sh "${HOOK}" onestart
           The status should be success
           The stderr should include "WARNING"
-          The contents of file "${PFB_RELEASE_CONF}" should include "UNCHANGED-STUB"
+          The contents of file "${PFB_NIGHTLY_CONF}" should include "UNCHANGED-STUB"
         End
     End
 End

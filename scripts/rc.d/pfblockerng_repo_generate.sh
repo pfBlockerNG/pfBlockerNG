@@ -1,6 +1,6 @@
 #!/bin/sh
 # /usr/local/etc/rc.d/pfblockerng_repo_generate.sh — boot-time repo-conf
-# regenerator (ADR-39). Installed by the per-channel install-<ch>.sh scripts (and the legacy add-repo.sh).
+# regenerator (ADR-39). Installed by the per-channel install-<ch>.sh scripts.
 #
 # WHAT IT DOES (and nothing more): for each pfBlockerNG pkg-repo conf file that
 # EXISTS, it detects this box's pfSense edition/version and UNCONDITIONALLY
@@ -31,9 +31,8 @@
 # no longer has a per-arch leaf, so this hook no longer calls `pkg` at all (it
 # used to read `pkg config abi` only to derive that leaf).
 #
-# The emitted conf body is BYTE-IDENTICAL to `add-repo.sh --print-conf`,
-# `build-repo.sh --print-conf`, and `build-repo-portable.py --print-conf`
-# (pinned by tests/test_add_repo_conf.py).
+# The emitted conf body is BYTE-IDENTICAL to `build-repo.sh --print-conf` and
+# `build-repo-portable.py --print-conf` (pinned by tests/test_repo_conf_generators.py).
 #
 # POSIX sh only; quote all expansions.
 
@@ -51,15 +50,16 @@
 
 name="pfblockerng_repo_generate"
 
-# On-box paths (installed by add-repo.sh). Override via env for tests.
+# On-box paths (installed by the per-channel install-<ch>.sh scripts). Override
+# via env for tests.
 #
-# One path per channel repository (issue #2148). `release` is the legacy shared
-# repo that carried both the stable and the -devel package; the four channel
-# repos each own a <channel>/<varver>/ catalogue serving the ONE canonical
-# package. A box subscribes to exactly ONE of these — the orphan guard in
-# _regen_one() is what keeps regeneration from re-enabling a channel the user
-# switched away from.
-: "${PFB_RELEASE_CONF:=/usr/local/etc/pkg/repos/pfblockerng.conf}"
+# One path per channel repository (issue #2148). The four channel repos each own
+# a <channel>/<varver>/ catalogue serving the ONE canonical package. A box
+# subscribes to exactly ONE of these — the orphan guard in _regen_one() is what
+# keeps regeneration from re-enabling a channel the user switched away from. The
+# legacy shared release repo (pfblockerng.conf, pre-#2148) is retired by the
+# installers and never regenerated — a leftover is left byte-unchanged
+# (issue #2416).
 : "${PFB_STABLE_CONF:=/usr/local/etc/pkg/repos/pfblockerng-stable.conf}"
 : "${PFB_TESTING_CONF:=/usr/local/etc/pkg/repos/pfblockerng-testing.conf}"
 : "${PFB_EDGE_CONF:=/usr/local/etc/pkg/repos/pfblockerng-edge.conf}"
@@ -99,7 +99,7 @@ _emit_conf() {
     _ec_repo="$2"
     _ec_url="$3"
     cat <<EOF
-# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.
+# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install-${_ec_channel}.sh to change.
 # pfBlockerNG (${_ec_channel} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
 # fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
@@ -118,7 +118,7 @@ EOF
 
 # Regenerate one conf IF it exists (orphan guard: an absent conf stays absent —
 # we never create a channel the user didn't bootstrap).
-# $1 = conf path, $2 = channel word (release|stable|testing|edge|nightly), $3 = repo name.
+# $1 = conf path, $2 = channel word (stable|testing|edge|nightly), $3 = repo name.
 _regen_one() {
     _ro_conf="$1"
     _ro_channel="$2"
@@ -144,7 +144,6 @@ _regen_one() {
 # orphan guard skips every absent conf, so a box on one channel stays on that one
 # channel across a reboot (single-repository subscription, issue #2148).
 pfblockerng_repo_generate_start() {
-    _regen_one "${PFB_RELEASE_CONF}" 'release' 'pfblockerng'
     _regen_one "${PFB_STABLE_CONF}"  'stable'  'pfblockerng-stable'
     _regen_one "${PFB_TESTING_CONF}" 'testing' 'pfblockerng-testing'
     _regen_one "${PFB_EDGE_CONF}"    'edge'    'pfblockerng-edge'
@@ -153,8 +152,8 @@ pfblockerng_repo_generate_start() {
 }
 
 # Run as an rc.d service when rc.subr is present (the pfSense box); otherwise run
-# the regeneration directly (off-box: add-repo.sh bootstrap + the shellspec suite,
-# where /etc/rc.subr does not exist).
+# the regeneration directly (off-box: the install-<channel>.sh bootstrap + the
+# shellspec suite, where /etc/rc.subr does not exist).
 if [ -r /etc/rc.subr ]; then
     . /etc/rc.subr
     rcvar="${name}_enable"

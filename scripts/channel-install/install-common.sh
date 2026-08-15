@@ -5,10 +5,11 @@
 # helpers, with no top-level side effects beyond variable defaults (a `.` of this file
 # from any shell context is inert until pfb_channel_install is called).
 #
-# WHY ONE SCRIPT PER CHANNEL: folds add-repo.sh (repo bootstrap) and migrate-channel.sh
-# (installed-package move) into ONE idempotent state machine — a fresh box and an
-# already-installed box converge through the same steps instead of two scripts run in
-# sequence, and re-running on a converged box mutates nothing (check-then-act throughout).
+# WHY ONE SCRIPT PER CHANNEL: repo bootstrap (conf + boot hook) and an installed
+# package's channel move fold into ONE idempotent state machine — a fresh box and
+# an already-installed box converge through the same steps instead of separate
+# scripts run in sequence, and re-running on a converged box mutates nothing
+# (check-then-act throughout).
 #
 # WHY EVERY pkg(8) CALL REDIRECTS STDIN FROM /dev/null: the published form is piped into
 # `sh` (`fetch -qo - .../install-<ch>.sh | sh`), so the script's own stdin IS the script
@@ -22,6 +23,8 @@
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
+: "${PFB_CHANNEL:?install-common.sh is sourced by install-<ch>.sh, which sets PFB_CHANNEL}"
+
 PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
 ROOT="${PFBLOCKERNG_ROOT%/}"
@@ -29,7 +32,8 @@ PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"
 
 # The hook source lives next to this file's sibling scripts/rc.d/ in a checkout.
 # Resolved once at source time (this file and install-<ch>.sh share a directory, so
-# $0 here is still install-<ch>.sh's path — same CDPATH='' guard as add-repo.sh).
+# $0 here is still install-<ch>.sh's path — same CDPATH='' guard used throughout
+# scripts/, see tests/shell/cdpath_spec.sh).
 PFB_COMMON_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
 HOOK_SRC="${PFB_COMMON_DIR}/../rc.d/pfblockerng_repo_generate.sh"
 
@@ -42,9 +46,9 @@ ON_BOX_HOOK="${ROOT}/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 CONFIG_XML="${ROOT}/cf/conf/config.xml"
 CONF_MARKER="Generated at boot by pfblockerng_repo_generate"
 
-# Every project conf any channel-install script (or the legacy add-repo.sh) may have
-# written. Exactly one may be enabled at a time — single-repository subscription,
-# issue #2148.
+# Every project conf any channel-install script (or a pre-#2148 legacy bootstrap)
+# may have written. Exactly one may be enabled at a time — single-repository
+# subscription, issue #2148.
 PROJECT_CONFS="pfblockerng.conf
 pfblockerng-stable.conf
 pfblockerng-testing.conf
@@ -129,8 +133,13 @@ pfb_channel_install() {
         die 1 "'${PKG_BIN}' not found — run this ON a pfSense box, or set PKG_BIN"
 
     # 2. Boot-time generator hook: install/refresh only if missing or different.
+    #    HOOK_SRC is trusted ONLY when this IS a checkout — i.e. install-common.sh's
+    #    own file sits beside it too. Piped ($0 is "sh"), PFB_COMMON_DIR resolves to
+    #    the caller's cwd instead: from /usr/local/etc/pkg (ROOT="") that cwd's
+    #    "../rc.d/..." collides with ON_BOX_HOOK itself, so trusting HOOK_SRC there
+    #    would `cmp` the on-box hook against itself and never refresh a stale one.
     _hook_tmp="$(mktemp "${TMPDIR:-/tmp}/pfb-hook.XXXXXX")" || die 1 "mktemp failed while staging the boot hook"
-    if [ -f "${HOOK_SRC}" ]; then
+    if [ -f "${PFB_COMMON_DIR}/install-common.sh" ] && [ -f "${HOOK_SRC}" ]; then
         cp "${HOOK_SRC}" "${_hook_tmp}"
     else
         pfb_emit_embedded_hook >"${_hook_tmp}" || {
@@ -139,6 +148,10 @@ pfb_channel_install() {
         }
     fi
     if [ -f "${ON_BOX_HOOK}" ] && cmp -s "${_hook_tmp}" "${ON_BOX_HOOK}"; then
+        # "Up to date" means the BYTES match — never that the mode is already
+        # correct (a restored config backup / tar extraction can drop the exec
+        # bit on an otherwise byte-identical file), so chmod runs unconditionally.
+        chmod 755 "${ON_BOX_HOOK}"
         printf '==> Hook up to date\n'
     else
         mkdir -p "$(dirname "${ON_BOX_HOOK}")"
@@ -150,8 +163,8 @@ pfb_channel_install() {
 
     # 3. Conf: stage a stub ONLY if absent — an existing conf is never truncated, the
     #    hook rewrites it in place (or leaves it untouched if detection fails), so no
-    #    backup/restore dance is needed here (unlike add-repo.sh, which used to stage
-    #    over a possibly-working conf before proving the new one).
+    #    backup/restore dance is needed here (the predecessor two-script flow used to
+    #    stage over a possibly-working conf before proving the new one).
     CONF_CREATED=0
     if [ ! -f "${CONF_PATH}" ]; then
         mkdir -p "${REPOS_DIR}"
@@ -166,8 +179,7 @@ pfb_channel_install() {
     printf '==> Running the generator hook to resolve the conf now\n'
     _no_conf="${REPOS_DIR}/.pfb-no-such-conf"
     _own_conf_var="PFB_$(printf '%s' "${PFB_CHANNEL}" | tr '[:lower:]' '[:upper:]')_CONF"
-    env PFB_RELEASE_CONF="${_no_conf}" \
-        PFB_STABLE_CONF="${_no_conf}" \
+    env PFB_STABLE_CONF="${_no_conf}" \
         PFB_TESTING_CONF="${_no_conf}" \
         PFB_EDGE_CONF="${_no_conf}" \
         PFB_NIGHTLY_CONF="${_no_conf}" \
@@ -181,8 +193,17 @@ pfb_channel_install() {
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
         die 4 "the generator hook did not resolve ${CONF_PATH} (no marker line) — variant detection may have failed; inspect: sh ${ON_BOX_HOOK} onestart"
     fi
+    # The marker alone is not enough: the hook leaves an EXISTING conf UNCHANGED
+    # when detection fails, so a pre-existing conf carrying the marker but
+    # resolving to ANOTHER base/channel (a stale conf from a fork, a staged
+    # prefix, or a restored config backup) must be rejected too.
+    _expect_url_prefix="url: \"${PFB_BASE_URL%/}/${PFB_CHANNEL}/"
+    if ! grep -qF "${_expect_url_prefix}" "${CONF_PATH}" 2>/dev/null; then
+        [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
+        die 4 "${CONF_PATH} does not resolve to ${PFB_BASE_URL%/}/${PFB_CHANNEL}/ — a stale or foreign conf; inspect: sh ${ON_BOX_HOOK} onestart"
+    fi
     printf '==> Conf resolved:\n'
-    sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}" >&2
+    sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}"
 
     # 4. Refresh THIS repo's catalog only (a stale/unpublished peer must not veto the
     #    switch — issue #2384).

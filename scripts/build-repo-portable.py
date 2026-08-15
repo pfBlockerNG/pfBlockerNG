@@ -59,8 +59,8 @@ META_CONF = (
 )
 
 # The shared client repo-conf template — kept byte-identical to
-# scripts/build-repo.sh / add-repo.sh --print-conf (pinned by
-# tests/test_add_repo_conf.py) so all three generators are interchangeable.
+# scripts/build-repo.sh --print-conf (pinned by tests/test_repo_conf_generators.py)
+# so both generators are interchangeable.
 # ${ABI} is the literal pkg(8) variable (expanded by pkg, never the shell), so
 # one conf follows the box across an OS upgrade; priority 100 sits above the
 # base Netgate `pfSense` repo (priority 0) because priority — not version —
@@ -72,7 +72,7 @@ CONF_PRIORITY = 100
 # Per-channel repo-conf stanza key (issue #2147 step B): the four channels
 # (stable/testing/edge/nightly) plus the legacy "release" default all carry the
 # ONE canonical pfSense-pkg-pfBlockerNG identity — channel only picks the
-# stanza name + URL path segment. Mirrors add-repo.sh's CHANNEL case.
+# stanza name + URL path segment. Mirrors install-common.sh's PROJECT_CONFS keying.
 _CHANNEL_REPO_NAMES = {
     "release": "pfblockerng",
     "nightly": "pfblockerng-nightly",
@@ -1374,7 +1374,8 @@ def print_conf(resolved_url: str, *, channel: str = "release") -> None:
     url = resolved_url.rstrip("/")
     repo_name = _CHANNEL_REPO_NAMES[channel]
     sys.stdout.write(
-        "# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run add-repo.sh to change.\n"
+        f"# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit;"
+        f" re-run install-{channel}.sh to change.\n"
         f"# pfBlockerNG ({channel} channel) — self-hosted pkg repository (ADR-17).\n"
         "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
         "# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"
@@ -1402,7 +1403,7 @@ def main(argv: list[str]) -> int:
             "  build-repo-portable.py --in ./pkgs --out ./site\n\n"
             "  # build under a version-keyed subdir (ADR-20)\n"
             "  build-repo-portable.py --in ./pkgs --out ./site --catalog-name ce-2.8\n\n"
-            "  # print the client repo-conf (add-repo.sh + README reuse it)\n"
+            "  # print the client repo-conf (the README reuses it)\n"
             "  build-repo-portable.py --print-conf --base-url https://example.github.io/pkg\n\n"
             "  # matrix-driven: build the full variant tree, arch-less (ADR-20; issue #1806)\n"
             "  read-version-matrix.sh --print-build | build-repo-portable.py --build-matrix \\\n"

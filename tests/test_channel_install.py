@@ -2,10 +2,10 @@
 (issue #2416) and their shared engine, install-common.sh.
 
 The four install-<channel>.sh files are thin: they set PFB_CHANNEL, source
-install-common.sh, and call pfb_channel_install(). install-common.sh folds
-add-repo.sh's repo bootstrap (conf + boot hook) and migrate-channel.sh's installed
--package move into ONE idempotent state machine — check-then-act at every step, so a
-second run on a converged box performs zero pkg mutations.
+install-common.sh, and call pfb_channel_install(). install-common.sh is the SOLE
+client entry point — repo bootstrap (conf + boot hook) and an installed package's
+channel move fold into ONE idempotent state machine — check-then-act at every step,
+so a second run on a converged box performs zero pkg mutations.
 
 A fake ``pkg`` binary (see ``_PKG_STUB``) fakes just enough of pkg(8) to drive every
 branch: a ``pkgstate/<name>/{version,repo}`` directory pair per installed package, a
@@ -229,8 +229,8 @@ def _write_pkg_stub(root: str) -> str:
 def _seed_box(root: str) -> None:
     """CE 2.8.1 box fixture: /etc/version + /etc/product_label (no 'Plus' -> CE).
 
-    Mirrors _run_add_repo's fixture in test_add_repo_conf.py so the hook resolves the
-    same ce-2.8 varver here.
+    Mirrors _run_hook's fixture in tests/test_repo_conf_generators.py so the hook
+    resolves the same ce-2.8 varver here.
     """
     etc_dir = os.path.join(root, "etc")
     os.makedirs(etc_dir, exist_ok=True)
@@ -383,6 +383,21 @@ def test_fresh_box_bootstraps_hook_conf_and_installs(channel: str) -> None:
         assert _mutating_lines(log) == installs, "a fresh box must delete nothing"
 
 
+def test_conf_resolved_url_line_prints_to_stdout() -> None:
+    """N1: the '==> Conf resolved:' header and the url: line it introduces belong
+    on the SAME stream — splitting one logical message across stdout and stderr
+    means a caller reading stdout alone sees the header with no url after it."""
+    with tempfile.TemporaryDirectory() as root:
+        channel = "stable"
+        proc = _run_install(root, channel)
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "==> Conf resolved:" in proc.stdout, proc.stdout
+        assert f'url: "{_BASE_URL}/{channel}/ce-2.8"' in proc.stdout, (
+            f"the url: line must print to stdout beside its header:\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+
+
 # --------------------------------------------------------------------------- #
 # 2. Already up to date — zero mutations
 # --------------------------------------------------------------------------- #
@@ -397,6 +412,28 @@ def test_already_up_to_date_performs_zero_mutations() -> None:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "Already up to date" in proc.stdout
         assert _mutating_lines(_pkg_log(root).read_text()) == []
+
+
+def test_up_to_date_hook_gets_chmod_755_even_when_bytes_are_identical() -> None:
+    """CodeRabbit finding on install-common.sh step 2: "up to date" only means the
+    HOOK BYTES match — never that the mode is already correct. A byte-identical hook
+    left at 0644 (e.g. a restored config backup, or a tar extraction that dropped
+    the exec bit) must still be made executable, or it never runs at boot."""
+    with tempfile.TemporaryDirectory() as root:
+        channel = "stable"
+        hook_path = _hook_path(root)
+        hook_path.parent.mkdir(parents=True, exist_ok=True)
+        hook_path.write_bytes(_HOOK.read_bytes())
+        hook_path.chmod(0o644)
+        assert oct(hook_path.stat().st_mode & 0o777) == "0o644", "before-state: hook must be mode 644"
+
+        proc = _run_install(root, channel)
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Hook up to date" in proc.stdout, proc.stdout
+        assert oct(hook_path.stat().st_mode & 0o777) == "0o755", (
+            "AFTER: a byte-identical hook must still be made executable"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -584,6 +621,54 @@ def test_resume_with_conf_present_but_hook_absent() -> None:
         assert _mutating_lines(log) == [f"install -y -r pfblockerng-{channel} {_CANONICAL}"]
 
 
+def test_stale_foreign_conf_rejected_when_detection_fails() -> None:
+    """CodeRabbit finding on install-common.sh step 3: the boot MARKER alone is not
+    enough — the hook leaves an EXISTING conf UNCHANGED when detection fails, so a
+    pre-existing conf carrying the marker but resolving to ANOTHER base's URL (a
+    stale conf from a fork, a staged prefix, or a restored config backup) must
+    still be rejected — never silently accepted and converged onto."""
+    with tempfile.TemporaryDirectory() as root:
+        channel = "stable"
+        pkg_bin = _write_pkg_stub(root)
+        _seed_box(root)
+        _seed_catalog(root, _repo_name(channel), ("4.0.0",))
+        manifest = _seed_info_manifest(root, (_DEFAULT_PAYLOAD_PATH,))
+        _seed_payload(root, _DEFAULT_PAYLOAD_PATH)
+
+        # Detection failure: blank /etc/version (written AFTER _seed_box's real one).
+        with open(os.path.join(root, "etc", "version"), "w") as fh:
+            fh.write("")
+
+        stale_conf_text = (
+            "# Generated at boot by pfblockerng_repo_generate (ADR-39)\n"
+            'pfblockerng-stable: {\n  url: "https://other.example/pkg/stable/ce-2.8",\n'
+            "  mirror_type: none,\n  signature_type: none,\n  priority: 100,\n  enabled: yes\n}\n"
+        )
+        conf_path = _seed_conf_file(root, _conf_name(channel), stale_conf_text)
+        assert "Generated at boot by pfblockerng_repo_generate" in conf_path.read_text(), (
+            "before-state: marker must be present"
+        )
+        assert "other.example" in conf_path.read_text(), "before-state: url must point at another base"
+
+        env = {
+            **os.environ,
+            "PFBLOCKERNG_ROOT": root,
+            "PKG_BIN": pkg_bin,
+            "PFB_BASE_URL": _BASE_URL,
+            "PFB_TEST_ROOT": root,
+            "PFB_STUB_INFO_MANIFEST": manifest,
+        }
+        proc = subprocess.run(
+            ["sh", str(_install_script(channel))], env=env, capture_output=True, text=True, check=False
+        )
+
+        assert proc.returncode == 4, proc.stdout + proc.stderr
+        assert conf_path.read_text() == stale_conf_text, (
+            "a stale foreign conf must be left byte-identical — it is not ours to delete"
+        )
+        assert _mutating_lines(_pkg_log(root).read_text()) == []
+
+
 # --------------------------------------------------------------------------- #
 # 11. Offered-version pick via pkg version -t (issue #2393 residual)
 # --------------------------------------------------------------------------- #
@@ -760,6 +845,30 @@ def test_help_flag_exits_zero() -> None:
         assert _mutating_lines(_pkg_log(root).read_text()) == [], "--help must never touch pkg"
 
 
+def test_missing_pkg_binary_fails_at_step_1_with_exit_1_no_files_written() -> None:
+    """CodeRabbit nitpick: PKG_BIN pointing at a nonexistent binary must fail loudly
+    at step 1 — before the hook or the conf is ever written — exit 1, naming the
+    missing path in the message."""
+    with tempfile.TemporaryDirectory() as root:
+        channel = "stable"
+        _seed_box(root)
+        env = {
+            **os.environ,
+            "PFBLOCKERNG_ROOT": root,
+            "PKG_BIN": "/nonexistent/pkg",
+            "PFB_BASE_URL": _BASE_URL,
+            "PFB_TEST_ROOT": root,
+        }
+        proc = subprocess.run(
+            ["sh", str(_install_script(channel))], env=env, capture_output=True, text=True, check=False
+        )
+
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        assert "/nonexistent/pkg" in proc.stderr, proc.stderr
+        assert not _hook_path(root).exists(), "AFTER: no hook file must be written"
+        assert not _conf_path(root, channel).exists(), "AFTER: no conf file must be written"
+
+
 # --------------------------------------------------------------------------- #
 # 17. Piped invocation: stdin never consumed by the script itself
 # --------------------------------------------------------------------------- #
@@ -853,3 +962,20 @@ def test_install_common_parses_and_carries_required_hook_markers() -> None:
     text = _COMMON.read_text()
     assert "# PFB_EMBED_HOOK_BEGIN" in text
     assert "# PFB_EMBED_HOOK_END" in text
+
+
+def test_sourcing_without_pfb_channel_fails_loudly() -> None:
+    """install-common.sh is sourced ONLY by install-<ch>.sh, which always sets
+    PFB_CHANNEL before the `.`. A source with PFB_CHANNEL unset must fail loudly
+    instead of silently baking an empty channel into every message, path, and
+    hook the state machine drives."""
+    env = {k: v for k, v in os.environ.items() if k != "PFB_CHANNEL"}
+    proc = subprocess.run(
+        ["sh", "-c", f'. "{_COMMON}"'],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+    assert "PFB_CHANNEL" in proc.stderr, proc.stderr

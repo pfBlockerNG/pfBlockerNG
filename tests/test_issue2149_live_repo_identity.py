@@ -365,15 +365,22 @@ def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch
     assert ("/bin/rm", "-f", nightly.NIGHTLY_LIVE_CONF) in ssh_calls
 
 
-def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: MonkeyPatch) -> None:
+def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     """A failed ordinary upgrade cannot be accepted as proof that Nightly stayed installed."""
 
     class FakeVM:
         def ssh(self, *_args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess([], 0, "", "")
 
-    def fail_if_migration_reached(*_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("migration reached")
+    def fake_run_channel_installer(
+        _vm: object, channel: str, *_args: object, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        # The nightly install (step 1) must succeed to reach the ordinary-upgrade
+        # check; the qualified migration (step 2, channel != "nightly") must NEVER
+        # be reached once that check fails.
+        if channel != "nightly":
+            raise RuntimeError("migration reached")
+        return subprocess.CompletedProcess([], 0, "", "")
 
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/stable")
     monkeypatch.setenv(repo.LIVE_NIGHTLY_URL_ENV, "https://example.test/pkg/nightly")
@@ -386,8 +393,8 @@ def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: Mon
     monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
     monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
     monkeypatch.setattr(repo, "reset_channel_subscription", lambda *_args: None)
-    monkeypatch.setattr(repo, "run_add_repo_sh", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(repo, "pkg_install_qualified", lambda *_args: None)
+    monkeypatch.setattr(repo, "run_channel_installer", fake_run_channel_installer)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(repo, "assert_live_package", lambda _vm, _name, version, *_args: version)
     monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_args: repo.channel_repo_name("nightly"))
     monkeypatch.setattr(
@@ -395,19 +402,15 @@ def test_live_nightly_downgrade_rejects_failed_ordinary_upgrade(monkeypatch: Mon
         "_pkg_retry",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 17, "", "upgrade failed"),
     )
-    monkeypatch.setattr(
-        repo,
-        "run_migrate_channel_sh",
-        fail_if_migration_reached,
-    )
 
     with pytest.raises(AssertionError, match="ordinary pkg upgrade failed"):
-        repo.test_live_nightly_downgrade_requires_selected_semantic_repo(cast(SmokeVM, FakeVM()))
+        repo.test_live_nightly_downgrade_requires_selected_semantic_repo(cast(SmokeVM, FakeVM()), tmp_path)
 
 
-def test_live_nightly_downgrade_checks_both_provenances(monkeypatch: MonkeyPatch) -> None:
+def test_live_nightly_downgrade_checks_both_provenances(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
     """The successful downgrade verifies both the Nightly and semantic identities."""
     assertions: list[tuple[str, str, str]] = []
+    installer_calls: list[str] = []
 
     class FakeVM:
         def ssh(self, *_args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -417,6 +420,12 @@ def test_live_nightly_downgrade_checks_both_provenances(monkeypatch: MonkeyPatch
         assertions.append((version, source, channel))
         return version
 
+    def fake_run_channel_installer(
+        _vm: object, channel: str, *_args: object, **_kwargs: object
+    ) -> subprocess.CompletedProcess[str]:
+        installer_calls.append(channel)
+        return subprocess.CompletedProcess([], 0, "", "")
+
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/stable")
     monkeypatch.setenv(repo.LIVE_NIGHTLY_URL_ENV, "https://example.test/pkg/nightly")
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", "c" * 40)
@@ -428,8 +437,8 @@ def test_live_nightly_downgrade_checks_both_provenances(monkeypatch: MonkeyPatch
     monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
     monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
     monkeypatch.setattr(repo, "reset_channel_subscription", lambda *_args: None)
-    monkeypatch.setattr(repo, "run_add_repo_sh", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(repo, "pkg_install_qualified", lambda *_args: None)
+    monkeypatch.setattr(repo, "run_channel_installer", fake_run_channel_installer)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(repo, "assert_live_package", fake_assert)
     monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: "20260810_2")
     origins = iter([repo.channel_repo_name("nightly"), repo.channel_repo_name("stable")])
@@ -441,19 +450,15 @@ def test_live_nightly_downgrade_checks_both_provenances(monkeypatch: MonkeyPatch
     )
     monkeypatch.setattr(
         repo,
-        "run_migrate_channel_sh",
-        lambda *_args: subprocess.CompletedProcess([], 0, "", ""),
-    )
-    monkeypatch.setattr(
-        repo,
         "_ssh_check",
         lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "<\n", ""),
     )
     monkeypatch.setattr(repo, "installed_pfblockerng_names", lambda *_args: [repo.CANONICAL_PKG_NAME])
 
-    repo.test_live_nightly_downgrade_requires_selected_semantic_repo(cast(SmokeVM, FakeVM()))
+    repo.test_live_nightly_downgrade_requires_selected_semantic_repo(cast(SmokeVM, FakeVM()), tmp_path)
 
     assert assertions == [
         ("20260810_2", "b" * 40, "nightly"),
         ("89.0.2", "c" * 40, "stable"),
     ]
+    assert installer_calls == ["nightly", "stable"]
