@@ -112,13 +112,24 @@ import sys
 
 site = sys.argv[1]
 argv = sys.argv[1:]
+# Six deterministic client scripts since issue #2416: the two legacy scripts (one
+# deprecation cycle) plus the four per-channel installers. Stub body text is the
+# script's own base name (sans .sh) so existing pre-seeded fixture bytes below
+# ("# add-repo stub\n", "# migrate-channel stub\n") keep matching byte-for-byte.
+CLIENT_SCRIPTS = ("add-repo.sh", "migrate-channel.sh", "install-stable.sh",
+                   "install-testing.sh", "install-edge.sh", "install-nightly.sh")
+
+
+def _write_client_scripts(site):
+    for name in CLIENT_SCRIPTS:
+        with open(os.path.join(site, name), "w") as fh:
+            fh.write(f"#!/bin/sh\n# {name[:-len('.sh')]} stub\n")
+
+
 if "--client-scripts-only" in argv:
-    # Mirrors the real generator's script-only mode (issue #2408): ONLY the two
-    # client scripts are written — no landing/browse/autoindex output.
-    with open(os.path.join(site, "add-repo.sh"), "w") as fh:
-        fh.write("#!/bin/sh\n# add-repo stub\n")
-    with open(os.path.join(site, "migrate-channel.sh"), "w") as fh:
-        fh.write("#!/bin/sh\n# migrate-channel stub\n")
+    # Mirrors the real generator's script-only mode (issue #2408): ONLY the
+    # deterministic client scripts are written — no landing/browse/autoindex output.
+    _write_client_scripts(site)
     print("client scripts stub written")
     sys.exit(0)
 # Records the exact --matrix file this run was fed, byte for byte, when
@@ -147,11 +158,8 @@ for dirpath, _dirs, _files in os.walk(site):
         continue
     with open(os.path.join(dirpath, "index.html"), "w") as fh:
         fh.write(f"autoindex stub: {rel}\n")
-# write_site() also publishes BOTH client scripts into the site root.
-with open(os.path.join(site, "add-repo.sh"), "w") as fh:
-    fh.write("#!/bin/sh\n# add-repo stub\n")
-with open(os.path.join(site, "migrate-channel.sh"), "w") as fh:
-    fh.write("#!/bin/sh\n# migrate-channel stub\n")
+# write_site() also publishes every client script into the site root.
+_write_client_scripts(site)
 print("landing stub written")
 PY
     echo '#!/bin/sh' > "${base}/fake-src/scripts/add-repo.sh"
@@ -254,6 +262,23 @@ PY
     git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "UNRESOLVABLE-main"
   }
 
+  # The six deterministic client scripts (issue #2416: the two legacy scripts, one
+  # deprecation cycle, plus the four per-channel installers), and their sorted
+  # docs/-relative path list — shared by every preseed/assertion below so the count
+  # only needs bumping in one place.
+  CLIENT_SCRIPT_NAMES="add-repo.sh migrate-channel.sh install-stable.sh install-testing.sh install-edge.sh install-nightly.sh"
+  CLIENT_SCRIPT_PATHS="docs/add-repo.sh docs/migrate-channel.sh docs/install-stable.sh docs/install-testing.sh docs/install-edge.sh docs/install-nightly.sh"
+  SORTED_CLIENT_SCRIPT_PATHS="docs/add-repo.sh docs/install-edge.sh docs/install-nightly.sh docs/install-stable.sh docs/install-testing.sh docs/migrate-channel.sh"
+
+  # Writes every client-script stub, byte-identical to the fake gen_landing.py's
+  # own output, into docs/ — used to preseed a "current scripts" state.
+  write_client_script_stubs() {
+    for _name in ${CLIENT_SCRIPT_NAMES}; do
+        _base="${_name%.sh}"
+        printf '#!/bin/sh\n# %s stub\n' "${_base}" > "${base}/pkg-repo/docs/${_name}"
+    done
+  }
+
   # --- PUBLISH_KIND=nightly fixture ------------------------------------------
   # Layered on top of common_env (already exported by setup()): keeps the shared
   # vars (PFB_SRC/PKG_REPO/SOURCE_RUN_ID/BASE_URL) and adds the nightly-only ones.
@@ -337,12 +362,16 @@ JSON
     The path "${base}/pkg-repo/docs/edge/index.html" should be exist
     committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
     The variable committed should include 'docs/edge/index.html'
-    # write_site() publishes BOTH client scripts into the site root on the same
-    # walk; the landing page's bootstrap one-liner and its channel-switch snippet
-    # fetch them from there, so an unstaged copy means the published site serves a
-    # 404 into `sh` for the half it omits (issue #2148).
+    # write_site() publishes every client script into the site root on the same
+    # walk; the landing page's install one-liners fetch them from there, so an
+    # unstaged copy means the published site serves a 404 into `sh` for whichever
+    # it omits (issue #2148, issue #2416).
     The variable committed should include 'docs/add-repo.sh'
     The variable committed should include 'docs/migrate-channel.sh'
+    The variable committed should include 'docs/install-stable.sh'
+    The variable committed should include 'docs/install-testing.sh'
+    The variable committed should include 'docs/install-edge.sh'
+    The variable committed should include 'docs/install-nightly.sh'
   End
 
   It 'a stray index-less docs/staging dir (leftover from a crashed stage run) never aborts the dir_indexes collector'
@@ -525,12 +554,12 @@ JSON
   # --- no-op path --------------------------------------------------------
 
   It 'commits nothing on a no-op run with current client scripts'
-    # The catalogue-NOOP path still regenerates the two client scripts
-    # (issue #2408) — pre-seed them byte-identical to the stub generator's
-    # output so the full-NOOP branch is reached honestly, not via drift.
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+    # The catalogue-NOOP path still regenerates every client script
+    # (issue #2408, issue #2416) — pre-seed them byte-identical to the stub
+    # generator's output so the full-NOOP branch is reached honestly, not via drift.
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
         && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
     original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
@@ -561,10 +590,10 @@ JSON
 
   It 'ships a client-script refresh when the catalogue is a no-op but the scripts drifted'
     # The seed tree carries NO committed client scripts — maximal drift. A
-    # catalogue no-op must still publish the pair: the scripts are generated
-    # from PFB_SRC, not from release assets, so a script-only fix was
+    # catalogue no-op must still publish every one of them: the scripts are
+    # generated from PFB_SRC, not from release assets, so a script-only fix was
     # otherwise unshippable via a republish of an already-published release
-    # (issue #2408).
+    # (issue #2408, issue #2416).
     seed_refresh_drift
     export FAKE_MODE=noop
     When run script "$script"
@@ -576,10 +605,10 @@ JSON
     The stderr should include 'main'
     The result of function remote_head_now should not equal "$original_remote_head"
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
   End
 
-  It 'a client-script refresh commits EXACTLY the two scripts and says so in the commit'
+  It 'a client-script refresh commits EXACTLY the six scripts and says so in the commit'
     # Exact-list equality: no landing/browse/autoindex page, no untracked or
     # unrelated dirty file may ride along (the seeded traps above would each
     # break the equality), and the commit subject + run-id trailer must
@@ -591,10 +620,33 @@ JSON
     The output should include 'ADVANCE'
     The stderr should include 'main'
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: refresh client scripts'
     The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+  End
+
+  It 'a drift in only one per-channel installer still ships a client-script refresh'
+    # issue #2416 raised the deterministic script pair to six — every one of the
+    # four per-channel installers must be regenerated + staged on a catalogue
+    # no-op, not just add-repo.sh/migrate-channel.sh. Pre-seed five of the six
+    # current and leave install-edge.sh stale: the refresh is reached, and the
+    # resulting commit touches ONLY the one script that actually drifted, iff the
+    # wrapper's no-op-path `git add` covers every script in CLIENT_SCRIPT_PATHS.
+    write_client_script_stubs
+    printf '#!/bin/sh\n# stale install-edge\n' > "${base}/pkg-repo/docs/install-edge.sh"
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The result of function remote_head_now should not equal "$original_remote_head"
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/install-edge.sh'
   End
 
   It 'commits nothing when a reported touched target leaves the tree unchanged'
@@ -616,16 +668,15 @@ JSON
     printf 'browse stub\n' > "${base}/pkg-repo/docs/browse.html"
     printf 'autoindex stub: edge\n' > "${base}/pkg-repo/docs/edge/index.html"
     printf 'autoindex stub: edge/ce-2.8\n' > "${base}/pkg-repo/docs/edge/ce-2.8/index.html"
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    write_client_script_stubs
     # docs/.nojekyll is truncate-and-recreated unconditionally whenever the
     # script has any touched target (regardless of whether the target itself
     # changed) — pre-seed it too, or its own first-ever creation would be a
     # genuine diff and mask the branch this test means to reach.
     true > "${base}/pkg-repo/docs/.nojekyll"
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
     ( cd "${base}/pkg-repo" && git_fixture add docs/index.html docs/browse.html \
-        docs/edge/index.html docs/edge/ce-2.8/index.html docs/.nojekyll docs/add-repo.sh \
-        docs/migrate-channel.sh \
+        docs/edge/index.html docs/edge/ce-2.8/index.html docs/.nojekyll $CLIENT_SCRIPT_PATHS \
         && git_fixture commit -q -m preseed-landing \
         && git_fixture push -q origin main )
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
@@ -868,11 +919,11 @@ HOOK
   It 'n5: nightly mode NOOP output commits nothing'
     nightly_env
     # Same pre-seed as the tagged no-op example: the catalogue-NOOP path
-    # regenerates the client scripts (issue #2408), so a true no-op needs them
-    # current in the seed tree.
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+    # regenerates every client script (issue #2408, issue #2416), so a true
+    # no-op needs them all current in the seed tree.
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
         && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
     original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
@@ -898,7 +949,7 @@ HOOK
     The output should include 'ADVANCE'
     The stderr should include 'main'
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: refresh client scripts'
     The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
@@ -988,10 +1039,12 @@ HOOK
     The variable original should equal 'seed'
     The path "${base}/pkg-repo/docs/index.html" should not be exist
     The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
+    The path "${base}/pkg-repo/docs/install-stable.sh" should not be exist
     committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
     The variable committed should include 'docs/staging/10-1/edge/ce-2.8/marker.pkg'
     The variable committed should not include 'docs/index.html'
     The variable committed should not include 'docs/add-repo.sh'
+    The variable committed should not include 'docs/install-stable.sh'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: stage v4.0.0.b1 -> ["edge"]'
     The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
@@ -1035,9 +1088,9 @@ HOOK
 
   It 's4: stage full no-op (nothing touched, scripts current) writes noop=true and prints STAGE NOOP'
     export PUBLISH_STAGE=stage
-    printf '#!/bin/sh\n# add-repo stub\n' >"${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' >"${base}/pkg-repo/docs/migrate-channel.sh"
-    (cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    (cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
         && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main)
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
     original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
@@ -1119,7 +1172,7 @@ HOOK
     The output should include 'ADVANCE'
     The stderr should include 'main'
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
     out="$(cat "$GITHUB_OUTPUT")"
     The variable out should include 'staging_prefix=staging/10-1'
     The variable out should include 'touched=[]'
