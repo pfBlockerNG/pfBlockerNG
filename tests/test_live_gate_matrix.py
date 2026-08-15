@@ -8,7 +8,33 @@ the workflow's logic fails here first.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+from pathlib import Path
+
 from scripts.live_gate_matrix import compute_live_gate_matrix
+
+_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_module_imports_outside_pytest_without_conftest_on_sys_path() -> None:
+    """The workflow's prepare-live-gate step imports this module from a bare
+    ``python3 -`` invocation -- only tests/conftest.py puts scripts/ on sys.path,
+    so importing it that way must not depend on pfb_pkg (build-repo-portable.py's
+    own import) being reachable some other way. Runs as a real subprocess, PYTHONPATH
+    stripped, cwd at the repo root -- the same shape the workflow step runs under."""
+    env = dict(os.environ)
+    env.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-c", "from scripts.live_gate_matrix import compute_live_gate_matrix"],
+        cwd=str(_ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"stdout={result.stdout!r} stderr={result.stderr!r}"
+
 
 CE_LEG = {
     "pfsense_version": "2.8.1",
