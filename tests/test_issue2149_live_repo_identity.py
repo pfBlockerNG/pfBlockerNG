@@ -215,6 +215,38 @@ def test_live_pages_record_channel_is_tag_primary(
     assert assertions == [(repo.CANONICAL_PKG_NAME, version, "a" * 40, primary)]
 
 
+def test_live_pages_rejects_dest_faster_than_primary(monkeypatch: MonkeyPatch) -> None:
+    """Containment: dest cannot be slower-or-equal... dest cannot be faster than primary."""
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/stable")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", "4.0.1.a1")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_CHANNEL", "edge")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
+    monkeypatch.setattr(repo, "repo_priority", lambda *_args: 0)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_update", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_delete", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        repo,
+        "pkg_install_from_repo",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_a, **_k: repo.channel_repo_name("stable"))
+    monkeypatch.setattr(repo, "assert_live_package", lambda *_a, **_k: "4.0.1.a1")
+
+    with pytest.raises(AssertionError, match="faster than primary"):
+        repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
+
+
 def test_live_package_accepts_primary_on_faster_dest(monkeypatch: MonkeyPatch) -> None:
     """assert_live_package compares record.channel to the tag primary, not the dest folder."""
     monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: "4.0.1.a1")

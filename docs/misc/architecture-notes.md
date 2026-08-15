@@ -1130,7 +1130,9 @@ Full design: ADR-39.
   `concurrency` serialises publishes. `PUBLISH_STAGE=direct` (default) keeps today's single-push
   path for `nightly.yml` (publish-then-gate, PR #2404) and `pkg-republish.yml`; nightly with any
   other value is a usage error. `smoke-single.yml` exposes the generic `smoke_repo_live_url` /
-  `smoke_repo_expected_source_sha` / `smoke_repo_expected_version` inputs beside the nightly trio;
+  `smoke_repo_expected_source_sha` / `smoke_repo_expected_version` /
+  `smoke_repo_expected_channel` inputs beside the nightly trio
+  (`SMOKE_REPO_EXPECTED_CHANNEL` is required when a live URL is set);
   `DEFAULT_LIVE_BASE_URL` in `tests/smoke/test_repo_install.py` is Stable.
 - **Four-channel catalogue model (issue #2147):** the served tree is
   `<channel>/<varver>/` with channels exactly `stable` / `testing` / `edge` / `nightly`
