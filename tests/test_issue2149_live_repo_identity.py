@@ -243,7 +243,39 @@ def test_live_pages_rejects_dest_faster_than_primary(monkeypatch: MonkeyPatch) -
     monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_a, **_k: repo.channel_repo_name("stable"))
     monkeypatch.setattr(repo, "assert_live_package", lambda *_a, **_k: "4.0.1.a1")
 
-    with pytest.raises(AssertionError, match="faster than primary"):
+    with pytest.raises(AssertionError, match="slower than primary"):
+        repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
+
+
+def test_live_pages_rejects_nightly_dest(monkeypatch: MonkeyPatch) -> None:
+    """A tagged release never fans into Nightly; dest=nightly is not a live Pages pair."""
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/nightly")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", "4.0.0")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_CHANNEL", "stable")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
+    monkeypatch.setattr(repo, "repo_priority", lambda *_args: 0)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_update", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_delete", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        repo,
+        "pkg_install_from_repo",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+    monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_a, **_k: repo.channel_repo_name("nightly"))
+    monkeypatch.setattr(repo, "assert_live_package", lambda *_a, **_k: "4.0.0")
+
+    with pytest.raises(AssertionError, match="cannot be nightly"):
         repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
 
 
