@@ -159,12 +159,19 @@ pfb_channel_install() {
         CONF_CREATED=1
     fi
 
+    # Drive the hook for THIS channel's conf only. Its orphan guard skips an absent
+    # path, so every peer conf is aimed at a path that cannot exist: a run against
+    # another base (fork, staged prefix) that fails before verify must not have
+    # re-pointed a working peer subscription — peers are only ever retired, after.
     printf '==> Running the generator hook to resolve the conf now\n'
-    PFB_RELEASE_CONF="${REPOS_DIR}/pfblockerng.conf" \
-        PFB_STABLE_CONF="${REPOS_DIR}/pfblockerng-stable.conf" \
-        PFB_TESTING_CONF="${REPOS_DIR}/pfblockerng-testing.conf" \
-        PFB_EDGE_CONF="${REPOS_DIR}/pfblockerng-edge.conf" \
-        PFB_NIGHTLY_CONF="${REPOS_DIR}/pfblockerng-nightly.conf" \
+    _no_conf="${REPOS_DIR}/.pfb-no-such-conf"
+    _own_conf_var="PFB_$(printf '%s' "${PFB_CHANNEL}" | tr '[:lower:]' '[:upper:]')_CONF"
+    env PFB_RELEASE_CONF="${_no_conf}" \
+        PFB_STABLE_CONF="${_no_conf}" \
+        PFB_TESTING_CONF="${_no_conf}" \
+        PFB_EDGE_CONF="${_no_conf}" \
+        PFB_NIGHTLY_CONF="${_no_conf}" \
+        "${_own_conf_var}=${CONF_PATH}" \
         PFB_BASE_URL="${PFB_BASE_URL}" \
         PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
         PFB_VERSION_FILE="${ROOT}/etc/version" \
