@@ -7,6 +7,8 @@
 # local-smoke.sh hands to select-box.sh is therefore the ONLY thing standing between a lease
 # and a working run, and every part of it is load-bearing:
 #
+#   * --init — tini is PID 1 so SIGTERM reaches qemu and grandchildren are reaped.
+#     Without it a cancelled lease can leave qemu holding /dev/kvm (issue #2396).
 #   * --device /dev/kvm — without it qemu silently falls back to TCG and the suite times out
 #     rather than failing cleanly. Verified end to end on the fleet: the device passes from
 #     the Proxmox host, through the unprivileged LXC, into the container.
@@ -73,7 +75,7 @@ EOF
     bootstrap "$@" | awk '{ i = index($0, "ci-runner-vm:"); if (i) print substr($0, i) }'
   }
 
-  # ── the container invocation ─────────────────────────────────────────────── #
+  # ── the container invocation ───────────────────────────────────
 
   It 'runs the leg inside the VM runner image'
     # The image ref itself (box-side-expanded against PFB_LAN_REGISTRY, issue #2247)
@@ -90,6 +92,13 @@ EOF
     # job's timeout, which reads as a flake rather than a misconfiguration.
     When call bootstrap --ref dummy
     The output should include '--device /dev/kvm'
+  End
+
+  It 'gives the container an init process'
+    # Without tini, smoke-on-box.sh is PID 1: SIGTERM is not forwarded and qemu
+    # grandchildren are not reaped. A cancelled lease can leave qemu holding /dev/kvm.
+    When call bootstrap --ref dummy
+    The output should include '--init'
   End
 
   It 'lowers the unprivileged port floor via the namespaced sysctl'
@@ -172,7 +181,7 @@ EOF
     The output should include 'docker run --rm '
   End
 
-  # ── the sparse checkout ──────────────────────────────────────────────────── #
+  # ── the sparse checkout ────────────────────────────────────
 
   It 'checks out only the paths a smoke leg reads'
     # src/ (the .pkg build), scripts/ (the harness), stubs/python/ (root conftest's
@@ -190,7 +199,7 @@ EOF
     The output should include 'ci-metadata'
   End
 
-  # ── flag encoding across the docker argument list ────────────────────────── #
+  # ── flag encoding across the docker argument list ─────────────────────────
 
   It 'carries an explicit channel through to the container command'
     When call bootstrap --ref dummy --channel testing
