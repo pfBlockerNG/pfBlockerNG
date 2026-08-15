@@ -100,12 +100,27 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     #1711 parity tests actually existed for: a rule wired into one composition and
     not the other silently reopens "the save page accepts it, the resolver drops it".
     """
-    from pfb_dnsbl_regex_rules import (
-        _REGEX_BUDGET_MAX,
-        _regex_complexity_budget,
-        _regex_has_catastrophic_shape,
-        _regex_is_catastrophic_shape,
-    )
+    import io
+
+    from pfb_dnsbl_regex_rules import _REGEX_BUDGET_MAX, _regex_is_catastrophic_shape, main
+
+    def main_rejects_shape(pattern: str) -> bool | None:
+        """Return whether ``main()`` rejected for shape/budget, or None if it
+        skipped the line or rejected for compile/control (not this pin)."""
+        old_in, old_err = sys.stdin, sys.stderr
+        try:
+            sys.stdin = io.StringIO(pattern + "\n")
+            captured = io.StringIO()
+            sys.stderr = captured
+            rc = main(["probe"])
+        finally:
+            sys.stdin, sys.stderr = old_in, old_err
+        err = captured.getvalue()
+        if rc == 0:
+            return False
+        if "catastrophic-backtracking shape" in err or "too many quantifiers" in err:
+            return True
+        return None
 
     corpus = [
         "^ads\\.example\\.com$",
@@ -139,7 +154,9 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
     corpus += ["".join(combination) for combination in itertools.product(blocks, repeat=4)]
 
     for pattern in corpus:
-        probe_rejects = _regex_has_catastrophic_shape(pattern) or _regex_complexity_budget(pattern) > _REGEX_BUDGET_MAX
+        probe_rejects = main_rejects_shape(pattern)
+        if probe_rejects is None:
+            continue
         assert probe_rejects == _regex_is_catastrophic_shape(pattern), (
             f"probe and resolver disagree on {pattern!r}: "
             f"probe rejects={probe_rejects}, resolver rejects={_regex_is_catastrophic_shape(pattern)}"
