@@ -82,6 +82,99 @@ def test_log_guest_identity_empty_output_is_loud() -> None:
         smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, EmptyVM()))
 
 
+class _IdentityVM:
+    """A guest whose ssh(...) always returns the given identity probe stdout."""
+
+    def __init__(self, stdout: str) -> None:
+        self._stdout = stdout
+        self.calls: list[tuple[tuple[str, ...], float]] = []
+
+    def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+        self.calls.append((remote, timeout))
+        return subprocess.CompletedProcess(remote, 0, self._stdout, "")
+
+
+def _identity_stdout(abi_line: str | None) -> str:
+    lines = [
+        "etc_version=2.8.1-RELEASE",
+        "versionpatch=0",
+        "kernel_release=15.0-CURRENT",
+        "kernel_version=FreeBSD 15 build",
+    ]
+    if abi_line is not None:
+        lines.append(abi_line)
+    return "\n".join(lines) + "\n"
+
+
+def test_log_guest_identity_raises_on_abi_os_major_mismatch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # issue #2242: live pfSense repository metadata rewrote the effective ABI mid-run
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:16:amd64"))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+    assert "FreeBSD:16:amd64" in str(exc_info.value)
+    assert "FreeBSD:15:amd64" in str(exc_info.value)
+    printed = capsys.readouterr().out
+    assert "PFB_GUEST_IDENTITY abi=FreeBSD:16:amd64" in printed, "diagnostics must survive the raise"
+
+
+def test_log_guest_identity_allows_matching_abi_os_major(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64"))
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
+
+
+def test_log_guest_identity_skips_check_when_smoke_abi_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SMOKE_ABI", raising=False)
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:16:amd64"))
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
+
+
+def test_log_guest_identity_treats_empty_smoke_abi_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:16:amd64"))
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
+
+
+def test_log_guest_identity_raises_on_abi_fallback_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=?"))
+
+    with pytest.raises(RuntimeError, match=r"FreeBSD:15:amd64"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_allows_arch_only_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    # arch is deliberately not compared here — only OS/major (issue #2242 scope)
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:aarch64"))
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
+
+
+def test_log_guest_identity_raises_when_abi_line_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout(None))
+
+    with pytest.raises(RuntimeError, match=r"FreeBSD:15:amd64"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_raises_on_garbage_smoke_abi(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "garbage")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64"))
+
+    with pytest.raises(RuntimeError, match=r"garbage"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
 def test_successful_deploy_emits_installer_diagnostics(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
 ) -> None:
