@@ -176,9 +176,18 @@ Describe 'image-upgrade.sh package refresh (--upgrade-pkgs)'
     The contents of file "$CALLS" should not include 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y'
   End
 
-  # F3 addendum (e) — "Newer FreeBSD version" / IGNORE_OSVERSION wording.
+  # F3 addendum (e) — each pkg(8) cross-major wording gets its own row, so
+  # dropping one alternative from the phrase list turns exactly one row red.
+  It 'fails closed when the dry-run plan reports a Newer FreeBSD version'
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Newer FreeBSD version for package foo-1.0' 1 0 '' '' '' ''
+    The status should be failure
+    The stderr should include 'FreeBSD major'
+    The output should not include 'REACHED-AFTER-REFRESH'
+    The contents of file "$CALLS" should not include 'env ASSUME_ALWAYS_YES=yes pkg upgrade -y'
+  End
+
   It 'fails closed when the dry-run plan asks to IGNORE_OSVERSION'
-    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'Newer FreeBSD version for package foo-1.0: to ignore this error set IGNORE_OSVERSION=yes' 1 0 '' '' '' ''
+    When call run_refresh 'FreeBSD:15:amd64' '15.0-RELEASE' 'to ignore this error set IGNORE_OSVERSION=yes' 1 0 '' '' '' ''
     The status should be failure
     The stderr should include 'FreeBSD major'
     The output should not include 'REACHED-AFTER-REFRESH'
