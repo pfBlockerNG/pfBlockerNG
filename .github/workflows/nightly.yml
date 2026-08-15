@@ -241,8 +241,6 @@ jobs:
           PORTS_REF: ${{ env.PORTS_REF }}
         run: |
           set -eu
-          # In the run body, not the env: map — GitHub Actions never
-          # shell-expands env-map values (issue #2231).
           export RUN_ROOT="$GITHUB_WORKSPACE/out"
           export TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
           export SOURCE_DIR="$GITHUB_WORKSPACE/source"
@@ -293,15 +291,6 @@ jobs:
           PKG_SHA="$(sha256sum "$PKG" | cut -d' ' -f1)"
           cp "$PKG" "result/$PKG_NAME"
 
-          # issue #1806 B1 / issue #2146 S1: this leg's extra_pkgs dependency
-          # ports (RUN_DEPENDS pfSense CE's own repo doesn't carry, e.g.
-          # textproc/py-charset-normalizer) -- SAME build tool release.yml's
-          # tagged dep-build loop uses, from the SAME ports checkout
-          # build-leg.sh just prepared above (never a second clone). UNLIKE
-          # release.yml, Nightly never renames these: nightly assets keep
-          # their canonical <name>-<version>.pkg filename (publish_catalogues.py
-          # _verify_dependency_asset requires a nightly intake's declared name
-          # to equal the package's own manifest identity).
           DEP_PKG_DIR="${RUN_ROOT}/${RUN_ID}/deppkgs"
           DEP_ARTIFACTS_JSON="[]"
           EXTRA_PKGS="$(jq -c '.extra_pkgs // []' row.json)"
@@ -311,11 +300,6 @@ jobs:
             I=0
             while [ "$I" -lt "$ORIGIN_COUNT" ]; do
               ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
-              # sparse-clone-ports.sh's checkout only includes the
-              # pfBlockerNG port's OWN RUN_DEPENDS -- extra_pkgs is a
-              # matrix-level concept it doesn't know about, so this origin's
-              # dir was never materialized. Add it explicitly (idempotent;
-              # cone mode already set by sparse-clone-ports.sh).
               git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
               python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" \
                 --ports "$PORTS_DIR" \
@@ -402,7 +386,6 @@ jobs:
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
         run: |
           set -eu
-          # Run-body export, not an env: map value (issue #2231).
           TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
           python3 "$TRUSTED_DIR/scripts/nightly_provenance.py" handoff \
             --pkg-version "$PKG_VERSION" \
@@ -428,11 +411,6 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  # ── Publish the pkg catalogue (ADR-17, issue #2146 S3) ──────────────────────
-  # The only production catalogue mutation in the whole Nightly flow. Runs after
-  # the handoff job's own verified handoff succeeds -- never races it, never on
-  # a failed outcome. See scripts/publish-pkg-repo.sh
-  # (PUBLISH_KIND=nightly), the only thing here that touches git.
   publish-pkg-repo:
     name: "Publish the pkg catalogue"
     needs: [prepare, handoff]
@@ -452,12 +430,6 @@ jobs:
       - name: Checkout trusted workflow tools (the engine + orchestration scripts — TRUSTED ref)
         uses: actions/checkout@v6
         with:
-          # SECURITY: publish-pkg-repo.sh below is EXECUTED AS SHELL and, via
-          # publish_nightly.py, holds an App token able to push to
-          # pfBlockerNG/pkg. Same rule as release-published.yml's own
-          # publish-pkg-repo job: pin the revision the workflow's own `prepare`
-          # job already resolved (needs.prepare.outputs.tools_sha), never a
-          # floating ref that could move between this run's start and now.
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 0
           persist-credentials: false
@@ -465,13 +437,6 @@ jobs:
 
       - name: Generate GitHub App token (pkg)
         id: app-token
-        # Mint a short-lived installation token from the PKG GitHub App, scoped to
-        # pfBlockerNG/pkg with Contents:write. The App installation already holds
-        # "Read and write access to actions, code, and copilot agent settings" —
-        # create-github-app-token NARROWS the minted token to only the permission(s)
-        # listed, so contents:write here (not actions:write) is the whole reason
-        # the token can push code. REQUIRES the App to be installed on pkg with
-        # Contents:write; if it is not, this step fails loudly.
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
@@ -486,7 +451,7 @@ jobs:
           repository: pfBlockerNG/pkg
           ref: main
           token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true # publish-pkg-repo.sh pushes via this token
+          persist-credentials: true
           path: pkg-repo
           fetch-depth: 1
 
@@ -504,9 +469,6 @@ jobs:
           merge-multiple: false
 
       - name: Publish the pkg catalogue
-        # Path env vars are exported in the run body, not an env: map — GitHub
-        # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
-        # there would reach the job as a literal dollar-string (issue #2231).
         run: |
           set -eu
           export PFB_SRC="$GITHUB_WORKSPACE/trusted"
@@ -514,8 +476,21 @@ jobs:
           export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
           export RESULTS_DIR="$GITHUB_WORKSPACE/results"
           export PUBLISH_KIND=nightly
-          # Failed Nightly? Dispatch another one. No durable allocation exists to
-          # recover or replay; each invocation gets its own timestamped version.
           export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
           export BASE_URL=https://pfblockerng.github.io/pkg
           sh trusted/scripts/publish-pkg-repo.sh
+
+  validate-live-pages-install:
+    name: Live Pages pkg install
+    needs: [prepare, publish-pkg-repo]
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      pytest_marker: repo
+      pytest_filter: "test_install_from_live_pages_url or test_install_from_live_nightly_url"
+      smoke_repo_live_url: https://pfblockerng.github.io/pkg/nightly
+      smoke_repo_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}
+      smoke_repo_expected_version: ${{ needs.prepare.outputs.pkg_version }}
+      smoke_nightly_live_url: https://pfblockerng.github.io/pkg/nightly
+      smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}
+      smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}
+    secrets: inherit
