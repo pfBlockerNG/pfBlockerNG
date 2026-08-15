@@ -15,6 +15,8 @@ disables silently. These gates cover what actionlint cannot:
 2. Every workflow ``image:`` pin rides the series ``.github/docker/VERSION``
    names — a stale pin runs a whole job family on an old toolchain silently.
 3. ``scripts/local-smoke.sh`` runs that same series — no other gate scans it.
+4. Every job-level ``container:`` mapping has an ``options:`` that includes
+   ``--init`` so PID 1 reaps and forwards SIGTERM (issue #2396).
 """
 
 from __future__ import annotations
@@ -183,7 +185,7 @@ def test_egress_gating_container_jobs_grant_net_admin() -> None:
 
     Two scoping rules, both from review mutations on PR #2262: the arming match
     accepts ANY non-empty value because helpers.py arms on any non-empty string
-    (a workflow arming with "true" must not escape the gate), and the capability
+    (a workflow arming with \"true\" must not escape the gate), and the capability
     must appear on a container `options:` line specifically — a whole-file
     substring was proven vacuous by the gate's own diagnostic echo naming
     --cap-add=NET_ADMIN in its error text."""
@@ -307,3 +309,151 @@ def test_pass_silencer_scanner_catches_every_spelling() -> None:
     assert _pass_silencers("# actionlint runs shellcheck --norc; see .shellcheckrc") == []
     assert _pass_silencers("      paths-ignore:\n        - '**.md'") == []
     assert _pass_silencers('> "$RUNNER_TEMP/canary-shellcheck.yml"') == []
+
+
+# --------------------------------------------------------------------------- #
+# 4. Every job-level container: mapping passes --init (issue #2396).
+# --------------------------------------------------------------------------- #
+
+
+_CONTAINER_KEY = re.compile(r"^(\s*)container:\s*(.*)$")
+_OPTIONS_KEY = re.compile(r"^(\s*)options:\s*(.*)$")
+
+
+def _comment_stripped(value: str) -> str:
+    if " #" in value:
+        return value.split(" #", 1)[0].rstrip()
+    return value.rstrip()
+
+
+def _container_init_offences(text: str, where: str) -> tuple[list[str], int]:
+    """Walk each ``container:`` block and require ITS ``options:`` to carry
+    ``--init``. A whole-file substring is not enough: one job with ``--init``
+    would hide another that dropped it (the hole #2396 is closing)."""
+    offences: list[str] = []
+    found = 0
+    lines = text.splitlines()
+    i = 0
+    n = len(lines)
+    while i < n:
+        line = lines[i]
+        if not line.strip() or line.lstrip().startswith("#"):
+            i += 1
+            continue
+        opened = _CONTAINER_KEY.match(line)
+        if not opened:
+            i += 1
+            continue
+        found += 1
+        indent = len(opened.group(1))
+        inline = _comment_stripped(opened.group(2)).strip()
+        if inline:
+            offences.append(f"{where}:{i + 1}: container: {inline!r} has no options: (--init missing)")
+            i += 1
+            continue
+        options_value: str | None = None
+        options_lineno: int | None = None
+        child_indent: int | None = None
+        j = i + 1
+        while j < n:
+            nxt = lines[j]
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                j += 1
+                continue
+            nxt_indent = len(nxt) - len(nxt.lstrip())
+            if nxt_indent <= indent:
+                break
+            if child_indent is None:
+                child_indent = nxt_indent
+            if nxt_indent == child_indent:
+                opt = _OPTIONS_KEY.match(nxt)
+                if opt:
+                    options_lineno = j + 1
+                    options_value = _comment_stripped(opt.group(2))
+                    if re.match(r"^[|>][+-]?\d*$", options_value.strip()):
+                        body: list[str] = []
+                        k = j + 1
+                        while k < n:
+                            body_line = lines[k]
+                            if not body_line.strip() or body_line.lstrip().startswith("#"):
+                                k += 1
+                                continue
+                            body_indent = len(body_line) - len(body_line.lstrip())
+                            if body_indent <= child_indent:
+                                break
+                            body.append(body_line.strip())
+                            k += 1
+                        options_value = " ".join(body)
+                        j = k - 1
+            j += 1
+        if options_value is None:
+            offences.append(f"{where}:{i + 1}: container: has no options: (--init missing)")
+        elif "--init" not in options_value:
+            offences.append(f"{where}:{options_lineno}: container options {options_value!r} missing --init")
+        i = j
+    return offences, found
+
+
+def test_container_jobs_pass_init() -> None:
+    """GitHub's job PID 1 is ``tail -f /dev/null`` and never reaps. Every
+    ``container:`` job must therefore pass ``--init`` on its own ``options:``
+    line (issue #2215, restored here after the migration test retired)."""
+    offenders: list[str] = []
+    found = 0
+    for path in _workflow_files():
+        rel = str(path.relative_to(ROOT))
+        if not rel.startswith(".github/workflows/"):
+            continue
+        offences, n = _container_init_offences(path.read_text(encoding="utf-8"), rel)
+        found += n
+        offenders.extend(offences)
+    assert found >= 65, (
+        f"only found {found} container: jobs, expected at least 65 — either the "
+        "block walker stopped matching a form (fix the walker) or jobs were "
+        "legitimately removed (recount and lower the floor)"
+    )
+    assert not offenders, (
+        "every workflow container: job must pass --init on its own options: "
+        "line so tini is PID 1:\n  " + "\n  ".join(offenders)
+    )
+
+
+def test_container_init_scanner_associates_options_per_block() -> None:
+    """Vacuity guard: a sibling job's ``--init`` must not satisfy a job that
+    dropped it, and a dispatch ``options:`` list is not a container options
+    line."""
+    fixture = (
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      channel:\n"
+        "        options: [stable, testing, edge]\n"
+        "jobs:\n"
+        "  good:\n"
+        "    container:\n"
+        "      image: x\n"
+        "      options: --init --user 1001:1001\n"
+        "  folded:\n"
+        "    container:\n"
+        "      image: y\n"
+        "      options: >-\n"
+        "        --init\n"
+        "        --device /dev/kvm\n"
+        "  missing_flag:\n"
+        "    container:\n"
+        "      image: z\n"
+        "      options: --user 1001:1001\n"
+        "  no_options:\n"
+        "    container:\n"
+        "      image: w\n"
+        "  string_form:\n"
+        "    container: node:18\n"
+    )
+    offences, found = _container_init_offences(fixture, "fixture.yml")
+    assert found == 5, found
+    kinds = [o.split(": ", 1)[1] for o in offences]
+    assert kinds == [
+        "container options '--user 1001:1001' missing --init",
+        "container: has no options: (--init missing)",
+        "container: 'node:18' has no options: (--init missing)",
+    ], offences
