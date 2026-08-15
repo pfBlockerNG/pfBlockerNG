@@ -93,6 +93,28 @@ def test_release_published_promotes_only_after_green_gate() -> None:
     assert "exit 1" in job
 
 
+def test_release_published_promote_env_never_supplies_assets_dir() -> None:
+    """publish-pkg-repo.sh's promote arm requires SOURCE_REPOSITORY, RELEASE_ID,
+    RELEASE_TAG, DESTINATIONS, SOURCE_RUN_ID, ROUTE_MATRIX, BASE_URL, STAGING_PREFIX,
+    and PUBLISH_STAGE -- but never ASSETS_DIR (issue #2389 fix-round-1 F1: the
+    script's tagged-mode env guard used to require ASSETS_DIR unconditionally,
+    which broke every promote since this job never exports it)."""
+    job = _extract_job(_workflow("release-published.yml"), "promote-pkg-repo")
+    for var in (
+        "SOURCE_REPOSITORY",
+        "RELEASE_ID",
+        "RELEASE_TAG",
+        "DESTINATIONS",
+        "SOURCE_RUN_ID",
+        "ROUTE_MATRIX",
+        "BASE_URL",
+        "STAGING_PREFIX",
+        "PUBLISH_STAGE",
+    ):
+        assert re.search(rf"^\s+{var}:", job, re.MULTILINE), f"promote-pkg-repo env missing {var!r}:\n{job}"
+    assert "ASSETS_DIR" not in job
+
+
 def test_release_published_serialises_publishes() -> None:
     text = _workflow("release-published.yml")
     assert re.search(r"^concurrency:\n  group: \S+\n  cancel-in-progress: false\n", text, re.MULTILINE), text

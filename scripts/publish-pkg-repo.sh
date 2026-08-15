@@ -76,11 +76,23 @@
 #                        touched=<compact JSON array of "channel/varver">, and
 #                        noop=true|false.
 #
-# Required environment — PUBLISH_KIND=tagged only:
+# Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=direct|stage only:
 #   SOURCE_REPOSITORY, RELEASE_ID, RELEASE_TAG, DESTINATIONS
 #                        the rest of the publish_release.py intake — see its --help
 #   ASSETS_DIR             directory of downloaded .pkg assets + digests.json sidecar
 #   ROUTE_MATRIX           the pinned ROUTE matrix, compact JSON array text
+#
+# Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=promote only:
+#   RELEASE_TAG, DESTINATIONS  the promote commit message's own trailers
+#   ROUTE_MATRIX             landing_regen_and_stage's tagged-mode matrix source
+#                        Never SOURCE_REPOSITORY/RELEASE_ID/ASSETS_DIR — promote
+#                        never runs publish_release.py (issue #2389 fix-round-1
+#                        F1): the workflow's promote-pkg-repo job exports neither.
+#
+# Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=discard only:
+#   (none beyond the unconditional PFB_SRC/PKG_REPO/SOURCE_RUN_ID/BASE_URL and
+#   STAGING_PREFIX below) — discard only removes a staged tree and commits the
+#   removal; it never runs the publisher or the landing regen.
 #
 # Required environment — PUBLISH_KIND=nightly only:
 #   HANDOFF_FILE            path to the verified nightly_provenance.build_handoff JSON
@@ -118,12 +130,28 @@ esac
 
 case "$PUBLISH_KIND" in
     tagged)
-        : "${SOURCE_REPOSITORY:?SOURCE_REPOSITORY is required}"
-        : "${RELEASE_ID:?RELEASE_ID is required}"
-        : "${RELEASE_TAG:?RELEASE_TAG is required}"
-        : "${DESTINATIONS:?DESTINATIONS is required}"
-        : "${ASSETS_DIR:?ASSETS_DIR is required}"
-        : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
+        # Required-var set depends on PUBLISH_STAGE: direct/stage run the publisher
+        # (needs the full publish_release.py intake); promote only regenerates the
+        # landing page + writes a commit trailer (needs a strict subset); discard
+        # needs nothing here at all (issue #2389 fix-round-1 F1) — the workflow's
+        # promote-pkg-repo job exports neither SOURCE_REPOSITORY/RELEASE_ID nor
+        # ASSETS_DIR, so requiring them unconditionally broke every promote/discard.
+        case "$PUBLISH_STAGE" in
+            direct | stage)
+                : "${SOURCE_REPOSITORY:?SOURCE_REPOSITORY is required}"
+                : "${RELEASE_ID:?RELEASE_ID is required}"
+                : "${RELEASE_TAG:?RELEASE_TAG is required}"
+                : "${DESTINATIONS:?DESTINATIONS is required}"
+                : "${ASSETS_DIR:?ASSETS_DIR is required}"
+                : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
+                ;;
+            promote)
+                : "${RELEASE_TAG:?RELEASE_TAG is required}"
+                : "${DESTINATIONS:?DESTINATIONS is required}"
+                : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
+                ;;
+            discard) ;;
+        esac
         ;;
     nightly)
         : "${HANDOFF_FILE:?HANDOFF_FILE is required}"
