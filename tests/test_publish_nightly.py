@@ -247,7 +247,8 @@ class _LegSpec:
 def _resolved_dep_specs(spec: _LegSpec) -> Sequence[tuple[str, str]]:
     if spec.dep_specs is not None:
         return spec.dep_specs
-    extras = list(spec.row.get("extra_pkgs") or [])
+    raw_extras = spec.row.get("extra_pkgs") or []
+    extras = list(raw_extras) if isinstance(raw_extras, (list, tuple)) else []
     if extras == [_CHARSET_ORIGIN]:
         return (_CHARSET_DEP_SPEC,)
     if extras:
