@@ -66,7 +66,7 @@ esac
 REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# ── Required env ──────────────────────────────────────────────────────────────────── #
+# ── Required env ──────────────────────────────────────────────────────────── #
 if [ -z "${PFB_BOXES:-}" ]; then
     printf 'local-smoke: PFB_BOXES is required (space-separated ssh targets)\n' >&2
     printf '             e.g. export PFB_BOXES="root@10.0.0.23 root@10.0.0.24"\n' >&2
@@ -74,7 +74,7 @@ if [ -z "${PFB_BOXES:-}" ]; then
 fi
 export PFB_BOXES
 
-# ── Parse flags ───────────────────────────────────────────────────────────────────── #
+# ── Parse flags ───────────────────────────────────────────────────────────── #
 _REF="${PFB_REF:-}"
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
 # A local run must build the same-named package CI does, or a green local smoke proves
@@ -99,7 +99,7 @@ while [ "$#" -gt 0 ]; do
         --shards)   shift; _SHARDS="$1"; shift ;;
         --) shift; break ;;
         -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
-        *)  break ;;  # extra positionals not supported in new model
+        *)  break ;;
     esac
 done
 if [ "$#" -gt 0 ]; then
@@ -107,9 +107,6 @@ if [ "$#" -gt 0 ]; then
     exit 2
 fi
 
-# ── Validate --channel against the builder's own vocabulary ────────────────── #
-# build-pkg-portable.py rejects anything else at argparse, on the box, after a lease and a
-# ports clone. Refusing here costs nothing and keeps the value a single literal word.
 case "$_CHANNEL" in
     stable|testing|edge|nightly) ;;
     *)
@@ -118,7 +115,6 @@ case "$_CHANNEL" in
         ;;
 esac
 
-# ── Validate --shards (positive integer; loud exit 2 on 0/negative/garbage) ── #
 case "$_SHARDS" in
     ''|*[!0-9]*)
         printf 'local-smoke: --shards must be a positive integer: %s\n' "$_SHARDS" >&2
@@ -130,7 +126,6 @@ if [ "$_SHARDS" -eq 0 ]; then
     exit 2
 fi
 
-# ── --shards N>1 guards: a narrowed run must not shard (empty-slice hazard) ── #
 if [ "$_SHARDS" -gt 1 ]; then
     if [ -n "$_FILTER" ]; then
         printf 'local-smoke: --shards N>1 refuses --filter (a -k slice can collect zero tests -- pytest exit 5 would fail that shard spuriously); drop one of the two\n' >&2
@@ -143,11 +138,8 @@ if [ "$_SHARDS" -gt 1 ]; then
     fi
 fi
 
-# ── Testability seam: override select-box.sh path for the hermetic spec ────── #
 _SELECT_BOX="${PFB_SELECT_BOX:-scripts/select-box.sh}"
 
-# ── Resolve REF (default: current branch name, falls back to SHA) ─────────── #
-# A branch name is fetchable; a bare SHA is not (unless already pushed).
 if [ -z "$_REF" ]; then
     _REF="$(git -C "$REPO_ROOT" symbolic-ref --short HEAD 2>/dev/null)" || true
     if [ -z "$_REF" ]; then
@@ -157,14 +149,8 @@ if [ -z "$_REF" ]; then
     fi
 fi
 
-# Normalize a remote-qualified ref (origin/devel) to its bare name: the on-box
-# `git fetch origin <ref>` wants the REMOTE ref name (devel), not `origin/devel`.
 _REF="${_REF#origin/}"
 
-# ── Build the on-box bootstrap command string ─────────────────────────────── #
-# The bootstrap runs on the box via ssh; it must be a single shell command string.
-# Use single-quote encoding for values that may contain shell metacharacters.
-# ponytail: _sq encodes ONE value for embedding in a single-quoted sh literal.
 _sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
 
 _REF_Q="$(_sq "$_REF")"
@@ -179,7 +165,6 @@ _NIGHTLY_EXPECTED_VERSION_Q="$(_sq "${SMOKE_NIGHTLY_EXPECTED_VERSION:-}")"
 _PFSENSE_REF_Q="$(_sq "${SMOKE_PFSENSE_REF:-}")"
 _CIVM_REF_Q="$(_sq "${CIVM_REF:-}")"
 
-# Build the smoke-on-box.sh flags string (structured, no word-split risk after encoding).
 _ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --channel '$_CHANNEL' --marker '$_MARKER_Q'"
 if [ -n "$_FILTER" ]; then
     _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"
@@ -188,108 +173,50 @@ if [ "$_NO_TWO_VM" -eq 1 ]; then
     _ob_flags="$_ob_flags --no-two-vm"
 fi
 
-# The bootstrap string:
-#   1. cd to the repo on the box
-#   2. narrow the working tree to the paths a smoke leg reads (src/ builds the .pkg,
-#      scripts/ is the harness, stubs/python/ supports root conftest, tests/smoke/ is the suite). 38 MB of tracked files
-#      against 13 MB for what a leg actually uses; legacy/ADRs/, tests/php/ and plugins/ are
-#      the bulk of the difference and none of them is read here.
-#   3. fetch the requested ref and check out its FETCHED TIP (FETCH_HEAD) — NOT a
-#      bare `git checkout <ref>`, which lands the box's possibly-stale LOCAL branch
-#      (a clone whose local devel predates an upstream commit would miss files added
-#      since, e.g. scripts/smoke-on-box.sh itself → "cannot open" + no run).
-#   4. fetch the ci-metadata orphan ref. read-version-matrix.sh reads
-#      origin/ci-metadata, which is a REF and not a path, so the sparse checkout above
-#      does not bring it and every matrix-derived value would fall back silently.
-#   5. exec the leg INSIDE ci-runner-vm. The boxes carry Docker and nothing else — qemu,
-#      oras, dig and the Playwright browser live in the image now.
-#
-# The docker flags are each load-bearing:
-#   --init             tini is PID 1 so SIGTERM reaches qemu and grandchildren are reaped.
-#   --device /dev/kvm  qemu falls back to TCG without it and the suite times out rather
-#                      than failing cleanly. The device passes host → LXC → container.
-#   --sysctl ...       the non-root mock DNS binds :53. This replaces an in-script
-#                      `sysctl -w`, which a container cannot perform against the host.
-#   the bind mounts    repo, ports tree and guest key live on the box; image artifacts stay
-#                      in the disposable container writable layer for this workload.
-#   the image ref      issue #2247: box-side-expanded `${PFB_LAN_REGISTRY:-ghcr.io}/...`
-#                      (escaped `\$` -- left UNEXPANDED here so the remote box shell
-#                      resolves it against ITS OWN /etc/environment, not this caller's);
-#                      unset falls back to ghcr.io, today's behavior. -e PFB_LAN_REGISTRY
-#                      carries the same var into the container so scripts/smoke-on-box.sh
-#                      and scripts/lib/lan-registry.sh can rewrite refs and route oras
-#                      --plain-http against the LAN registry themselves. Supersedes the
-#                      --add-host hijack + CA-bundle mount from #2230: one mechanism, no
-#                      private PKI (owner decision 2026-08-08).
-# Ref-stable: the one-liner is the only part that has to work across refs;
-# smoke-on-box.sh handles everything else.
-# shellcheck disable=SC2089  # quoting: _ob_flags is pre-encoded for remote sh
-_bootstrap="cd /root/pfBlockerNG \\
- && git sparse-checkout init --cone \\
- && git sparse-checkout set src scripts stubs/python tests/smoke \\
- && git fetch --quiet origin '$_REF_Q' \\
- && git checkout --quiet --force FETCH_HEAD \\
- && git fetch --quiet --no-tags origin ci-metadata:refs/remotes/origin/ci-metadata \\
- && exec docker run --rm --init \\
-      --device /dev/kvm \\
-      --sysctl net.ipv4.ip_unprivileged_port_start=53 \\
-      -v /root/pfBlockerNG:/root/pfBlockerNG \\
-      -v /root/FreeBSD-ports:/root/FreeBSD-ports \\
-      -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \\
-      -e SMOKE_GHCR_TOKEN -e SMOKE_ADMIN_USER -e SMOKE_ADMIN_PASSWORD \\
-      -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \\
-      -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \\
-      -e SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' -e SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \\
-      -e SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' -e SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \\
-      -e SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='$_NIGHTLY_EXPECTED_SOURCE_SHA_Q' -e SMOKE_NIGHTLY_EXPECTED_VERSION='$_NIGHTLY_EXPECTED_VERSION_Q' \\
-      -w /root/pfBlockerNG \\
-      \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:9 \\
+_bootstrap="cd /root/pfBlockerNG \
+ && git sparse-checkout init --cone \
+ && git sparse-checkout set src scripts stubs/python tests/smoke \
+ && git fetch --quiet origin '$_REF_Q' \
+ && git checkout --quiet --force FETCH_HEAD \
+ && git fetch --quiet --no-tags origin ci-metadata:refs/remotes/origin/ci-metadata \
+ && exec docker run --rm --init \
+      --device /dev/kvm \
+      --sysctl net.ipv4.ip_unprivileged_port_start=53 \
+      -v /root/pfBlockerNG:/root/pfBlockerNG \
+      -v /root/FreeBSD-ports:/root/FreeBSD-ports \
+      -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
+      -e SMOKE_GHCR_TOKEN -e SMOKE_ADMIN_USER -e SMOKE_ADMIN_PASSWORD \
+      -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \
+      -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
+      -e SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' -e SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \
+      -e SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' -e SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \
+      -e SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='$_NIGHTLY_EXPECTED_SOURCE_SHA_Q' -e SMOKE_NIGHTLY_EXPECTED_VERSION='$_NIGHTLY_EXPECTED_VERSION_Q' \
+      -w /root/pfBlockerNG \
+      \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:9 \
       sh scripts/smoke-on-box.sh $_ob_flags"
 
-printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \\
+printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \
     "$_REF" "$_MARKER" "${_FILTER:+ filter=$_FILTER}" >&2
 
-# ── Lease box(es) and run the bootstrap ─────────────────────────────────────────── #
-# select-box.sh -- <cmd>: acquires a lease, runs <cmd> on the box over ssh,
-# releases the lease on EXIT/INT/TERM (automatic EXIT trap). The KEY=value
-# output goes to stdout (ignored here; we don't eval it).
 if [ "$_SHARDS" -eq 1 ]; then
-    # N=1: today's flow, unchanged (only the select-box path now rides the seam).
-    # shellcheck disable=SC2090  # expansion is intentional: _bootstrap is the remote command
     sh "$_SELECT_BOX" -- "$_bootstrap"
     exit $?
 fi
 
-# ── N>1: concurrent multi-box module sharding (issue #797) ─────────────────── #
-# One select-box.sh lease PER SHARD, launched together, aggregated at the end.
-# Pool-sizing contract: N should be <= the free PFB_BOXES pool. We do NOT
-# pre-count the pool -- an oversized N just means the excess shards fail on
-# select-box.sh's own pool-exhaustion path (~6 jittered scans, PFB_MAX_RETRIES)
-# and show up as failed shards below: loud, not hung.
 _LOG_DIR="$(mktemp -d "${TMPDIR:-/tmp}/pfb-local-smoke-shards.XXXXXX")"
 printf 'local-smoke: sharded run (--shards %s); logs: %s\n' "$_SHARDS" "$_LOG_DIR" >&2
 
 _PIDS=""
 _ABORT=0
-# Forward Ctrl-C/TERM to every launched shard's select-box.sh process so its
-# own EXIT trap releases its lease -- no orphaned leases on an interrupted
-# fan-out. $_PIDS is expanded when the signal actually fires (single-quoted
-# trap body), so it always reflects whatever has been launched so far. The
-# _ABORT flag additionally STOPS the launch loop: a POSIX trap handler resumes
-# execution where it left off, so without the flag a signal delivered mid-loop
-# would kill the running shards and then keep leasing and launching the rest.
 trap '_ABORT=1; kill $_PIDS 2>/dev/null' INT TERM
 
 _i=0
 while [ "$_i" -lt "$_SHARDS" ] && [ "$_ABORT" -eq 0 ]; do
     _shard_bootstrap="${_bootstrap} --shard '$(_sq "$_i")' --shard-total '$(_sq "$_SHARDS")'"
     _shard_log="${_LOG_DIR}/shard-${_i}.log"
-    # shellcheck disable=SC2090  # expansion is intentional: _shard_bootstrap is the remote command
     sh "$_SELECT_BOX" -- "$_shard_bootstrap" > "$_shard_log" 2>&1 &
     _pid=$!
     _PIDS="$_PIDS $_pid"
-    # Close the launch/signal race: if the signal landed between the fork above
-    # and this check, the trap's kill missed the just-recorded pid -- kill it now.
     if [ "$_ABORT" -eq 1 ]; then
         kill "$_pid" 2>/dev/null || true
         break
@@ -298,8 +225,6 @@ while [ "$_i" -lt "$_SHARDS" ] && [ "$_ABORT" -eq 0 ]; do
     _i=$((_i + 1))
 done
 
-# Wait for every shard IN LAUNCH ORDER -- deterministic blocking, no polling
-# (`wait <pid>` is the POSIX-sh sync primitive; no sleep-loop coordination).
 _RCS=""
 _FAILED=0
 for _pid in $_PIDS; do
@@ -323,7 +248,7 @@ if [ "$_FAILED" -eq 1 ]; then
     _i=0
     for _rc in $_RCS; do
         if [ "$_rc" -ne 0 ]; then
-            printf 'local-smoke: ---- shard %s FAILED (rc=%s); last 25 lines of %s ----\n' \\
+            printf 'local-smoke: ---- shard %s FAILED (rc=%s); last 25 lines of %s ----\n' \
                 "$_i" "$_rc" "${_LOG_DIR}/shard-${_i}.log" >&2
             tail -n 25 "${_LOG_DIR}/shard-${_i}.log" >&2
             printf 'local-smoke: ---- end shard %s log ----\n' "$_i" >&2
