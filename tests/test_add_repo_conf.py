@@ -208,7 +208,7 @@ def _run_add_repo(
     unscoped_guard = ""
     if unscoped_update_fails and not update_fails:
         unscoped_guard = (
-            '  _saw_r=0\n'
+            "  _saw_r=0\n"
             '  _prev=""\n'
             '  for _a in "$@"; do\n'
             '    if [ "$_prev" = "-r" ]; then _saw_r=1; fi\n'
@@ -1198,12 +1198,7 @@ def test_leftover_release_conf_does_not_block_stable_switch() -> None:
         repos = _repos_dir(root)
         repos.mkdir(parents=True)
         leftover = repos / "pfblockerng.conf"
-        leftover.write_text(
-            "pfblockerng: {\n"
-            f'  url: "{_PAGES_BASE}/release/ce-2.8",\n'
-            "  enabled: yes\n"
-            "}\n"
-        )
+        leftover.write_text(f'pfblockerng: {{\n  url: "{_PAGES_BASE}/release/ce-2.8",\n  enabled: yes\n}}\n')
 
         proc = _run_add_repo(
             root,
