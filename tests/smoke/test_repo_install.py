@@ -2134,7 +2134,7 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 #                                                                              #
 # The hook runs as a POSIX-sh rc.d script. Off the rc(8) framework it runs    #
 # its *_start directly (its own else-branch), so we drive it as              #
-# `/bin/sh <hook> onestart`. Env-overridable paths (PFB_RELEASE_CONF,         #
+# `/bin/sh <hook> onestart`. Env-overridable paths (PFB_STABLE_CONF,          #
 # PFB_NIGHTLY_CONF, PFB_BASE_URL) point it at test fixtures + a file://       #
 # catalog without modifying the production script. NO pkg call, NO network.   #
 #                                                                              #
@@ -2195,7 +2195,7 @@ def _read_conf_url_on_guest(vm: SmokeVM, conf_path: str) -> str:
 def _run_generate_hook(
     vm: SmokeVM,
     *,
-    release_conf: str,
+    stable_conf: str,
     base_url: str | None = None,
     nightly_conf: str | None = None,
     timeout: float = 300.0,
@@ -2203,10 +2203,10 @@ def _run_generate_hook(
     """Run the generator hook directly as ``/bin/sh <hook> onestart``.
 
     Driven with its env-overridable paths pointing at the test fixtures:
-    ``PFB_RELEASE_CONF``, ``PFB_NIGHTLY_CONF``, and optionally ``PFB_BASE_URL`` (a
+    ``PFB_STABLE_CONF``, ``PFB_NIGHTLY_CONF``, and optionally ``PFB_BASE_URL`` (a
     file:// catalog base). ``nightly_conf`` defaults to a genuinely NON-EXISTENT path
     (not ``/dev/null`` — that exists and would defeat the orphan guard's ``[ -f ]``
-    test conceptually), so by default only the release conf is in play. Detection
+    test conceptually), so by default only the stable conf is in play. Detection
     reads the real box files (/etc/product_label, /etc/version, pkg config abi).
 
     Returns the completed process. The hook MUST always exit 0 (a non-zero rc is an
@@ -2214,7 +2214,7 @@ def _run_generate_hook(
     """
     if nightly_conf is None:
         nightly_conf = f"{GENERATE_DIR}/nonexistent_pfblockerng_nightly.conf"
-    env_args = [f"PFB_RELEASE_CONF={release_conf}", f"PFB_NIGHTLY_CONF={nightly_conf}"]
+    env_args = [f"PFB_STABLE_CONF={stable_conf}", f"PFB_NIGHTLY_CONF={nightly_conf}"]
     if base_url is not None:
         env_args.append(f"PFB_BASE_URL={base_url}")
     result = vm.ssh("env", *env_args, "/bin/sh", GUEST_HOOK_PATH, "onestart", timeout=timeout)
@@ -2227,14 +2227,14 @@ def _run_generate_hook(
 
 @pytest.mark.timeout(60)
 def test_generate_hook_safety_absent_conf_exits_0(repo_vm: SmokeVM) -> None:
-    """ADR-39 ORPHAN PATH: when the release conf is ABSENT the hook exits 0 and writes nothing.
+    """ADR-39 ORPHAN PATH: when the stable conf is ABSENT the hook exits 0 and writes nothing.
 
     An orphaned hook (conf removed by the user after removing the repo) must be inert —
     it must not wedge boot or create a channel the user never bootstrapped.
 
     Scenario: generator hook with no repo conf is a safe no-op.
 
-    Given NEITHER our release conf NOR our nightly conf exists (both ``PFB_*_CONF``
+    Given NEITHER our stable conf NOR our nightly conf exists (both ``PFB_*_CONF``
       point at genuinely non-existent paths),
     When ``/bin/sh <hook> onestart`` runs with those overrides,
     Then the hook exits 0 (MUST — boot-safety hard rule) AND neither conf was created.
@@ -2249,14 +2249,14 @@ def test_generate_hook_safety_absent_conf_exits_0(repo_vm: SmokeVM) -> None:
         # BEFORE: neither conf exists (a genuinely-absent nightly path, NOT /dev/null —
         # so the orphan guard is exercised for real on both channels).
         assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
-            f"BEFORE: release conf unexpectedly exists at {absent_conf}"
+            f"BEFORE: stable conf unexpectedly exists at {absent_conf}"
         )
         assert repo_vm.ssh("/bin/test", "-f", absent_nightly).returncode != 0, (
             f"BEFORE: nightly conf unexpectedly exists at {absent_nightly}"
         )
 
         # WHEN: run the hook with both conf paths non-existent.
-        _run_generate_hook(repo_vm, release_conf=absent_conf, nightly_conf=absent_nightly)
+        _run_generate_hook(repo_vm, stable_conf=absent_conf, nightly_conf=absent_nightly)
 
         # AFTER: both confs still absent; hook was a no-op (created no channel).
         assert repo_vm.ssh("/bin/test", "-f", absent_conf).returncode != 0, (
@@ -2286,8 +2286,8 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
     regenerate, no patching).
 
     Scenario:
-      Background: a file:// catalog at ``<base>/release/<real_varver>/``; the seeded
-        conf url initially points at ``<base>/release/stale-9.9`` (wrong).
+      Background: a file:// catalog at ``<base>/stable/<real_varver>/``; the seeded
+        conf url initially points at ``<base>/stable/stale-9.9`` (wrong).
       Given the conf carries the stale varver (BEFORE asserted),
       When  the generator hook runs with ``PFB_BASE_URL=<file:// base>``,
       Then  the conf url contains the box's REAL varver (stale gone) and the canonical
@@ -2307,18 +2307,18 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 
     catalog_base = f"{GENERATE_DIR}/catalog"
     base_url = f"file://{catalog_base}"
-    guest_real_dir = f"{catalog_base}/release/{real_varver}"
+    guest_real_dir = f"{catalog_base}/stable/{real_varver}"
     test_conf_path = f"{GENERATE_DIR}/pfblockerng_test.conf"
 
     try:
-        # 1. Build the real catalog on the guest under release/<real_varver>/ — the
+        # 1. Build the real catalog on the guest under stable/<real_varver>/ — the
         #    PRODUCTION layout (build_repo_matrix, arch-less — issue #1806) that the
         #    hook's regenerated conf resolves to.
         shipped_dir = build_repo_via_portable_named(
             repo_vm,
             [Path(pkg), *_smoke_dep_pkg_paths()],
             tmp_path,
-            catalog_name=f"release/{real_varver}",
+            catalog_name=f"stable/{real_varver}",
             guest_root=catalog_base,
         )
         assert shipped_dir == guest_real_dir, f"catalog shipped to {shipped_dir!r}, expected {guest_real_dir!r}"
@@ -2327,10 +2327,10 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
         )
 
         # 2. Seed the TEST conf with a STALE varver url (canonical body shape).
-        stale_url = f"{base_url}/release/{STALE_VARVER}"
+        stale_url = f"{base_url}/stable/{STALE_VARVER}"
         stale_conf_body = (
             "# pending boot-time generation\n"
-            "pfblockerng: {\n"
+            "pfblockerng-stable: {\n"
             f'  url: "{stale_url}",\n'
             "  mirror_type: none,\n"
             "  signature_type: none,\n"
@@ -2357,7 +2357,7 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
         )
 
         # WHEN: run the generator hook (file:// base) — it regenerates the conf.
-        hook_result = _run_generate_hook(repo_vm, release_conf=test_conf_path, base_url=base_url)
+        hook_result = _run_generate_hook(repo_vm, stable_conf=test_conf_path, base_url=base_url)
 
         # AFTER: conf url has the box's REAL varver (stale gone) + the canonical marker.
         url_after = _read_conf_url_on_guest(repo_vm, test_conf_path)
@@ -2392,7 +2392,7 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 
         # IDEMPOTENCE: a second run leaves the conf byte-identical (pure regenerate).
         sha_before = _ssh_check(repo_vm, "sha256", "-q", test_conf_path).stdout.strip()
-        _run_generate_hook(repo_vm, release_conf=test_conf_path, base_url=base_url)
+        _run_generate_hook(repo_vm, stable_conf=test_conf_path, base_url=base_url)
         sha_after = _ssh_check(repo_vm, "sha256", "-q", test_conf_path).stdout.strip()
         assert sha_before == sha_after, (
             f"IDEMPOTENCE: conf changed on a second hook run ({sha_before!r} -> {sha_after!r})"
