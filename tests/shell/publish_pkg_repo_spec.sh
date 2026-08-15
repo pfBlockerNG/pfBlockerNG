@@ -422,12 +422,30 @@ JSON
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  # Fixture for the client-script-refresh examples: a catalogue no-op with
+  # drifted scripts, plus every trap an over-broad stage could sweep in —
+  # committed landing pages whose bytes DIFFER from the stub generator's
+  # output (a regression that regenerates the timestamped pages on a no-op
+  # produces a real diff there), an untracked file, and a dirty tracked file
+  # (either of which a `git add -A`/`.` regression would commit).
+  seed_refresh_drift() {
+    printf 'old landing\n' > "${base}/pkg-repo/docs/index.html"
+    printf 'old browse\n' > "${base}/pkg-repo/docs/browse.html"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/index.html docs/browse.html \
+        && git_fixture commit -q -m preseed-landing && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    echo debris > "${base}/pkg-repo/debris.txt"
+    echo dirty >> "${base}/pkg-repo/README.txt"
+  }
+
   It 'ships a client-script refresh when the catalogue is a no-op but the scripts drifted'
     # The seed tree carries NO committed client scripts — maximal drift. A
     # catalogue no-op must still publish the pair: the scripts are generated
     # from PFB_SRC, not from release assets, so a script-only fix was
     # otherwise unshippable via a republish of an already-published release
     # (issue #2408).
+    seed_refresh_drift
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0
@@ -437,24 +455,23 @@ JSON
     The output should not include 'publish-pkg-repo: NOOP'
     The stderr should include 'main'
     The result of function remote_head_now should not equal "$original_remote_head"
-    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
-    The variable committed should include 'docs/add-repo.sh'
-    The variable committed should include 'docs/migrate-channel.sh'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
   End
 
-  It 'a client-script refresh stages ONLY the two scripts and says so in the commit'
-    # No landing/browse/autoindex page may ride along (they embed a generation
-    # timestamp — regenerating them on a no-op would manufacture a commit every
-    # run), and the commit subject + run-id trailer must identify the refresh.
+  It 'a client-script refresh commits EXACTLY the two scripts and says so in the commit'
+    # Exact-list equality: no landing/browse/autoindex page, no untracked or
+    # unrelated dirty file may ride along (the seeded traps above would each
+    # break the equality), and the commit subject + run-id trailer must
+    # identify the refresh.
+    seed_refresh_drift
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0
     The output should include 'ADVANCE'
     The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
-    The variable committed should not include 'docs/index.html'
-    The variable committed should not include 'docs/browse.html'
-    The variable committed should not include 'README.txt'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: refresh client scripts'
     The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
@@ -745,6 +762,27 @@ HOOK
     The output should include 'NOOP'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'n5b: nightly mode ships the same mode-independent client-script refresh'
+    # The refresh branch precedes the PUBLISH_KIND commit-message split and
+    # must never acquire nightly identity: no jq pkg_version read, no
+    # pfBlockerNG-Nightly-Version trailer (the handoff fixture carries a
+    # pkg_version, so the nightly arm COULD produce one — this pins that the
+    # refresh arm does not route through it).
+    nightly_env
+    seed_refresh_drift
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: refresh client scripts'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+    The variable msg should not include 'pfBlockerNG-Nightly-Version'
   End
 
   It 'n6: nightly mode commit message carries the nightly version subject and trailers, ignoring tagged vars'
