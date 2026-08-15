@@ -70,6 +70,7 @@ import publish_catalogues as pc
 _SITE_SUBDIR = "docs"
 _DIGESTS_FILENAME = "digests.json"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+_PY_FLAVOR_ORIGIN = re.compile(r"^(py)(?:\d+)?-")
 
 
 class PublishReleaseError(Exception):
@@ -86,11 +87,6 @@ class DestinationConflictError(PublishReleaseError):
     so an operator can tell "the catalogue already holds a different build of
     this exact version" apart from a digest-sidecar or target-resolution
     failure by exception type alone."""
-
-
-# --------------------------------------------------------------------------- #
-# Digest sidecar + asset discovery.
-# --------------------------------------------------------------------------- #
 
 
 def _load_digests(assets_dir: Path) -> dict[str, str]:
@@ -132,20 +128,6 @@ def _verify_all_assets(
     digests: Mapping[str, str],
     work_dir: Path,
 ) -> list[pc.VerifiedAsset]:
-    """Verify every discovered asset, each into its OWN subdirectory of ``work_dir``.
-
-    ``_verify_canonical_asset`` derives its ``work_path`` from
-    ``CANONICAL_EMITTED_IDENTITY``-``canonical_package_version`` alone — no
-    row/variant component — and ``verify_run``'s own axes 4/6 REQUIRE every
-    canonical asset in one run to share that exact version. A multi-varver tagged
-    run (this ticket's central scenario: ce-2.8 + plus-26.03 + plus-26.07 all on
-    one tag) therefore produces several canonical assets whose engine-computed
-    work_path would be byte-identical if they shared one work_dir — verifying them
-    one after another would silently overwrite each with the next, so every
-    ``VerifiedAsset.work_path`` after the last call would resolve to the LAST
-    asset's bytes. Scoping one subdirectory per asset keeps their work_paths
-    distinct regardless of name collisions.
-    """
     return [
         pc.verify_asset(
             engine,
@@ -159,13 +141,6 @@ def _verify_all_assets(
     ]
 
 
-# --------------------------------------------------------------------------- #
-# Target resolution — one (channel, varver) target per canonical asset's own
-# matrix_row, dependency assets fanned in by ABI + extra_pkgs match against
-# THIS RUN's targets.
-# --------------------------------------------------------------------------- #
-
-
 @dataclass
 class _Target:
     row: Mapping[str, object]
@@ -173,10 +148,32 @@ class _Target:
     dependencies: list[pc.VerifiedAsset] = field(default_factory=list)
 
 
+def _origin_stem(value: object) -> str | None:
+    """Last path component of an origin, with a py / pyNNN flavor prefix stripped.
+
+    extra_pkgs lists port origins (textproc/py-charset-normalizer). Some
+    manifests and test fixtures use the flavored package origin
+    (textproc/py311-charset-normalizer). Those name the same extra.
+    """
+    if not isinstance(value, str) or "/" not in value:
+        return None
+    last = value.rsplit("/", 1)[-1]
+    stripped = _PY_FLAVOR_ORIGIN.sub("", last, count=1)
+    return stripped or last
+
+
 def _row_declares_dep(row: Mapping[str, object], dep: pc.VerifiedAsset) -> bool:
     """True iff this ROUTE/BUILD row lists the dependency's origin in extra_pkgs."""
     extras = row.get("extra_pkgs")
-    return isinstance(extras, list) and dep.manifest.get("origin") in extras
+    if not isinstance(extras, list):
+        return False
+    origin = dep.manifest.get("origin")
+    if origin in extras:
+        return True
+    stem = _origin_stem(origin)
+    if stem is None:
+        return False
+    return any(_origin_stem(extra) == stem for extra in extras)
 
 
 def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Target]:
@@ -217,12 +214,6 @@ def _asset_map(target: _Target) -> dict[str, Path]:
     for dep in target.dependencies:
         existing = mapping.get(dep.canonical_name)
         if existing is not None:
-            # A tagged run declares its dependency assets per row, so the SAME
-            # artifact legitimately arrives under several declared names — those
-            # deduplicate byte-identically. DIFFERENT bytes under one canonical
-            # name must fail closed here: keying the map silently last-wins
-            # otherwise, publishing one build and dropping the other with no
-            # conflict check at all (issue #2231).
             if _files_identical(existing, dep.work_path):
                 continue
             raise DestinationConflictError(
@@ -235,34 +226,13 @@ def _asset_map(target: _Target) -> dict[str, Path]:
     return mapping
 
 
-# --------------------------------------------------------------------------- #
-# Drop assets in place, prune + regenerate only what actually changed.
-# --------------------------------------------------------------------------- #
-
-
 def _files_identical(a: Path, b: Path) -> bool:
-    """True iff ``a`` and ``b`` hold the same bytes.
-
-    Checks size first: the common case (a genuinely new build) almost always
-    differs there, so most calls never read either file's contents."""
     if a.stat().st_size != b.stat().st_size:
         return False
     return a.read_bytes() == b.read_bytes()
 
 
 def _drop_assets(dest_dir: Path, asset_map: Mapping[str, Path]) -> bool:
-    """Copy every ``asset_map`` entry into ``dest_dir`` under its own name.
-
-    Returns True iff at least one entry was missing at the destination — the
-    caller uses this to decide whether this target needs
-    ``prune_retained``/``regenerate_catalogue`` at all (the no-op contract: an
-    already-identical destination is left completely untouched, never re-copied,
-    re-pruned, or re-regenerated).
-
-    An existing destination file with the SAME canonical name but DIFFERENT
-    bytes is a hard failure, never an overwrite: issue #2146's contract is that
-    a name/version collision with different bytes, source, or provenance fails
-    closed instead of silently replacing the published artifact."""
     dest_dir.mkdir(parents=True, exist_ok=True)
     changed = False
     for name, src in asset_map.items():
@@ -281,26 +251,12 @@ def _drop_assets(dest_dir: Path, asset_map: Mapping[str, Path]) -> bool:
 
 
 def _catalogue_descriptor_complete(dest_dir: Path, engine: pc.Engine) -> bool:
-    """True iff every catalog descriptor artifact ``build_repo`` emits is present
-    in ``dest_dir``.
-
-    catalogue_assembly.regenerate_catalogue's own docstring names the fault
-    window this closes: a write-back fault after the destination wipe can leave
-    the directory missing meta.conf/data.pkg/packagesite.pkg even though the
-    ``.pkg`` payload alone (all ``_drop_assets`` compares) is untouched and
-    byte-identical on a rerun — which would otherwise report a NOOP over an
-    unservable catalogue. ``_CATALOG_PKG_FILES`` is the engine's own name for
-    the two ``*.pkg``-named descriptor files; the engine has no equivalent
-    constant for ``meta.conf`` (only its CONTENT, ``META_CONF``), so that name
-    is listed directly here."""
     brp = engine.build_repo_portable
     return all((dest_dir / name).is_file() for name in (*brp._CATALOG_PKG_FILES, "meta.conf"))
 
 
 @dataclass(frozen=True)
 class PublishReport:
-    """What this run actually did — the workflow stages exactly ``touched``."""
-
     touched: tuple[tuple[str, str], ...]
 
     @property
@@ -314,11 +270,6 @@ class PublishReport:
 
 
 def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -> PublishReport:
-    """Assemble every (channel, varver) target this run's assets cover.
-
-    ``run_result`` must already be axis-1-13-verified (``publish_catalogues.verify_run``).
-    Never runs git — the caller commits/pushes exactly ``PublishReport.touched``.
-    """
     intake = run_result.intake
     site_root = Path(pkg_repo) / _SITE_SUBDIR
     targets = _build_targets(engine, run_result)
@@ -344,11 +295,6 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
         ca.verify_multi_destination_identity(engine, site_root, source_index)
 
     return PublishReport(touched=tuple(touched))
-
-
-# --------------------------------------------------------------------------- #
-# run() — intake -> verify -> publish. main() is a thin CLI wrapper around it.
-# --------------------------------------------------------------------------- #
 
 
 def run(
@@ -385,8 +331,6 @@ def run(
     with tempfile.TemporaryDirectory(prefix="publish-release-verify-") as work_dir:
         verified_assets = _verify_all_assets(engine, intake, assets_dir, digests, Path(work_dir))
         run_result = pc.verify_run(engine, intake, verified_assets, route_matrix_rows)
-        # publish() reads VerifiedAsset.work_path, which lives under work_dir — must
-        # run to completion BEFORE this context manager tears work_dir down.
         return publish(engine, run_result, pkg_repo)
 
 
