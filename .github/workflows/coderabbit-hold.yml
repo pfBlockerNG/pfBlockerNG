@@ -1,8 +1,6 @@
 # Silent Fair Usage mute. When CodeRabbit posts a quota notice, label every
-# open PR `cr-hold` so auto-review does not fire on the rest.
-# Labels only — never comment, never @coderabbitai (that is the spam).
-# Agents remove `cr-hold` from one PR after the window, then
-# `@coderabbitai pause` (if needed) + `@coderabbitai review` on that PR only.
+# open PR cr-hold so auto-review does not fire on the rest.
+# Labels only — never comment (that is the spam).
 # Policy: .agents/policy/coderabbit.md
 name: CodeRabbit hold
 
