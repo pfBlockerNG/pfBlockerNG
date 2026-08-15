@@ -4,7 +4,10 @@
 # image build upload hundreds of megabytes it then ignores.
 .git
 .claude/worktrees
+.grok/worktrees
 .venv
 node_modules
 **/node_modules
 **/__pycache__
+*.pkg
+*.qcow2

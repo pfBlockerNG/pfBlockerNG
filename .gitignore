@@ -61,7 +61,35 @@ test-results/
 
 # ── AI-agent worktrees (per-task, never committed) ───────────────────────────
 .claude/worktrees/
+.grok/worktrees/
 .codex/local-notes.md
 
-# Per-machine Claude Code overrides (e.g. Windows Git Bash path) — never committed
+# Per-machine Claude Code / Grok overrides — never committed
 .claude/settings.local.json
+
+# ── Secrets / credentials (never commit) ──────────────────────────────────────
+# Plugin-local copies live in plugins/ponytail/.gitignore; keep the same
+# contract at the repo root now that this checkout can `git push`.
+.env
+.env.*
+!.env.example
+id_rsa
+id_ed25519
+id_ed25519.pub
+*.pem
+.gh-token
+
+# ── Patch / rebase leftovers ──────────────────────────────────────────────────
+*.orig
+*.rej
+
+# ── Local package / VM / smoke artefacts ──────────────────────────────────────
+# No tracked .pkg or .qcow2 fixtures exist; these are builder / smoke output.
+*.pkg
+*.qcow2
+/out/
+/deppkgs/
+/pkg/
+smoke-diag/
+pfb-runs/
+smoke_key
