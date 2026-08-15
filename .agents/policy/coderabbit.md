@@ -40,44 +40,31 @@ auto-review spends).
   Those incrementals are what burned the Aug 15 hourly allowance.
 - Do not enable usage-based billing or paste billing org IDs into
   comments. Billing is an owner decision.
-- **Mute auto-review while Fair Usage is live.** A quota notice on
-  one PR will otherwise fire on every other open PR and pollute
-  them with the same "Review limit reached" comment. The mute is
-  the `cr-hold` label (preferred) or a `WIP` title / `WIP` label /
-  `[skip review]` title — `.coderabbit.yaml` skips auto-review on
-  all of those. Do **not** retitle a ready PR as WIP just to mute
-  CodeRabbit; use `cr-hold`. Drafts are also skipped
-  (`drafts: false`).
+- **Do not open a ready PR while the ledger says wait.** There is
+  no Fair Usage REST API and no mute label. Immediately before
+  `gh pr create`, run `scripts/agent/before-pr-create.sh`. Exit 3
+  → wait until the printed `next slot` (or until the owner says
+  open anyway). Do not invent `cr-hold` / `cr-go` labels.
 
-## Do not spam pause comments
+## Advisory limit (not a mute gate)
 
-Broadcasting `@coderabbitai pause` on every open PR is the spam
-we are avoiding. Mute is a **label**, applied by the
-`coderabbit-hold` workflow (no comment) or by `gh pr edit --add-label
-cr-hold`. `.coderabbit.yaml` skips auto-review on `cr-hold`.
+`scripts/agent/coderabbit_limit.py status` reconstructs a **lower
+bound** on this repo's PR-review spend from
+`GET /repos/{o}/{r}/issues/comments?since=` and prints the full
+picture (plan hourly columns, 7-day taper band, used/remaining
+this hour, last review, next slot, live quota if any). Use
+`created_at` — CodeRabbit edits the summarize comment in place.
+Incrementals collapse onto that comment; other repos are
+invisible. Wrong on the cheap side costs one delayed PR; a mute
+gate would need an exact number we do not have (#2435).
+
+No GitHub Action. Only agents consume the number, so the script
+on the PR-open path is the feature. There is no hold workflow.
 
 `@coderabbitai pause` and `@coderabbitai review` are **one PR, at
-review time only**:
-
-1. Quota notice → the Action labels every **other** open PR
-   `cr-hold`. Agents do **not** comment on the siblings.
-2. The same workflow **polls a reconstructed ledger**, not a
-   CodeRabbit API (none exposes Fair Usage). It records finished
-   review times from `coderabbitai[bot]` comments, applies the
-   published rolling-hour + 7-day Fair Usage table, and holds
-   when `used >= allowance - 1` (one spare slot). Cron `*/15` is
-   the backstop: "Reviews are available now" is a **reply** to a
-   human comment, not a self-firing expiry event (see #2435).
-   When the ledger is clear and no quota is live, it removes
-   `cr-hold` from **one** oldest held PR. Incremental auto-review
-   pauses after two reviewed commits, so one APPLY look is not a
-   burst. Agents may also un-hold one PR by hand and
-   `@coderabbitai review` it.
-3. Never `@coderabbitai pause` or `review` on a PR that still has
-   `cr-hold`, and never on a PR whose latest CR comment is a live
-   quota countdown.
-4. `@coderabbitai resume` only when product behaviour changed after
-   a finished review **and** no quota window is live.
+review time only**. Never `@coderabbitai review` while the latest
+CodeRabbit comment is a live quota countdown. Never broadcast
+pause comments.
 
 `.coderabbit.yaml` pauses incremental auto-review after two
 reviewed commits (`auto_pause_after_reviewed_commits: 2`): first
@@ -85,84 +72,43 @@ look plus the APPLY round. Turning incrementals off dropped the
 APPLY review — that is where the #2432 / #2434 defects lived.
 Format-only pushes after pause do not spend a slot.
 `review_status: false` hides "Review skipped" status widgets.
-Quota notices are **not** those widgets: on #2430 Fair Usage
-arrived as `rate limited by coderabbit.ai` / `Review limit
-reached` in the summarize comment, which still fires
-`issue_comment` for the hold workflow.
 
 ## Owner override and substitute reviewer
 
-Only the **repo owner** may spend a CodeRabbit slot anyway, or
-swap CodeRabbit for someone else on one PR. Agents never add
-`cr-go` and never invent a substitute.
-
-1. **Override the mute** — owner adds the `cr-go` label
-   (`gh pr edit N --add-label cr-go`). The hold Action will not
-   put `cr-hold` on that PR and will strip `cr-hold` if both are
-   present. Auto-review can run. Use when the owner wants
-   CodeRabbit on this PR *now* and accepts the Fair Usage cost.
-2. **Substitute reviewer** — owner names who reviews instead
-   (another agent, a human). Agents do **not**
-   `@coderabbitai review` on that PR. Three-leg still runs.
-   Record `CR-SUBSTITUTE: <who> reviewed <SHA>` on the PR.
-   Merge gate treats that record as the CodeRabbit stand-in for
-   that head. Do not invent a substitute; only when the owner
-   asked.
-
-A CLI-in-CI second channel (separate hourly CLI column) is
-tracked on #2436. Do not add an API-key job until the owner
-decides; Fair Usage weekly taper may still be per-developer
-across channels.
-
-## Mute while a quota window is live
-
-Any agent (this one or another) that sees a quota notice, or that
-opens a PR knowing a window is still counting down:
-
-1. Let the `coderabbit-hold` workflow label open PRs, or
-   `gh pr edit N --add-label cr-hold` yourself. **No pause comments
-   on the siblings.**
-2. New PRs during the window: `gh pr create --label cr-hold` (or
-   open as draft). Never open a ready, unlabeled, non-draft PR
-   while a countdown is live.
-3. Leave `cr-hold` on siblings until **their** turn. Removing it
-   from every PR at once just recreates the burst.
-4. When the window elapses: remove `cr-hold` from **one** PR,
-   `@coderabbitai pause` once on that PR, then `@coderabbitai
-   review` once. Do not comment on the rest.
-5. `cr-hold` is not "work unfinished". Three-leg, CI, and landing
-   continue.
+Only the **repo owner**, in conversation, may spend a slot anyway
+or name another reviewer. No labels. Agents never invent a
+substitute. Three-leg still runs. CLI-in-CI is #2436 (needs a
+burst test + an Agentic API key before anyone builds it).
 
 ## Required path (every future PR)
 
-1. Open a non-draft PR. Auto-review should ACK within ten minutes
+1. Run `scripts/agent/before-pr-create.sh`. Exit 3 → do not
+   `gh pr create` until the printed next slot, unless the owner
+   overrode in this conversation. Exit 0 → open a non-draft PR.
+   Auto-review should ACK within ten minutes
    (`wait-reviewer.sh --until ack`).
 2. **ACK is a real review** (walkthrough plus "Actionable comments
    posted" / "No actionable comments", or an inline review on the
    head SHA) → triage every finding per landing.md. Stop here.
 3. **ACK is only a quota notice** ("Review limit reached" /
    `rate limited by coderabbit.ai` and no finished review):
-   1. Do not comment on siblings. The hold workflow (or
-      `gh pr edit --add-label cr-hold`) mutes them.
-   2. Apply `cr-hold` to every **other** open PR if the Action
-      has not yet (mute section above).
-   3. Parse **Next review available in** (`N` minutes or hours).
+   1. Do not comment on siblings and do not open another ready PR.
+   2. Re-run `before-pr-create.sh` (or read the quota line).
+      Parse **Next review available in** (`N` minutes or hours).
       Unparsable → treat as 15 minutes, once.
-   4. Arm a **self-terminating** wait for `N + 30s`
+   3. Arm a **self-terminating** wait for `N + 30s`
       ([`waits.md`](waits.md): cap inside the wait, never a bare
       unbounded sleep). If `N` exceeds the waits.md two-hour
       ladder, wait the ladder, then **record a miss** — do not
       nudge. A late nudge during a still-open window refreshes
       the countdown (fixed floor above).
-   5. When the wait ends, remove `cr-hold` from **this** PR only
-      (it must already be paused), then post **exactly one**
-      top-level `@coderabbitai review`. If the PR is not paused,
-      `@coderabbitai pause` first, then `review` — never `review`
-      on an unpaused PR.
-   6. Arm `--until finished`. **FINISHED** → triage.
-      **Another quota notice** → re-apply `cr-hold`, wait that
-      new window **once**, nudge **once** more, then stop.
-      Record the miss (SHA + title) on the landing audit. Do not loop.
+   4. When the wait ends, post **exactly one** top-level
+      `@coderabbitai review` if the PR is paused; otherwise
+      `@coderabbitai pause` first, then `review`.
+   5. Arm `--until finished`. **FINISHED** → triage.
+      **Another quota notice** → wait that new window **once**,
+      nudge **once** more, then stop. Record the miss
+      (SHA + title) on the landing audit. Do not loop.
 4. **NOACK** in ten minutes → `@coderabbitai pause` if not already,
    then one `@coderabbitai review`, fresh ten-minute ack window.
    Still silent → CodeRabbit unavailable; three-leg carries the
@@ -192,8 +138,8 @@ tightening that is obvious **now** (same session, not "later"):
 | `@coderabbitai review` after ruff / comment APPLY / CR's own suggested diff | stop; landing spend rule already forbids it |
 | Third+ incremental on one PR | confirm `auto_pause_after_reviewed_commits` is 2; lower to 1 if incrementals are the burst |
 | Auto-review of `.md`, `.agents/`, `docs/`, `legacy/`, vendored trees | confirm `.coderabbit.yaml` `path_filters`; add the new tree |
-| Many product PRs in one hour | serialize: next PR opens with `cr-hold` (or as draft) until the in-flight PR's first finished CR review |
-| Quota notice on every open PR | `@coderabbitai pause` + `cr-hold` on siblings immediately |
+| Many product PRs in one hour | serialize: do not `gh pr create` until `before-pr-create.sh` says open |
+| Quota notice on every open PR | stop opening ready PRs; wait the printed next slot |
 | `@coderabbitai review` on an unpaused PR | no-op ("Already reviewed"); pause first |
 | Nudge while a quota notice is still counting down | never; wait the stated window |
 

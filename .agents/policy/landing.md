@@ -22,7 +22,7 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 
 ## Preflight
 
-- **Identify the PR:** given PR number, else current branch's open PR (number, head ref, base ref, state, draft flag, mergeability, URL). None → stop and ask. Resolve `OWNER/REPO` once.
+- **Identify the PR:** given PR number, else current branch's open PR (number, head ref, base ref, state, draft flag, mergeability, URL). None → stop and ask. Resolve `OWNER/REPO` once. Opening a new PR: run `scripts/agent/before-pr-create.sh` first (exit 3 = wait).
 - **Scope check:** flow is for code-bearing PRs. Dev-only classes (documentation, ADR text, skills, agent config) land straight on `devel` with no PR — say so and stop.
 - **Transport check (once):** confirm GitHub CLI present and authenticated. Absent → use client's GitHub MCP tools with wakeup-paced bounded checks ([`waits.md`](waits.md) §4 "Managed environments"); neither transport → stop and report.
 - **Refusal cases (re-checked immediately before merging):** never merge PR that is not OPEN, is draft (ask user to mark ready), or is CONFLICTING (conflict resolution is separate work). Mergeability UNKNOWN means GitHub still computing — re-read after few seconds.
@@ -63,7 +63,7 @@ The five-minute "drop CodeRabbit on quota" rule is **retired**. Full path:
 Judge availability per-PR with **10-minute acknowledgement window** anchored on PR's creation time, polled via `scripts/agent/wait-reviewer.sh --until ack` (self-exiting; result file's LAST line is verdict). PR already older than 10 minutes with no CodeRabbit message → conclude NOACK immediately.
 
 - **ACK is a real review** (finished body or inline review on the head SHA) → wait for `--until finished` if not already terminal, then triage.
-- **ACK is only a quota notice** → do **not** drop. Do **not** pause-comment every PR. The `coderabbit-hold` workflow labels sibling PRs `cr-hold`, and its poll job also holds from the reconstructed rolling-hour ledger (no CodeRabbit quota API). It releases **one** oldest hold per run once quota is dead **and** the ledger has a spare slot (up to 15 minutes lag). Then `@coderabbitai review` once on that PR. Details in coderabbit.md.
+- **ACK is only a quota notice** → do **not** drop. Do **not** pause-comment every PR. Do **not** open another ready PR until `scripts/agent/before-pr-create.sh` says open (or the owner overrode). Then `@coderabbitai review` once on that PR. Details in coderabbit.md.
 - **NOACK** → nudge **once** (`@coderabbitai review`), then re-run ack wait with a fresh 10-minute window anchored on *now* (`--since`). Still silent → CodeRabbit unavailable; three-leg carries the review step. Never a second no-ack nudge.
 - **Spend:** after a finished review, do not `@coderabbitai review` for format-only / comment-only / mechanical APPLY. Every quota notice triggers the spend inspection in coderabbit.md before the next PR opens.
 
@@ -134,7 +134,7 @@ Proceed to merge ONLY when review step finished cleanly:
 - **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to merge while any item lack outcome.
 - **No external reviewer** (CodeRabbit dropped, nobody else reviewed): note skip in audit trail; three legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before merge — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
-- **CodeRabbit mute at merge:** if the PR still has `cr-hold` (or `WIP`) **and** the head SHA has no finished CodeRabbit review, do not merge — unless the owner added `cr-go` (spend a slot anyway) or a `CR-SUBSTITUTE: <who> reviewed <SHA>` record covers this head (owner named another reviewer). Otherwise strip the label and either wait out the quota path in [`coderabbit.md`](coderabbit.md) or record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). `cr-hold` does **not** block an explicit `@coderabbitai review`. Agents never add `cr-go` or a substitute unless the owner asked.
+- **CodeRabbit at merge:** if the head SHA has no finished CodeRabbit review, follow [`coderabbit.md`](coderabbit.md) or record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
 - Unresolved, contested, or user-decision findings → stop and report; do not merge.
 
 ## Merge step

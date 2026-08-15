@@ -1,9 +1,9 @@
 # CodeRabbit configuration.
 #
 # Reviews are beneficial and stay advisory (they never gate merge).
-# First look plus one incremental (the APPLY round). Quota mute is
-# the cr-hold label via coderabbit-hold.yml — do not broadcast pause
-# comments. Path: .agents/policy/coderabbit.md.
+# First look plus one incremental (the APPLY round). Agents decide
+# when to open a PR from scripts/agent/before-pr-create.sh.
+# Path: .agents/policy/coderabbit.md.
 reviews:
   auto_review:
     enabled: true
@@ -16,12 +16,10 @@ reviews:
     ignore_title_keywords:
       - "WIP"
       - "[skip review]"
-    # !label = skip auto-review. cr-hold is the Fair Usage mute
-    # (quota notices otherwise land on every open PR). WIP stays
-    # for unfinished work. See .agents/policy/coderabbit.md.
+    # !label = skip auto-review. WIP is unfinished work, not a
+    # Fair Usage mute. See .agents/policy/coderabbit.md.
     labels:
       - "!WIP"
-      - "!cr-hold"
   # Hide "Review skipped" / status-only comments (quota + no-new-commits).
   review_status: false
 
