@@ -114,6 +114,13 @@ final class WwwCheckboxPostedValueTest extends TestCase
 			while ($j < $count && is_array($tokens[$j]) && in_array($tokens[$j][0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], TRUE)) {
 				$j++;
 			}
+			// A fully-qualified `new \Form_Checkbox(` is the same call; no page declares a
+			// namespace today, so this is only here to keep the shape from being a blind spot.
+			if ($j < $count && is_array($tokens[$j]) && $tokens[$j][0] === T_NS_SEPARATOR) {
+				$j++;
+			} elseif ($j < $count && $tokens[$j] === '\\') {
+				$j++;
+			}
 			if ($j >= $count || !is_array($tokens[$j]) || $tokens[$j][0] !== T_STRING || $tokens[$j][1] !== 'Form_Checkbox') {
 				continue;
 			}
@@ -166,6 +173,13 @@ final class WwwCheckboxPostedValueTest extends TestCase
 			self::splitArgs("'pfb_x', gettext('A, B'), 'Enabled', \$checked, 'on'"),
 			'a comma inside a nested call must not end that argument'
 		);
+		// The case above is also satisfied by quote-tracking alone; this one is not, so it
+		// is what actually holds the depth tracking honest.
+		$this->assertSame(
+			["'pfb_x'", 'max($a, $b)', "'Enabled'", '$rows[1, 2]', "'on'"],
+			self::splitArgs("'pfb_x', max(\$a, \$b), 'Enabled', \$rows[1, 2], 'on'"),
+			'an UNQUOTED comma inside a call or an index must not end that argument'
+		);
 		$this->assertSame(
 			["'pfb_x'", '"a \\", b"', "'Enabled'", '$checked'],
 			self::splitArgs("'pfb_x', \"a \\\", b\", 'Enabled', \$checked"),
@@ -194,7 +208,9 @@ final class WwwCheckboxPostedValueTest extends TestCase
 		// construct. An undercount means a page is unguarded without anything saying so.
 		$expected = 0;
 		foreach ($this->pages() as $page) {
-			$expected += substr_count(php_strip_whitespace($page), 'new Form_Checkbox');
+			$stripped  = php_strip_whitespace($page);
+			$expected += substr_count($stripped, 'new Form_Checkbox');
+			$expected += substr_count($stripped, 'new \\Form_Checkbox');
 		}
 		$this->assertGreaterThan(20, $expected, 'the sweep found almost no checkboxes; it has stopped matching');
 		$this->assertSame($expected, $seen, 'the sweep parsed fewer checkbox calls than the tree contains');
