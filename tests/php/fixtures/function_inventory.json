@@ -1073,6 +1073,26 @@
                 "variadic": false,
                 "type": "?string",
                 "default": null
+            },
+            {
+                "name": "record_channel",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_channel_from_build_record": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "json",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
             }
         ]
     },
@@ -1095,6 +1115,19 @@
         "params": [
             {
                 "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_channel_recognized": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "channel",
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",
@@ -8813,6 +8846,26 @@
             }
         ]
     },
+    "pfb_pkg_annotation": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pkgname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "key",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_pkg_argv_subcommand": {
         "returnsRef": false,
         "returnType": "string",
@@ -8857,6 +8910,19 @@
             }
         ]
     },
+    "pfb_pkg_is_our_name": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "name",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "pfb_pkg_latest": {
         "returnsRef": false,
         "returnType": "string",
@@ -8873,6 +8939,19 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_pkg_newest_version": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "versions",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
                 "default": null
             }
         ]
@@ -10528,6 +10607,19 @@
             }
         ]
     },
+    "pfb_software_pkgmgr_usable": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": null
+            }
+        ]
+    },
     "pfb_software_provenance_ok": {
         "returnsRef": false,
         "returnType": "bool",
@@ -10537,6 +10629,26 @@
         "returnsRef": false,
         "returnType": "array",
         "params": []
+    },
+    "pfb_software_uninstall_href": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pkgname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_software_update_check": {
         "returnsRef": false,
@@ -10555,6 +10667,33 @@
                 "variadic": false,
                 "type": "?array",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_software_update_href": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pkgname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "update_available",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
             }
         ]
     },

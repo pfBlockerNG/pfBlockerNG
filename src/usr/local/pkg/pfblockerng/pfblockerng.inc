@@ -4843,8 +4843,8 @@ function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
  */
 
 /*
- * Channel a build is on, from its installed package NAME:
- *   pfSense-pkg-pfBlockerNG         -> 'stable'
+ * Channel leftover from an installed package NAME suffix (issue #2395):
+ *   pfSense-pkg-pfBlockerNG         -> NULL     (canonical name is not a channel)
  *   pfSense-pkg-pfBlockerNG-testing -> 'testing'
  *   pfSense-pkg-pfBlockerNG-edge    -> 'edge'
  *   pfSense-pkg-pfBlockerNG-devel   -> 'devel'   (retired port; installed boxes remain)
@@ -4857,12 +4857,10 @@ function pfb_wizard_dnsvip_settings(bool $auto, $vip4, $vip6): array {
  * boxes installed before the rename still carry it, and dropping it here would read them
  * as an unknown channel — i.e. not our build.
  *
- * issue #2148 narrowed this function's ROLE (its mapping is unchanged). Channel is now
- * catalogue placement — all four catalogues publish the canonical 'pfSense-pkg-pfBlockerNG'
- * — so pfb_channel_from_repo_name() is the authoritative channel signal and this is the
- * FALLBACK: the discriminator inside the legacy shared 'pfblockerng' repo, which carries
- * both the canonical and the -devel identity. It also remains the prefix/identity filter
- * inside pfb_pkg_installed_name().
+ * issue #2148 made channel catalogue placement: all four catalogues publish the canonical
+ * 'pfSense-pkg-pfBlockerNG', so an empty suffix cannot mean 'stable'. pfb_channel_from_repo_name()
+ * is authoritative; pfb_build_record.channel is next; this suffix map is leftovers only.
+ * Identity (is this our package at all) lives in pfb_pkg_is_our_name().
  */
 function pfb_channel_from_pkgname(?string $name): ?string {
 	if (!is_string($name) || $name === '') {
@@ -4875,7 +4873,7 @@ function pfb_channel_from_pkgname(?string $name): ?string {
 	$suffix = substr($lname, strlen('pfsense-pkg-pfblockerng'));
 	switch ($suffix) {
 		case '':
-			return 'stable';
+			return null;
 		case '-testing':
 			return 'testing';
 		case '-edge':
@@ -4887,6 +4885,23 @@ function pfb_channel_from_pkgname(?string $name): ?string {
 		default:
 			return null;
 	}
+}
+
+/*
+ * TRUE when $name is a pfBlockerNG package identity: the canonical name or a recognised
+ * leftover suffix. Used by pfb_pkg_installed_name() so dropping the empty-suffix -> stable
+ * lie (#2395) does not hide pfSense-pkg-pfBlockerNG from the install probe.
+ */
+function pfb_pkg_is_our_name(?string $name): bool {
+	if (!is_string($name) || $name === '') {
+		return FALSE;
+	}
+	$lname = strtolower($name);
+	if (!str_starts_with($lname, 'pfsense-pkg-pfblockerng')) {
+		return FALSE;
+	}
+	$suffix = substr($lname, strlen('pfsense-pkg-pfblockerng'));
+	return $suffix === '' || pfb_channel_from_pkgname($name) !== null;
 }
 
 /*
@@ -4928,18 +4943,57 @@ function pfb_channel_from_repo_name(?string $repo): ?string {
 }
 
 /*
- * The channel an install is on: the REPO decides, the NAME is the fallback (issue #2148).
- *
- * The two mappers above answer half the question each, and every caller needs both halves in
- * the same order — the Software page label, the cron notice text, and the cached channel. It
- * lives here as ONE function rather than as a repeated expression so the page and the notice
- * cannot drift into disagreeing about what channel a box is on.
- *
- * NULL when neither half recognises the install (a Netgate or hand-built package); callers
- * render that as 'unknown'.
+ * A recognised software channel token, or NULL. Used for pfb_build_record.channel and any
+ * other already-decoded annotation so a junk/foreign string cannot become a channel label.
  */
-function pfb_channel_for_install(?string $repo, ?string $pkgname): ?string {
-	return pfb_channel_from_repo_name($repo) ?? pfb_channel_from_pkgname($pkgname);
+function pfb_channel_recognized(?string $channel): ?string {
+	if (!is_string($channel) || $channel === '') {
+		return null;
+	}
+	switch (strtolower($channel)) {
+		case 'stable':
+		case 'testing':
+		case 'edge':
+		case 'devel':
+		case 'nightly':
+			return strtolower($channel);
+		default:
+			return null;
+	}
+}
+
+/*
+ * Channel from a pfb_build_record JSON blob (the package annotation), or NULL when the
+ * blob is missing/unparseable/has no recognised channel. Sideloaded GitHub Release
+ * assets carry this even when %R is empty (issue #2395).
+ */
+function pfb_channel_from_build_record(?string $json): ?string {
+	if (!is_string($json) || $json === '') {
+		return null;
+	}
+	$data = json_decode($json, TRUE);
+	if (!is_array($data) || !array_key_exists('channel', $data) || !is_string($data['channel'])) {
+		return null;
+	}
+	return pfb_channel_recognized($data['channel']);
+}
+
+/*
+ * The channel an install is on (issue #2148 / #2395).
+ *
+ * Precedence:
+ *   1. pfb_channel_from_repo_name($repo) when the %R is a pfblockerng-* catalogue;
+ *   2. a recognised $record_channel (pfb_build_record.channel from the installed .pkg);
+ *   3. a non-empty recognised name suffix (legacy leftovers);
+ *   4. NULL — callers render 'unknown'. Never invent 'stable' from the canonical name.
+ *
+ * $record_channel is the already-decoded annotation so this stays hermetic: live callers
+ * pass pfb_channel_from_build_record(pfb_pkg_annotation(...)); tests pass a literal.
+ */
+function pfb_channel_for_install(?string $repo, ?string $pkgname, ?string $record_channel = null): ?string {
+	return pfb_channel_from_repo_name($repo)
+		?? pfb_channel_recognized($record_channel)
+		?? pfb_channel_from_pkgname($pkgname);
 }
 
 /*
@@ -4998,6 +5052,37 @@ function pfb_software_is_our_build(?string $installed_repo): bool {
 		array('pfblockerng', 'pfblockerng-stable', 'pfblockerng-testing', 'pfblockerng-edge', 'pfblockerng-nightly'),
 		TRUE
 	);
+}
+
+/*
+ * TRUE only when pfSense Package Manager can see this origin (issue #2380).
+ * get_pkg_info() skips any pfSense-pkg-* whose %R is not exactly 'pfSense', so
+ * pkg_mgr_install.php reinstall/delete are dead on pfblockerng-* (and empty) origins.
+ */
+function pfb_software_pkgmgr_usable(?string $repo): bool {
+	return $repo === 'pfSense';
+}
+
+/*
+ * Update-now href. Package Manager only when %R is pfSense AND an update is available;
+ * otherwise '#' (the Software page disables the control and prints the CLI instead).
+ */
+function pfb_software_update_href(string $pkgname, string $repo, bool $update_available): string {
+	if (!$update_available || $pkgname === '' || !pfb_software_pkgmgr_usable($repo)) {
+		return '#';
+	}
+	return '/pkg_mgr_install.php?mode=reinstallpkg&pkg=' . rawurlencode($pkgname);
+}
+
+/*
+ * Uninstall href. Same origin gate as Update: never send a pfblockerng-* install to
+ * pkg_mgr_install.php?mode=delete (issue #2380).
+ */
+function pfb_software_uninstall_href(string $pkgname, string $repo): string {
+	if ($pkgname === '' || !pfb_software_pkgmgr_usable($repo)) {
+		return '#';
+	}
+	return '/pkg_mgr_install.php?mode=delete&pkg=' . rawurlencode($pkgname);
 }
 
 /*
@@ -5066,7 +5151,8 @@ if (!defined('PFB_PYTHON_WRAPPER')) {
 /*
  * The installed pfBlockerNG package NAME (e.g. 'pfSense-pkg-pfBlockerNG-devel'), read
  * from `pkg query '%n'` filtered to our prefix; '' when not installed via pkg or the
- * query fails. Feeds pfb_channel_from_pkgname().
+ * query fails. Feeds pfb_pkg_is_our_name() so the canonical identity still matches
+ * after empty-suffix stopped meaning 'stable' (issue #2395).
  */
 function pfb_pkg_installed_name(): string {
 	$out = array();
@@ -5080,7 +5166,7 @@ function pfb_pkg_installed_name(): string {
 	}
 	foreach ($out as $line) {
 		$line = trim($line);
-		if (pfb_channel_from_pkgname($line) !== null) {
+		if (pfb_pkg_is_our_name($line)) {
 			return $line;
 		}
 	}
@@ -5154,10 +5240,60 @@ function pfb_pkg_installed_repo(string $pkgname): string {
 }
 
 /*
- * The pfBlockerNG repo's latest version of $pkgname: `pkg update -r <repo>` (best-effort refresh of
- * just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`. Reads ONLY that repo
- * ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read latest"). Returns ''
- * (the caller then serves cache) when:
+ * One installed-package annotation value (`pkg query '%At %Av'`), or '' when absent/failed.
+ * Used to read pfb_build_record off the live .pkg (issue #2395).
+ */
+function pfb_pkg_annotation(string $pkgname, string $key): string {
+	if ($pkgname === '' || $key === '') {
+		return '';
+	}
+	$out = array();
+	$ret = -1;
+	exec(escapeshellarg(PFB_PKG_BIN) . " query '%At %Av' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	if ($ret !== 0) {
+		return '';
+	}
+	foreach ($out as $line) {
+		$line = trim((string) $line);
+		$pos = strpos($line, ' ');
+		if ($pos === FALSE) {
+			continue;
+		}
+		if (substr($line, 0, $pos) === $key) {
+			return trim(substr($line, $pos + 1));
+		}
+	}
+	return '';
+}
+
+/*
+ * Newest non-empty version in $versions via pkg_version_compare() (issue #2379).
+ * Catalogues retain older builds; rquery lists them in catalog order, not version order.
+ * Nightly is YYYYMMDDHHMMSS.<7hex> — never lexical / PHP version_compare at the call site.
+ */
+function pfb_pkg_newest_version(array $versions): string {
+	$latest = '';
+	foreach ($versions as $line) {
+		if (!is_scalar($line)) {
+			continue;
+		}
+		$ver = trim((string) $line);
+		if ($ver === '') {
+			continue;
+		}
+		if ($latest === '' || pkg_version_compare($latest, $ver) === '<') {
+			$latest = $ver;
+		}
+	}
+	return $latest;
+}
+
+/*
+ * The pfBlockerNG repo's latest version of $pkgname: `pkg update -f -r <repo>` (forced
+ * refresh of just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`.
+ * Reads ONLY that repo ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read
+ * latest"). Picks the newest rquery line with pkg_version_compare(); $out[0] is catalog
+ * order, not newest (issue #2379). Returns '' (the caller then serves cache) when:
  *   - $pkgname/$reponame is empty;
  *   - the pkg subsystem is locked (is_subsystem_dirty('pkg')) — never fight a base update;
  *   - DNS is unavailable (get_dnsavailable()) — never stall on a network read;
@@ -5178,12 +5314,16 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
-	// Best-effort catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
-	exec("{$tmo}{$bin} update -r {$repo} 2>/dev/null");
+	// Forced catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
+	// -f is required: Pages/file:// catalogs can keep an unchanged mtime/etag (issue #2379).
+	exec("{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
 	$out = array();
 	$ret = -1;
 	exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
-	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
+	if ($ret !== 0 || $out === array()) {
+		return '';
+	}
+	return pfb_pkg_newest_version($out);
 }
 
 /*
@@ -5262,10 +5402,11 @@ function pfb_software_write_cache(array $cache): void {
  *   3. Read latest from the repo the package was INSTALLED from (guarded inside
  *      pfb_pkg_latest()). An empty latest (pkg locked / no DNS / repo absent) preserves the
  *      cached latest so the page keeps showing the last-known value rather than regressing
- *      to ''.
- *   4. Refresh the cache (pkgname/repo/channel/installed/latest/last_checked) and, when
- *      pfb_should_notify() says so, raise a DE-DUPED file_notice and persist
- *      last_notified = latest (so repeated ticks at the same latest do not renotify).
+ *      to ''. A failed live read does NOT advance last_checked (issue #2379).
+ *   4. Refresh the cache (pkgname/repo/channel/installed/latest; last_checked only on a
+ *      successful live read) and, when pfb_should_notify() says so, raise a DE-DUPED
+ *      file_notice and persist last_notified = latest (so repeated ticks at the same
+ *      latest do not renotify).
  *
  * Best-effort throughout: it returns the cache array and never throws, so wiring it into
  * the cron pass can never break a feed update. $force (the page's "Check now" button) bypasses
@@ -5311,40 +5452,61 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	$repo = array_key_exists('installed_repo', $io)
 		? (string) $io['installed_repo']
 		: pfb_pkg_installed_repo($pkgname);
-	// Repo-first, name-fallback, through the ONE shared accessor so the cached channel,
-	// the notice text and the Software page label can never disagree.
-	$channel = pfb_channel_for_install($repo, $pkgname);
+	// Repo, then build-record, then leftover name suffix — the ONE shared accessor so the
+	// cached channel, the notice text and the Software page label can never disagree.
+	// Tests inject $io['record_channel'] (or omit it to mean "no annotation"); the live
+	// path ($io empty) reads pfb_build_record off the installed package (issue #2395).
+	if (array_key_exists('record_channel', $io)) {
+		$record_channel = is_string($io['record_channel']) ? $io['record_channel'] : null;
+	} elseif ($io === array() && $pkgname !== '') {
+		$record_channel = pfb_channel_from_build_record(pfb_pkg_annotation($pkgname, 'pfb_build_record'));
+	} else {
+		$record_channel = null;
+	}
+	$channel = pfb_channel_for_install($repo, $pkgname, $record_channel);
 
 	$cache = pfb_software_read_cache();
 
 	// 3. Read latest from the installed repo; keep the cached value when the live read is
-	// unavailable.
+	// unavailable. last_checked advances only on a successful live read (issue #2379).
 	if (array_key_exists('latest', $io)) {
-		$latest = (string) $io['latest'];
+		$live_latest = (string) $io['latest'];
 	} else {
-		$latest = pfb_pkg_latest($pkgname, $repo);
+		$live_latest = pfb_pkg_latest($pkgname, $repo);
 	}
+	$live_ok = ($live_latest !== '');
 	// Only reuse cached latest/last_notified when the cache belongs to the SAME install.
 	// pfb_software_cache_matches_install() is the whole question — name AND repo — and the
 	// Software page gates its DISPLAYED values on the identical call, so the two can never
 	// disagree about which cache is current.
 	$cache_matches_install = pfb_software_cache_matches_install($cache, $pkgname, $repo);
-	if ($latest === '' && $cache_matches_install) {
+	if (!$live_ok && $cache_matches_install) {
 		$latest = (string) ($cache['latest'] ?? '');
+	} else {
+		$latest = $live_latest;
 	}
 
 	$last_notified = $cache_matches_install ? (string) ($cache['last_notified'] ?? '') : '';
+	$kept_checked = ($cache_matches_install && array_key_exists('last_checked', $cache))
+		? $cache['last_checked']
+		: null;
 
 	// 4. Refresh the cache. last_notified is written from the scoped value so a cache left
 	// by a different install (a different package name OR a different catalogue) is reset
-	// rather than carried forward.
+	// rather than carried forward. last_checked stays put when the live catalog read failed.
 	$cache['pkgname']       = $pkgname;
 	$cache['repo']          = $repo;
 	$cache['channel']       = $channel;
 	$cache['installed']     = $installed;
 	$cache['latest']        = $latest;
 	$cache['last_notified'] = $last_notified;
-	$cache['last_checked']  = time();
+	if ($live_ok) {
+		$cache['last_checked'] = time();
+	} elseif ($kept_checked !== null) {
+		$cache['last_checked'] = $kept_checked;
+	} else {
+		unset($cache['last_checked']);
+	}
 
 	if (pfb_should_notify($installed, $latest, $last_notified, $enabled)) {
 		file_notice('pfBlockerNG', "pfBlockerNG {$latest} available ({$channel})", 'pfBlockerNG', '/pfblockerng/pfblockerng_software.php', 1);

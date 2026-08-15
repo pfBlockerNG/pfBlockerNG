@@ -17,24 +17,30 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_channel_from_pkgname')]
 #[CoversFunction('pfb_channel_from_repo_name')]
+#[CoversFunction('pfb_channel_from_build_record')]
+#[CoversFunction('pfb_channel_recognized')]
 #[CoversFunction('pfb_channel_for_install')]
+#[CoversFunction('pfb_pkg_is_our_name')]
+#[CoversFunction('pfb_pkg_newest_version')]
 #[CoversFunction('pfb_software_cache_matches_install')]
 #[CoversFunction('pfb_software_is_our_build')]
+#[CoversFunction('pfb_software_pkgmgr_usable')]
+#[CoversFunction('pfb_software_update_href')]
+#[CoversFunction('pfb_software_uninstall_href')]
 #[CoversFunction('pfb_update_available')]
 #[CoversFunction('pfb_software_check_enabled')]
 #[CoversFunction('pfb_should_notify')]
 final class SoftwareUpdateDecisionTest extends TestCase
 {
 	/*
-	 * ---- pfb_channel_from_pkgname() — package name -> channel ----
-	 * The installed package name is authoritative for "what channel am I on". Each of
-	 * the three shipped names maps to its channel; anything else (incl. empty/null) is
-	 * an UNKNOWN channel -> null, the safe default (no feature without a known channel).
+	 * ---- pfb_channel_from_pkgname() — leftover name suffix -> channel (issue #2395) ----
+	 * The canonical name is NOT a channel (all four catalogues publish it). Only a
+	 * non-empty recognised suffix maps; empty/null/foreign -> null.
 	 */
 	public static function channelProvider(): array
 	{
 		return [
-			'stable: bare release name'   => ['pfSense-pkg-pfBlockerNG', 'stable'],
+			'canonical: empty suffix is not a channel' => ['pfSense-pkg-pfBlockerNG', null],
 			'devel: -devel suffix'        => ['pfSense-pkg-pfBlockerNG-devel', 'devel'],
 			'testing: -testing suffix'    => ['pfSense-pkg-pfBlockerNG-testing', 'testing'],
 			'edge: -edge suffix'          => ['pfSense-pkg-pfBlockerNG-edge', 'edge'],
@@ -90,27 +96,31 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	/*
-	 * ---- pfb_channel_for_install() — the ONE derivation both callers use (issue #2148) ----
-	 * The Software page label and the cron notice text must never disagree about what
-	 * channel a box is on, so the repo-first/name-fallback composition lives in one
-	 * function rather than as a repeated expression at each call site. Pinned here on all
-	 * three outcomes: the repo decides when it names a channel, the name decides when the
-	 * repo is the legacy shared catalogue (or is absent, as on a sideloaded `pkg add`),
-	 * and neither recognising the install yields null for the caller to render 'unknown'.
+	 * ---- pfb_channel_for_install() — the ONE derivation both callers use (#2148 / #2395) ----
+	 * Precedence: recognised repo, then a valid pfb_build_record.channel, then a leftover
+	 * name suffix. The canonical name alone is never 'stable'.
 	 */
 	public static function channelForInstallProvider(): array
 	{
 		return [
-			// The repo WINS over the name: this is the whole point of the cutover — the
-			// canonical identity lives in every catalogue, so the name would say 'stable'.
+			// The repo WINS over the name and over an annotation.
 			'edge catalogue beats the canonical name' => ['pfblockerng-edge', 'pfSense-pkg-pfBlockerNG', 'edge'],
 			'testing catalogue beats the name'        => ['pfblockerng-testing', 'pfSense-pkg-pfBlockerNG', 'testing'],
-			// Legacy shared repo: it names no channel, so the NAME still discriminates.
+			'repo beats annotation'                   => ['pfblockerng-edge', 'pfSense-pkg-pfBlockerNG', 'edge', 'testing'],
+			// Legacy shared repo: it names no channel. A leftover suffix still maps;
+			// the canonical name does not invent 'stable'.
 			'legacy repo falls back to -devel'        => ['pfblockerng', 'pfSense-pkg-pfBlockerNG-devel', 'devel'],
-			'legacy repo falls back to canonical'     => ['pfblockerng', 'pfSense-pkg-pfBlockerNG', 'stable'],
+			'legacy repo + canonical name -> unknown' => ['pfblockerng', 'pfSense-pkg-pfBlockerNG', null],
 			// A sideloaded `pkg add` records no repo at all — the Tier-A deploy's case.
-			'no repo falls back to the name'          => ['', 'pfSense-pkg-pfBlockerNG-nightly', 'nightly'],
-			'null repo falls back to the name'        => [null, 'pfSense-pkg-pfBlockerNG', 'stable'],
+			'no repo falls back to the name suffix'   => ['', 'pfSense-pkg-pfBlockerNG-nightly', 'nightly'],
+			'sideload -edge suffix'                   => ['', 'pfSense-pkg-pfBlockerNG-edge', 'edge'],
+			'sideload canonical is not stable'        => ['', 'pfSense-pkg-pfBlockerNG', null],
+			'null repo + canonical name -> unknown'   => [null, 'pfSense-pkg-pfBlockerNG', null],
+			// Annotation fills in when repo and suffix cannot.
+			'empty repo + annotation testing'         => ['', 'pfSense-pkg-pfBlockerNG', 'testing', 'testing'],
+			'annotation beats empty suffix'           => [null, 'pfSense-pkg-pfBlockerNG', 'edge', 'edge'],
+			// Netgate origin still accepts a leftover suffix (devel leftover).
+			'netgate repo + devel suffix -> devel'    => ['pfSense', 'pfSense-pkg-pfBlockerNG-devel', 'devel'],
 			// Neither half recognises it: a Netgate or hand-built package.
 			'netgate repo, foreign name -> null'      => ['pfSense', 'pfSense-pkg-suricata', null],
 			'unknown repo, unknown name -> null'      => ['whatever', '', null],
@@ -118,9 +128,143 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	#[DataProvider('channelForInstallProvider')]
-	public function testChannelForInstall(?string $repo, ?string $pkgname, ?string $expected): void
+	public function testChannelForInstall(
+		?string $repo,
+		?string $pkgname,
+		?string $expected,
+		?string $recordChannel = null
+	): void {
+		$this->assertSame($expected, pfb_channel_for_install($repo, $pkgname, $recordChannel));
+	}
+
+	/*
+	 * ---- pfb_channel_from_build_record() / pfb_channel_recognized() ----
+	 */
+	public static function buildRecordProvider(): array
 	{
-		$this->assertSame($expected, pfb_channel_for_install($repo, $pkgname));
+		return [
+			'testing annotation' => ['{"channel":"testing"}', 'testing'],
+			'stable annotation'  => ['{"channel":"stable"}', 'stable'],
+			'EDGE mixed case'    => ['{"channel":"EDGE"}', 'edge'],
+			'junk channel'       => ['{"channel":"beta"}', null],
+			'missing channel'    => ['{"source_sha":"abc"}', null],
+			'not json'           => ['{not json', null],
+			'empty'              => ['', null],
+			'null'               => [null, null],
+		];
+	}
+
+	#[DataProvider('buildRecordProvider')]
+	public function testChannelFromBuildRecord(?string $json, ?string $expected): void
+	{
+		$this->assertSame($expected, pfb_channel_from_build_record($json));
+	}
+
+	/*
+	 * ---- pfb_pkg_is_our_name() — identity after empty-suffix stopped meaning stable ----
+	 */
+	public static function ourNameProvider(): array
+	{
+		return [
+			'canonical'     => ['pfSense-pkg-pfBlockerNG', true],
+			'devel leftover'=> ['pfSense-pkg-pfBlockerNG-devel', true],
+			'edge leftover' => ['pfSense-pkg-pfBlockerNG-edge', true],
+			'foreign pkg'   => ['pfSense-pkg-suricata', false],
+			'foreign suffix'=> ['pfSense-pkg-pfBlockerNG-beta', false],
+			'empty'         => ['', false],
+			'null'          => [null, false],
+		];
+	}
+
+	#[DataProvider('ourNameProvider')]
+	public function testPkgIsOurName(?string $name, bool $expected): void
+	{
+		$this->assertSame($expected, pfb_pkg_is_our_name($name));
+	}
+
+	/*
+	 * ---- pfb_pkg_newest_version() — rquery lines, not $out[0] (issue #2379) ----
+	 */
+	public static function newestVersionProvider(): array
+	{
+		return [
+			'3.3.0 then 3.3.2'           => [['3.3.0', '3.3.2'], '3.3.2'],
+			'3.3.2 then 3.3.0'           => [['3.3.2', '3.3.0'], '3.3.2'],
+			'single 3.3.2'               => [['3.3.2'], '3.3.2'],
+			'empty / blanks skipped'     => [['', '3.3.0', '  ', '3.3.2'], '3.3.2'],
+			'empty list'                 => [[], ''],
+			'nightly dated'              => [['20260801', '20260814_2'], '20260814_2'],
+			'nightly timestamp.hex'      => [['20260801120000.abc1234', '20260814120000.def5678'], '20260814120000.def5678'],
+		];
+	}
+
+	#[DataProvider('newestVersionProvider')]
+	public function testPkgNewestVersion(array $versions, string $expected): void
+	{
+		$this->assertSame($expected, pfb_pkg_newest_version($versions));
+	}
+
+	/*
+	 * ---- Software-page action hrefs (issue #2380) ----
+	 * pkg_mgr_install.php only when %R is pfSense. Channel origins stay on '#'.
+	 */
+	public static function updateHrefProvider(): array
+	{
+		$pkg = 'pfSense-pkg-pfBlockerNG';
+		$pm = '/pkg_mgr_install.php?mode=reinstallpkg&pkg=' . rawurlencode($pkg);
+		return [
+			'Netgate + update'            => [$pkg, 'pfSense', true, $pm],
+			'Netgate + no update'         => [$pkg, 'pfSense', false, '#'],
+			'channel-stable + update'     => [$pkg, 'pfblockerng-stable', true, '#'],
+			'channel-testing + update'    => [$pkg, 'pfblockerng-testing', true, '#'],
+			'legacy pfblockerng + update' => [$pkg, 'pfblockerng', true, '#'],
+			'empty repo + update'         => [$pkg, '', true, '#'],
+			'empty pkgname'               => ['', 'pfSense', true, '#'],
+		];
+	}
+
+	#[DataProvider('updateHrefProvider')]
+	public function testSoftwareUpdateHref(string $pkgname, string $repo, bool $available, string $expected): void
+	{
+		$this->assertSame($expected, pfb_software_update_href($pkgname, $repo, $available));
+	}
+
+	public static function uninstallHrefProvider(): array
+	{
+		$pkg = 'pfSense-pkg-pfBlockerNG';
+		$pm = '/pkg_mgr_install.php?mode=delete&pkg=' . rawurlencode($pkg);
+		return [
+			'Netgate'         => [$pkg, 'pfSense', $pm],
+			'channel-stable'  => [$pkg, 'pfblockerng-stable', '#'],
+			'channel-edge'    => [$pkg, 'pfblockerng-edge', '#'],
+			'empty repo'      => [$pkg, '', '#'],
+			'empty pkgname'   => ['', 'pfSense', '#'],
+		];
+	}
+
+	#[DataProvider('uninstallHrefProvider')]
+	public function testSoftwareUninstallHref(string $pkgname, string $repo, string $expected): void
+	{
+		$this->assertSame($expected, pfb_software_uninstall_href($pkgname, $repo));
+	}
+
+	public function testSoftwarePageDoesNotHardcodePkgMgrForAllOrigins(): void
+	{
+		$src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_software.php'
+		);
+		$this->assertStringContainsString('pfb_software_update_href', $src);
+		$this->assertStringContainsString('pfb_software_uninstall_href', $src);
+		$this->assertStringNotContainsString(
+			'mode=reinstallpkg&pkg={$pfb_pkg_arg}',
+			$src,
+			'channel-origin installs must not emit a hardcoded Package Manager reinstall href'
+		);
+		$this->assertStringNotContainsString(
+			'mode=delete&pkg={$pfb_pkg_arg}',
+			$src,
+			'channel-origin installs must not emit a hardcoded Package Manager delete href'
+		);
 	}
 
 	/*
@@ -215,6 +359,8 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		return [
 			'newer latest -> available'        => ['3.2.0_5', '3.2.0_6', true],
 			'newer minor -> available'         => ['3.2.0', '3.2.1', true],
+			'3.3.0 vs 3.3.2 -> available'      => ['3.3.0', '3.3.2', true],
+			'3.3.2 vs 3.3.0 -> not available'  => ['3.3.2', '3.3.0', false],
 			'equal -> not available'           => ['3.2.0', '3.2.0', false],
 			'older latest -> not available'    => ['3.2.0_6', '3.2.0_5', false],
 			'nightly newer date -> available'  => ['20260101', '20260615', true],
