@@ -311,8 +311,17 @@ landing_regen_and_stage() {
         stage_paths="${stage_paths} docs/${target}"
     done
     docs_root="${PKG_REPO}/docs"
+    # `if`/`fi`, never `[ -f ... ] && printf` — the last directory `find` enumerates
+    # (order is not alphabetical; whatever readdir(3) returns) can legitimately have
+    # no index.html (gen_landing.py never writes one under docs/staging, issue #2389
+    # F4), and an `&&`-chained test's own falsy status becomes the whole `while`
+    # loop's exit status on its last iteration, which `set -e` then treats as this
+    # `dir_indexes=$(...)` assignment failing — aborting the script AFTER the
+    # publisher already ran and BEFORE any git add/commit (issue #2389 fix-round-1 F5).
     dir_indexes=$(find "$docs_root" -mindepth 1 -type d -print | while IFS= read -r d; do
-        [ -f "${d}/index.html" ] && printf 'docs/%s/index.html\n' "${d#"${docs_root}/"}"
+        if [ -f "${d}/index.html" ]; then
+            printf 'docs/%s/index.html\n' "${d#"${docs_root}/"}"
+        fi
     done)
     stage_paths="${stage_paths}
 ${dir_indexes}"

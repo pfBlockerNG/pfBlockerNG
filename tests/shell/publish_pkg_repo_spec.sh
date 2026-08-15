@@ -139,9 +139,11 @@ with open(os.path.join(site, "browse.html"), "w") as fh:
 # Mirrors the real generator's all_dirs()/write_site(): a per-directory
 # autoindex at EVERY existing level, not just this run's touched targets. The
 # site-wide walk is the property being pinned, so the stub must walk it too.
+# Skips docs/staging (issue #2389 F4: gen_landing.py never indexes it) so the
+# F5 spec examples can exercise a real index-less directory under docs/.
 for dirpath, _dirs, _files in os.walk(site):
     rel = os.path.relpath(dirpath, site)
-    if rel == ".":
+    if rel == "." or rel == "staging" or rel.startswith("staging" + os.sep):
         continue
     with open(os.path.join(dirpath, "index.html"), "w") as fh:
         fh.write(f"autoindex stub: {rel}\n")
@@ -341,6 +343,29 @@ JSON
     # 404 into `sh` for the half it omits (issue #2148).
     The variable committed should include 'docs/add-repo.sh'
     The variable committed should include 'docs/migrate-channel.sh'
+  End
+
+  It 'a stray index-less docs/staging dir (leftover from a crashed stage run) never aborts the dir_indexes collector'
+    # gen_landing.py never writes an index.html under docs/staging (issue #2389 F4)
+    # -- reachable here because a `direct` publish (this script's default mode,
+    # used by nightly.yml/pkg-republish.yml) can run while a stray docs/staging
+    # tree is still sitting on disk from an earlier crashed "stage" run.
+    # docs/staging/10-1/stable/ce-2.8 is the DEEPEST, alphabetically LAST entry
+    # `find -type d` enumerates under docs/ in this fixture, so `[ -f "$d/index.html"
+    # ] && printf ...` (no `if`/`fi`) makes the while loop's own exit status 1 on
+    # its last iteration -- `dir_indexes=$(...)` then aborts the whole script under
+    # `set -e`, after the publisher already ran, before any git add/commit.
+    mkdir -p "${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8"
+    echo stray >"${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8/stray.pkg"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
+    The variable committed should not include 'docs/staging'
+    The path "${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8/index.html" should not be exist
   End
 
   It 'never sweeps a stray untracked file or an unrelated dirty tracked file into the commit'
