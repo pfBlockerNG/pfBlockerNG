@@ -3,19 +3,24 @@
 The generator turns a built four-channel catalogue tree (stable/testing/edge/nightly,
 issue #2147) into a styled index: channel install cards, a Version x ABI table read
 from each .pkg manifest, and per-dir listings that show packages but hide pkg(8) catalog
-plumbing. These tests pin that behaviour without needing real .pkg archives (the manifest
-reader is injected / the render helpers are pure).
+plumbing. Most cases inject the manifest reader or exercise pure render helpers. The
+record-epoch HTML pin (issue #2401) builds a real libpkg fixture so the listing
+and landing rows cannot stay green behind a stubbed reader.
 """
 
 from __future__ import annotations
 
 import importlib.util
 import inspect
+import io
+import json
 import os
+import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import pfb_pkg
 import pytest
 
 # Load scripts/gen_landing.py (a script path, not an installed module).
@@ -233,11 +238,11 @@ def test_dir_entries_use_record_epoch_for_pkg_files(tmp_path: Path, monkeypatch:
     Then the .pkg row carries the record epoch while the plumbing file keeps its mtime,
     And an unreadable .pkg (corrupt/foreign) falls back to its mtime instead of crashing.
     """
-    import json
-
     record_epoch = int(datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp())
-    (tmp_path / "pfSense-pkg-pfBlockerNG-3.3.2.pkg").write_bytes(b"not a real pkg")
+    project = tmp_path / "pfSense-pkg-pfBlockerNG-3.3.2.pkg"
+    project.write_bytes(b"not a real pkg")
     (tmp_path / "broken.pkg").write_bytes(b"also not a pkg")
+    (tmp_path / "packagesite.pkg").write_bytes(b"catalog")
     (tmp_path / "meta.conf").write_text("meta")
 
     def fake_read(path: str) -> dict:
@@ -251,6 +256,9 @@ def test_dir_entries_use_record_epoch_for_pkg_files(tmp_path: Path, monkeypatch:
     assert by_name["pfSense-pkg-pfBlockerNG-3.3.2.pkg"] == float(record_epoch)
     assert by_name["broken.pkg"] == os.stat(tmp_path / "broken.pkg").st_mtime
     assert by_name["meta.conf"] == os.stat(tmp_path / "meta.conf").st_mtime
+    # Catalog plumbing stays on mtime even when the stub would hand it a record
+    # (is_package_file is the gate — issue #2401 leftover of path.endswith(".pkg")).
+    assert by_name["packagesite.pkg"] == os.stat(tmp_path / "packagesite.pkg").st_mtime
     # Out-of-range epoch (inf) must fall back to mtime, not crash the renderer later.
     monkeypatch.setattr(
         gl,
@@ -260,6 +268,194 @@ def test_dir_entries_use_record_epoch_for_pkg_files(tmp_path: Path, monkeypatch:
     _, files = gl._dir_entries(str(tmp_path), "")
     by_name = {name: mtime for name, _size, mtime in files}
     assert by_name["broken.pkg"] == os.stat(tmp_path / "broken.pkg").st_mtime
+    assert by_name[project.name] == os.stat(project).st_mtime
+
+
+# Record-only fixture used by the write_site HTML pin (issue #2401). Epochs are
+# the ticket's own numbers so a listing/landing mismatch is visible in the assert.
+_RECORD_EPOCH = 1786735920  # 2026-08-14 19:32 UTC
+_FILE_MTIME = 1786750000  # 2026-08-14 23:26 UTC
+_SOURCE_SHA = "f2c5650a1768c5df2bf05fd2cd4ae938a2f566a8"
+_RECORD_DATE = "2026-08-14 19:32 UTC"
+_MTIME_DATE = "2026-08-14 23:26 UTC"
+
+
+def _write_pkg(path: Path, *, annotations: dict[str, str], name: str = _CANON, version: str = "3.3.2") -> None:
+    """Write a libpkg-shaped .pkg whose +COMPACT_MANIFEST carries *annotations*."""
+    manifest: dict[str, Any] = {
+        "name": name,
+        "origin": f"net/{name}",
+        "version": version,
+        "comment": "demo",
+        "maintainer": "dev@example.com",
+        "www": "https://example.com",
+        "abi": "FreeBSD:15:*",
+        "arch": "freebsd:15:x86:64",
+        "prefix": "/usr/local",
+        "flatsize": 1,
+        "licenselogic": "single",
+        "desc": "demo",
+        "categories": ["net"],
+        "annotations": annotations,
+    }
+    compact = json.dumps(manifest, separators=(",", ":")).encode() + b"\n"
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tf:
+        info = tarfile.TarInfo(name="+COMPACT_MANIFEST")
+        info.size = len(compact)
+        info.mode = 0o644
+        tf.addfile(info, io.BytesIO(compact))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable"))
+
+
+def _autoindex_row(html: str, name: str) -> str:
+    needle = f">{name}</a>"
+    for chunk in html.split("<tr>"):
+        if needle in chunk:
+            return chunk
+    raise AssertionError(f"no autoindex row for {name!r}")
+
+
+def _record_only_cell(root: Path) -> tuple[Path, Path]:
+    """Cell dir with a record-only project .pkg plus catalog plumbing, all utime-pinned."""
+    cell = root / "stable" / "ce-2.8"
+    pkg = cell / f"{_CANON}-3.3.2.pkg"
+    record = json.dumps({"source_date_epoch": _RECORD_EPOCH, "source_sha": _SOURCE_SHA})
+    _write_pkg(pkg, annotations={pfb_pkg.PFB_BUILD_RECORD_KEY: record})
+    (cell / "packagesite.pkg").write_bytes(b"catalog")
+    (cell / "data.pkg").write_bytes(b"data")
+    (cell / "meta.conf").write_text("version = 2;\n")
+    for child in cell.iterdir():
+        os.utime(child, (_FILE_MTIME, _FILE_MTIME))
+    return root, cell
+
+
+def test_artifact_epoch_prefers_created_then_record_then_mtime() -> None:
+    """One resolver: created annotation, then pfb_build_record, then the file mtime."""
+    record = json.dumps({"source_date_epoch": _RECORD_EPOCH, "source_sha": _SOURCE_SHA})
+    created = {"annotations": {"created": "10", pfb_pkg.PFB_BUILD_RECORD_KEY: record}}
+    assert gl.artifact_epoch(created, float(_FILE_MTIME)) == 10.0
+    assert gl.artifact_epoch({"annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: record}}, float(_FILE_MTIME)) == float(
+        _RECORD_EPOCH
+    )
+    # Out-of-range created falls through to the record, then to mtime.
+    assert gl.artifact_epoch(
+        {"annotations": {"created": "1e309", pfb_pkg.PFB_BUILD_RECORD_KEY: record}}, float(_FILE_MTIME)
+    ) == float(_RECORD_EPOCH)
+    assert gl.artifact_epoch({"annotations": {"created": "1e309"}}, float(_FILE_MTIME)) == float(_FILE_MTIME)
+    assert gl.artifact_epoch({}, float(_FILE_MTIME)) == float(_FILE_MTIME)
+
+
+def test_published_datetime_and_display_epoch_share_artifact_epoch(tmp_path: Path, monkeypatch: Any) -> None:
+    """Mutating the shared resolver must move BOTH surfaces (issue #2401).
+
+    Today a copy lives in published_datetime and another in _display_epoch, so
+    changing only the table path leaves the listing green. After the share, a
+    stubbed artifact_epoch is what both callers format / return.
+    """
+    src_pub = inspect.getsource(gl.published_datetime)
+    src_disp = inspect.getsource(gl._display_epoch)
+    assert "artifact_epoch(" in src_pub
+    assert "artifact_epoch(" in src_disp
+
+    sentinel = 1111111111.0
+    seen: list[tuple[dict, float]] = []
+
+    def fake_epoch(manifest: dict, mtime: float) -> float:
+        seen.append((manifest, mtime))
+        return sentinel
+
+    monkeypatch.setattr(gl, "artifact_epoch", fake_epoch)
+    assert gl.published_datetime({"annotations": {"created": "1"}}, 9.0) == gl.artifact_datetime(sentinel)
+
+    pkg = tmp_path / f"{_CANON}-3.3.2.pkg"
+    pkg.write_bytes(b"x")
+    monkeypatch.setattr(gl, "read_compact_manifest", lambda _p: {"annotations": {}})
+    assert gl._display_epoch(str(pkg), 22.0) == sentinel
+    assert len(seen) == 2
+
+
+def test_catalog_pkg_keeps_mtime_when_manifest_reader_returns_record(tmp_path: Path, monkeypatch: Any) -> None:
+    """packagesite.pkg / data.pkg must not inherit a stubbed project record.
+
+    is_package_file is the gate: even if read_compact_manifest would return the
+    project record for every path, catalog .pkg files keep their mtime.
+    """
+    cell = tmp_path / "cell"
+    cell.mkdir()
+    project = cell / f"{_CANON}-3.3.2.pkg"
+    site_pkg = cell / "packagesite.pkg"
+    data_pkg = cell / "data.pkg"
+    project.write_bytes(b"pkg")
+    site_pkg.write_bytes(b"catalog")
+    data_pkg.write_bytes(b"data")
+    for path in (project, site_pkg, data_pkg):
+        os.utime(path, (_FILE_MTIME, _FILE_MTIME))
+
+    record = json.dumps({"source_date_epoch": _RECORD_EPOCH, "source_sha": _SOURCE_SHA})
+    monkeypatch.setattr(
+        gl,
+        "read_compact_manifest",
+        lambda _p: {"annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: record}},
+    )
+    _, files = gl._dir_entries(str(cell), "")
+    by_name = {name: mtime for name, _size, mtime in files}
+    assert by_name[project.name] == float(_RECORD_EPOCH)
+    assert by_name["packagesite.pkg"] == float(_FILE_MTIME)
+    assert by_name["data.pkg"] == float(_FILE_MTIME)
+
+
+def test_write_site_record_only_pkg_drives_listing_and_landing(tmp_path: Path, monkeypatch: Any) -> None:
+    """A real compact-manifest fixture (record only, no created/commit) drives write_site.
+
+    The cell listing and the landing Published / Commit cells show the record
+    epoch / source_sha, not the file mtime. read_compact_manifest is not stubbed
+    — that is how #2375's acceptance escaped.
+    """
+    site, cell = _record_only_cell(tmp_path / "site")
+    # Prove the archive is a real record-only compact manifest before rendering.
+    compact = pfb_pkg.read_compact_manifest(cell / f"{_CANON}-3.3.2.pkg")
+    annotations = compact.get("annotations") or {}
+    assert "created" not in annotations
+    assert "commit" not in annotations
+    assert pfb_pkg.PFB_BUILD_RECORD_KEY in annotations
+
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    assert n == 1
+
+    listing = (cell / "index.html").read_text()
+    pkg_row = _autoindex_row(listing, f"{_CANON}-3.3.2.pkg")
+    assert _RECORD_DATE in pkg_row
+    assert _MTIME_DATE not in pkg_row
+    for plumbing in ("packagesite.pkg", "data.pkg", "meta.conf"):
+        row = _autoindex_row(listing, plumbing)
+        assert _RECORD_DATE not in row
+        assert _MTIME_DATE in row
+
+    landing = (site / "index.html").read_text()
+    assert _RECORD_DATE in landing
+    assert _MTIME_DATE not in landing
+    assert f"{gl.SOURCE_REPO_URL}/commit/{_SOURCE_SHA}" in landing
+    assert f">{_SOURCE_SHA[:7]}<" in landing
+
+
+def test_write_site_out_of_range_created_on_project_pkg_falls_back(tmp_path: Path, monkeypatch: Any) -> None:
+    """created=1e309 on the project .pkg falls back to mtime; write_site does not raise."""
+    site = tmp_path / "site"
+    cell = site / "stable" / "ce-2.8"
+    pkg = cell / f"{_CANON}-3.3.2.pkg"
+    _write_pkg(pkg, annotations={"created": "1e309"})
+    os.utime(pkg, (_FILE_MTIME, _FILE_MTIME))
+
+    monkeypatch.setattr(gl, "_conf_via_addrepo", lambda addrepo, base, ch: f"{ch}-conf")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_ADD_REPO_REAL))
+    assert n == 1
+    listing = (cell / "index.html").read_text()
+    assert _MTIME_DATE in _autoindex_row(listing, pkg.name)
+    landing = (site / "index.html").read_text()
+    assert _MTIME_DATE in landing
 
 
 def test_commit_cell_links_valid_sha_and_dashes_missing() -> None:

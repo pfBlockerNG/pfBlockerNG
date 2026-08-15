@@ -139,6 +139,25 @@ def _build_record(manifest: dict) -> dict:
     return record if isinstance(record, dict) else {}
 
 
+def artifact_epoch(manifest: dict, mtime: float) -> float:
+    """Resolve the display epoch: ``created``, then ``source_date_epoch``, then mtime.
+
+    Shared by the landing table (``published_datetime``) and the autoindex
+    (``_display_epoch``) so the two surfaces cannot drift (issue #2401).
+    """
+    annotations = manifest.get("annotations") or {}
+    for epoch in (annotations.get("created"), _build_record(manifest).get("source_date_epoch")):
+        if epoch is None:
+            continue
+        try:
+            value = float(epoch)
+            artifact_datetime(value)  # reject out-of-range epochs the renderer would choke on
+            return value
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue  # malformed or out-of-range — try the next source
+    return float(mtime)
+
+
 def published_datetime(manifest: dict, mtime_epoch: float) -> str:
     """The artifact's creation datetime (UTC, minute precision).
 
@@ -150,15 +169,7 @@ def published_datetime(manifest: dict, mtime_epoch: float) -> str:
     the embedded build record's ``source_date_epoch``. Fall back to the .pkg's mtime
     only when neither is readable.
     """
-    annotations = manifest.get("annotations") or {}
-    for epoch in (annotations.get("created"), _build_record(manifest).get("source_date_epoch")):
-        if epoch is None:
-            continue
-        try:
-            return artifact_datetime(float(epoch))
-        except (TypeError, ValueError, OverflowError, OSError):
-            continue  # malformed or out-of-range — try the next source
-    return artifact_datetime(mtime_epoch)
+    return artifact_datetime(artifact_epoch(manifest, mtime_epoch))
 
 
 def commit_sha(manifest: dict) -> str:
@@ -1001,30 +1012,18 @@ def _dir_entries(site: str, rel: str) -> tuple[list[str], list[tuple[str, int, f
 
 
 def _display_epoch(path: str, mtime: float) -> float:
-    """The epoch a listing row shows: a .pkg's embedded creation epoch, else mtime.
+    """The epoch a listing row shows: a package's embedded creation epoch, else mtime.
 
-    The publisher regenerates listings in a fresh clone whose mtimes are all
-    'now' (issue #2375), so for packages the embedded ``created`` annotation /
-    build-record ``source_date_epoch`` is the only truthful date. Unreadable or
-    unannotated packages (pre-record hand builds, foreign files) keep the mtime.
+    Catalog plumbing is not a package: ``is_package_file`` keeps those rows on
+    mtime (issue #2401). Unreadable or unannotated packages keep the mtime.
     """
-    if not path.endswith(".pkg"):
+    if not is_package_file(os.path.basename(path)):
         return mtime
     try:
         manifest = read_compact_manifest(path)
     except Exception:  # corrupt/foreign .pkg — a listing must never crash the publish
         return mtime
-    annotations = manifest.get("annotations") or {}
-    for epoch in (annotations.get("created"), _build_record(manifest).get("source_date_epoch")):
-        if epoch is None:
-            continue
-        try:
-            value = float(epoch)
-            artifact_datetime(value)  # reject out-of-range epochs the renderer would choke on
-            return value
-        except (TypeError, ValueError, OverflowError, OSError):
-            continue
-    return mtime
+    return artifact_epoch(manifest, mtime)
 
 
 def render_autoindex(

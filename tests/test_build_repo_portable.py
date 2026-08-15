@@ -208,10 +208,9 @@ def test_meta_conf_is_byte_exact(tmp_path: Path) -> None:
 def test_published_pkg_preserves_source_mtime(tmp_path: Path) -> None:
     """The published .pkg keeps the SOURCE artifact's mtime (its real build time).
 
-    The landing page reads this mtime as the publish datetime, so it must survive
-    catalog generation — otherwise a cache-restored nightly would wrongly show the
-    regeneration run's time. Set a fixed past mtime on the input and assert it rides
-    through to the published copy.
+    A cache-restored nightly must keep its original datetime instead of jumping to
+    the catalog-regeneration run. Set a fixed past mtime on the input and assert it
+    rides through to the published copy.
     """
     in_dir = tmp_path / "in"
     in_dir.mkdir()
