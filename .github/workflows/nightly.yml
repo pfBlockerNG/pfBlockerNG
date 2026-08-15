@@ -430,6 +430,12 @@ jobs:
       - name: Checkout trusted workflow tools (the engine + orchestration scripts — TRUSTED ref)
         uses: actions/checkout@v6
         with:
+          # SECURITY: publish-pkg-repo.sh below is EXECUTED AS SHELL and, via
+          # publish_nightly.py, holds an App token able to push to
+          # pfBlockerNG/pkg. Same rule as release-published.yml's own
+          # publish-pkg-repo job: pin the revision the workflow's own `prepare`
+          # job already resolved (needs.prepare.outputs.tools_sha), never a
+          # floating ref that could move between this run's start and now.
           ref: ${{ needs.prepare.outputs.tools_sha }}
           fetch-depth: 0
           persist-credentials: false
@@ -451,7 +457,7 @@ jobs:
           repository: pfBlockerNG/pkg
           ref: main
           token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true
+          persist-credentials: true # publish-pkg-repo.sh pushes via this token
           path: pkg-repo
           fetch-depth: 1
 
@@ -476,6 +482,8 @@ jobs:
           export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
           export RESULTS_DIR="$GITHUB_WORKSPACE/results"
           export PUBLISH_KIND=nightly
+          # Failed Nightly? Dispatch another one. No durable allocation exists to
+          # recover or replay; each invocation gets its own timestamped version.
           export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
           export BASE_URL=https://pfblockerng.github.io/pkg
           sh trusted/scripts/publish-pkg-repo.sh
