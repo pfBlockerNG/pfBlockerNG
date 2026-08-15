@@ -7,7 +7,7 @@
 #   - every versioned tag is annotated and carries exactly one explicit channel trailer
 #   - its commit must be reachable from the exact release/X.Y line derived by the parser
 #   - malformed metadata, an unknown channel, or an unreachable release line -> rejected
-#   - agent (CLAUDECODE=1, CODEX_THREAD_ID, or COPILOT_CLI set) branch push
+#   - agent (CLAUDECODE=1, CODEX_THREAD_ID, COPILOT_CLI, or GROK_SESSION_ID set) branch push
 #     rewriting remote
 #     history -> allowed only when the advertised remote oid equals the local
 #     remote-tracking ref, i.e. the history being overwritten was fetched
@@ -104,16 +104,22 @@ PFB_TAG_UPDATES
 # remote history it never fetched (advertised remote oid != remote-tracking ref).
 # Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
 # 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
-# agent sets COPILOT_AGENT_PROMPT. Same shape as CLAUDECODE and CODEX_THREAD_ID —
-# nothing is installed, and no process tree is inspected.
+# agent sets COPILOT_AGENT_PROMPT. Grok CLI exports GROK_AGENT=1 and
+# GROK_SESSION_ID (probed 2026-08-15). Same shape as CLAUDECODE and
+# CODEX_THREAD_ID — nothing is installed, and no process tree is inspected.
 copilot_session() {
 	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
+}
+
+grok_session() {
+	[ -n "${GROK_SESSION_ID:-}" ] || [ -n "${GROK_AGENT:-}" ]
 }
 
 agent_runtime=0
 [ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
 [ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
 [ "$agent_runtime" = "1" ] || ! copilot_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! grok_session || agent_runtime=1
 if [ "$agent_runtime" = "1" ]; then
     remote_name="${1:-origin}"
     while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do

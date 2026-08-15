@@ -1,6 +1,6 @@
 #shellcheck shell=sh
 # .githooks/pre-push agent lease-by-effect guard (issue #1307): an agent
-# (CLAUDECODE=1 or CODEX_THREAD_ID set) push that rewrites a remote branch's
+# (CLAUDECODE=1, CODEX_THREAD_ID, or GROK_SESSION_ID set) push that rewrites a remote branch's
 # history is allowed only
 # when the hook's advertised remote oid equals the local remote-tracking ref —
 # i.e. the agent has fetched the history it is about to overwrite. That is
@@ -56,16 +56,29 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   # per row (the suite itself may run under CLAUDECODE=1).
   agent_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+      | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+        CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
   }
   codex_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT CODEX_THREAD_ID=codex-test \
+      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
+        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+        CODEX_THREAD_ID=codex-test \
+        sh "$hook" origin "${base}/remote.git"
+  }
+  grok_hook() {
+    cd "${base}/A" && printf '%s\n' "$1" \
+      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
+        -u COPILOT_CLI -u CODEX_THREAD_ID \
+        GROK_AGENT=1 GROK_SESSION_ID=grok-test \
         sh "$hook" origin "${base}/remote.git"
   }
   human_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
-      | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+      | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        -u GROK_SESSION_ID -u GROK_AGENT \
         sh "$hook" origin "${base}/remote.git"
   }
 
@@ -90,6 +103,12 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
   It 'denies the same stale rewrite for a Codex session'
     When run codex_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+    The status should equal 1
+    The stderr should include 'unfetched'
+  End
+
+  It 'denies the same stale rewrite for a Grok session'
+    When run grok_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     The status should equal 1
     The stderr should include 'unfetched'
   End
@@ -130,7 +149,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" && printf '%s\n%s\n' \
         "refs/heads/new $a_local refs/heads/new $Z40" \
         "refs/heads/devel $a_local refs/heads/devel $remote_tip" \
-        | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
+        | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+          -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
     }
     When run two_refs
     The status should equal 1
@@ -150,7 +171,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+          -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          CLAUDECODE=1 git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force
     The status should not equal 0
@@ -163,9 +186,27 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u COPILOT_AGENT_PROMPT CODEX_THREAD_ID=codex-test git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u COPILOT_AGENT_PROMPT \
+          -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          CODEX_THREAD_ID=codex-test git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_codex
+    The status should not equal 0
+    The stderr should include 'unfetched'
+    The result of function remote_tip_now should equal "$remote_tip"
+  End
+
+  It 'blocks the same real force-push for a Grok agent marker'
+    real_force_grok() {
+      cd "${base}/A" \
+        && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
+        && [ "$(remote_tip_now)" = "$remote_tip" ] \
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+          GROK_AGENT=1 GROK_SESSION_ID=grok-test \
+          git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+    }
+    When run real_force_grok
     The status should not equal 0
     The stderr should include 'unfetched'
     The result of function remote_tip_now should equal "$remote_tip"
@@ -176,7 +217,9 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
       cd "${base}/A" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && [ "$(remote_tip_now)" = "$remote_tip" ] \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          git push --force origin devel # git-env-scrub-guard: allow hook-under-test push
     }
     When run real_force_human
     The status should equal 0

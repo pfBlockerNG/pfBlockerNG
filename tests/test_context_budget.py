@@ -108,14 +108,16 @@ def _tracked(root: Path) -> list[str]:
 @pytest.mark.parametrize(
     ("rel", "budget"),
     [
-        ("AGENTS.md", 10_240),
+        ("AGENTS.md", 10_752),
         ("CLAUDE.md", 8_192),
+        ("GROK.md", 8_192),
         (".agents/policy/new-policy.md", 12_288),
         (".agents/context/new-context.md", 12_288),
         (".agents/policy/landing.md", 26_000),
         (".agents/policy/agent-roles.md", 19_000),
         (".agents/policy/delegation.md", 18_000),
         ("tests/smoke/CLAUDE.md", 400),
+        ("tests/smoke/GROK.md", 400),
         ("src/usr/local/AGENTS.md", 400),
         # Nested stubs under .agents/ are dir stubs, not routed policy files —
         # the stub branch must win over the policy/context prefix.
@@ -145,7 +147,7 @@ def test_size_over_budget_fires_and_at_budget_passes(tmp_path: Path) -> None:
 def test_nested_stub_over_budget_fires_root_files_use_own_budget(tmp_path: Path) -> None:
     root = tmp_path
     _write(root, "www/CLAUDE.md", "x" * 401)
-    _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 10,240
+    _write(root, "AGENTS.md", "x" * 401)  # root bootstrap: 401 B is far under 10,752
     violations = ccb.check_sizes(root, ["www/CLAUDE.md", "AGENTS.md"])
     assert violations == ["www/CLAUDE.md: 401 bytes > budget 400"]
 
@@ -755,6 +757,7 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
     [
         "AGENTS.md",
         "CLAUDE.md",
+        "GROK.md",
         ".claude/settings.json",
         "scripts/check_context_budget.py",
         ".agents/policy/alpha.md",
@@ -891,7 +894,7 @@ def test_ci_workflow_paths_match_checker_triggers() -> None:
         set(ccb._TRIGGER_FILES)
         | {f"{d}**" for d in ccb._TRIGGER_DIRS}
         # the basename trigger (nested dir stubs anywhere) as workflow globs:
-        | {"**/AGENTS.md", "**/CLAUDE.md"}
+        | {"**/AGENTS.md", "**/CLAUDE.md", "**/GROK.md"}
     )
     # Compare each trigger block INDEPENDENTLY: the two hand-duplicated paths
     # lists drift exactly one-block-at-a-time, and a whole-file set comparison

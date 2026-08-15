@@ -1,6 +1,6 @@
 #shellcheck shell=sh
 # .githooks/prepare-commit-msg agent worktree guard (issue #1262): an agent
-# commit (CLAUDECODE=1 or CODEX_THREAD_ID set) in the PRIMARY checkout aborts;
+# commit (CLAUDECODE=1, CODEX_THREAD_ID, or GROK_SESSION_ID set) in the PRIMARY checkout aborts;
 # a linked-worktree commit, a human commit, and an agent-dedicated checkout (managed-remote
 # marker CLAUDE_CODE_USER_EMAIL, or the pfblockerng.allowprimarycommit valve)
 # all pass. Enforced in prepare-commit-msg because that hook still runs when
@@ -44,15 +44,23 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   # Direct hook invocations: cwd selects primary vs linked worktree; env is
   # set explicitly per row because the suite itself may run under CLAUDECODE=1.
   agent_hook_in() {
-    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 \
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT CLAUDECODE=1 \
       sh "$hook" "$2"
   }
   codex_hook_in() {
     cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
+      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
       CODEX_THREAD_ID=codex-test sh "$hook" "$2"
   }
+  grok_hook_in() {
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
+      -u COPILOT_CLI -u CODEX_THREAD_ID \
+      GROK_AGENT=1 GROK_SESSION_ID=grok-test sh "$hook" "$2"
+  }
   human_hook_in() {
-    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+    cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
       sh "$hook" "$2"
   }
 
@@ -77,6 +85,18 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
 
   It 'passes a Codex commit in a linked worktree'
     When run codex_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  It 'blocks a Grok commit in the primary checkout'
+    When run grok_hook_in "$primary" .git/PCM_MSG
+    The status should equal 1
+    The stderr should include 'primary checkout'
+  End
+
+  It 'passes a Grok commit in a linked worktree'
+    When run grok_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
   End
@@ -112,7 +132,9 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
 
   It 'passes an agent commit in a managed-remote session (owner email marker set)'
     managed_hook() {
-      cd "$primary" && env -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=owner@example.com \
+      cd "$primary" && env -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        -u GROK_SESSION_ID -u GROK_AGENT \
+        CLAUDECODE=1 CLAUDE_CODE_USER_EMAIL=owner@example.com \
         sh "$hook" .git/PCM_MSG
     }
     When run managed_hook
@@ -128,7 +150,9 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       cd "$primary" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && echo change >> seed.txt && git_fixture add seed.txt \
-        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT CLAUDECODE=1 git commit -n -m blocked # git-env-scrub-guard: allow hook-under-test commit
+        && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
+          -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          CLAUDECODE=1 git commit -n -m blocked # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit
     The status should not equal 0
@@ -141,7 +165,9 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       cd "$primary" \
         && git_fixture config core.hooksPath "${PFB_ROOT}/.githooks" \
         && echo change >> seed.txt && git_fixture add seed.txt \
-        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT git commit -n -m allowed # git-env-scrub-guard: allow hook-under-test commit
+        && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
+          -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+          git commit -n -m allowed # git-env-scrub-guard: allow hook-under-test commit
     }
     When run real_commit_human
     The status should equal 0

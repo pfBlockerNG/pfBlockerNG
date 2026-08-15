@@ -1,23 +1,24 @@
 #shellcheck shell=sh
-# Copilot attribution and agent detection in the git hooks (issue #2177).
+# Grok attribution and agent detection in the git hooks (issue #2439).
 #
-# Copilot CLI exports COPILOT_CLI=1 into every shell it spawns — inherited by
-# nested shells and visible to git hooks (probed on 1.0.78, 2026-08-06, by
-# dumping the environment inside a real session). So the client is detected
-# exactly as Claude (CLAUDECODE) and Codex (CODEX_THREAD_ID) are: one variable,
-# nothing installed, no process inspection.
+# Grok CLI exports GROK_AGENT=1 and GROK_SESSION_ID into every shell it
+# spawns — inherited by nested shells and visible to git hooks (probed
+# 2026-08-15 by dumping the environment inside a real session). So the
+# client is detected exactly as Claude (CLAUDECODE), Codex (CODEX_THREAD_ID),
+# and Copilot (COPILOT_CLI) are: environment variables, nothing installed,
+# no process inspection.
 #
 # The attribution rows are the load-bearing ones. This repo sets the legacy
-# `coauthor.email` to Claude's identity, so a Copilot commit with no provider
-# detection is credited to CLAUDE — observed on a real Copilot commit before
-# this change, and the same misattribution the Codex branch exists to prevent.
+# `coauthor.email` to Claude's identity, so a Grok commit with no provider
+# detection is credited to CLAUDE — the same misattribution the Codex and
+# Copilot branches exist to prevent.
 
-Describe 'Copilot detection in the git hooks (issue #2177)'
+Describe 'Grok detection in the git hooks (issue #2439)'
   pcm_hook="${PFB_ROOT}/.githooks/prepare-commit-msg"
 
   setup() {
     scrub_git_env
-    base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/copilotenv.XXXXXX")"
+    base="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/grokenv.XXXXXX")"
     primary="${base}/primary"
     wt="${base}/wt"
     git_fixture init -q -b devel "$primary"
@@ -41,11 +42,11 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
   AfterEach 'cleanup'
 
   # Env is set explicitly per row because the suite itself may run under
-  # CLAUDECODE=1 or CODEX_THREAD_ID.
-  copilot_hook_in() {
+  # CLAUDECODE=1, CODEX_THREAD_ID, COPILOT_CLI, or GROK_SESSION_ID.
+  grok_hook_in() {
     cd "$1" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-      -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID -u GROK_AGENT \
-      COPILOT_CLI=1 sh "$pcm_hook" "$2"
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+      GROK_AGENT=1 GROK_SESSION_ID=grok-test sh "$pcm_hook" "$2"
   }
   human_hook_in() {
     cd "$1" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
@@ -53,18 +54,18 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
       -u GROK_SESSION_ID -u GROK_AGENT sh "$pcm_hook" "$2"
   }
 
-  It 'never credits the legacy Claude identity to a Copilot commit'
+  It 'never credits the legacy Claude identity to a Grok commit'
     git_fixture -C "$primary" config coauthor.name Claude
     git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
-    When run copilot_hook_in "$wt" "$wt_msg"
+    When run grok_hook_in "$wt" "$wt_msg"
     The status should equal 0
     The contents of file "$wt_msg" should not include 'noreply@anthropic.com'
   End
 
-  It 'credits the Copilot-specific identity when one is configured'
-    git_fixture -C "$primary" config coauthor.copilot.name Owner
-    git_fixture -C "$primary" config coauthor.copilot.email owner@example.com
-    When run copilot_hook_in "$wt" "$wt_msg"
+  It 'credits the Grok-specific identity when one is configured'
+    git_fixture -C "$primary" config coauthor.grok.name Owner
+    git_fixture -C "$primary" config coauthor.grok.email owner@example.com
+    When run grok_hook_in "$wt" "$wt_msg"
     The status should equal 0
     The contents of file "$wt_msg" should include 'Co-Authored-By: Owner <owner@example.com>'
   End
@@ -78,16 +79,17 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
   End
 
   It 'credits every client present when one agent runs inside another'
-    # Copilot launched from a Claude session inherits CLAUDECODE while setting
-    # COPILOT_CLI: both ran, so both are credited rather than one winning.
+    # Grok launched from a Claude session inherits CLAUDECODE while setting
+    # GROK_SESSION_ID: both ran, so both are credited rather than one winning.
     git_fixture -C "$primary" config coauthor.claude.name Claude
     git_fixture -C "$primary" config coauthor.claude.email noreply@anthropic.com
-    git_fixture -C "$primary" config coauthor.copilot.name Owner
-    git_fixture -C "$primary" config coauthor.copilot.email owner@example.com
+    git_fixture -C "$primary" config coauthor.grok.name Owner
+    git_fixture -C "$primary" config coauthor.grok.email owner@example.com
     nested() {
       cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
-        -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID -u GROK_AGENT \
-        CLAUDECODE=1 COPILOT_CLI=1 sh "$pcm_hook" "$wt_msg"
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        CLAUDECODE=1 GROK_AGENT=1 GROK_SESSION_ID=grok-test \
+        sh "$pcm_hook" "$wt_msg"
     }
     When run nested
     The status should equal 0
@@ -100,17 +102,18 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
     git_fixture -C "$primary" config coauthor.claude.email noreply@anthropic.com
     nested_unconfigured() {
       cd "$wt" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
-        -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID -u GROK_AGENT \
-        CLAUDECODE=1 COPILOT_CLI=1 sh "$pcm_hook" "$wt_msg"
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
+        CLAUDECODE=1 GROK_AGENT=1 GROK_SESSION_ID=grok-test \
+        sh "$pcm_hook" "$wt_msg"
     }
     When run nested_unconfigured
     The status should equal 0
     The contents of file "$wt_msg" should include 'Co-Authored-By: Claude <noreply@anthropic.com>'
-    The contents of file "$wt_msg" should not include 'copilot'
+    The contents of file "$wt_msg" should not include 'grok'
   End
 
-  It 'blocks a Copilot commit in the primary checkout (issue #1262)'
-    When run copilot_hook_in "$primary" .git/PCM_MSG
+  It 'blocks a Grok commit in the primary checkout (issue #1262)'
+    When run grok_hook_in "$primary" .git/PCM_MSG
     The status should equal 1
     The stderr should include 'primary checkout'
   End
@@ -121,13 +124,13 @@ Describe 'Copilot detection in the git hooks (issue #2177)'
     The stderr should equal ''
   End
 
-  It 'detects the Copilot cloud agent, which sets its own prompt variable'
-    cloud() {
+  It 'detects GROK_AGENT alone, without GROK_SESSION_ID'
+    agent_only() {
       cd "$primary" && env -u CLAUDECODE -u CODEX_THREAD_ID -u CLAUDE_CODE_USER_EMAIL \
-        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
-        COPILOT_AGENT_PROMPT='work the issue' sh "$pcm_hook" .git/PCM_MSG
+        -u COPILOT_CLI -u COPILOT_AGENT_PROMPT -u GROK_SESSION_ID \
+        GROK_AGENT=1 sh "$pcm_hook" .git/PCM_MSG
     }
-    When run cloud
+    When run agent_only
     The status should equal 1
     The stderr should include 'primary checkout'
   End
