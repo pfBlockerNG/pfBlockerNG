@@ -36,7 +36,9 @@
 # permanent on disk (fall back to an explicit bectl activate; fail closed —
 # issue #1858) -> power off cleanly -> compress on Proxmox -> stream back ->
 # boot the exported artifact once and refuse to publish it under a tag whose
-# family it does not come up with (issue #1858) -> push the new tag (local).
+# family it does not come up with, or whose pkg ABI disagrees with its own
+# kernel or the caller's --expect-freebsd-major (issues #1858, #2242) -> push
+# the new tag (local).
 # The source tag is left untouched, so the old image is always kept.
 #
 # Usage:
@@ -124,6 +126,12 @@
 #                    php_version, py_flavor, freebsd_version/major) into FILE
 #                    after the health gate — the activation-PR step consumes
 #                    them (issue #1837). Best-effort; default off.
+#   --expect-freebsd-major N  require the EXPORTED artifact's pkg ABI major to
+#                    equal N (digits only), in addition to it always having to
+#                    agree with the artifact's own kernel major — refuses to
+#                    publish a disk whose FreeBSD major silently drifted from
+#                    what the caller expected (issue #2242). Default empty =
+#                    only the ABI-vs-kernel self-consistency check applies.
 #   --keep           keep the work dirs (image copies, console log) afterwards
 #   --force          overwrite the target tag if it already exists
 #
@@ -182,6 +190,7 @@ UPGRADE_TIMEOUT=1200
 UPGRADE_PKGS=0
 BRANCH=""
 FACTS_OUT=""
+EXPECT_FREEBSD_MAJOR=""
 KEEP=0
 FORCE=0
 
@@ -221,6 +230,12 @@ while [ $# -gt 0 ]; do
         --upgrade-pkgs)    UPGRADE_PKGS=1; shift ;;
         --branch)          BRANCH="$2"; shift 2 ;;
         --facts-out)       FACTS_OUT="$2"; shift 2 ;;
+        --expect-freebsd-major)
+            EXPECT_FREEBSD_MAJOR="$2"
+            case "$EXPECT_FREEBSD_MAJOR" in
+                *[!0-9]*) die "--expect-freebsd-major must be digits only (got '$EXPECT_FREEBSD_MAJOR')" ;;
+            esac
+            shift 2 ;;
         --keep)            KEEP=1; shift ;;
         --force)           FORCE=1; shift ;;
         -h|--help)         sed -n '2,115p' "$0"; exit 0 ;;
@@ -651,7 +666,10 @@ pfb_publish_decision() {
 # publish it unless the version it actually comes up with belongs to TAG's
 # family. The running box is not proof: a box captured before its boot finished
 # made a 26.03.1 disk pass every in-run check and ship as :26.07 (issue #1858).
-# The artifact is the last word before a push.
+# Also refuses to publish when the artifact's own pkg ABI disagrees with its
+# kernel (a half-upgraded disk), or — when EXPECT_FREEBSD_MAJOR is set — when
+# the ABI major disagrees with the caller's expectation (issue #2242). The
+# artifact is the last word before a push.
 # FILE is the KVM host's out.qcow2 — the exact bytes the pushed local copy was
 # streamed from, so booting it there costs no second transfer. The boot writes
 # to that copy; the local one is already on disk and is what gets pushed.
@@ -662,21 +680,40 @@ pfb_verify_artifact() {
     # script (the #1844 rule above), and QPID must land in the top-level shell
     # so cleanup() can reap a wedged verification QEMU.
     pfb_boot_artifact_version "$_pva_file" > "${LOCAL_DIR}/verify-version"
-    _pva_ver=$(tr -d '\r' < "${LOCAL_DIR}/verify-version")
+    _pva_ver=$(sed -n '1p' "${LOCAL_DIR}/verify-version" | tr -d '\r')
+    _pva_abi=$(sed -n '2p' "${LOCAL_DIR}/verify-version" | tr -d '\r')
+    _pva_kern=$(sed -n '3p' "${LOCAL_DIR}/verify-version" | tr -d '\r')
     [ -n "$_pva_ver" ] \
         || die "could not read a version from the exported artifact — refusing to publish"
     _pva_fam=$(image_version_tag "$_pva_ver")
     if [ "$_pva_fam" != "$_pva_tag" ]; then
         die "exported artifact boots ${_pva_ver} (family ${_pva_fam}), not ${_pva_tag} — refusing to publish a mislabelled image"
     fi
-    log "artifact verified: boots ${_pva_ver}"
+    [ -n "$_pva_abi" ] \
+        || die "could not read pkg ABI from the exported artifact — refusing to publish"
+    [ -n "$_pva_kern" ] \
+        || die "could not read kernel release from the exported artifact — refusing to publish"
+    # abi_major: 2nd ':'-field of "FreeBSD:15:amd64"; kern_major: text before
+    # the first '.' of "15.0-CURRENT" — both plain POSIX-parameter parsing.
+    # shellcheck disable=SC2086  # intentional: IFS=: word-splits the ABI string
+    _pva_abi_maj=$(IFS=:; set -- $_pva_abi; printf '%s' "${2:-}")
+    _pva_kern_maj=${_pva_kern%%.*}
+    if [ "$_pva_abi_maj" != "$_pva_kern_maj" ]; then
+        die "exported artifact's pkg ABI ${_pva_abi} disagrees with its kernel ${_pva_kern} — refusing to publish (issue #2242)"
+    fi
+    if [ -n "$EXPECT_FREEBSD_MAJOR" ] && [ "$_pva_abi_maj" != "$EXPECT_FREEBSD_MAJOR" ]; then
+        die "exported artifact's pkg ABI ${_pva_abi} is FreeBSD major ${_pva_abi_maj}, expected ${EXPECT_FREEBSD_MAJOR} for ${_pva_tag} — refusing to publish (issue #2242)"
+    fi
+    log "artifact verified: boots ${_pva_ver} (pkg ABI ${_pva_abi}, kernel ${_pva_kern})"
 }
 # pfb_verify_artifact END
 
 # pfb_boot_artifact_version DISK — boot DISK once with the SAME topology the
 # upgrade ran under (same MACs, same SMBIOS uuid, same mgmt hostfwd; the upgrade
-# VM is already gone, so GUEST_PORT is free) and echo the guest's /etc/version.
-# Everything but that version goes to stderr — the caller reads stdout.
+# VM is already gone, so GUEST_PORT is free) and echo three lines: /etc/version,
+# pkg config ABI, uname -r (issue #2242 — the artifact's own ABI/kernel are what
+# pfb_verify_artifact checks). A value that could not be read is an empty line;
+# the line count stays fixed at 3. Everything else goes to stderr.
 pfb_boot_artifact_version() {
     _pbav_disk=$1
     log "booting the exported artifact to read the version it really comes up with" >&2
@@ -702,6 +739,8 @@ pfb_boot_artifact_version() {
     [ -n "$QPID" ] || die "verification boot did not write a pidfile (see ${REMOTE_DIR}/verify-console.log on the KVM host)"
     wait_guest_ssh "${VERIFY_BOOT_TIMEOUT:-600}" verify-console.log >&2
     _pbav_ver=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r')
+    _pbav_abi=$(ssh_guest '/usr/local/sbin/pkg config ABI' 2>/dev/null | tr -d '\r')
+    _pbav_kern=$(ssh_guest 'uname -r' 2>/dev/null | tr -d '\r')
     ssh_guest '/sbin/shutdown -p now' >/dev/null 2>&1 || true
     _pbav_elapsed=0
     while px "kill -0 $QPID 2>/dev/null"; do
@@ -712,7 +751,7 @@ pfb_boot_artifact_version() {
         sleep 3; _pbav_elapsed=$((_pbav_elapsed + 3))
     done
     QPID=""
-    printf '%s\n' "$_pbav_ver"
+    printf '%s\n%s\n%s\n' "$_pbav_ver" "$_pbav_abi" "$_pbav_kern"
 }
 
 # pfb_promote_be BEGIN

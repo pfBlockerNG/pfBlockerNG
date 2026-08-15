@@ -297,6 +297,8 @@ jobs:
       #   2. Same-version refreshes pass --upgrade-pkgs: pkg update -f + pkg upgrade
       #      -n (dry-run detect); ONLY if upgrades pending → pkg upgrade -y + reboot
       #      + wait SSH. Cross-version legs omit it; pfSense-upgrade owns the transition.
+      #      Same-version legs also pass --expect-freebsd-major (from matrix.freebsd_version)
+      #      so the published artifact's pkg ABI major must match the matrix row (issue #2242).
       #   3. Runs pfSense-upgrade (reboots the box), waits for version to change.
       #   4. Health gate: polls up to 300 s for webConfigurator HTTP or pfctl live
       #      ruleset; fail-closed (die → no publish) if neither answers.
@@ -318,6 +320,7 @@ jobs:
           VARIANT: ${{ matrix.variant }}
           FORCE_FLAG: ${{ matrix.force_flag }}
           BRANCH: ${{ matrix.branch }}
+          FREEBSD_VERSION: ${{ matrix.freebsd_version }}
         run: |
           set -eu
           # Run-body export, not an env: map value — GitHub Actions never
@@ -325,6 +328,10 @@ jobs:
           export SMOKE_SSH_KEY="$GITHUB_WORKSPACE/smoke_key"
           UPGRADE_PKGS_FLAG=
           [ "$FROM_TAG" = "$TARGET_TAG" ] && UPGRADE_PKGS_FLAG=--upgrade-pkgs
+          EXPECT_MAJOR_ARGS=
+          if [ "$FROM_TAG" = "$TARGET_TAG" ]; then
+            EXPECT_MAJOR_ARGS="--expect-freebsd-major ${FREEBSD_VERSION%%.*}"
+          fi
           sh scripts/image-upgrade.sh \
             ${FORCE_FLAG:+"$FORCE_FLAG"} \
             --from "$FROM_TAG" \
@@ -336,17 +343,18 @@ jobs:
             --compression "${{ inputs.compression }}" \
             --upgrade-timeout "${{ inputs.upgrade_timeout }}" \
             --facts-out "$PWD/box-facts.env" \
-            ${UPGRADE_PKGS_FLAG:+"$UPGRADE_PKGS_FLAG"}
+            ${UPGRADE_PKGS_FLAG:+"$UPGRADE_PKGS_FLAG"} \
+            $EXPECT_MAJOR_ARGS
 
       # ── Activation PR: box-verified matrix update (issue #1837) ────────────
       # The upgrade leg is the only moment automation has SSH into a live box
       # running the NEW version. image-upgrade.sh gathered its facts
       # (box-facts.env); if the leg family's matrix entry is not yet
       # active-and-accurate, open ONE tracker/* PR setting ci: true and the
-      # box-verified php_version / py_flavor / freebsd_major. The full
-      # freebsd_version string only changes when the MAJOR moved (the matrix
-      # keeps its human convention, e.g. 16.0-RELEASE vs the box's
-      # 16.0-CURRENT); the raw box value is quoted in the PR body.
+      # box-verified php_version / py_flavor. The matrix is human-curated: a
+      # guest-reported freebsd_major that disagrees with the matrix row is a
+      # broken guest, not new truth, and hard-stops the step instead of
+      # rewriting freebsd_major/freebsd_version (issue #2242).
       # Matrix writes remain auto-PR ONLY — never a ci-metadata push.
       # Contract pinned by tests/test_image_refresh_plan_contract.py.
       - name: Open activation PR (box-verified matrix update)
@@ -385,18 +393,22 @@ jobs:
             exit 0
           fi
 
+          # The matrix is human-curated; a surprise major means a broken guest,
+          # not new truth — hard stop before any write (issue #2242).
+          cur_major=$(printf '%s' "$ENTRY" | jq -r '.freebsd_major // ""')
+          if [ -n "$freebsd_major" ] && [ -n "$cur_major" ] && [ "$freebsd_major" != "$cur_major" ]; then
+            echo "::error::${CHANNEL} ${FAMILY}: guest reports FreeBSD major ${freebsd_major} (${freebsd_version}) but the matrix row says ${cur_major} — refusing to activate; the matrix is human-curated and a surprise major means a broken guest, not new truth (issue #2242)"
+            exit 1
+          fi
+
           NEWM=$(mktemp)
           jq --arg v "$FAMILY" --arg c "$CHANNEL" \
-             --arg php "${php_version:-}" --arg py "${py_flavor:-}" \
-             --arg fbmaj "${freebsd_major:-}" --arg fb "${freebsd_version:-}" '
+             --arg php "${php_version:-}" --arg py "${py_flavor:-}" '
             (.versions[] | select(.pfsense_version == $v and .channel == $c
                                    and ((.arch // "amd64") == "amd64"))) |= (
               .ci = true
               | (if $php != "" then .php_version = $php else . end)
               | (if $py != "" then .py_flavor = $py else . end)
-              | (if $fbmaj != "" and .freebsd_major != $fbmaj
-                 then .freebsd_major = $fbmaj | .freebsd_version = $fb
-                 else . end)
             )' matrix_current.json > "$NEWM"
 
           # Semantic compare — immune to on-disk formatting drift.
@@ -442,9 +454,8 @@ jobs:
             printf '| Python flavor | `%s` |\n' "${py_flavor:-?}"
             printf '| FreeBSD | `%s` (major %s) |\n\n' "${freebsd_version:-?}" "${freebsd_major:-?}"
             printf 'This PR sets `ci: true` (the image now exists for the smoke fan-out) and\n'
-            printf 'corrects any drifted version fields. The full `freebsd_version` string is\n'
-            printf 'only rewritten when the MAJOR changed — the matrix keeps its human\n'
-            printf 'convention otherwise.\n\n'
+            printf 'corrects `php_version`/`py_flavor` from the box facts; a FreeBSD major\n'
+            printf 'mismatch refuses to activate instead of rewriting the matrix (issue #2242).\n\n'
             printf '_Opened automatically by image-refresh (issue #1837). Matrix changes are\n'
             printf 'PRs only — merging is a human decision and re-fires the reconcile._\n'
           } > "$BODY_FILE"

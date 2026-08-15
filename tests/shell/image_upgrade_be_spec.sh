@@ -36,23 +36,28 @@ Describe 'image-upgrade.sh pre-push artifact verification'
   BeforeEach 'setup'
   AfterEach 'teardown'
 
-  # run_verify BOOTED TAG — drive the shipped verifier: it re-boots the EXPORTED
-  # artifact and compares the family it actually boots against the publish tag.
+  # run_verify BOOTED TAG [ABI] [KERNEL] [EXPECT] — drive the shipped verifier:
+  # it re-boots the EXPORTED artifact and compares the family it actually boots
+  # against the publish tag, then (issue #2242) the artifact's own pkg ABI
+  # against its kernel and, when EXPECT is given, against EXPECT. ABI/KERNEL
+  # default to an internally-consistent FreeBSD 16 pair so callers testing only
+  # the version/family guard don't have to spell them out.
   # This is the guard that catches the whole class, not just the one-shot-BE
   # case: whatever makes the disk differ from the box we observed, the artifact
   # itself is the last word before a push (issue #1858).
   run_verify() {
-    _booted="$1" _tag="$2" sh -c '
+    _booted="$1" _tag="$2" _abi="${3-FreeBSD:16:amd64}" _kern="${4-16.0-CURRENT}" _expect="${5-}" sh -c '
       set -e
       log()  { printf "==> %s\n" "$*"; }
       warn() { printf "WARNING: %s\n" "$*" >&2; }
       die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
       LOCAL_DIR="$2"
+      EXPECT_FREEBSD_MAJOR="$_expect"
       # the real tag rule, not a stub — the family comparison IS the guard
       . "$(dirname "$1")/image-lib.sh"
       eval "$(sed -n "/^# pfb_verify_artifact BEGIN/,/^# pfb_verify_artifact END/p" "$1")"
-      # stub the boot: report the version the exported disk comes up with
-      pfb_boot_artifact_version() { printf "%s\n" "$_booted"; }
+      # stub the boot: report the version/abi/kernel the exported disk comes up with
+      pfb_boot_artifact_version() { printf "%s\n%s\n%s\n" "$_booted" "$_abi" "$_kern"; }
       pfb_verify_artifact "$2/out.qcow2" "$_tag"
       printf "REACHED-AFTER-VERIFY\n"
     ' _ "$SCRIPT" "$WORK"
@@ -133,6 +138,69 @@ Describe 'image-upgrade.sh pre-push artifact verification'
     When call run_verify 26.07.1-RELEASE 26.07
     The status should be success
     The output should include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'passes when the artifact ABI and kernel major agree, no expectation given'
+    When call run_verify 26.07-BETA 26.07 'FreeBSD:16:amd64' '16.0-CURRENT'
+    The status should be success
+    The output should include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'refuses to publish when the artifact ABI disagrees with its own kernel'
+    When call run_verify 26.07-BETA 26.07 'FreeBSD:16:amd64' '15.0-CURRENT'
+    The status should be failure
+    The stderr should include 'disagrees with its kernel'
+    The output should not include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'refuses to publish when the artifact ABI major does not match --expect-freebsd-major'
+    When call run_verify 26.07-BETA 26.07 'FreeBSD:16:amd64' '16.0-CURRENT' 15
+    The status should be failure
+    The stderr should include 'expected 15'
+    The output should not include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'passes when the artifact ABI major matches --expect-freebsd-major'
+    When call run_verify 26.07-BETA 26.07 'FreeBSD:16:amd64' '16.0-CURRENT' 16
+    The status should be success
+    The output should include 'REACHED-AFTER-VERIFY'
+  End
+
+  It 'refuses to publish when the artifact never reports a pkg ABI'
+    When call run_verify 26.07-BETA 26.07 '' '16.0-CURRENT'
+    The status should be failure
+    The stderr should include 'could not read pkg ABI'
+    The output should not include 'REACHED-AFTER-VERIFY'
+  End
+End
+
+Describe 'image-upgrade.sh --expect-freebsd-major option parsing'
+  SCRIPT="${PFB_ROOT}/scripts/image-upgrade.sh"
+
+  # run_optparse ARGS... — drive the shipped option-parsing loop in isolation
+  # (extracted verbatim, real execution — not a stub), so the digit guard is
+  # proven against the actual case arm, not a grep proxy.
+  run_optparse() {
+    sh -c '
+      set -e
+      die() { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      _self="$1"; shift
+      eval "$(sed -n "/^while \[ \$# -gt 0 \]; do\$/,/^done\$/p" "$_self")"
+      printf "REACHED-AFTER-PARSE\n"
+    ' _ "$SCRIPT" "$@"
+  }
+
+  It 'rejects a non-numeric --expect-freebsd-major'
+    When call run_optparse --expect-freebsd-major abc
+    The status should be failure
+    The stderr should include 'digits only'
+    The output should not include 'REACHED-AFTER-PARSE'
+  End
+
+  It 'accepts a numeric --expect-freebsd-major'
+    When call run_optparse --expect-freebsd-major 16
+    The status should be success
+    The output should include 'REACHED-AFTER-PARSE'
   End
 End
 
@@ -290,7 +358,9 @@ Describe 'image-upgrade.sh verification boot command'
       wait_guest_ssh() { true; }
       ssh_guest() {
         case "$*" in
-          *"/etc/version"*) printf "26.07-BETA\n" ;;
+          *"/etc/version"*)     printf "26.07-BETA\n" ;;
+          *"pkg config ABI"*)   printf "FreeBSD:16:amd64\n" ;;
+          *"uname -r"*)         printf "16.0-CURRENT\n" ;;
         esac
       }
       pfb_boot_artifact_version /r/out.qcow2
@@ -308,6 +378,16 @@ Describe 'image-upgrade.sh verification boot command'
     The contents of file "$PXCMDS" should not include 'work.qcow2'
     The contents of file "$PXCMDS" should not include '/r/qemu.pid'
     The contents of file "$PXCMDS" should not include '/r/console.log'
+  End
+
+  It 'prints exactly three lines: version, pkg ABI, kernel release (issue #2242)'
+    When call run_bootcmd /r/work.qcow2
+    The status should be success
+    The stderr should include 'booting the exported artifact'
+    The lines of output should equal 3
+    The line 1 of output should equal '26.07-BETA'
+    The line 2 of output should equal 'FreeBSD:16:amd64'
+    The line 3 of output should equal '16.0-CURRENT'
   End
 
   It 'refuses to boot when the substitutions do not take'
