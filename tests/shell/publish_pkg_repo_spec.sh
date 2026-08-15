@@ -1108,6 +1108,18 @@ PY
     The variable msg should include 'pfBlockerNG-Promoted-From: staging/10-1'
   End
 
+  It 'p7: promote succeeds without ASSETS_DIR — the workflow promote-pkg-repo job never sets it'
+    seed_staged_tree
+    unset ASSETS_DIR
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should be exist
+  End
+
   It 'd1: discard drops a staged tree, commits the removal, and leaves the real target untouched'
     seed_staged_tree
     export PUBLISH_STAGE=discard
@@ -1135,6 +1147,18 @@ PY
     The output should include 'DISCARD NOOP'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'd3: discard succeeds with none of the tagged-only vars set — discard needs only STAGING_PREFIX + SOURCE_RUN_ID'
+    seed_staged_tree
+    unset ASSETS_DIR SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS ROUTE_MATRIX
+    export PUBLISH_STAGE=discard
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/staging" should not be exist
   End
 
   It 'k1: rejects PUBLISH_STAGE other than direct under PUBLISH_KIND=nightly, before any git call'
