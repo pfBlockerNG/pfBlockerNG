@@ -162,6 +162,7 @@ LIVE_BASE_URL_ENV = "SMOKE_REPO_LIVE_URL"
 LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
 LIVE_EXPECTED_SOURCE_SHA_ENV = "SMOKE_REPO_EXPECTED_SOURCE_SHA"
 LIVE_EXPECTED_VERSION_ENV = "SMOKE_REPO_EXPECTED_VERSION"
+LIVE_EXPECTED_CHANNEL_ENV = "SMOKE_REPO_EXPECTED_CHANNEL"
 NIGHTLY_EXPECTED_SOURCE_SHA_ENV = "SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA"
 NIGHTLY_EXPECTED_VERSION_ENV = "SMOKE_NIGHTLY_EXPECTED_VERSION"
 DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg/stable"
@@ -1440,8 +1441,10 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     assert base_url is not None  # for the type-checker: pytest.skip above is NoReturn
     expected_source_sha = os.environ.get(LIVE_EXPECTED_SOURCE_SHA_ENV)
     expected_version = os.environ.get(LIVE_EXPECTED_VERSION_ENV)
+    expected_channel = os.environ.get(LIVE_EXPECTED_CHANNEL_ENV)
     assert expected_source_sha, f"{LIVE_EXPECTED_SOURCE_SHA_ENV} is required with {LIVE_BASE_URL_ENV}"
     assert expected_version, f"{LIVE_EXPECTED_VERSION_ENV} is required with {LIVE_BASE_URL_ENV}"
+    assert expected_channel, f"{LIVE_EXPECTED_CHANNEL_ENV} is required with {LIVE_BASE_URL_ENV}"
 
     host = urllib.parse.urlparse(base_url).hostname
     assert host, f"could not parse a host from {base_url!r}"
@@ -1477,12 +1480,15 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         assert "Missing dependency" not in combined, (
             f"RUN_DEPENDS did not resolve from the live Pages catalog:\n{combined}"
         )
-        selected_channel = base_url.rsplit("/", 1)[-1]
-        assert selected_channel in CHANNELS, f"live base URL does not end in a known channel: {base_url!r}"
-        expected_origin = channel_repo_name(selected_channel)
+        dest_channel = base_url.rsplit("/", 1)[-1]
+        assert dest_channel in CHANNELS, f"live base URL does not end in a known channel: {base_url!r}"
+        assert expected_channel in CHANNELS, (
+            f"{LIVE_EXPECTED_CHANNEL_ENV} is not a known channel: {expected_channel!r}"
+        )
+        expected_origin = channel_repo_name(dest_channel)
         origin = pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME)
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
-        assert_live_package(repo_vm, CANONICAL_PKG_NAME, expected_version, expected_source_sha, selected_channel)
+        assert_live_package(repo_vm, CANONICAL_PKG_NAME, expected_version, expected_source_sha, expected_channel)
     finally:
         pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         _ssh_check(repo_vm, "/bin/rm", "-f", REPO_CONF)

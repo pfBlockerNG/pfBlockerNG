@@ -25,11 +25,17 @@ def test_smoke_single_exposes_repo_live_inputs() -> None:
     """Actions callers can supply the generic-channel live-install inputs (issue #2389)
     release-published.yml's validate-live-pages-install job feeds."""
     workflow = (Path(__file__).parents[1] / ".github/workflows/smoke-single.yml").read_text()
-    for name in ("smoke_repo_live_url", "smoke_repo_expected_source_sha", "smoke_repo_expected_version"):
+    for name in (
+        "smoke_repo_live_url",
+        "smoke_repo_expected_source_sha",
+        "smoke_repo_expected_version",
+        "smoke_repo_expected_channel",
+    ):
         assert workflow.count(f"      {name}:") == 2
     assert "SMOKE_REPO_LIVE_URL: ${{ inputs.smoke_repo_live_url }}" in workflow
     assert "SMOKE_REPO_EXPECTED_SOURCE_SHA: ${{ inputs.smoke_repo_expected_source_sha }}" in workflow
     assert "SMOKE_REPO_EXPECTED_VERSION: ${{ inputs.smoke_repo_expected_version }}" in workflow
+    assert "SMOKE_REPO_EXPECTED_CHANNEL: ${{ inputs.smoke_repo_expected_channel }}" in workflow
 
 
 @pytest.mark.parametrize(
@@ -54,12 +60,16 @@ def test_live_package_rejects_wrong_provenance(
         repo.assert_live_package(cast(SmokeVM, object()), repo.CANONICAL_PKG_NAME, "4.0.0.a21", "a" * 40, "edge")
 
 
-@pytest.mark.parametrize("missing", ["SMOKE_REPO_EXPECTED_SOURCE_SHA", "SMOKE_REPO_EXPECTED_VERSION"])
+@pytest.mark.parametrize(
+    "missing",
+    ["SMOKE_REPO_EXPECTED_SOURCE_SHA", "SMOKE_REPO_EXPECTED_VERSION", "SMOKE_REPO_EXPECTED_CHANNEL"],
+)
 def test_live_pages_requires_expected_identity(monkeypatch: MonkeyPatch, missing: str) -> None:
-    """A live semantic URL without both expected identity fields fails closed."""
+    """A live semantic URL without every expected identity field fails closed."""
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", "a" * 40)
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", "4.0.0.a21")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_CHANNEL", "edge")
     monkeypatch.delenv(missing)
 
     with pytest.raises(AssertionError, match=missing):
@@ -94,6 +104,7 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", expected_source)
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", expected_version)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_CHANNEL", "edge")
     monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
     monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
     monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
@@ -143,6 +154,85 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
     }
     assert assertions == [(repo.CANONICAL_PKG_NAME, expected_version, expected_source, "edge")]
     assert ("/bin/rm", "-f", repo.REPO_CONF) in ssh_calls
+
+
+@pytest.mark.parametrize(
+    ("dest", "primary", "version"),
+    [
+        ("edge", "testing", "4.0.1.a1"),
+        ("testing", "stable", "4.0.0"),
+        ("edge", "edge", "4.0.0.a1"),
+    ],
+)
+def test_live_pages_record_channel_is_tag_primary(
+    monkeypatch: MonkeyPatch,
+    dest: str,
+    primary: str,
+    version: str,
+) -> None:
+    """A faster dest still carries the tag primary in pfb_build_record.channel."""
+    assertions: list[tuple[str, str, str, str]] = []
+    seen_origin: list[str] = []
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(repo, "_live_base_url", lambda: f"https://example.test/pkg/{dest}")
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", "a" * 40)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", version)
+    monkeypatch.setenv("SMOKE_REPO_EXPECTED_CHANNEL", primary)
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
+    monkeypatch.setattr(repo, "repo_priority", lambda *_args: 0)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_update", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_delete", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        repo,
+        "pkg_install_from_repo",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""),
+    )
+
+    def fake_origin(_vm: object, _pkg_name: str, **_kwargs: object) -> str:
+        origin = repo.channel_repo_name(dest)
+        seen_origin.append(origin)
+        return origin
+
+    def fake_assert(_vm: object, pkg_name: str, ver: str, source_sha: str, channel: str) -> str:
+        assertions.append((pkg_name, ver, source_sha, channel))
+        return ver
+
+    monkeypatch.setattr(repo, "pkg_repo_origin_of", fake_origin)
+    monkeypatch.setattr(repo, "assert_live_package", fake_assert)
+
+    repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
+
+    assert seen_origin == [repo.channel_repo_name(dest)]
+    assert assertions == [(repo.CANONICAL_PKG_NAME, version, "a" * 40, primary)]
+
+
+def test_live_package_accepts_primary_on_faster_dest(monkeypatch: MonkeyPatch) -> None:
+    """assert_live_package compares record.channel to the tag primary, not the dest folder."""
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: "4.0.1.a1")
+    monkeypatch.setattr(
+        repo,
+        "pkg_build_record",
+        lambda *_args: {"source_sha": "a" * 40, "channel": "testing"},
+    )
+    assert (
+        repo.assert_live_package(
+            cast(SmokeVM, object()),
+            repo.CANONICAL_PKG_NAME,
+            "4.0.1.a1",
+            "a" * 40,
+            "testing",
+        )
+        == "4.0.1.a1"
+    )
 
 
 def test_live_nightly_install_targets_canonical_package(monkeypatch: MonkeyPatch) -> None:

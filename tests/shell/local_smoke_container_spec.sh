@@ -147,12 +147,13 @@ EOF
     SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'
     SMOKE_REPO_EXPECTED_SOURCE_SHA='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
     SMOKE_REPO_EXPECTED_VERSION='4.0.0.a21'
+    SMOKE_REPO_EXPECTED_CHANNEL='edge'
     SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
     SMOKE_NIGHTLY_EXPECTED_VERSION='20260810_2'
     SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'
     CIVM_REF='ghcr.io/example/civm:v2'
     export SMOKE_REPO_LIVE_URL SMOKE_NIGHTLY_LIVE_URL
-    export SMOKE_REPO_EXPECTED_SOURCE_SHA SMOKE_REPO_EXPECTED_VERSION
+    export SMOKE_REPO_EXPECTED_SOURCE_SHA SMOKE_REPO_EXPECTED_VERSION SMOKE_REPO_EXPECTED_CHANNEL
     export SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA SMOKE_NIGHTLY_EXPECTED_VERSION
     export SMOKE_PFSENSE_REF CIVM_REF
 
@@ -161,6 +162,7 @@ EOF
     The output should include "-e SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'"
     The output should include "-e SMOKE_REPO_EXPECTED_SOURCE_SHA='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
     The output should include "-e SMOKE_REPO_EXPECTED_VERSION='4.0.0.a21'"
+    The output should include "-e SMOKE_REPO_EXPECTED_CHANNEL='edge'"
     The output should include "-e SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
     The output should include "-e SMOKE_NIGHTLY_EXPECTED_VERSION='20260810_2'"
     The output should include "-e SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'"

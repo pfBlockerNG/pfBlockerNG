@@ -395,6 +395,7 @@ jobs:
       smoke_repo_live_url: https://pfblockerng.github.io/pkg/${{ needs.publish-pkg-repo.outputs.staging_prefix }}/${{ matrix.channel }}
       smoke_repo_expected_source_sha: ${{ needs.resolve.outputs.source_sha }}
       smoke_repo_expected_version: ${{ needs.resolve.outputs.portversion }}
+      smoke_repo_expected_channel: ${{ needs.resolve.outputs.channel }}
       # SECURITY: same trusted-ref rule as resolve/publish-pkg-repo above — the smoke
       # harness (test code) must come from the workflow's own revision
       # (github.workflow_sha), never the released tag's tree that actions/checkout
