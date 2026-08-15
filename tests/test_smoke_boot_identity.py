@@ -27,7 +27,8 @@ def test_log_guest_identity_reports_observed_and_expected_facts(
                 0,
                 "etc_version=2.8.1-RELEASE\nversionpatch=0\n"
                 "kernel_release=15.0-CURRENT\nkernel_version=FreeBSD 15 build\n"
-                "abi=FreeBSD:15:amd64\n",
+                "abi=FreeBSD:15:amd64\nfreebsd_version=15.0-CURRENT\n"
+                "pkg_client=1.21.3\npkg_pkg=1.21.3_8\n",
                 "",
             )
 
@@ -47,12 +48,18 @@ def test_log_guest_identity_reports_observed_and_expected_facts(
         "PFB_GUEST_IDENTITY kernel_release=15.0-CURRENT",
         "PFB_GUEST_IDENTITY kernel_version=FreeBSD 15 build",
         "PFB_GUEST_IDENTITY abi=FreeBSD:15:amd64",
+        "PFB_GUEST_IDENTITY freebsd_version=15.0-CURRENT",
+        "PFB_GUEST_IDENTITY pkg_client=1.21.3",
+        "PFB_GUEST_IDENTITY pkg_pkg=1.21.3_8",
     ]
     assert "/bin/cat /etc/version" in smoke_conftest.GUEST_IDENTITY_COMMAND
     assert "/bin/cat /etc/versionpatch" in smoke_conftest.GUEST_IDENTITY_COMMAND
     assert "/usr/bin/uname -r" in smoke_conftest.GUEST_IDENTITY_COMMAND
     assert "/usr/bin/uname -v" in smoke_conftest.GUEST_IDENTITY_COMMAND
     assert "/usr/local/sbin/pkg config ABI" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/bin/freebsd-version" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/usr/local/sbin/pkg -v" in smoke_conftest.GUEST_IDENTITY_COMMAND
+    assert "/usr/local/sbin/pkg query %v pkg" in smoke_conftest.GUEST_IDENTITY_COMMAND
 
 
 def test_log_guest_identity_failure_is_loud_and_read_only() -> None:
@@ -94,7 +101,15 @@ class _IdentityVM:
         return subprocess.CompletedProcess(remote, 0, self._stdout, "")
 
 
-def _identity_stdout(abi_line: str | None) -> str:
+def _identity_stdout(
+    abi_line: str | None,
+    *,
+    freebsd_version_line: str = "freebsd_version=15.0-CURRENT",
+    pkg_client_line: str = "pkg_client=1.21.3",
+    pkg_pkg_line: str = "pkg_pkg=1.21.3_8",
+) -> str:
+    """Row-2/row-3 fields default to values consistent with the SMOKE_ABI major most
+    tests here use (15), so an abi-focused fixture doesn't accidentally trip rows 2/3."""
     lines = [
         "etc_version=2.8.1-RELEASE",
         "versionpatch=0",
@@ -103,6 +118,7 @@ def _identity_stdout(abi_line: str | None) -> str:
     ]
     if abi_line is not None:
         lines.append(abi_line)
+    lines += [freebsd_version_line, pkg_client_line, pkg_pkg_line]
     return "\n".join(lines) + "\n"
 
 
@@ -173,6 +189,92 @@ def test_log_guest_identity_raises_on_garbage_smoke_abi(monkeypatch: pytest.Monk
 
     with pytest.raises(RuntimeError, match=r"garbage"):
         smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+# --- row 2: /bin/freebsd-version major vs SMOKE_ABI major (owner residual table) ---
+
+
+def test_log_guest_identity_raises_on_freebsd_version_major_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64", freebsd_version_line="freebsd_version=16.0-CURRENT"))
+
+    with pytest.raises(RuntimeError, match=r"freebsd-version") as exc_info:
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+    assert "16.0-CURRENT" in str(exc_info.value)
+    assert "FreeBSD:15:amd64" in str(exc_info.value)
+
+
+def test_log_guest_identity_raises_on_freebsd_version_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64", freebsd_version_line="freebsd_version=?"))
+
+    with pytest.raises(RuntimeError, match=r"freebsd-version"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_allows_matching_freebsd_version_major(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    # a patch-level difference on the same major must not raise
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64", freebsd_version_line="freebsd_version=15.1-RELEASE"))
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
+
+
+# --- row 3: pkg client major vs the installed pkg package's own major ---
+
+
+def test_log_guest_identity_raises_on_pkg_client_major_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(
+        _identity_stdout("abi=FreeBSD:15:amd64", pkg_client_line="pkg_client=2.7.5", pkg_pkg_line="pkg_pkg=1.21.3_8")
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"pkg client 2\.7\.5 does not match the installed pkg package 1\.21\.3_8",
+    ):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_allows_matching_pkg_client_major(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    # a patch-level difference on the same major must not raise
+    vm = _IdentityVM(
+        _identity_stdout("abi=FreeBSD:15:amd64", pkg_client_line="pkg_client=1.21.3", pkg_pkg_line="pkg_pkg=1.21.4_1")
+    )
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
+
+
+def test_log_guest_identity_raises_on_pkg_client_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64", pkg_client_line="pkg_client=?"))
+
+    with pytest.raises(RuntimeError, match=r"pkg client"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_raises_on_pkg_pkg_placeholder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64", pkg_pkg_line="pkg_pkg=?"))
+
+    with pytest.raises(RuntimeError, match=r"pkg client"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_skips_rows_2_and_3_when_smoke_abi_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SMOKE_ABI", raising=False)
+    vm = _IdentityVM(
+        _identity_stdout(
+            "abi=FreeBSD:16:amd64",
+            freebsd_version_line="freebsd_version=99.0-CURRENT",
+            pkg_client_line="pkg_client=9.9.9",
+            pkg_pkg_line="pkg_pkg=1.1.1",
+        )
+    )
+
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
 
 
 def test_successful_deploy_emits_installer_diagnostics(

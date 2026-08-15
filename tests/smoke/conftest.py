@@ -74,8 +74,13 @@ GUEST_IDENTITY_COMMAND = (
     "kernel_release=$(/usr/bin/uname -r 2>/dev/null || printf '?'); "
     "kernel_version=$(/usr/bin/uname -v 2>/dev/null || printf '?'); "
     "abi=$(/usr/local/sbin/pkg config ABI 2>/dev/null || printf '?'); "
-    "printf 'etc_version=%s\\nversionpatch=%s\\nkernel_release=%s\\nkernel_version=%s\\nabi=%s\\n' "
-    '"$etc_version" "$versionpatch" "$kernel_release" "$kernel_version" "$abi"'
+    "freebsd_version=$(/bin/freebsd-version 2>/dev/null || printf '?'); "
+    "pkg_client=$(/usr/local/sbin/pkg -v 2>/dev/null || printf '?'); "
+    "pkg_pkg=$(/usr/local/sbin/pkg query %v pkg 2>/dev/null || printf '?'); "
+    "printf 'etc_version=%s\\nversionpatch=%s\\nkernel_release=%s\\nkernel_version=%s\\nabi=%s\\n"
+    "freebsd_version=%s\\npkg_client=%s\\npkg_pkg=%s\\n' "
+    '"$etc_version" "$versionpatch" "$kernel_release" "$kernel_version" "$abi" '
+    '"$freebsd_version" "$pkg_client" "$pkg_pkg"'
 )
 
 # Host<->guest exposure baked into boot_vm.sh's hostfwd map (see RESULTS/01).
@@ -343,6 +348,19 @@ def _abi_os_major(abi: str) -> str:
     return ":".join(abi.split(":")[:2])
 
 
+def _abi_major(abi: str) -> str:
+    """Second ``:``-separated field of a pkg ABI string (``FreeBSD:15:amd64`` -> ``15``)."""
+    parts = abi.split(":")
+    return parts[1] if len(parts) > 1 else ""
+
+
+def _dot_major(value: str) -> str:
+    """Text before the first ``.`` (``15.0-CURRENT``/``1.21.3`` -> ``15``/``1``); a
+    missing/placeholder value (``?``, empty) passes through unchanged so it never
+    coincidentally equals a real digit major."""
+    return value.split(".", 1)[0]
+
+
 def _log_guest_identity(vm: SmokeVM) -> None:
     """Emit the booted guest facts needed to diagnose image/matrix drift."""
     result = vm.ssh(GUEST_IDENTITY_COMMAND, timeout=30.0)
@@ -357,12 +375,21 @@ def _log_guest_identity(vm: SmokeVM) -> None:
         f"expected_abi={os.environ.get('SMOKE_ABI', '?')}"
     )
     observed_abi = "?"
+    observed_freebsd_version = "?"
+    observed_pkg_client = "?"
+    observed_pkg_pkg = "?"
     for line in result.stdout.splitlines():
         print(f"PFB_GUEST_IDENTITY {line}")
         if line.startswith("abi="):
             observed_abi = line[len("abi=") :]
-    # issue #2242: live pfSense repository metadata rewrote the effective ABI mid-run;
-    # fail before pkg add rather than let a stale/foreign package land. Arch is
+        elif line.startswith("freebsd_version="):
+            observed_freebsd_version = line[len("freebsd_version=") :]
+        elif line.startswith("pkg_client="):
+            observed_pkg_client = line[len("pkg_client=") :]
+        elif line.startswith("pkg_pkg="):
+            observed_pkg_pkg = line[len("pkg_pkg=") :]
+    # issue #2242 row 1: live pfSense repository metadata rewrote the effective ABI
+    # mid-run; fail before pkg add rather than let a stale/foreign package land. Arch is
     # deliberately not compared — only OS/major.
     expected_abi = os.environ.get("SMOKE_ABI", "")
     if expected_abi and _abi_os_major(observed_abi) != _abi_os_major(expected_abi):
@@ -371,6 +398,23 @@ def _log_guest_identity(vm: SmokeVM) -> None:
             "(OS/major mismatch; issue #2242 — live pfSense repository metadata rewrote the "
             "effective ABI, refusing to pkg add)"
         )
+    if expected_abi:
+        # row 2: the userland major itself, independent of what pkg claims its ABI is.
+        expected_major = _abi_major(expected_abi)
+        if _dot_major(observed_freebsd_version) != expected_major:
+            raise RuntimeError(
+                f"guest /bin/freebsd-version {observed_freebsd_version} does not match expected "
+                f"SMOKE_ABI {expected_abi} (major mismatch; issue #2242 — a foreign FreeBSD "
+                "userland replaced the guest's own, refusing to pkg add)"
+            )
+        # row 3: the pkg CLIENT binary's own major vs the major of the pkg PACKAGE it
+        # thinks it has installed — a foreign pkg binary can replace the client without
+        # updating pkg's own package record, or vice versa.
+        if _dot_major(observed_pkg_client) != _dot_major(observed_pkg_pkg):
+            raise RuntimeError(
+                f"pkg client {observed_pkg_client} does not match the installed pkg package "
+                f"{observed_pkg_pkg} — a foreign pkg binary replaced the client (issue #2242)"
+            )
 
 
 @timed_step("boot_and_probe")
