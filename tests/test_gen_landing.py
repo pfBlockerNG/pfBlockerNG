@@ -2268,15 +2268,10 @@ def test_published_installer_runs_piped_with_embedded_hook(tmp_path: Path, monke
 def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """B1/F1 (issue #2416): the guard's genuine-checkout signal was ``-f
-    SCRIPT_DIR/install.sh`` — but the published artifact's own filename IS
-    install.sh, so ANY copy sitting in SCRIPT_DIR satisfies it, checkout or not.
-    From cwd ``/usr/local/etc`` (``ROOT=""``), ``SCRIPT_DIR/rc.d/...`` collides
-    with the on-box installed hook path itself: with a leftover downloaded
-    install.sh also sitting there (e.g. from an earlier ``fetch -o``), the old
-    guard would ``cmp`` the stale on-box hook against ITSELF, report "up to
-    date", and never refresh it — even though this run is piped fresh from the
-    network. The embedded hook must be tried FIRST, unconditionally.
+    """The published installer never mistakes the on-box hook for its checkout
+    sibling. From cwd ``/usr/local/etc`` (``ROOT=""``) ``SCRIPT_DIR/rc.d/...`` IS
+    the installed hook path, and a leftover downloaded install.sh sitting there
+    makes the directory look like a checkout; the embedded hook must still win.
 
     Before-state: a stale hook AND a leftover install.sh copy are pre-seeded at
     the collision path. After a piped run from that cwd, the installed hook must
@@ -2348,13 +2343,10 @@ def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source
 
 
 def test_published_installer_saved_to_disk_still_replaces_a_stale_on_box_hook(tmp_path: Path, monkeypatch: Any) -> None:
-    """F1 (issue #2416): the same collision, hit by running the published artifact
-    BY PATH rather than piped — e.g. ``fetch -o install.sh ... && sh install.sh``,
-    saved straight into ``/usr/local/etc``. ``$0`` is the saved file itself here
-    (not "sh"), so ``SCRIPT_DIR`` is ``/usr/local/etc`` directly from dirname —
-    the old guard's ``-f SCRIPT_DIR/install.sh`` is trivially true (it's the file
-    being run) AND ``-f HOOK_SRC`` is true (HOOK_SRC collides with the stale
-    on-box hook itself). The embedded hook must still be tried first.
+    """The same collision, hit by running the published artifact BY PATH rather
+    than piped — ``fetch -o install.sh ... && sh install.sh`` saved straight into
+    ``/usr/local/etc``, so ``SCRIPT_DIR`` is that directory and ``HOOK_SRC`` is the
+    stale on-box hook itself. The embedded hook must still win.
 
     Before-state: a stale hook is pre-seeded at the on-box path, which is also
     where the published install.sh is saved. After running it BY PATH, the
@@ -2423,11 +2415,11 @@ def test_published_installer_saved_to_disk_still_replaces_a_stale_on_box_hook(tm
 
 
 def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_path: Path, monkeypatch: Any) -> None:
-    """B3/F3 (issue #2416): a fork publishing from a non-default base (or a staged
-    prefix) must ship an installer whose OWN ``PFB_BASE_URL`` default points at ITS
-    base — not the hardcoded upstream default baked into the repository copy of
-    install.sh. Without a ``PFB_BASE_URL`` override, a piped run must resolve the
-    conf against the site's real base.
+    """A fork publishing from a non-default base (or a staged prefix) must ship an
+    installer whose OWN ``PFB_BASE_URL`` default points at ITS base — not the
+    hardcoded upstream default baked into the repository copy of install.sh.
+    Without a ``PFB_BASE_URL`` override, a piped run must resolve the conf against
+    the site's real base.
     """
     import subprocess
 
@@ -2492,9 +2484,9 @@ def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_pa
 def test_write_site_bakes_a_base_url_containing_shell_metacharacters_as_inert_data(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """CR (issue #2416 review): ``_bake_base_url`` interpolates *base* into
-    install.sh's own source text — a base built from ``$(...)``, backticks, ``'``,
-    ``"``, or ``&`` must land as inert shell DATA, never executable shell syntax.
+    """``_bake_base_url`` interpolates *base* into install.sh's own source text —
+    a base built from ``$(...)``, backticks, ``'``, ``"``, or ``&`` must land as
+    inert shell DATA, never executable shell syntax.
     A fork's configured base URL is config, not code; the published installer
     must run it through unchanged and execute nothing from it.
     """
