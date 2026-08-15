@@ -59,15 +59,15 @@ Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`)
   `*.sh`/`*.md` staged). NOT unit suites — run `python3 -m pytest` yourself while
   iterating; tests and static analysis run in CI only. Missing tool = reported + skipped.
   `--no-verify` bypass is for humans, not agents.
-- **`prepare-commit-msg`** — first aborts agent commit (`CLAUDECODE=1` or
-  `CODEX_THREAD_ID` set) in **primary checkout** (agents commit only in linked
+- **`prepare-commit-msg`** — first aborts agent commit (`CLAUDECODE=1`,
+  `CODEX_THREAD_ID`, Copilot, or Grok marker set) in **primary checkout** (agents commit only in linked
   worktrees — issue #1262; state-checked via `--git-dir` vs `--git-common-dir`, never
   command text; agent-dedicated checkouts opt out via `CLAUDE_CODE_USER_EMAIL`
   (managed-remote) or
   `git config pfblockerng.allowprimarycommit true`), then appends owner's
   `Co-authored-by:` trailer (see Commit style); runs even under `--no-verify`.
 - **`pre-push`** — enforces release tag scheme via `scripts/release-version.sh`; also
-  denies agent (`CLAUDECODE=1` or `CODEX_THREAD_ID` set) branch push that would rewrite
+  denies agent (`CLAUDECODE=1`, `CODEX_THREAD_ID`, Copilot, or Grok marker set) branch push that would rewrite
   remote history the agent never fetched (advertised remote oid must equal
   remote-tracking ref — issue #1307, `--force-with-lease`'s check enforced by effect).
 
@@ -121,15 +121,17 @@ trailer only when its provider adapter defines verified, GitHub-recognized
 identity; otherwise disclose it in PR audit/footer and never fabricate or
 borrow another provider's identity. Claude's adapter uses
 `Claude <noreply@anthropic.com>`; Codex's mapping in `AGENTS.md` has no verified
-coauthor identity, and Copilot's is whatever `coauthor.copilot.*` names locally.
+coauthor identity; Copilot's is whatever `coauthor.copilot.*` names locally;
+Grok's is whatever `coauthor.grok.*` names locally.
 **Every client whose marker is present gets its own trailer** — agent launched
 from inside another agent's session inherits outer marker while setting its
 own, and both worked on the commit. Each identity comes only from that client's
 own `coauthor.<client>.*` keys; legacy `coauthor.*` key holds Claude's (and
 human session's) identity and is read only when no client marker present at
-all, so unconfigured Codex or Copilot commit never credited to Claude.
+all, so unconfigured Codex, Copilot, or Grok commit never credited to Claude.
 Client markers: `CLAUDECODE=1`, `CODEX_THREAD_ID`, `COPILOT_CLI` (plus
-`COPILOT_AGENT_PROMPT` for Copilot's cloud agent). In **agent/managed-remote** environments, active
+`COPILOT_AGENT_PROMPT` for Copilot's cloud agent), `GROK_SESSION_ID` /
+`GROK_AGENT`. In **agent/managed-remote** environments, active
 agent is committer+signer, human is author (`--author=`), and
 `prepare-commit-msg` hook injects owner's `Co-authored-by:` trailer automatically.
 Full two-model spec + badge preconditions: below.

@@ -58,7 +58,7 @@ def test_copilot_client_detection_needs_nothing_installed() -> None:
     # Every client present is credited from its OWN key, and the legacy key —
     # which holds Claude's identity here — is gated on no client being present.
     trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
-    assert "for pfb_provider in claude codex copilot" in trailer, "attribution is no longer per-client"
+    assert "for pfb_provider in claude codex copilot grok" in trailer, "attribution is no longer per-client"
     assert "coauthor.${pfb_provider}.email" in trailer, "identities no longer come from per-client keys"
     assert "any_client" in trailer, "the legacy coauthor key is no longer gated on a client marker"
 
@@ -74,6 +74,44 @@ def test_copilot_instructions_route_at_the_canonical_bootstrap() -> None:
     assert adapter.exists()
     bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert ".agents/context/copilot-adapter.md" in bootstrap, "AGENTS.md never names the Copilot adapter"
+
+
+def test_grok_client_detection_needs_nothing_installed() -> None:
+    # Grok CLI exports GROK_AGENT and GROK_SESSION_ID into every shell it
+    # spawns, so detection is two variables like the other clients. Nothing
+    # may appear under scripts/agent as a Grok session installer.
+    for name in ("grok-session-marker.sh", "grok-session-hook.sh", "install-grok-hooks.sh"):
+        assert not (ROOT / "scripts/agent" / name).exists(), f"{name} is not how Grok is detected"
+
+    for hook in (".githooks/prepare-commit-msg", ".githooks/pre-push"):
+        body = (ROOT / hook).read_text(encoding="utf-8")
+        assert "GROK_SESSION_ID" in body, f"{hook} lost Grok session detection"
+        assert "GROK_AGENT" in body, f"{hook} lost Grok agent detection"
+        assert "grok_session" in body, f"{hook} lost grok_session helper"
+
+    trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
+    assert "for pfb_provider in claude codex copilot grok" in trailer, "Grok is missing from per-client attribution"
+    assert "grok) grok_session || continue" in trailer, "Grok is no longer a trailer provider"
+
+
+def test_grok_adapter_routes_at_the_canonical_bootstrap() -> None:
+    adapter_md = (ROOT / "GROK.md").read_text(encoding="utf-8")
+    assert "AGENTS.md" in adapter_md, "Grok is never sent to the canonical bootstrap"
+    assert ".agents/context/grok-adapter.md" in adapter_md
+    for mode in ("PONYTAIL", "CAVEMAN"):
+        assert mode in adapter_md
+
+    adapter = ROOT / ".agents/context/grok-adapter.md"
+    assert adapter.exists()
+    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert ".agents/context/grok-adapter.md" in bootstrap, "AGENTS.md never names the Grok adapter"
+    assert "GROK.md" in bootstrap, "AGENTS.md never names the Grok thin adapter"
+
+    harness = ROOT / ".grok/rules/harness.md"
+    assert harness.is_file(), "Grok rules dir must auto-inject the adapter pointer"
+    pointer = harness.read_text(encoding="utf-8")
+    assert "GROK.md" in pointer
+    assert ".agents/context/grok-adapter.md" in pointer
 
 
 def test_copilot_roles_are_pinned_and_defined() -> None:

@@ -1,7 +1,7 @@
 # pfBlockerNG — agent bootstrap (canonical)
 
 This file = **canonical, vendor-neutral agent policy bootstrap**. Claude Code load it
-through `CLAUDE.md` (`@AGENTS.md` import), Codex native, Copilot via
+through `CLAUDE.md` (`@AGENTS.md` import), Codex and Grok native, Copilot via
 `.github/copilot-instructions.md`. Detailed policy live in `.agents/policy/`, domain
 context in `.agents/context/` and `docs/misc/` — load per routing table below, never
 all at once. Shared behavior change land there, never in vendor copy.
@@ -153,6 +153,9 @@ Vendor-specific surfaces live in each vendor's own adapter, never in this neutra
   Copilot translation table and Copilot specifics (custom agents in `.github/agents/`, repo
   hooks in `.github/hooks/`, pid session marker git hooks read, attribution).
   **Read both at session start.**
+- **Grok** → `GROK.md` (thin adapter) plus `.agents/context/grok-adapter.md`.
+  Grok load this bootstrap native. Git-hook markers `GROK_SESSION_ID` /
+  `GROK_AGENT`. **Read both at session start.**
 
 Respond terse like smart caveman. All technical substance stay. Only fluff die. Drop
 articles/filler/pleasantries/hedging; fragments OK; technical terms exact; code unchanged.

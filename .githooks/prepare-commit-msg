@@ -27,22 +27,28 @@ set -u
 
 # Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
 # 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
-# agent sets COPILOT_AGENT_PROMPT. Same shape as CLAUDECODE and CODEX_THREAD_ID —
-# nothing is installed, and no process tree is inspected.
+# agent sets COPILOT_AGENT_PROMPT. Grok CLI exports GROK_AGENT=1 and
+# GROK_SESSION_ID (probed 2026-08-15). Same shape as CLAUDECODE and
+# CODEX_THREAD_ID — nothing is installed, and no process tree is inspected.
 copilot_session() {
 	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
 }
 
-# Agent worktree guard (issue #1262): abort a Claude Code, Codex, or Copilot
-# commit in the primary checkout (--git-dir == --git-common-dir; agents commit
-# only in linked worktrees). Lives in THIS hook because it still runs when
-# verification is skipped. Exempt: managed-remote sessions (CLAUDE_CODE_USER_EMAIL
-# set) or an explicit `git config pfblockerng.allowprimarycommit true`
-# (agent-dedicated).
+grok_session() {
+	[ -n "${GROK_SESSION_ID:-}" ] || [ -n "${GROK_AGENT:-}" ]
+}
+
+# Agent worktree guard (issue #1262): abort a Claude Code, Codex, Copilot, or
+# Grok commit in the primary checkout (--git-dir == --git-common-dir; agents
+# commit only in linked worktrees). Lives in THIS hook because it still runs
+# when verification is skipped. Exempt: managed-remote sessions
+# (CLAUDE_CODE_USER_EMAIL set) or an explicit
+# `git config pfblockerng.allowprimarycommit true` (agent-dedicated).
 agent_runtime=0
 [ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
 [ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
 [ "$agent_runtime" = "1" ] || ! copilot_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! grok_session || agent_runtime=1
 if [ "$agent_runtime" = "1" ] && [ -z "${CLAUDE_CODE_USER_EMAIL:-}" ] &&
 	[ "$(git config --bool --get pfblockerng.allowprimarycommit 2>/dev/null)" != "true" ]; then
 	unset CDPATH # a CDPATH hit makes cd echo the dir, corrupting $(cd ... && pwd -P)
@@ -77,7 +83,7 @@ committer_email=$(ident_email "$committer_ident")
 # own, and both of them worked on the commit. Each client is credited only from
 # its OWN configured identity — no identity is ever invented for a client, and
 # the legacy `coauthor.*` key stays Claude's (and the human's) alone, so a clone
-# configured to credit Claude cannot misattribute Codex or Copilot work.
+# configured to credit Claude cannot misattribute Codex, Copilot, or Grok work.
 credited=0
 any_client=0
 
@@ -103,11 +109,12 @@ append_trailer() {
 	credited=1
 }
 
-for pfb_provider in claude codex copilot; do
+for pfb_provider in claude codex copilot grok; do
 	case "$pfb_provider" in
 		claude) [ "${CLAUDECODE:-}" = "1" ] || continue ;;
 		codex) [ -n "${CODEX_THREAD_ID:-}" ] || continue ;;
 		copilot) copilot_session || continue ;;
+		grok) grok_session || continue ;;
 	esac
 	any_client=1
 	email=$(git config --get "coauthor.${pfb_provider}.email" 2>/dev/null || true)
@@ -123,8 +130,8 @@ done
 # No client credited: a human session (the legacy key), the managed-remote owner,
 # or an author who differs from the committer. The legacy key holds Claude's
 # identity here, so it is read ONLY when no client marker was present at all —
-# otherwise a Codex or Copilot commit with no configured identity of its own
-# would be credited to Claude.
+# otherwise a Codex, Copilot, or Grok commit with no configured identity of
+# its own would be credited to Claude.
 if [ "$credited" = "0" ]; then
 	email=''
 	[ "$any_client" = "1" ] || email=$(git config --get coauthor.email 2>/dev/null || true)

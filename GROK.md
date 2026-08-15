@@ -1,0 +1,30 @@
+# Grok adapter — pfBlockerNG
+
+[`AGENTS.md`](AGENTS.md) is canonical vendor-neutral agent policy bootstrap; this file only Grok adapter. Grok load `AGENTS.md` native. Read `AGENTS.md` now and follow, including routing table into `.agents/policy/`, `.agents/context/`, `docs/misc/`. Grok noun translation lives in
+[`.agents/context/grok-adapter.md`](.agents/context/grok-adapter.md) — read at session start.
+
+Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated worktree, rebase-only linear history, tests ship with every change and carry red-to-green proof, every config field goes through `PfbConfig`, no direct Python on appliance, POSIX sh only.
+
+## Grok-only surfaces
+
+- Skills discovered from `.agents/skills/` (canonical) and `.claude/skills/`
+  symlinks onto it — no Grok-specific copy exists or should be created. Grok also
+  scans `.grok/skills/` if one is added.
+- No repo session hooks are wired. Mode capsules ride this file and
+  `.grok/rules/harness.md`, which Grok auto-loads.
+- `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
+  `GROK_SESSION_ID` and `GROK_AGENT`, which the Grok CLI exports into every shell
+  it spawns. Never unset to dodge guard it trips.
+- Human owner stays author, committer, signer. `Co-authored-by:` trailer for
+  Grok emitted only from locally configured `coauthor.grok.*` identity; none
+  configured → disclose authorship in PR body instead.
+- Reviews use an independent spawned reviewer per `.agents/policy/landing.md`.
+  Grok has no in-repo custom-agent files; spawn `general-purpose` (or `explore` /
+  `plan`) rather than inventing a fourth role tree.
+
+## Communication
+
+Activate PONYTAIL full (build laziest solution that actually works) and CAVEMAN full
+(terse: drop articles, filler, pleasantries, hedging; fragments fine; technical terms and
+code exact). Two exceptions get normal professional grammar: external or public-facing text
+(issues, PR bodies, commits) and documentation. Commits: `<scope>: <imperative summary>`.

@@ -8,8 +8,8 @@ Every surface has a byte budget so the hot context cannot silently re-accrete
 table references must carry a `Scope:` + `Load-when:` header so it stays
 routable. Budgets (calibrated on the measured tree, not the matrix estimates):
 
-- `AGENTS.md` (bootstrap)                          10,240 B
-- `CLAUDE.md` (thin adapter + tool-managed blocks)  8,192 B
+- `AGENTS.md` (bootstrap)                          10,752 B
+- `CLAUDE.md` / `GROK.md` (thin vendor adapters)    8,192 B
 - `.agents/policy/*.md` / `.agents/context/*.md`   12,288 B default; grandfathered
   ratchet caps for the pre-taxonomy files (landing 26,000, agent-roles 19,000,
   delegation 18,000 — frozen constants: lower them as the files shrink)
@@ -32,9 +32,9 @@ registered DYNAMIC_CAPSULE_PRODUCERS entry, and a recognized reference the
 checker cannot statically resolve and read fails closed (#1501).
 
 CONDITIONAL: in --staged / --diff mode the checks run IF AND ONLY IF the change
-touches a context surface (AGENTS.md, CLAUDE.md, .agents/policy/,
+touches a context surface (AGENTS.md, CLAUDE.md, GROK.md, .agents/policy/,
 .agents/context/, docs/misc/, .claude/rules/, .claude/hooks/, scripts/,
-.claude/settings.json, any nested CLAUDE.md/AGENTS.md, or this checker);
+.claude/settings.json, any nested CLAUDE.md/AGENTS.md/GROK.md, or this checker);
 otherwise it reports the skip and exits 0. --all checks unconditionally.
 
 Usage:
@@ -59,7 +59,7 @@ from pathlib import Path
 
 from _git_paths import nul_listing
 
-BOOTSTRAP_BUDGET = 10_240
+BOOTSTRAP_BUDGET = 10_752
 ADAPTER_BUDGET = 8_192
 POLICY_BUDGET = 12_288
 STUB_BUDGET = 400
@@ -78,6 +78,7 @@ COMMAND_BYTES_MAX = CAPSULE_BUDGET * 6 + 200
 FILE_BUDGETS = {
     "AGENTS.md": BOOTSTRAP_BUDGET,
     "CLAUDE.md": ADAPTER_BUDGET,
+    "GROK.md": ADAPTER_BUDGET,
     ".agents/policy/landing.md": 26_000,
     ".agents/policy/agent-roles.md": 19_000,
     ".agents/policy/delegation.md": 18_000,
@@ -162,7 +163,7 @@ def budget_for(rel: str) -> int | None:
     # its instruction files are not our dir stubs. Checked before the
     # policy/context prefix: a nested AGENTS.md/CLAUDE.md under .agents/ is a
     # dir stub, not a routed policy file.
-    if "/" in rel and base in ("CLAUDE.md", "AGENTS.md") and "plugins" not in rel.split("/")[:-1]:
+    if "/" in rel and base in ("CLAUDE.md", "AGENTS.md", "GROK.md") and "plugins" not in rel.split("/")[:-1]:
         return STUB_BUDGET
     if rel.startswith((".agents/policy/", ".agents/context/")) and rel.endswith(".md"):
         return POLICY_BUDGET
@@ -482,14 +483,14 @@ def _git(root: Path, *args: str) -> str:
 
 # The CI workflow (.github/workflows/context-budget.yml) path-filters on these same
 # surfaces; pinned by tests/test_context_budget.py::test_ci_workflow_paths_match_checker_triggers.
-_TRIGGER_FILES = ("AGENTS.md", "CLAUDE.md", SETTINGS, "scripts/check_context_budget.py")
+_TRIGGER_FILES = ("AGENTS.md", "CLAUDE.md", "GROK.md", SETTINGS, "scripts/check_context_budget.py")
 _TRIGGER_DIRS = (".agents/policy/", ".agents/context/", "docs/misc/", ".claude/rules/", ".claude/hooks/", "scripts/")
 
 
 def touches_context_surface(changed: list[str]) -> bool:
     for rel in changed:
         base = rel.rsplit("/", 1)[-1]
-        if rel in _TRIGGER_FILES or rel.startswith(_TRIGGER_DIRS) or base in ("CLAUDE.md", "AGENTS.md"):
+        if rel in _TRIGGER_FILES or rel.startswith(_TRIGGER_DIRS) or base in ("CLAUDE.md", "AGENTS.md", "GROK.md"):
             return True
     return False
 
