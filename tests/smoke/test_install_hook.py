@@ -46,6 +46,13 @@ sleep 2
 echo "=== pkg add (runs rc.packages POST-INSTALL) ==="
 env ASSUME_ALWAYS_YES=yes pkg add "$P" 2>&1
 echo "rc=$?"
+# Fresh-install IP suppression must not be planted as empty (schedule-seeded
+# General used to trip the General->IP copy and persist suppression off).
+php -r '
+require_once "config.inc";
+$v = config_get_path("installedpackages/pfblockerngipsettings/config/0/suppression", "__ABSENT__");
+echo "SUPPRESSION=" . (is_scalar($v) ? (string)$v : "__NONSCALAR__") . "\n";
+'
 # Leave the VM clean for the repo-install module (which expects the pkg ABSENT).
 env ASSUME_ALWAYS_YES=yes pkg delete -y "$NAME" >/dev/null 2>&1 || true
 """
@@ -117,3 +124,10 @@ def test_install_hook_succeeds(smoke_vm: SmokeVM) -> None:
     )
     ran = [p for p in _SUCCESS_PHRASES if p in out]
     assert ran, f"the install hook did not run the full pfBlockerNG setup:\n{out}"
+    supp_lines = [line for line in out.splitlines() if line.startswith("SUPPRESSION=")]
+    assert supp_lines, f"fresh-install suppression probe missing:\n{out}"
+    supp = supp_lines[-1].split("=", 1)[1]
+    assert supp != "", (
+        "fresh install planted ip/suppression as empty (General->IP copy fired "
+        f"on schedule-seeded General):\n{out}"
+    )
