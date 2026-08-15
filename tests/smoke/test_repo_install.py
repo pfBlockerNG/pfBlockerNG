@@ -144,7 +144,7 @@ BUILD_REPO_PORTABLE = Path(__file__).resolve().parents[2] / "scripts" / "build-r
 PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the flat portable catalog is shipped
 
 # The repository copy of the boot-time generator hook — the executed-proof oracle
-# for "the embedded heredoc survives ash when piped": a fresh-box channel-installer
+# for "the embedded heredoc survives ash when piped": a fresh-box install.sh
 # run's on-guest hook must be byte-identical to THIS file.
 RC_D_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
 
@@ -1298,7 +1298,7 @@ def write_live_repo_conf(
     timeout: float = 60.0,
 ) -> None:
     """Write a REPO CONF, ONLY, pointing at the LIVE ``<channel-base>/<varver>`` Pages URL —
-    no install-common.sh run, no pkg mutation: a hand-written subscription, exactly what a
+    no install.sh run, no pkg mutation: a hand-written subscription, exactly what a
     restored config backup or a manually-edited conf looks like.
 
     Built from the SAME generator the publish job emits (``build-repo-portable.py
@@ -1308,7 +1308,7 @@ def write_live_repo_conf(
     NO_ARCH, issue #1806): there is no ``${ABI}`` pkg(8) variable any more, the caller
     supplies the concrete varver. ``channel`` omitted defaults to the legacy release conf
     (``REPO_CONF``); pass it (with ``conf_path``) to write one of the four channel confs
-    directly, bypassing install-common.sh's own always-installs convergence.
+    directly, bypassing install.sh's own always-installs convergence.
     """
     channel_args = () if channel is None else ("--channel", channel)
     proc = subprocess.run(
@@ -1417,7 +1417,7 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
     deployed tree. Ordinary ``pkg upgrade`` must leave Nightly's higher date version
     untouched even with a lower-versioned semantic repo ALSO subscribed (a hand-written
     conf, exactly what a restored config backup looks like); the published
-    ``install-<channel>.sh`` must then move the canonical package to the selected
+    ``install.sh --channel <channel>`` must then move the canonical package to the selected
     Stable, Testing, or Edge repository and its lower version.
     """
     semantic_url = _live_base_url()
@@ -1459,10 +1459,10 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
     try:
         reset_channel_subscription(repo_vm)
 
-        # GIVEN: the published install-nightly.sh subscribes AND installs, in one shot.
+        # GIVEN: the published install.sh --channel nightly subscribes AND installs, in one shot.
         installer = run_channel_installer(repo_vm, "nightly", common_base, tmp_path)
         assert installer.returncode == 0, (
-            f"install-nightly.sh exited {installer.returncode}\n"
+            f"install.sh --channel nightly exited {installer.returncode}\n"
             f"stdout:\n{installer.stdout}\nstderr:\n{installer.stderr}"
         )
         nightly_version = assert_live_package(
@@ -1475,7 +1475,7 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
         assert pkg_repo_origin_of(repo_vm, CANONICAL_PKG_NAME) == channel_repo_name("nightly")
 
         # WHEN (1): the semantic channel's conf ALSO becomes present — a hand-written
-        # conf, no install-common.sh run, so the nightly install is untouched at this
+        # conf, no install.sh run, so the nightly install is untouched at this
         # point (asserted below) — exactly what a restored config backup looks like.
         write_live_repo_conf(
             repo_vm,
@@ -1526,7 +1526,7 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
     finally:
         reset_channel_subscription(repo_vm)
         repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
-        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install-*.sh", timeout=60.0)
+        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install.sh", timeout=60.0)
         restore_pages_hosts(repo_vm, prior_hosts)
 
 
@@ -2144,7 +2144,7 @@ def test_eol_route_only_install_from_frozen_catalog(repo_vm: SmokeVM, tmp_path: 
 
 # Working directory on the guest for the generator-hook test.
 GENERATE_DIR = "/tmp/pfb_generate_test"
-# On-box path where install-<channel>.sh installs the hook (production).
+# On-box path where install.sh installs the hook (production).
 GUEST_HOOK_PATH = "/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 # Source path for the hook (runner side).
@@ -2420,18 +2420,18 @@ def test_generate_hook_rewrites_stale_varver_and_resolves(repo_vm: SmokeVM, tmp_
 # Two consequences the cases below pin on a real box:                          #
 #   * SINGLE-REPOSITORY SUBSCRIPTION — every project repo shares priority 100  #
 #     and `pkg` does not order across equal-priority repositories, so exactly  #
-#     ONE project conf may exist. install-<channel>.sh retires the others.     #
+#     ONE project conf may exist. install.sh retires the others.              #
 #   * The installed package NAME can no longer identify the channel, so the    #
 #     repository it came from (`pkg query '%R'`) is the only authority — and   #
 #     `pkg` never moves an installed package across repositories on its own,   #
-#     which is why install-<channel>.sh's converge step is repository-         #
+#     which is why install.sh's converge step is repository-                  #
 #     qualified.                                                              #
 #                                                                              #
 # Marker: @pytest.mark.repo (inherited from pytestmark).                       #
 # Dispatch: gh workflow run smoke-single.yml -f pytest_marker=repo             #
 # =========================================================================== #
 
-# The four channels, in the order install-common.sh's PROJECT_CONFS enumerates them.
+# The four channels, in the order install.sh's PROJECT_CONFS enumerates them.
 CHANNELS = ("stable", "testing", "edge", "nightly")
 
 # The ONE identity every channel catalogue publishes, and the legacy suffixed identity a
@@ -2443,7 +2443,7 @@ LEGACY_DEVEL_PKG_NAME = f"{CANONICAL_PKG_NAME}-devel"
 PKG_REPOS_DIR = REPO_CONF.rsplit("/", 1)[0]
 LEGACY_RELEASE_CONF_NAME = REPO_CONF.rsplit("/", 1)[1]
 
-# Every conf install-common.sh's PROJECT_CONFS may ever have written. Exactly ONE
+# Every conf install.sh's PROJECT_CONFS may ever have written. Exactly ONE
 # may be present on a box; `test_project_conf_names_match_the_shipped_scripts`
 # pins this tuple to that script.
 PROJECT_CONF_NAMES = (LEGACY_RELEASE_CONF_NAME, *(f"pfblockerng-{channel}.conf" for channel in CHANNELS))
@@ -2452,9 +2452,9 @@ PROJECT_CONF_NAMES = (LEGACY_RELEASE_CONF_NAME, *(f"pfblockerng-{channel}.conf" 
 # from GUEST_SPIKE_DIR so the ADR-17 cases above are unaffected).
 CHANNEL_REPO_ROOT = "/tmp/pfb_channel_repo"
 
-# The shared engine under test, sourced by every install-<channel>.sh — the SOLE
-# client entry point (issue #2416).
-INSTALL_COMMON_SH = Path(__file__).resolve().parents[2] / "scripts" / "channel-install" / "install-common.sh"
+# The engine under test — the SOLE client entry point, --channel parameterized
+# (issue #2416 follow-up).
+INSTALL_SH = Path(__file__).resolve().parents[2] / "scripts" / "install.sh"
 
 # Distinct PORTREVISIONs per catalogue, so `pkg query %v` alone identifies WHICH
 # catalogue served a build (a `%R` assertion that happened to be right for the wrong
@@ -2466,7 +2466,7 @@ CHANNEL_REVISIONS = {"stable": "_1", "testing": "_2", "edge": "_3", "nightly": "
 EDGE_ROLLBACK_REVISION = CHANNEL_REVISIONS["stable"]
 # The legacy `-devel` build sits ABOVE every channel build, so nothing about a migration
 # off it can be explained by ordinary version ordering — only by the repository-qualified
-# replacement install-<channel>.sh performs.
+# replacement install.sh performs.
 LEGACY_REVISION = "_9"
 # Which slower channels' builds each catalogue ALSO carries. Strict containment
 # (edge ⊇ testing ⊇ stable) is what the in-repo rollback case rides on; expressed as
@@ -2480,7 +2480,7 @@ def channel_repo_name(channel: str) -> str:
 
 
 def channel_conf_name(channel: str) -> str:
-    """The conf FILE name install-<channel>.sh writes for a channel."""
+    """The conf FILE name install.sh writes for a channel."""
     return f"pfblockerng-{channel}.conf"
 
 
@@ -2645,20 +2645,18 @@ def test_rename_pkg_rewrites_both_manifests_and_keeps_the_payload(tmp_path: Path
 
 
 def test_project_conf_names_match_the_shipped_scripts() -> None:
-    """HERMETIC (no VM): the conf set this module sweeps IS the set install-common.sh manages.
+    """HERMETIC (no VM): the conf set this module sweeps IS the set install.sh manages.
 
     ``PROJECT_CONF_NAMES`` drives both the per-channel parametrization and every
-    "exactly one project conf" assertion below. Add a fifth channel to
-    install-common.sh's ``PROJECT_CONFS`` without adding it here and the live cases
-    keep passing while silently covering one channel less and leaving its conf
-    unswept — a coverage hole that looks exactly like green.
+    "exactly one project conf" assertion below. Add a fifth channel to install.sh's
+    ``PROJECT_CONFS`` without adding it here and the live cases keep passing while
+    silently covering one channel less and leaving its conf unswept — a coverage
+    hole that looks exactly like green.
     """
-    block = re.search(r'(?ms)^PROJECT_CONFS="(.*?)"', INSTALL_COMMON_SH.read_text())
-    assert block is not None, "install-common.sh: no PROJECT_CONFS list to compare against"
+    block = re.search(r'(?ms)^PROJECT_CONFS="(.*?)"', INSTALL_SH.read_text())
+    assert block is not None, "install.sh: no PROJECT_CONFS list to compare against"
     declared = tuple(line.strip() for line in block.group(1).splitlines() if line.strip())
-    assert declared == PROJECT_CONF_NAMES, (
-        f"install-common.sh manages {declared}, this module sweeps {PROJECT_CONF_NAMES}"
-    )
+    assert declared == PROJECT_CONF_NAMES, f"install.sh manages {declared}, this module sweeps {PROJECT_CONF_NAMES}"
 
 
 # --------------------------------------------------------------------------- #
@@ -2701,7 +2699,7 @@ def installed_pfblockerng_names(vm: SmokeVM, *, timeout: float = 60.0) -> list[s
     """Every installed pfBlockerNG IDENTITY, sorted — the box's identity oracle.
 
     ``-g`` makes the trailing ``*`` a glob; without it ``pkg query`` treats the pattern
-    as an exact name and matches nothing. This is the same query install-common.sh
+    as an exact name and matches nothing. This is the same query install.sh
     classifies the box with, so a case asserting on it asserts on what the script sees.
     A query miss is "nothing installed" (rc=1), not an error.
     """
@@ -2845,13 +2843,13 @@ def channel_catalogs(repo_vm: SmokeVM, tmp_path_factory: pytest.TempPathFactory)
     finally:
         reset_channel_subscription(repo_vm)
         repo_vm.ssh("/bin/rm", "-rf", CHANNEL_REPO_ROOT, timeout=60.0)
-        # install-<channel>.sh installs the generator hook at the PRODUCTION rc.d path;
+        # install.sh installs the generator hook at the PRODUCTION rc.d path;
         # drop it so a staged hook never survives into a later module sharing this guest.
         repo_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH, timeout=60.0)
-        # issue #2416 — the per-channel installer cases below stage install-<ch>.sh
+        # issue #2416 follow-up — the per-channel cases below stage install.sh
         # beside the other spike scripts; sweep every published one so none survives
         # into a later module sharing this guest.
-        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install-*.sh", timeout=60.0)
+        repo_vm.ssh("/bin/sh", "-c", f"rm -f {GUEST_SPIKE_DIR}/install.sh", timeout=60.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -2882,7 +2880,7 @@ def test_edge_rollback_stays_within_the_edge_repository(
         stable-era build of the canonical package.
 
     Given the box subscribed to edge and running the NEWER edge build via the published
-      ``install-edge.sh`` (BEFORE asserted: ``%v`` is edge's version, ``%R`` is
+      ``install.sh --channel edge`` (BEFORE asserted: ``%v`` is edge's version, ``%R`` is
       ``pfblockerng-edge``),
     When  ``pkg install -f -y -r pfblockerng-edge pfSense-pkg-pfBlockerNG-<older>`` runs,
     Then  ``%v`` is the OLDER version, ``%R`` is STILL ``pfblockerng-edge``, the box still
@@ -2937,13 +2935,13 @@ def test_edge_rollback_stays_within_the_edge_repository(
 # ============================================================================ #
 # issue #2416 — the per-channel installer, published                           #
 #                                                                              #
-# One self-contained install-<channel>.sh per channel is the SOLE client       #
+# One self-contained install.sh, --channel parameterized, is the SOLE client   #
 # entry point: EVERY starting state (fresh box, legacy -devel, a Netgate-      #
 # origin canonical install, another channel) folds                            #
-# into ONE idempotent state machine (install-common.sh), published by          #
+# into ONE idempotent state machine, published by                             #
 # gen_landing.py exactly the way the live website build does it                #
 # (--client-scripts-only, no landing/browse pages). These cases run the        #
-# PUBLISHED form -- hook and install-common.sh embedded, no sibling file on    #
+# PUBLISHED form -- the hook embedded, no sibling file on                      #
 # disk -- piped into /bin/sh on the guest, the `fetch | sh` shape a user       #
 # actually runs. Each starting state gets its own case, and every case         #
 # proves a second run is a true no-op (conf/hook bytes + installed version     #
@@ -2960,7 +2958,7 @@ def test_edge_rollback_stays_within_the_edge_repository(
 # imported directly).
 GEN_LANDING_PY = Path(__file__).resolve().parents[2] / "scripts" / "gen_landing.py"
 
-# The four stdout markers install-common.sh's converge step (9) guards every mutating
+# The four stdout markers install.sh's converge step (9) guards every mutating
 # pkg call with; a no-op second run must print NONE of them.
 _MUTATION_MARKERS = ("==> Installing", "==> Reinstalling", "==> Removing")
 
@@ -2973,25 +2971,27 @@ def run_channel_installer(
     *,
     timeout: float = 900.0,
 ) -> subprocess.CompletedProcess[str]:
-    """Publish the SHIPPED ``install-<channel>.sh`` and run it PIPED on the guest.
+    """Publish the SHIPPED ``install.sh`` and run it PIPED on the guest, parameterized
+    by ``--channel``.
 
     Generates the self-contained published form the SAME way the live website build
-    does it (``gen_landing.py <site> <base> --client-scripts-only``): hook and
-    install-common.sh embedded via the PFB_EMBED splices, install-common.sh's own
-    ``PFB_BASE_URL`` default baked to *base_url* (issue #2416 B3/F3), no sibling file
-    needed on disk. The env override below rides alongside it (harmless, keeps the
-    staged/prefix shape a fork run would use).
+    does it (``gen_landing.py <site> <base> --client-scripts-only``): the hook is
+    embedded via the PFB_EMBED splice, install.sh's own ``PFB_BASE_URL`` default
+    baked to *base_url* (issue #2416 B3/F3), no sibling file needed on disk. The env
+    override below rides alongside it (harmless, keeps the staged/prefix shape a
+    fork run would use).
 
-    Ships ``install-<channel>.sh`` to ``GUEST_SPIKE_DIR`` and PIPES it through
-    ``fetch(1)`` exactly the ``fetch -qo - <url> | sh`` shape documented in the
-    script's own usage() header (issue #2416 F2/N2) — a redirected file gives a
-    SEEKABLE stdin and does not exercise the #2390 pipe hazard; ``fetch -qo - file://…``
-    does. The script's stdin IS the script text (install-common.sh's header explains
-    why every pkg(8) call redirects ITS OWN stdin from /dev/null — a child that read
-    the unredirected stdin would consume trailing script bytes). Returns WITHOUT
+    Ships ``install.sh`` to ``GUEST_SPIKE_DIR`` (once — the same file serves every
+    channel) and PIPES it through ``fetch(1)`` exactly the
+    ``fetch -qo - <url> | sh -s -- --channel <ch>`` shape documented in the script's
+    own usage() header (issue #2416 F2/N2) — a redirected file gives a SEEKABLE
+    stdin and does not exercise the #2390 pipe hazard; ``fetch -qo - file://…`` does.
+    The script's stdin IS the script text (install.sh's header explains why every
+    pkg(8) call redirects ITS OWN stdin from /dev/null — a child that read the
+    unredirected stdin would consume trailing script bytes). Returns WITHOUT
     raising — the refusal case (case 5 below) asserts on a non-zero exit.
     """
-    # --client-scripts-only always overwrites the same four install-<ch>.sh files, so one
+    # --client-scripts-only always overwrites the same install.sh file, so one
     # shared site dir per test is fine even across repeated/multi-channel calls.
     site_dir = tmp_path / "site"
     site_dir.mkdir(parents=True, exist_ok=True)
@@ -3013,13 +3013,16 @@ def run_channel_installer(
             f"gen_landing.py --client-scripts-only failed: rc={gen.returncode}\n"
             f"stdout:\n{gen.stdout}\nstderr:\n{gen.stderr}"
         )
-    local_script = site_dir / f"install-{channel}.sh"
+    local_script = site_dir / "install.sh"
     assert local_script.is_file(), f"gen_landing.py did not publish {local_script.name}"
 
-    guest_path = f"{GUEST_SPIKE_DIR}/install-{channel}.sh"
+    guest_path = f"{GUEST_SPIKE_DIR}/install.sh"
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)
     _scp_to_guest(vm, local_script, guest_path)
-    cmd = f"env PFB_BASE_URL='{base_url}' /bin/sh -c \"fetch -qo - file://{guest_path} | /bin/sh\""
+    cmd = (
+        f"env PFB_BASE_URL='{base_url}' /bin/sh -c "
+        f'"fetch -qo - file://{guest_path} | /bin/sh -s -- --channel {channel}"'
+    )
     return vm.ssh(cmd, timeout=timeout)
 
 
@@ -3053,10 +3056,10 @@ def _assert_second_run_is_a_noop(
     hook_before: str,
     version_before: str | None,
 ) -> None:
-    """Re-run ``install-<channel>.sh`` on already-converged state: zero mutations.
+    """Re-run ``install.sh --channel <channel>`` on already-converged state: zero mutations.
 
     Shared second-run assertion for every case below — "Already up to date" reported,
-    none of install-common.sh's mutating-step markers printed, and the conf, the hook,
+    none of install.sh's mutating-step markers printed, and the conf, the hook,
     and the installed version are BYTE/VALUE identical to what the first run left.
     """
     proc = run_channel_installer(vm, channel, base_url, tmp_path)
@@ -3086,7 +3089,7 @@ def test_channel_installer_fresh_box_installs_from_the_channel(
     channel: str,
     tmp_path: Path,
 ) -> None:
-    """FRESH BOX: the published ``install-<channel>.sh``, piped, converges a box with
+    """FRESH BOX: the published ``install.sh --channel <channel>``, piped, converges a box with
     nothing installed and no project conf onto that channel — and a second run is a
     true no-op.
 
@@ -3094,7 +3097,8 @@ def test_channel_installer_fresh_box_installs_from_the_channel(
 
     Given nothing pfBlockerNG-shaped is installed and no project conf exists (BEFORE
       asserted),
-    When  ``env PFB_BASE_URL=<file://catalogue> /bin/sh -c "fetch -qo - file://install-<channel>.sh | /bin/sh"``
+    When  ``env PFB_BASE_URL=<file://catalogue> /bin/sh -c
+      "fetch -qo - file://install.sh | /bin/sh -s -- --channel <channel>"``
       runs (the published, self-contained form, PIPED exactly like ``fetch | sh`` —
       a real non-seekable stdin, not a redirected file),
     Then  it exits 0, reports ``==> Done``, the box carries EXACTLY the canonical
@@ -3169,7 +3173,7 @@ def test_channel_installer_replaces_the_legacy_devel_identity(
     channel_catalogs: ChannelCatalogs,
     tmp_path: Path,
 ) -> None:
-    """LEGACY -devel: the published ``install-stable.sh`` REPLACES a box's legacy
+    """LEGACY -devel: the published ``install.sh --channel stable`` REPLACES a box's legacy
     suffixed identity with the canonical one, installed from the stable channel.
 
     GIVEN mirrors ``test_migrate_channel_replaces_the_legacy_identity_with_the_canonical_one``'s:
@@ -3180,7 +3184,7 @@ def test_channel_installer_replaces_the_legacy_devel_identity(
 
     Given the box installed ``pfSense-pkg-pfBlockerNG-devel`` from the legacy
       ``pfblockerng`` repo (BEFORE asserted),
-    When  ``install-stable.sh`` runs, piped,
+    When  ``install.sh --channel stable`` runs, piped,
     Then  it exits 0, reports removing the legacy identity, the box carries EXACTLY the
       canonical identity from the stable channel at the version that catalogue serves,
       and exactly one project conf survives;
@@ -3190,7 +3194,7 @@ def test_channel_installer_replaces_the_legacy_devel_identity(
     reset_channel_subscription(repo_vm)
 
     # GIVEN: subscribed to the legacy release repo (a hand-written pfblockerng.conf —
-    # no channel-install script ever writes the legacy conf), carrying only the -devel identity.
+    # no install.sh run ever writes the legacy conf), carrying only the -devel identity.
     write_repo_conf(repo_vm, f"{channel_catalogs.root}/release/{channel_catalogs.varver}", ours_priority=100)
     pkg_update(repo_vm)
     pkg_install_qualified(repo_vm, OURS_REPO_NAME, LEGACY_DEVEL_PKG_NAME)
@@ -3249,22 +3253,23 @@ def test_channel_installer_moves_a_canonical_install_between_channels(
 
     Scenario: switching channels via the one-file installer, both ways.
 
-    Given the box converged onto edge via ``install-edge.sh`` (BEFORE asserted: edge's
+    Given the box converged onto edge via ``install.sh --channel edge`` (BEFORE asserted: edge's
       version, edge's repository),
-    When  ``install-stable.sh`` runs, piped — a downgrade WITHIN the same release
+    When  ``install.sh --channel stable`` runs, piped — a downgrade WITHIN the same release
       family (only the PORTREVISION differs),
     Then  it exits 0, the box is at stable's OLDER version from stable's repository, the
       edge conf is retired, and NO WARNING is printed (same family);
-    When  ``install-edge.sh`` runs again, piped,
+    When  ``install.sh --channel edge`` runs again, piped,
     Then  it exits 0, the box is back at edge's version from edge's repository;
-    And   a second run of ``install-edge.sh`` is a true no-op.
+    And   a second run of ``install.sh --channel edge`` is a true no-op.
     """
     reset_channel_subscription(repo_vm)
 
     # GIVEN: converged onto edge via the published installer.
     proc_edge = run_channel_installer(repo_vm, "edge", channel_catalogs.base_url, tmp_path)
     assert proc_edge.returncode == 0, (
-        f"install-edge.sh exited {proc_edge.returncode}\nstdout:\n{proc_edge.stdout}\nstderr:\n{proc_edge.stderr}"
+        f"install.sh --channel edge exited {proc_edge.returncode}\n"
+        f"stdout:\n{proc_edge.stdout}\nstderr:\n{proc_edge.stderr}"
     )
     _, version_before, repo_before = _pkg_state(repo_vm)
     assert version_before == channel_catalogs.versions["edge"], (
@@ -3274,12 +3279,12 @@ def test_channel_installer_moves_a_canonical_install_between_channels(
         f"BEFORE: installed from {repo_before!r}, expected {channel_repo_name('edge')!r}"
     )
 
-    # WHEN: install-stable.sh, piped — a same-family downgrade.
+    # WHEN: install.sh --channel stable, piped — a same-family downgrade.
     proc_stable = run_channel_installer(repo_vm, "stable", channel_catalogs.base_url, tmp_path)
 
     # THEN: moved onto stable's build/repository; edge conf retired; no WARNING.
     assert proc_stable.returncode == 0, (
-        f"install-stable.sh exited {proc_stable.returncode}\n"
+        f"install.sh --channel stable exited {proc_stable.returncode}\n"
         f"stdout:\n{proc_stable.stdout}\nstderr:\n{proc_stable.stderr}"
     )
     _, version_stable, repo_stable = _pkg_state(repo_vm)
@@ -3295,10 +3300,10 @@ def test_channel_installer_moves_a_canonical_install_between_channels(
     )
     assert "WARNING" not in proc_stable.stderr, f"same-family downgrade printed a WARNING:\n{proc_stable.stderr}"
 
-    # WHEN: install-edge.sh again, piped — a forward move back onto edge.
+    # WHEN: install.sh --channel edge again, piped — a forward move back onto edge.
     proc_edge_again = run_channel_installer(repo_vm, "edge", channel_catalogs.base_url, tmp_path)
     assert proc_edge_again.returncode == 0, (
-        f"install-edge.sh (2nd) exited {proc_edge_again.returncode}\n"
+        f"install.sh --channel edge (2nd) exited {proc_edge_again.returncode}\n"
         f"stdout:\n{proc_edge_again.stdout}\nstderr:\n{proc_edge_again.stderr}"
     )
     _, version_edge_again, repo_edge_again = _pkg_state(repo_vm)
@@ -3313,7 +3318,7 @@ def test_channel_installer_moves_a_canonical_install_between_channels(
     conf_before = _conf_bytes(repo_vm, conf_path)
     hook_before = _hook_bytes(repo_vm)
 
-    # THEN (second run of install-edge.sh): a true no-op.
+    # THEN (second run of install.sh --channel edge): a true no-op.
     _assert_second_run_is_a_noop(
         repo_vm,
         "edge",
@@ -3341,14 +3346,14 @@ def test_channel_installer_moves_a_netgate_install_onto_the_channel(
     catalogue (the ADR-17 kill-gate cases above note the same gap), so — mirroring
     their DECOY technique — a controlled ``file://`` repo NOT among the project confs
     stands in: it serves the SAME canonical identity, installed here by REPOSITORY
-    QUALIFICATION (``-r``, no priority contest needed — install-common.sh's own
+    QUALIFICATION (``-r``, no priority contest needed — install.sh's own
     installs are always ``-r``-qualified too).
 
     Scenario: a Netgate-origin canonical install converges via the one-file installer.
 
     Given the canonical identity installed from a repo that is NOT one of the four
       project repos (BEFORE asserted),
-    When  ``install-testing.sh`` runs, piped,
+    When  ``install.sh --channel testing`` runs, piped,
     Then  it exits 0, the box is at testing's version from testing's repository, still
       carries EXACTLY the canonical identity, and the decoy conf — not a project conf —
       is left untouched;
@@ -3404,7 +3409,7 @@ def test_channel_installer_moves_a_netgate_install_onto_the_channel(
         )
         assert _ssh_check(repo_vm, "/bin/test", "-f", decoy_conf_path).returncode == 0, (
             f"AFTER: the decoy conf {decoy_conf_path} was removed — it is not a project conf, "
-            "install-<channel>.sh must never touch it"
+            "install.sh must never touch it"
         )
 
         conf_path = f"{PKG_REPOS_DIR}/{channel_conf_name(channel)}"
@@ -3436,17 +3441,17 @@ def test_channel_installer_refuses_an_unpublished_channel_without_touching_the_b
     """UNPUBLISHED CHANNEL: the published installer REFUSES when its channel's
     catalogue is not there, and touches NOTHING already on the box.
 
-    install-common.sh's own step 4 (``pkg update -f -r <repo>``) is what fails here —
+    install.sh's own step 4 (``pkg update -f -r <repo>``) is what fails here —
     a genuinely unreachable ``file://`` root has no catalogue to fetch — and the
     conf stub the run itself created is removed on the way out (``CONF_CREATED``),
     exactly like ``test_migrate_channel_refuses_an_unsubscribed_channel_before_mutating``
     proves for the older two-script flow.
 
-    Scenario: install-nightly.sh with no nightly catalogue published.
+    Scenario: install.sh --channel nightly with no nightly catalogue published.
 
-    Given the box converged onto stable via ``install-stable.sh`` (BEFORE asserted),
+    Given the box converged onto stable via ``install.sh --channel stable`` (BEFORE asserted),
       and no nightly conf exists,
-    When  ``install-nightly.sh`` runs, piped, with ``PFB_BASE_URL`` pointed at a root
+    When  ``install.sh --channel nightly`` runs, piped, with ``PFB_BASE_URL`` pointed at a root
       that has no ``nightly/<varver>`` catalogue at all,
     Then  it exits 4, the stable install is UNCHANGED (same version, same repository,
       the stable conf byte-identical), and no nightly conf was left behind.
@@ -3456,7 +3461,7 @@ def test_channel_installer_refuses_an_unpublished_channel_without_touching_the_b
     # GIVEN: converged onto stable via the published installer.
     proc_stable = run_channel_installer(repo_vm, "stable", channel_catalogs.base_url, tmp_path)
     assert proc_stable.returncode == 0, (
-        f"install-stable.sh exited {proc_stable.returncode}\n"
+        f"install.sh --channel stable exited {proc_stable.returncode}\n"
         f"stdout:\n{proc_stable.stdout}\nstderr:\n{proc_stable.stderr}"
     )
     _, version_before, repo_before = _pkg_state(repo_vm)
@@ -3473,7 +3478,7 @@ def test_channel_installer_refuses_an_unpublished_channel_without_touching_the_b
         "BEFORE: already subscribed to nightly — the refusal cannot be exercised"
     )
 
-    # WHEN: install-nightly.sh, piped, at a base URL with no nightly catalogue.
+    # WHEN: install.sh --channel nightly, piped, at a base URL with no nightly catalogue.
     missing_base_url = f"file://{channel_catalogs.root}-missing"
     proc = run_channel_installer(repo_vm, "nightly", missing_base_url, tmp_path)
 

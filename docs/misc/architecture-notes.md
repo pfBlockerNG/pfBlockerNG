@@ -1036,11 +1036,11 @@ on a version change and can only be corrected by a **separate, later** pkg run �
 one-pkg-run lag. The boot-time generator hook below closes that lag.
 
 **`rc.d` generator hook (`scripts/rc.d/pfblockerng_repo_generate.sh`).** Installed on-box by
-the per-channel `install-<channel>.sh` (issue #2416) into `/usr/local/etc/rc.d/`; runs at
-every boot. It is a pure conf **regenerator**: for each of the four channel conf files that
+`install.sh` (issue #2416 follow-up: one script, `--channel` parameterized) into
+`/usr/local/etc/rc.d/`; runs at every boot. It is a pure conf **regenerator**: for each of the four channel conf files that
 exists, it detects the box's `<varver>` (arch-less, issue #1806) and **unconditionally
 overwrites** the conf with the canonical body (channel-correct URL + a marker comment). The
-legacy shared release conf (`pfblockerng.conf`, pre-#2148) is retired by the installers and
+legacy shared release conf (`pfblockerng.conf`, pre-#2148) is retired by install.sh and
 NEVER regenerated — a leftover survives byte-unchanged. **No `pkg` call, no network, no
 snapshot, no reconcile, no parse-and-compare** — re-deriving the conf from scratch is
 strictly simpler than diffing and patching one in place, and never wrong. Key properties:
@@ -1082,18 +1082,19 @@ strictly simpler than diffing and patching one in place, and never wrong. Key pr
     the boot-environment clone, so a non-package hook placed there persists across the very
     upgrade it heals (maintainer-confirmed from long operational use).
 
-**Published one-file bootstrap (`site/install-<channel>.sh`, issue #2416) — the SOLE client
-entry point.** The repository copies (`scripts/channel-install/install-<channel>.sh`,
-sourcing the shared `install-common.sh`, which in turn shells out to the sibling
-`scripts/rc.d/pfblockerng_repo_generate.sh`) all resolve siblings via `dirname "$0"`, which
-fails when **piped** into `sh` (`$0` is then `sh`, not the script path). `gen_landing.py`'s
-`write_channel_installers()` publishes a self-contained `site/install-<channel>.sh` per
-channel via TWO splices: `install-common.sh`'s own text (its `PFB_BASE_URL` default baked
-to the site's own base first, issue #2416 B3/F3) replaces the per-channel stub's
-`PFB_EMBED_COMMON` block, then the hook body is spliced into THAT text's `PFB_EMBED_HOOK`
-block — a single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so none of the hook's
-dollar-signs or backticks are expanded. Published at
-`pfblockerng.github.io/pkg/install-<channel>.sh`, what the README's one-liners point to.
+**Published one-file bootstrap (`site/install.sh`, issue #2416 follow-up) — the SOLE client
+entry point.** One script, `--channel <stable|testing|edge|nightly>` parameterized — the
+predecessor four `install-<channel>.sh` wrappers + shared `install-common.sh` split is
+retired; unifying them was an owner ruling (2026-08). The repository copy
+(`scripts/install.sh`) shells out to the sibling `scripts/rc.d/pfblockerng_repo_generate.sh`,
+resolved via `dirname "$0"`, which fails when **piped** into `sh` (`$0` is then `sh`, not the
+script path). `gen_landing.py`'s `write_install_script()` publishes a self-contained
+`site/install.sh` via TWO splices: `_bake_base_url` points install.sh's own `PFB_BASE_URL`
+default at the site's own base first (issue #2416 B3/F3), then the hook body is spliced into
+THAT text's `PFB_EMBED_HOOK` block — a single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so
+none of the hook's dollar-signs or backticks are expanded. Published at
+`pfblockerng.github.io/pkg/install.sh`, what the README's one-liners
+(`fetch -qo - <base>/install.sh | sh -s -- --channel <ch>`) point to.
 
 Full design: ADR-39.
 
@@ -1165,9 +1166,9 @@ Full design: ADR-39.
   `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
   publisher failure, so a partial or failed run cannot erase another channel
   (pinned by `tests/shell/publish_pkg_repo_spec.sh`). On a catalogue no-op it still
-  regenerates the four deterministic client scripts (`gen_landing.py
-  --client-scripts-only`: the four `install-<channel>.sh`, issue #2416) and commits
-  whichever drifted (issue #2408) — the timestamped
+  regenerates the one deterministic client script (`gen_landing.py
+  --client-scripts-only`: `install.sh`, issue #2416) and commits it if it
+  drifted (issue #2408) — the timestamped
   landing/browse/autoindex pages remain publish-only. Trust model is unchanged
   (`signature_type: none`, HTTPS/TLS to the Pages host — no catalogue-signing key); the landing
   page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
@@ -1190,18 +1191,18 @@ Full design: ADR-39.
   Netgate's 0, though a box enables only one project channel repo at a time (issue #2251).
   Both `--print-conf` producers take `--channel <stable|testing|edge|nightly>` (repo
   `pfblockerng-<channel>`, conf `pfblockerng-<channel>.conf`, URL
-  `<base>/<channel>/<varver>`, issue #2147). Live bootstrap (`install-<channel>.sh`, below)
-  covers all four channels plus the legacy default (`pfblockerng.conf`, the old bundled
-  release repo, pre-#2148, retired and left untouched — issue #2416), and enforces
+  `<base>/<channel>/<varver>`, issue #2147). Live bootstrap (`install.sh --channel <ch>`,
+  below) covers all four channels plus the legacy default (`pfblockerng.conf`, the old
+  bundled release repo, pre-#2148, retired and left untouched — issue #2416), and enforces
   single-repository subscription by retiring every other project conf; the rc.d hook
   regenerates each of the four channel confs that EXISTS, so a channel the box switched
   away from stays gone across a pfSense OS upgrade (issue #2148). The emitted conf is
   byte-identical across the producers (drift-pinned in `tests/test_repo_conf_generators.py`
   and `tests/test_build_repo_portable.py`).
-- **Channel switching is one state machine (issue #2416):** `install-<channel>.sh`
-  (`install-common.sh`'s `pfb_channel_install()`) — the SOLE client entry point — folds what
-  were once two separate operations — moving the SUBSCRIPTION and moving the INSTALLED
-  PACKAGE — into one idempotent run, check-then-act at every step: install/refresh the
+- **Channel switching is one state machine (issue #2416 follow-up):** `install.sh`'s
+  `pfb_channel_install()`, parameterized by `--channel` — the SOLE client entry point —
+  folds what were once two separate operations — moving the SUBSCRIPTION and moving the
+  INSTALLED PACKAGE — into one idempotent run, check-then-act at every step: install/refresh the
   boot hook; resolve THIS channel's conf through it; `pkg update -f -r <repo>`; pick the
   OFFERED version by reducing `pkg rquery`'s offerings pairwise through `pkg version -t`
   (never catalogue order, issue #2393 residual — the same comparator `pkg install`

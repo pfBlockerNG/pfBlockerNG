@@ -17,7 +17,7 @@ The ``<varver>`` segment is resolved by the boot-time ``rc.d`` generator hook
 "/etc/product_label contains 'Plus'", version = major.minor of /etc/version.  The
 hook regenerates each EXISTING channel conf every boot, so the URL self-corrects
 after a pfSense OS upgrade — except the legacy release conf (pfblockerng.conf),
-retired by the per-channel install-<ch>.sh scripts (issue #2416) and left
+retired by install.sh (issue #2416 follow-up) and left
 byte-unchanged if a leftover survives.
 
 Tests below pin:
@@ -140,9 +140,9 @@ def _field(conf: str, key: str) -> str:
 def test_release_conf_byte_identical_across_producer_generators() -> None:
     """Producer --print-conf still defaults to the legacy release tree, byte-for-byte.
 
-    The per-channel install-<ch>.sh scripts no longer emit a release conf
-    (--channel is required and release is rejected — issue #2384). The catalogue
-    producers keep their internal default for assembling unpublished/legacy trees.
+    install.sh no longer emits a release conf (--channel is required and release
+    is rejected — issue #2384). The catalogue producers keep their internal default
+    for assembling unpublished/legacy trees.
     """
     build = _print_conf_sh(_BUILD_REPO)
     portable = _print_conf_portable()

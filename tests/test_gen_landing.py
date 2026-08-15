@@ -32,7 +32,7 @@ gl = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(gl)
 
 # Paths to the real scripts — used wherever tests exercise the live integration
-# (write_site + write_channel_installers) rather than fake fixtures.
+# (write_site + write_install_script) rather than fake fixtures.
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 _CANON = gl.CANONICAL_EMITTED_IDENTITY  # "pfSense-pkg-pfBlockerNG" — the ONE channel-agnostic identity
@@ -1302,8 +1302,8 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
         assert audience_anchor[ch] in page.lower()
         assert f"--channel {ch}" not in page
         assert f"{ch}-conf-snippet" not in page
-        # install-<ch>.sh present iff the channel is published — none are here.
-        assert f"install-{ch}.sh" not in page
+    # The install.sh recipe appears only on a published card — none are here.
+    assert "install.sh" not in page
     assert "pkg install" not in page
     # Nightly keeps its stability badge.
     assert '<span class="badge">not for daily use</span>' in page
@@ -1363,8 +1363,8 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     # recipe (issue #2416) — the SOLE recipe, no bare pkg install.
     # Anchored to the <pre> element boundary so a trailing `sh -s --` (or any other
     # tail) fails this assertion rather than slipping past a bare substring check.
-    assert f"<pre>fetch -qo - {base}/install-testing.sh | sh</pre>" in page
-    assert f"<pre>fetch -qo - {base}/install-nightly.sh | sh</pre>" in page
+    assert f"<pre>fetch -qo - {base}/install.sh | sh -s -- --channel testing</pre>" in page
+    assert f"<pre>fetch -qo - {base}/install.sh | sh -s -- --channel nightly</pre>" in page
     assert "pkg install" not in page
     assert "testing-conf-snippet" in page
     assert "nightly-conf-snippet" in page
@@ -1402,7 +1402,7 @@ def test_render_page_snippets_have_copy_buttons() -> None:
       <pre> content is emitted unchanged (so the copied text is exactly the command),
     And the supporting CSS + a dependency-free clipboard script are present,
     And exactly two command snippets are wrapped on the one published card (the
-      one-line channel-installer recipe + a manual conf, issue #2416) — not the
+      one-line --channel installer recipe + a manual conf, issue #2416) — not the
       inline <code> spans, and unpublished cards have none.
     """
     pkgs = [_pkg("testing", _CANON, "3.2.16", "FreeBSD:15:amd64", "testing/ce-2.8/FreeBSD:15:amd64/d.pkg")]
@@ -1413,7 +1413,9 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     btn = '<button class="copy" type="button" aria-label="Copy to clipboard">Copy</button>'
     assert btn in page
     # Only published channels (testing here) get a copyable recipe + manual conf.
-    assert f"{btn}<pre>fetch -qo - https://pfblockerng.github.io/pkg/install-testing.sh | sh</pre>" in page
+    assert (
+        f"{btn}<pre>fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel testing</pre>" in page
+    )
     assert f"{btn}<pre>testing-conf-snippet</pre>" in page
     assert "stable-conf-snippet" not in page
 
@@ -1445,10 +1447,7 @@ def test_render_page_empty_channel_shows_not_yet_published_for_every_card() -> N
     page = gl.render_page("https://x/pkg", [], _stub_conf)
     assert page.count("not yet published") == 4
     assert "pkg install" not in page
-    assert "install-stable.sh" not in page
-    assert "install-testing.sh" not in page
-    assert "install-edge.sh" not in page
-    assert "install-nightly.sh" not in page
+    assert "install.sh" not in page
     assert "-conf-snippet" not in page
     assert '<button class="copy"' not in page
 
@@ -1492,22 +1491,23 @@ def test_unpublished_nightly_card_has_no_install_recipe() -> None:
     # slice up to the published-packages heading.
     nightly = nightly.split("<h2>Published packages</h2>", 1)[0]
     assert "not yet published" in nightly
-    assert "install-nightly.sh" not in nightly
+    assert "install.sh" not in nightly
     assert "--channel nightly" not in nightly
     assert "pkg install" not in nightly
     assert "nightly-conf-snippet" not in nightly
 
 
 def test_published_card_recipe_is_the_one_line_channel_installer() -> None:
-    """Published stable: the card's ONE recipe is the piped per-channel installer —
-    no bare `pkg install` — plus the manual-conf details (issue #2416: the four
-    per-channel installers are the SOLE client entry point on the landing cards)."""
+    """Published stable: the card's ONE recipe is the piped, --channel-parameterized
+    installer — no bare `pkg install` — plus the manual-conf details (issue #2416
+    follow-up: the single install.sh is the SOLE client entry point on the landing
+    cards)."""
     pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
     base = "https://pfblockerng.github.io/pkg"
     page = gl.render_page(base, pkgs, _stub_conf)
     # Anchored to the <pre> element boundary so a trailing `sh -s --` (or any other
     # tail) fails this assertion rather than slipping past a bare substring check.
-    assert f"<pre>fetch -qo - {base}/install-stable.sh | sh</pre>" in page
+    assert f"<pre>fetch -qo - {base}/install.sh | sh -s -- --channel stable</pre>" in page
     assert "pkg install" not in page
     assert "stable-conf-snippet" in page
     assert "Manual conf (advanced)" in page
@@ -2125,58 +2125,10 @@ def test_conf_via_portable_matches_real_build_repo_portable_contract() -> None:
         assert f"{base}/{channel}/<varver>" in conf
 
 
-# ── _embed_common: splice install-common.sh into a channel installer stub ─────
-
-
-def test_embed_common_replaces_whole_marked_block_including_markers() -> None:
-    """Unlike ``_embed_hook`` (which keeps its BEGIN/END lines), ``_embed_common``
-    replaces the WHOLE marked block — both marker lines included — with the common
-    text verbatim: the markers only delimit the stub `. install-common.sh` sourcing
-    line, which cannot survive into a self-contained published script."""
-    channel_text = (
-        "#!/bin/sh\n"
-        "PFB_CHANNEL=stable\n"
-        f"{gl._COMMON_EMBED_BEGIN}\n"
-        '. "$(dirname "$0")/install-common.sh"\n'
-        f"{gl._COMMON_EMBED_END}\n"
-        'pfb_channel_install "$@"\n'
-    )
-    common_text = "pfb_channel_install() {\n    :\n}\n"
-
-    out = gl._embed_common(channel_text, common_text)
-
-    assert gl._COMMON_EMBED_BEGIN not in out
-    assert gl._COMMON_EMBED_END not in out
-    assert '. "$(dirname "$0")/install-common.sh"' not in out
-    assert common_text in out
-    assert out.startswith("#!/bin/sh\nPFB_CHANNEL=stable\n")
-    assert out.endswith('pfb_channel_install "$@"\n')
-
-
-def test_embed_common_missing_markers_raises_value_error() -> None:
-    with pytest.raises(ValueError, match="embed markers"):
-        gl._embed_common("#!/bin/sh\nno markers here\n", "common body\n")
-
-
-def test_embed_common_misordered_markers_raises_value_error() -> None:
-    channel_text = f"{gl._COMMON_EMBED_END}\n{gl._COMMON_EMBED_BEGIN}\n"
-    with pytest.raises(ValueError, match="embed markers"):
-        gl._embed_common(channel_text, "common body\n")
-
-
-def test_embed_common_rejects_common_text_containing_the_heredoc_delimiter() -> None:
-    channel_text = f"{gl._COMMON_EMBED_BEGIN}\nstub\n{gl._COMMON_EMBED_END}\n"
-    hostile_common = f"echo {gl._HOOK_HEREDOC}\n"
-    with pytest.raises(ValueError, match="heredoc delimiter"):
-        gl._embed_common(channel_text, hostile_common)
-
-
-def test_write_site_publishes_the_four_channel_installers(tmp_path: Path, monkeypatch: Any) -> None:
-    """write_site() publishes a self-contained install-<channel>.sh for each of the four
-    channels (issue #2416) — the SOLE client entry point: install-common.sh is spliced
-    into the thin per-channel stub (its PFB_EMBED_COMMON block replaces the
-    `. install-common.sh` sourcing line so the published script needs no sibling file on
-    disk), then the boot hook is embedded via the same PFB_EMBED_HOOK splice technique.
+def test_write_site_publishes_install_script(tmp_path: Path, monkeypatch: Any) -> None:
+    """write_site() publishes a self-contained install.sh (issue #2416 follow-up) —
+    the SOLE client entry point for all four channels: the boot hook is embedded via
+    the PFB_EMBED_HOOK splice, so the published script needs no sibling file on disk.
     """
     import subprocess
 
@@ -2186,30 +2138,26 @@ def test_write_site_publishes_the_four_channel_installers(tmp_path: Path, monkey
 
     gl.write_site(str(site), f"file://{site}")
 
-    assert sorted(p.name for p in site.iterdir() if p.name.startswith("install-")) == sorted(gl.CLIENT_SCRIPTS), (
-        "write_site must publish EXACTLY the four per-channel installers, no legacy scripts"
+    assert sorted(p.name for p in site.iterdir() if p.name.startswith("install")) == sorted(gl.CLIENT_SCRIPTS), (
+        "write_site must publish EXACTLY install.sh, no per-channel/legacy scripts"
     )
 
-    for channel in gl.CH_ORDER:
-        published = site / f"install-{channel}.sh"
-        assert published.exists(), f"write_site must produce site/install-{channel}.sh"
-        assert os.access(str(published), os.X_OK), f"install-{channel}.sh must be executable"
-        text = published.read_text()
-        assert gl._COMMON_EMBED_BEGIN not in text, "the PFB_EMBED_COMMON marker must not survive publishing"
-        assert gl._COMMON_EMBED_END not in text, "the PFB_EMBED_COMMON marker must not survive publishing"
-        assert '$0")/install-common.sh"' not in text, "the published installer must not source a sibling file"
-        assert 'pfb_channel_install "$@"' in text
-        assert f"cat <<'{gl._HOOK_HEREDOC}'" in text, "the boot hook must be embedded, not left as the stub body"
-        assert "PROVIDE: pfblockerng_repo_generate" in text, "embedded hook body must contain the rc.d PROVIDE pragma"
-        sh_n = subprocess.run(["sh", "-n"], input=text, text=True, capture_output=True)
-        assert sh_n.returncode == 0, f"sh -n failed on published install-{channel}.sh:\n{sh_n.stderr}"
+    published = site / "install.sh"
+    assert published.exists(), "write_site must produce site/install.sh"
+    assert os.access(str(published), os.X_OK), "install.sh must be executable"
+    text = published.read_text()
+    assert 'pfb_channel_install "$@"' in text
+    assert "--channel" in text, "the published script must still parse --channel"
+    assert f"cat <<'{gl._HOOK_HEREDOC}'" in text, "the boot hook must be embedded, not left as the stub body"
+    assert "PROVIDE: pfblockerng_repo_generate" in text, "embedded hook body must contain the rc.d PROVIDE pragma"
+    sh_n = subprocess.run(["sh", "-n"], input=text, text=True, capture_output=True)
+    assert sh_n.returncode == 0, f"sh -n failed on published install.sh:\n{sh_n.stderr}"
 
 
-def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tmp_path: Path, monkeypatch: Any) -> None:
-    """Scenario: the published install-stable.sh converges a fresh box when piped into sh
-    from a directory with NO scripts/ tree at all (issue #2416) — proving both embeds
-    (install-common.sh's PFB_EMBED_COMMON splice AND the hook's PFB_EMBED_HOOK splice
-    living inside the now-embedded common text) are self-contained. Mirrors
+def test_published_installer_runs_piped_with_embedded_hook(tmp_path: Path, monkeypatch: Any) -> None:
+    """Scenario: the published install.sh converges a fresh box when piped into
+    `sh -s -- --channel stable` from a directory with NO scripts/ tree at all (issue
+    #2416 follow-up) — proving the PFB_EMBED_HOOK splice is self-contained. Mirrors
     ``test_published_add_repo_embeds_hook_and_installs_piped``'s technique; reuses
     ``tests.test_channel_install``'s fake pkg(8) stub (already proven against every branch
     of ``pfb_channel_install``) rather than re-deriving pkg's behaviour here.
@@ -2224,7 +2172,7 @@ def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tm
 
     base = f"file://{site}"
     gl.write_site(str(site), base)
-    published_text = (site / "install-stable.sh").read_text()
+    published_text = (site / "install.sh").read_text()
 
     root = tmp_path / "root"
     root.mkdir()
@@ -2251,7 +2199,7 @@ def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tm
         "PFB_BASE_URL": base,
     }
     result = subprocess.run(
-        ["sh", "-s"],
+        ["sh", "-s", "--", "--channel", "stable"],
         input=published_text,
         text=True,
         capture_output=True,
@@ -2262,7 +2210,7 @@ def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tm
     )
 
     assert result.returncode == 0, (
-        f"install-stable.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
 
     assert hook_path.exists(), f"hook not installed\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -2278,20 +2226,20 @@ def test_published_channel_installer_runs_piped_with_embedded_hook_and_common(tm
     assert f'url: "{base}/stable/ce-2.8"' in conf_text
 
 
-def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkout_source(
+def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    """B1 (issue #2416): piped, ``$0`` is ``sh``, so install-common.sh's
-    dirname-derived ``PFB_COMMON_DIR`` resolves to the CALLER's cwd — not a checkout
-    directory. A user following the published one-liner from ``/usr/local/etc/pkg``
-    (``ROOT=""``) makes ``PFB_COMMON_DIR/../rc.d/...`` collide with the on-box
-    installed hook path itself: the state machine would ``cmp`` the stale on-box
-    hook against itself, report "up to date", and never refresh it. The sibling hook
-    must only be trusted when install-common.sh's OWN file sits beside it too (the
-    genuine-checkout signal) — otherwise the embedded copy is used.
+    """B1 (issue #2416): piped, ``$0`` is ``sh``, so install.sh's dirname-derived
+    ``SCRIPT_DIR`` resolves to the CALLER's cwd — not a checkout directory. A user
+    following the published one-liner from ``/usr/local/etc/pkg`` (``ROOT=""``)
+    makes ``SCRIPT_DIR/rc.d/...`` collide with the on-box installed hook path
+    itself: the state machine would ``cmp`` the stale on-box hook against itself,
+    report "up to date", and never refresh it. The sibling hook must only be
+    trusted when install.sh's OWN file sits beside it too (the genuine-checkout
+    signal) — otherwise the embedded copy is used.
 
     Before-state: a stale hook is pre-seeded at the on-box path. After a piped run
-    from a cwd whose "../rc.d/..." resolves to that SAME path, the installed hook
+    from a cwd whose "rc.d/..." resolves to that SAME path, the installed hook
     must be the real embedded copy, byte-identical to the repository source.
     """
     import subprocess
@@ -2304,7 +2252,7 @@ def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkou
 
     base = f"file://{site}"
     gl.write_site(str(site), base)
-    published_text = (site / "install-stable.sh").read_text()
+    published_text = (site / "install.sh").read_text()
 
     root = tmp_path / "root"
     root.mkdir()
@@ -2327,7 +2275,7 @@ def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkou
     assert hook_path.read_text() == "#!/bin/sh\n# STALE\n", "before-state: the stale hook must be in place"
 
     # cwd = the "installed" pkg dir a user following `fetch | sh` from would be in —
-    # its "../rc.d/..." IS the on-box hook path (the collision the bug exploits).
+    # its "rc.d/..." IS the on-box hook path (the collision the bug exploits).
     cwd = root / "usr" / "local" / "etc" / "pkg"
     cwd.mkdir(parents=True)
 
@@ -2339,7 +2287,7 @@ def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkou
         "PFB_BASE_URL": base,
     }
     result = subprocess.run(
-        ["sh", "-s"],
+        ["sh", "-s", "--", "--channel", "stable"],
         input=published_text,
         text=True,
         capture_output=True,
@@ -2348,7 +2296,7 @@ def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkou
     )
 
     assert result.returncode == 0, (
-        f"install-stable.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     real_hook = (_SCRIPTS_DIR / "rc.d" / "pfblockerng_repo_generate.sh").read_text()
     assert hook_path.read_text() == real_hook, (
@@ -2357,12 +2305,12 @@ def test_published_channel_installer_never_treats_the_on_box_hook_as_its_checkou
     )
 
 
-def test_write_site_bakes_the_sites_base_url_into_every_published_installer(tmp_path: Path, monkeypatch: Any) -> None:
+def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_path: Path, monkeypatch: Any) -> None:
     """B3/F3 (issue #2416): a fork publishing from a non-default base (or a staged
-    prefix) must ship installers whose OWN ``PFB_BASE_URL`` default points at ITS
+    prefix) must ship an installer whose OWN ``PFB_BASE_URL`` default points at ITS
     base — not the hardcoded upstream default baked into the repository copy of
-    install-common.sh. Without a ``PFB_BASE_URL`` override, a piped run must
-    resolve the conf against the site's real base.
+    install.sh. Without a ``PFB_BASE_URL`` override, a piped run must resolve the
+    conf against the site's real base.
     """
     import subprocess
 
@@ -2375,16 +2323,15 @@ def test_write_site_bakes_the_sites_base_url_into_every_published_installer(tmp_
     fork_base = "https://fork.example.org/mypkg"
     gl.write_site(str(site), fork_base)
 
-    for channel in gl.CH_ORDER:
-        text = (site / f"install-{channel}.sh").read_text()
-        assert f'PFB_BASE_URL="${{PFB_BASE_URL:-{fork_base}}}"' in text, (
-            f"install-{channel}.sh must default PFB_BASE_URL to the site's own base, not upstream's"
-        )
+    text = (site / "install.sh").read_text()
+    assert f'PFB_BASE_URL="${{PFB_BASE_URL:-{fork_base}}}"' in text, (
+        "install.sh must default PFB_BASE_URL to the site's own base, not upstream's"
+    )
 
     # Running the published installer piped, with NO PFB_BASE_URL override, must
     # resolve the conf against the FORK's base — proving the baked default (not
     # just its text) drives the run.
-    published_text = (site / "install-stable.sh").read_text()
+    published_text = text
 
     root = tmp_path / "root"
     root.mkdir()
@@ -2407,7 +2354,7 @@ def test_write_site_bakes_the_sites_base_url_into_every_published_installer(tmp_
         "PFB_TEST_ROOT": str(root),
     }
     result = subprocess.run(
-        ["sh", "-s"],
+        ["sh", "-s", "--", "--channel", "stable"],
         input=published_text,
         text=True,
         capture_output=True,
@@ -2415,7 +2362,7 @@ def test_write_site_bakes_the_sites_base_url_into_every_published_installer(tmp_
         cwd=str(tmp_path),
     )
     assert result.returncode == 0, (
-        f"install-stable.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
     conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
     conf_text = conf_path.read_text()
@@ -2451,8 +2398,9 @@ def test_main_cli_accepts_the_production_positional_and_matrix_flag_shape(tmp_pa
 
 
 def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path) -> None:
-    """``--client-scripts-only`` publishes ONLY the deterministic client scripts: the
-    four per-channel installers — the SOLE client entry point (issue #2416).
+    """``--client-scripts-only`` publishes ONLY the deterministic client script:
+    install.sh, --channel parameterized — the SOLE client entry point (issue #2416
+    follow-up).
 
     publish-pkg-repo.sh's catalogue-NOOP path (issue #2408) uses this mode to ship a
     script-only fix; writing any timestamped landing/browse/autoindex page here would
@@ -2465,11 +2413,10 @@ def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path
 
     assert rc == 0
     assert sorted(p.name for p in site.iterdir()) == sorted(gl.CLIENT_SCRIPTS)
-    for channel in gl.CH_ORDER:
-        installer = (site / f"install-{channel}.sh").read_text()
-        assert f"cat <<'{gl._HOOK_HEREDOC}'" in installer, (
-            f"install-{channel}.sh's boot hook must be embedded, not left as the stub body"
-        )
+    installer = (site / "install.sh").read_text()
+    assert f"cat <<'{gl._HOOK_HEREDOC}'" in installer, (
+        "install.sh's boot hook must be embedded, not left as the stub body"
+    )
 
 
 def test_main_client_scripts_only_rejects_matrix(tmp_path: Path) -> None:

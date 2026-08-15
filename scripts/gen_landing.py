@@ -47,22 +47,15 @@ _CHANNELS: frozenset[str] = frozenset(CH_ORDER)
 # release-published.yml's own concurrency group) could otherwise regenerate this
 # page mid-stage and make the un-gated tree browsable.
 STAGING_TOP_DIR = "staging"
-# Embed markers in every install-<channel>.sh (via install-common.sh) that
-# delimit the hook placeholder body.
+# Embed markers in install.sh that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
 _HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
 _HOOK_HEREDOC = "PFB_HOOK_HEREDOC"
-# Embed markers in each install-<channel>.sh that delimit the thin
-# `. install-common.sh` sourcing stub — gen_landing.py replaces the WHOLE block
-# (markers included) with install-common.sh's own text (issue #2416).
-_COMMON_EMBED_BEGIN = "# PFB_EMBED_COMMON_BEGIN"
-_COMMON_EMBED_END = "# PFB_EMBED_COMMON_END"
 # Every deterministic client script this generator publishes at the site root: the
-# four install-<channel>.sh scripts (issue #2416) — the ONE idempotent installer
-# per channel, and the sole client entry point (subscribe + install + switch +
-# upgrade). The predecessor two-script bootstrap is gone. Derived from CH_ORDER so
-# the two enumerations cannot drift apart.
-CLIENT_SCRIPTS: tuple[str, ...] = tuple(f"install-{channel}.sh" for channel in CH_ORDER)
+# ONE install.sh (issue #2416 follow-up) — parameterized by --channel, the sole
+# client entry point (subscribe + install + switch + upgrade) for all four
+# channels. The predecessor four-script-per-channel bootstrap is gone.
+CLIENT_SCRIPTS: tuple[str, ...] = ("install.sh",)
 # The source repo a .pkg is built from — base for the per-artifact commit link.
 SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 
@@ -473,14 +466,14 @@ _CARD_META: dict[str, dict[str, str]] = {
 
 def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
     """One channel's install card: audience prose, and — only when published —
-    the ONE-line per-channel installer recipe and a collapsed manual-conf snippet.
+    the ONE-line piped installer recipe and a collapsed manual-conf snippet.
     An unpublished channel keeps title/badge/blurb/"not yet published" and ships no
     install recipe or conf snippet (issue #2382).
 
-    The recipe is the single piped ``install-<channel>.sh`` (issue #2416) — it folds
-    the predecessor's separate new-install / existing-install scripts into one
-    idempotent script that converges from ANY starting state, so the card no longer
-    needs to distinguish "new" from "existing" installs.
+    The recipe is the single piped ``install.sh --channel <channel>`` (issue #2416
+    follow-up) — ONE idempotent script, parameterized by channel, that converges
+    from ANY starting state, so the card no longer needs to distinguish "new" from
+    "existing" installs, nor ship a script per channel.
     """
     meta = _CARD_META[channel]
     badge = f" {meta['badge']}" if meta["badge"] else ""
@@ -492,7 +485,7 @@ def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Call
     if latest.get(channel):
         body += (
             '<p class="blurb">Install, upgrade, or switch to this channel (any starting state):</p>'
-            f"{_copyable(_esc(f'fetch -qo - {base}/install-{channel}.sh | sh'))}"
+            f"{_copyable(_esc(f'fetch -qo - {base}/install.sh | sh -s -- --channel {channel}'))}"
             f"{_manual_conf_details(conf_fn, channel)}"
         )
     return f"{body}</div>"
@@ -1065,9 +1058,10 @@ def _embed_hook(script_text: str, hook_text: str) -> str:
     replaced with a single-quoted heredoc that prints the hook verbatim — no variable
     or command expansion in the emitted content, regardless of what the hook contains.
     The resulting script is self-contained and safe to pipe into ``sh``. Used by
-    ``write_channel_installers`` — splices into the common text ``_embed_common`` has
-    already spliced into each install-<channel>.sh (the PFB_EMBED_HOOK markers live
-    in install-common.sh).
+    ``write_install_script`` — splices directly into install.sh's own text (the
+    PFB_EMBED_HOOK markers live in install.sh itself, issue #2416 follow-up: the
+    earlier per-channel-stub + install-common.sh split, and its extra PFB_EMBED_COMMON
+    splice, are gone).
     """
     lines = script_text.splitlines(keepends=True)
     begin_idx = next(
@@ -1095,99 +1089,56 @@ def _embed_hook(script_text: str, hook_text: str) -> str:
     return "".join(lines[:begin_idx] + heredoc_lines + lines[end_idx + 1 :])
 
 
-def _embed_common(channel_text: str, common_text: str) -> str:
-    """Splice *common_text* into *channel_text* between the PFB_EMBED_COMMON markers.
-
-    Unlike ``_embed_hook`` (which keeps its BEGIN/END marker lines and injects a
-    heredoc between them), the WHOLE marked block — both marker lines included — is
-    replaced with *common_text* verbatim: the markers only delimit the thin
-    ``. install-common.sh`` sourcing stub in the repository copy of each
-    install-<channel>.sh, and that sibling-file ``.`` cannot survive into a script
-    meant to be piped into ``sh`` (where ``$0`` is ``sh``, so sibling-file resolution
-    via ``dirname "$0"`` fails). The result still carries install-common.sh's own
-    PFB_EMBED_HOOK markers, which ``_embed_hook`` splices next.
-    """
-    lines = channel_text.splitlines(keepends=True)
-    begin_idx = next(
-        (i for i, ln in enumerate(lines) if _COMMON_EMBED_BEGIN in ln),
-        None,
-    )
-    end_idx = next(
-        (i for i, ln in enumerate(lines) if _COMMON_EMBED_END in ln),
-        None,
-    )
-    if begin_idx is None or end_idx is None or begin_idx >= end_idx:
-        raise ValueError(f"script is missing the embed markers ({_COMMON_EMBED_BEGIN!r} / {_COMMON_EMBED_END!r})")
-    if _HOOK_HEREDOC in common_text:
-        raise ValueError(
-            f"common text contains the heredoc delimiter {_HOOK_HEREDOC!r} — "
-            "choose a different delimiter or fix install-common.sh"
-        )
-    body = common_text if common_text.endswith("\n") else common_text + "\n"
-    return "".join(lines[:begin_idx] + [body] + lines[end_idx + 1 :])
-
-
-# The exact hardcoded PFB_BASE_URL default line install-common.sh's repository
-# copy carries — replaced with the SITE's own base at publish time (issues #2416 /
-# B3/F3) so a fork or staged prefix ships installers that resolve against
-# themselves without requiring every user to override PFB_BASE_URL by hand.
+# The exact hardcoded PFB_BASE_URL default line install.sh's repository copy
+# carries — replaced with the SITE's own base at publish time (issues #2416 /
+# B3/F3) so a fork or staged prefix ships an installer that resolves against
+# itself without requiring every user to override PFB_BASE_URL by hand.
 _BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"'
 
 
-def _bake_base_url(common_text: str, base: str) -> str:
-    """Replace install-common.sh's hardcoded ``PFB_BASE_URL`` default with *base*.
+def _bake_base_url(script_text: str, base: str) -> str:
+    """Replace install.sh's hardcoded ``PFB_BASE_URL`` default with *base*.
 
-    Raises if the line is not found EXACTLY once — a drifted install-common.sh
-    must fail the site build loudly rather than silently publish installers that
-    still default to the upstream URL.
+    Raises if the line is not found EXACTLY once — a drifted install.sh must fail
+    the site build loudly rather than silently publish an installer that still
+    defaults to the upstream URL.
     """
-    count = common_text.count(_BASE_URL_DEFAULT_LINE)
+    count = script_text.count(_BASE_URL_DEFAULT_LINE)
     if count != 1:
         raise ValueError(
-            f"expected exactly one PFB_BASE_URL default line in install-common.sh, found {count}: "
-            f"{_BASE_URL_DEFAULT_LINE!r}"
+            f"expected exactly one PFB_BASE_URL default line in install.sh, found {count}: {_BASE_URL_DEFAULT_LINE!r}"
         )
     replacement = f'PFB_BASE_URL="${{PFB_BASE_URL:-{base}}}"'
-    return common_text.replace(_BASE_URL_DEFAULT_LINE, replacement, 1)
+    return script_text.replace(_BASE_URL_DEFAULT_LINE, replacement, 1)
 
 
-def write_channel_installers(site: str, base: str) -> list[str]:
-    """Write a self-contained ``install-<channel>.sh`` to *site*/install-<channel>.sh
-    for each of the four channels (issue #2416) — the SOLE client entry point:
-    subscribe + install + switch + upgrade, all in one idempotent script.
+def write_install_script(site: str, base: str) -> list[str]:
+    """Write a self-contained ``install.sh`` to *site*/install.sh — the SOLE client
+    entry point for all four channels (issue #2416 follow-up): subscribe + install +
+    switch + upgrade, one idempotent script, parameterized by ``--channel``.
 
-    The repository copies live under ``<scripts_dir>/channel-install/``
-    (install-<channel>.sh, install-common.sh) and ``<scripts_dir>/rc.d/`` (the boot
-    hook), where ``scripts_dir`` is this file's own directory (gen_landing.py lives
-    directly in ``scripts/``). Each published script is built in three splices:
-    ``_bake_base_url`` points install-common.sh's own ``PFB_BASE_URL`` default at
-    *base*, ``_embed_common`` replaces the thin per-channel stub's
-    ``. install-common.sh`` sourcing line with that (now base-baked) text, then
-    ``_embed_hook`` replaces THAT text's ``pfb_emit_embedded_hook`` stub body with
-    the boot hook via a single-quoted heredoc — so the result needs no sibling file
-    when piped into ``sh``. Returns the file names written, e.g.
-    ``["install-stable.sh", "install-testing.sh", ...]``.
+    The repository copy lives at ``<scripts_dir>/install.sh`` and
+    ``<scripts_dir>/rc.d/`` holds the boot hook, where ``scripts_dir`` is this
+    file's own directory (gen_landing.py lives directly in ``scripts/``). The
+    published script is built in two splices: ``_bake_base_url`` points install.sh's
+    own ``PFB_BASE_URL`` default at *base*, then ``_embed_hook`` replaces its
+    ``pfb_emit_embedded_hook`` stub body with the boot hook via a single-quoted
+    heredoc — so the result needs no sibling file when piped into ``sh``. Returns
+    the file name written, e.g. ``["install.sh"]``.
     """
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    channel_dir = os.path.join(scripts_dir, "channel-install")
     hook_path = os.path.join(scripts_dir, "rc.d", "pfblockerng_repo_generate.sh")
     with open(hook_path) as fh:
         hook_text = fh.read()
-    with open(os.path.join(channel_dir, "install-common.sh")) as fh:
-        common_text = fh.read()
-    common_text = _bake_base_url(common_text, base)
-    names: list[str] = []
-    for channel in CH_ORDER:
-        name = f"install-{channel}.sh"
-        with open(os.path.join(channel_dir, name)) as fh:
-            channel_text = fh.read()
-        out_text = _embed_hook(_embed_common(channel_text, common_text), hook_text)
-        out_path = os.path.join(site, name)
-        with open(out_path, "w") as fh:
-            fh.write(out_text)
-        os.chmod(out_path, 0o755)
-        names.append(name)
-    return names
+    with open(os.path.join(scripts_dir, "install.sh")) as fh:
+        script_text = fh.read()
+    script_text = _bake_base_url(script_text, base)
+    out_text = _embed_hook(script_text, hook_text)
+    out_path = os.path.join(site, "install.sh")
+    with open(out_path, "w") as fh:
+        fh.write(out_text)
+    os.chmod(out_path, 0o755)
+    return ["install.sh"]
 
 
 def _conf_via_portable(base: str, channel: str) -> str:
@@ -1242,9 +1193,10 @@ def write_site(site: str, base: str, matrix: list[dict] | None = None) -> int:
         subdirs, files = _dir_entries(site, rel)
         with open(os.path.join(site, rel, "index.html"), "w") as fh:
             fh.write(render_autoindex(rel, subdirs, files))
-    # Publish the four deterministic client scripts — the ONLY client entry point
-    # (issue #2416): one self-contained install-<channel>.sh per channel.
-    write_channel_installers(site, base)
+    # Publish the ONE deterministic client script — the ONLY client entry point
+    # (issue #2416 follow-up): a self-contained install.sh, parameterized by
+    # --channel.
+    write_install_script(site, base)
     return len(pkgs)
 
 
@@ -1270,7 +1222,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.client_scripts_only:
         if args.matrix:
             ap.error("--client-scripts-only writes no landing page — --matrix cannot apply")
-        write_channel_installers(args.site, args.base_url)
+        write_install_script(args.site, args.base_url)
         print(f"client scripts written: {', '.join(CLIENT_SCRIPTS)}")
         return 0
     matrix = None

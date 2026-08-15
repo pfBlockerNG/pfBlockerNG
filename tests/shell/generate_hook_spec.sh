@@ -248,9 +248,9 @@ End
 
 Describe 'generate hook — leaves a leftover legacy release conf untouched'
     # Before #2416 the hook regenerated pfblockerng.conf (the pre-#2148 shared
-    # release repo). The per-channel install-<ch>.sh scripts retired it — a box
-    # that still carries a leftover from before the migration must not have it
-    # silently resurrected/rewritten at every boot; it is simply never touched.
+    # release repo). install.sh retired it — a box that still carries a leftover
+    # from before the migration must not have it silently resurrected/rewritten
+    # at every boot; it is simply never touched.
     setup() {
         _r_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_rel.XXXXXX")"
         _make_box "${_r_dir}" "pfSense" "2.8.1"

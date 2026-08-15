@@ -1,11 +1,10 @@
-"""Hermetic tests for scripts/channel-install/install-{stable,testing,edge,nightly}.sh
-(issue #2416) and their shared engine, install-common.sh.
+"""Hermetic tests for scripts/install.sh (issue #2416 follow-up: one script, the four
+per-channel install-<channel>.sh wrappers + install-common.sh are gone, replaced by a
+single script parameterized by ``--channel``).
 
-The four install-<channel>.sh files are thin: they set PFB_CHANNEL, source
-install-common.sh, and call pfb_channel_install(). install-common.sh is the SOLE
-client entry point — repo bootstrap (conf + boot hook) and an installed package's
-channel move fold into ONE idempotent state machine — check-then-act at every step,
-so a second run on a converged box performs zero pkg mutations.
+install.sh is the SOLE client entry point — repo bootstrap (conf + boot hook) and an
+installed package's channel move fold into ONE idempotent state machine — check-then-act
+at every step, so a second run on a converged box performs zero pkg mutations.
 
 A fake ``pkg`` binary (see ``_PKG_STUB``) fakes just enough of pkg(8) to drive every
 branch: a ``pkgstate/<name>/{version,repo}`` directory pair per installed package, a
@@ -25,8 +24,8 @@ from pathlib import Path
 import pytest
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
-_SCRIPTS = _ROOT_DIR / "scripts" / "channel-install"
-_COMMON = _SCRIPTS / "install-common.sh"
+_SCRIPTS_DIR = _ROOT_DIR / "scripts"
+_SCRIPT = _SCRIPTS_DIR / "install.sh"
 _HOOK = _ROOT_DIR / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
 
 _CHANNELS = ("stable", "testing", "edge", "nightly")
@@ -167,10 +166,6 @@ exit 0
 # --------------------------------------------------------------------------- #
 
 
-def _install_script(channel: str) -> Path:
-    return _SCRIPTS / f"install-{channel}.sh"
-
-
 def _repo_name(channel: str) -> str:
     return f"pfblockerng-{channel}"
 
@@ -283,6 +278,7 @@ def _run_install(
     channel: str,
     *,
     args: tuple[str, ...] = (),
+    channel_style: str = "space",
     catalog: tuple[str, ...] = ("4.0.0",),
     info_paths: tuple[str, ...] = (_DEFAULT_PAYLOAD_PATH,),
     create_info_paths: bool = True,
@@ -290,11 +286,16 @@ def _run_install(
     version_t_broken: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Run install-<channel>.sh with PFBLOCKERNG_ROOT=root and the fake pkg stub.
+    """Run install.sh --channel <channel> with PFBLOCKERNG_ROOT=root and the fake pkg
+    stub.
 
     Re-seeds the box fixture, catalogue, and info manifest on every call (idempotent
     to call twice), but never touches pkgstate/ or repo confs — those persist across
     repeated calls on the same root, which is what the idempotency/resume tests need.
+
+    ``channel_style`` selects how ``channel`` is passed: ``"space"`` (default,
+    ``--channel <channel>``), ``"equals"`` (``--channel=<channel>``), so the two
+    accepted forms can share every other fixture.
     """
     pkg_bin = _write_pkg_stub(root)
     _seed_box(root)
@@ -320,8 +321,19 @@ def _run_install(
     if manifest:
         env["PFB_STUB_INFO_MANIFEST"] = manifest
 
-    argv = ["sh", str(_install_script(channel)), *args]
+    channel_args = [f"--channel={channel}"] if channel_style == "equals" else ["--channel", channel]
+    argv = ["sh", str(_SCRIPT), *channel_args, *args]
     return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
+
+
+def _run_argv(*args: str, env_extra: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run install.sh with exactly ``args`` — no pkg stub, no box fixture.
+
+    Every arg-parsing rejection happens BEFORE step 1 (environment) even runs, so
+    these hostile-input cases need nothing but the script itself.
+    """
+    env = {**os.environ, **(env_extra or {})}
+    return subprocess.run(["sh", str(_SCRIPT), *args], env=env, capture_output=True, text=True, check=False)
 
 
 def _mutating_lines(log_text: str) -> list[str]:
@@ -329,8 +341,8 @@ def _mutating_lines(log_text: str) -> list[str]:
 
 
 def _assert_idempotent_second_run(root: str, channel: str) -> None:
-    """Re-run install-<channel>.sh on already-converged state: zero pkg mutations,
-    identical conf/hook bytes."""
+    """Re-run install.sh --channel <channel> on already-converged state: zero pkg
+    mutations, identical conf/hook bytes."""
     conf_before = _conf_path(root, channel).read_text()
     hook_before = _hook_path(root).read_text()
     log_before = _pkg_log(root).read_text()
@@ -356,8 +368,8 @@ def _assert_idempotent_second_run(root: str, channel: str) -> None:
 
 @pytest.mark.parametrize("channel", _CHANNELS)
 def test_fresh_box_bootstraps_hook_conf_and_installs(channel: str) -> None:
-    """Scenario: given a box with nothing configured, when install-<ch>.sh runs,
-    then the hook is installed, the conf resolves with the channel's URL segment,
+    """Scenario: given a box with nothing configured, when install.sh --channel <ch>
+    runs, then the hook is installed, the conf resolves with the channel's URL segment,
     exactly one bare install runs, and no delete happens."""
     with tempfile.TemporaryDirectory() as root:
         assert not _hook_path(root).exists()
@@ -415,10 +427,11 @@ def test_already_up_to_date_performs_zero_mutations() -> None:
 
 
 def test_up_to_date_hook_gets_chmod_755_even_when_bytes_are_identical() -> None:
-    """CodeRabbit finding on install-common.sh step 2: "up to date" only means the
-    HOOK BYTES match — never that the mode is already correct. A byte-identical hook
-    left at 0644 (e.g. a restored config backup, or a tar extraction that dropped
-    the exec bit) must still be made executable, or it never runs at boot."""
+    """CodeRabbit finding on install-common.sh step 2 (carried into install.sh): "up
+    to date" only means the HOOK BYTES match — never that the mode is already
+    correct. A byte-identical hook left at 0644 (e.g. a restored config backup, or a
+    tar extraction that dropped the exec bit) must still be made executable, or it
+    never runs at boot."""
     with tempfile.TemporaryDirectory() as root:
         channel = "stable"
         hook_path = _hook_path(root)
@@ -599,8 +612,8 @@ def test_idempotent_second_run_after_legacy_devel_migration() -> None:
 
 def test_resume_with_conf_present_but_hook_absent() -> None:
     """Scenario: given a box whose conf already carries the boot marker (a prior
-    run got that far) but whose rc.d hook is absent, when install-stable.sh runs,
-    then the hook is installed and the package install still happens."""
+    run got that far) but whose rc.d hook is absent, when install.sh --channel stable
+    runs, then the hook is installed and the package install still happens."""
     with tempfile.TemporaryDirectory() as root:
         channel = "stable"
         _seed_conf_file(
@@ -622,11 +635,12 @@ def test_resume_with_conf_present_but_hook_absent() -> None:
 
 
 def test_stale_foreign_conf_rejected_when_detection_fails() -> None:
-    """CodeRabbit finding on install-common.sh step 3: the boot MARKER alone is not
-    enough — the hook leaves an EXISTING conf UNCHANGED when detection fails, so a
-    pre-existing conf carrying the marker but resolving to ANOTHER base's URL (a
-    stale conf from a fork, a staged prefix, or a restored config backup) must
-    still be rejected — never silently accepted and converged onto."""
+    """CodeRabbit finding on install-common.sh step 3 (carried into install.sh): the
+    boot MARKER alone is not enough — the hook leaves an EXISTING conf UNCHANGED
+    when detection fails, so a pre-existing conf carrying the marker but resolving
+    to ANOTHER base's URL (a stale conf from a fork, a staged prefix, or a restored
+    config backup) must still be rejected — never silently accepted and converged
+    onto."""
     with tempfile.TemporaryDirectory() as root:
         channel = "stable"
         pkg_bin = _write_pkg_stub(root)
@@ -659,7 +673,7 @@ def test_stale_foreign_conf_rejected_when_detection_fails() -> None:
             "PFB_STUB_INFO_MANIFEST": manifest,
         }
         proc = subprocess.run(
-            ["sh", str(_install_script(channel))], env=env, capture_output=True, text=True, check=False
+            ["sh", str(_SCRIPT), "--channel", channel], env=env, capture_output=True, text=True, check=False
         )
 
         assert proc.returncode == 4, proc.stdout + proc.stderr
@@ -817,26 +831,100 @@ def test_config_section_preserved_across_install_succeeds() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 16. Hostile args: positional / unknown flag -> exit 2; --help -> exit 0
+# 16. --channel=<ch> (the equals form) behaves exactly like --channel <ch>
 # --------------------------------------------------------------------------- #
 
 
-def test_positional_argument_rejected() -> None:
+def test_channel_equals_form_installs_the_same_as_space_form() -> None:
     with tempfile.TemporaryDirectory() as root:
-        proc = _run_install(root, "stable", args=("stable",))
+        proc = _run_install(root, "edge", channel_style="equals", catalog=("4.0.0",))
 
-        assert proc.returncode == 2, proc.stdout + proc.stderr
-        assert "usage" in proc.stderr.lower() or "Usage:" in proc.stdout
-
-
-def test_channel_flag_rejected() -> None:
-    with tempfile.TemporaryDirectory() as root:
-        proc = _run_install(root, "stable", args=("--channel", "stable"))
-
-        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Done" in proc.stdout
+        assert Path(root, "pkgstate", _CANONICAL, "repo").read_text() == "pfblockerng-edge"
 
 
-def test_help_flag_exits_zero() -> None:
+# --------------------------------------------------------------------------- #
+# 17. Arg parsing: --channel required/valid, release rejected, hostile args -> 2,
+#     -h/--help -> 0. Every case here fails before step 1 (environment), so no pkg
+#     stub or box fixture is needed (issue #2416 follow-up: new --channel surface).
+# --------------------------------------------------------------------------- #
+
+
+def test_missing_channel_rejected_with_no_default_message() -> None:
+    proc = _run_argv()
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "no default" in (proc.stdout + proc.stderr).lower(), proc.stdout + proc.stderr
+
+
+def test_channel_flag_missing_value_rejected() -> None:
+    proc = _run_argv("--channel")
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "requires a value" in (proc.stdout + proc.stderr).lower(), proc.stdout + proc.stderr
+
+
+@pytest.mark.parametrize("bogus", ["bogus", "STABLE", "Stable", "release "])
+def test_invalid_channel_value_rejected(bogus: str) -> None:
+    proc = _run_argv("--channel", bogus)
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_release_channel_rejected_by_name() -> None:
+    """`release` (the legacy shared-repo word) is explicitly named in the error —
+    distinct from a merely-unknown value, so a user who tries the old word is told
+    what changed rather than getting a generic 'unknown channel'."""
+    proc = _run_argv("--channel", "release")
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "release" in proc.stderr.lower(), proc.stderr
+
+
+def test_positional_argument_alone_rejected() -> None:
+    proc = _run_argv("stable")
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "usage" in proc.stderr.lower() or "Usage:" in proc.stdout
+
+
+def test_positional_argument_after_valid_channel_rejected() -> None:
+    proc = _run_argv("--channel", "stable", "stable")
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_unknown_flag_rejected() -> None:
+    proc = _run_argv("--bogus-flag")
+
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def test_help_flag_exits_zero_and_never_touches_pkg() -> None:
+    proc = _run_argv("--help")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Usage:" in proc.stdout
+
+
+def test_help_short_flag_exits_zero() -> None:
+    proc = _run_argv("-h")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Usage:" in proc.stdout
+
+
+def test_help_before_channel_short_circuits_without_requiring_one() -> None:
+    """--help wins even when it is NOT the first/only argument — a user who typo'd
+    the channel value still gets usage text, not a channel-validation error."""
+    proc = _run_argv("--channel", "bogus", "--help")
+
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "Usage:" in proc.stdout
+
+
+def test_help_flag_never_touches_pkg() -> None:
     with tempfile.TemporaryDirectory() as root:
         proc = _run_install(root, "stable", args=("--help",))
 
@@ -860,7 +948,7 @@ def test_missing_pkg_binary_fails_at_step_1_with_exit_1_no_files_written() -> No
             "PFB_TEST_ROOT": root,
         }
         proc = subprocess.run(
-            ["sh", str(_install_script(channel))], env=env, capture_output=True, text=True, check=False
+            ["sh", str(_SCRIPT), "--channel", channel], env=env, capture_output=True, text=True, check=False
         )
 
         assert proc.returncode == 1, proc.stdout + proc.stderr
@@ -870,17 +958,18 @@ def test_missing_pkg_binary_fails_at_step_1_with_exit_1_no_files_written() -> No
 
 
 # --------------------------------------------------------------------------- #
-# 17. Piped invocation: stdin never consumed by the script itself
+# 18. Piped invocation: stdin never consumed by the script itself
 # --------------------------------------------------------------------------- #
 
 
 def test_piped_invocation_leaves_pkg_stdin_empty_and_installs_a_real_hook() -> None:
-    """Scenario: given install-stable.sh piped into `sh -s` (the published
-    `fetch | sh` form, exercised here from a checkout with cwd = the script's own
-    directory so sibling-file resolution still finds the real hook), when it runs,
-    then it succeeds and installs a real hook. (The stdin-isolation guarantee is
-    pinned separately by test_pkg_wrapper_redirects_stdin_from_dev_null — here the
-    call is the script's last statement, so sh has already drained the pipe.)"""
+    """Scenario: given install.sh piped into `sh -s -- --channel stable` (the
+    published `fetch | sh -s -- --channel <ch>` form, exercised here from a checkout
+    with cwd = scripts/ so sibling-file resolution still finds the real hook), when
+    it runs, then it succeeds and installs a real hook. (The stdin-isolation
+    guarantee is pinned separately by test_pkg_wrapper_redirects_stdin_from_dev_null
+    — here the call is the script's last statement, so sh has already drained the
+    pipe.)"""
     with tempfile.TemporaryDirectory() as root:
         channel = "stable"
         pkg_bin = _write_pkg_stub(root)
@@ -897,12 +986,12 @@ def test_piped_invocation_leaves_pkg_stdin_empty_and_installs_a_real_hook() -> N
             "PFB_TEST_ROOT": root,
             "PFB_STUB_INFO_MANIFEST": manifest,
         }
-        script_text = _install_script(channel).read_text()
+        script_text = _SCRIPT.read_text()
 
         proc = subprocess.run(
-            ["sh", "-s"],
+            ["sh", "-s", "--", "--channel", channel],
             input=script_text,
-            cwd=str(_SCRIPTS),
+            cwd=str(_SCRIPTS_DIR),
             env=env,
             capture_output=True,
             text=True,
@@ -918,15 +1007,23 @@ def test_piped_invocation_leaves_pkg_stdin_empty_and_installs_a_real_hook() -> N
 
 
 def test_pkg_wrapper_redirects_stdin_from_dev_null() -> None:
-    """Scenario: given the sourced install-common.sh and a pkg(8) stub that reads its
-    stdin, when `_pkg` runs while the calling shell's stdin still holds unread bytes
-    (what a `fetch | sh` pipe looks like mid-script), then the stub reads NOTHING —
-    the wrapper hands every pkg call /dev/null, so no child can eat script text."""
+    """Scenario: given install.sh sourced (via `--help`, which returns before any
+    pkg call, so control comes back to the sourcing shell) and a pkg(8) stub that
+    reads its stdin, when `_pkg` runs while the calling shell's stdin still holds
+    unread bytes (what a `fetch | sh -s -- --channel <ch>` pipe looks like
+    mid-script), then the stub reads NOTHING — the wrapper hands every pkg call
+    /dev/null, so no child can eat script text.
+
+    ``. file arguments`` is a bash/ksh extension, not POSIX — dash's dot command
+    ignores extra words. ``set -- --help`` first is the portable way to hand the
+    sourced script its ``"$@"``: a sourced script with no explicit dot-arguments
+    inherits the CALLING shell's current positional parameters (POSIX 2.9.5).
+    """
     with tempfile.TemporaryDirectory() as root:
         pkg_bin = _write_pkg_stub(root)
         env = {**os.environ, "PKG_BIN": pkg_bin, "PFB_TEST_ROOT": root}
         proc = subprocess.run(
-            ["sh", "-c", f'PFB_CHANNEL=stable; . "{_COMMON}"; _pkg query "%v" pfSense-pkg-pfBlockerNG'],
+            ["sh", "-c", f'set -- --help; . "{_SCRIPT}" >/dev/null; _pkg query "%v" pfSense-pkg-pfBlockerNG'],
             input="REST-OF-THE-PIPED-SCRIPT\n",
             env=env,
             capture_output=True,
@@ -939,43 +1036,16 @@ def test_pkg_wrapper_redirects_stdin_from_dev_null() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 18. Structure: markers, PFB_CHANNEL, sh -n on all five files
+# 19. Structure: markers, sh -n
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("channel", _CHANNELS)
-def test_channel_script_parses_and_carries_required_markers(channel: str) -> None:
-    f = _install_script(channel)
-    proc = subprocess.run(["sh", "-n", str(f)], capture_output=True, text=True, check=False)
+def test_install_script_parses_and_carries_required_hook_markers() -> None:
+    proc = subprocess.run(["sh", "-n", str(_SCRIPT)], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
 
-    text = f.read_text()
-    assert "# PFB_EMBED_COMMON_BEGIN" in text
-    assert "# PFB_EMBED_COMMON_END" in text
-    assert f'PFB_CHANNEL="{channel}"' in text
-
-
-def test_install_common_parses_and_carries_required_hook_markers() -> None:
-    proc = subprocess.run(["sh", "-n", str(_COMMON)], capture_output=True, text=True, check=False)
-    assert proc.returncode == 0, proc.stderr
-
-    text = _COMMON.read_text()
+    text = _SCRIPT.read_text()
     assert "# PFB_EMBED_HOOK_BEGIN" in text
     assert "# PFB_EMBED_HOOK_END" in text
-
-
-def test_sourcing_without_pfb_channel_fails_loudly() -> None:
-    """install-common.sh is sourced ONLY by install-<ch>.sh, which always sets
-    PFB_CHANNEL before the `.`. A source with PFB_CHANNEL unset must fail loudly
-    instead of silently baking an empty channel into every message, path, and
-    hook the state machine drives."""
-    env = {k: v for k, v in os.environ.items() if k != "PFB_CHANNEL"}
-    proc = subprocess.run(
-        ["sh", "-c", f'. "{_COMMON}"'],
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert proc.returncode != 0, proc.stdout + proc.stderr
-    assert "PFB_CHANNEL" in proc.stderr, proc.stderr
+    assert text.startswith("#!/bin/sh\n")
+    assert os.access(str(_SCRIPT), os.X_OK), "the repository copy must be executable"

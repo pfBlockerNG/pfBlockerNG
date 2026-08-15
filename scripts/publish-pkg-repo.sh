@@ -20,8 +20,8 @@
 # is `exit 1` on the spot, before any git add ever runs. There is no
 # `git add -A` / `git add .` anywhere below — only the exact touched (channel,
 # varver) directories the publisher reports, plus the landing page's own
-# output and docs/.nojekyll; on a catalogue no-op, only the two regenerated
-# client scripts (issue #2408).
+# output and docs/.nojekyll; on a catalogue no-op, only the regenerated
+# client script (issue #2408).
 #
 # On a rejected push (another run advanced origin/main first), the ENTIRE cycle
 # reruns from a fresh sync — not a rebase of the local commit — because
@@ -41,9 +41,9 @@
 #            the original bytes there — so a live install can be gated against
 #            the staged path while nothing else on the site moves. No landing
 #            regen: staging is never served as the site. The catalogue-no-op
-#            path is the ONE exception — it still regenerates + pushes every
-#            deterministic client script (the four docs/install-<channel>.sh
-#            per-channel installers; issue #2408, issue #2416, shared with
+#            path is the ONE exception — it still regenerates + pushes the
+#            deterministic client script (docs/install.sh, the --channel
+#            parameterized installer; issue #2408, issue #2416, shared with
 #            "direct") even though nothing was staged, and reports
 #            GITHUB_OUTPUT noop=true.
 #   promote  move a previously staged tree (STAGING_PREFIX) into its real
@@ -114,10 +114,10 @@
 set -eu
 
 # Every deterministic client script gen_landing.py publishes at the site root:
-# the four per-channel installers (issue #2416) — the SOLE client entry point.
-# Single source of truth for both the catalogue-NOOP `git add` list and the
-# direct/promote stage_paths list below.
-CLIENT_SCRIPTS="install-stable.sh install-testing.sh install-edge.sh install-nightly.sh"
+# the one --channel-parameterized installer (issue #2416 follow-up) — the SOLE
+# client entry point. Single source of truth for both the catalogue-NOOP `git add`
+# list and the direct/promote stage_paths list below.
+CLIENT_SCRIPTS="install.sh"
 
 PUBLISH_KIND="${PUBLISH_KIND:-tagged}"
 case "$PUBLISH_KIND" in

@@ -1,20 +1,27 @@
 #!/bin/sh
 # shellcheck shell=sh
-# install-common.sh — shared state machine behind install-{stable,testing,edge,nightly}.sh
-# (issue #2416). Sourced only — never run directly; defines pfb_channel_install() and
-# helpers, with no top-level side effects beyond variable defaults (a `.` of this file
-# from any shell context is inert until pfb_channel_install is called).
+# install.sh — put this pfSense box on a pfBlockerNG channel (issue #2416 follow-up:
+# one script, --channel parameterizes it, replacing the earlier per-channel
+# install-<ch>.sh + install-common.sh split).
 #
-# WHY ONE SCRIPT PER CHANNEL: repo bootstrap (conf + boot hook) and an installed
-# package's channel move fold into ONE idempotent state machine — a fresh box and
-# an already-installed box converge through the same steps instead of separate
-# scripts run in sequence, and re-running on a converged box mutates nothing
-# (check-then-act throughout).
+# WHY ONE SCRIPT: repo bootstrap (conf + boot hook) and an installed package's
+# channel move fold into ONE idempotent state machine, parameterized by --channel —
+# a fresh box and an already-installed box converge through the same steps instead
+# of separate scripts run in sequence, and re-running on a converged box mutates
+# nothing (check-then-act throughout). Four near-identical per-channel wrapper
+# scripts added nothing but drift risk over a single --channel argument.
 #
 # WHY EVERY pkg(8) CALL REDIRECTS STDIN FROM /dev/null: the published form is piped into
-# `sh` (`fetch -qo - .../install-<ch>.sh | sh`), so the script's own stdin IS the script
-# text — any child process that reads stdin without redirection would consume trailing
-# script bytes and corrupt the run.
+# `sh` (`fetch -qo - .../install.sh | sh -s -- --channel <ch>`), so the script's own
+# stdin IS the script text — any child process that reads stdin without redirection
+# would consume trailing script bytes and corrupt the run.
+#
+# Usage:
+#   install.sh --channel <stable|testing|edge|nightly>   subscribe + install/converge
+#   install.sh -h|--help                                  this text
+#
+# Published at ${PFB_BASE_URL}/install.sh; run ON the box:
+#   fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel stable
 #
 # Env (all overridable; forks/staging/tests set these):
 #   PKG_BIN           pkg(8) binary path (default: /usr/local/sbin/pkg)
@@ -23,32 +30,27 @@
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
-: "${PFB_CHANNEL:?install-common.sh is sourced by install-<ch>.sh, which sets PFB_CHANNEL}"
+set -eu
+
+# The hook source lives next to this file's sibling scripts/rc.d/ in a checkout.
+# Resolved once at source time — CDPATH='' guard used throughout scripts/, see
+# tests/shell/cdpath_spec.sh.
+SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
 
 PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
 ROOT="${PFBLOCKERNG_ROOT%/}"
 PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"
 
-# The hook source lives next to this file's sibling scripts/rc.d/ in a checkout.
-# Resolved once at source time (this file and install-<ch>.sh share a directory, so
-# $0 here is still install-<ch>.sh's path — same CDPATH='' guard used throughout
-# scripts/, see tests/shell/cdpath_spec.sh).
-PFB_COMMON_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
-HOOK_SRC="${PFB_COMMON_DIR}/../rc.d/pfblockerng_repo_generate.sh"
-
 CANONICAL_PKG="pfSense-pkg-pfBlockerNG"
-REPO_NAME="pfblockerng-${PFB_CHANNEL}"
-CONF_NAME="pfblockerng-${PFB_CHANNEL}.conf"
 REPOS_DIR="${ROOT}/usr/local/etc/pkg/repos"
-CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
 ON_BOX_HOOK="${ROOT}/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 CONFIG_XML="${ROOT}/cf/conf/config.xml"
 CONF_MARKER="Generated at boot by pfblockerng_repo_generate"
 
-# Every project conf any channel-install script (or a pre-#2148 legacy bootstrap)
-# may have written. Exactly one may be enabled at a time — single-repository
-# subscription, issue #2148.
+# Every project conf this script (or a pre-#2148 legacy bootstrap) may have written.
+# Exactly one may be enabled at a time — single-repository subscription, issue #2148.
 PROJECT_CONFS="pfblockerng.conf
 pfblockerng-stable.conf
 pfblockerng-testing.conf
@@ -59,7 +61,7 @@ pfblockerng-nightly.conf"
 die() {
     _die_code="$1"
     shift
-    printf 'install-%s: %s\n' "${PFB_CHANNEL}" "$*" >&2
+    printf 'install.sh: %s\n' "$*" >&2
     exit "${_die_code}"
 }
 
@@ -73,24 +75,24 @@ _pkg() {
 
 usage() {
     cat <<USAGE
-install-${PFB_CHANNEL}.sh — put this pfSense box on the pfBlockerNG ${PFB_CHANNEL} channel.
+install.sh — put this pfSense box on a pfBlockerNG channel.
 
 Usage:
-  install-${PFB_CHANNEL}.sh              subscribe + install/converge (idempotent)
-  install-${PFB_CHANNEL}.sh -h|--help    this text
+  install.sh --channel <stable|testing|edge|nightly>   subscribe + install/converge (idempotent)
+  install.sh -h|--help                                  this text
 
-Published at ${PFB_BASE_URL}/install-${PFB_CHANNEL}.sh; run ON the box:
-  fetch -qo - ${PFB_BASE_URL}/install-${PFB_CHANNEL}.sh | sh
+Published at ${PFB_BASE_URL}/install.sh; run ON the box:
+  fetch -qo - ${PFB_BASE_URL}/install.sh | sh -s -- --channel <stable|testing|edge|nightly>
 
 Installs the boot-time repo-conf generator hook (ADR-39), subscribes this box to the
-${PFB_CHANNEL} channel ALONE (retiring any other pfBlockerNG channel conf), then
-installs or moves the running package onto pfSense-pkg-pfBlockerNG from that channel.
-Safe to re-run: a converged box performs no package changes.
+named channel ALONE (retiring any other pfBlockerNG channel conf), then installs or
+moves the running package onto pfSense-pkg-pfBlockerNG from that channel. Safe to
+re-run: a converged box performs no package changes.
 
 Exit codes:
   0  ok, including a reported no-op (already up to date)
   1  environment: pkg binary or hook source not found
-  2  usage: unknown argument
+  2  usage: unknown argument, unknown/missing --channel
   4  target unavailable: the hook could not resolve the conf, pkg update failed, the
      catalogue offers nothing, or pkg version -t gave no usable answer
   5  a pkg operation (delete/install) failed
@@ -102,11 +104,11 @@ USAGE
 # copy this is a STUB that fails loud: the standalone scripts/rc.d/pfblockerng_repo_generate.sh
 # is the source of truth, used directly from a checkout via HOOK_SRC. The website build
 # (gen_landing.py) replaces the body between the PFB_EMBED markers with the hook in a
-# single-quoted heredoc, producing the self-contained install-<ch>.sh served at
-# <base>/install-<ch>.sh for `fetch | sh`.
+# single-quoted heredoc, producing the self-contained install.sh served at
+# <base>/install.sh for `fetch | sh`.
 pfb_emit_embedded_hook() {
     # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by gen_landing.py at website-build time.
-    printf 'install-%s: no embedded hook in this copy — run from a checkout, or use the published %s/install-%s.sh\n' "${PFB_CHANNEL}" "${PFB_BASE_URL}" "${PFB_CHANNEL}" >&2
+    printf 'install.sh: no embedded hook in this copy — run from a checkout, or use the published %s/install.sh\n' "${PFB_BASE_URL}" >&2
     return 1
     # PFB_EMBED_HOOK_END
 }
@@ -115,8 +117,21 @@ pfb_emit_embedded_hook() {
 # against live state, so a second run on a converged box performs zero package
 # mutations and leaves the conf + hook bytes unchanged (idempotent).
 pfb_channel_install() {
+    PFB_CHANNEL=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --channel)
+                [ $# -ge 2 ] || {
+                    usage >&2
+                    die 2 "--channel requires a value"
+                }
+                PFB_CHANNEL="$2"
+                shift 2
+                ;;
+            --channel=*)
+                PFB_CHANNEL="${1#--channel=}"
+                shift
+                ;;
             -h | --help)
                 usage
                 return 0
@@ -128,18 +143,38 @@ pfb_channel_install() {
         esac
     done
 
+    case "${PFB_CHANNEL}" in
+        stable | testing | edge | nightly) ;;
+        "")
+            usage >&2
+            die 2 "--channel is required — there is no default"
+            ;;
+        release)
+            usage >&2
+            die 2 "'release' is not a channel — choose stable, testing, edge, or nightly"
+            ;;
+        *)
+            usage >&2
+            die 2 "unknown channel '${PFB_CHANNEL}' — choose stable, testing, edge, or nightly"
+            ;;
+    esac
+
+    REPO_NAME="pfblockerng-${PFB_CHANNEL}"
+    CONF_NAME="pfblockerng-${PFB_CHANNEL}.conf"
+    CONF_PATH="${REPOS_DIR}/${CONF_NAME}"
+
     # 1. Environment.
     command -v "${PKG_BIN}" >/dev/null 2>&1 ||
         die 1 "'${PKG_BIN}' not found — run this ON a pfSense box, or set PKG_BIN"
 
     # 2. Boot-time generator hook: install/refresh only if missing or different.
-    #    HOOK_SRC is trusted ONLY when this IS a checkout — i.e. install-common.sh's
-    #    own file sits beside it too. Piped ($0 is "sh"), PFB_COMMON_DIR resolves to
-    #    the caller's cwd instead: from /usr/local/etc/pkg (ROOT="") that cwd's
-    #    "../rc.d/..." collides with ON_BOX_HOOK itself, so trusting HOOK_SRC there
+    #    HOOK_SRC is trusted ONLY when this IS a checkout — i.e. install.sh's own
+    #    file sits beside it too. Piped ($0 is "sh"), SCRIPT_DIR resolves to the
+    #    caller's cwd instead: from /usr/local/etc/pkg (ROOT="") that cwd's
+    #    "rc.d/..." collides with ON_BOX_HOOK itself, so trusting HOOK_SRC there
     #    would `cmp` the on-box hook against itself and never refresh a stale one.
     _hook_tmp="$(mktemp "${TMPDIR:-/tmp}/pfb-hook.XXXXXX")" || die 1 "mktemp failed while staging the boot hook"
-    if [ -f "${PFB_COMMON_DIR}/install-common.sh" ] && [ -f "${HOOK_SRC}" ]; then
+    if [ -f "${SCRIPT_DIR}/install.sh" ] && [ -f "${HOOK_SRC}" ]; then
         cp "${HOOK_SRC}" "${_hook_tmp}"
     else
         pfb_emit_embedded_hook >"${_hook_tmp}" || {
@@ -292,7 +327,7 @@ pfb_channel_install() {
             _fam_installed="$(printf '%s' "${_canon_ver}" | cut -d. -f1,2)"
             if [ "${_fam_offered}" != "${_fam_installed}" ]; then
                 {
-                    printf 'install-%s: WARNING — moving back from %s to %s crosses release families:\n' "${PFB_CHANNEL}" "${_canon_ver}" "${OFFERED}"
+                    printf 'install.sh: WARNING — moving back from %s to %s crosses release families:\n' "${_canon_ver}" "${OFFERED}"
                     printf '  settings written by the newer build may be rolled back or dropped by the\n'
                     printf '  older build'\''s migrations, features present in the newer build disappear,\n'
                     printf '  and a re-save may be needed.\n'
@@ -342,3 +377,5 @@ pfb_channel_install() {
     # 11. Done.
     printf '==> Done — %s-%s installed from %s (%s channel).\n' "${CANONICAL_PKG}" "${OFFERED}" "${REPO_NAME}" "${PFB_CHANNEL}"
 }
+
+pfb_channel_install "$@"

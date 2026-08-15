@@ -1,6 +1,6 @@
 #!/bin/sh
 # /usr/local/etc/rc.d/pfblockerng_repo_generate.sh — boot-time repo-conf
-# regenerator (ADR-39). Installed by the per-channel install-<ch>.sh scripts.
+# regenerator (ADR-39). Installed by install.sh.
 #
 # WHAT IT DOES (and nothing more): for each pfBlockerNG pkg-repo conf file that
 # EXISTS, it detects this box's pfSense edition/version and UNCONDITIONALLY
@@ -50,7 +50,7 @@
 
 name="pfblockerng_repo_generate"
 
-# On-box paths (installed by the per-channel install-<ch>.sh scripts). Override
+# On-box paths (installed by install.sh). Override
 # via env for tests.
 #
 # One path per channel repository (issue #2148). The four channel repos each own
@@ -99,7 +99,7 @@ _emit_conf() {
     _ec_repo="$2"
     _ec_url="$3"
     cat <<EOF
-# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install-${_ec_channel}.sh to change.
+# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install.sh --channel ${_ec_channel} to change.
 # pfBlockerNG (${_ec_channel} channel) — self-hosted pkg repository (ADR-17).
 # NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
 # fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
@@ -152,8 +152,8 @@ pfblockerng_repo_generate_start() {
 }
 
 # Run as an rc.d service when rc.subr is present (the pfSense box); otherwise run
-# the regeneration directly (off-box: the install-<channel>.sh bootstrap + the
-# shellspec suite, where /etc/rc.subr does not exist).
+# the regeneration directly (off-box: install.sh's bootstrap + the shellspec
+# suite, where /etc/rc.subr does not exist).
 if [ -r /etc/rc.subr ]; then
     . /etc/rc.subr
     rcvar="${name}_enable"
