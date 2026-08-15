@@ -45,8 +45,8 @@ HOUR = timedelta(hours=1)
 WEEK = timedelta(days=7)
 DEFAULT_WINDOW_MINUTES = 15
 NOTE = (
-    "Lower bound: incrementals edit one summarize comment (created_at). "
-    "Other repos are invisible. Fair Usage is per developer."
+    "Spend is a lower bound (incrementals share one created_at; other repos "
+    "invisible), so the allowance shown may be optimistic."
 )
 
 # https://docs.coderabbit.ai/management/plans#rate-limits
@@ -187,16 +187,32 @@ def next_slot_at(times_in_hour: list[datetime], allowance: int) -> datetime | No
 
 
 def decode_gh_pages(raw: str) -> list[Any]:
-    """Parse ``gh api --paginate`` output (one array, or ``][``-joined pages)."""
+    """Parse ``gh api --paginate`` output without rewriting comment bodies.
+
+    Current ``gh`` emits one merged JSON array. Older versions concatenate
+    pages as ``][``. A literal replace of that marker corrupts bodies that
+    contain ``][`` (five live comments in the last 7 days). Walk with
+    ``JSONDecoder.raw_decode`` instead.
+    """
     text = (raw or "").strip()
     if not text:
         return []
-    if "][" in text:
-        text = text.replace("][", ",")
-    data = json.loads(text)
-    if isinstance(data, list):
-        return data
-    return [data]
+    decoder = json.JSONDecoder()
+    items: list[Any] = []
+    idx = 0
+    length = len(text)
+    while idx < length:
+        while idx < length and text[idx].isspace():
+            idx += 1
+        if idx >= length:
+            break
+        obj, end = decoder.raw_decode(text, idx)
+        if isinstance(obj, list):
+            items.extend(obj)
+        else:
+            items.append(obj)
+        idx = end
+    return items
 
 
 @dataclass(frozen=True)

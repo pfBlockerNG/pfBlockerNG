@@ -2,6 +2,8 @@
 # Run immediately before `gh pr create`. Prints the CodeRabbit limit picture.
 # Exit 0 = opening a ready PR is affordable. Exit 3 = wait (do not create
 # unless the owner overrode in this conversation). Exit 2 = usage / tool error.
+# Exit 3 is also used with --json: the JSON is written to stdout; treat 3 as
+# advice, not a crashed command.
 #
 # Usage: before-pr-create.sh [--repo OWNER/REPO] [--json]
 
