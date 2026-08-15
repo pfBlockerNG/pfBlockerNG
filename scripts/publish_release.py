@@ -15,7 +15,8 @@ workflow) owns staging exactly the touched directories, committing, and pushing 
 this module only reports which ``(channel, varver)`` directories it touched.
 
 No-op behaviour: a ``(channel, varver)`` target whose desired files (this run's
-canonical asset + any dependency assets that ABI-match its ROUTE row) are already
+canonical asset + any dependency assets that ABI-match its ROUTE row and whose
+origin is listed in that row's ``extra_pkgs``) are already
 present, byte-identical, at the destination AND whose catalog descriptor
 (meta.conf/data.pkg/packagesite.pkg) is complete is left untouched entirely — no
 copy, no prune, no regenerate. There is no ledger; "already published" is read
@@ -160,7 +161,8 @@ def _verify_all_assets(
 
 # --------------------------------------------------------------------------- #
 # Target resolution — one (channel, varver) target per canonical asset's own
-# matrix_row, dependency assets fanned in by ABI match against THIS RUN's targets.
+# matrix_row, dependency assets fanned in by ABI + extra_pkgs match against
+# THIS RUN's targets.
 # --------------------------------------------------------------------------- #
 
 
@@ -169,6 +171,12 @@ class _Target:
     row: Mapping[str, object]
     canonical: pc.VerifiedAsset
     dependencies: list[pc.VerifiedAsset] = field(default_factory=list)
+
+
+def _row_declares_dep(row: Mapping[str, object], dep: pc.VerifiedAsset) -> bool:
+    """True iff this ROUTE/BUILD row lists the dependency's origin in extra_pkgs."""
+    extras = row.get("extra_pkgs")
+    return isinstance(extras, list) and dep.manifest.get("origin") in extras
 
 
 def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Target]:
@@ -185,10 +193,13 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
         targets[varver] = _Target(row=row, canonical=asset)
 
     for dep in run_result.dependency_assets:
+        # Same-major ABI is not enough: a CE extra must not land in a Plus
+        # catalogue whose extra_pkgs is empty (issue #2383).
         matched = [
             varver
             for varver, target in targets.items()
             if brp._pkg_matches_abi(dep.manifest, f"FreeBSD:{target.row['freebsd_major']}:*")
+            and _row_declares_dep(target.row, dep)
         ]
         if not matched:
             raise PublishReleaseError(
