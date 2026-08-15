@@ -284,6 +284,16 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
             changed = _drop_assets(dest_dir, asset_map)
             if not changed and not _catalogue_descriptor_complete(dest_dir, engine):
                 changed = True
+            # Heal historical holes before prune: copy every canonical version
+            # still on a slower tagged channel (never nightly) onto this dest.
+            copied = ca.backfill_from_slower_channels(site_root, channel, varver, engine=engine)
+            if copied:
+                changed = True
+                for src, destinations in copied.items():
+                    bucket = source_index.setdefault(src, [])
+                    for dest in destinations:
+                        if dest not in bucket:
+                            bucket.append(dest)
             for src in asset_map.values():
                 source_index.setdefault(src.resolve(), []).append((channel, varver))
             if changed:

@@ -1002,6 +1002,96 @@ class OutcomeTests(_TempDirTestCase):
         self.assertIn(f"pfSense-pkg-pfBlockerNG-4.0.0.b{ca_default_keep() + 1}.pkg", remaining)
 
 
+# --------------------------------------------------------------------------- #
+# Containment backfill (issue #2398): a slower-channel generation omitted from
+# a faster catalogue must be copied byte-identically before prune. Nightly is
+# outside this reconciliation.
+# --------------------------------------------------------------------------- #
+
+
+class ContainmentBackfillPublishTests(_TempDirTestCase):
+    def _seed_canonical(self, channel: str, varver: str, record: dict) -> Path:
+        """Drop one already-canonical .pkg into docs/<channel>/<varver>/."""
+        dest_dir = self.pkg_repo / "docs" / channel / varver
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        name = f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}.pkg"
+        scratch = self.tmp / f"seed-{next(self._assets_counter)}"
+        scratch.mkdir()
+        src, _digest = _wrap_canonical_pkg(scratch, record, local_name=name)
+        dest = dest_dir / name
+        dest.write_bytes(src.read_bytes())
+        return dest
+
+    @_requires_engine
+    def test_edge_heals_testing_version_omitted_from_edge(self) -> None:
+        # Red canary: testing/ce-2.8 has 3.2.10, edge/ce-2.8 does not.
+        # A new testing publish (destinations testing+edge) must copy it.
+        seeded = self._seed_canonical(
+            "testing",
+            "ce-2.8",
+            _record(channel="stable", row=ROW_CE, source_tag="v3.2.10"),
+        )
+        self.assertFalse(
+            (self.pkg_repo / "docs" / "edge" / "ce-2.8" / "pfSense-pkg-pfBlockerNG-3.2.10.pkg").exists()
+        )
+
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(
+            assets_dir,
+            channel="testing",
+            rows=(ROW_CE,),
+            source_tag="v3.2.16.a1",
+            include_dependency=False,
+        )
+        report = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            channel="testing",
+            destinations='["testing","edge"]',
+            tag="v3.2.16.a1",
+        )
+
+        self.assertEqual(set(report.touched), {("testing", "ce-2.8"), ("edge", "ce-2.8")})
+        edge_pkg = self.pkg_repo / "docs" / "edge" / "ce-2.8" / "pfSense-pkg-pfBlockerNG-3.2.10.pkg"
+        self.assertTrue(edge_pkg.is_file())
+        self.assertEqual(edge_pkg.read_bytes(), seeded.read_bytes())
+        self.assertTrue(
+            (self.pkg_repo / "docs" / "edge" / "ce-2.8" / "pfSense-pkg-pfBlockerNG-3.2.16.a1.pkg").is_file()
+        )
+
+    @_requires_engine
+    def test_nightly_catalogue_not_healed_by_tagged_publish(self) -> None:
+        seeded = self._seed_canonical(
+            "testing",
+            "ce-2.8",
+            _record(channel="stable", row=ROW_CE, source_tag="v3.2.10"),
+        )
+        nightly_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        nightly_dir.mkdir(parents=True)
+
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(
+            assets_dir,
+            channel="testing",
+            rows=(ROW_CE,),
+            source_tag="v3.2.16.a1",
+            include_dependency=False,
+        )
+        _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            channel="testing",
+            destinations='["testing","edge"]',
+            tag="v3.2.16.a1",
+        )
+
+        self.assertTrue(seeded.is_file())
+        self.assertFalse((nightly_dir / "pfSense-pkg-pfBlockerNG-3.2.10.pkg").exists())
+        self.assertFalse((nightly_dir / "pfSense-pkg-pfBlockerNG-3.2.16.a1.pkg").exists())
+
+
 def ca_default_keep() -> int:
     return ca.DEFAULT_RETENTION_KEEP
 

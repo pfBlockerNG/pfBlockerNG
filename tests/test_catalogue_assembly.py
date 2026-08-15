@@ -982,6 +982,176 @@ class ContainmentAwarePruningTests(_TempDirTestCase):
         self.assertIn("dep-edge.pkg", _pkg_names(edge_dir))
 
 
+# --------------------------------------------------------------------------- #
+# Containment backfill: prune-only protection cannot create a missing package.
+# Faster tagged catalogues must be copied onto from slower ones (byte-identical)
+# so edge superset-of testing superset-of stable. Nightly is independent.
+# --------------------------------------------------------------------------- #
+
+
+class ContainmentBackfillTests(_TempDirTestCase):
+    @_requires_engine
+    def test_copies_missing_canonical_from_slower(self) -> None:
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        _seed_canonical(self.tmp, edge_dir, ["2.0.0"])
+        slower = testing_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg"
+
+        copied = ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        dest = edge_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg"
+        self.assertTrue(dest.is_file())
+        self.assertEqual(dest.read_bytes(), slower.read_bytes())
+        self.assertEqual(list(copied), [slower.resolve()])
+        self.assertEqual(copied[slower.resolve()], [("testing", "ce-2.8"), ("edge", "ce-2.8")])
+
+    @_requires_engine
+    def test_already_identical_is_noop(self) -> None:
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        _drop(edge_dir, testing_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg")
+
+        copied = ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(copied, {})
+        self.assertEqual(_pkg_names(edge_dir), ["pfSense-pkg-pfBlockerNG-1.0.0.pkg"])
+
+    @_requires_engine
+    def test_same_name_different_bytes_rejected(self) -> None:
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        _drop(
+            edge_dir,
+            _canonical_pkg(
+                self.tmp,
+                version="1.0.0",
+                origin="net/pfSense-pkg-pfBlockerNG-EVIL",
+                local_name="pfSense-pkg-pfBlockerNG-1.0.0.pkg",
+            ),
+        )
+
+        with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
+            ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+        self.assertIn("different build", str(ctx.exception))
+        self.assertNotEqual(
+            (testing_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg").read_bytes(),
+            (edge_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg").read_bytes(),
+        )
+
+    @_requires_engine
+    def test_slower_sources_disagreeing_bytes_rejected(self) -> None:
+        out = self.tmp / "out"
+        stable_dir = out / "stable" / "ce-2.8"
+        testing_dir = out / "testing" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        _seed_canonical(self.tmp, stable_dir, ["1.0.0"])
+        _drop(
+            testing_dir,
+            _canonical_pkg(
+                self.tmp,
+                version="1.0.0",
+                origin="net/pfSense-pkg-pfBlockerNG-EVIL",
+                local_name="pfSense-pkg-pfBlockerNG-1.0.0.pkg",
+            ),
+        )
+        edge_dir.mkdir(parents=True)
+
+        with self.assertRaises(ca.CatalogueAssemblyError) as ctx:
+            ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+        self.assertIn("slower channels disagree", str(ctx.exception))
+        self.assertEqual(_pkg_names(edge_dir), [])
+
+    @_requires_engine
+    def test_dependency_never_copied(self) -> None:
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        _drop(
+            testing_dir,
+            _dep_pkg(
+                self.tmp,
+                name="py311-charset-normalizer",
+                version="3.4.0",
+                local_name="py311-charset-normalizer-3.4.0.pkg",
+            ),
+        )
+        edge_dir.mkdir(parents=True)
+
+        copied = ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertIn("pfSense-pkg-pfBlockerNG-1.0.0.pkg", _pkg_names(edge_dir))
+        self.assertNotIn("py311-charset-normalizer-3.4.0.pkg", _pkg_names(edge_dir))
+        self.assertEqual(len(copied), 1)
+
+    @_requires_engine
+    def test_nightly_destination_copies_nothing(self) -> None:
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        nightly_dir = out / "nightly" / "ce-2.8"
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        nightly_dir.mkdir(parents=True)
+
+        copied = ca.backfill_from_slower_channels(out, "nightly", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(copied, {})
+        self.assertEqual(_pkg_names(nightly_dir), [])
+
+    @_requires_engine
+    def test_nightly_source_never_copied(self) -> None:
+        out = self.tmp / "out"
+        nightly_dir = out / "nightly" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        _seed_canonical(self.tmp, nightly_dir, ["1.0.0"])
+        edge_dir.mkdir(parents=True)
+
+        copied = ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(copied, {})
+        self.assertEqual(_pkg_names(edge_dir), [])
+
+    @_requires_engine
+    def test_stable_has_nothing_to_backfill(self) -> None:
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        stable_dir = out / "stable" / "ce-2.8"
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        stable_dir.mkdir(parents=True)
+
+        copied = ca.backfill_from_slower_channels(out, "stable", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(copied, {})
+        self.assertEqual(_pkg_names(stable_dir), [])
+
+    @_requires_engine
+    def test_backfill_then_prune_keeps_slower_version_outside_keep_window(self) -> None:
+        # Slower still has 1.0.0; faster only has newer keep-window versions.
+        # After backfill + prune, 1.0.0 exists on faster (heal + protection).
+        out = self.tmp / "out"
+        testing_dir = out / "testing" / "ce-2.8"
+        edge_dir = out / "edge" / "ce-2.8"
+        newer = [f"2.0.{i}" for i in range(ca.DEFAULT_RETENTION_KEEP)]
+        _seed_canonical(self.tmp, testing_dir, ["1.0.0"])
+        _seed_canonical(self.tmp, edge_dir, newer)
+        slower = testing_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg"
+
+        copied = ca.backfill_from_slower_channels(out, "edge", "ce-2.8", engine=_ENGINE)
+        evicted = ca.prune_retained(out, "edge", "ce-2.8", engine=_ENGINE)
+
+        dest = edge_dir / "pfSense-pkg-pfBlockerNG-1.0.0.pkg"
+        self.assertTrue(dest.is_file())
+        self.assertEqual(dest.read_bytes(), slower.read_bytes())
+        self.assertEqual(list(copied), [slower.resolve()])
+        self.assertEqual(evicted, ())
+        self.assertIn("pfSense-pkg-pfBlockerNG-1.0.0.pkg", _pkg_names(edge_dir))
+
+
 class SlowerChannelsConsistencyTests(unittest.TestCase):
     # Pure constant-shape checks, no engine/fixtures needed.
     def test_keys_match_known_channels(self) -> None:
