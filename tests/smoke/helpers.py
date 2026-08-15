@@ -4046,6 +4046,21 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -
     )
 
 
+# Single-probe replacement for the old bare `test -f` sentinel check (issue #2242 owner
+# residual 02:55): `pfSense-upgrade -uf` only publishes the sentinel on SUCCESS, so a
+# finished-but-failed run leaves it absent forever -- the old probe could not tell that
+# apart from "still running" and spun to the full timeout. One ssh round-trip answers
+# present/running/gone. Both alternatives are bracket-escaped (``[-]``, ``[.]``) so the
+# pattern text embedded in THIS command's own argv never satisfies itself as a match --
+# unescaped, `pgrep -f` matches its own invoking shell (verified live: an unescaped
+# `pfSense-upgrade` branch made every probe report "running" with no job anywhere).
+_METADATA_PROBE_CMD = (
+    "if /bin/test -f /var/run/pfSense_version.rc; then echo present; "
+    "elif /bin/pgrep -f 'pfSense[-]upgrade|rc[.]update_pkg_metadata' >/dev/null 2>&1; then echo running; "
+    "else echo gone; fi"
+)
+
+
 def wait_boot_complete(
     vm: SmokeVM,
     *,
@@ -4097,17 +4112,26 @@ def wait_boot_complete(
                     break
                 try:
                     metadata = vm.ssh(
-                        "/bin/test",
-                        "-f",
-                        "/var/run/pfSense_version.rc",
+                        "/bin/sh",
+                        "-c",
+                        _METADATA_PROBE_CMD,
                         timeout=min(30.0, remaining),
                     )
                 except subprocess.TimeoutExpired:
                     last_metadata = "timeout"
                     continue
                 last_metadata = f"rc={metadata.returncode} stdout={metadata.stdout!r} stderr={metadata.stderr!r}"
-                if metadata.returncode == 0:
+                word = metadata.stdout.strip()
+                if word == "present":
                     return
+                if word == "gone":
+                    print(
+                        "PFB_BOOT_METADATA sentinel=absent job=gone — pfSense metadata refresh exited "
+                        "without publishing /var/run/pfSense_version.rc (metadata FAILED, not still "
+                        "booting; issue #2242)"
+                    )
+                    return
+                # "running" (or an unrecognised word) -- job still working; keep polling.
         remaining = deadline - time.monotonic()
         if not remaining > 0:
             break
