@@ -1031,9 +1031,7 @@ class ContainmentBackfillPublishTests(_TempDirTestCase):
             "ce-2.8",
             _record(channel="stable", row=ROW_CE, source_tag="v3.2.10"),
         )
-        self.assertFalse(
-            (self.pkg_repo / "docs" / "edge" / "ce-2.8" / "pfSense-pkg-pfBlockerNG-3.2.10.pkg").exists()
-        )
+        self.assertFalse((self.pkg_repo / "docs" / "edge" / "ce-2.8" / "pfSense-pkg-pfBlockerNG-3.2.10.pkg").exists())
 
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(
