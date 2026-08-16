@@ -20,6 +20,11 @@ on:
         description: Immutable source Release tag
         required: true
         type: string
+      refresh_landing:
+        description: Re-render the landing page/autoindexes even when the catalogue is unchanged (client-script or card changes)
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   packages: read
@@ -173,6 +178,7 @@ jobs:
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
           BASE_URL: https://pfblockerng.github.io/pkg
+          PUBLISH_REFRESH_LANDING: ${{ inputs.refresh_landing && '1' || '0' }}
         # Path env vars are exported HERE, not in the env: map above — GitHub
         # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
         # there reaches the job as a literal dollar-string (issue #2231). The

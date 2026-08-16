@@ -1169,7 +1169,14 @@ Full design: ADR-39.
   regenerates the one deterministic client script (`gen_landing.py
   --client-scripts-only`: `install.sh`, issue #2416) and commits it if it
   drifted (issue #2408) — the timestamped
-  landing/browse/autoindex pages remain publish-only. Trust model is unchanged
+  landing/browse/autoindex pages remain publish-only unless `PUBLISH_REFRESH_LANDING=1`
+  (tagged + `PUBLISH_STAGE=direct` only; `pkg-republish.yml`'s `refresh_landing` input)
+  forces the full landing regen on that same no-op path, for shipping a landing
+  template/card fix via a republish of an already-published release (issue #2416
+  follow-up). Both that no-op path and a real publish also sweep any retired
+  client script (`RETIRED_CLIENT_SCRIPTS`: `add-repo.sh`, `migrate-channel.sh`,
+  superseded by `install.sh`) still present on the live site out of the same
+  commit. Trust model is unchanged
   (`signature_type: none`, HTTPS/TLS to the Pages host — no catalogue-signing key); the landing
   page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
   single-repository subscription, and the explicit repository-qualified downgrade rule. The
