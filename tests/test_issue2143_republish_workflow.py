@@ -40,11 +40,9 @@ _IDENTITY_VALUES = {
     },
 }
 _SOURCE_RUN_ID_VALUE = "${{ github.run_id }}:${{ github.run_attempt }}"
-# issue #2416 follow-up: pkg-republish.yml's own `refresh_landing` workflow_dispatch
-# input (never `github.event.inputs.*`, which would read `${{ }}` context syntax
-# from the wrong namespace under `workflow_dispatch` — `inputs.*` is the one that
-# resolves) toggled to the '0'/'1' string publish-pkg-repo.sh's own
-# PUBLISH_REFRESH_LANDING case-statement parses.
+# pkg-republish.yml's Boolean `refresh_landing` input maps to the '0'/'1' string
+# publish-pkg-repo.sh's PUBLISH_REFRESH_LANDING parses; `inputs.*` keeps the Boolean
+# (`github.event.inputs.*` would stringify it, making "false" truthy).
 _PUBLISH_REFRESH_LANDING_VALUE = "${{ inputs.refresh_landing && '1' || '0' }}"
 
 
