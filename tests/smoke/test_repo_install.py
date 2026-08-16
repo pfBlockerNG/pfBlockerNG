@@ -2937,9 +2937,9 @@ def test_edge_rollback_stays_within_the_edge_repository(
 # entry point: EVERY starting state (fresh box, legacy -devel, a Netgate-      #
 # origin canonical install, another channel) folds                            #
 # into ONE idempotent state machine, published by                             #
-# gen_landing.py exactly the way the live website build does it                #
-# (--client-scripts-only, no landing/browse pages). These cases run the        #
-# PUBLISHED form -- the hook embedded, no sibling file on                      #
+# gen_landing.py exactly the way the live website build does it (rendering     #
+# the repo's pkg-site/ tree via --site-tree; issue #2450). These cases run     #
+# the PUBLISHED form -- the hook embedded, no sibling file on                  #
 # disk -- piped into /bin/sh on the guest, the `fetch | sh` shape a user       #
 # actually runs. Each starting state gets its own case, and every case         #
 # proves a second run is a true no-op (conf/hook bytes + installed version     #
@@ -2955,6 +2955,7 @@ def test_edge_rollback_stays_within_the_edge_repository(
 # script in this module is driven — build-repo-portable.py, build-repo.sh — never
 # imported directly).
 GEN_LANDING_PY = Path(__file__).resolve().parents[2] / "scripts" / "gen_landing.py"
+PKG_SITE_DIR = Path(__file__).resolve().parents[2] / "pkg-site"
 
 # The four stdout markers install.sh's converge step (9) guards every mutating
 # pkg call with; a no-op second run must print NONE of them.
@@ -2973,7 +2974,7 @@ def run_channel_installer(
     by ``--channel``.
 
     Generates the self-contained published form the SAME way the live website build
-    does it (``gen_landing.py <site> <base> --client-scripts-only``): the hook is
+    does it (``gen_landing.py <site> <base> --site-tree <pkg-site>``): the hook is
     embedded via the PFB_EMBED splice, install.sh's own ``PFB_BASE_URL`` default
     baked to *base_url* (issue #2416 B3/F3), no sibling file needed on disk. The env
     override below rides alongside it (harmless, keeps the staged/prefix shape a
@@ -2989,8 +2990,8 @@ def run_channel_installer(
     unredirected stdin would consume trailing script bytes). Returns WITHOUT
     raising — the refusal case (case 5 below) asserts on a non-zero exit.
     """
-    # --client-scripts-only always overwrites the same install.sh file, so one
-    # shared site dir per test is fine even across repeated/multi-channel calls.
+    # A full render always overwrites the same install.sh file, so one shared site
+    # dir per test is fine even across repeated/multi-channel calls.
     site_dir = tmp_path / "site"
     site_dir.mkdir(parents=True, exist_ok=True)
     gen = subprocess.run(
@@ -2999,7 +3000,8 @@ def run_channel_installer(
             str(GEN_LANDING_PY),
             str(site_dir),
             base_url,
-            "--client-scripts-only",
+            "--site-tree",
+            str(PKG_SITE_DIR),
         ],
         capture_output=True,
         text=True,
@@ -3008,8 +3010,7 @@ def run_channel_installer(
     )
     if gen.returncode != 0:
         raise RuntimeError(
-            f"gen_landing.py --client-scripts-only failed: rc={gen.returncode}\n"
-            f"stdout:\n{gen.stdout}\nstderr:\n{gen.stderr}"
+            f"gen_landing.py --site-tree failed: rc={gen.returncode}\nstdout:\n{gen.stdout}\nstderr:\n{gen.stderr}"
         )
     local_script = site_dir / "install.sh"
     assert local_script.is_file(), f"gen_landing.py did not publish {local_script.name}"

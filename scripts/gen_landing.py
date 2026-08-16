@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
-# gen_landing.py — generate the human-navigable landing page + per-directory
-# indexes for the self-hosted pkg repository (ADR-17). Run by pfBlockerNG/pkg's
+# gen_landing.py — the pkg-site renderer (issue #2450). Builds the declared site
+# tree (this repo's pkg-site/: install.sh, per-channel recipes, .nojekyll, …),
+# renders the dynamic pages (landing index.html, browse.html, and a browse/<ch>/…
+# view of every catalogue tree), and mirrors the result into the pkg repo's docs/ —
+# write every desired file, delete everything extraneous. Run by pfBlockerNG/pkg's
 # publish.yml AFTER the per-channel catalog trees are built under <site>/.
 #
 # It is the human-facing sibling of build-repo-portable.py: that tool emits the
 # machine catalog pkg(8) fetches; this one renders a styled index over it —
 # channel install cards (stable / testing / edge / nightly), a Version x ABI table
-# read from each .pkg's own manifest, and a clean per-directory listing that shows
-# the package(s) but not the pkg(8) catalog plumbing (meta.conf/packagesite.pkg/...).
+# read from each .pkg's own manifest, and a browse view that shows the package(s)
+# without writing anything inside the publisher-owned catalogue trees.
 #
 # Four-channel catalogue model (issue #2147): every channel serves the ONE canonical
 # package (pfb_pkg.CANONICAL_EMITTED_IDENTITY) from its own <channel>/<varver>/
@@ -15,10 +18,16 @@
 # the legacy two-repo / suffixed-package model (release/nightly repos,
 # -devel/-nightly identities) is retired from this generator.
 #
+# Deterministic: rendering never reads a file's mtime. An artifact's Published/Last
+# modified cell is its manifest `created` annotation, else the embedded build
+# record's `source_date_epoch`, else an em dash — never a filesystem timestamp — so
+# a second render of the same inputs is byte-identical (a NOOP republish never
+# manufactures a commit).
+#
 # Stdlib only + the `zstd` binary (to read a .pkg's +COMPACT_MANIFEST). Dev-only
 # tooling — not shipped in release archives (those contain only src/).
 #
-# Usage: gen_landing.py <site-dir> <pages-base-url>
+# Usage: gen_landing.py <docs-dir> <pages-base-url> --site-tree <pkg-site-dir> [--matrix <file>]
 from __future__ import annotations
 
 import argparse
@@ -26,6 +35,7 @@ import html
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 from collections.abc import Callable, Iterable
@@ -41,21 +51,17 @@ CH_ORDER: list[str] = ["stable", "testing", "edge", "nightly"]
 _CHANNELS: frozenset[str] = frozenset(CH_ORDER)
 # publish-pkg-repo.sh's PUBLISH_STAGE=stage relocates a not-yet-gated publish under
 # this top-level dir (issue #2389) -- files there stay served, but this generator
-# never indexes or links it: it is unreachable from a fresh checkout of the site
-# until promote-pkg-repo.sh's `promote` mode moves it into a real channel, and a
-# concurrent `direct` publish (nightly.yml/pkg-republish.yml, both outside
-# release-published.yml's own concurrency group) could otherwise regenerate this
-# page mid-stage and make the un-gated tree browsable.
+# never indexes, browses, or writes it (CATALOGUE_DIRS below).
 STAGING_TOP_DIR = "staging"
-# Embed markers in install.sh that delimit the hook placeholder body.
+# Publisher-owned top-level prefixes: the renderer may never write, delete, or
+# autoindex anything under one of these (issue #2450) — the one exception is a
+# one-time sweep of a legacy `index.html` leftover (sync_site). Derived from
+# CH_ORDER + STAGING_TOP_DIR so the two never drift apart.
+CATALOGUE_DIRS: tuple[str, ...] = (*CH_ORDER, STAGING_TOP_DIR)
+# Embed markers in a site-tree .sh file that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
 _HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
 _HOOK_HEREDOC = "PFB_HOOK_HEREDOC"
-# Every deterministic client script this generator publishes at the site root: the
-# ONE install.sh (issue #2416 follow-up) — parameterized by --channel, the sole
-# client entry point (subscribe + install + switch + upgrade) for all four
-# channels. The predecessor four-script-per-channel bootstrap is gone.
-CLIENT_SCRIPTS: tuple[str, ...] = ("install.sh",)
 # The source repo a .pkg is built from — base for the per-artifact commit link.
 SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
 
@@ -148,10 +154,12 @@ def _build_record(manifest: dict) -> dict:
     return record if isinstance(record, dict) else {}
 
 
-def artifact_epoch(manifest: dict, mtime: float) -> float:
-    """Resolve the display epoch: ``created``, then ``source_date_epoch``, then mtime.
+def artifact_epoch(manifest: dict) -> float | None:
+    """Resolve the display epoch: ``created``, then ``source_date_epoch``, else None.
 
-    Shared by the landing table (``published_datetime``) and the autoindex
+    Never a file mtime (issue #2450): a rendered page must not depend on when a
+    file happened to be (re)written, or a NOOP republish would still change bytes.
+    Shared by the landing table (``published_datetime``) and the browse view
     (``_display_epoch``) so the two surfaces cannot drift (issue #2401).
     """
     annotations = manifest.get("annotations")
@@ -166,21 +174,35 @@ def artifact_epoch(manifest: dict, mtime: float) -> float:
             return value
         except (TypeError, ValueError, OverflowError, OSError):
             continue  # malformed or out-of-range — try the next source
-    return float(mtime)
+    return None
 
 
-def published_datetime(manifest: dict, mtime_epoch: float) -> str:
-    """The artifact's creation datetime (UTC, minute precision).
+def published_datetime(manifest: dict) -> str:
+    """The artifact's creation datetime (UTC, minute precision), or "" when unknown.
 
     Prefer the ``created`` build annotation — the source commit's committer epoch,
-    baked into the .pkg at build time, so it reflects when the artifact's CODE was
-    created and survives every daily republish/re-download (a nightly is rebuilt and a
-    release asset re-downloaded each run, which would otherwise reset the mtime to
-    'today'). No build site stamps ``created`` today (issue #2375), so next prefer
-    the embedded build record's ``source_date_epoch``. Fall back to the .pkg's mtime
-    only when neither is readable.
+    baked into the .pkg at build time — then the embedded build record's
+    ``source_date_epoch``. Never a file mtime (issue #2450): the caller renders ""
+    through ``_or_dash`` as an em dash, keeping the cell deterministic across every
+    republish instead of showing "today".
     """
-    return artifact_datetime(artifact_epoch(manifest, mtime_epoch))
+    epoch = artifact_epoch(manifest)
+    return artifact_datetime(epoch) if epoch is not None else ""
+
+
+def _display_epoch(path: str) -> float | None:
+    """The epoch a browse-view row shows: a package's embedded creation epoch, else
+    None (issue #2450: never a file mtime). Catalog plumbing and every non-package
+    file always resolve to None (``is_package_file`` is the gate). An unreadable or
+    unannotated package also resolves to None rather than crashing the render.
+    """
+    if not is_package_file(os.path.basename(path)):
+        return None
+    try:
+        manifest = read_compact_manifest(path)
+    except Exception:  # corrupt/foreign .pkg — a listing must never crash the publish
+        return None
+    return artifact_epoch(manifest)
 
 
 def commit_sha(manifest: dict) -> str:
@@ -249,9 +271,9 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
     A package's channel is read from its catalogue placement — the top-level directory
     under <site> (issue #2147) — never from its name. A package sitting under an
     unrecognized top-level dir (a legacy release/nightly-suffixed tree, a stray future
-    dir) is not attributed to any channel and is dropped from this list entirely; it
-    stays reachable via the raw directory autoindex, which walks disk directly and
-    never calls this function.
+    dir, ``staging/``) is not attributed to any channel and is dropped from this list
+    entirely; it stays reachable via the raw catalogue tree, which this generator never
+    autoindexes but never removes either.
     """
     if read_manifest is None:
         read_manifest = read_compact_manifest
@@ -277,7 +299,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "version": ver,
                     "abi": abi,
                     "size": os.path.getsize(path),
-                    "published": published_datetime(man, os.path.getmtime(path)),
+                    "published": published_datetime(man),
                     "commit": commit_sha(man),
                     # PHP/Python the build targets, read from its RUN_DEPENDS — the fallback
                     # for an ABI the matrix doesn't cover (the matrix value wins when joined).
@@ -464,16 +486,32 @@ _CARD_META: dict[str, dict[str, str]] = {
 }
 
 
-def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Callable[[str], str]) -> str:
-    """One channel's install card: audience prose, and — only when published —
-    the ONE-line piped installer recipe and a collapsed manual-conf snippet.
-    An unpublished channel keeps title/badge/blurb/"not yet published" and ships no
-    install recipe or conf snippet (issue #2382).
+def _recipe_text(site_tree: dict[str, tuple[bytes, int]], channel: str) -> str:
+    """The stripped, already-{base}-substituted recipe for *channel* — the ONE-line
+    piped install command a published card's copyable block shows verbatim (issue
+    #2450). Raises when a PUBLISHED channel has no ``recipes/<channel>.sh`` in the
+    built site tree: a missing recipe must fail the build loudly, never render a
+    card with no install command.
+    """
+    key = f"recipes/{channel}.sh"
+    entry = site_tree.get(key)
+    if entry is None:
+        raise ValueError(f"missing site-tree recipe for a published channel: {key}")
+    data, _mode = entry
+    return data.decode("utf-8").strip()
 
-    The recipe is the single piped ``install.sh --channel <channel>`` (issue #2416
-    follow-up) — ONE idempotent script, parameterized by channel, that converges
-    from ANY starting state, so the card no longer needs to distinguish "new" from
-    "existing" installs, nor ship a script per channel.
+
+def _channel_card(
+    channel: str,
+    latest: dict[str, str],
+    conf_fn: Callable[[str], str],
+    site_tree: dict[str, tuple[bytes, int]],
+) -> str:
+    """One channel's install card: audience prose, and — only when published —
+    the ONE-line piped installer recipe (read verbatim from the built site tree's
+    ``recipes/<channel>.sh``) and a collapsed manual-conf snippet. An unpublished
+    channel keeps title/badge/blurb/"not yet published" and ships no install recipe
+    or conf snippet (issue #2382).
     """
     meta = _CARD_META[channel]
     badge = f" {meta['badge']}" if meta["badge"] else ""
@@ -485,7 +523,7 @@ def _channel_card(channel: str, base: str, latest: dict[str, str], conf_fn: Call
     if latest.get(channel):
         body += (
             '<p class="blurb">Install, upgrade, or switch to this channel (any starting state):</p>'
-            f"{_copyable(_esc(f'fetch -qo - {base}/install.sh | sh -s -- --channel {channel}'))}"
+            f"{_copyable(_esc(_recipe_text(site_tree, channel)))}"
             f"{_manual_conf_details(conf_fn, channel)}"
         )
     return f"{body}</div>"
@@ -687,7 +725,7 @@ def _row_html(r: dict, *, with_channel: bool) -> str:
         f"<td><code>{_esc(r['abi'])}</code></td>"
         f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
         f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
-        f'<td class="num">{_esc(r.get("published", ""))}</td>'
+        f'<td class="num">{_or_dash(r.get("published", ""))}</td>'
         f"<td>{commit_cell(r.get('commit', ''))}</td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
     )
@@ -924,11 +962,13 @@ def render_page(
     base: str,
     pkgs: list[dict],
     conf_fn: Callable[[str], str],
+    site_tree: dict[str, tuple[bytes, int]],
     matrix: list[dict] | None = None,
 ) -> str:
-    """Render the root landing page."""
+    """Render the root landing page. ``site_tree`` is the BUILT site tree (issue
+    #2450) — the source of each published channel's recipe text."""
     latest = latest_versions(pkgs)
-    cards = "".join(_channel_card(ch, base, latest, conf_fn) for ch in CH_ORDER)
+    cards = "".join(_channel_card(ch, latest, conf_fn, site_tree) for ch in CH_ORDER)
     eol_block = _eol_versions_html(pkgs, matrix)
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
@@ -955,93 +995,22 @@ def render_page(
     )
 
 
-def _is_staging_path(rel: str) -> bool:
-    """True for ``STAGING_TOP_DIR`` itself or anything under it (issue #2389)."""
-    return rel.replace(os.sep, "/").split("/", 1)[0] == STAGING_TOP_DIR
+def _epoch_cell(epoch: float | None) -> str:
+    """The Last-modified cell for an optional epoch — an em dash when absent (issue
+    #2450: never a file mtime)."""
+    return _or_dash(artifact_datetime(epoch) if epoch is not None else "")
 
 
-def all_dirs(site: str) -> list[str]:
-    """Every directory under ``site`` (relative path, "/"-separated), excluding the site root
-    and the un-gated ``STAGING_TOP_DIR`` subtree, sorted. Used to emit a browsable autoindex
-    at EVERY level (GitHub Pages has no autoindex)."""
-    out = [
-        os.path.relpath(d, site)
-        for d, _x, _f in os.walk(site)
-        if os.path.relpath(d, site) != "." and not _is_staging_path(os.path.relpath(d, site))
-    ]
-    return sorted(out)
-
-
-# Generated HTML + Pages plumbing that an autoindex listing hides (it is not repository content).
-_INDEX_HIDDEN = frozenset({"index.html", "browse.html", ".nojekyll"})
-
-
-def _dir_entries(site: str, rel: str) -> tuple[list[str], list[tuple[str, int, float]]]:
-    """The immediate children of ``site/rel``: (subdir names, file (name, size, mtime) tuples),
-    each sorted, with the generated index pages + Pages plumbing hidden."""
-    d = os.path.join(site, rel) if rel else site
-    subdirs: list[str] = []
-    files: list[tuple[str, int, float]] = []
-    for name in sorted(os.listdir(d)):
-        if name in _INDEX_HIDDEN:
-            continue
-        p = os.path.join(d, name)
-        if os.path.isdir(p):
-            subdirs.append(name)
-        else:
-            st = os.stat(p)
-            files.append((name, st.st_size, _display_epoch(p, st.st_mtime)))
-    return subdirs, files
-
-
-def _display_epoch(path: str, mtime: float) -> float:
-    """The epoch a listing row shows: a package's embedded creation epoch, else mtime.
-
-    Catalog plumbing is not a package: ``is_package_file`` keeps those rows on
-    mtime (issue #2401). Unreadable or unannotated packages keep the mtime.
-    """
-    if not is_package_file(os.path.basename(path)):
-        return mtime
-    try:
-        manifest = read_compact_manifest(path)
-    except Exception:  # corrupt/foreign .pkg — a listing must never crash the publish
-        return mtime
-    return artifact_epoch(manifest, mtime)
-
-
-def render_autoindex(
-    rel: str, subdirs: list[str], files: list[tuple[str, int, float]], *, is_root: bool = False
-) -> str:
-    """A FreeBSD/Debian-style directory listing for ``rel`` (the browse root when ``is_root``).
-
-    Subdirs link to ``./<name>/`` and files to ``./<name>`` (the ``./`` prefix keeps a colon-bearing
-    ABI segment like ``FreeBSD:15:amd64`` a relative path, not a URI scheme — RFC 3986 §4.2). A
-    "Parent Directory" row (``../``) is shown except at the browse root."""
-    title = f"/{rel}" if rel else "/"
-    rows = []
-    if not is_root:
-        rows.append(
-            '<tr><td><a href="../">../</a></td><td class="num">&mdash;</td><td class="num">Parent Directory</td></tr>'
-        )
-    for name in subdirs:
-        rows.append(
-            f'<tr><td><a href="./{_esc(name)}/">{_esc(name)}/</a></td>'
-            '<td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
-        )
-    for name, size, mtime in files:
-        rows.append(
-            f'<tr><td><a href="./{_esc(name)}">{_esc(name)}</a></td>'
-            f'<td class="num">{_esc(artifact_datetime(mtime))}</td>'
-            f'<td class="num">{_esc(human_size(size))}</td></tr>'
-        )
-    # "repository home" climbs to the site root (which serves the human landing page).
-    home = "./" if is_root else "../" * (rel.count("/") + 1)
+def _render_listing_html(title: str, home_href: str, rows: list[str]) -> str:
+    """The shared directory-listing page shell — the landing/browse chrome around a
+    Name | Last modified | Size table, used by both browse.html and every
+    browse/<ch>/… page."""
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>pfBlockerNG pkg — Index of {_esc(title)}</title><style>{_CSS}</style></head>"
         f'<body><div class="wrap"><header><h1>Index of {_esc(title)}</h1>'
-        f'<p><a href="{_esc(home)}">&larr; pfBlockerNG repository home</a></p></header>'
+        f'<p><a href="{_esc(home_href)}">&larr; pfBlockerNG repository home</a></p></header>'
         '<div class="tablewrap"><table class="autoindex"><thead><tr>'
         "<th>Name</th><th>Last modified</th><th>Size</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
@@ -1051,46 +1020,100 @@ def render_autoindex(
     )
 
 
-def _embed_hook(script_text: str, hook_text: str) -> str:
-    """Splice *hook_text* into *script_text* between the PFB_EMBED_HOOK markers.
-
-    The stub body (everything between the BEGIN and END marker lines, inclusive) is
-    replaced with a single-quoted heredoc that prints the hook verbatim — no variable
-    or command expansion in the emitted content, regardless of what the hook contains.
-    The resulting script is self-contained and safe to pipe into ``sh``. Used by
-    ``write_install_script`` — splices directly into install.sh's own text (the
-    PFB_EMBED_HOOK markers live in install.sh itself, issue #2416 follow-up: the
-    earlier per-channel-stub + install-common.sh split, and its extra PFB_EMBED_COMMON
-    splice, are gone).
+def _root_files(built: dict[str, tuple[bytes, int]]) -> list[str]:
+    """The site-tree's own root-level file names, sorted; the generated pages are
+    hidden (not repository content). Sourced from ``built`` — never a disk listing
+    — since sync_site's own contract makes the site tree's root files the ONLY
+    things that can ever survive at the docs root besides a catalogue dir (issue
+    #2450): reading disk here would see this run's write only after it happens,
+    an ordering hazard that broke determinism (a rendered page must reflect the
+    tree being written THIS run, not whatever a previous run left behind).
     """
-    lines = script_text.splitlines(keepends=True)
-    begin_idx = next(
-        (i for i, ln in enumerate(lines) if _HOOK_EMBED_BEGIN in ln),
-        None,
-    )
-    end_idx = next(
-        (i for i, ln in enumerate(lines) if _HOOK_EMBED_END in ln),
-        None,
-    )
-    if begin_idx is None or end_idx is None or begin_idx >= end_idx:
-        raise ValueError(f"script is missing the embed markers ({_HOOK_EMBED_BEGIN!r} / {_HOOK_EMBED_END!r})")
-    if _HOOK_HEREDOC in hook_text:
-        raise ValueError(
-            f"hook text contains the heredoc delimiter {_HOOK_HEREDOC!r} — choose a different delimiter or fix the hook"
+    hidden = {"index.html", "browse.html", ".nojekyll"}
+    return sorted(name for name in built if "/" not in name and name not in hidden)
+
+
+def render_browse_root(docs: str, built: dict[str, tuple[bytes, int]]) -> str:
+    """docs/browse.html — the top-level entry point: one row per present catalogue
+    channel (CH_ORDER order; ``staging`` is never listed, issue #2389) linking into
+    its own browse/<ch>/ page, then every root-level site-tree file linking directly.
+    """
+    rows: list[str] = []
+    for ch in CH_ORDER:
+        if os.path.isdir(os.path.join(docs, ch)):
+            esc = _esc(ch)
+            rows.append(
+                f'<tr><td><a href="./browse/{esc}/">{esc}/</a></td>'
+                '<td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
+            )
+    for name in _root_files(built):
+        data, _mode = built[name]
+        esc = _esc(name)
+        rows.append(
+            f'<tr><td><a href="./{esc}">{esc}</a></td>'
+            f'<td class="num">{_epoch_cell(None)}</td>'
+            f'<td class="num">{_esc(human_size(len(data)))}</td></tr>'
         )
-    # Build the replacement: keep the BEGIN marker line, inject the heredoc, keep END.
-    heredoc_lines = [
-        lines[begin_idx],
-        f"    cat <<'{_HOOK_HEREDOC}'\n",
-        hook_text if hook_text.endswith("\n") else hook_text + "\n",
-        f"{_HOOK_HEREDOC}\n",
-        lines[end_idx],
-    ]
-    return "".join(lines[:begin_idx] + heredoc_lines + lines[end_idx + 1 :])
+    return _render_listing_html("/", "./", rows)
+
+
+def _catalogue_subdirs(docs: str, channel: str) -> list[str]:
+    """Every docs-relative dir at or below <docs>/<channel> — the channel root
+    itself plus each directory nested under it, sorted, "/"-separated."""
+    root = os.path.join(docs, channel)
+    out = [channel]
+    for dirpath, dirs, _files in os.walk(root):
+        for d in dirs:
+            rel = os.path.relpath(os.path.join(dirpath, d), docs).replace(os.sep, "/")
+            out.append(rel)
+    return sorted(out)
+
+
+def _render_catalogue_browse_page(docs: str, full_rel: str) -> str:
+    """One ``browse/<full_rel>/index.html`` page — ``full_rel`` is ``"<channel>"``
+    or ``"<channel>/<sub>/…"``, a real directory under docs/. Subdirs link within
+    the browse mirror (``./<name>/``); files link OUT into the real catalogue tree
+    via a climb-to-root-then-descend relative path, since the browse tree and the
+    catalogue tree are siblings under docs/, not the same directory (issue #2450).
+    """
+    src_dir = os.path.join(docs, *full_rel.split("/"))
+    depth = full_rel.count("/") + 2  # hops from browse/<full_rel>/ up to the docs root
+    climb = "../" * depth
+    is_channel_root = "/" not in full_rel
+
+    rows: list[str] = []
+    parent_href = f"{climb}browse.html" if is_channel_root else "../"
+    rows.append(
+        f'<tr><td><a href="{_esc(parent_href)}">../</a></td>'
+        '<td class="num">&mdash;</td><td class="num">Parent Directory</td></tr>'
+    )
+
+    subdirs: list[str] = []
+    files: list[str] = []
+    for name in sorted(os.listdir(src_dir)):
+        if name == "index.html":
+            continue  # a legacy autoindex leftover — never repository content (issue #2450)
+        (subdirs if os.path.isdir(os.path.join(src_dir, name)) else files).append(name)
+
+    for name in subdirs:
+        esc = _esc(name)
+        rows.append(
+            f'<tr><td><a href="./{esc}/">{esc}/</a></td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
+        )
+    for name in files:
+        path = os.path.join(src_dir, name)
+        esc = _esc(name)
+        target = f"{climb}{full_rel}/{name}"
+        rows.append(
+            f'<tr><td><a href="{_esc(target)}">{esc}</a></td>'
+            f'<td class="num">{_epoch_cell(_display_epoch(path))}</td>'
+            f'<td class="num">{_esc(human_size(os.path.getsize(path)))}</td></tr>'
+        )
+    return _render_listing_html(f"/{full_rel}", climb, rows)
 
 
 # The exact hardcoded PFB_BASE_URL default line install.sh's repository copy
-# carries — replaced with the SITE's own base at publish time (issues #2416 /
+# carries — replaced with the SITE's own base at render time (issues #2416 /
 # B3/F3) so a fork or staged prefix ships an installer that resolves against
 # itself without requiring every user to override PFB_BASE_URL by hand.
 _BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"'
@@ -1134,33 +1157,141 @@ def _bake_base_url(script_text: str, base: str) -> str:
     return script_text.replace(_BASE_URL_DEFAULT_LINE, replacement, 1)
 
 
-def write_install_script(site: str, base: str) -> list[str]:
-    """Write a self-contained ``install.sh`` to *site*/install.sh — the SOLE client
-    entry point for all four channels (issue #2416 follow-up): subscribe + install +
-    switch + upgrade, one idempotent script, parameterized by ``--channel``.
+def _embed_hook(script_text: str, hook_text: str) -> str:
+    """Splice *hook_text* into *script_text* between the PFB_EMBED_HOOK markers.
 
-    The repository copy lives at ``<scripts_dir>/install.sh`` and
-    ``<scripts_dir>/rc.d/`` holds the boot hook, where ``scripts_dir`` is this
-    file's own directory (gen_landing.py lives directly in ``scripts/``). The
-    published script is built in two splices: ``_bake_base_url`` points install.sh's
-    own ``PFB_BASE_URL`` default at *base*, then ``_embed_hook`` replaces its
-    ``pfb_emit_embedded_hook`` stub body with the boot hook via a single-quoted
-    heredoc — so the result needs no sibling file when piped into ``sh``. Returns
-    the file name written, e.g. ``["install.sh"]``.
+    The stub body (everything between the BEGIN and END marker lines, inclusive) is
+    replaced with a single-quoted heredoc that prints the hook verbatim — no variable
+    or command expansion in the emitted content, regardless of what the hook contains.
+    The resulting script is self-contained and safe to pipe into ``sh``. Used by
+    ``build_site_tree`` on every ``.sh`` site-tree file carrying the markers (today,
+    only install.sh) — the PFB_EMBED_HOOK markers live in the script's own text.
+    """
+    lines = script_text.splitlines(keepends=True)
+    begin_idx = next(
+        (i for i, ln in enumerate(lines) if _HOOK_EMBED_BEGIN in ln),
+        None,
+    )
+    end_idx = next(
+        (i for i, ln in enumerate(lines) if _HOOK_EMBED_END in ln),
+        None,
+    )
+    if begin_idx is None or end_idx is None or begin_idx >= end_idx:
+        raise ValueError(f"script is missing the embed markers ({_HOOK_EMBED_BEGIN!r} / {_HOOK_EMBED_END!r})")
+    if _HOOK_HEREDOC in hook_text:
+        raise ValueError(
+            f"hook text contains the heredoc delimiter {_HOOK_HEREDOC!r} — choose a different delimiter or fix the hook"
+        )
+    # Build the replacement: keep the BEGIN marker line, inject the heredoc, keep END.
+    heredoc_lines = [
+        lines[begin_idx],
+        f"    cat <<'{_HOOK_HEREDOC}'\n",
+        hook_text if hook_text.endswith("\n") else hook_text + "\n",
+        f"{_HOOK_HEREDOC}\n",
+        lines[end_idx],
+    ]
+    return "".join(lines[:begin_idx] + heredoc_lines + lines[end_idx + 1 :])
+
+
+def build_site_tree(tree: str, base: str) -> dict[str, tuple[bytes, int]]:
+    """Build the desired site-tree files from the declared source ``tree`` (this
+    repo's ``pkg-site/``, issue #2450): every regular file under it (symlinks
+    followed, dotfiles included), keyed by its "/"-relative path.
+
+    A ``.sh`` file gets ``_bake_base_url`` applied when install.sh's default-URL
+    line occurs (raising on more than one occurrence — a drifted script), then
+    ``_embed_hook`` applied when the hook markers occur — today only ``install.sh``
+    matches either. Every file whose bytes decode as UTF-8 then gets its literal
+    ``{base}`` token substituted with *base* (the site's channel recipes use it;
+    nothing else in the tree carries the token, so this is a no-op elsewhere).
+    The source file's permission bits (the exec bit) are preserved.
     """
     scripts_dir = os.path.dirname(os.path.abspath(__file__))
     hook_path = os.path.join(scripts_dir, "rc.d", "pfblockerng_repo_generate.sh")
-    with open(hook_path) as fh:
-        hook_text = fh.read()
-    with open(os.path.join(scripts_dir, "install.sh")) as fh:
-        script_text = fh.read()
-    script_text = _bake_base_url(script_text, base)
-    out_text = _embed_hook(script_text, hook_text)
-    out_path = os.path.join(site, "install.sh")
-    with open(out_path, "w") as fh:
-        fh.write(out_text)
-    os.chmod(out_path, 0o755)
-    return ["install.sh"]
+    out: dict[str, tuple[bytes, int]] = {}
+    for dirpath, _dirs, files in os.walk(tree, followlinks=True):
+        for fname in files:
+            path = os.path.join(dirpath, fname)
+            rel = os.path.relpath(path, tree).replace(os.sep, "/")
+            with open(path, "rb") as fh:
+                data = fh.read()
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            if fname.endswith(".sh"):
+                text = data.decode("utf-8")
+                if text.count(_BASE_URL_DEFAULT_LINE) >= 1:
+                    text = _bake_base_url(text, base)
+                if _HOOK_EMBED_BEGIN in text:
+                    with open(hook_path) as hf:
+                        hook_text = hf.read()
+                    text = _embed_hook(text, hook_text)
+                data = text.encode("utf-8")
+            try:
+                text = data.decode("utf-8")
+            except UnicodeDecodeError:
+                pass  # binary file — copied verbatim, no {base} substitution possible
+            else:
+                data = text.replace("{base}", base).encode("utf-8")
+            out[rel] = (data, mode)
+    return out
+
+
+def _catalogue_prefix(rel: str) -> str | None:
+    """The ``CATALOGUE_DIRS`` entry *rel* sits under, or None."""
+    seg = rel.split("/", 1)[0]
+    return seg if seg in CATALOGUE_DIRS else None
+
+
+def _prune_empty_dirs(root: str) -> None:
+    """Remove every directory under *root* left empty by ``sync_site``'s deletions
+    (never *root* itself). Bottom-up, re-checking live directory contents at each
+    step so a cascade (a leaf's removal emptying its parent) prunes fully."""
+    for dirpath, _dirs, _files in os.walk(root, topdown=False):
+        if dirpath == root:
+            continue
+        if not os.listdir(dirpath):
+            os.rmdir(dirpath)
+
+
+def sync_site(docs: str, desired: dict[str, tuple[bytes, int]]) -> tuple[list[str], list[str]]:
+    """Mirror *desired* into *docs*: write every desired file, then delete whatever
+    under docs is neither under a ``CATALOGUE_DIRS`` prefix nor in *desired* — plus a
+    one-time sweep of a legacy ``index.html`` leftover under a catalogue prefix
+    (issue #2450). Every OTHER file under a catalogue prefix is left untouched: the
+    assert below makes the renderer unable to write one from *desired* in the first
+    place. Returns ``(written, deleted)``, each the sorted "/"-relative paths.
+    """
+    for rel in desired:
+        if _catalogue_prefix(rel) is not None:
+            raise ValueError(f"desired site path {rel!r} sits under a catalogue-owned prefix — refusing to write")
+
+    for rel, (data, mode) in desired.items():
+        out_path = os.path.join(docs, *rel.split("/"))
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "wb") as fh:
+            fh.write(data)
+        os.chmod(out_path, mode)
+
+    deleted: list[str] = []
+    for dirpath, _dirs, files in os.walk(docs, followlinks=False):
+        rel_dir = os.path.relpath(dirpath, docs).replace(os.sep, "/")
+        rel_dir = "" if rel_dir == "." else rel_dir
+        for fname in files:
+            full = os.path.join(dirpath, fname)
+            if os.path.islink(full):
+                continue  # never follow/touch a symlink inside docs
+            rel = f"{rel_dir}/{fname}" if rel_dir else fname
+            prefix = _catalogue_prefix(rel)
+            if prefix is not None:
+                if fname == "index.html":
+                    os.remove(full)
+                    deleted.append(rel)
+                continue  # every other catalogue-owned file is untouched
+            if rel not in desired:
+                os.remove(full)
+                deleted.append(rel)
+
+    _prune_empty_dirs(docs)
+    return sorted(desired), sorted(deleted)
 
 
 def _conf_via_portable(base: str, channel: str) -> str:
@@ -1191,71 +1322,56 @@ def _conf_via_portable(base: str, channel: str) -> str:
     return out.stdout.rstrip("\n")
 
 
-def write_site(site: str, base: str, matrix: list[dict] | None = None) -> int:
-    """Generate the human landing page (root index.html), a browsable autoindex at EVERY
-    directory level (so the whole tree is folder-navigable on GitHub Pages, which has no
-    autoindex), and a root ``browse.html`` entry point the landing page links to. Returns the
-    count of pfBlockerNG packages indexed — published dependencies are browsable but not
-    ours to count (issue #1863)."""
+def write_site(site: str, base: str, site_tree: str, matrix: list[dict] | None = None) -> int:
+    """Render the pkg-site tree onto *site* (docs/) and mirror it there (issue
+    #2450): build the site tree from *site_tree*, collect the published packages,
+    render the landing page + the browse view (root + every catalogue dir, never
+    writing inside a catalogue tree), then ``sync_site``. Returns the count of
+    pfBlockerNG packages indexed — published dependencies are browsable but not
+    ours to count (issue #1863).
+    """
     base = base.rstrip("/")
     pkgs = collect_packages(site)
+    built = build_site_tree(site_tree, base)
 
     def conf_fn(channel: str) -> str:
         return _conf_via_portable(base, channel)
 
-    # The human landing page stays the site root; browse.html is the directory-style entry.
-    with open(os.path.join(site, "index.html"), "w") as fh:
-        fh.write(render_page(base, pkgs, conf_fn, matrix))
-    root_subdirs, root_files = _dir_entries(site, "")
-    root_subdirs = [d for d in root_subdirs if d != STAGING_TOP_DIR]
-    with open(os.path.join(site, "browse.html"), "w") as fh:
-        fh.write(render_autoindex("", root_subdirs, root_files, is_root=True))
-    # An autoindex index.html in every directory (intermediate + leaf), so each level is browsable.
-    for rel in all_dirs(site):
-        subdirs, files = _dir_entries(site, rel)
-        with open(os.path.join(site, rel, "index.html"), "w") as fh:
-            fh.write(render_autoindex(rel, subdirs, files))
-    # Publish the ONE deterministic client script — the ONLY client entry point
-    # (issue #2416 follow-up): a self-contained install.sh, parameterized by
-    # --channel.
-    write_install_script(site, base)
+    desired = dict(built)
+    # A rendered page always wins over a same-named site-tree file (H4, issue #2450).
+    desired["index.html"] = (render_page(base, pkgs, conf_fn, built, matrix).encode(), 0o644)
+    desired["browse.html"] = (render_browse_root(site, built).encode(), 0o644)
+    for ch in CH_ORDER:
+        if not os.path.isdir(os.path.join(site, ch)):
+            continue
+        for full_rel in _catalogue_subdirs(site, ch):
+            page = _render_catalogue_browse_page(site, full_rel)
+            desired[f"browse/{full_rel}/index.html"] = (page.encode(), 0o644)
+
+    written, deleted = sync_site(site, desired)
+    print(
+        f"pkg-site: {len(written)} file(s) written, {len(deleted)} removed; {len(pkgs)} pfBlockerNG package(s) indexed"
+    )
     return len(pkgs)
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Generate the pkg-repo landing page + per-dir indexes.")
-    ap.add_argument("site", help="the built catalog tree (output of build-repo-portable.py)")
+    ap = argparse.ArgumentParser(description="Render the pkg-site tree onto the pkg repo's docs/ and mirror it there.")
+    ap.add_argument("site", help="the docs/ tree to render into (the built catalog trees already live there)")
     ap.add_argument("base_url", help="the Pages base URL, e.g. https://pfblockerng.github.io/pkg")
+    ap.add_argument("--site-tree", required=True, help="the pkg-site/ source tree to render (this repo's pkg-site/)")
     ap.add_argument(
         "--matrix",
         help="supported-versions build matrix JSON (list of {abi, pfsense_version, variant, "
         "php_version, py_flavor}) — splits the packages table by pfSense edition. Omitted -> "
         "a single 'Other builds' table from manifest data.",
     )
-    ap.add_argument(
-        "--client-scripts-only",
-        action="store_true",
-        help=f"write only the deterministic client scripts ({', '.join(CLIENT_SCRIPTS)}); "
-        "no landing/browse/autoindex pages. Used by publish-pkg-repo.sh's catalogue-NOOP "
-        "path (issue #2408) — the pages embed a generation timestamp, so writing them "
-        "there would manufacture a commit on every run.",
-    )
     args = ap.parse_args(argv)
-    if args.client_scripts_only:
-        if args.matrix:
-            ap.error("--client-scripts-only writes no landing page — --matrix cannot apply")
-        write_install_script(args.site, args.base_url)
-        print(f"client scripts written: {', '.join(CLIENT_SCRIPTS)}")
-        return 0
     matrix = None
     if args.matrix:
         with open(args.matrix) as fh:
             matrix = json.load(fh)
-    n = write_site(args.site, args.base_url, matrix)
-    print(
-        f"landing page + browse.html + {len(all_dirs(args.site))} dir index(es) written; "
-        f"{n} pfBlockerNG package(s) indexed"
-    )
+    write_site(args.site, args.base_url, args.site_tree, matrix)
     return 0
 
 
