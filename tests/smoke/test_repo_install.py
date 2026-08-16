@@ -317,9 +317,8 @@ _PKG_REPO_ABORT_RC = 134
 def pkg_repo_index(vm: SmokeVM, repo_dir: str) -> None:
     """``pkg repo <dir>`` on the guest — no key argument => an unsigned catalog.
 
-    Retries ONCE, and only when ``pkg`` itself died on SIGABRT (issue #2447): that is a
-    libpkg crash on an input the very next run indexes cleanly (replayed on a leased box:
-    same ref, same case, green), not a property of the catalog under test. Any other
+    Retries ONCE, and only when ``pkg`` itself died on SIGABRT (issue #2447): a
+    transient libpkg crash, not a property of the catalog under test. Any other
     non-zero exit raises on the first try, exactly as before.
     """
     remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
@@ -351,6 +350,9 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
     catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the
     live half of the build-side premise.
     """
+    # The script's own `pkg repo` runs un-retried (not routed through pkg_repo_index): the
+    # #2447 abort has only ever been seen on the direct call, and retrying here would mean
+    # re-running the whole script under test.
     real_varver = _box_real_varver(vm)
     _ssh_check(vm, "/bin/rm", "-rf", GUEST_PKG_IN_DIR, SCRIPT_REPO_ROOT)
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_PKG_IN_DIR, GUEST_SPIKE_DIR)
