@@ -743,6 +743,26 @@ JSON
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=promote, before any git call'
+    export PUBLISH_REFRESH_LANDING=1
+    export PUBLISH_STAGE=promote
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=discard, before any git call'
+    export PUBLISH_REFRESH_LANDING=1
+    export PUBLISH_STAGE=discard
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
   It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_KIND=nightly, before any git call'
     nightly_env
     export PUBLISH_REFRESH_LANDING=1
@@ -766,7 +786,10 @@ JSON
   # replaced by the single --channel install.sh, issue #2416 follow-up) must be
   # swept off an already-live site by a republish -----------------------------
 
-  It 'retired: a catalogue+script NOOP still ships a commit that removes retired client scripts'
+  It 'retired: PUBLISH_REFRESH_LANDING=1 sweeps retired client scripts into the landing-regen NOOP commit'
+    # The sweep only ever rides a commit that ALSO regenerates the landing page —
+    # the knob-off NOOP path below never sweeps (the live index.html still links
+    # the retired scripts; a knob-off sweep would 404 it without a regen).
     write_client_script_stubs
     # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
     ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
@@ -775,15 +798,43 @@ JSON
     printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
     ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
         && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
+    export PUBLISH_REFRESH_LANDING=1
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0
     The output should include 'ADVANCE'
     The stderr should include 'main'
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    The variable committed should include 'docs/add-repo.sh'
+    The variable committed should include 'docs/migrate-channel.sh'
+    The variable committed should include 'docs/index.html'
     The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
     The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
+  End
+
+  It 'retired: PUBLISH_REFRESH_LANDING unset leaves retired scripts in place on the catalogue+script NOOP — no landing regen, no 404'
+    # The retired-script sweep must never run without a landing regen in the
+    # same commit — the live index.html still links docs/add-repo.sh, so a
+    # knob-off sweep would 404 it. Knob unset (default '0') on an otherwise
+    # true NOOP must leave the retired scripts untouched and commit nothing.
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+    The path "${base}/pkg-repo/docs/add-repo.sh" should be exist
+    The path "${base}/pkg-repo/docs/migrate-channel.sh" should be exist
   End
 
   It 'retired: a real publish also removes retired client scripts still present on the site'
@@ -1243,6 +1294,34 @@ HOOK
     The variable out should include 'noop=true'
   End
 
+  It 's4b: stage full no-op with retired scripts present leaves them untouched — PUBLISH_REFRESH_LANDING is always 0 under stage'
+    # PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=stage (see the
+    # refresh-landing rejection examples above), so the knob is always '0' here
+    # — the shared no-op branch must never sweep retired scripts on a stage run
+    # either.
+    export PUBLISH_STAGE=stage
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    (cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main)
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
+    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export FAKE_MODE=noop
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+    The path "${base}/pkg-repo/docs/add-repo.sh" should be exist
+    The path "${base}/pkg-repo/docs/migrate-channel.sh" should be exist
+  End
+
   It 's5: stage removes a stale docs/staging tree from an earlier crashed run in the same commit as the new one'
     export PUBLISH_STAGE=stage
     mkdir -p "${base}/pkg-repo/docs/staging/OLD/edge/ce-2.8"
@@ -1373,6 +1452,29 @@ HOOK
     porcelain="$(git_fixture -C "${base}/pkg-repo" status --porcelain)"
     The variable porcelain should include 'README.txt'
     The variable porcelain should include 'debris.txt'
+  End
+
+  It 'p1b: promote also sweeps retired client scripts still present on the live site'
+    # promote runs landing_regen_and_stage (it IS a landing regen — the step
+    # that goes live), so the retired-script sweep belongs there too, same as
+    # the direct real-publish path.
+    seed_staged_tree
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
+    export PUBLISH_STAGE=promote
+    export STAGING_PREFIX=staging/10-1
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should include 'docs/add-repo.sh'
+    The variable committed should include 'docs/migrate-channel.sh'
+    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
+    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
+    The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
   End
 
   It 'p2: promote never invokes the publisher'
