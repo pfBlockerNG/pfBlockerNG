@@ -118,6 +118,22 @@ ROW_ROUTE_ONLY_17: dict[str, object] = {
     "role": "route-only",
 }
 
+# A route-only row on FreeBSD 16 — lets a dependency's ABI clear axis 9 (S1's own
+# "ABI matches SOME ROUTE row" check) via a row OTHER than the one its own suffix
+# names, isolating publish_release's own suffix-row ABI cross-check (issue #2468).
+ROW_ROUTE_ONLY_16: dict[str, object] = {
+    "pfsense_version": "99.0",
+    "channel": "CE",
+    "freebsd_version": "16.0-RELEASE",
+    "freebsd_major": "16",
+    "php_version": "8.3",
+    "py_flavor": "py311",
+    "variant": "CE",
+    "status": "active",
+    "extra_pkgs": [],
+    "role": "route-only",
+}
+
 _THREE_ROWS = (ROW_CE, ROW_PLUS_03, ROW_PLUS_07)
 
 
@@ -655,49 +671,12 @@ class TargetResolutionTests(_TempDirTestCase):
         self.assertIn("same varver", str(ctx.exception))
 
     @_requires_engine
-    def test_two_dependency_assets_same_canonical_name_different_bytes_rejected(self) -> None:
-        """A tagged run declares its dependency assets per row, so two rows can both
-        carry name-version X. The same artifact renamed twice is legitimate — but
-        DIFFERENT bytes under one canonical name must fail closed: the per-target
-        asset map keys by canonical name, and collapsing the pair last-wins would
-        silently publish only the later asset with no conflict check at all
-        (issue #2231)."""
-        assets_dir = self.new_assets_dir()
-        digests = _populate_assets_dir(
-            assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
-        )
-        twin_digests: list[str] = []
-        for row, filler in ((ROW_PLUS_03_TWIN, b"built-by-leg-one"), (ROW_PLUS_07_TWIN, b"built-by-leg-two")):
-            declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
-            _path, digest = _wrap_dependency_pkg(
-                assets_dir,
-                name="py311-twin",
-                version="1.0.0",
-                abi="FreeBSD:16:*",
-                local_name=declared,
-                payload={"filler.bin": filler},
-            )
-            digests[declared] = digest
-            twin_digests.append(digest)
-        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
-
-        with self.assertRaises(pr.DestinationConflictError) as ctx:
-            _run(
-                pkg_repo=self.pkg_repo,
-                assets_dir=assets_dir,
-                rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN),
-                tag="v4.0.0.b1",
-            )
-        self.assertIn("different bytes", str(ctx.exception))
-        # The operator-facing message names both builds — pin both digests.
-        for digest in twin_digests:
-            self.assertIn(f"sha256={digest}", str(ctx.exception))
-
-    @_requires_engine
     def test_same_dependency_renamed_per_row_with_identical_bytes_publishes(self) -> None:
-        """The legitimate twin of the rejection above: ONE artifact attached under two
-        per-row declared names (byte-identical) deduplicates and publishes into every
-        matching varver — never a conflict."""
+        """The byte-identical twin of DependencyPlaceIfMissingTests's own
+        same-major/different-bytes case: ONE artifact attached under two per-row
+        declared names (byte-identical) also publishes into every matching varver —
+        per-suffix routing (issue #2468) sends each to its own row's varver either
+        way; this pins the identical-bytes case never regresses alongside it."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(
             assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
@@ -797,6 +776,234 @@ class DestinationConflictTests(_TempDirTestCase):
         self.assertIn(str(published), message)
         self.assertIn("pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg", message)
         self.assertEqual(published.read_bytes(), original_bytes)  # never overwritten
+
+
+# --------------------------------------------------------------------------- #
+# issue #2468 — dependency .pkg identity = filename: place-if-missing, never
+# byte-compared or overwritten. Canonical packages keep the strict conflict check.
+# --------------------------------------------------------------------------- #
+
+
+class DependencyPlaceIfMissingTests(_TempDirTestCase):
+    @_requires_engine
+    def test_stale_destination_dependency_bytes_untouched_canonical_published(self) -> None:
+        """RED CANARY (issue #2468): a destination already holding a byte-different
+        same-name dependency .pkg (e.g. left over from an older release) must never
+        block this run — the dependency's filename IS its identity; publishers place
+        it only when missing and never compare or overwrite it. The canonical
+        package still publishes normally alongside the untouched stale dependency."""
+        assets_dir = self.new_assets_dir()
+        digests = _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        declared = _dependency_declared_name(name="py311-charset-normalizer", version="3.4.0", row=ROW_CE)
+        _path, digest = _wrap_dependency_pkg(
+            assets_dir,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name=declared,
+            payload={"filler.bin": b"incoming-build"},
+        )
+        digests[declared] = digest
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+
+        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        stale_dir = self.tmp / "stale-dep-seed"
+        stale_dir.mkdir()
+        stale_path, _stale_digest = _wrap_dependency_pkg(
+            stale_dir,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name="py311-charset-normalizer-3.4.0.pkg",
+            payload={"filler.bin": b"stale-build-from-an-older-release"},
+        )
+        stale_bytes = stale_path.read_bytes()
+        catalogue_dir.mkdir(parents=True)
+        (catalogue_dir / "py311-charset-normalizer-3.4.0.pkg").write_bytes(stale_bytes)
+
+        report = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            tag="v4.0.0.b1",
+        )
+
+        self.assertFalse(report.noop)
+        self.assertTrue((catalogue_dir / "pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg").is_file())
+        self.assertEqual((catalogue_dir / "py311-charset-normalizer-3.4.0.pkg").read_bytes(), stale_bytes)
+
+    @_requires_engine
+    def test_two_same_major_rows_each_own_dep_asset_lands_only_in_own_varver(self) -> None:
+        """Two same-major rows (plus-26.03 + plus-26.07, both FreeBSD 16) each carry
+        their OWN byte-different dep asset under the identical canonical name
+        (py311-twin-1.0.0.pkg). Per-suffix routing (issue #2468) sends each asset to
+        the varver of its OWN -<Variant>-<pfsense_version> suffix only — never by
+        same-major ABI match against every declaring row — so the two never collide
+        and the run succeeds, each varver holding only its own row's bytes."""
+        assets_dir = self.new_assets_dir()
+        digests = _populate_assets_dir(
+            assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
+        )
+        twin_bytes: dict[str, bytes] = {}
+        for row, filler in ((ROW_PLUS_03_TWIN, b"built-by-leg-one"), (ROW_PLUS_07_TWIN, b"built-by-leg-two")):
+            declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
+            path, digest = _wrap_dependency_pkg(
+                assets_dir,
+                name="py311-twin",
+                version="1.0.0",
+                abi="FreeBSD:16:*",
+                local_name=declared,
+                payload={"filler.bin": filler},
+            )
+            digests[declared] = digest
+            twin_bytes[str(row["pfsense_version"])] = path.read_bytes()
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+
+        report = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN),
+            tag="v4.0.0.b1",
+        )
+
+        self.assertFalse(report.noop)
+        for row in (ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN):
+            row_varver = _ENGINE.build_repo_portable.catalog_name_from_version(row["pfsense_version"], row["variant"])
+            dep_path = self.pkg_repo / "docs" / "edge" / row_varver / "py311-twin-1.0.0.pkg"
+            self.assertTrue(dep_path.is_file(), row_varver)
+            self.assertEqual(dep_path.read_bytes(), twin_bytes[str(row["pfsense_version"])], row_varver)
+
+    @_requires_engine
+    def test_dependency_abi_mismatching_its_suffix_row_major_rejected(self) -> None:
+        """A dependency asset whose OWN suffix names a valid canonical target row,
+        but whose manifest ABI does not match that row's FreeBSD major, is rejected
+        — per-suffix routing never falls back to matching a DIFFERENT row by ABI.
+        ROW_ROUTE_ONLY_16 lets the ABI clear axis 9 (S1's own "matches SOME ROUTE
+        row" check) so this test isolates publish_release's own suffix-row check."""
+        assets_dir = self.new_assets_dir()
+        digests = _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        declared = _dependency_declared_name(name="py311-charset-normalizer", version="3.4.0", row=ROW_CE)
+        _path, digest = _wrap_dependency_pkg(
+            assets_dir,
+            version="3.4.0",
+            abi="FreeBSD:16:*",  # ROW_CE (its suffix row) is FreeBSD 15 — deliberate mismatch.
+            local_name=declared,
+        )
+        digests[declared] = digest
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+
+        with self.assertRaises(pr.PublishReleaseError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets_dir,
+                rows=(ROW_CE, ROW_ROUTE_ONLY_16),
+                tag="v4.0.0.b1",
+            )
+        self.assertIn("matches no varver targeted", str(ctx.exception))
+
+    def test_asset_map_two_deps_same_canonical_name_rejected(self) -> None:
+        """Unit test on _asset_map directly (issue #2468 coverage row 6): two
+        dependency VerifiedAssets that resolve to the SAME canonical name always
+        conflict — no byte-compare-then-tolerate branch, no file reads. Never
+        reachable end-to-end from one tagged run (a real asset set cannot carry
+        two on-disk files sharing one declared filename); reachable via nightly
+        handoffs or direct API use."""
+        canonical = pc.VerifiedAsset(
+            asset_class="canonical",
+            declared_name="pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.8.pkg",
+            canonical_name="pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg",
+            work_path=Path("pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg"),
+            sha256="a" * 64,
+            manifest={},
+            record={"matrix_row": ROW_CE},
+        )
+        dep_one = pc.VerifiedAsset(
+            asset_class="dependency",
+            declared_name="py311-twin-1.0.0-CE-2.8.pkg",
+            canonical_name="py311-twin-1.0.0.pkg",
+            work_path=Path("dep-one.pkg"),
+            sha256="b" * 64,
+            manifest={},
+            release_suffix=("CE", "2.8"),
+        )
+        dep_two = pc.VerifiedAsset(
+            asset_class="dependency",
+            declared_name="py311-twin-1.0.0-CE-2.8-again.pkg",
+            canonical_name="py311-twin-1.0.0.pkg",
+            work_path=Path("dep-two.pkg"),
+            sha256="c" * 64,
+            manifest={},
+            release_suffix=("CE", "2.8"),
+        )
+        target = pr._Target(row=ROW_CE, canonical=canonical, dependencies=[dep_one, dep_two])
+
+        with self.assertRaises(pr.DestinationConflictError) as ctx:
+            pr._asset_map(target)
+        message = str(ctx.exception)
+        self.assertIn(dep_one.declared_name, message)
+        self.assertIn(dep_two.declared_name, message)
+        self.assertIn(dep_one.sha256, message)
+        self.assertIn(dep_two.sha256, message)
+
+    @_requires_engine
+    def test_multi_channel_fanout_dep_differs_at_one_channel_no_identity_violation(self) -> None:
+        """issue #2468 coverage row 13: canonical is identical across a multi-channel
+        fan-out (verify_multi_destination_identity still enforces THAT), but a
+        dependency that already differs at ONE destination channel — because it was
+        placed there by an earlier run and this run's dep is missing at the OTHER
+        channel — must never trip the identity check. Dependencies are excluded
+        from source_index: fan-out byte identity is a canonical-package invariant."""
+        assets_dir = self.new_assets_dir()
+        digests = _populate_assets_dir(
+            assets_dir,
+            channel="testing",
+            rows=(ROW_CE,),
+            source_tag="v4.0.1.b1",
+            include_dependency=False,
+        )
+        declared = _dependency_declared_name(name="py311-charset-normalizer", version="3.4.0", row=ROW_CE)
+        _path, digest = _wrap_dependency_pkg(
+            assets_dir,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name=declared,
+            payload={"filler.bin": b"this-runs-build"},
+        )
+        digests[declared] = digest
+        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
+
+        testing_dir = self.pkg_repo / "docs" / "testing" / "ce-2.8"
+        testing_dir.mkdir(parents=True)
+        stale_dir = self.tmp / "stale-dep-seed"
+        stale_dir.mkdir()
+        stale_path, _stale_digest = _wrap_dependency_pkg(
+            stale_dir,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name="py311-charset-normalizer-3.4.0.pkg",
+            payload={"filler.bin": b"an-earlier-runs-build"},
+        )
+        stale_bytes = stale_path.read_bytes()
+        (testing_dir / "py311-charset-normalizer-3.4.0.pkg").write_bytes(stale_bytes)
+
+        report = _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            channel="testing",
+            destinations='["testing","edge"]',
+            tag="v4.0.1.b1",
+        )
+
+        self.assertEqual(set(report.touched), {("testing", "ce-2.8"), ("edge", "ce-2.8")})
+        testing_pkg = testing_dir / "pfSense-pkg-pfBlockerNG-4.0.1.b1.pkg"
+        edge_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        edge_pkg = edge_dir / "pfSense-pkg-pfBlockerNG-4.0.1.b1.pkg"
+        self.assertEqual(testing_pkg.read_bytes(), edge_pkg.read_bytes())  # canonical still identical
+
+        testing_dep = testing_dir / "py311-charset-normalizer-3.4.0.pkg"
+        edge_dep = edge_dir / "py311-charset-normalizer-3.4.0.pkg"
+        self.assertEqual(testing_dep.read_bytes(), stale_bytes)  # untouched, already present
+        self.assertTrue(edge_dep.is_file())
+        self.assertNotEqual(edge_dep.read_bytes(), stale_bytes)  # placed fresh, missing before
 
 
 # --------------------------------------------------------------------------- #

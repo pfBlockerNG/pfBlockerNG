@@ -14,18 +14,30 @@ module only calls their public contracts. Never runs git: the caller (the releas
 workflow) owns staging exactly the touched directories, committing, and pushing —
 this module only reports which ``(channel, varver)`` directories it touched.
 
-No-op behaviour: a ``(channel, varver)`` target whose desired files (this run's
-canonical asset + any dependency assets that ABI-match its ROUTE row and whose
-origin is listed in that row's ``extra_pkgs``) are already
-present, byte-identical, at the destination AND whose catalog descriptor
-(meta.conf/data.pkg/packagesite.pkg) is complete is left untouched entirely — no
-copy, no prune, no regenerate. There is no ledger; "already published" is read
-straight off the files already on disk. A destination whose descriptor is
-incomplete (a prior run's write-back fault) is regenerated even when the ``.pkg``
-payload itself is unchanged. A destination file sharing an incoming asset's
-canonical name but carrying DIFFERENT bytes is never overwritten: same
-name/version with different bytes, source, or provenance raises
-``DestinationConflictError`` instead.
+Dependency identity (issue #2468): a dependency ``.pkg``'s identity is its filename
+alone (``<name>-<version>.pkg``, e.g. ``py311-charset-normalizer-3.4.0.pkg``) — a
+tagged Release asset's ``-<Variant>-<pfsense_version>`` suffix (``VerifiedAsset.
+release_suffix``) routes it to the varver of ITS OWN suffix row (``_build_targets``:
+that row must be one of this run's own canonical targets, must declare the dep's
+origin in ``extra_pkgs``, and its ABI must match — never by ABI-matching every
+same-major declaring row). A dependency already present at a destination is left
+exactly as-is — never read, never byte-compared, never overwritten — and one missing
+is copied in (``_drop_assets``). The canonical package keeps the strict rule below.
+Because a dependency is place-if-missing, it never feeds the multi-destination
+identity check (``_asset_map``/``publish``'s ``source_index``) — fan-out byte
+identity stays a canonical-package invariant only; a dep already differing at one
+destination but freshly placed at another is expected, not a divergence.
+
+No-op behaviour: a ``(channel, varver)`` target whose canonical asset is already
+present, byte-identical, at the destination (dependency assets are irrelevant to this
+check — see above) AND whose catalog descriptor (meta.conf/data.pkg/packagesite.pkg)
+is complete is left untouched entirely — no copy, no prune, no regenerate. There is no
+ledger; "already published" is read straight off the files already on disk. A
+destination whose descriptor is incomplete (a prior run's write-back fault) is
+regenerated even when the ``.pkg`` payload itself is unchanged. A destination
+CANONICAL file sharing an incoming asset's canonical name but carrying DIFFERENT
+bytes is never overwritten: same name/version with different bytes, source, or
+provenance raises ``DestinationConflictError`` instead.
 
 Nightly intake is not handled here: ``run()`` accepts only ``kind == "tagged"`` intake
 and fails closed otherwise.
@@ -198,39 +210,44 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
         targets[varver] = _Target(row=row, canonical=asset)
 
     for dep in run_result.dependency_assets:
-        # Same-major ABI is not enough: a CE extra must not land in a Plus
-        # catalogue whose extra_pkgs is empty (issue #2383).
-        matched = [
-            varver
-            for varver, target in targets.items()
-            if brp._pkg_matches_abi(dep.manifest, f"FreeBSD:{target.row['freebsd_major']}:*")
-            and _row_declares_dep(target.row, dep)
-        ]
-        if not matched:
-            raise PublishReleaseError(
-                f"dependency asset {dep.declared_name!r} matches no varver targeted "
-                "by this run's own canonical assets (ABI + extra_pkgs declaration)"
-            )
-        for varver in matched:
-            targets[varver].dependencies.append(dep)
+        # issue #2468: routes to the varver of the dep's OWN suffix row only — never
+        # by ABI-match against every same-major declaring row. That row must be a
+        # canonical target of this run, declare the dep's origin, and match ABI.
+        reject = PublishReleaseError(
+            f"dependency asset {dep.declared_name!r} matches no varver targeted "
+            "by this run's own canonical assets (per-suffix routing, ABI, and "
+            "extra_pkgs declaration)"
+        )
+        if dep.release_suffix is None:
+            raise reject
+        variant, pfsense_version = dep.release_suffix
+        varver = brp.catalog_name_from_version(pfsense_version, variant)
+        target = targets.get(varver)
+        if target is None:
+            raise reject
+        if not brp._pkg_matches_abi(dep.manifest, f"FreeBSD:{target.row['freebsd_major']}:*"):
+            raise reject
+        if not _row_declares_dep(target.row, dep):
+            raise reject
+        target.dependencies.append(dep)
 
     return targets
 
 
-def _asset_map(target: _Target) -> dict[str, Path]:
-    mapping = {target.canonical.canonical_name: target.canonical.work_path}
+def _asset_map(target: _Target) -> dict[str, pc.VerifiedAsset]:
+    mapping: dict[str, pc.VerifiedAsset] = {target.canonical.canonical_name: target.canonical}
     for dep in target.dependencies:
         existing = mapping.get(dep.canonical_name)
         if existing is not None:
-            if _files_identical(existing, dep.work_path):
-                continue
+            # issue #2468: two assets resolving to one canonical name always conflict
+            # — no byte-compare-then-tolerate branch; dependency identity is the
+            # filename alone, and per-suffix routing should make this unreachable.
             raise DestinationConflictError(
-                f"{dep.canonical_name}: two verified assets share this canonical name "
-                f"with different bytes — "
-                f"existing sha256={hashlib.sha256(existing.read_bytes()).hexdigest()}, "
-                f"incoming sha256={hashlib.sha256(dep.work_path.read_bytes()).hexdigest()}"
+                f"{dep.canonical_name}: two verified assets share this canonical name — "
+                f"{existing.declared_name!r} (sha256={existing.sha256}) and "
+                f"{dep.declared_name!r} (sha256={dep.sha256})"
             )
-        mapping[dep.canonical_name] = dep.work_path
+        mapping[dep.canonical_name] = dep
     return mapping
 
 
@@ -266,12 +283,17 @@ def _evict_undeclared_deps(dest_dir: Path, *, engine: pc.Engine, row: Mapping[st
     return evicted
 
 
-def _drop_assets(dest_dir: Path, asset_map: Mapping[str, Path]) -> bool:
+def _drop_assets(dest_dir: Path, asset_map: Mapping[str, pc.VerifiedAsset]) -> bool:
     dest_dir.mkdir(parents=True, exist_ok=True)
     changed = False
-    for name, src in asset_map.items():
+    for name, asset in asset_map.items():
         dest = dest_dir / name
+        src = asset.work_path
         if dest.is_file():
+            if asset.asset_class == "dependency":
+                # issue #2468: a dependency .pkg's identity IS its filename — place
+                # it only when missing, never byte-compare or overwrite an existing one.
+                continue
             if _files_identical(dest, src):
                 continue
             raise DestinationConflictError(
@@ -330,8 +352,10 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
                     for dest in destinations:
                         if dest not in bucket:
                             bucket.append(dest)
-            for src in asset_map.values():
-                source_index.setdefault(src.resolve(), []).append((channel, varver))
+            # issue #2468: only the canonical asset feeds the fan-out identity index —
+            # a place-if-missing dependency skipped at one destination but placed
+            # fresh at another would otherwise falsely trip verify_multi_destination_identity.
+            source_index.setdefault(target.canonical.work_path.resolve(), []).append((channel, varver))
             if changed:
                 ca.prune_retained(site_root, channel, varver, engine=engine)
                 ca.regenerate_catalogue(site_root, channel, varver, engine=engine)

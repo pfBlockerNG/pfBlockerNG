@@ -621,6 +621,9 @@ class AssetVerificationTests(unittest.TestCase):
         self.assertEqual(asset.asset_class, "dependency")
         self.assertIsNone(asset.record)
         self.assertEqual(asset.canonical_name, "py311-charset-normalizer-3.4.0.pkg")
+        # issue #2468: the -<Variant>-<pfsense_version> suffix this asset carries is
+        # exposed for the publisher's own per-suffix routing, not just parsed and discarded.
+        self.assertEqual(asset.release_suffix, ("CE", "2.8"))
 
     def test_verify_dependency_asset_nightly_bare_name(self) -> None:
         intake = self._intake(channel="nightly", destinations='["nightly"]')
@@ -635,6 +638,8 @@ class AssetVerificationTests(unittest.TestCase):
         )
         self.assertEqual(asset.asset_class, "dependency")
         self.assertIsNone(asset.record)
+        # issue #2468: a Nightly dependency artifact carries no per-row suffix.
+        self.assertIsNone(asset.release_suffix)
 
     def test_dependency_tagged_bare_name_without_suffix_rejected(self) -> None:
         """A tagged dependency asset that is missing its -<Variant>-<pfsense_version>

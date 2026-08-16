@@ -64,7 +64,9 @@ def test_row_declares_dep_does_not_treat_abi_as_a_declaration() -> None:
 
 
 def test_build_targets_match_requires_row_declares_dep() -> None:
-    """_build_targets must consult _row_declares_dep for dest extra attach."""
+    """_build_targets must consult _row_declares_dep for dest extra attach — a
+    dependency's own suffix row must DECLARE its origin, or per-suffix routing
+    (issue #2468) rejects it as a gate, not merely a filter predicate."""
     source = inspect.getsource(pr._build_targets)
     assert "_row_declares_dep" in source
-    assert "and _row_declares_dep" in source or "and pr._row_declares_dep" in source
+    assert "if not _row_declares_dep" in source or "if not pr._row_declares_dep" in source
