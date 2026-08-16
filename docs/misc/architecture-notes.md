@@ -1110,16 +1110,18 @@ Full design: ADR-39.
   per-asset `digest`, and run `scripts/publish-pkg-repo.sh`. That script calls
   `scripts/publish_release.py` (structured intake, per-asset and whole-run verification,
   catalogue assembly via `scripts/catalogue_assembly.py` and per-channel retention — never git),
-  regenerates the landing page, then commits and force-free pushes the touched catalogue
-  directories. Routing comes from the dispatch's ordered `destinations` tuple; there is no
-  latest-release discovery. `nightly.yml`'s own `publish-pkg-repo` job runs the same script with
-  `PUBLISH_KIND=nightly` (`scripts/publish_nightly.py`) off the verified nightly handoff.
+  then commits and force-free pushes the touched catalogue directories — nothing else; the site
+  around the catalogue is `pkg-render-site.yml`'s job, called after (issue #2450, below). Routing
+  comes from the dispatch's ordered `destinations` tuple; there is no latest-release discovery.
+  `nightly.yml`'s own `publish-pkg-repo` job runs the same script with `PUBLISH_KIND=nightly`
+  (`scripts/publish_nightly.py`) off the verified nightly handoff.
 - **Gate-before-announce for tagged publishes (issue #2389):** `docs/` on `pkg` `main` IS the
   Pages site, so a plain publish announces the moment it pushes. `release-published.yml` therefore
   runs `publish-pkg-repo.sh` with `PUBLISH_STAGE=stage`: the publisher runs against the real tree
   (containment-aware pruning stays correct), every touched `<channel>/<varver>` is relocated under
-  `docs/staging/<run_id>-<attempt>/` with the original bytes restored in place, no landing/client
-  script regen, one push. `prepare-live-gate` (`scripts/live_gate_matrix.py`) fans the CI legs
+  `docs/staging/<run_id>-<attempt>/` with the original bytes restored in place, one push (never a
+  site render — that is never this job's concern, staged or not). `prepare-live-gate`
+  (`scripts/live_gate_matrix.py`) fans the CI legs
   whose varver was touched out per destination; `validate-live-pages-install` runs `smoke-single.yml`
   (`pytest_marker: repo`, `test_install_from_live_pages_url`) per leg against
   `https://pfblockerng.github.io/pkg/staging/<seg>/<channel>` with expected version = portversion and
@@ -1127,14 +1129,17 @@ Full design: ADR-39.
   channel, so `build-repo-portable.py --print-conf` derives the real `pfblockerng-<channel>` repo
   name and the box's `%R` matches. `promote-pkg-repo` (`always()`, only when the stage succeeded and
   was not a no-op) runs `PUBLISH_STAGE=promote` on green (staged dirs moved into place, staging
-  tree dropped, landing regenerated, one push — the announce) or `PUBLISH_STAGE=discard` on any red
-  leg (staging tree dropped, run fails). A stage-mode run whose catalogue is a no-op still ships a
-  drifted client-script refresh and reports `noop=true`, which skips the gate. A target the publisher
-  reports as updated but whose bytes did not change (`git status --porcelain` empty) is dropped from
-  staging; a promote whose prefix holds no `<channel>/<varver>` fails loudly. Workflow-level
-  `concurrency` serialises publishes. `PUBLISH_STAGE=direct` (default) keeps today's single-push
-  path for `nightly.yml` (publish-then-gate, PR #2404) and `pkg-republish.yml`; nightly with any
-  other value is a usage error. `smoke-single.yml` exposes the generic `smoke_repo_live_url` /
+  tree dropped, one push — the announce) or `PUBLISH_STAGE=discard` on any red leg (staging tree
+  dropped, run fails). A stage-mode run whose catalogue is a no-op reports `noop=true`, which skips
+  the gate and `promote-pkg-repo` entirely. A target the publisher reports as updated but whose
+  bytes did not change (`git status --porcelain` empty) is dropped from staging; a promote whose
+  prefix holds no `<channel>/<varver>` fails loudly. Workflow-level `concurrency` serialises
+  publishes. `render-site` (`pkg-render-site.yml`, issue #2450) runs after regardless — `if:
+  always() && needs.publish-pkg-repo.result == 'success'` — so a promote, a discard, and a
+  catalogue no-op alike still get a current site; it never gates on `promote-pkg-repo`'s own
+  result. `PUBLISH_STAGE=direct` (default) keeps today's single-push path for `nightly.yml`
+  (publish-then-gate, PR #2404) and `pkg-republish.yml`; nightly with any other value is a usage
+  error. `smoke-single.yml` exposes the generic `smoke_repo_live_url` /
   `smoke_repo_expected_source_sha` / `smoke_repo_expected_version` /
   `smoke_repo_expected_channel` inputs beside the nightly trio
   (`SMOKE_REPO_EXPECTED_CHANNEL` is required when a live URL is set);
@@ -1165,21 +1170,28 @@ Full design: ADR-39.
   Deployment is atomic per run: `publish-pkg-repo.sh` stages ONLY the touched
   `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
   publisher failure, so a partial or failed run cannot erase another channel
-  (pinned by `tests/shell/publish_pkg_repo_spec.sh`). On a catalogue no-op it still
-  regenerates the one deterministic client script (`gen_landing.py
-  --client-scripts-only`: `install.sh`, issue #2416) and commits it if it
-  drifted (issue #2408) — the timestamped
-  landing/browse/autoindex pages remain publish-only unless `PUBLISH_REFRESH_LANDING=1`
-  (tagged + `PUBLISH_STAGE=direct` only; `pkg-republish.yml`'s `refresh_landing` input)
-  forces the full landing regen on that same no-op path, for shipping a landing
-  template/card fix via a republish of an already-published release (issue #2416
-  follow-up). Any retired client script (`RETIRED_CLIENT_SCRIPTS`: `add-repo.sh`,
-  `migrate-channel.sh`, superseded by `install.sh`) still present on the live
-  site is swept out of the same commit, but only when that commit also
-  regenerates the landing page — a `PUBLISH_REFRESH_LANDING=1` no-op, a
-  direct/nightly real publish, or `PUBLISH_STAGE=promote` — never the
-  knob-off no-op or a `PUBLISH_STAGE=stage` run, which would 404 a script the
-  live `index.html` still links. Trust model is unchanged
+  (pinned by `tests/shell/publish_pkg_repo_spec.sh`). It never touches the site around
+  the catalogue any more (issue #2450): that split into its own renderer. `pkg-site/`
+  (this repo) is the declared site tree — `install.sh` (`{base}`-substituted, hook
+  embedded via the same bake-and-splice idiom as before) and `recipes/<channel>.sh`
+  (the verbatim card text each channel's landing card shows) — mirrored 1:1 into
+  `pkg`'s `docs/`. `scripts/render-pkg-site.sh` renders it plus the dynamic pages
+  (landing `index.html`, `browse.html`, and `browse/<channel>/<varver>/index.html`)
+  entirely OUTSIDE the catalogue trees, via `gen_landing.py --site-tree`, and
+  commits + pushes only if something changed (a NOOP writes nothing; rendering never
+  reads a file's mtime, so byte-identical inputs never manufacture a commit). It is
+  wired into CI as `pkg-render-site.yml`: a `workflow_call` every catalogue publisher
+  (`release-published.yml`, `pkg-republish.yml`, `nightly.yml`) invokes AFTER its own
+  catalogue commit, or a bare `workflow_dispatch` to re-render on demand. Ownership of
+  `docs/` is two disjoint prefixes — the publisher writes only
+  `docs/{stable,testing,edge,nightly,staging}/**`, the renderer writes everything
+  else — each enforced by its own `git diff --cached` guard before any commit, so a
+  regressed renderer can never silently touch a catalogue path or vice versa. One
+  operator step remains manual, once, after the first successful render: delete the
+  legacy per-directory `index.html` autoindexes still sitting inside the live catalogue
+  dirs by hand — that cleanup is deliberately not script logic (a renderer that could
+  reach into a catalogue-owned path to delete something is the exact hazard the guard
+  exists to prevent). Trust model is unchanged
   (`signature_type: none`, HTTPS/TLS to the Pages host — no catalogue-signing key); the landing
   page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
   single-repository subscription, and the explicit repository-qualified downgrade rule. The

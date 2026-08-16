@@ -403,20 +403,24 @@ is installing a retained older version rather than re-deploying a site.
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and both share the exact `--print-conf` shape
   the inline conf in the README reuses byte-for-byte.
-- **Client scripts.** The Pages root serves one self-contained `install.sh`, parameterized
-  by `--channel` (issue #2416 follow-up) — the SOLE client entry point — published by
-  `scripts/gen_landing.py` from `scripts/install.sh` (subscription, install/move,
-  legacy-identity replacement, and verification, folded into one idempotent script — no
-  repository-only step that can leave a box subscribed but not installed). The boot-time
-  regenerator hook is embedded the same way.
+- **Site tree.** `pkg-site/` (this repo) is the declared, non-catalogue site tree —
+  `install.sh`, `--channel`-parameterized (issue #2416 follow-up) — the SOLE client entry
+  point — and `recipes/<channel>.sh` (the verbatim card text each channel's landing card
+  shows). `scripts/render-pkg-site.sh` mirrors it 1:1 into `pkg`'s `docs/`, `{base}`-substituted
+  and with the boot-time regenerator hook embedded, alongside the dynamic pages it also renders
+  (landing `index.html`, `browse.html`, `browse/<channel>/<varver>/index.html`) — all of it
+  OUTSIDE the catalogue trees (issue #2450).
 - **Triggers.** `pfBlockerNG/pkg` carries no workflow of its own — it holds the served tree and
   GitHub Pages publishes it from `main`. This repo does the publishing: the `publish-pkg-repo`
   job in `release-published.yml` runs on the real `release: published` event, and
   `pkg-republish.yml` re-runs the same flow on manual dispatch. Both mint a GitHub App token
   scoped to `pfBlockerNG/pkg` with `contents: write` (`actions/create-github-app-token@v3`,
   secrets `PKG_GITHUB_APP_ID` + `PKG_GITHUB_APP_PRIVATE_KEY`), then run
-  `scripts/publish-pkg-repo.sh`, which commits the assembled catalogue into `pkg`. A publish
-  failure never breaks the Release or the ports PR.
+  `scripts/publish-pkg-repo.sh`, which commits the assembled catalogue into `pkg` — nothing
+  else. Each of those, plus `nightly.yml`'s own `publish-pkg-repo` job, then calls
+  `pkg-render-site.yml` (a reusable `workflow_call`, also directly `workflow_dispatch`-able) to
+  render the site around that catalogue; a publish failure never breaks the Release or the ports
+  PR.
 
 See [ADR-17](legacy/ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
 

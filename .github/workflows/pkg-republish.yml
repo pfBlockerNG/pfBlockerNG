@@ -7,7 +7,10 @@ name: Trigger pkg repository republish
 # FAILED run means the App ID / private key is missing, misconfigured, or lacks
 # Contents:write on pfBlockerNG/pkg. issue #2146: there is no workflow in
 # pfBlockerNG/pkg any more — this run does the verify + assemble + commit + push
-# itself, exactly like release-published.yml's job.
+# itself, exactly like release-published.yml's job. This job republishes the
+# catalogue ONLY; the render-site job below (pkg-render-site.yml, issue #2450
+# step 3) renders the site around it afterward — the two are separate concerns
+# with disjoint docs/ ownership.
 
 on:
   workflow_dispatch:
@@ -20,11 +23,6 @@ on:
         description: Immutable source Release tag
         required: true
         type: string
-      refresh_landing:
-        description: Re-render the landing page/autoindexes even when the catalogue is unchanged (client-script or card changes)
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   packages: read
@@ -177,8 +175,6 @@ jobs:
           DESTINATIONS: ${{ steps.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
-          BASE_URL: https://pfblockerng.github.io/pkg
-          PUBLISH_REFRESH_LANDING: ${{ inputs.refresh_landing && '1' || '0' }}
         # Path env vars are exported HERE, not in the env: map above — GitHub
         # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
         # there reaches the job as a literal dollar-string (issue #2231). The
@@ -189,3 +185,11 @@ jobs:
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           export ASSETS_DIR="$RUNNER_TEMP/assets"
           sh scripts/publish-pkg-repo.sh
+
+  render-site:
+    name: Render the pkg website
+    needs: publish
+    uses: ./.github/workflows/pkg-render-site.yml
+    with:
+      source_ref: "${{ github.workflow_sha }}"
+    secrets: inherit
