@@ -264,6 +264,23 @@ jobs:
           ROUTE_MATRIX=$(sh scripts/read-version-matrix.sh --print-route | jq -c .)
           echo "route_matrix=${ROUTE_MATRIX}" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare the FreeBSD-ports checkout for the dependency flow
+        # issue #2454 step 3b: publish-pkg-repo.sh's dependency flow
+        # (publish_deps.py, run before the publisher below) needs a ports
+        # checkout at the SAME FreeBSD-ports commit the canonical .pkg assets
+        # downloaded above were themselves built against --
+        # publish_deps.py --print-ports-sha derives that straight from the
+        # assets' own build-record provenance, never re-resolved independently
+        # (a republish of an OLD release that still carries legacy dep assets
+        # is exactly why this reads the assets, not a fresh ls-remote).
+        env:
+          ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
+        run: |
+          set -eu
+          export PFB_SRC="$GITHUB_WORKSPACE"
+          PORTS_SHA="$(python3 scripts/publish_deps.py --print-ports-sha --assets-dir "$RUNNER_TEMP/assets")"
+          sh scripts/prepare-dep-ports.sh https://github.com/pfBlockerNG/FreeBSD-ports.git "$PORTS_SHA" "$RUNNER_TEMP/ports" "$ROUTE_MATRIX"
+
       - name: Stage the pkg catalogue
         id: stage
         env:
@@ -287,6 +304,7 @@ jobs:
           export PFB_SRC="$GITHUB_WORKSPACE"
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           export ASSETS_DIR="$RUNNER_TEMP/assets"
+          export PORTS_DIR="$RUNNER_TEMP/ports"
           sh scripts/publish-pkg-repo.sh
 
   # ── 2. Prepare the live-install gate matrix (issue #2389) ──────────────────
