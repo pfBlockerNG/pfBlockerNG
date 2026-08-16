@@ -21,7 +21,9 @@
 # `git add -A` / `git add .` anywhere below — only the exact touched (channel,
 # varver) directories the publisher reports, plus the landing page's own
 # output and docs/.nojekyll; on a catalogue no-op, only the regenerated
-# client script (issue #2408).
+# client script (issue #2408) unless PUBLISH_REFRESH_LANDING=1 (issue #2416
+# follow-up) — see below. Any retired client script still on the live site is
+# swept in the same commit either way.
 #
 # On a rejected push (another run advanced origin/main first), the ENTIRE cycle
 # reruns from a fresh sync — not a rebase of the local commit — because
@@ -75,6 +77,15 @@
 #   PUBLISH_STAGE           "direct" (default), "stage", "promote", or "discard";
 #                        anything else is a usage error. Only "direct" is valid
 #                        when PUBLISH_KIND=nightly.
+#   PUBLISH_REFRESH_LANDING "0" (default) or "1"; on an otherwise catalogue-NOOP
+#                        run, "1" regenerates the FULL landing page
+#                        (index.html/browse.html/every autoindex) instead of
+#                        just CLIENT_SCRIPTS — for shipping a landing
+#                        template/card fix via a republish of an
+#                        already-published release (issue #2416 follow-up).
+#                        Valid only with PUBLISH_KIND=tagged and
+#                        PUBLISH_STAGE=direct; any other combination is a usage
+#                        error.
 #   MAX_PUSH_ATTEMPTS      bounded retry count (default 5)
 # Optional — PUBLISH_STAGE=stage only, when GITHUB_ACTIONS-style outputs are
 # wanted:
@@ -119,6 +130,12 @@ set -eu
 # list and the direct/promote stage_paths list below.
 CLIENT_SCRIPTS="install.sh"
 
+# Scripts the landing generator used to publish before the issue #2416
+# follow-up collapsed every client entry point down to install.sh above —
+# gen_landing.py no longer writes them, but a republish of an
+# already-published release must still sweep them off an already-live site.
+RETIRED_CLIENT_SCRIPTS="add-repo.sh migrate-channel.sh"
+
 PUBLISH_KIND="${PUBLISH_KIND:-tagged}"
 case "$PUBLISH_KIND" in
     tagged | nightly) ;;
@@ -133,6 +150,15 @@ case "$PUBLISH_STAGE" in
     direct | stage | promote | discard) ;;
     *)
         echo "::error::PUBLISH_STAGE must be 'direct', 'stage', 'promote', or 'discard', got '${PUBLISH_STAGE}'" >&2
+        exit 1
+        ;;
+esac
+
+PUBLISH_REFRESH_LANDING="${PUBLISH_REFRESH_LANDING:-0}"
+case "$PUBLISH_REFRESH_LANDING" in
+    0 | 1) ;;
+    *)
+        echo "::error::PUBLISH_REFRESH_LANDING must be '0' or '1', got '${PUBLISH_REFRESH_LANDING}'" >&2
         exit 1
         ;;
 esac
@@ -177,6 +203,13 @@ esac
 # snapshot is out of scope here (see the header docblock).
 if [ "$PUBLISH_KIND" = nightly ] && [ "$PUBLISH_STAGE" != direct ]; then
     echo "::error::PUBLISH_STAGE must be 'direct' when PUBLISH_KIND=nightly, got '${PUBLISH_STAGE}'" >&2
+    exit 1
+fi
+
+# PUBLISH_REFRESH_LANDING=1 only makes sense on the real single-push publish
+# flow — stage/promote/discard and nightly keep their own flows untouched.
+if [ "$PUBLISH_REFRESH_LANDING" = 1 ] && { [ "$PUBLISH_KIND" != tagged ] || [ "$PUBLISH_STAGE" != direct ]; }; then
+    echo "::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct, got PUBLISH_KIND='${PUBLISH_KIND}' PUBLISH_STAGE='${PUBLISH_STAGE}'" >&2
     exit 1
 fi
 
@@ -245,6 +278,16 @@ remove_docs_staging_tree() {
         git -C "$PKG_REPO" rm -r --quiet docs/staging
     fi
     rm -rf "${PKG_REPO}/docs/staging"
+}
+
+# Stages the removal of every RETIRED_CLIENT_SCRIPTS entry still present on the
+# live site, so the deletion rides the same commit as whatever else this run is
+# already about to commit (NOOP script/landing refresh, or a real publish).
+# --ignore-unmatch is a no-op once a script is already gone.
+remove_retired_client_scripts() {
+    for retired in $RETIRED_CLIENT_SCRIPTS; do
+        git -C "$PKG_REPO" rm -q --ignore-unmatch -- "docs/${retired}"
+    done
 }
 
 # Relocates every $touched (channel, varver) target under
@@ -487,22 +530,32 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
 
             script_refresh=0
             if [ -z "$touched" ]; then
-                # --- catalogue unchanged: the client scripts may still have drifted ---
+                # --- catalogue unchanged: the client scripts (or, with
+                # PUBLISH_REFRESH_LANDING=1, the whole landing page) may still have
+                # drifted --------------------------------------------------------
                 # Every client script (CLIENT_SCRIPTS) is generated from the PFB_SRC
                 # checkout, not from the release assets, so a script-only fix must ship
                 # even when every destination already matches (issue #2408, issue #2416).
-                # Only the deterministic script set is regenerated here — the
-                # landing/browse/autoindex pages embed a generation timestamp, and
-                # writing them on a no-op would manufacture a commit on every run.
-                python3 "${PFB_SRC}/scripts/gen_landing.py" \
-                    "${PKG_REPO}/docs" "$BASE_URL" \
-                    --client-scripts-only
-                client_script_paths=""
-                for client_script in $CLIENT_SCRIPTS; do
-                    client_script_paths="${client_script_paths} docs/${client_script}"
-                done
-                # shellcheck disable=SC2086  # client_script_paths is a controlled, space-separated pathspec list
-                git -C "$PKG_REPO" add -- $client_script_paths
+                # By default only the deterministic script set is regenerated here —
+                # the landing/browse/autoindex pages embed a generation timestamp, and
+                # writing them on every no-op would manufacture a commit on every run.
+                # PUBLISH_REFRESH_LANDING=1 (validated tagged+direct-only above) opts
+                # into the full regen instead, for a landing-only fix (issue #2416
+                # follow-up).
+                if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
+                    landing_regen_and_stage
+                else
+                    python3 "${PFB_SRC}/scripts/gen_landing.py" \
+                        "${PKG_REPO}/docs" "$BASE_URL" \
+                        --client-scripts-only
+                    client_script_paths=""
+                    for client_script in $CLIENT_SCRIPTS; do
+                        client_script_paths="${client_script_paths} docs/${client_script}"
+                    done
+                    # shellcheck disable=SC2086  # client_script_paths is a controlled, space-separated pathspec list
+                    git -C "$PKG_REPO" add -- $client_script_paths
+                fi
+                remove_retired_client_scripts
                 if git -C "$PKG_REPO" diff --cached --quiet; then
                     if [ "$PUBLISH_STAGE" = stage ]; then
                         emit_stage_outputs true
@@ -511,7 +564,11 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                     echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
                     exit 0
                 fi
-                echo "publish-pkg-repo: catalogue unchanged — client script(s) drifted; committing a script refresh."
+                if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
+                    echo "publish-pkg-repo: catalogue unchanged — PUBLISH_REFRESH_LANDING=1; committing a landing refresh."
+                else
+                    echo "publish-pkg-repo: catalogue unchanged — client script(s) drifted; committing a script refresh."
+                fi
                 script_refresh=1
             elif [ "$PUBLISH_STAGE" = stage ]; then
                 # --- stage: relocate the publisher's output, never serve it --------
@@ -534,6 +591,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 # route_matrix (the handoff is what this run actually verified against —
                 # never a freshly re-read live matrix, which could have moved since).
                 landing_regen_and_stage
+                remove_retired_client_scripts
 
                 # --- stage EXACTLY what changed — never -A / . ----------------------
                 if git -C "$PKG_REPO" diff --cached --quiet; then
@@ -546,8 +604,13 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             if [ "$script_refresh" -eq 1 ]; then
                 # Mode-independent: the refresh carries no release/nightly identity —
                 # its content comes from PFB_SRC, so the run id is the whole provenance.
-                commit_message=$(printf 'publish: refresh client scripts\n\npfBlockerNG-Source-Run-Id: %s\n' \
-                    "$SOURCE_RUN_ID")
+                if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
+                    commit_message=$(printf 'publish: refresh landing page\n\npfBlockerNG-Source-Run-Id: %s\n' \
+                        "$SOURCE_RUN_ID")
+                else
+                    commit_message=$(printf 'publish: refresh client scripts\n\npfBlockerNG-Source-Run-Id: %s\n' \
+                        "$SOURCE_RUN_ID")
+                fi
             elif [ "$PUBLISH_STAGE" = stage ]; then
                 commit_message=$(printf 'publish: stage %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Staging-Prefix: %s\n' \
                     "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$stage_prefix")

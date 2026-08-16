@@ -701,6 +701,122 @@ JSON
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  # --- PUBLISH_REFRESH_LANDING (issue #2416 follow-up: republish of an
+  # already-published release must be able to refresh the landing page, not
+  # just the client scripts) ------------------------------------------------
+
+  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 forces a full landing regen on the NOOP path, committing index.html plus the client script'
+    export PUBLISH_REFRESH_LANDING=1
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The path "${base}/pkg-repo/docs/index.html" should be exist
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should include 'docs/index.html'
+    The variable committed should include 'docs/install.sh'
+    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
+    The variable msg should include 'publish: refresh landing page'
+    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
+  End
+
+  It 'refresh-landing: PUBLISH_REFRESH_LANDING unset leaves the NOOP path unchanged — no landing regen'
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'NOOP'
+    The path "${base}/pkg-repo/docs/index.html" should not be exist
+  End
+
+  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=stage, before any git call'
+    export PUBLISH_REFRESH_LANDING=1
+    export PUBLISH_STAGE=stage
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_KIND=nightly, before any git call'
+    nightly_env
+    export PUBLISH_REFRESH_LANDING=1
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 'refresh-landing: rejects a PUBLISH_REFRESH_LANDING value other than 0 or 1, before any git call'
+    export PUBLISH_REFRESH_LANDING=yes
+    When run script "$script"
+    The status should equal 1
+    The stderr should include "::error::PUBLISH_REFRESH_LANDING must be '0' or '1', got 'yes'"
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  # --- retired client scripts (docs/add-repo.sh, docs/migrate-channel.sh —
+  # replaced by the single --channel install.sh, issue #2416 follow-up) must be
+  # swept off an already-live site by a republish -----------------------------
+
+  It 'retired: a catalogue+script NOOP still ships a commit that removes retired client scripts'
+    write_client_script_stubs
+    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
+    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
+        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
+    export FAKE_MODE=noop
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/add-repo.sh docs/migrate-channel.sh'
+    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
+    The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
+  End
+
+  It 'retired: a real publish also removes retired client scripts still present on the site'
+    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
+    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
+    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
+        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should include 'docs/add-repo.sh'
+    The variable committed should include 'docs/migrate-channel.sh'
+    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
+    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
+    The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
+  End
+
+  It 'retired: retired client scripts absent from the site never error the run'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
+    The variable committed should not include 'add-repo.sh'
+    The variable committed should not include 'migrate-channel.sh'
+  End
+
   # --- a damaged working tree must never reach a commit --------------------
 
   It 'never commits or pushes a mid-regeneration fault, even though the working tree is left damaged'
