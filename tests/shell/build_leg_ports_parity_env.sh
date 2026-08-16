@@ -118,7 +118,11 @@ if not pfsense_version:
             f"no matrix row for variant={variant} freebsd_major={major}; "
             f"set PARITY_PFSENSE_VERSION to name this leg's row"
         )
-    pfsense_version = str(matches[0]["pfsense_version"])
+    # Several rows can share (variant, major) — Plus 26.03 and 26.07 do. Any REAL row gives a
+    # valid route for this parity comparison (both sides of it use the same record), so pick
+    # the lowest version deterministically rather than by matrix order. Naming the leg exactly
+    # is the caller's job via PARITY_PFSENSE_VERSION.
+    pfsense_version = min(str(m["pfsense_version"]) for m in matches)
 row = {
     "pfsense_version": pfsense_version,
     "channel": variant,
