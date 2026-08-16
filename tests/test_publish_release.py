@@ -253,13 +253,12 @@ def _wrap_dependency_pkg(
     abi: str = "FreeBSD:15:*",
     local_name: str,
     payload: dict[str, bytes] | None = None,
-    origin: str | None = None,
 ) -> tuple[Path, str]:
     manifest = {
         "name": name,
         "version": version,
         "abi": abi,
-        "origin": origin if origin is not None else f"textproc/{name}",
+        "origin": f"textproc/{name}",
     }
     compact = json.dumps(manifest, separators=(",", ":")).encode()
     members = [("+COMPACT_MANIFEST", compact, 0o644, 0)]
@@ -599,9 +598,13 @@ class RejectionPropagationTests(_TempDirTestCase):
 
 class TargetResolutionTests(_TempDirTestCase):
     @_requires_engine
-    def test_dependency_matching_no_build_row_is_ignored(self) -> None:
-        """issue #2454: a dependency asset is never routed to a target — it is
-        ignored, ABI mismatch or not, and publish succeeds."""
+    def test_dependency_matches_no_run_target_rejected(self) -> None:
+        """Axis 9 (verify_run) only requires a dependency's ABI to match SOME ROUTE
+        row (build or route-only) in the pinned matrix — not necessarily one this
+        run actually built. A dependency whose ABI matches only the route-only
+        FreeBSD-17 row (no canonical asset this run targets) passes S1 but must be
+        rejected by publish_release's OWN target-fan-in, since there is no
+        (channel, varver) directory it could land in."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
         declared = "py311-orphan-1.0.0-CE-17.0.pkg"
@@ -615,15 +618,14 @@ class TargetResolutionTests(_TempDirTestCase):
         digests[declared] = digest
         (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
 
-        report = _run(
-            pkg_repo=self.pkg_repo,
-            assets_dir=assets_dir,
-            rows=(ROW_CE, ROW_ROUTE_ONLY_17),
-            tag="v4.0.0.b1",
-        )
-        self.assertFalse(report.noop)
-        self.assertFalse((self.pkg_repo / "docs/edge/ce-2.8" / declared).exists())
-        self.assertFalse((self.pkg_repo / "docs/edge/ce-2.8" / "py311-orphan-1.0.0.pkg").exists())
+        with self.assertRaises(pr.PublishReleaseError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets_dir,
+                rows=(ROW_CE, ROW_ROUTE_ONLY_17),
+                tag="v4.0.0.b1",
+            )
+        self.assertIn("matches no varver targeted", str(ctx.exception))
 
     @_requires_engine
     def test_duplicate_varver_from_two_route_rows_rejected(self) -> None:
@@ -653,16 +655,18 @@ class TargetResolutionTests(_TempDirTestCase):
         self.assertIn("same varver", str(ctx.exception))
 
     @_requires_engine
-    def test_two_dependency_assets_same_canonical_name_different_bytes_ignored(self) -> None:
-        """issue #2454 step 3a: the fail-closed contract (issue #2231) this test used
-        to pin no longer applies to a dependency asset — this module never places one
-        at all, so two dependency assets sharing a canonical name with DIFFERENT
-        bytes are simply never compared: publish succeeds, and neither ever lands at
-        any destination."""
+    def test_two_dependency_assets_same_canonical_name_different_bytes_rejected(self) -> None:
+        """A tagged run declares its dependency assets per row, so two rows can both
+        carry name-version X. The same artifact renamed twice is legitimate — but
+        DIFFERENT bytes under one canonical name must fail closed: the per-target
+        asset map keys by canonical name, and collapsing the pair last-wins would
+        silently publish only the later asset with no conflict check at all
+        (issue #2231)."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(
             assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
         )
+        twin_digests: list[str] = []
         for row, filler in ((ROW_PLUS_03_TWIN, b"built-by-leg-one"), (ROW_PLUS_07_TWIN, b"built-by-leg-two")):
             declared = _dependency_declared_name(name="py311-twin", version="1.0.0", row=row)
             _path, digest = _wrap_dependency_pkg(
@@ -674,24 +678,26 @@ class TargetResolutionTests(_TempDirTestCase):
                 payload={"filler.bin": filler},
             )
             digests[declared] = digest
+            twin_digests.append(digest)
         (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
 
-        report = _run(
-            pkg_repo=self.pkg_repo,
-            assets_dir=assets_dir,
-            rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN),
-            tag="v4.0.0.b1",
-        )
-        self.assertFalse(report.noop)
-        for varver in ("plus-26.03", "plus-26.07"):
-            self.assertFalse((self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").exists())
+        with self.assertRaises(pr.DestinationConflictError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets_dir,
+                rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN),
+                tag="v4.0.0.b1",
+            )
+        self.assertIn("different bytes", str(ctx.exception))
+        # The operator-facing message names both builds — pin both digests.
+        for digest in twin_digests:
+            self.assertIn(f"sha256={digest}", str(ctx.exception))
 
     @_requires_engine
-    def test_same_dependency_renamed_per_row_with_identical_bytes_still_ignored(self) -> None:
-        """The legitimate twin of the case above: even byte-identical dependency
-        assets attached under two per-row declared names are never placed — issue
-        #2454 step 3a removed dependency placement entirely, not merely its
-        different-bytes guard."""
+    def test_same_dependency_renamed_per_row_with_identical_bytes_publishes(self) -> None:
+        """The legitimate twin of the rejection above: ONE artifact attached under two
+        per-row declared names (byte-identical) deduplicates and publishes into every
+        matching varver — never a conflict."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(
             assets_dir, rows=(ROW_PLUS_03_TWIN, ROW_PLUS_07_TWIN), source_tag="v4.0.0.b1", include_dependency=False
@@ -716,7 +722,10 @@ class TargetResolutionTests(_TempDirTestCase):
         )
         self.assertFalse(report.noop)
         for varver in ("plus-26.03", "plus-26.07"):
-            self.assertFalse((self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").exists())
+            self.assertTrue(
+                (self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").is_file(),
+                f"dependency missing from {varver}",
+            )
 
     @_requires_engine
     def test_canonical_asset_without_record_rejected(self) -> None:
@@ -789,57 +798,6 @@ class DestinationConflictTests(_TempDirTestCase):
         self.assertIn("pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg", message)
         self.assertEqual(published.read_bytes(), original_bytes)  # never overwritten
 
-    @_requires_engine
-    def test_legacy_dependency_asset_with_divergent_bytes_at_destination_is_ignored(self) -> None:
-        """Issue #2454 step 3a: this publisher no longer places dependency assets at
-        all — a Release published BEFORE this change may still carry a legacy
-        dependency .pkg at the destination (bytes A, planted here directly, mirroring
-        what a pre-3a publish_release run would have left behind), complete with a
-        full catalogue descriptor. An assets-dir dependency of the SAME name/version
-        but DIFFERENT bytes (B) must be silently ignored — never compared, never
-        placed — leaving the existing file byte-identical, instead of raising
-        DestinationConflictError the way the old dependency fan-in code did."""
-        record = _record(channel="edge", row=ROW_CE, source_tag="v4.0.0.b1")
-        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
-        catalogue_dir.mkdir(parents=True)
-        canonical_name = f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}.pkg"
-        _wrap_canonical_pkg(catalogue_dir, record, local_name=canonical_name)
-        _wrap_dependency_pkg(
-            catalogue_dir,
-            name="py311-charset-normalizer",
-            version="3.4.0",
-            abi="FreeBSD:15:*",
-            local_name=_CHARSET_PKG,
-            payload={"filler.bin": b"payload-X"},
-        )
-        ca.regenerate_catalogue(self.pkg_repo / "docs", "edge", "ce-2.8", engine=_ENGINE)
-        self.assertTrue((catalogue_dir / "meta.conf").is_file())
-        self.assertTrue((catalogue_dir / "data.pkg").is_file())
-        self.assertTrue((catalogue_dir / "packagesite.pkg").is_file())
-        original_bytes = (catalogue_dir / _CHARSET_PKG).read_bytes()
-        original_sha = hashlib.sha256(original_bytes).hexdigest()
-
-        assets_dir = self.new_assets_dir()
-        digests = _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        declared = _dependency_declared_name(name="py311-charset-normalizer", version="3.4.0", row=ROW_CE)
-        _path, digest = _wrap_dependency_pkg(
-            assets_dir,
-            name="py311-charset-normalizer",
-            version="3.4.0",
-            abi="FreeBSD:15:*",
-            local_name=declared,
-            payload={"filler.bin": b"payload-Y"},
-        )
-        digests[declared] = digest
-        (assets_dir / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
-
-        _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1")  # must not raise
-
-        self.assertEqual((catalogue_dir / _CHARSET_PKG).read_bytes(), original_bytes)
-        self.assertEqual(hashlib.sha256((catalogue_dir / _CHARSET_PKG).read_bytes()).hexdigest(), original_sha)
-        self.assertTrue((catalogue_dir / canonical_name).is_file())
-        self.assertIn(_CHARSET_NAME, _packagesite_names(catalogue_dir))
-
 
 # --------------------------------------------------------------------------- #
 # Basic publish flow — coverage matrix: varvers, dependency scoping, channels.
@@ -848,10 +806,7 @@ class DestinationConflictTests(_TempDirTestCase):
 
 class BasicPublishFlowTests(_TempDirTestCase):
     @_requires_engine
-    def test_first_publish_single_varver_dependency_asset_ignored(self) -> None:
-        """issue #2454 step 3a: an --assets-dir dependency asset is verified (S1) but
-        never placed by this publisher — publish_deps.py owns that, as its own,
-        earlier step."""
+    def test_first_publish_single_varver_with_dependency(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1")
         report = _run(
@@ -865,13 +820,13 @@ class BasicPublishFlowTests(_TempDirTestCase):
         self.assertFalse(report.noop)
         catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
         self.assertTrue((catalogue_dir / "pfSense-pkg-pfBlockerNG-4.0.0.b1.pkg").is_file())
-        self.assertFalse((catalogue_dir / "py311-charset-normalizer-3.4.0.pkg").exists())
+        self.assertTrue((catalogue_dir / "py311-charset-normalizer-3.4.0.pkg").is_file())
         self.assertTrue((catalogue_dir / "meta.conf").is_file())
         self.assertTrue((catalogue_dir / "data.pkg").is_file())
         self.assertTrue((catalogue_dir / "packagesite.pkg").is_file())
 
     @_requires_engine
-    def test_first_publish_three_varvers_dependency_asset_ignored_everywhere(self) -> None:
+    def test_first_publish_three_varvers_dependency_only_in_ce(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=_THREE_ROWS, source_tag="v4.0.0.b1")
         report = _run(
@@ -886,7 +841,7 @@ class BasicPublishFlowTests(_TempDirTestCase):
             {("edge", "ce-2.8"), ("edge", "plus-26.03"), ("edge", "plus-26.07")},
         )
         docs = self.pkg_repo / "docs" / "edge"
-        self.assertFalse((docs / "ce-2.8" / "py311-charset-normalizer-3.4.0.pkg").exists())
+        self.assertTrue((docs / "ce-2.8" / "py311-charset-normalizer-3.4.0.pkg").is_file())
         self.assertFalse((docs / "plus-26.03" / "py311-charset-normalizer-3.4.0.pkg").exists())
         self.assertFalse((docs / "plus-26.07" / "py311-charset-normalizer-3.4.0.pkg").exists())
         for varver in ("ce-2.8", "plus-26.03", "plus-26.07"):
@@ -1379,15 +1334,10 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
 
     @_requires_engine
     def test_declared_ce_extra_kept_on_new_canonical(self) -> None:
-        # issue #2454 step 3a: this publisher never places a dependency, so the
-        # initial charset extra is planted directly — mirroring what a
-        # publish_deps.py run (or a Release published before this change) would
-        # have already left at this destination.
         assets_1 = self.new_assets_dir()
-        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1")
         _run(pkg_repo=self.pkg_repo, assets_dir=assets_1, rows=(ROW_CE,), tag="v4.0.0.b1")
         dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
-        self._plant_charset(dest, major="15")
         self.assertTrue((dest / _CHARSET_PKG).is_file())
 
         assets_2 = self.new_assets_dir()
@@ -1399,40 +1349,14 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
     @_requires_engine
     def test_undeclared_ce_extra_evicted_when_row_drops_extra_pkgs(self) -> None:
         assets_1 = self.new_assets_dir()
-        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1")
         _run(pkg_repo=self.pkg_repo, assets_dir=assets_1, rows=(ROW_CE,), tag="v4.0.0.b1")
         dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
-        self._plant_charset(dest, major="15")
         self.assertTrue((dest / _CHARSET_PKG).is_file())
 
         assets_2 = self.new_assets_dir()
         _populate_assets_dir(assets_2, rows=(ROW_CE_NO_EXTRA,), source_tag="v4.0.0.b2", include_dependency=False)
         _run(pkg_repo=self.pkg_repo, assets_dir=assets_2, rows=(ROW_CE_NO_EXTRA,), tag="v4.0.0.b2")
-        self.assertFalse((dest / _CHARSET_PKG).exists())
-        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
-
-    @_requires_engine
-    def test_same_name_other_category_extra_evicted(self) -> None:
-        # issue #2403: category is part of the extra's identity — www/py-foo never
-        # satisfies a textproc/py-foo declaration, so a same-named leftover from
-        # another category is undeclared and goes.
-        assets_1 = self.new_assets_dir()
-        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        _run(pkg_repo=self.pkg_repo, assets_dir=assets_1, rows=(ROW_CE,), tag="v4.0.0.b1")
-        dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
-        _wrap_dependency_pkg(
-            dest,
-            name=_CHARSET_NAME,
-            version="3.4.0",
-            abi="FreeBSD:15:*",
-            local_name=_CHARSET_PKG,
-            origin=f"www/{_CHARSET_NAME}",
-        )
-        self.assertTrue((dest / _CHARSET_PKG).is_file())
-
-        assets_2 = self.new_assets_dir()
-        _populate_assets_dir(assets_2, rows=(ROW_CE,), source_tag="v4.0.0.b2", include_dependency=False)
-        _run(pkg_repo=self.pkg_repo, assets_dir=assets_2, rows=(ROW_CE,), tag="v4.0.0.b2")
         self.assertFalse((dest / _CHARSET_PKG).exists())
         self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
 
@@ -1460,16 +1384,10 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
 
 
 class SameMajorDestScopeTests(_TempDirTestCase):
-    """issue #2403 (superseded by #2454 step 3a): a same-major CE extra never
-    reaches ANY varver's asset_map any more — not merely a Plus row with an empty
-    extra_pkgs, since dependency assets are now unconditionally ignored."""
+    """issue #2403: same-major CE extra must not land on Plus extra_pkgs=[]."""
 
     @_requires_engine
-    def test_same_major_dep_asset_never_enters_any_asset_map(self) -> None:
-        """The guarded mechanism test_same_major_dep_not_published_to_row_with_empty_extra_pkgs
-        pinned (per-row extra_pkgs scoping of an incoming dependency asset) no longer
-        exists — _asset_map never carries a dependency entry for ANY row, declared or
-        not, so this proves the assets-dir dependency is ignored everywhere."""
+    def test_same_major_dep_not_published_to_row_with_empty_extra_pkgs(self) -> None:
         rows = (ROW_CE, ROW_PLUS_SAME_MAJOR)
         assets = self.new_assets_dir()
         _populate_assets_dir(assets, channel="stable", rows=rows, source_tag="v4.0.0")
@@ -1492,21 +1410,18 @@ class SameMajorDestScopeTests(_TempDirTestCase):
 
         extra = _CHARSET_PKG
         for channel in ("stable", "testing", "edge"):
-            self.assertNotIn(extra, captured[f"{channel}/ce-2.8"], channel)
+            self.assertIn(extra, captured[f"{channel}/ce-2.8"], channel)
             self.assertNotIn(extra, captured[f"{channel}/plus-26.03"], channel)
             ce_dir = self.pkg_repo / "docs" / channel / "ce-2.8"
             plus_dir = self.pkg_repo / "docs" / channel / "plus-26.03"
-            self.assertFalse((ce_dir / extra).exists(), channel)
+            self.assertTrue((ce_dir / extra).is_file(), channel)
             self.assertFalse((plus_dir / extra).exists(), channel)
-            self.assertNotIn(_CHARSET_NAME, _packagesite_names(ce_dir))
+            self.assertIn(_CHARSET_NAME, _packagesite_names(ce_dir))
             self.assertNotIn(_CHARSET_NAME, _packagesite_names(plus_dir))
 
     @_requires_engine
-    def test_undeclared_twin_dep_against_empty_plus_extra_pkgs_ignored(self) -> None:
-        """The guarded mechanism test_undeclared_twin_dep_against_empty_plus_extra_pkgs_rejected
-        pinned (rejecting a dependency whose ABI matches no row's extra_pkgs
-        declaration) no longer exists: a dependency asset is now ignored — publish
-        succeeds, and py311-twin never lands anywhere."""
+    def test_undeclared_twin_dep_against_empty_plus_extra_pkgs_rejected(self) -> None:
+        """No import-time mutation: Plus extra_pkgs=[] does not accept py311-twin."""
         assets = self.new_assets_dir()
         digests = _populate_assets_dir(
             assets, rows=(ROW_PLUS_03, ROW_PLUS_07), source_tag="v4.0.0.b1", include_dependency=False
@@ -1522,13 +1437,14 @@ class SameMajorDestScopeTests(_TempDirTestCase):
             )
             digests[declared] = digest
         (assets / pr._DIGESTS_FILENAME).write_text(json.dumps(digests), encoding="utf-8")
-        report = _run(
-            pkg_repo=self.pkg_repo,
-            assets_dir=assets,
-            rows=(ROW_PLUS_03, ROW_PLUS_07),
-            tag="v4.0.0.b1",
-        )
-        self.assertFalse(report.noop)
+        with self.assertRaises(pr.PublishReleaseError) as ctx:
+            _run(
+                pkg_repo=self.pkg_repo,
+                assets_dir=assets,
+                rows=(ROW_PLUS_03, ROW_PLUS_07),
+                tag="v4.0.0.b1",
+            )
+        self.assertIn("matches no varver targeted", str(ctx.exception))
         for varver in ("plus-26.03", "plus-26.07"):
             self.assertFalse((self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").exists())
 

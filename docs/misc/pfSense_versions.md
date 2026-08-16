@@ -105,10 +105,9 @@ Notes:
   (no FreeBSD host needed), and `build-repo-portable.py --dep-pkgs` folds
   result into release/nightly catalogs of every matching FreeBSD major.
   Release-verification CI gate (release.yml's smoke-suite/ui-suite) proves this
-  end to end against built artifacts. A dep `.pkg` is catalogue content, never a
-  GitHub Release asset (issue #2454): `scripts/publish_deps.py`, run by
-  `publish-pkg-repo.sh` before the publisher, builds and publishes it straight
-  into the pkg catalogue. `attach-pkgs` uploads canonical `.pkg`s only, and
-  `publish-release`'s healthcheck rejects a row-suffixed dep `.pkg` leaking onto
-  a Release draft. The release run's smoke/UI legs still get the leg-built
-  `pfBlockerNG-relpkg-deppkgs-*` artifact — as test input only.
+  end to end against built artifacts, and dep `.pkg` IS deliberate
+  GitHub Release asset — `attach-pkgs`'s existing `pfBlockerNG-relpkg-*` sweep
+  attaches it alongside branch `.pkg`s, and `publish-release`'s healthcheck
+  counts it explicitly. Remaining follow-up narrower: separate
+  `pfBlockerNG/pkg` repo's `publish.yml` folding attached dep `.pkg` into
+  live served catalog not yet wired there.

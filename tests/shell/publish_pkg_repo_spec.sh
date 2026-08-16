@@ -203,80 +203,6 @@ def main():
 sys.exit(main())
 PY
 
-    # --- fake publish_deps.py — the dependency-flow counterpart (issue #2454
-    # step 2). Same doubling rationale as the two stubs above: the real
-    # build/manifest verification is publish_deps.py's own unit suite (step 1);
-    # this script's OWN job — running it first, its own commit, NOOP/failure
-    # containment — is what this spec exercises. FAKE_DEPS_MODE default "noop"
-    # (every existing example that never sets it must see IDENTICAL behaviour to
-    # before this dependency flow existed): "touch" writes a dep-marker.pkg per
-    # FAKE_DEPS_TOUCHED target and prints "updated <target>" (a `..`-bearing
-    # target resolves outside docs/ exactly like the publish_release.py stub's
-    # own g1/g1b hostile case, for the identical guard to catch); "phantom"
-    # prints "updated <target>" for every FAKE_DEPS_TOUCHED target WITHOUT
-    # writing anything, so the wrapper's `git diff --cached --quiet` phantom
-    # check is the only thing standing between that and an empty commit;
-    # "fail" prints ::error:: and exits 1.
-    cat >"${base}/fake-src/scripts/publish_deps.py" <<'PY'
-import os
-import sys
-
-
-def _arg(name, argv):
-    return argv[argv.index(name) + 1]
-
-
-def main():
-    argv = sys.argv[1:]
-    pkg_repo = _arg("--pkg-repo", argv)
-    mode = os.environ.get("FAKE_DEPS_MODE", "noop")
-
-    # Records the exact argv this invocation received, for the spec's own
-    # forwarding assertions (x7/x8) -- proves the wrapper passes the right
-    # --channels/--route-matrix/--ports-dir per mode, not just that SOME
-    # python3 call happened.
-    record_path = os.environ.get("FAKE_DEPS_INVOCATION_RECORD")
-    if record_path:
-        with open(record_path, "w") as fh:
-            fh.write("\n".join(argv))
-
-    if mode == "fail":
-        print("::error::simulated dep flow fault", file=sys.stderr)
-        return 1
-
-    if mode == "noop":
-        print("NOOP: every dependency already present at every destination")
-        return 0
-
-    if mode == "phantom":
-        for target in os.environ.get("FAKE_DEPS_TOUCHED", "").split(","):
-            target = target.strip()
-            if not target:
-                continue
-            print(f"updated {target}")
-        return 0
-
-    # mode == "touch"
-    for target in os.environ.get("FAKE_DEPS_TOUCHED", "").split(","):
-        target = target.strip()
-        if not target:
-            continue
-        if ".." in target.split("/"):
-            resolved = os.path.normpath(os.path.join(pkg_repo, "docs", target))
-            with open(resolved, "a") as fh:
-                fh.write("\ndep-traversal\n")
-        else:
-            target_dir = os.path.join(pkg_repo, "docs", target)
-            os.makedirs(target_dir, exist_ok=True)
-            with open(os.path.join(target_dir, "dep-marker.pkg"), "w") as fh:
-                fh.write(target)
-        print(f"updated {target}")
-    return 0
-
-
-sys.exit(main())
-PY
-
     common_env() {
         PFB_SRC="${base}/fake-src"
         PKG_REPO="${base}/pkg-repo"
@@ -287,9 +213,7 @@ PY
         SOURCE_RUN_ID=10:1
         ASSETS_DIR="${base}/assets"
         ROUTE_MATRIX='[{"freebsd_major":"15","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]'
-        PORTS_DIR="${base}/ports"
-        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS SOURCE_RUN_ID ASSETS_DIR ROUTE_MATRIX PORTS_DIR
-        mkdir -p "$PORTS_DIR"
+        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS SOURCE_RUN_ID ASSETS_DIR ROUTE_MATRIX
     }
     common_env
     mkdir -p "${base}/assets"
@@ -341,7 +265,7 @@ JSON
     export FAKE_TOUCHED='../README.txt'
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::commit touched non-catalogue path(s):'
+    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
     The stderr should include 'README.txt'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -354,7 +278,7 @@ JSON
     export FAKE_TOUCHED='stable/../../x'
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::commit touched non-catalogue path(s):'
+    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
     staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
@@ -383,7 +307,7 @@ JSON
     export FAKE_MODE=rename_fold
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::commit touched non-catalogue path(s):'
+    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
     The stderr should include 'docs/index.html'
     The result of function local_head_now should equal "$pretest_head"
     The result of function remote_head_now should equal "$pretest_remote_head"
@@ -735,19 +659,14 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
-  It 'n4b: nightly mode invalid handoff JSON fails before any git mutation'
-    # Issue #2454 step 2: the dependency flow is now the FIRST thing to read
-    # HANDOFF_FILE each run (it derives --route-matrix from it), so malformed
-    # JSON is now caught there, before publish_nightly.py's own read ever runs —
-    # same containment guarantee (abort before any git mutation), different
-    # component surfacing it.
+  It 'n4b: nightly mode invalid handoff JSON fails via the publisher before any git mutation'
     nightly_env
     printf 'not json' > "$HANDOFF_FILE"
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::HANDOFF_FILE .route_matrix could not be read'
+    The stderr should include 'simulated handoff read/parse failure'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
   End
@@ -1191,258 +1110,4 @@ PY
     The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
     The variable msg should not include 'pfBlockerNG-Staging-Prefix'
   End
-
-  # --- PUBLISH_KIND=tagged|nightly: the dependency flow runs BEFORE the
-  # publisher (issue #2454 step 2) -------------------------------------------
-  # publish_deps.py (step 1) is doubled the same way publish_release.py /
-  # publish_nightly.py already are above -- this script's OWN job is running it
-  # first, its own commit, direct at the real catalogue location even under
-  # PUBLISH_STAGE=stage, and the containment/NOOP/failure rules around it.
-
-  It 'x1: a dependency-flow touch commits BEFORE the publisher, tagged direct'
-    export FAKE_DEPS_MODE=touch
-    export FAKE_DEPS_TOUCHED=edge/ce-2.8
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
-    The variable commit_count should equal 2
-    subjects="$(git_fixture -C "${base}/pkg-repo" log --format=%s -2)"
-    expected_subjects="$(printf 'publish: v4.0.0.b1 -> ["edge"]\ndeps: publish missing dependency packages -> ["edge/ce-2.8"]')"
-    The variable subjects should equal "$expected_subjects"
-    deps_sha="$(git_fixture -C "${base}/pkg-repo" rev-parse main~1)"
-    deps_files="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= "$deps_sha")"
-    The variable deps_files should equal 'docs/edge/ce-2.8/dep-marker.pkg'
-    deps_msg="$(git_fixture -C "${base}/pkg-repo" show -s --format=%B "$deps_sha")"
-    The variable deps_msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
-  End
-
-  It 'x2: nothing missing from the dependency flow leaves the publish as exactly ONE commit'
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
-    The variable commit_count should equal 1
-  End
-
-  It 'x3: a dependency-flow failure aborts before the publisher ever runs, and before any git mutation'
-    nightly_env
-    export FAKE_DEPS_MODE=fail
-    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
-    When run script "$script"
-    The status should equal 1
-    The stderr should include 'publish_deps.py failed'
-    The stderr should include 'simulated dep flow fault'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-    The path "${base}/nightly-invocation.txt" should not be exist
-  End
-
-  It 'x4: a dependency-flow touch with a no-op publisher pushes the deps commit only'
-    export FAKE_DEPS_MODE=touch
-    export FAKE_DEPS_TOUCHED=edge/ce-2.8
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'publish-pkg-repo: catalogue NOOP — pushing the deps commit only'
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
-    The variable commit_count should equal 1
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
-    The variable committed should equal 'docs/edge/ce-2.8/dep-marker.pkg'
-  End
-
-  It 'x5: stage mode with a deps-only touch pushes the deps commit and emits a single stage NOOP'
-    export PUBLISH_STAGE=stage
-    export FAKE_DEPS_MODE=touch
-    export FAKE_DEPS_TOUCHED=edge/ce-2.8
-    export FAKE_MODE=noop
-    export GITHUB_OUTPUT="${base}/github_output.txt"
-    true >"$GITHUB_OUTPUT"
-    When run script "$script"
-    The status should equal 0
-    The output should include 'STAGE NOOP'
-    The output should include 'publish-pkg-repo: catalogue NOOP — pushing the deps commit only'
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
-    The variable commit_count should equal 1
-    The path "${base}/pkg-repo/docs/edge/ce-2.8/dep-marker.pkg" should be exist
-    The path "${base}/pkg-repo/docs/staging" should not be exist
-    out="$(cat "$GITHUB_OUTPUT")"
-    noop_lines="$(printf '%s\n' "$out" | grep -c '^noop=')"
-    The variable noop_lines should equal 1
-    The variable out should include 'noop=true'
-  End
-
-  It 'x6: stage mode with both a dependency touch and a publisher touch makes two commits'
-    export PUBLISH_STAGE=stage
-    export FAKE_DEPS_MODE=touch
-    export FAKE_DEPS_TOUCHED=edge/ce-2.8
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    export GITHUB_OUTPUT="${base}/github_output.txt"
-    true >"$GITHUB_OUTPUT"
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
-    The variable commit_count should equal 2
-    The path "${base}/pkg-repo/docs/edge/ce-2.8/dep-marker.pkg" should be exist
-    The path "${base}/pkg-repo/docs/staging/10-1/edge/ce-2.8/marker.pkg" should be exist
-    out="$(cat "$GITHUB_OUTPUT")"
-    noop_lines="$(printf '%s\n' "$out" | grep -c '^noop=')"
-    The variable noop_lines should equal 1
-    The variable out should include 'noop=false'
-  End
-
-  It 'x7: nightly mode forwards the nightly channel literal and the handoff route_matrix to the dependency flow'
-    nightly_env
-    export FAKE_DEPS_MODE=noop
-    export FAKE_DEPS_INVOCATION_RECORD="${base}/deps-invocation.txt"
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'NOOP'
-    dep_channels_arg="$(awk '/^--channels$/{getline; print; exit}' "${base}/deps-invocation.txt")"
-    The variable dep_channels_arg should equal '["nightly"]'
-    dep_ports_arg="$(awk '/^--ports-dir$/{getline; print; exit}' "${base}/deps-invocation.txt")"
-    The variable dep_ports_arg should equal "$PORTS_DIR"
-    dep_route_arg="$(awk '/^--route-matrix$/{getline; print; exit}' "${base}/deps-invocation.txt")"
-    expected_route="$(jq -c '.route_matrix' "$HANDOFF_FILE")"
-    The variable dep_route_arg should equal "$expected_route"
-  End
-
-  It 'x8: tagged mode forwards DESTINATIONS and ROUTE_MATRIX verbatim to the dependency flow'
-    export FAKE_DEPS_MODE=noop
-    export FAKE_DEPS_INVOCATION_RECORD="${base}/deps-invocation.txt"
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'NOOP'
-    dep_channels_arg="$(awk '/^--channels$/{getline; print; exit}' "${base}/deps-invocation.txt")"
-    The variable dep_channels_arg should equal "$DESTINATIONS"
-    dep_route_arg="$(awk '/^--route-matrix$/{getline; print; exit}' "${base}/deps-invocation.txt")"
-    The variable dep_route_arg should equal "$ROUTE_MATRIX"
-  End
-
-  It 'x9a: tagged direct fails before any git call when PORTS_DIR is unset'
-    unset PORTS_DIR
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should not equal 0
-    The stderr should include 'PORTS_DIR is required'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'x9b: promote succeeds without PORTS_DIR — the dependency flow never runs for promote'
-    seed_staged_tree
-    unset PORTS_DIR ASSETS_DIR
-    export PUBLISH_STAGE=promote
-    export STAGING_PREFIX=staging/10-1
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-  End
-
-  It 'x9c: discard succeeds without PORTS_DIR — the dependency flow never runs for discard'
-    seed_staged_tree
-    unset PORTS_DIR
-    export PUBLISH_STAGE=discard
-    export STAGING_PREFIX=staging/10-1
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-  End
-
-  It 'x10 (hostile): a traversal-shaped dependency target is refused by the catalogue-only guard, no deps commit, remote unmoved'
-    export FAKE_DEPS_MODE=touch
-    export FAKE_DEPS_TOUCHED='stable/../../x'
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 1
-    The stderr should include '::error::commit touched non-catalogue path(s):'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-    staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
-    The variable staged should equal ''
-  End
-
-  It 'x11: re-syncs and redoes BOTH the deps commit and the publish commit after a rejected push'
-    reject_count_file="${base}/reject_count"
-    printf '2\n' > "$reject_count_file"
-    cat > "${base}/remote.git/hooks/pre-receive" <<HOOK
-#!/bin/sh
-n=\$(cat "$reject_count_file" 2>/dev/null || echo 0)
-if [ "\$n" -gt 0 ]; then
-    echo \$((n - 1)) > "$reject_count_file"
-    echo "simulated contention — fetch first" >&2
-    exit 1
-fi
-exit 0
-HOOK
-    chmod +x "${base}/remote.git/hooks/pre-receive"
-    export FAKE_DEPS_MODE=touch
-    export FAKE_DEPS_TOUCHED=edge/ce-2.8
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'push rejected (attempt 1/5)'
-    The stderr should include 'push rejected (attempt 2/5)'
-    The output should include 'sync attempt 3/5'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count main)"
-    The variable commit_count should equal 3
-    merge_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count --merges main)"
-    The variable merge_count should equal 0
-    subjects="$(git_fixture -C "${base}/pkg-repo" log --format=%s -2)"
-    expected_subjects="$(printf 'publish: v4.0.0.b1 -> ["edge"]\ndeps: publish missing dependency packages -> ["edge/ce-2.8"]')"
-    The variable subjects should equal "$expected_subjects"
-  End
-
-  It 'x12: a nightly handoff missing route_matrix aborts before any git mutation'
-    nightly_env
-    printf '%s' '{"run_id":"10:1","pkg_version":"20260804153045.aaaaaaa"}' > "$HANDOFF_FILE"
-    export FAKE_DEPS_MODE=noop
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=nightly/ce-2.8
-    When run script "$script"
-    The status should equal 1
-    The stderr should include '::error::HANDOFF_FILE .route_matrix could not be read'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'x13: a phantom dependency touch alongside a real publisher touch makes exactly ONE commit (publish only)'
-    export FAKE_DEPS_MODE=phantom
-    export FAKE_DEPS_TOUCHED=edge/ce-2.8
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
-    The variable commit_count should equal 1
-    subject="$(git_fixture -C "${base}/pkg-repo" log --format=%s -1)"
-    The variable subject should equal 'publish: v4.0.0.b1 -> ["edge"]'
-    remote_commit_count="$(git_fixture -C "${base}/remote.git" rev-list --count "${original_remote_head}..main")"
-    The variable remote_commit_count should equal 1
-    The path "${base}/pkg-repo/docs/edge/ce-2.8/dep-marker.pkg" should not be exist
-  End
-
 End
