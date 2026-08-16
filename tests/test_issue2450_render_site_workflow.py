@@ -77,15 +77,39 @@ def test_render_site_job_serialises_via_job_level_concurrency() -> None:
     assert re.search(r"^\s+concurrency:\n\s+group: \S+\n\s+cancel-in-progress: false\s*$", job, re.MULTILINE), job
 
 
+def test_render_site_workflow_declares_an_explicit_secrets_contract() -> None:
+    """Least-privilege secrets (CodeRabbit finding, PR #2451 review): workflow_call
+    must declare exactly the two secrets the render job needs, both required — so a
+    caller can never fall back to forwarding every repository/org secret."""
+    on_block = RENDER.split("on:", 1)[1].split("permissions:", 1)[0]
+    call_block = on_block.split("workflow_call:", 1)[1].split("workflow_dispatch:", 1)[0]
+    secrets_block = call_block.split("secrets:", 1)[1]
+    assert re.search(r"^\s+PKG_GITHUB_APP_ID:\n\s+required: true\s*$", secrets_block, re.MULTILINE), secrets_block
+    assert re.search(r"^\s+PKG_GITHUB_APP_PRIVATE_KEY:\n\s+required: true\s*$", secrets_block, re.MULTILINE), (
+        secrets_block
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 2. Every publisher workflow calls it after its own publish job.
 # --------------------------------------------------------------------------- #
+
+# The explicit two-key secrets map every render-site caller must use instead of
+# `secrets: inherit` (least-privilege, CodeRabbit finding, PR #2451 review) —
+# PKG_GITHUB_APP_ID and PKG_GITHUB_APP_PRIVATE_KEY are the ONLY secrets
+# pkg-render-site.yml's own `workflow_call.secrets` block declares.
+_EXPLICIT_RENDER_SECRETS = (
+    "PKG_GITHUB_APP_ID: ${{ secrets.PKG_GITHUB_APP_ID }}",
+    "PKG_GITHUB_APP_PRIVATE_KEY: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}",
+)
 
 
 def test_pkg_republish_calls_render_site_after_publish() -> None:
     job = _extract_job(REPUBLISH, "render-site")
     assert "uses: ./.github/workflows/pkg-render-site.yml" in job
-    assert "secrets: inherit" in job
+    assert "secrets: inherit" not in job
+    for line in _EXPLICIT_RENDER_SECRETS:
+        assert line in job, job
     assert "needs: publish" in job or "needs: [publish]" in job
     assert 'source_ref: "${{ github.workflow_sha }}"' in job or "source_ref: ${{ github.workflow_sha }}" in job
 
@@ -93,7 +117,9 @@ def test_pkg_republish_calls_render_site_after_publish() -> None:
 def test_release_published_calls_render_site_after_publish_and_promote() -> None:
     job = _extract_job(PUBLISHED, "render-site")
     assert "uses: ./.github/workflows/pkg-render-site.yml" in job
-    assert "secrets: inherit" in job
+    assert "secrets: inherit" not in job
+    for line in _EXPLICIT_RENDER_SECRETS:
+        assert line in job, job
     assert "needs: [publish-pkg-repo, promote-pkg-repo]" in job
     assert "if: always() && needs.publish-pkg-repo.result == 'success'" in job
     assert 'source_ref: "${{ github.workflow_sha }}"' in job or "source_ref: ${{ github.workflow_sha }}" in job
@@ -102,7 +128,9 @@ def test_release_published_calls_render_site_after_publish_and_promote() -> None
 def test_nightly_calls_render_site_after_publish_with_trusted_ref() -> None:
     job = _extract_job(NIGHTLY, "render-site")
     assert "uses: ./.github/workflows/pkg-render-site.yml" in job
-    assert "secrets: inherit" in job
+    assert "secrets: inherit" not in job
+    for line in _EXPLICIT_RENDER_SECRETS:
+        assert line in job, job
     assert "needs: [prepare, publish-pkg-repo]" in job
     assert (
         'source_ref: "${{ needs.prepare.outputs.tools_sha }}"' in job

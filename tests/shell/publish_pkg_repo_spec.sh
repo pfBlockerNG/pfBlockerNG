@@ -97,6 +97,26 @@ def main():
                 print(f"updated {target}")
         return 0
 
+    if mode == "rename_fold":
+        # g1c (hostile): a rename-SHAPED diff. docs/index.html (non-catalogue,
+        # already tracked) is deleted, and a NEW catalogue-owned file is added
+        # carrying its exact bytes -- git's own default rename detection pairs
+        # a genuine delete with a genuine add of near-identical content, so
+        # `git diff --cached --name-only` (no --no-renames) shows ONLY the
+        # catalogue-side name, hiding the non-catalogue deletion entirely. The
+        # wrapper's guard must not depend on that git default.
+        docs_dir = os.path.join(pkg_repo, "docs")
+        with open(os.path.join(docs_dir, "index.html"), "rb") as fh:
+            index_bytes = fh.read()
+        target_dir = os.path.join(docs_dir, "edge", "ce-2.8")
+        os.makedirs(target_dir, exist_ok=True)
+        with open(os.path.join(target_dir, "data.pkg"), "wb") as fh:
+            fh.write(index_bytes)
+        os.remove(os.path.join(docs_dir, "index.html"))
+        print("updated index.html")
+        print("updated edge/ce-2.8")
+        return 0
+
     for target in os.environ.get("FAKE_TOUCHED", "").split(","):
         target = target.strip()
         if not target:
@@ -261,6 +281,36 @@ JSON
     The stderr should include '::error::publisher commit touched non-catalogue path(s):'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
+    staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
+    The variable staged should equal ''
+  End
+
+  It 'g1c: a rename-shaped diff (non-catalogue file deleted, similar bytes added under a catalogue path) is still rejected'
+    # Fixture: seed a tracked docs/index.html (>=200 bytes -- past git's default
+    # rename-similarity threshold) and drop the pre-existing docs/edge/ce-2.8/data.pkg
+    # from HEAD, so the stub's own recreation of data.pkg below is a genuine ADD, not
+    # a MODIFY -- required for git's default rename detection to even consider pairing
+    # it with the deletion of docs/index.html (a same-path modify can never become R).
+    content=""
+    i=0
+    while [ "$i" -lt 200 ]; do
+        content="${content}x"
+        i=$((i + 1))
+    done
+    printf '%s\n' "$content" > "${base}/pkg-repo/docs/index.html"
+    git_fixture -C "${base}/pkg-repo" add docs/index.html
+    git_fixture -C "${base}/pkg-repo" rm -q docs/edge/ce-2.8/data.pkg
+    git_fixture -C "${base}/pkg-repo" commit -q -m 'g1c fixture: seed docs/index.html, drop data.pkg'
+    git_fixture -C "${base}/pkg-repo" push -q origin main
+    pretest_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    pretest_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export FAKE_MODE=rename_fold
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The stderr should include 'docs/index.html'
+    The result of function local_head_now should equal "$pretest_head"
+    The result of function remote_head_now should equal "$pretest_remote_head"
     staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
     The variable staged should equal ''
   End

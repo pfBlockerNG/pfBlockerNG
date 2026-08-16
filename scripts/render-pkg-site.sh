@@ -104,8 +104,12 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     for catalogue_dir in $CATALOGUE_DIRS; do
         catalogue_pathspec="${catalogue_pathspec} docs/${catalogue_dir}"
     done
+    # --no-renames for the same reason as publish-pkg-repo.sh's own guard: a
+    # rename-shaped diff must never be folded away before this check sees it,
+    # even though the pathspec's own ordering already makes this script safe
+    # without it — belt-and-suspenders symmetry with the publisher's guard.
     # shellcheck disable=SC2086  # catalogue_pathspec is a controlled, space-separated pathspec list
-    touched_catalogue=$(git -C "$PKG_REPO" diff --cached --name-only -- $catalogue_pathspec)
+    touched_catalogue=$(git -C "$PKG_REPO" diff --cached --name-only --no-renames -- $catalogue_pathspec)
     if [ -n "$touched_catalogue" ]; then
         echo "::error::render touched catalogue-owned path(s):" >&2
         printf '%s\n' "$touched_catalogue" >&2

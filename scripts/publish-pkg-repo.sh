@@ -256,10 +256,13 @@ stage_touched_targets() {
 # per-target `git add` above (and promote_from_staging's `git mv`) against a
 # hostile or drifted "updated <path>" report reaching outside the catalogue
 # trees — a `..`-bearing target is the canonical case, never structurally
-# impossible from a shell loop alone.
+# impossible from a shell loop alone. `--no-renames`: git's own default rename
+# detection can fold a non-catalogue deletion into a similar-enough addition
+# under a catalogue path, so `--name-only` alone would show only the catalogue
+# path and hide the deletion.
 assert_catalogue_only_staged() {
     catalogue_alt=$(printf '%s' "$CATALOGUE_DIRS" | tr ' ' '|')
-    staged=$(git -C "$PKG_REPO" diff --cached --name-only)
+    staged=$(git -C "$PKG_REPO" diff --cached --name-only --no-renames)
     bad=$(printf '%s\n' "$staged" | grep -vE "^docs/(${catalogue_alt})/" || true)
     if [ -n "$bad" ]; then
         echo "::error::publisher commit touched non-catalogue path(s):" >&2
