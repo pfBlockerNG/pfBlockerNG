@@ -157,13 +157,14 @@ def _own_entry() -> Variant:
     version = os.environ.get("SMOKE_PFSENSE_VERSION", "").strip()
     if version:
         rows = [v for v in variants if v.version == version]
-        if not rows:
-            raise RuntimeError(
-                f"no matrix row for pfsense_version {version!r} (known: {sorted(v.version for v in variants)})"
-            )
         if len(rows) > 1:
             raise RuntimeError(f"pfsense_version {version!r} matches {len(rows)} matrix rows: {rows!r}")
-        return rows[0]
+        if rows:
+            return rows[0]
+        # Names no row, so it is not a row identity: scripts/smoke-on-box.sh exports the pfSense
+        # IMAGE TAG here (or a literal "?" for a digest-pinned ref), which need not equal any
+        # matrix pfsense_version. Fall through to ABI matching, which refuses ambiguity loudly
+        # on its own — nothing is silently mis-selected.
     abi = os.environ.get("SMOKE_ABI")
     if not abi:
         # Bare dispatch names no leg at all: fall back to the matrix's FIRST ROW. Deliberately

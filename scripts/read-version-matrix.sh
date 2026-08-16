@@ -274,7 +274,7 @@ CI_MATRIX="$(printf '%s' "$_BUILD_ROLE_ENTRIES" | jq -c '
 if [ "${_VF_LOWER:-}" != "plus" ]; then
   CI_COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
   if [ "$CI_COUNT" -eq 0 ]; then
-    printf '::error::CI matrix is empty — no ci:true CE entries in %s\n' "$MATRIX_FILE" >&2
+    printf '::error::CI matrix is empty — no ci:true entries in %s\n' "$MATRIX_FILE" >&2
     exit 1
   fi
 fi

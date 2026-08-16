@@ -345,3 +345,33 @@ def test_own_row_selection_needs_no_edition_to_major_mapping(monkeypatch: pytest
             SMOKE_PHP_VERSION="8.5",
         )
         assert mx.own_variant().catalog == expected
+
+
+def test_unknown_smoke_pfsense_version_falls_through_to_abi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A SMOKE_PFSENSE_VERSION that names no row is not a row identity — fall through to ABI.
+
+    scripts/smoke-on-box.sh exports the pfSense IMAGE TAG (or a literal "?" when the ref is
+    digest-pinned), which need not equal any matrix pfsense_version. Treating that as a row
+    identity turned a working local on-box run into a hard RuntimeError. The ABI path still
+    refuses ambiguity loudly on its own, so nothing is silently mis-selected.
+    """
+    for stray in ("?", "15.1.0", ""):
+        _set_env(
+            monkeypatch,
+            SMOKE_MATRIX_JSON=_MATRIX,
+            SMOKE_PFSENSE_VERSION=stray,
+            SMOKE_ABI="FreeBSD:15:amd64",
+        )
+        own = mx.own_variant()
+        assert (own.version, own.abi) == ("2.8.0", "FreeBSD:15:amd64"), f"stray={stray!r}"
+
+
+def test_ambiguous_smoke_pfsense_version_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two rows carrying the same pfsense_version is a matrix bug — refuse, never pick one."""
+    dupe = (
+        '[{"pfsense_version":"2.8","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
+        '{"pfsense_version":"2.8","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"}]'
+    )
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=dupe, SMOKE_PFSENSE_VERSION="2.8", SMOKE_ABI="FreeBSD:15:amd64")
+    with pytest.raises(RuntimeError, match="matches 2 matrix rows"):
+        mx.own_variant()
