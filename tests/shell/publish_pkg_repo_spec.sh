@@ -1,19 +1,24 @@
 #shellcheck shell=sh
 # publish_pkg_repo_spec.sh — scripts/publish-pkg-repo.sh.
 #
-# publish_release.py and gen_landing.py are stubbed (a fake PFB_SRC checkout, see
-# setup()): git mutation is the ONLY thing this script owns, and it is exactly what
-# this spec exercises — network/engine verification is publish_release.py's own,
-# already-covered PFB_SRC=... python3 -m unittest suite (pkg repo). Fixture: a bare
-# "remote" origin plus a working PKG_REPO clone already carrying one committed
-# catalogue directory (docs/edge/ce-2.8), mirroring what the release job's checkout
-# looks like before this script runs.
+# publish_release.py and publish_nightly.py are stubbed (a fake PFB_SRC checkout,
+# see setup()): git mutation is the ONLY thing this script owns, and it is exactly
+# what this spec exercises — network/engine verification is each publisher's own,
+# already-covered PFB_SRC=... python3 -m unittest suite (pkg repo). Site rendering
+# is NOT this script's job (issue #2450 step 2) — render-pkg-site.sh's own spec
+# (render_pkg_site_spec.sh) covers that. Fixture: a bare "remote" origin plus a
+# working PKG_REPO clone already carrying one committed catalogue directory
+# (docs/edge/ce-2.8), mirroring what the release job's checkout looks like before
+# this script runs.
 #
-# CONTAINMENT: the fault-injection case is the load-bearing one —
-# the stub simulates catalogue_assembly.py's own documented failure mode (a
-# mid-regeneration write-back fault: wipe the catalog descriptor files, leave an
-# orphaned .pkg, THEN exit non-zero) and this spec asserts the damaged working tree
-# never reaches a commit, and the bare origin never moves.
+# CONTAINMENT: two independent guards are exercised here. The publisher
+# fault-injection case (a mid-regeneration write-back fault: wipe the catalog
+# descriptor files, leave an orphaned .pkg, THEN exit non-zero) asserts the
+# damaged working tree never reaches a commit and the bare origin never moves.
+# The catalogue-only-staged guard (g1/g1b) asserts a hostile or drifted "updated
+# <path>" report that reaches outside docs/<stable|testing|edge|nightly|staging>/
+# is rejected before any commit, even though the per-target `git add` alone would
+# otherwise trust the report blindly.
 
 Describe 'publish-pkg-repo.sh'
   script="${PFB_ROOT}/scripts/publish-pkg-repo.sh"
@@ -42,8 +47,8 @@ Describe 'publish-pkg-repo.sh'
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
     original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
 
-    # --- fake PFB_SRC: stub publish_release.py + gen_landing.py -------------
-    # Real network/engine verification is publish_release.py's own unit suite
+    # --- fake PFB_SRC: stub publish_release.py + publish_nightly.py ---------
+    # Real network/engine verification is each publisher's own unit suite
     # (pkg repo); this script's OWN job is the git mutation around it, so the
     # python calls are doubled here rather than re-verified.
     mkdir -p "${base}/fake-src/scripts"
@@ -96,76 +101,24 @@ def main():
         target = target.strip()
         if not target:
             continue
-        target_dir = os.path.join(pkg_repo, "docs", target)
-        os.makedirs(target_dir, exist_ok=True)
-        with open(os.path.join(target_dir, "marker.pkg"), "w") as fh:
-            fh.write(target)
+        # Hostile/drifted report (g1/g1b): a `..`-bearing target resolves
+        # OUTSIDE docs/ entirely — the wrapper's own containment guard (never
+        # this stub) is what must catch it, so this writes directly to the
+        # resolved path instead of assuming target is always a fresh directory.
+        if ".." in target.split("/"):
+            resolved = os.path.normpath(os.path.join(pkg_repo, "docs", target))
+            with open(resolved, "a") as fh:
+                fh.write("\ntraversal\n")
+        else:
+            target_dir = os.path.join(pkg_repo, "docs", target)
+            os.makedirs(target_dir, exist_ok=True)
+            with open(os.path.join(target_dir, "marker.pkg"), "w") as fh:
+                fh.write(target)
         print(f"updated {target}")
     return 0
 
 
 sys.exit(main())
-PY
-    cat >"${base}/fake-src/scripts/gen_landing.py" <<'PY'
-import os
-import sys
-
-site = sys.argv[1]
-argv = sys.argv[1:]
-# ONE deterministic client script since issue #2416 follow-up: install.sh,
-# --channel parameterized, is the SOLE client entry point. Stub body text is the
-# script's own base name (sans .sh) so existing pre-seeded fixture bytes below
-# ("# install stub\n") keep matching byte-for-byte.
-CLIENT_SCRIPTS = ("install.sh",)
-
-
-def _write_client_scripts(site):
-    # FAKE_OMIT_CLIENT_SCRIPT simulates a generator that silently produced fewer
-    # scripts than CLIENT_SCRIPTS names (a drifted generator/wrapper pairing) —
-    # the wrapper's own fail-closed guard is what this exercises, never gen_landing.py.
-    omit = os.environ.get("FAKE_OMIT_CLIENT_SCRIPT", "")
-    for name in CLIENT_SCRIPTS:
-        if name == omit:
-            continue
-        with open(os.path.join(site, name), "w") as fh:
-            fh.write(f"#!/bin/sh\n# {name[:-len('.sh')]} stub\n")
-
-
-if "--client-scripts-only" in argv:
-    # Mirrors the real generator's script-only mode (issue #2408): ONLY the
-    # deterministic client scripts are written — no landing/browse/autoindex output.
-    _write_client_scripts(site)
-    print("client scripts stub written")
-    sys.exit(0)
-# Records the exact --matrix file this run was fed, byte for byte, when
-# FAKE_LANDING_MATRIX_RECORD is set — publish-pkg-repo.sh's own job (not
-# gen_landing.py's) is choosing that file's SOURCE (tagged: $ROUTE_MATRIX;
-# nightly: the handoff's own route_matrix), so the nightly-mode spec examples
-# assert against this record rather than re-deriving the transform themselves.
-if "--matrix" in argv:
-    matrix_path = argv[argv.index("--matrix") + 1]
-    record_path = os.environ.get("FAKE_LANDING_MATRIX_RECORD")
-    if record_path:
-        with open(matrix_path, encoding="utf-8") as src, open(record_path, "w", encoding="utf-8") as dst:
-            dst.write(src.read())
-with open(os.path.join(site, "index.html"), "w") as fh:
-    fh.write("landing stub\n")
-with open(os.path.join(site, "browse.html"), "w") as fh:
-    fh.write("browse stub\n")
-# Mirrors the real generator's all_dirs()/write_site(): a per-directory
-# autoindex at EVERY existing level, not just this run's touched targets. The
-# site-wide walk is the property being pinned, so the stub must walk it too.
-# Skips docs/staging (issue #2389: gen_landing.py never indexes it) so the
-# spec examples can exercise a real index-less directory under docs/.
-for dirpath, _dirs, _files in os.walk(site):
-    rel = os.path.relpath(dirpath, site)
-    if rel == "." or rel == "staging" or rel.startswith("staging" + os.sep):
-        continue
-    with open(os.path.join(dirpath, "index.html"), "w") as fh:
-        fh.write(f"autoindex stub: {rel}\n")
-# write_site() also publishes every client script into the site root.
-_write_client_scripts(site)
-print("landing stub written")
 PY
 
     # --- fake publish_nightly.py — the Nightly-mode counterpart to the
@@ -240,8 +193,7 @@ PY
         SOURCE_RUN_ID=10:1
         ASSETS_DIR="${base}/assets"
         ROUTE_MATRIX='[{"freebsd_major":"15","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]'
-        BASE_URL=https://pfblockerng.github.io/pkg
-        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS SOURCE_RUN_ID ASSETS_DIR ROUTE_MATRIX BASE_URL
+        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS SOURCE_RUN_ID ASSETS_DIR ROUTE_MATRIX
     }
     common_env
     mkdir -p "${base}/assets"
@@ -265,26 +217,9 @@ PY
     git_fixture -C "${base}/pkg-repo" rev-parse main 2>/dev/null || echo "UNRESOLVABLE-main"
   }
 
-  # The one deterministic client script (issue #2416 follow-up: install.sh,
-  # --channel parameterized, is the SOLE client entry point), and its docs/-relative
-  # path — shared by every preseed/assertion below so a future addition only needs
-  # bumping in one place.
-  CLIENT_SCRIPT_NAMES="install.sh"
-  CLIENT_SCRIPT_PATHS="docs/install.sh"
-  SORTED_CLIENT_SCRIPT_PATHS="docs/install.sh"
-
-  # Writes every client-script stub, byte-identical to the fake gen_landing.py's
-  # own output, into docs/ — used to preseed a "current scripts" state.
-  write_client_script_stubs() {
-    for _name in ${CLIENT_SCRIPT_NAMES}; do
-        _base="${_name%.sh}"
-        printf '#!/bin/sh\n# %s stub\n' "${_base}" > "${base}/pkg-repo/docs/${_name}"
-    done
-  }
-
   # --- PUBLISH_KIND=nightly fixture ------------------------------------------
   # Layered on top of common_env (already exported by setup()): keeps the shared
-  # vars (PFB_SRC/PKG_REPO/SOURCE_RUN_ID/BASE_URL) and adds the nightly-only ones.
+  # vars (PFB_SRC/PKG_REPO/SOURCE_RUN_ID) and adds the nightly-only ones.
   # Tagged-only vars are deliberately left exported by common_env in most nightly
   # examples -- proving they are IGNORED, not merely absent (see the "does not
   # leak a tagged trailer" example) -- except where a test explicitly unsets them.
@@ -294,126 +229,59 @@ PY
     RESULTS_DIR="${base}/results"
     export PUBLISH_KIND HANDOFF_FILE RESULTS_DIR
     mkdir -p "$RESULTS_DIR"
-    # DELIBERATELY a different row than common_env's own $ROUTE_MATRIX (freebsd
-    # 15/2.8/CE/8.3/py311) -- n9 stages the landing matrix on this handoff row
-    # and asserts against ITS values; if the nightly arm ever regressed to
-    # reading $ROUTE_MATRIX instead, the assertion must fail on a value
-    # mismatch, not pass on accidental byte-identity between the two fixtures.
     cat > "$HANDOFF_FILE" <<'JSON'
 {"run_id":"10:1","pkg_version":"20260804153045.aaaaaaa","route_matrix":[{"freebsd_major":"16","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]}
 JSON
   }
 
-  # --- landing_matrix ABI expression pins: the transform lives in this script,
-  # so the properties pfBlockerNG/pkg's own retired test pinned live here now ---
+  # --- g1/g1b: the catalogue-only-staged guard (issue #2450 step 2) ----------
+  # A hostile or drifted "updated <path>" report is the load-bearing red canary:
+  # the per-target `git add -- docs/<target>` alone would stage whatever git
+  # resolves that pathspec to, however it escapes docs/ — this guard is the
+  # only thing that catches it, on every mode, right before every commit.
 
-  It 'never interpolates the retired arch matrix field'
-    When run sh -c "! grep -Fq '\\(.arch)' '${script}'"
+  It 'g1 (hostile): refuses to commit when the staged diff reaches outside the catalogue trees'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED='../README.txt'
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The stderr should include 'README.txt'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+    staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
+    The variable staged should equal ''
+  End
+
+  It 'g1b (hostile): refuses a traversal target that resolves outside docs/ but still inside the repo'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED='stable/../../x'
+    When run script "$script"
+    The status should equal 1
+    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+    staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
+    The variable staged should equal ''
+  End
+
+  It 'g2: a direct publish commits ONLY docs/<channel>/<varver> paths'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
     The status should equal 0
-  End
-
-  It 'contains exactly one abi FreeBSD wildcard expression'
-    When run sh -c "grep -o 'abi: \"FreeBSD:[^\"]*\"' '${script}' | wc -l | tr -d ' '"
-    The output should equal 1
-  End
-
-  It 'the abi expression as written emits the NO_ARCH wildcard for freebsd_major'
-    abi_expr="$(grep -o 'abi: "FreeBSD:[^"]*"' "$script" | head -1)"
-    When run sh -c "printf '%s' '{\"freebsd_major\":\"15\"}' | jq -c '{ ${abi_expr} }'"
-    The output should equal '{"abi":"FreeBSD:15:*"}'
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/marker.pkg'
   End
 
   # --- success path ----------------------------------------------------------
 
-  It 'commits and pushes exactly the touched directory plus the landing page'
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The result of function local_head_now should not equal "$original_head"
-    The result of function remote_head_now should not equal "$original_remote_head"
-    The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should be exist
-    The path "${base}/pkg-repo/docs/index.html" should be exist
-  End
-
-  It 'fails closed when the generator silently omits a client script'
-    # CodeRabbit finding: landing_regen_and_stage's `[ -f ... ] && stage_paths=...`
-    # SKIPS a missing client script instead of failing — a drifted generator/wrapper
-    # pairing (CLIENT_SCRIPTS names a script the generator no longer writes) would
-    # silently ship no script at all, never caught. The wrapper must die instead,
-    # naming the missing file, and commit nothing.
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    export FAKE_OMIT_CLIENT_SCRIPT=install.sh
-    When run script "$script"
-    The status should not equal 0
-    The stderr should include 'install.sh'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'stages nothing outside the touched target and the landing page'
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
-    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
-    The variable committed should include 'docs/index.html'
-    The variable committed should include 'docs/.nojekyll'
-  End
-
-  It 'stages the channel-level autoindex gen_landing.py regenerates for every existing directory'
-    # gen_landing.py's all_dirs() walks the WHOLE docs/ tree on every run,
-    # regenerating a per-directory autoindex at every level — not just the
-    # (channel, varver) directory this run touched. docs/edge/index.html sits
-    # one level ABOVE docs/edge/ce-2.8 (the touched target), so it is never
-    # swept in by the touched-target pathspec and must be staged separately.
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    The path "${base}/pkg-repo/docs/edge/index.html" should be exist
-    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
-    The variable committed should include 'docs/edge/index.html'
-    # write_site() publishes the client script into the site root on the same
-    # walk; the landing page's install one-liner fetches it from there, so an
-    # unstaged copy means the published site serves a 404 into `sh` (issue #2416).
-    The variable committed should include 'docs/install.sh'
-  End
-
-  It 'a stray index-less docs/staging dir (leftover from a crashed stage run) never aborts the dir_indexes collector'
-    # gen_landing.py never writes an index.html under docs/staging (issue #2389)
-    # -- reachable here because a `direct` publish (this script's default mode,
-    # used by nightly.yml/pkg-republish.yml) can run while a stray docs/staging
-    # tree is still sitting on disk from an earlier crashed "stage" run.
-    # docs/staging/10-1/stable/ce-2.8 is the DEEPEST, alphabetically LAST entry
-    # `find -type d` enumerates under docs/ in this fixture, so `[ -f "$d/index.html"
-    # ] && printf ...` (no `if`/`fi`) makes the while loop's own exit status 1 on
-    # its last iteration -- `dir_indexes=$(...)` then aborts the whole script under
-    # `set -e`, after the publisher already ran, before any git add/commit.
-    mkdir -p "${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8"
-    echo stray >"${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8/stray.pkg"
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
-    The variable committed should not include 'docs/staging'
-    The path "${base}/pkg-repo/docs/staging/10-1/stable/ce-2.8/index.html" should not be exist
-  End
-
   It 'never sweeps a stray untracked file or an unrelated dirty tracked file into the commit'
     # Proves the explicit pathspec, not `git add -A`/`.`, is what runs —
     # debris.txt is untracked, README.txt is tracked but outside every
-    # (channel, varver) target and outside the landing page's own output.
+    # (channel, varver) target.
     export FAKE_MODE=success
     export FAKE_TOUCHED=edge/ce-2.8
     echo dirty >> "${base}/pkg-repo/README.txt"
@@ -431,15 +299,14 @@ JSON
   End
 
   # --- leftover dest autoindex from a rejected push (issue #2407) -----------
-  # Dual defense: `git clean -fd -- docs` after checkout -B, and dest
-  # autoindex staging via `git ls-files` (already-tracked only), never a
-  # site-wide find. Each pin below is independent — dropping only one
-  # defense must turn that pin RED.
+  # Dual defense: `git clean -fd -- docs` after checkout -B, and the explicit
+  # per-target pathspec, never a site-wide add. Each pin below is independent —
+  # dropping only one defense must turn that pin RED.
 
   It 'cleans an untracked leftover dest autoindex off disk after checkout -B'
     # Clean pin: leftover must not exist on disk after ADVANCE. Dropping
-    # `git clean -fd -- docs` leaves the untracked dest (ls-files will not
-    # stage it) and this example goes RED. G1 debris/README stay uncommitted.
+    # `git clean -fd -- docs` leaves the untracked dest and this example goes
+    # RED. G1 debris/README stay uncommitted.
     mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
     printf 'orphan autoindex\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
     echo dirty >> "${base}/pkg-repo/README.txt"
@@ -484,47 +351,6 @@ JSON
     The variable tracked_leftover should equal ''
   End
 
-  It 'stages a rewrite of an already-tracked dest autoindex that this run did not touch'
-    # ls-files dest-level pin: origin already tracks docs/nightly/ce-2.8/index.html
-    # and this run only touches edge/ce-2.8. gen_landing rewrites every existing
-    # dest autoindex; only the ls-files dest-index stage picks this one up.
-    # Dropping that stage leaves the rewrite unstaged and this example goes RED,
-    # even if git clean remains (the file is tracked, so clean cannot remove it).
-    # Distinct from the touched-channel docs/edge/index.html rewrite below.
-    mkdir -p "${base}/pkg-repo/docs/nightly/ce-2.8"
-    printf 'old dest index\n' > "${base}/pkg-repo/docs/nightly/ce-2.8/index.html"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/nightly/ce-2.8/index.html \
-        && git_fixture commit -q -m preseed-nightly-dest-index \
-        && git_fixture push -q origin main )
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
-    The variable committed should include 'docs/nightly/ce-2.8/index.html'
-    rewritten="$(git_fixture -C "${base}/pkg-repo" show HEAD:docs/nightly/ce-2.8/index.html)"
-    The variable rewritten should equal 'autoindex stub: nightly/ce-2.8'
-  End
-
-  It 'still stages a rewrite of an already-tracked channel autoindex'
-    printf 'old channel index\n' > "${base}/pkg-repo/docs/edge/index.html"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/edge/index.html \
-        && git_fixture commit -q -m preseed-channel-index \
-        && git_fixture push -q origin main )
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
-    The variable committed should include 'docs/edge/index.html'
-    rewritten="$(cat "${base}/pkg-repo/docs/edge/index.html")"
-    The variable rewritten should equal 'autoindex stub: edge'
-  End
-
   # --- the script must be self-sufficient for git identity -----------------
 
   It 'commits with a fixed bot identity even when no git identity is configured anywhere'
@@ -566,16 +392,7 @@ JSON
 
   # --- no-op path --------------------------------------------------------
 
-  It 'commits nothing on a no-op run with current client scripts'
-    # The catalogue-NOOP path still regenerates every client script
-    # (issue #2408, issue #2416) — pre-seed them byte-identical to the stub
-    # generator's output so the full-NOOP branch is reached honestly, not via drift.
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+  It 'commits nothing on a no-op run'
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0
@@ -584,114 +401,11 @@ JSON
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
-  # Fixture for the client-script-refresh examples: a catalogue no-op with
-  # drifted scripts, plus every trap an over-broad stage could sweep in —
-  # committed landing pages whose bytes DIFFER from the stub generator's
-  # output (a regression that regenerates the timestamped pages on a no-op
-  # produces a real diff there), an untracked file, and a dirty tracked file
-  # (either of which a `git add -A`/`.` regression would commit).
-  seed_refresh_drift() {
-    printf 'old landing\n' > "${base}/pkg-repo/docs/index.html"
-    printf 'old browse\n' > "${base}/pkg-repo/docs/browse.html"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/index.html docs/browse.html \
-        && git_fixture commit -q -m preseed-landing && git_fixture push -q origin main )
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
-    echo debris > "${base}/pkg-repo/debris.txt"
-    echo dirty >> "${base}/pkg-repo/README.txt"
-  }
-
-  It 'ships a client-script refresh when the catalogue is a no-op but the scripts drifted'
-    # The seed tree carries NO committed client scripts — maximal drift. A
-    # catalogue no-op must still publish every one of them: the scripts are
-    # generated from PFB_SRC, not from release assets, so a script-only fix was
-    # otherwise unshippable via a republish of an already-published release
-    # (issue #2408, issue #2416).
-    seed_refresh_drift
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    # The wrapper's own no-op verdict must not appear; the publisher's
-    # "NOOP: every destination already matches" line legitimately does.
-    The output should not include 'publish-pkg-repo: NOOP'
-    The stderr should include 'main'
-    The result of function remote_head_now should not equal "$original_remote_head"
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
-  End
-
-  It 'a client-script refresh commits EXACTLY the four scripts and says so in the commit'
-    # Exact-list equality: no landing/browse/autoindex page, no untracked or
-    # unrelated dirty file may ride along (the seeded traps above would each
-    # break the equality), and the commit subject + run-id trailer must
-    # identify the refresh.
-    seed_refresh_drift
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
-    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
-    The variable msg should include 'publish: refresh client scripts'
-    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
-  End
-
-  It 'a stale single client script still ships a refresh that touches only it'
-    # issue #2416 follow-up made install.sh the SOLE client entry point. Pre-seed it
-    # stale (byte-different from the stub generator's current output) with nothing
-    # else dirty: the refresh is reached, and the resulting commit touches ONLY
-    # that one script.
-    printf '#!/bin/sh\n# stale install\n' > "${base}/pkg-repo/docs/install.sh"
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    The result of function remote_head_now should not equal "$original_remote_head"
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/install.sh'
-  End
-
   It 'commits nothing when a reported touched target leaves the tree unchanged'
     # publish_release.py reports "updated edge/ce-2.8" but writes nothing
     # under docs/ — the tree itself never changed, so `git diff --cached
-    # --quiet` after staging must find nothing to commit. Pre-seeds
-    # docs/index.html with byte-identical content to what the (also stubbed)
-    # gen_landing.py would regenerate, so the landing-page step contributes no
-    # diff either — the discard path is reached honestly, not bypassed by an
-    # incidental landing-page change.
-    git_fixture -C "${base}/pkg-repo" fetch -q origin
-    git_fixture -C "${base}/pkg-repo" checkout -q main
-    printf 'landing stub\n' > "${base}/pkg-repo/docs/index.html"
-    # The stub gen_landing.py also regenerates browse.html and a per-directory
-    # autoindex at every existing level (edge/ and edge/ce-2.8/, mirroring the
-    # real generator) — pre-seed those identically too, or their own
-    # first-ever creation would be a genuine diff and mask the branch this
-    # test means to reach.
-    printf 'browse stub\n' > "${base}/pkg-repo/docs/browse.html"
-    printf 'autoindex stub: edge\n' > "${base}/pkg-repo/docs/edge/index.html"
-    printf 'autoindex stub: edge/ce-2.8\n' > "${base}/pkg-repo/docs/edge/ce-2.8/index.html"
-    write_client_script_stubs
-    # docs/.nojekyll is truncate-and-recreated unconditionally whenever the
-    # script has any touched target (regardless of whether the target itself
-    # changed) — pre-seed it too, or its own first-ever creation would be a
-    # genuine diff and mask the branch this test means to reach.
-    true > "${base}/pkg-repo/docs/.nojekyll"
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add docs/index.html docs/browse.html \
-        docs/edge/index.html docs/edge/ce-2.8/index.html docs/.nojekyll $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-landing \
-        && git_fixture push -q origin main )
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
-
+    # --quiet` after staging must find nothing to commit — the discard path,
+    # not the guard, is what this reaches.
     export FAKE_MODE=phantom
     export FAKE_TOUCHED=edge/ce-2.8
     When run script "$script"
@@ -699,173 +413,6 @@ JSON
     The output should include 'NOOP'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  # --- PUBLISH_REFRESH_LANDING (issue #2416 follow-up: republish of an
-  # already-published release must be able to refresh the landing page, not
-  # just the client scripts) ------------------------------------------------
-
-  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 forces a full landing regen on the NOOP path, committing index.html plus the client script'
-    export PUBLISH_REFRESH_LANDING=1
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    The path "${base}/pkg-repo/docs/index.html" should be exist
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should include 'docs/index.html'
-    The variable committed should include 'docs/install.sh'
-    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
-    The variable msg should include 'publish: refresh landing page'
-    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
-  End
-
-  It 'refresh-landing: PUBLISH_REFRESH_LANDING unset leaves the NOOP path unchanged — no landing regen'
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'NOOP'
-    The path "${base}/pkg-repo/docs/index.html" should not be exist
-  End
-
-  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=stage, before any git call'
-    export PUBLISH_REFRESH_LANDING=1
-    export PUBLISH_STAGE=stage
-    When run script "$script"
-    The status should equal 1
-    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=promote, before any git call'
-    export PUBLISH_REFRESH_LANDING=1
-    export PUBLISH_STAGE=promote
-    When run script "$script"
-    The status should equal 1
-    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=discard, before any git call'
-    export PUBLISH_REFRESH_LANDING=1
-    export PUBLISH_STAGE=discard
-    When run script "$script"
-    The status should equal 1
-    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'refresh-landing: PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_KIND=nightly, before any git call'
-    nightly_env
-    export PUBLISH_REFRESH_LANDING=1
-    When run script "$script"
-    The status should equal 1
-    The stderr should include '::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'refresh-landing: rejects a PUBLISH_REFRESH_LANDING value other than 0 or 1, before any git call'
-    export PUBLISH_REFRESH_LANDING=yes
-    When run script "$script"
-    The status should equal 1
-    The stderr should include "::error::PUBLISH_REFRESH_LANDING must be '0' or '1', got 'yes'"
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  # --- retired client scripts (docs/add-repo.sh, docs/migrate-channel.sh —
-  # replaced by the single --channel install.sh, issue #2416 follow-up) must be
-  # swept off an already-live site by a republish -----------------------------
-
-  It 'retired: PUBLISH_REFRESH_LANDING=1 sweeps retired client scripts into the landing-regen NOOP commit'
-    # The sweep only ever rides a commit that ALSO regenerates the landing page —
-    # the knob-off NOOP path below never sweeps (the live index.html still links
-    # the retired scripts; a knob-off sweep would 404 it without a regen).
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
-        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
-    export PUBLISH_REFRESH_LANDING=1
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should include 'docs/add-repo.sh'
-    The variable committed should include 'docs/migrate-channel.sh'
-    The variable committed should include 'docs/index.html'
-    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
-    The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
-  End
-
-  It 'retired: PUBLISH_REFRESH_LANDING unset leaves retired scripts in place on the catalogue+script NOOP — no landing regen, no 404'
-    # The retired-script sweep must never run without a landing regen in the
-    # same commit — the live index.html still links docs/add-repo.sh, so a
-    # knob-off sweep would 404 it. Knob unset (default '0') on an otherwise
-    # true NOOP must leave the retired scripts untouched and commit nothing.
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
-        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'NOOP'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-    The path "${base}/pkg-repo/docs/add-repo.sh" should be exist
-    The path "${base}/pkg-repo/docs/migrate-channel.sh" should be exist
-  End
-
-  It 'retired: a real publish also removes retired client scripts still present on the site'
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
-        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should include 'docs/add-repo.sh'
-    The variable committed should include 'docs/migrate-channel.sh'
-    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
-    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
-    The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
-  End
-
-  It 'retired: retired client scripts absent from the site never error the run'
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=edge/ce-2.8
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
-    The variable committed should not include 'add-repo.sh'
-    The variable committed should not include 'migrate-channel.sh'
   End
 
   # --- a damaged working tree must never reach a commit --------------------
@@ -1095,42 +642,12 @@ HOOK
 
   It 'n5: nightly mode NOOP output commits nothing'
     nightly_env
-    # Same pre-seed as the tagged no-op example: the catalogue-NOOP path
-    # regenerates every client script (issue #2408, issue #2416), so a true
-    # no-op needs them all current in the seed tree.
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
     export FAKE_MODE=noop
     When run script "$script"
     The status should equal 0
     The output should include 'NOOP'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
-  End
-
-  It 'n5b: nightly mode ships the same mode-independent client-script refresh'
-    # The refresh branch precedes the PUBLISH_KIND commit-message split and
-    # must never acquire nightly identity: no jq pkg_version read, no
-    # pfBlockerNG-Nightly-Version trailer (the handoff fixture carries a
-    # pkg_version, so the nightly arm COULD produce one — this pins that the
-    # refresh arm does not route through it).
-    nightly_env
-    seed_refresh_drift
-    export FAKE_MODE=noop
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
-    msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
-    The variable msg should include 'publish: refresh client scripts'
-    The variable msg should include 'pfBlockerNG-Source-Run-Id: 10:1'
-    The variable msg should not include 'pfBlockerNG-Nightly-Version'
   End
 
   It 'n6: nightly mode commit message carries the nightly version subject and trailers, ignoring tagged vars'
@@ -1173,42 +690,14 @@ HOOK
     The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
   End
 
-  It 'n9: nightly mode derives the landing matrix from the handoff route_matrix, not $ROUTE_MATRIX'
-    # nightly_env's handoff route_matrix (freebsd 16/2.9/Plus/8.4/py312) is
-    # DELIBERATELY a different row than common_env's own $ROUTE_MATRIX
-    # (freebsd 15/2.8/CE/8.3/py311, still exported here): asserting the
-    # HANDOFF row's own values is what a wrong `landing_input="$ROUTE_MATRIX"`
-    # read in the nightly arm would actually fail on -- byte-identical
-    # fixtures would let that regression pass silently.
-    nightly_env
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=nightly/ce-2.8
-    export FAKE_LANDING_MATRIX_RECORD="${base}/landing-matrix-seen.json"
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    seen="$(cat "${base}/landing-matrix-seen.json")"
-    The variable seen should equal '[{"abi":"FreeBSD:16:*","pfsense_version":"2.9","variant":"Plus","php_version":"8.4","py_flavor":"py312"}]'
-    The variable seen should not include '"pfsense_version":"2.8"'
-  End
-
   # --- PUBLISH_STAGE=stage|promote|discard (issue #2389 S1, gate-before-announce) --
   # docs/ on `main` IS the Pages site, so a plain tagged publish commits the
-  # catalogue and the landing page atomically and nothing can be live-gated before
-  # announce. common_env's SOURCE_RUN_ID is "10:1" (colon, matching the real
+  # catalogue atomically and nothing can be live-gated before announce.
+  # common_env's SOURCE_RUN_ID is "10:1" (colon, matching the real
   # release-published.yml workflow) -- PUBLISH_STAGE=stage translates it to the
   # dash-form staging segment "10-1" throughout these examples.
 
   It 's1: stage relocates a touched target under docs/staging/<segment>, restoring the original at its real location'
-    # Materialize + commit every client script BEFORE the run (as a prior "direct"
-    # publish would have left them) so the negative assertions below can actually
-    # FAIL on a regression — a stage run that never wrote them in the first place
-    # would pass those assertions vacuously (issue #2416 CodeRabbit finding).
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    ( cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main )
     export PUBLISH_STAGE=stage
     export FAKE_MODE=success
     export FAKE_TOUCHED=edge/ce-2.8
@@ -1222,16 +711,8 @@ HOOK
     The path "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg" should not be exist
     original="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf")"
     The variable original should equal 'seed'
-    The path "${base}/pkg-repo/docs/index.html" should not be exist
-    # No landing regen during "stage" (staging is never served) — the client script
-    # (already on disk/tracked from the preseed above) is not touched, staged, or
-    # re-committed by this run. Every candidate path was materialized above so each
-    # negative assertion can actually fail.
     committed="$(git_fixture -C "${base}/pkg-repo" show --stat --format= HEAD | tr -s ' ' | sed 's/^ *//;s/ .*//')"
     The variable committed should include 'docs/staging/10-1/edge/ce-2.8/marker.pkg'
-    The variable committed should not include 'docs/index.html'
-    The path "${base}/pkg-repo/docs/install.sh" should be exist
-    The variable committed should not include 'docs/install.sh'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: stage v4.0.0.b1 -> ["edge"]'
     The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
@@ -1273,14 +754,8 @@ HOOK
     The variable out should include 'noop=false'
   End
 
-  It 's4: stage full no-op (nothing touched, scripts current) writes noop=true and prints STAGE NOOP'
+  It 's4: stage full no-op (nothing touched) writes noop=true and prints STAGE NOOP'
     export PUBLISH_STAGE=stage
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    (cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main)
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
     export FAKE_MODE=noop
     export GITHUB_OUTPUT="${base}/github_output.txt"
     true >"$GITHUB_OUTPUT"
@@ -1292,34 +767,6 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
     out="$(cat "$GITHUB_OUTPUT")"
     The variable out should include 'noop=true'
-  End
-
-  It 's4b: stage full no-op with retired scripts present leaves them untouched — PUBLISH_REFRESH_LANDING is always 0 under stage'
-    # PUBLISH_REFRESH_LANDING=1 is rejected under PUBLISH_STAGE=stage (see the
-    # refresh-landing rejection examples above), so the knob is always '0' here
-    # — the shared no-op branch must never sweep retired scripts on a stage run
-    # either.
-    export PUBLISH_STAGE=stage
-    write_client_script_stubs
-    # shellcheck disable=SC2086  # CLIENT_SCRIPT_PATHS is a controlled, space-separated pathspec list
-    (cd "${base}/pkg-repo" && git_fixture add $CLIENT_SCRIPT_PATHS \
-        && git_fixture commit -q -m preseed-scripts && git_fixture push -q origin main)
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
-        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
-    original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
-    export FAKE_MODE=noop
-    export GITHUB_OUTPUT="${base}/github_output.txt"
-    true >"$GITHUB_OUTPUT"
-    When run script "$script"
-    The status should equal 0
-    The output should include 'NOOP'
-    The result of function local_head_now should equal "$original_head"
-    The result of function remote_head_now should equal "$original_remote_head"
-    The path "${base}/pkg-repo/docs/add-repo.sh" should be exist
-    The path "${base}/pkg-repo/docs/migrate-channel.sh" should be exist
   End
 
   It 's5: stage removes a stale docs/staging tree from an earlier crashed run in the same commit as the new one'
@@ -1373,27 +820,6 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
-  It 's8: stage mode client-script refresh (nothing touched, scripts drifted) still emits noop=true'
-    # The workflow (S2) keys its live-gate dispatch on GITHUB_OUTPUT noop != 'true'
-    # -- a script-only refresh has nothing staged to gate, so it must report
-    # noop=true (touched=[]) even though a real commit landed on main (ADVANCE).
-    export PUBLISH_STAGE=stage
-    seed_refresh_drift
-    export FAKE_MODE=noop
-    export GITHUB_OUTPUT="${base}/github_output.txt"
-    true >"$GITHUB_OUTPUT"
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal "$SORTED_CLIENT_SCRIPT_PATHS"
-    out="$(cat "$GITHUB_OUTPUT")"
-    The variable out should include 'staging_prefix=staging/10-1'
-    The variable out should include 'touched=[]'
-    The variable out should include 'noop=true'
-  End
-
   It 's9: stage drops a phantom-touched target (publisher reported it, the tree never changed) instead of staging it'
     # publish_release.py's own touched-report and the tree's real state can, in
     # principle, disagree (the "phantom" FAKE_MODE above exists for exactly this).
@@ -1409,8 +835,9 @@ HOOK
     When run script "$script"
     The status should equal 0
     The output should include 'publish-pkg-repo: stage — edge/ce-2.8 reported updated but unchanged; not staged'
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
     The path "${base}/pkg-repo/docs/staging" should not be exist
     original="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf")"
     The variable original should equal 'seed'
@@ -1426,7 +853,7 @@ HOOK
         && git_fixture commit -q -m preseed-staged && git_fixture push -q origin main)
   }
 
-  It 'p1: promote moves a staged tree live, regenerates the landing page, and never sweeps unrelated dirty/untracked files'
+  It 'p1: promote moves a staged tree live and never sweeps unrelated dirty/untracked files'
     seed_staged_tree
     echo dirty >>"${base}/pkg-repo/README.txt"
     echo stray >"${base}/pkg-repo/debris.txt"
@@ -1440,9 +867,6 @@ HOOK
     marker="$(cat "${base}/pkg-repo/docs/edge/ce-2.8/marker.pkg")"
     The variable marker should equal 'edge/ce-2.8'
     The path "${base}/pkg-repo/docs/staging" should not be exist
-    The path "${base}/pkg-repo/docs/index.html" should be exist
-    landing="$(cat "${base}/pkg-repo/docs/index.html")"
-    The variable landing should equal 'landing stub'
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'publish: v4.0.0.b1 -> ["edge"]'
     The variable msg should include 'pfBlockerNG-Promoted-From: staging/10-1'
@@ -1454,27 +878,22 @@ HOOK
     The variable porcelain should include 'debris.txt'
   End
 
-  It 'p1b: promote also sweeps retired client scripts still present on the live site'
-    # promote runs landing_regen_and_stage (it IS a landing regen — the step
-    # that goes live), so the retired-script sweep belongs there too, same as
-    # the direct real-publish path.
+  It 'g3: promote commits only catalogue paths'
+    # edge/ce-2.8 already exists (from the base fixture's own seed commit), so
+    # promote_from_staging's own `git rm -r` + `git mv` legitimately touches
+    # every file at that location (the 3 pre-existing ones plus the promoted
+    # marker.pkg), not just one — the invariant this pins is that EVERY touched
+    # path is catalogue-owned, never an exact single-file count.
     seed_staged_tree
-    printf '#!/bin/sh\n# add-repo stub\n' > "${base}/pkg-repo/docs/add-repo.sh"
-    printf '#!/bin/sh\n# migrate-channel stub\n' > "${base}/pkg-repo/docs/migrate-channel.sh"
-    ( cd "${base}/pkg-repo" && git_fixture add docs/add-repo.sh docs/migrate-channel.sh \
-        && git_fixture commit -q -m preseed-retired-scripts && git_fixture push -q origin main )
     export PUBLISH_STAGE=promote
     export STAGING_PREFIX=staging/10-1
     When run script "$script"
     The status should equal 0
     The output should include 'ADVANCE'
     The stderr should include 'main'
-    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should include 'docs/add-repo.sh'
-    The variable committed should include 'docs/migrate-channel.sh'
-    The variable committed should include 'docs/edge/ce-2.8/marker.pkg'
-    The path "${base}/pkg-repo/docs/add-repo.sh" should not be exist
-    The path "${base}/pkg-repo/docs/migrate-channel.sh" should not be exist
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD)"
+    non_catalogue="$(printf '%s\n' "$committed" | grep -vE '^docs/(stable|testing|edge|nightly|staging)/' || true)"
+    The variable non_catalogue should equal ''
   End
 
   It 'p2: promote never invokes the publisher'
