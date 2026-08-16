@@ -1274,9 +1274,10 @@ Full design: ADR-39.
   or a release line, and no assertion compares one row against another (issue #2464): rows may
   share a build target (CE 2.9 and Plus 26.03 are both FreeBSD:16 / php85) or an edition and a
   major (Plus 26.03 / Plus 26.07 — keying the topology on (ABI, edition) had silently dropped
-  26.07 and pointed that leg at the plus-26.03 catalog). The retired ADR-20 "wrong variant is
-  rejected" case asserted a cross-row difference and is gone; each leg asserts conformance to its
-  own row instead. Adding a pfSense version needs no edit here.
+  26.07 and pointed that leg at the plus-26.03 catalog). ADR-20's "a package that is not this box's build must
+  not install" case survives, re-framed row-locally: the forged package's target is derived from
+  THIS leg's row (the next FreeBSD major, a php this row does not use), never from a sibling
+  row. Adding a pfSense version needs no edit here.
   (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, matching the
   box's FreeBSD major.) Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
