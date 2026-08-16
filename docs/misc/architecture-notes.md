@@ -1257,8 +1257,7 @@ Full design: ADR-39.
   distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`), cross-repo
   precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and the catalog
   accepted from both generators. The ADR-20 **variant topology** (each leg's ABI / PHP / Python /
-  catalog, and the opposite-edition guard) is **derived entirely from the version matrix** — never
-  hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
+  catalog) is **derived entirely from the version matrix** — never hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
   reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-ci` at job start —
   issue #1806 W3: never `--print-build`, which dedupes by `freebsd_major` and would hide a same-major
   second edition from this topology entirely — egress open), falls back to running that script, and
@@ -1267,7 +1266,16 @@ Full design: ADR-39.
   stays a CONCRETE guest ABI); when it matches more than one edition sharing a `freebsd_major`
   (issue #1806 — no `arch` left to disambiguate by), `SMOKE_IMAGE_REF` (already exported by
   smoke-single.yml) breaks the tie by image name, and `_own_entry()` refuses loudly rather than
-  silently picking one when it can't. Adding a pfSense version needs no edit here.
+  silently picking one when it can't. A leg is addressed by its OWN row identity —
+  `SMOKE_PFSENSE_VERSION`, exported per leg by smoke-single.yml and ui-tests.yml — and the
+  topology carries one Variant per ROW; a bare dispatch that names no leg falls back to the
+  matrix's first row, documented as arbitrary. Nothing maps an edition to an ABI, a php version,
+  or a release line, and no assertion compares one row against another (issue #2464): rows may
+  share a build target (CE 2.9 and Plus 26.03 are both FreeBSD:16 / php85) or an edition and a
+  major (Plus 26.03 / Plus 26.07 — keying the topology on (ABI, edition) had silently dropped
+  26.07 and pointed that leg at the plus-26.03 catalog). The retired ADR-20 "wrong variant is
+  rejected" case asserted a cross-row difference and is gone; each leg asserts conformance to its
+  own row instead. Adding a pfSense version needs no edit here.
   (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, matching the
   box's FreeBSD major.) Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated

@@ -164,22 +164,24 @@ fi
 cd "$REPO_ROOT"
 
 # ── Derive build params from the ABI ─────────────────────────────────────── #
-# Extract FreeBSD major to pick the matching PHP version.
-# FreeBSD 15 = CE 2.8 (php 8.3); FreeBSD 16 = Plus 26.03 (php 8.5).
-# py_flavor is py311 for all current legs.
+# The FreeBSD major picks the matrix row; the row supplies php_version and py_flavor.
+# NEVER a major -> php table (issue #2464): "FreeBSD 15 means php 8.3" was the current
+# row set written down as a rule, so a new major silently built the wrong php, and the
+# same file already trusted the matrix for the dep .pkg flavor a few steps below.
+# --print-build is deduped to one row per major, which is exactly this lookup's key.
 _freebsd_major="${_ABI#FreeBSD:}"
 _freebsd_major="${_freebsd_major%%:*}"
-case "$_freebsd_major" in
-    15) _php_ver="8.3" ;;
-    16) _php_ver="8.5" ;;
-    *)
-        printf 'smoke-on-box: unknown FreeBSD major %s in ABI %s; defaulting to 8.3\n' \
-            "$_freebsd_major" "$_ABI" >&2
-        _php_ver="8.3"
-        ;;
-esac
-# ponytail: all current legs use py311; extend the case above when this changes.
-_py_flavor="py311"  # version-literal-ok: all current legs are py311 (see comment above)
+_BUILD_ROW="$(sh scripts/read-version-matrix.sh --print-build)" \
+    || { printf 'smoke-on-box: could not read the version matrix\n' >&2; exit 1; }
+_php_ver="$(printf '%s' "$_BUILD_ROW" | jq -r --arg maj "$_freebsd_major" \
+    '([.[] | select(.freebsd_major == $maj)][0].php_version) // ""')"
+_py_flavor="$(printf '%s' "$_BUILD_ROW" | jq -r --arg maj "$_freebsd_major" \
+    '([.[] | select(.freebsd_major == $maj)][0].py_flavor) // ""')"
+if [ -z "$_php_ver" ] || [ -z "$_py_flavor" ]; then
+    printf 'smoke-on-box: no matrix row for FreeBSD major %s (ABI %s) — refusing to guess php/py\n' \
+        "$_freebsd_major" "$_ABI" >&2
+    exit 1
+fi
 
 # ── Step 2: ports tree — bring to pfblockerng/use-github ───────────────────── #
 printf 'smoke-on-box: updating FreeBSD-ports at %s (php=%s %s)\n' \
@@ -302,19 +304,12 @@ printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
 # extra_pkgs (port origins pfSense's own repo doesn't carry, e.g.
 # textproc/py-charset-normalizer for CE) and build each as a dep .pkg, from the
 # SAME ports tree build-leg.sh above just prepared/reused (no second clone).
-_BUILD_ROW="$(sh scripts/read-version-matrix.sh --print-build)" \
-    || { printf 'smoke-on-box: could not read the version matrix for extra_pkgs\n' >&2; exit 1; }
+# _BUILD_ROW was already read above (same --print-build view) — reuse it.
 _EXTRA_PKGS_JSON="$(printf '%s' "$_BUILD_ROW" | jq -c --arg maj "$_freebsd_major" \
     '([.[] | select(.freebsd_major == $maj)][0].extra_pkgs) // []')"
 _EXTRA_PKGS_COUNT="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq 'length')"
-# This leg's OWN py_flavor from the SAME matrix row (already read above for
-# extra_pkgs) -- never the top-level hardcoded default: a dep .pkg's
-# python<NNN> RUN_DEPENDS must match the box's REAL flavor, which the matrix
-# already knows precisely, even while the branch-.pkg build above still uses
-# the hardcoded ceiling (see its own comment).
-_dep_py_flavor="$(printf '%s' "$_BUILD_ROW" | jq -r --arg maj "$_freebsd_major" \
-    '([.[] | select(.freebsd_major == $maj)][0].py_flavor) // ""')"
-[ -n "$_dep_py_flavor" ] || _dep_py_flavor="$_py_flavor"
+# The dep .pkgs use the SAME row-derived flavor as the branch .pkg above.
+_dep_py_flavor="$_py_flavor"
 SMOKE_DEP_PKGS=""
 if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
     _DEP_PKG_DIR="${REPO_ROOT}/out/deppkgs"

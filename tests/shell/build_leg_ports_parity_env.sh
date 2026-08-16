@@ -89,9 +89,33 @@ variant = os.environ["PARITY_VARIANT"]
 php = os.environ["PARITY_PHP"]
 py_flavor = os.environ["PARITY_PY_FLAVOR"]
 major = abi.split(":")[1]
-# A project record needs a valid pfSense version solely to derive its route. Keep
-# it deterministic while deriving the target ABI facts from the caller.
-pfsense_version = os.environ.get("PARITY_PFSENSE_VERSION", "2.8" if major == "15" else "2.9")
+# A project record needs a valid pfSense version solely to derive its route. Take it
+# from the caller, else look up a REAL matrix row for this (variant, major) — never a
+# major -> version table (issue #2464): "15 means 2.8, anything else means 2.9"
+# fabricated {Plus, 2.9}, a row that exists in no matrix, on every Plus leg.
+pfsense_version = os.environ.get("PARITY_PFSENSE_VERSION", "")
+if not pfsense_version:
+    import subprocess
+
+    rows = json.loads(
+        subprocess.run(
+            ["sh", "scripts/read-version-matrix.sh", "--print-ci"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    )
+    matches = [
+        r
+        for r in rows
+        if str(r.get("freebsd_major")) == major and str(r.get("variant", "")).lower() == variant.lower()
+    ]
+    if not matches:
+        raise SystemExit(
+            f"no matrix row for variant={variant} freebsd_major={major}; "
+            f"set PARITY_PFSENSE_VERSION to name this leg's row"
+        )
+    pfsense_version = str(matches[0]["pfsense_version"])
 row = {
     "pfsense_version": pfsense_version,
     "channel": variant,

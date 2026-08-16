@@ -167,6 +167,13 @@ STUBEOF
   It 'prepares the same channel selected for the package build'
     # Stop at the sparse-Ports boundary: no image pull, host prep, package build or VM.
     printf '0\n' > "${WORK}/port-floor"
+    # The php/py the ports prep is given come from this leg's matrix row (issue #2464),
+    # so the boundary needs the row present.
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
     SPARSE_CHANNEL_FILE="${WORK}/sparse-channel"
     SPARSE_EXIT=42
     export SPARSE_CHANNEL_FILE SPARSE_EXIT
@@ -177,6 +184,27 @@ STUBEOF
     The contents of file "$SPARSE_CHANNEL_FILE" should equal 'testing'
   End
 
+  It 'refuses to build when the matrix has no row for this ABI major'
+    # issue #2464: the php/py a leg builds with come from ITS OWN matrix row. There is no
+    # major -> php table to fall back on, so an unknown major must stop the run rather than
+    # silently build a package with the wrong php.
+    printf '0\n' > "${WORK}/port-floor"
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+    SPARSE_CHANNEL_FILE="${WORK}/sparse-channel-unused"
+    SPARSE_EXIT=42
+    export SPARSE_CHANNEL_FILE SPARSE_EXIT
+
+    When run sh "$SCRIPT" --ref HEAD --abi FreeBSD:99:amd64
+    The status should not equal 0
+    The status should not equal 42
+    The stderr should include 'no matrix row for FreeBSD major 99'
+    The path "$SPARSE_CHANNEL_FILE" should not be exist
+  End
+
   It 'pulls both images into distinct container-local directories'
     printf '0\n' > "${WORK}/port-floor"
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
@@ -185,7 +213,7 @@ printf '%s\n' /tmp/fake.pkg
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
-printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
 #!/bin/sh
@@ -243,7 +271,7 @@ printf '%s\n' /tmp/fake.pkg
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
-printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
 #!/bin/sh
@@ -284,6 +312,11 @@ STUBEOF
 
   It 'propagates a direct image pull failure'
     printf '0\n' > "${WORK}/port-floor"
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
     ORAS_PULL_EXIT=37
     export ORAS_PULL_EXIT
 
@@ -295,6 +328,11 @@ STUBEOF
 
   It 'rejects a descriptor that disagrees with the resolved digest before pulling'
     printf '0\n' > "${WORK}/port-floor"
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/read-version-matrix.sh"
     ORAS_DESCRIPTOR_DIGEST=sha256:different
     export ORAS_DESCRIPTOR_DIGEST
 
@@ -318,7 +356,7 @@ printf '%s\n' /tmp/fake.pkg
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
-printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
@@ -366,7 +404,7 @@ printf '%s\n' /tmp/fake.pkg
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
-printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
@@ -405,7 +443,7 @@ printf '%s\n' /tmp/fake.pkg
 STUBEOF
     cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
 #!/bin/sh
-printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311"}]'
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 

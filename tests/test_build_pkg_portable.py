@@ -1100,13 +1100,13 @@ def test_php_guard_is_derived_from_php_version(php_version: str) -> None:
     """The PHP guard is DERIVED from --php (strip the dot → phpXY / lang/phpXY).
 
     Whatever the matrix carries, exactly ONE php* dep appears and it is the derived
-    one — so no other edition's php token can leak in (the CE-vs-Plus discrimination).
+    one — so no php other than the one this build was asked for can leak in.
     """
     expected = "php" + php_version.replace(".", "")
     deps = dict(bpp._resolve_variant_deps(php_version=php_version, py_flavor="py311"))
     # The derived php dep is present with its real origin (libpkg requires a non-empty one).
     assert deps.get(expected) == f"lang/{expected}"
-    # Exactly one php* dep, and it IS the derived one (no other edition's php leaks in).
+    # Exactly one php* dep, and it IS the derived one (no other php leaks in).
     assert [n for n in deps if n.startswith("php")] == [expected]
 
 
@@ -1205,9 +1205,9 @@ def test_php_injects_variant_guard_via_cli(tmp_path: Path) -> None:
     full, _compact, _tf = _read_pkg(out / "testpkg-1.0_2.pkg")
     deps = full.get("deps", {})
     assert "foo" in deps  # Makefile RUN_DEPENDS still present
-    assert deps.get("php83", {}).get("origin") == "lang/php83"  # CE PHP guard, real origin
+    assert deps.get("php83", {}).get("origin") == "lang/php83"  # the requested PHP guard, real origin
     assert deps.get("python311", {}).get("origin") == "lang/python311"  # Python guard, real origin
-    assert "php85" not in deps  # the Plus discriminator stays absent
+    assert "php85" not in deps  # no php but the requested one (php85 is not an edition marker)
     assert "py311" not in deps  # the flavor token is NOT a dep name (would be unsatisfiable)
 
 

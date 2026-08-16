@@ -55,59 +55,72 @@ jobs:
           COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
           printf '\n%s CI entries\n' "$COUNT"
 
-      - name: Verify build matrix contains expected CE 2.8 entry
+      - name: Verify every build row is internally consistent
         env:
           BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
         run: |
           set -eu
-          # Sanity: the seed must have the 2.8 CE entry with FreeBSD 15 + PHP 8.3.
-          ENTRY="$(printf '%s' "$BUILD_MATRIX" | jq -e '
-            .[] | select(.channel == "CE" and .pfsense_version == "2.8")  # version-literal-ok: sanity pin - asserts the seed carries the expected CE entry
-          ')" || {
-            printf '::error::BUILD matrix is missing the expected CE 2.8 entry\n'
+          # Row-local conformance only (issue #2464): every row is checked against ITS OWN
+          # fields. No edition -> FreeBSD major, edition -> php, or edition -> ci mapping is
+          # asserted anywhere: the matrix is a matrix, and two rows may legitimately share a
+          # build target (CE 2.9 and Plus 26.03 are both FreeBSD 16 / php 8.5) or an edition
+          # and a major (Plus 26.03 and Plus 26.07). `--print-build` also drops `.ci` and
+          # dedupes to one row per freebsd_major, so no edition-keyed count is meaningful here.
+          printf '%s' "$BUILD_MATRIX" | jq -e '
+            length > 0 and all(.[]; . as $row |
+              ($row.pfsense_version | test("^[0-9]+[.][0-9]+")) and
+              ($row.freebsd_version | startswith($row.freebsd_major + ".")) and
+              ($row.php_version | test("^[0-9]+[.][0-9]+$")) and
+              ($row.py_flavor | test("^py[0-9]+$")) and
+              ($row.channel | test("^(CE|Plus)$")) and
+              ($row.variant == $row.channel)
+            )
+          ' > /dev/null || {
+            printf '::error::a BUILD row is not internally consistent\n'
+            printf '%s' "$BUILD_MATRIX" | jq .
             exit 1
           }
-          FB="$(printf '%s' "$ENTRY" | jq -r '.freebsd_version')"
-          PHP="$(printf '%s' "$ENTRY" | jq -r '.php_version')"
-          CI_FLAG="$(printf '%s' "$ENTRY" | jq -r '.ci')"
-          if [ "$FB" != "15.0-RELEASE" ]; then
-            printf '::error::CE 2.8 freebsd_version expected 15.0-RELEASE, got %s\n' "$FB"
-            exit 1
-          fi
-          if [ "$PHP" != "8.3" ]; then
-            printf '::error::CE 2.8 php_version expected 8.3, got %s\n' "$PHP"
-            exit 1
-          fi
-          if [ "$CI_FLAG" != "true" ]; then
-            printf '::error::CE 2.8 ci expected true, got %s\n' "$CI_FLAG"
-            exit 1
-          fi
-          printf 'CE 2.8 entry OK: FreeBSD %s, PHP %s, ci=%s\n' "$FB" "$PHP" "$CI_FLAG"
+          printf 'every BUILD row is internally consistent\n'
 
-      - name: Verify Plus entry is ci:false
-        env:
-          BUILD_MATRIX: ${{ steps.matrices.outputs.build_matrix }}
-        run: |
-          set -eu
-          # Plus entries must never be in CI.
-          PLUS_CI="$(printf '%s' "$BUILD_MATRIX" | jq '[.[] | select(.channel == "Plus" and .ci == true)] | length')"
-          if [ "$PLUS_CI" -ne 0 ]; then
-            printf '::error::%s Plus entries have ci=true — Plus must always be ci:false\n' "$PLUS_CI"
-            exit 1
-          fi
-          printf 'Plus entries all have ci=false: OK\n'
-
-      - name: Verify CI matrix contains only CE entries
+      - name: Verify every CI row is internally consistent and ci:true
         env:
           CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
         run: |
           set -eu
-          NON_CE="$(printf '%s' "$CI_MATRIX" | jq '[.[] | select(.channel != "CE")] | length')"
-          if [ "$NON_CE" -ne 0 ]; then
-            printf '::error::CI matrix contains %s non-CE entries — only CE should be in CI\n' "$NON_CE"
+          # `--print-ci` is the row-per-version view the reader filters on ci:true, so the only
+          # invariant is that each row says so itself — never "which editions are allowed in
+          # CI" (Plus has been ci:true since ADR-24).
+          printf '%s' "$CI_MATRIX" | jq -e '
+            length > 0 and all(.[]; . as $row |
+              $row.ci == true and
+              ($row.channel | test("^(CE|Plus)$")) and
+              ($row.variant == $row.channel) and
+              ($row.freebsd_version | startswith($row.freebsd_major + ".")) and
+              ($row.php_version | test("^[0-9]+[.][0-9]+$")) and
+              ($row.py_flavor | test("^py[0-9]+$"))
+            )
+          ' > /dev/null || {
+            printf '::error::a CI row is not internally consistent, or is not ci:true\n'
+            printf '%s' "$CI_MATRIX" | jq .
             exit 1
-          fi
-          printf 'CI matrix contains only CE entries: OK\n'
+          }
+          printf 'every CI row is internally consistent and ci:true\n'
+
+      - name: Verify every CI row is uniquely identified by its version
+        env:
+          CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
+        run: |
+          set -eu
+          # The row identity the smoke topology addresses legs by (SMOKE_PFSENSE_VERSION,
+          # tests/smoke/_matrix.py). Duplicate versions would make a leg ambiguous.
+          printf '%s' "$CI_MATRIX" | jq -e '
+            ([.[].pfsense_version] | length) == ([.[].pfsense_version] | unique | length)
+          ' > /dev/null || {
+            printf '::error::two CI rows share a pfsense_version — a leg cannot be addressed\n'
+            printf '%s' "$CI_MATRIX" | jq -r '.[].pfsense_version'
+            exit 1
+          }
+          printf 'every CI row has a unique pfsense_version\n'
 
       - name: Verify reject-unknown behaviour (simulate unknown version lookup)
         run: |
