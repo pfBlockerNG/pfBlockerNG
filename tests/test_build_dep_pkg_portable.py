@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
@@ -299,6 +300,44 @@ def test_fetch_verified_sdist_all_mirrors_failing_raises(tmp_path: Path, monkeyp
 
 
 # --------------------------------------------------------------------------- #
+# sdist_epoch — the dependency's OWN timestamp (newest member mtime inside the
+# verified sdist), never the build clock or ambient SOURCE_DATE_EPOCH
+# (issue #2454).
+# --------------------------------------------------------------------------- #
+
+
+def _write_sdist_tar(dest: Path, mtimes: list[int]) -> None:
+    with tarfile.open(dest, "w:gz") as tf:
+        for i, mtime in enumerate(mtimes):
+            data = f"member {i}".encode()
+            info = tarfile.TarInfo(name=f"pkg/file{i}.txt")
+            info.size = len(data)
+            info.mtime = mtime
+            tf.addfile(info, io.BytesIO(data))
+
+
+def test_sdist_epoch_is_the_newest_member_mtime(tmp_path: Path) -> None:
+    sdist = tmp_path / "fake.tar.gz"
+    _write_sdist_tar(sdist, [100, 300, 200])
+    assert bdp.sdist_epoch(sdist) == 300
+
+
+def test_sdist_epoch_refuses_empty_tar(tmp_path: Path) -> None:
+    sdist = tmp_path / "empty.tar.gz"
+    with tarfile.open(sdist, "w:gz"):
+        pass
+    with pytest.raises(bdp.DepPkgError, match="mtime"):
+        bdp.sdist_epoch(sdist)
+
+
+def test_sdist_epoch_refuses_all_zero_mtimes(tmp_path: Path) -> None:
+    sdist = tmp_path / "zero.tar.gz"
+    _write_sdist_tar(sdist, [0, 0])
+    with pytest.raises(bdp.DepPkgError, match="mtime"):
+        bdp.sdist_epoch(sdist)
+
+
+# --------------------------------------------------------------------------- #
 # Wheel build — exactly one PURE wheel, or refuse.
 # --------------------------------------------------------------------------- #
 
@@ -516,10 +555,26 @@ def test_stage_wheel_without_entry_points_yields_no_scripts(tmp_path: Path) -> N
 # --------------------------------------------------------------------------- #
 
 
-def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | None) -> None:
+# The sdist's own release stamp — fixed so `sdist_epoch()` has a real member
+# mtime to read, independent of whatever ambient SOURCE_DATE_EPOCH a test sets.
+_FAKE_SDIST_MTIME = 1700000000
+
+
+def _write_fake_sdist(dest: Path, *, mtime: int = _FAKE_SDIST_MTIME) -> None:
+    with tarfile.open(dest, "w:gz") as tf:
+        data = b"Metadata-Version: 1.0\n"
+        info = tarfile.TarInfo(name="charset_normalizer-3.4.4/PKG-INFO")
+        info.size = len(data)
+        info.mtime = mtime
+        tf.addfile(info, io.BytesIO(data))
+
+
+def _mock_network(
+    monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | None, sdist_mtime: int = _FAKE_SDIST_MTIME
+) -> None:
     def fake_fetch(port: Any, dest_dir: Path, *, sha256: str, size: int) -> Path:
         dest = dest_dir / f"{port.distname}.tar.gz"
-        dest.write_bytes(b"mocked sdist bytes -- fetch is not exercised here")
+        _write_fake_sdist(dest, mtime=sdist_mtime)
         return dest
 
     def fake_build_wheel(sdist: Path, work_dir: Path) -> Path:
@@ -618,6 +673,87 @@ def test_build_dep_pkg_derives_portname_from_flavor_prefix(tmp_path: Path, monke
 
 
 # --------------------------------------------------------------------------- #
+# Ambient SOURCE_DATE_EPOCH independence (issue #2454): dep .pkg bytes are a
+# function of the pinned sdist ONLY, never the caller's ambient project epoch.
+# --------------------------------------------------------------------------- #
+
+
+def test_build_dep_pkg_bytes_do_not_depend_on_ambient_source_date_epoch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1")
+    out_path1 = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out1"))
+    assert os.environ["SOURCE_DATE_EPOCH"] == "1", "ambient value must be restored after the call"
+
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "2")
+    out_path2 = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out2"))
+    assert os.environ["SOURCE_DATE_EPOCH"] == "2", "ambient value must be restored after the call"
+
+    assert out_path1.read_bytes() == out_path2.read_bytes(), (
+        "two builds of the same dep under different ambient SOURCE_DATE_EPOCH must be byte-identical"
+    )
+
+    for out_path in (out_path1, out_path2):
+        full = _read_full_manifest(out_path)
+        for install_path, entry in full["files"].items():
+            assert entry["mtime"] == _FAKE_SDIST_MTIME, f"{install_path}: manifest mtime must be the sdist epoch"
+
+        tar_bytes = pfb_pkg.zstd_decompress(out_path.read_bytes())
+        with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
+            for member in tf.getmembers():
+                if member.name in ("+MANIFEST", "+COMPACT_MANIFEST"):
+                    continue
+                assert member.mtime == _FAKE_SDIST_MTIME, f"{member.name}: tar mtime must be the sdist epoch"
+
+
+def test_build_dep_pkg_restores_absent_source_date_epoch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+
+    bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
+
+    assert "SOURCE_DATE_EPOCH" not in os.environ
+
+
+def test_build_wheel_runs_pip_with_the_dep_epoch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """build_wheel() is stubbed entirely here (like _mock_network does) — so
+    assert the dep epoch is live in os.environ["SOURCE_DATE_EPOCH"] at the
+    moment build_wheel() is called (the mechanism that makes the real `pip
+    wheel` subprocess, which copies os.environ, stamp the wheel with it)."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+
+    def fake_fetch(port: Any, dest_dir: Path, *, sha256: str, size: int) -> Path:
+        dest = dest_dir / f"{port.distname}.tar.gz"
+        _write_fake_sdist(dest)
+        return dest
+
+    captured: list[str | None] = []
+
+    def fake_build_wheel(sdist: Path, work_dir: Path) -> Path:
+        captured.append(os.environ.get("SOURCE_DATE_EPOCH"))
+        wheel_dir = work_dir / "wheel"
+        wheel_dir.mkdir(parents=True, exist_ok=True)
+        wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
+        _write_wheel(wheel, files={"charset_normalizer/__init__.py": b"x = 1\n"}, entry_points=None)
+        return wheel
+
+    monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
+    monkeypatch.setattr(bdp, "build_wheel", fake_build_wheel)
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "999")
+
+    bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
+
+    assert captured == [str(_FAKE_SDIST_MTIME)]
+
+
+# --------------------------------------------------------------------------- #
 # CLI wiring
 # --------------------------------------------------------------------------- #
 
@@ -664,7 +800,7 @@ def test_main_stdout_is_only_the_pkg_path_line(
 
     def fake_fetch(port: Any, dest_dir: Path, *, sha256: str, size: int) -> Path:
         dest = dest_dir / f"{port.distname}.tar.gz"
-        dest.write_bytes(b"mocked sdist bytes")
+        _write_fake_sdist(dest)
         return dest
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:

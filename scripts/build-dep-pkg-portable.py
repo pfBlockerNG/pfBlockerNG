@@ -30,6 +30,12 @@
 # Requires: python3 (stdlib) + pip (BUILD_DEPENDS equivalent) + a zstd encoder
 # (see build-pkg-portable.py). Network is required (sdist fetch + pip's own
 # fetch of its build backend). Developer tool — not shipped in release archives.
+#
+# Dep .pkg bytes are a function of the pinned sdist ONLY, never the caller's
+# ambient SOURCE_DATE_EPOCH: the pfBlockerNG project build exports that for
+# ITS OWN commit, and reusing it here would stamp every dep with an unrelated
+# epoch that collides with the same-version dep already published from a
+# different pfBlockerNG commit (issue #2454).
 
 from __future__ import annotations
 
@@ -41,6 +47,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import urllib.request
 import zipfile
@@ -232,6 +239,23 @@ def fetch_verified_sdist(port: PortFacts, dest_dir: Path, *, sha256: str, size: 
     raise DepPkgError(f"failed to fetch {distfile} from any MASTER_SITES candidate:\n  " + "\n  ".join(errors))
 
 
+def sdist_epoch(sdist: Path) -> int:
+    """The dependency's OWN timestamp: the newest member mtime inside the
+    verified sdist tarball (upstream's release stamp). This — never the build
+    clock, never the ambient SOURCE_DATE_EPOCH — is what every mtime this tool
+    emits derives from (issue #2454). A sdist with no members, or whose
+    members all carry mtime 0, is refused: a dependency must carry its own
+    timestamp, and silently falling back elsewhere would just reintroduce the
+    leak this function exists to close."""
+    with tarfile.open(sdist) as tf:
+        newest = max((m.mtime for m in tf.getmembers()), default=0)
+    if newest <= 0:
+        raise DepPkgError(
+            f"{sdist}: no usable member mtime found in the sdist — a dependency must carry its own timestamp"
+        )
+    return int(newest)
+
+
 # --------------------------------------------------------------------------- #
 # Wheel build — BUILD_DEPENDS py-setuptools/py-wheel equivalent: `pip wheel`.
 # --------------------------------------------------------------------------- #
@@ -417,6 +441,12 @@ def stage_wheel(wheel: Path, stage_dir: Path, py_dotted: str) -> tuple[list[Path
 
 
 def build_dep_pkg(args: argparse.Namespace) -> Path:
+    """Build the dep .pkg. Every mtime the output carries — the wheel build's
+    own stamping, every staged-file mtime, the +MANIFEST files[*].mtime — is
+    pinned to ``sdist_epoch()``, NOT the ambient ``SOURCE_DATE_EPOCH`` a caller
+    may have exported for an unrelated pfBlockerNG project build: this
+    function overrides that env var for its own duration (restored in a
+    ``finally``) so the two builds never collide (issue #2454)."""
     port_dir = Path(args.ports).resolve() / args.port
     port = read_port(port_dir)
     py_dotted = python_dotted_version(args.py_flavor)  # validates the flavor too
@@ -427,49 +457,59 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
     with tempfile.TemporaryDirectory(prefix="pfbng-deppkg-") as td:
         tmp = Path(td)
         sdist = fetch_verified_sdist(port, tmp, sha256=sha256, size=size)
-        wheel = build_wheel(sdist, tmp)
+        dep_epoch = sdist_epoch(sdist)
 
-        stage = tmp / "stage"
-        site_files, script_files = stage_wheel(wheel, stage, py_dotted)
-        if not site_files:
-            raise DepPkgError(f"{wheel.name}: wheel contained no files")
+        prior_epoch = os.environ.get("SOURCE_DATE_EPOCH")
+        os.environ["SOURCE_DATE_EPOCH"] = str(dep_epoch)
+        try:
+            wheel = build_wheel(sdist, tmp)
 
-        portname = f"{args.py_flavor}-{port.portname}"
-        pyv = args.py_flavor[2:]  # "py311" -> "311"
+            stage = tmp / "stage"
+            site_files, script_files = stage_wheel(wheel, stage, py_dotted)
+            if not site_files:
+                raise DepPkgError(f"{wheel.name}: wheel contained no files")
 
-        files: list[Any] = []
-        for f in site_files:
-            files.append(bpp.StagedFile(install_path="/" + str(f.relative_to(stage)), src_in_stage=f, perm="0644"))
-        for f in script_files:
-            files.append(bpp.StagedFile(install_path="/" + str(f.relative_to(stage)), src_in_stage=f, perm="0555"))
+            portname = f"{args.py_flavor}-{port.portname}"
+            pyv = args.py_flavor[2:]  # "py311" -> "311"
 
-        build = bpp.Build(
-            portname=portname,
-            pkgversion=port.portversion,
-            origin=args.port,
-            comment=port.comment,
-            maintainer=port.maintainer,
-            categories=port.categories,
-            licenses=port.license.split(),
-            www=port.www,
-            desc=read_descr(port_dir, port.comment),
-            prefix="/usr/local",
-            # NO_ARCH: wildcard the CPU so one build serves every arch on this
-            # FreeBSD major (real `pkg create` does the same for a NO_ARCH port).
-            abi=f"FreeBSD:{args.freebsd_major}:*",
-            arch=f"freebsd:{args.freebsd_major}:*",
-            deps=[
-                bpp.Dep(name=f"python{pyv}", origin=f"lang/python{pyv}", version=args.python_dep_version),
-            ],
-            files=files,
-        )
+            files: list[Any] = []
+            for f in site_files:
+                files.append(bpp.StagedFile(install_path="/" + str(f.relative_to(stage)), src_in_stage=f, perm="0644"))
+            for f in script_files:
+                files.append(bpp.StagedFile(install_path="/" + str(f.relative_to(stage)), src_in_stage=f, perm="0555"))
 
-        out_dir = Path(args.out_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-        out_path = out_dir / f"{build.pkgname}.pkg"
-        bpp.write_pkg(build, out_path, args.compression)
-        sys.stderr.write(f"==> wrote {out_path}  ({out_path.stat().st_size} bytes, {len(build.files)} files)\n")
-        return out_path
+            build = bpp.Build(
+                portname=portname,
+                pkgversion=port.portversion,
+                origin=args.port,
+                comment=port.comment,
+                maintainer=port.maintainer,
+                categories=port.categories,
+                licenses=port.license.split(),
+                www=port.www,
+                desc=read_descr(port_dir, port.comment),
+                prefix="/usr/local",
+                # NO_ARCH: wildcard the CPU so one build serves every arch on this
+                # FreeBSD major (real `pkg create` does the same for a NO_ARCH port).
+                abi=f"FreeBSD:{args.freebsd_major}:*",
+                arch=f"freebsd:{args.freebsd_major}:*",
+                deps=[
+                    bpp.Dep(name=f"python{pyv}", origin=f"lang/python{pyv}", version=args.python_dep_version),
+                ],
+                files=files,
+            )
+
+            out_dir = Path(args.out_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"{build.pkgname}.pkg"
+            bpp.write_pkg(build, out_path, args.compression)
+            sys.stderr.write(f"==> wrote {out_path}  ({out_path.stat().st_size} bytes, {len(build.files)} files)\n")
+            return out_path
+        finally:
+            if prior_epoch is None:
+                os.environ.pop("SOURCE_DATE_EPOCH", None)
+            else:
+                os.environ["SOURCE_DATE_EPOCH"] = prior_epoch
 
 
 def main(argv: list[str]) -> int:
