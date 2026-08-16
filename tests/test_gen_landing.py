@@ -2734,28 +2734,34 @@ def test_sync_site_writes_every_desired_file_and_deletes_extraneous(tmp_path: Pa
     )
 
 
-def test_sync_site_legacy_index_html_swept_from_every_catalogue_dir(tmp_path: Path) -> None:
-    """R9: a pre-existing legacy index.html anywhere under a catalogue prefix is
-    deleted (the one-time sweep); every sibling file (meta.conf/.pkg bytes) is
-    left byte-for-byte untouched; nothing is ever WRITTEN under a catalogue prefix."""
+def test_sync_site_leaves_a_legacy_index_html_under_a_catalogue_dir_untouched(tmp_path: Path) -> None:
+    """R9: a pre-existing legacy index.html anywhere under a catalogue prefix is left
+    byte-for-byte alone by the renderer — no add/modify/delete under a catalogue
+    prefix, ever (owner ruling: any one-time cleanup of such a leftover is an
+    operator task run once after the first publish with this script, never logic
+    carried in the script itself). Every sibling file (meta.conf/.pkg bytes) is
+    likewise untouched, and the render is byte-identical before/after."""
     docs = tmp_path / "docs"
-    _touch(docs / "stable" / "index.html")
-    _touch(docs / "stable" / "ce-2.8" / "index.html")
+    stable_index = docs / "stable" / "index.html"
+    cell_index = docs / "stable" / "ce-2.8" / "index.html"
+    _touch(stable_index)
+    _touch(cell_index)
     meta = docs / "stable" / "ce-2.8" / "meta.conf"
     meta.parent.mkdir(parents=True, exist_ok=True)
     meta.write_bytes(b"version = 2;\n")
     pkg = docs / "stable" / "ce-2.8" / f"{_CANON}-1.0.0.pkg"
     pkg.write_bytes(b"pkg-bytes")
+    before = _snapshot(docs)
 
     written, deleted = gl.sync_site(str(docs), {})
 
     assert written == []
-    assert "stable/index.html" in deleted
-    assert "stable/ce-2.8/index.html" in deleted
-    assert not (docs / "stable" / "index.html").exists()
-    assert not (docs / "stable" / "ce-2.8" / "index.html").exists()
+    assert deleted == []
+    assert stable_index.is_file()
+    assert cell_index.is_file()
     assert meta.read_bytes() == b"version = 2;\n"
     assert pkg.read_bytes() == b"pkg-bytes"
+    assert _snapshot(docs) == before
 
 
 def test_sync_site_refuses_a_desired_path_under_a_catalogue_prefix(tmp_path: Path) -> None:
