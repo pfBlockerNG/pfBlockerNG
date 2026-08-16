@@ -1564,8 +1564,10 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
 
 
 # =========================================================================== #
-# ADR-20 Phase 6 — variant-catalog live-VM cases (CE install, wrong-variant   #
-# guard, routing URL).                                                        #
+# ADR-20 Phase 6 — variant-catalog live-VM cases: this leg installs from ITS   #
+# OWN row's catalog, and the routing URL. The wrong-variant guard case is gone  #
+# (issue #2464): it asserted a difference between two matrix rows, which says   #
+# nothing about this build and is unfalsifiable when two rows share a target.   #
 #                                                                              #
 # Marker: @pytest.mark.repo  (inherited from pytestmark = pytest.mark.repo).  #
 # Deselected from default `python -m pytest` — dispatched via:                #

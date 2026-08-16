@@ -97,14 +97,17 @@ pfsense_version = os.environ.get("PARITY_PFSENSE_VERSION", "")
 if not pfsense_version:
     import subprocess
 
-    rows = json.loads(
-        subprocess.run(
-            ["sh", str(Path(os.environ["PFB_ROOT"]) / "scripts" / "read-version-matrix.sh"), "--print-ci"],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
+    proc = subprocess.run(
+        ["sh", str(Path(os.environ["PFB_ROOT"]) / "scripts" / "read-version-matrix.sh"), "--print-ci"],
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    if proc.returncode != 0:
+        # capture_output swallows the reader's own ::error:: line; re-emit it or the failure
+        # reads as an empty traceback.
+        raise SystemExit(f"read-version-matrix.sh --print-ci failed (rc={proc.returncode}): {proc.stderr.strip()}")
+    rows = json.loads(proc.stdout)
     matches = [
         r
         for r in rows
