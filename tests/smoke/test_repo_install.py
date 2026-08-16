@@ -305,8 +305,34 @@ def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     _ssh_check(vm, "/bin/mkdir", "-p", repo_dir)
     for pkg in staged:
         _scp_to_guest(vm, pkg, f"{repo_dir}/{pkg.name}")
-    # `pkg repo <dir>` with no key argument => an unsigned catalog.
-    _ssh_check(vm, "env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
+    pkg_repo_index(vm, repo_dir)
+
+
+# `pkg repo` exit status when libpkg aborts (SIGABRT, 128+6) — the guest's jemalloc runs
+# with assertions on and once in many runs trips one inside libpkg
+# (`Failed assertion: "alloc_ctx.szind != SC_NSIZES"` … `Abort trap`, issue #2447).
+_PKG_REPO_ABORT_RC = 134
+
+
+def pkg_repo_index(vm: SmokeVM, repo_dir: str) -> None:
+    """``pkg repo <dir>`` on the guest — no key argument => an unsigned catalog.
+
+    Retries ONCE, and only when ``pkg`` itself died on SIGABRT (issue #2447): that is a
+    libpkg crash on an input the very next run indexes cleanly (replayed on a leased box:
+    same ref, same case, green), not a property of the catalog under test. Any other
+    non-zero exit raises on the first try, exactly as before.
+    """
+    remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
+    result = vm.ssh(*remote, timeout=180.0)
+    if result.returncode == _PKG_REPO_ABORT_RC:
+        print(
+            f"PFB_NOTE pkg repo {repo_dir} aborted (rc={result.returncode}) — retrying once (#2447):\n{result.stderr}"
+        )
+        result = vm.ssh(*remote, timeout=180.0)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"guest cmd {remote!r} failed: rc={result.returncode}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
 
 
 def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
