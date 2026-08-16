@@ -502,7 +502,9 @@ jobs:
     uses: ./.github/workflows/pkg-render-site.yml
     with:
       source_ref: "${{ needs.prepare.outputs.tools_sha }}"
-    secrets: inherit
+    secrets:
+      PKG_GITHUB_APP_ID: ${{ secrets.PKG_GITHUB_APP_ID }}
+      PKG_GITHUB_APP_PRIVATE_KEY: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
 
   validate-live-pages-install:
     name: Live Pages pkg install

@@ -195,10 +195,11 @@ PY
   # --- r2: NOOP ----------------------------------------------------------------
 
   It 'r2: a second run over already-rendered content is a NOOP'
-    sh "$script" >/dev/null 2>&1
+    seed_rc=0
+    sh "$script" >/dev/null 2>&1 || seed_rc=$?
+    [ "$seed_rc" -eq 0 ] || { echo "seed render failed with ${seed_rc}" >&2; return 1; }
     original_remote_head="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
     original_head="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
-    export FAKE_RENDER_MODE=noop
     When run script "$script"
     The status should equal 0
     The output should include 'NOOP'

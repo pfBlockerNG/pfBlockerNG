@@ -15,6 +15,11 @@ on:
         description: pfBlockerNG ref providing scripts/gen_landing.py + pkg-site/
         required: true
         type: string
+    secrets:
+      PKG_GITHUB_APP_ID:
+        required: true
+      PKG_GITHUB_APP_PRIVATE_KEY:
+        required: true
   workflow_dispatch:
     inputs:
       source_ref:

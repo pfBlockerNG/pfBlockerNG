@@ -1134,9 +1134,14 @@ def _shell_single_quote(value: str) -> str:
 def _bake_base_url(script_text: str, base: str) -> str:
     """Replace install.sh's hardcoded ``PFB_BASE_URL`` default with *base*.
 
-    Raises if the line is not found EXACTLY once — a drifted install.sh must fail
-    the site build loudly rather than silently publish an installer that still
-    defaults to the upstream URL.
+    Only called by ``build_site_tree`` when the default-URL line occurs at least
+    once; raises if it occurs MORE than once, so a doubled line still fails the
+    site build loudly. A script carrying ZERO occurrences is never routed here at
+    all — ``build_site_tree`` leaves it unbaked, silently — so the invariant that
+    the repository's own ``scripts/install.sh`` always carries this line EXACTLY
+    once is pinned by the test suite
+    (``test_scripts_install_sh_carries_the_bake_line_and_both_embed_markers``),
+    not enforced by this function.
 
     *base* is baked in as a single-quoted ``PFB_DEFAULT_BASE_URL`` literal, then
     referenced through a second, unquoted ``${PFB_BASE_URL:-${PFB_DEFAULT_BASE_URL}}``
@@ -1222,7 +1227,7 @@ def build_site_tree(tree: str, base: str) -> dict[str, tuple[bytes, int]]:
                 text = data.decode("utf-8")
                 if text.count(_BASE_URL_DEFAULT_LINE) >= 1:
                     text = _bake_base_url(text, base)
-                if _HOOK_EMBED_BEGIN in text:
+                if _HOOK_EMBED_BEGIN in text or _HOOK_EMBED_END in text:
                     with open(hook_path) as hf:
                         hook_text = hf.read()
                     text = _embed_hook(text, hook_text)
@@ -1245,13 +1250,30 @@ def _catalogue_prefix(rel: str) -> str | None:
 
 def _prune_empty_dirs(root: str) -> None:
     """Remove every directory under *root* left empty by ``sync_site``'s deletions
-    (never *root* itself). Bottom-up, re-checking live directory contents at each
-    step so a cascade (a leaf's removal emptying its parent) prunes fully."""
+    (never *root* itself, never a catalogue-owned tree). Bottom-up, re-checking
+    live directory contents at each step so a cascade (a leaf's removal emptying
+    its parent) prunes fully."""
     for dirpath, _dirs, _files in os.walk(root, topdown=False):
         if dirpath == root:
             continue
+        rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
+        if _catalogue_prefix(rel) is not None:
+            continue  # catalogue-owned — never touched, no exceptions
         if not os.listdir(dirpath):
             os.rmdir(dirpath)
+
+
+def _symlinked_component(docs: str, rel: str) -> str | None:
+    """The first path, walking from *docs* down to ``docs/<rel>`` inclusive, that is
+    a symlink — or None if none is. Used by ``sync_site`` to refuse writing THROUGH
+    a symlink (a directory component or the leaf itself) planted inside docs/, which
+    would otherwise let a write escape the tree entirely."""
+    current = docs
+    for part in rel.split("/"):
+        current = os.path.join(current, part)
+        if os.path.islink(current):
+            return current
+    return None
 
 
 def sync_site(docs: str, desired: dict[str, tuple[bytes, int]]) -> tuple[list[str], list[str]]:
@@ -1262,12 +1284,22 @@ def sync_site(docs: str, desired: dict[str, tuple[bytes, int]]) -> tuple[list[st
     WRITE one from *desired* in the first place. A one-time cleanup of a legacy
     autoindex leftover under a catalogue dir (from the generator this replaces) is
     an operator task run once after the first successful publish with this script,
-    never logic this script carries forward. Returns ``(written, deleted)``, each
-    the sorted "/"-relative paths.
+    never logic this script carries forward. Every desired path is also validated
+    BEFORE the first write — a `..` segment or a leading `/`, or a symlink sitting
+    anywhere between docs/ and the write target (leaf or intermediate directory) —
+    so no partial write can ever land, and none can escape docs/.
+    Returns ``(written, deleted)``, each the sorted "/"-relative paths.
     """
     for rel in desired:
         if _catalogue_prefix(rel) is not None:
             raise ValueError(f"desired site path {rel!r} sits under a catalogue-owned prefix — refusing to write")
+        if rel.startswith("/") or any(segment == ".." for segment in rel.split("/")):
+            raise ValueError(f"desired site path {rel!r} is not a safe relative path — refusing to write")
+        symlinked = _symlinked_component(docs, rel)
+        if symlinked is not None:
+            raise ValueError(
+                f"desired site path {rel!r} resolves through a symlink at {symlinked!r} — refusing to write"
+            )
 
     for rel, (data, mode) in desired.items():
         out_path = os.path.join(docs, *rel.split("/"))

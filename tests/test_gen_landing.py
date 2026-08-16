@@ -2700,6 +2700,35 @@ def test_build_site_tree_two_default_url_lines_raises(tmp_path: Path) -> None:
         gl.build_site_tree(str(tree), "https://x/pkg")
 
 
+def test_build_site_tree_half_marked_sh_raises(tmp_path: Path) -> None:
+    """Blocking finding, PR #2451 review: build_site_tree used to trigger
+    ``_embed_hook`` ONLY when the BEGIN marker was present, so a ``.sh`` carrying
+    just the END marker (a drifted/half-edited script) fell through unpatched and
+    unraised. The trigger now fires on EITHER marker being present, so a half-marked
+    file always reaches ``_embed_hook``'s own missing-marker ``ValueError`` instead
+    of silently publishing broken content."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, "half.sh", f"#!/bin/sh\n{gl._HOOK_EMBED_END}\n".encode())
+
+    with pytest.raises(ValueError, match="embed markers"):
+        gl.build_site_tree(str(tree), "https://x/pkg")
+
+
+def test_scripts_install_sh_carries_the_bake_line_and_both_embed_markers() -> None:
+    """Drift pin (blocking finding, PR #2451 review): build_site_tree only bakes or
+    hook-embeds a .sh file when ITS OWN trigger substring occurs in the text — a
+    correct, intentional design (recipes/*.sh carry neither and must stay
+    untouched by either splice). That design depends on the repository's own
+    ``scripts/install.sh`` — the ONE file in the real pkg-site/ tree that carries
+    both — never drifting to a partial set; install.sh changes only via a reviewed
+    PR, so this pin (not runtime code) is what keeps a drifted repository copy
+    from silently publishing an unbaked or unpatched installer."""
+    text = (_SCRIPTS_DIR / "install.sh").read_text()
+    assert text.count(gl._BASE_URL_DEFAULT_LINE) == 1
+    assert text.count(gl._HOOK_EMBED_BEGIN) == 1
+    assert text.count(gl._HOOK_EMBED_END) == 1
+
+
 # ── sync_site: mirror the desired tree into docs/, never touching a catalogue dir ──
 
 
@@ -2764,6 +2793,24 @@ def test_sync_site_leaves_a_legacy_index_html_under_a_catalogue_dir_untouched(tm
     assert _snapshot(docs) == before
 
 
+def test_sync_site_never_prunes_an_empty_catalogue_owned_dir(tmp_path: Path) -> None:
+    """`_prune_empty_dirs` must skip catalogue-owned trees, matching the "never
+    added, modified, or deleted here — no exception" contract sync_site's own
+    docstring states (CodeRabbit finding id 3791471640, PR #2451 review N3): an
+    empty ``docs/staging/`` (never git-visible, but reachable via a partial
+    publisher run) and an empty ``docs/stable/empty/`` both survive."""
+    docs = tmp_path / "docs"
+    (docs / "staging").mkdir(parents=True)
+    (docs / "stable" / "empty").mkdir(parents=True)
+
+    written, deleted = gl.sync_site(str(docs), {})
+
+    assert written == []
+    assert deleted == []
+    assert (docs / "staging").is_dir()
+    assert (docs / "stable" / "empty").is_dir()
+
+
 def test_sync_site_refuses_a_desired_path_under_a_catalogue_prefix(tmp_path: Path) -> None:
     """H3: a desired site path rooted under a catalogue prefix raises BEFORE writing
     anything — the renderer must be structurally unable to write there."""
@@ -2792,6 +2839,55 @@ def test_sync_site_never_follows_a_symlink_inside_docs(tmp_path: Path) -> None:
 
     assert written == [] and deleted == []
     assert (docs / "link.txt").is_symlink()
+
+
+def test_sync_site_refuses_to_write_through_a_symlinked_leaf(tmp_path: Path) -> None:
+    """A pre-existing symlink AT a desired path (e.g. a leftover ``install.sh`` ->
+    outside docs/) must never be written through — the write pass raises before
+    touching it, and the symlink's target is left byte-for-byte alone (PR #2451
+    review N2: the write pass used to follow it while the delete pass already
+    refused to)."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    victim = tmp_path / "outside" / "victim.txt"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("untouched")
+    (docs / "install.sh").symlink_to(victim)
+
+    with pytest.raises(ValueError, match="symlink"):
+        gl.sync_site(str(docs), {"install.sh": (b"RENDERED\n", 0o755)})
+
+    assert victim.read_text() == "untouched"
+    assert (docs / "install.sh").is_symlink()
+
+
+def test_sync_site_refuses_to_write_through_a_symlinked_directory(tmp_path: Path) -> None:
+    """A symlinked DIRECTORY component between docs/ and the write target (e.g. a
+    leftover ``browse`` -> ``stable``) must also be refused — the write pass walks
+    every path component, not just the leaf."""
+    docs = tmp_path / "docs"
+    (docs / "stable").mkdir(parents=True)
+    (docs / "browse").symlink_to(docs / "stable")
+
+    with pytest.raises(ValueError, match="symlink"):
+        gl.sync_site(str(docs), {"browse/edge/ce-2.8/index.html": (b"<html></html>", 0o644)})
+
+    assert (docs / "browse").is_symlink()
+    assert not (docs / "stable" / "edge").exists()
+
+
+def test_sync_site_refuses_a_desired_key_containing_a_traversal_segment(tmp_path: Path) -> None:
+    """A desired key carrying a `..` segment must never be written — even though
+    ``write_site`` never produces one today, an internal caller passing one would
+    otherwise write straight through it (PR #2451 review N2)."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    outside_marker = tmp_path / "x.txt"
+
+    with pytest.raises(ValueError, match="safe relative path"):
+        gl.sync_site(str(docs), {"../x.txt": (b"escaped\n", 0o644)})
+
+    assert not outside_marker.exists()
 
 
 # ── render_page / _channel_card: recipe text from the built site tree ─────────

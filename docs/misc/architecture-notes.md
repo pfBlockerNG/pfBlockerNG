@@ -1088,10 +1088,11 @@ predecessor four `install-<channel>.sh` wrappers + shared `install-common.sh` sp
 retired; unifying them was an owner ruling (2026-08). The repository copy
 (`scripts/install.sh`) shells out to the sibling `scripts/rc.d/pfblockerng_repo_generate.sh`,
 resolved via `dirname "$0"`, which fails when **piped** into `sh` (`$0` is then `sh`, not the
-script path). `gen_landing.py`'s `write_install_script()` publishes a self-contained
-`site/install.sh` via TWO splices: `_bake_base_url` points install.sh's own `PFB_BASE_URL`
-default at the site's own base first (issue #2416 B3/F3), then the hook body is spliced into
-THAT text's `PFB_EMBED_HOOK` block — a single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so
+script path). `gen_landing.py`'s `build_site_tree()` — the generic pkg-site/ tree-build
+pass (issue #2450) — applies TWO splices to install.sh's site-tree copy: `_bake_base_url`
+points install.sh's own `PFB_BASE_URL` default at the site's own base first (issue #2416
+B3/F3), then the hook body is spliced into THAT text's `PFB_EMBED_HOOK` block — a
+single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so
 none of the hook's dollar-signs or backticks are expanded. Published at
 `pfblockerng.github.io/pkg/install.sh`, what the README's one-liners
 (`fetch -qo - <base>/install.sh | sh -s -- --channel <ch>`) point to.
