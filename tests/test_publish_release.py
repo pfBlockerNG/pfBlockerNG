@@ -253,12 +253,13 @@ def _wrap_dependency_pkg(
     abi: str = "FreeBSD:15:*",
     local_name: str,
     payload: dict[str, bytes] | None = None,
+    origin: str | None = None,
 ) -> tuple[Path, str]:
     manifest = {
         "name": name,
         "version": version,
         "abi": abi,
-        "origin": f"textproc/{name}",
+        "origin": origin if origin is not None else f"textproc/{name}",
     }
     compact = json.dumps(manifest, separators=(",", ":")).encode()
     members = [("+COMPACT_MANIFEST", compact, 0o644, 0)]
@@ -1410,6 +1411,31 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
         assets_2 = self.new_assets_dir()
         _populate_assets_dir(assets_2, rows=(ROW_CE_NO_EXTRA,), source_tag="v4.0.0.b2", include_dependency=False)
         _run(pkg_repo=self.pkg_repo, assets_dir=assets_2, rows=(ROW_CE_NO_EXTRA,), tag="v4.0.0.b2")
+        self.assertFalse((dest / _CHARSET_PKG).exists())
+        self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
+
+    @_requires_engine
+    def test_same_name_other_category_extra_evicted(self) -> None:
+        # issue #2403: category is part of the extra's identity — www/py-foo never
+        # satisfies a textproc/py-foo declaration, so a same-named leftover from
+        # another category is undeclared and goes.
+        assets_1 = self.new_assets_dir()
+        _populate_assets_dir(assets_1, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        _run(pkg_repo=self.pkg_repo, assets_dir=assets_1, rows=(ROW_CE,), tag="v4.0.0.b1")
+        dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        _wrap_dependency_pkg(
+            dest,
+            name=_CHARSET_NAME,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name=_CHARSET_PKG,
+            origin=f"www/{_CHARSET_NAME}",
+        )
+        self.assertTrue((dest / _CHARSET_PKG).is_file())
+
+        assets_2 = self.new_assets_dir()
+        _populate_assets_dir(assets_2, rows=(ROW_CE,), source_tag="v4.0.0.b2", include_dependency=False)
+        _run(pkg_repo=self.pkg_repo, assets_dir=assets_2, rows=(ROW_CE,), tag="v4.0.0.b2")
         self.assertFalse((dest / _CHARSET_PKG).exists())
         self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
 
