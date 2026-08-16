@@ -1207,7 +1207,9 @@ Full design: ADR-39.
   counts one main asset per release row plus the total `extra_pkgs` entries. The publisher folds
   those attached dep `.pkg` assets into the served catalogue itself — `publish_catalogues.py`
   verifies each one against its ROUTE row's ABI and `publish_release.py` drops it into the same
-  destination as the canonical package.
+  destination as the canonical package. Dependency package bytes derive from the pinned sdist's
+  own timestamp (`build-dep-pkg-portable.py`), never the project `SOURCE_DATE_EPOCH` — the
+  invariant that lets the shared-bytes rule hold for deps too (issue #2454).
 - **Generators:** `scripts/build-repo-portable.py` (primary catalog gen) and
   `scripts/build-repo.sh` (fallback + `--print-conf` conf template) both emit the client
   repo-conf; `priority: 100` — one equal priority across every project channel repo, above

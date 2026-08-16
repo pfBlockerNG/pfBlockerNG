@@ -337,6 +337,39 @@ def test_sdist_epoch_refuses_all_zero_mtimes(tmp_path: Path) -> None:
         bdp.sdist_epoch(sdist)
 
 
+def test_sdist_epoch_refuses_non_tar_file(tmp_path: Path) -> None:
+    """A malformed/verified-but-not-actually-tar sdist must raise DepPkgError,
+    not an uncaught tarfile.TarError — main() only catches DepPkgError."""
+    sdist = tmp_path / "notreally.tar.gz"
+    sdist.write_bytes(b"not a tar file at all, just garbage bytes" * 4)
+    with pytest.raises(bdp.DepPkgError, match="not a readable tar sdist"):
+        bdp.sdist_epoch(sdist)
+
+
+def test_sdist_epoch_refuses_mtime_above_ustar_range(tmp_path: Path) -> None:
+    """A member mtime above the ustar archive ceiling must fail inside
+    sdist_epoch() itself — naming the offending sdist — rather than surfacing
+    later from write_pkg's own range check with no sdist context."""
+    sdist = tmp_path / "toobig.tar.gz"
+    _write_sdist_tar(sdist, [0o77777777777 + 1])
+    with pytest.raises(bdp.DepPkgError, match=f"newest member mtime of {sdist.name}"):
+        bdp.sdist_epoch(sdist)
+
+
+def test_sdist_epoch_truncates_fractional_pax_mtime(tmp_path: Path) -> None:
+    """Real PyPI sdists are pax archives with fractional member mtimes;
+    sdist_epoch() truncates to whole seconds rather than propagating a float
+    SOURCE_DATE_EPOCH downstream."""
+    sdist = tmp_path / "pax.tar.gz"
+    with tarfile.open(sdist, "w:gz", format=tarfile.PAX_FORMAT) as tf:
+        data = b"member"
+        info = tarfile.TarInfo(name="pkg/file.txt")
+        info.size = len(data)
+        info.mtime = 1760412874.4126263
+        tf.addfile(info, io.BytesIO(data))
+    assert bdp.sdist_epoch(sdist) == 1760412874
+
+
 # --------------------------------------------------------------------------- #
 # Wheel build — exactly one PURE wheel, or refuse.
 # --------------------------------------------------------------------------- #
@@ -699,15 +732,44 @@ def test_build_dep_pkg_bytes_do_not_depend_on_ambient_source_date_epoch(
 
     for out_path in (out_path1, out_path2):
         full = _read_full_manifest(out_path)
+        assert full["files"], "manifest must list staged files"
         for install_path, entry in full["files"].items():
             assert entry["mtime"] == _FAKE_SDIST_MTIME, f"{install_path}: manifest mtime must be the sdist epoch"
 
         tar_bytes = pfb_pkg.zstd_decompress(out_path.read_bytes())
         with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
-            for member in tf.getmembers():
-                if member.name in ("+MANIFEST", "+COMPACT_MANIFEST"):
-                    continue
+            payload = [m for m in tf.getmembers() if m.name not in ("+MANIFEST", "+COMPACT_MANIFEST")]
+            assert payload, "archive must carry payload members besides the manifests"
+            for member in payload:
                 assert member.mtime == _FAKE_SDIST_MTIME, f"{member.name}: tar mtime must be the sdist epoch"
+
+
+def test_build_dep_pkg_uses_each_sdists_own_mtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """_mock_network's sdist_mtime param actually drives the output: two builds
+    with distinct sdist mtimes produce different package bytes, and each one's
+    manifest files[*].mtime equals its OWN sdist mtime (never the other one's,
+    and never a shared/default value)."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+
+    mtime_a = 1_650_000_000
+    mtime_b = 1_700_000_500
+    assert mtime_a != _FAKE_SDIST_MTIME
+    assert mtime_b != _FAKE_SDIST_MTIME
+
+    _mock_network(monkeypatch, console_scripts=None, sdist_mtime=mtime_a)
+    out_a = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out_a"))
+
+    _mock_network(monkeypatch, console_scripts=None, sdist_mtime=mtime_b)
+    out_b = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out_b"))
+
+    assert out_a.read_bytes() != out_b.read_bytes(), "distinct sdist mtimes must produce distinct package bytes"
+
+    full_a = _read_full_manifest(out_a)
+    full_b = _read_full_manifest(out_b)
+    assert full_a["files"] and full_b["files"]
+    assert all(entry["mtime"] == mtime_a for entry in full_a["files"].values())
+    assert all(entry["mtime"] == mtime_b for entry in full_b["files"].values())
 
 
 def test_build_dep_pkg_restores_absent_source_date_epoch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -717,6 +779,46 @@ def test_build_dep_pkg_restores_absent_source_date_epoch(tmp_path: Path, monkeyp
     monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
 
     bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
+
+    assert "SOURCE_DATE_EPOCH" not in os.environ
+
+
+def _raise_stage_wheel(*_args: Any, **_kwargs: Any) -> tuple[list[Path], list[Path]]:
+    raise RuntimeError("boom: stage_wheel exploded")
+
+
+def test_build_dep_pkg_restores_ambient_source_date_epoch_after_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The finally restore must also fire on the exception path (not merely the
+    success path both prior tests exercise): stage_wheel() raises AFTER the
+    env override is installed, and the ambient value must still come back."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    monkeypatch.setattr(bdp, "stage_wheel", _raise_stage_wheel)
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "42")
+
+    with pytest.raises(RuntimeError, match="boom: stage_wheel exploded"):
+        bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
+
+    assert os.environ["SOURCE_DATE_EPOCH"] == "42"
+
+
+def test_build_dep_pkg_restores_absent_source_date_epoch_after_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as above for the absent-ambient-value case: an exception after the
+    override must still leave SOURCE_DATE_EPOCH absent, not stuck at the dep
+    epoch."""
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    monkeypatch.setattr(bdp, "stage_wheel", _raise_stage_wheel)
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+
+    with pytest.raises(RuntimeError, match="boom: stage_wheel exploded"):
+        bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
 
     assert "SOURCE_DATE_EPOCH" not in os.environ
 

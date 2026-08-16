@@ -241,19 +241,30 @@ def fetch_verified_sdist(port: PortFacts, dest_dir: Path, *, sha256: str, size: 
 
 def sdist_epoch(sdist: Path) -> int:
     """The dependency's OWN timestamp: the newest member mtime inside the
-    verified sdist tarball (upstream's release stamp). This — never the build
-    clock, never the ambient SOURCE_DATE_EPOCH — is what every mtime this tool
-    emits derives from (issue #2454). A sdist with no members, or whose
-    members all carry mtime 0, is refused: a dependency must carry its own
-    timestamp, and silently falling back elsewhere would just reintroduce the
-    leak this function exists to close."""
-    with tarfile.open(sdist) as tf:
-        newest = max((m.mtime for m in tf.getmembers()), default=0)
+    verified sdist tarball (upstream's release stamp), truncated to whole
+    seconds (pax fractional stamps truncate). This — never the build clock,
+    never the ambient SOURCE_DATE_EPOCH — is what every mtime this tool emits
+    derives from (issue #2454). A sdist with no members, or whose members all
+    carry mtime 0, is refused: a dependency must carry its own timestamp, and
+    silently falling back elsewhere would just reintroduce the leak this
+    function exists to close. A sdist that isn't actually a readable tar
+    archive, or whose newest member mtime falls outside the archive format's
+    representable range, is refused here too — naming this sdist — rather than
+    surfacing later as an uncaught traceback or a range error that blames the
+    wrong source."""
+    try:
+        with tarfile.open(sdist) as tf:
+            newest = max((m.mtime for m in tf.getmembers()), default=0)
+    except tarfile.TarError as exc:
+        raise DepPkgError(f"{sdist.name}: not a readable tar sdist: {exc}") from exc
     if newest <= 0:
         raise DepPkgError(
             f"{sdist}: no usable member mtime found in the sdist — a dependency must carry its own timestamp"
         )
-    return int(newest)
+    try:
+        return bpp._checked_mtime(int(newest), f"newest member mtime of {sdist.name}")
+    except bpp.BuildError as exc:
+        raise DepPkgError(str(exc)) from exc
 
 
 # --------------------------------------------------------------------------- #
