@@ -196,10 +196,9 @@ EOF
 End
 
 Describe 'build-repo.sh pkg repo abort retry (issue #2447)'
-  # The layout stub above always succeeds on `pkg repo`. These rows use a
-  # counting stub so a first-try SIGABRT (rc=134) is retried once, and an
-  # ordinary rc=1 is not.
-  setup() {
+  # Own helper names: a second `setup`/`cleanup` in this file would overwrite
+  # the layout block's functions (shellspec loads the whole file first).
+  setup_2447() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/brrepo2447.XXXXXX")"
     mkdir -p "${work}/bin" "${work}/in" "${work}/out"
     : > "${work}/repo.count"
@@ -228,15 +227,30 @@ case "$cmd" in
 		printf '%s\n' "$n" > "${PFB_REPO_STUB_COUNT}"
 		case "${PFB_REPO_STUB_MODE:-ok}" in
 			abort-once)
-				[ "$n" -eq 1 ] && exit 134
-				touch "$1/packagesite.pkg"
+				if [ "$n" -eq 1 ]; then
+					# Truncated first-run descriptors. A retry that
+					# does not unlink them would ship these as the
+					# catalog (#2386: descriptor exists ≠ complete).
+					printf 'TRUNCATED\n' > "$1/packagesite.pkg"
+					printf 'TRUNCATED\n' > "$1/meta.conf"
+					exit 134
+				fi
+				# Second run: if a leftover descriptor is still here,
+				# leave it — that is the fail-open we are pinning.
+				# Only write COMPLETE when the retry started clean.
+				if [ -f "$1/packagesite.pkg" ] || [ -f "$1/meta.conf" ]; then
+					:
+				else
+					printf 'COMPLETE\n' > "$1/packagesite.pkg"
+					printf 'COMPLETE\n' > "$1/meta.conf"
+				fi
 				;;
 			fail)
 				echo "pkg: No such file or directory" >&2
 				exit 1
 				;;
 			*)
-				touch "$1/packagesite.pkg"
+				printf 'COMPLETE\n' > "$1/packagesite.pkg"
 				;;
 		esac ;;
 	*) exit 64 ;;
@@ -246,11 +260,11 @@ EOF
     printf 'name=%s\nversion=%s\nabi=%s\n' pfSense-pkg-pfBlockerNG 4.0.1 'FreeBSD:15:*' \
       > "${work}/in/a.pkg"
   }
-  cleanup() { rm -rf "$work"; }
-  Before 'setup'
-  After 'cleanup'
+  cleanup_2447() { rm -rf "$work"; }
+  Before 'setup_2447'
+  After 'cleanup_2447'
 
-  run_build() {
+  run_build_2447() {
     PATH="${work}/bin:${PATH}" PKG_BIN=pkg \
       PFB_REPO_STUB_COUNT="${work}/repo.count" \
       PFB_REPO_STUB_MODE="$1" \
@@ -258,15 +272,24 @@ EOF
   }
 
   It 'retries pkg repo once after rc=134 and ships the catalog'
-    When call run_build abort-once
+    When call run_build_2447 abort-once
     The status should be success
     The stderr should include 'retrying once (#2447)'
     The path "${work}/out/release/ce-2.8/packagesite.pkg" should be exist
     The contents of file "${work}/repo.count" should equal '2'
   End
 
+  It 'drops truncated first-run descriptors before the retry'
+    When call run_build_2447 abort-once
+    The status should be success
+    The contents of file "${work}/out/release/ce-2.8/packagesite.pkg" should equal 'COMPLETE'
+    The contents of file "${work}/out/release/ce-2.8/meta.conf" should equal 'COMPLETE'
+    # Payload copies survive the descriptor wipe.
+    The path "${work}/out/release/ce-2.8/pfSense-pkg-pfBlockerNG-4.0.1.pkg" should be exist
+  End
+
   It 'does not retry an ordinary pkg repo failure'
-    When call run_build fail
+    When call run_build_2447 fail
     The status should equal 1
     The stderr should include 'failed (rc=1)'
     The stderr should not include 'retrying once'

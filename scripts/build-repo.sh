@@ -331,6 +331,12 @@ _pkg_repo_rc=0
 env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir" || _pkg_repo_rc=$?
 if [ "$_pkg_repo_rc" -eq 134 ]; then
     echo "build-repo: pkg repo aborted (rc=134) — retrying once (#2447)" >&2
+    # An aborted first run can leave a truncated descriptor. Retrying on
+    # top of it is the #2386 "descriptor exists ≠ complete" class. Drop
+    # only catalog files — keep the payload .pkg copies already laid out.
+    for _desc in meta meta.conf packagesite.pkg data.pkg packagesite.yaml data; do
+        rm -f "${dir}/${_desc}"
+    done
     _pkg_repo_rc=0
     env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir" || _pkg_repo_rc=$?
 fi
