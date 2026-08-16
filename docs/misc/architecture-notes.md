@@ -1257,7 +1257,8 @@ Full design: ADR-39.
   distribution flow, **deselected from `-m smoke`**) — install-from-our-repo (no `-f`), cross-repo
   precedence (both directions vs a `netgate-decoy`), `pkg upgrade` `_1`→`_9`, and the catalog
   accepted from both generators. The ADR-20 **variant topology** (each leg's ABI / PHP / Python /
-  catalog) is **derived entirely from the version matrix** — never hardcoded CE/Plus: `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
+  catalog) is **derived entirely from the version matrix** — never hardcoded CE/Plus:
+  `tests/smoke/_matrix.py` (unit-tested off-box by `tests/test_smoke_matrix.py`)
   reads `SMOKE_MATRIX_JSON` (smoke-single.yml injects `read-version-matrix.sh --print-ci` at job start —
   issue #1806 W3: never `--print-build`, which dedupes by `freebsd_major` and would hide a same-major
   second edition from this topology entirely — egress open), falls back to running that script, and

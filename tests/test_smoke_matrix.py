@@ -158,7 +158,7 @@ def test_bare_dispatch_defaults_to_the_first_matrix_row(monkeypatch: pytest.Monk
 
 def test_two_rows_sharing_an_abi_are_not_collapsed_by_the_unit_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
     """Rows sharing a FreeBSD major stay distinct — CE 2.9 and Plus 26.03 both are FreeBSD:16."""
-    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX)
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_COLLIDING_SHAPES_MATRIX)
     same_abi = sorted(v.catalog for v in mx.matrix_variants() if v.abi == "FreeBSD:16:amd64")
     assert same_abi == ["ce-2.9", "plus-26.03", "plus-26.07"]
 
@@ -275,11 +275,11 @@ def test_smoke_topology_excludes_route_only_via_ci_matrix_injection(monkeypatch:
     )
 
 
-# The LIVE 2026-08 matrix shape (issue #2464): FOUR rows, two of which (Plus 26.07 and
-# Plus 26.03) share an edition AND a FreeBSD major, and two of which (CE 2.9 and Plus
-# 26.03) share a build target across editions. Nothing about a row is derivable from
-# another row's edition or major.
-_LIVE_SHAPE_MATRIX = (
+# The two collision SHAPES a row-keyed topology must survive (issue #2464), not a snapshot
+# of the live matrix — a copy of the live row set here would just rot: two rows sharing an
+# edition AND a FreeBSD major, and two rows sharing a build target across editions. Nothing
+# about a row is derivable from another row's edition or major.
+_COLLIDING_SHAPES_MATRIX = (
     '[{"pfsense_version":"2.8","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
     '{"pfsense_version":"26.03","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"},'
     '{"pfsense_version":"26.07","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"},'
@@ -295,7 +295,7 @@ def test_every_matrix_row_derives_its_own_variant(monkeypatch: pytest.MonkeyPatc
     against a release line it does not build. A matrix row is identified by its own
     version, not by a property it happens to share with a sibling.
     """
-    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX)
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_COLLIDING_SHAPES_MATRIX)
     catalogs = sorted(v.catalog for v in mx.matrix_variants())
     assert catalogs == ["ce-2.8", "ce-2.9", "plus-26.03", "plus-26.07"], (
         f"a matrix row was collapsed into another: got {catalogs}"
@@ -311,7 +311,7 @@ def test_own_row_selected_by_smoke_pfsense_version(monkeypatch: pytest.MonkeyPat
     """
     _set_env(
         monkeypatch,
-        SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX,
+        SMOKE_MATRIX_JSON=_COLLIDING_SHAPES_MATRIX,
         SMOKE_PFSENSE_VERSION="26.07",
         SMOKE_ABI="FreeBSD:16:amd64",
         SMOKE_PHP_VERSION="8.5",
@@ -322,7 +322,7 @@ def test_own_row_selected_by_smoke_pfsense_version(monkeypatch: pytest.MonkeyPat
 
     _set_env(
         monkeypatch,
-        SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX,
+        SMOKE_MATRIX_JSON=_COLLIDING_SHAPES_MATRIX,
         SMOKE_PFSENSE_VERSION="26.03",
         SMOKE_ABI="FreeBSD:16:amd64",
         SMOKE_PHP_VERSION="8.5",
@@ -339,7 +339,7 @@ def test_own_row_selection_needs_no_edition_to_major_mapping(monkeypatch: pytest
     for version, expected in (("2.9", "ce-2.9"), ("26.03", "plus-26.03")):
         _set_env(
             monkeypatch,
-            SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX,
+            SMOKE_MATRIX_JSON=_COLLIDING_SHAPES_MATRIX,
             SMOKE_PFSENSE_VERSION=version,
             SMOKE_ABI="FreeBSD:16:amd64",
             SMOKE_PHP_VERSION="8.5",

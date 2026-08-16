@@ -1647,6 +1647,66 @@ def build_repo_via_portable_named(
     return guest_catalog_dir
 
 
+def forge_foreign_pkg(src_pkg: Path, out_dir: Path, *, target_php: str, target_abi: str) -> Path:
+    """Forge a .pkg that is NOT built for this box, from the branch .pkg.
+
+    Re-reads the +COMPACT_MANIFEST, replaces every ``php8N`` dep key with ``target_php``,
+    sets the ``abi`` to ``target_abi``, and repacks. No payload change — the dep/ABI
+    mismatch is refused before pkg ever reads the files.
+
+    The caller derives the target from THIS leg's own row (issue #2464: a FreeBSD major
+    and a php this row does not use), never from another matrix row — two rows may
+    legitimately share a build target, which would make the forgery a no-op.
+    """
+    tar_bytes = _zstd_decompress(src_pkg.read_bytes())
+    repacked = io.BytesIO()
+    pkg_name = ""
+    with (
+        tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tin,
+        tarfile.open(fileobj=repacked, mode="w", format=tarfile.USTAR_FORMAT) as tout,
+    ):
+        for member in tin.getmembers():
+            extracted = tin.extractfile(member) if member.isfile() else None
+            data = extracted.read() if extracted is not None else b""
+            if member.name in _PKG_MANIFEST_MEMBERS:
+                obj = json.loads(data)
+                # Swap every php8N dep for the target variant's php (CE manifest has
+                # php83; forging a Plus pkg makes it php85, and vice-versa).
+                if "deps" in obj:
+                    old_deps: dict[str, object] = obj["deps"]
+                    new_deps: dict[str, object] = {}
+                    for key, val in old_deps.items():
+                        if re.match(r"php8\d", key):
+                            # Replace the key; keep the value dict unchanged (origin/version are fictional).
+                            new_deps[target_php] = val
+                        else:
+                            new_deps[key] = val
+                    obj["deps"] = new_deps
+                # Set the target ABI: the box's own `pkg install` ABI-compatibility check is
+                # the guard under test (a concrete-vs-wildcard bucket no longer exists —
+                # issue #1806 — so this must be a wildcard ABI or the portable generator
+                # itself hard-rejects it; callers pass "FreeBSD:<opp_major>:*").
+                obj["abi"] = target_abi
+                pkg_name = obj.get("name", pkg_name)
+                data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
+                ti = tarfile.TarInfo(name=member.name)
+                ti.size = len(data)
+                ti.mode = 0o644
+                ti.uid = ti.gid = 0
+                ti.uname, ti.gname = "root", "wheel"
+                ti.mtime = 0
+                ti.type = tarfile.REGTYPE
+                tout.addfile(ti, io.BytesIO(data))
+            else:
+                tout.addfile(member, io.BytesIO(data) if member.isfile() else None)
+    if not pkg_name:
+        raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST with a name — not a libpkg .pkg?")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{pkg_name}-{target_php}.pkg"
+    out_path.write_bytes(_zstd_compress(repacked.getvalue()))
+    return out_path
+
+
 def pkg_query_deps(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     """Return the raw ``pkg query '%dn %dv' <PKG_NAME>`` output (dep names + versions).
 
@@ -1748,6 +1808,126 @@ def vm_pkg_query_name(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     """``pkg query '%n' <PKG_NAME>`` — the package name if installed, else empty string."""
     result = vm.ssh("pkg", "query", "%n", PKG_NAME, timeout=timeout)
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+# --------------------------------------------------------------------------- #
+# ADR-20 Case 2 — a package that is NOT built for this box must not install    #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.timeout(900)
+def test_foreign_build_target_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
+    """ADR-20 P6 CASE 2 — a .pkg whose build target contradicts THIS leg's row does not
+    install; the package is absent after the attempt.
+
+    The forged target is derived from this leg's own row (issue #2464): the next FreeBSD
+    major, and a php this row does not use. It is deliberately NOT "the other edition's"
+    package — two matrix rows may share a build target (CE 2.9 and Plus 26.03 are both
+    FreeBSD:16 / php85), which would make that forgery identical to the box's own build
+    and the assertion unfalsifiable. What ADR-20 asks is narrower and row-local: a build
+    that is not this row's must never install silently.
+
+    Before-state ASSERT: the box's OWN package installs CLEANLY (own php dep satisfied) —
+      proves the own path works, so the AFTER failure is the forgery, not broken setup.
+    Given the own package uninstalled and the repo conf pointing at the foreign catalog,
+    When ``pkg install -y <pkgname>`` runs against it,
+    Then the install fails or the package is absent, the output names a pkg-level cause
+      (the foreign php dep, the foreign ABI, an ABI/OS rejection, or no candidate),
+      AND ``pkg query '%n' <pkgname>`` confirms the package is NOT installed.
+    """
+    pkg = os.environ.get("SMOKE_PKG")
+    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
+    src = Path(pkg)
+
+    own = own_variant()
+    own_major = own.abi.split(":")[1]
+    # Derived from THIS row, not from a sibling row: the next major up, and any php that is
+    # not this row's. Both are what makes the package foreign to this box.
+    foreign_major = str(int(own_major) + 1)
+    foreign_php = "php83" if own.php != "php83" else "php85"
+    foreign_catalog = f"foreign-fbsd{foreign_major}"
+
+    # ---- Before-state: prove the box's OWN path works (the control) ----
+    own_catalog_dir = build_repo_via_portable_named(
+        repo_vm,
+        [src, *_smoke_dep_pkg_paths()],
+        tmp_path,
+        catalog_name=own.catalog,
+        guest_root=VARIANT_REPO_ROOT,
+    )
+    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+    pkg_delete(repo_vm)
+    write_repo_conf(repo_vm, own_catalog_dir, ours_priority=pfsense_prio + 100)
+    pkg_update(repo_vm)
+    assert vm_pkg_query_name(repo_vm) == "", "package unexpectedly present before the control install"
+
+    own_install = pkg_install_from_repo(repo_vm)
+    own_combined = own_install.stdout + own_install.stderr
+    assert "Missing dependency" not in own_combined, (
+        f"Control ({own.abi}) install: RUN_DEPENDS did not resolve:\n{own_combined}"
+    )
+    own_deps = pkg_query_deps(repo_vm)
+    assert own.php in own_deps, f"Control ({own.abi}) install: {own.php} not in deps; pkg query '%dn %dv':\n{own_deps}"
+
+    # ---- Forge a .pkg for a build target this row does not have ----
+    # The portable generator hard-rejects a concrete ABI (issue #1806 — production catalogs
+    # only hold wildcard/NO_ARCH pkgs), so the forged ABI is wildcarded to the foreign major.
+    foreign_pkg = forge_foreign_pkg(
+        src, tmp_path / "foreign_forge", target_php=foreign_php, target_abi=f"FreeBSD:{foreign_major}:*"
+    )
+    # Deliberately NOT folding in _smoke_dep_pkg_paths(): this catalog exists only to be
+    # REJECTED (foreign build target, not dep resolution), and those deps belong to the
+    # box's own major.
+    foreign_catalog_dir = build_repo_via_portable_named(
+        repo_vm,
+        [foreign_pkg],
+        tmp_path,
+        catalog_name=foreign_catalog,
+        guest_root=VARIANT_REPO_ROOT,
+    )
+
+    pkg_delete(repo_vm)
+    assert vm_pkg_query_name(repo_vm) == "", "package still present after pkg_delete"
+    write_repo_conf(repo_vm, foreign_catalog_dir, ours_priority=pfsense_prio + 100)
+    try:
+        pkg_update(repo_vm)
+    except RuntimeError:
+        # pkg update may itself fail on the ABI mismatch — that IS the guard firing.
+        pass
+
+    install_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=300.0)
+    install_failed = install_result.returncode != 0
+    install_output = install_result.stdout + install_result.stderr
+    package_installed = vm_pkg_query_name(repo_vm) != ""
+
+    assert install_failed or not package_installed, (
+        f"Foreign-target guard did NOT fire: a FreeBSD:{foreign_major} package installed on a "
+        f"{own.abi} box.\npkg install rc={install_result.returncode}\n"
+        f"pkg install output:\n{install_output}\npkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
+    )
+    # AND the failure names a CAUSE, not merely a non-zero exit. `install_failed` is
+    # deliberately NOT one of these clauses: it is already asserted above, so including it
+    # would make every other clause unreachable (issue #1965).
+    lowered = install_output.lower()
+    reasons = {
+        f"names the foreign php dep ({foreign_php})": foreign_php in install_output,
+        f"names the foreign ABI (FreeBSD:{foreign_major})": f"freebsd:{foreign_major}" in lowered,
+        "reports an ABI / OS-version rejection": any(
+            kw in lowered for kw in ("wrong abi", "wrong os version", "mismatch", "incompatible")
+        ),
+        "reports no installable candidate from the catalog": any(
+            kw in lowered for kw in ("no packages available", "not found", "missing dependency", "unable to find")
+        ),
+    }
+    assert any(reasons.values()), (
+        f"The foreign-target install failed, but for no attributable reason — the guard under "
+        f"test may not be what fired.\nexpected at least one of: {sorted(reasons)}\n"
+        f"actual: {reasons}\nrc={install_result.returncode}\n{install_output}"
+    )
+    assert not package_installed, (
+        f"Foreign-target guard: package IS installed despite the expected failure; "
+        f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
+    )
 
 
 # ADR-20 Case 3 (legacy ${ABI}/ conf transition window) retired: issue #1806 made

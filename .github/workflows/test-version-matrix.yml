@@ -45,12 +45,12 @@ jobs:
           COUNT="$(printf '%s' "$BUILD_MATRIX" | jq 'length')"
           printf '\n%s entries total\n' "$COUNT"
 
-      - name: Print CI matrix (ci:true CE entries only)
+      - name: Print CI matrix (every ci:true row)
         env:
           CI_MATRIX: ${{ steps.matrices.outputs.ci_matrix }}
         run: |
           set -eu
-          printf '=== CI matrix (ci:true CE entries only — fed to smoke fan-out) ===\n'
+          printf '=== CI matrix (every ci:true row — fed to smoke fan-out) ===\n'
           printf '%s' "$CI_MATRIX" | jq .
           COUNT="$(printf '%s' "$CI_MATRIX" | jq 'length')"
           printf '\n%s CI entries\n' "$COUNT"
@@ -100,6 +100,9 @@ jobs:
               ($row.php_version | test("^[0-9]+[.][0-9]+$")) and
               ($row.py_flavor | test("^py[0-9]+$"))
             )
+            # `variant` is required here even though the reader defaults it to "": the smoke
+            # topology derives this leg's catalog name from it, so a row without one produces
+            # a catalog like "-2.8" that no producer publishes.
           ' > /dev/null || {
             printf '::error::a CI row is not internally consistent, or is not ci:true\n'
             printf '%s' "$CI_MATRIX" | jq .
