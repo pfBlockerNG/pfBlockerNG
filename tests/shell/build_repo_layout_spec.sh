@@ -274,7 +274,7 @@ EOF
   It 'retries pkg repo once after rc=134 and ships the catalog'
     When call run_build_2447 abort-once
     The status should be success
-    The stderr should include 'retrying once (#2447)'
+    The stderr should include 'PFB_2447_RETRY'
     The path "${work}/out/release/ce-2.8/packagesite.pkg" should be exist
     The contents of file "${work}/repo.count" should equal '2'
   End
@@ -282,7 +282,7 @@ EOF
   It 'drops truncated first-run descriptors before the retry'
     When call run_build_2447 abort-once
     The status should be success
-    The stderr should include 'retrying once (#2447)'
+    The stderr should include 'PFB_2447_RETRY'
     The contents of file "${work}/out/release/ce-2.8/packagesite.pkg" should equal 'COMPLETE'
     The contents of file "${work}/out/release/ce-2.8/meta.conf" should equal 'COMPLETE'
     # Payload copies survive the descriptor wipe.

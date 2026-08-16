@@ -308,25 +308,31 @@ def build_guest_repo(vm: SmokeVM, repo_dir: str, pkg_files: list[Path]) -> None:
     pkg_repo_index(vm, repo_dir)
 
 
-# `pkg repo` exit status when libpkg aborts (SIGABRT, 128+6) — the guest's jemalloc runs
-# with assertions on and once in many runs trips one inside libpkg
-# (`Failed assertion: "alloc_ctx.szind != SC_NSIZES"` … `Abort trap`, issue #2447).
+# rc=134 is SIGABRT (128+6). One observed death site is jemalloc asserting
+# on a size-class index (`alloc_ctx.szind != SC_NSIZES`); that is not a
+# proven libpkg root cause (issue #2447).
 _PKG_REPO_ABORT_RC = 134
 
 
 def pkg_repo_index(vm: SmokeVM, repo_dir: str) -> None:
     """``pkg repo <dir>`` on the guest — no key argument => an unsigned catalog.
 
-    Retries ONCE, and only when ``pkg`` itself died on SIGABRT (issue #2447): a
-    transient libpkg crash, not a property of the catalog under test. Any other
-    non-zero exit raises on the first try, exactly as before.
+    Retries ONCE, and only when ``pkg`` itself died on SIGABRT (issue #2447).
+    That abort is a death site (one run: jemalloc size-class assertion), not
+    a diagnosed root cause. Any other non-zero exit raises on the first try.
     """
     remote = ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "repo", repo_dir)
     result = vm.ssh(*remote, timeout=180.0)
     if result.returncode == _PKG_REPO_ABORT_RC:
         print(
-            f"PFB_NOTE pkg repo {repo_dir} aborted (rc={result.returncode}) — retrying once (#2447):\n{result.stderr}"
+            f"PFB_2447_RETRY pkg repo {repo_dir} aborted (rc={result.returncode}) — retrying once:\n{result.stderr}"
         )
+        if os.environ.get("GITHUB_ACTIONS"):
+            print(
+                f"::notice title=PFB_2447_RETRY::pkg repo {repo_dir} aborted "
+                f"(rc={result.returncode}); retrying once. Count these; escalate "
+                "if frequent or if the second attempt aborts."
+            )
         result = vm.ssh(*remote, timeout=180.0)
     if result.returncode != 0:
         raise RuntimeError(
@@ -350,9 +356,8 @@ def build_repo_via_script(vm: SmokeVM, pkg_files: list[Path]) -> str:
     catalog triple ``pkg repo`` emits) is accepted by a real pfSense box, the
     live half of the build-side premise.
     """
-    # The script's own `pkg repo` runs un-retried (not routed through pkg_repo_index): the
-    # #2447 abort has only ever been seen on the direct call, and retrying here would mean
-    # re-running the whole script under test.
+    # The script's own `pkg repo` now retries once on rc=134 inside build-repo.sh.
+    # Do not wrap the whole script here — that would wipe the bucket again.
     real_varver = _box_real_varver(vm)
     _ssh_check(vm, "/bin/rm", "-rf", GUEST_PKG_IN_DIR, SCRIPT_REPO_ROOT)
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_PKG_IN_DIR, GUEST_SPIKE_DIR)

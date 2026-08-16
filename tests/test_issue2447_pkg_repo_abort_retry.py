@@ -1,7 +1,7 @@
-"""Issue #2447: ``pkg repo`` on the guest can SIGABRT (rc=134) inside libpkg (a jemalloc
-invalid-free assertion) once in many runs, on an input that indexes fine on the very
-next run. The catalog build retries that abort ONCE — and only that abort: any other
-failure (an rc=1 with a real error) still surfaces on the first try.
+"""Issue #2447: ``pkg repo`` on the guest can SIGABRT (rc=134). One run printed a
+jemalloc size-class assertion then Abort trap; the same input usually indexes.
+That line is a death site, not a root cause. The catalog build retries that abort
+ONCE — and only that abort: any other failure still surfaces on the first try.
 """
 
 from __future__ import annotations
@@ -40,8 +40,24 @@ def test_pkg_repo_retries_a_libpkg_abort_once(capsys: pytest.CaptureFixture[str]
 
     assert vm.calls == [PKG_REPO, PKG_REPO]
     out = capsys.readouterr().out
-    assert f"PFB_NOTE pkg repo {UPGRADE_REPO_DIR} aborted (rc=134)" in out
+    assert f"PFB_2447_RETRY pkg repo {UPGRADE_REPO_DIR} aborted (rc=134)" in out
     assert ABORT_STDERR in out
+    assert "::notice title=PFB_2447_RETRY::" not in out
+
+
+def test_pkg_repo_retry_emits_a_countable_actions_notice(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    aborted = subprocess.CompletedProcess((), 134, "", ABORT_STDERR)
+    success = subprocess.CompletedProcess((), 0, "", "")
+    vm = _FakeVM([aborted, success])
+
+    pkg_repo_index(vm, UPGRADE_REPO_DIR)  # type: ignore[arg-type]
+
+    out = capsys.readouterr().out
+    assert "PFB_2447_RETRY" in out
+    assert "::notice title=PFB_2447_RETRY::" in out
 
 
 def test_pkg_repo_second_abort_raises_with_the_abort_output() -> None:

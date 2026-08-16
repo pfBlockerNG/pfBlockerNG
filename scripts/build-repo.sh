@@ -324,13 +324,17 @@ done
 echo "==> pkg repo ${dir}" >&2
 # No key argument => an unsigned (NONE-signed) catalog. ASSUME_ALWAYS_YES so
 # pkg never prompts in CI.
-# Retry ONCE on SIGABRT (rc=134): guest jemalloc assertion inside libpkg
-# (issue #2447). Any other non-zero exits immediately. Do not re-run this
-# script — the bucket was already wiped above.
+# Retry ONCE on SIGABRT (rc=134 = 128+6). One run printed a jemalloc
+# size-class assertion then Abort trap (#2447) — that is a death site,
+# not a proven root cause. Any other non-zero exits immediately. Do not
+# re-run this script — the bucket was already wiped above.
 _pkg_repo_rc=0
 env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir" || _pkg_repo_rc=$?
 if [ "$_pkg_repo_rc" -eq 134 ]; then
-    echo "build-repo: pkg repo aborted (rc=134) — retrying once (#2447)" >&2
+    echo "PFB_2447_RETRY pkg repo ${dir} aborted (rc=134) — retrying once" >&2
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        echo "::notice title=PFB_2447_RETRY::pkg repo ${dir} aborted (rc=134); retrying once. Count these; escalate if frequent or if the second attempt aborts." >&2
+    fi
     # An aborted first run can leave a truncated descriptor. Retrying on
     # top of it is the #2386 "descriptor exists ≠ complete" class. Drop
     # only catalog files — keep the payload .pkg copies already laid out.
