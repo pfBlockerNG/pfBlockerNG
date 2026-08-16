@@ -62,6 +62,15 @@ def test_pkg_repo_second_abort_raises_with_the_abort_output() -> None:
     assert len(vm.calls) == 2
 
 
+def test_pkg_repo_first_success_does_not_retry() -> None:
+    success = subprocess.CompletedProcess((), 0, "", "")
+    vm = _FakeVM([success])
+
+    pkg_repo_index(vm, UPGRADE_REPO_DIR)  # type: ignore[arg-type]
+
+    assert vm.calls == [PKG_REPO]
+
+
 def test_pkg_repo_does_not_retry_an_ordinary_failure() -> None:
     failure = subprocess.CompletedProcess((), 1, "", "pkg: /tmp/pfb_repo_spike/upgrade: No such file or directory\n")
     vm = _FakeVM([failure])

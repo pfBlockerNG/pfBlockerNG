@@ -324,6 +324,19 @@ done
 echo "==> pkg repo ${dir}" >&2
 # No key argument => an unsigned (NONE-signed) catalog. ASSUME_ALWAYS_YES so
 # pkg never prompts in CI.
-env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir"
+# Retry ONCE on SIGABRT (rc=134): guest jemalloc assertion inside libpkg
+# (issue #2447). Any other non-zero exits immediately. Do not re-run this
+# script — the bucket was already wiped above.
+_pkg_repo_rc=0
+env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir" || _pkg_repo_rc=$?
+if [ "$_pkg_repo_rc" -eq 134 ]; then
+    echo "build-repo: pkg repo aborted (rc=134) — retrying once (#2447)" >&2
+    _pkg_repo_rc=0
+    env ASSUME_ALWAYS_YES=yes "$PKG_BIN" repo "$dir" || _pkg_repo_rc=$?
+fi
+[ "$_pkg_repo_rc" -eq 0 ] || {
+    echo "build-repo: pkg repo ${dir} failed (rc=${_pkg_repo_rc})" >&2
+    exit "$_pkg_repo_rc"
+}
 
 echo "==> built catalog (release channel) at release/${VARVER}" >&2

@@ -194,3 +194,82 @@ EOF
     The stderr should include 'FLAVOR COLLISION'
   End
 End
+
+Describe 'build-repo.sh pkg repo abort retry (issue #2447)'
+  # The layout stub above always succeeds on `pkg repo`. These rows use a
+  # counting stub so a first-try SIGABRT (rc=134) is retried once, and an
+  # ordinary rc=1 is not.
+  setup() {
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/brrepo2447.XXXXXX")"
+    mkdir -p "${work}/bin" "${work}/in" "${work}/out"
+    : > "${work}/repo.count"
+
+    cat > "${work}/bin/pkg" <<'EOF'
+#!/bin/sh
+cmd="$1"; shift
+case "$cmd" in
+	query)
+		[ "$1" = "-F" ] || exit 64
+		f="$2"; fmt="$3"
+		name="$(sed -n 's/^name=//p' "$f")"
+		version="$(sed -n 's/^version=//p' "$f")"
+		abi="$(sed -n 's/^abi=//p' "$f")"
+		case "$fmt" in
+			'%q')    printf '%s\n' "$abi" ;;
+			'%n %v') printf '%s %s\n' "$name" "$version" ;;
+			'%n-%v') printf '%s-%s\n' "$name" "$version" ;;
+			'%dn')   sed -n 's/^dep=//p' "$f" ;;
+			*) exit 64 ;;
+		esac ;;
+	repo)
+		n=0
+		[ -f "${PFB_REPO_STUB_COUNT}" ] && n=$(cat "${PFB_REPO_STUB_COUNT}")
+		n=$((n + 1))
+		printf '%s\n' "$n" > "${PFB_REPO_STUB_COUNT}"
+		case "${PFB_REPO_STUB_MODE:-ok}" in
+			abort-once)
+				[ "$n" -eq 1 ] && exit 134
+				touch "$1/packagesite.pkg"
+				;;
+			fail)
+				echo "pkg: No such file or directory" >&2
+				exit 1
+				;;
+			*)
+				touch "$1/packagesite.pkg"
+				;;
+		esac ;;
+	*) exit 64 ;;
+esac
+EOF
+    chmod +x "${work}/bin/pkg"
+    printf 'name=%s\nversion=%s\nabi=%s\n' pfSense-pkg-pfBlockerNG 4.0.1 'FreeBSD:15:*' \
+      > "${work}/in/a.pkg"
+  }
+  cleanup() { rm -rf "$work"; }
+  Before 'setup'
+  After 'cleanup'
+
+  run_build() {
+    PATH="${work}/bin:${PATH}" PKG_BIN=pkg \
+      PFB_REPO_STUB_COUNT="${work}/repo.count" \
+      PFB_REPO_STUB_MODE="$1" \
+      sh "${PFB_ROOT}/scripts/build-repo.sh" --in "${work}/in" --out "${work}/out" --varver ce-2.8
+  }
+
+  It 'retries pkg repo once after rc=134 and ships the catalog'
+    When call run_build abort-once
+    The status should be success
+    The stderr should include 'retrying once (#2447)'
+    The path "${work}/out/release/ce-2.8/packagesite.pkg" should be exist
+    The contents of file "${work}/repo.count" should equal '2'
+  End
+
+  It 'does not retry an ordinary pkg repo failure'
+    When call run_build fail
+    The status should equal 1
+    The stderr should include 'failed (rc=1)'
+    The stderr should not include 'retrying once'
+    The contents of file "${work}/repo.count" should equal '1'
+  End
+End
