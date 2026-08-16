@@ -43,9 +43,30 @@ def test_dep_download_fallback_matches_self_build_name() -> None:
     assert DEP_DOWNLOAD in lines[0], lines[0]
 
 
+LEGACY_FORMS = (
+    "pfBlockerNG-pkg-${{ inputs.image_name }}-s${{",
+    "pfBlockerNG-deppkgs-${{ inputs.image_name }}-s${{",
+    "format('pfBlockerNG-deppkgs-{0}-s{1}', inputs.image_name, inputs.shard)",
+    "<image_name>-s<shard>",
+)
+
+
 def test_no_image_name_only_pkg_names_remain() -> None:
     text = SMOKE_SINGLE_WORKFLOW.read_text(encoding="utf-8")
-    assert "pfBlockerNG-pkg-${{ inputs.image_name }}-s${{" not in text
-    assert "pfBlockerNG-deppkgs-${{ inputs.image_name }}-s${{" not in text
-    assert "format('pfBlockerNG-deppkgs-{0}-s{1}', inputs.image_name, inputs.shard)" not in text
-    assert "<image_name>-s<shard>" not in text
+    for legacy in LEGACY_FORMS:
+        assert legacy not in text, legacy
+
+
+def test_legacy_forms_are_what_the_pre_fix_workflow_carried() -> None:
+    """Fixture for the negative sweep above: rebuild the pre-#2453 text by dropping
+    pfsense_version from every fixed site and check each LEGACY_FORMS entry hits it, so
+    a typo in a legacy pattern cannot turn the sweep vacuous."""
+    text = SMOKE_SINGLE_WORKFLOW.read_text(encoding="utf-8")
+    pre_fix = (
+        text.replace("-${{ inputs.pfsense_version }}-s${{", "-s${{")
+        .replace(DEP_DOWNLOAD, "format('pfBlockerNG-deppkgs-{0}-s{1}', inputs.image_name, inputs.shard)")
+        .replace("<image_name>-<pfsense_version>-s<shard>", "<image_name>-s<shard>")
+    )
+    assert pre_fix != text
+    for legacy in LEGACY_FORMS:
+        assert legacy in pre_fix, legacy
