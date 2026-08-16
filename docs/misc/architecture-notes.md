@@ -750,9 +750,9 @@ slice in as the leftmost pytest args; `smoke-on-box.sh` forwards `--shard`/`--sh
 unchanged and independently refuses N>1 for any non-`smoke` marker, including the UI tier (a
 small, non-module-fungible suite that always runs as one unit). Diagnostics stay per-shard: CI
 names each leg's artifacts `smoke-diagnostics-<image_name>-<pfsense_version>-s<I>` and
-`pfBlockerNG-pkg-<image_name>-<pfsense_version>-s<I>` (two shards of one leg each build their own `.pkg` — a shared
-cross-shard build is a deferred optimisation); local runs get one log file per shard under the
-`--shards` run's kept log dir.
+`pfBlockerNG-pkg-<image_name>-<pfsense_version>-s<I>` (`pfBlockerNG-deppkgs-…` likewise; two shards
+of one leg each build their own `.pkg` — a shared cross-shard build is a deferred optimisation);
+local runs get one log file per shard under the `--shards` run's kept log dir.
 
 **Duration-balanced module sharding (#816).** `shard-modules.sh` splits by measured LOAD, not
 blind position, when it can: if `<test-dir>/module-durations.txt` exists it assigns modules by

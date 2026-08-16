@@ -57,7 +57,7 @@ on:
         required: false
         default: "pfblockerng/use-github"
       artifact_name:
-        description: "Name of the uploaded .pkg artifact. Override to keep per-leg builds distinct in one run (the smoke fan-out builds a CE + a Plus .pkg in the same workflow run)."
+        description: "Name of the uploaded .pkg artifact. Override to keep per-leg builds distinct in one run — one name per matrix row (the fan-outs build CE 2.8/2.9 + Plus .pkgs in the same workflow run; image_name alone is not unique, issue #2453)."
         required: false
         default: "pfBlockerNG-pkg"
       extra_pkgs:
@@ -65,7 +65,7 @@ on:
         required: false
         default: "[]"
       dep_artifact_name:
-        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>) or two same-major rows collide on upload."
+        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>-<pfsense_version>; image_name alone is NOT unique — CE 2.8 and CE 2.9 share it, issue #2453) or two same-major rows collide on upload."
         required: false
         default: ""
   workflow_call:
@@ -104,7 +104,7 @@ on:
         type: string
         default: "[]"
       dep_artifact_name:
-        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>) or two same-major rows collide on upload."
+        description: "Name for the uploaded dep-pkgs artifact (ignored when extra_pkgs is empty). Blank (default) -> pfBlockerNG-deppkgs-fbsd<freebsd_major>, the self-build convention (one per major, safe when the caller's fan-out never builds two same-major rows in one run). A caller whose fan-out IS per-version (e.g. smoke.yml/ui-tests.yml matrixing over leg rows) must override this with a per-row-unique name (e.g. append -<image_name>-<pfsense_version>; image_name alone is NOT unique — CE 2.8 and CE 2.9 share it, issue #2453) or two same-major rows collide on upload."
         required: false
         type: string
         default: ""
