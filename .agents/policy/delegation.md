@@ -51,9 +51,12 @@ constraint on ALL direct work: session context usage ≤ 50% — past 50% sessio
   evidence"). Briefs add mode line only for non-default level (e.g. `ultra`).
 - **Small tier follow every directive of canonical policy (AGENTS.md + its routed files).**
   Implementer cheaper, not exempt.
-- **Run at effort xhigh or better** — session default in `.claude/settings.json`
-  (`effortLevel: xhigh`), stated explicitly in every spawn (never rely on inheritance).
-  Exception: adversarial reviewers always run at `medium` ([`landing.md`](landing.md)).
+- **Effort per role, stated explicitly in every spawn** (never rely on inheritance):
+  implementers run at `xhigh` (session default in `.claude/settings.json`,
+  `effortLevel: xhigh`); every review or verification spawn — adversarial reviewer legs
+  AND per-step verifiers — runs at `medium` (at most `high`); `xhigh` for a review or
+  verification role is allowed only on Codex `gpt-5.6-luna` (owner ruling 2026-08-16).
+  Reviewer legs stay `medium` per [`landing.md`](landing.md).
 
 ## The delegation contract (brief → handoff → gate)
 
