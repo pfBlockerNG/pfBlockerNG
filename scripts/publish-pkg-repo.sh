@@ -23,7 +23,10 @@
 # output and docs/.nojekyll; on a catalogue no-op, only the regenerated
 # client script (issue #2408) unless PUBLISH_REFRESH_LANDING=1 (issue #2416
 # follow-up) — see below. Any retired client script still on the live site is
-# swept in the same commit either way.
+# swept ONLY in a commit that also regenerates the landing page — a
+# PUBLISH_REFRESH_LANDING=1 no-op, a direct/nightly real publish, or a
+# "promote" — never a knob-off (default) no-op or a "stage" no-op/run, which
+# would 404 a script the live index.html still links.
 #
 # On a rejected push (another run advanced origin/main first), the ENTIRE cycle
 # reruns from a fresh sync — not a rebase of the local commit — because
@@ -430,6 +433,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 exit 1
             }
             landing_regen_and_stage
+            remove_retired_client_scripts
             commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Promoted-From: %s\n' \
                 "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$STAGING_PREFIX")
             ;;
@@ -544,6 +548,11 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 # follow-up).
                 if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
                     landing_regen_and_stage
+                    # Only here: the sweep must never ride a commit that does not
+                    # also regenerate the landing page — the live index.html still
+                    # links every RETIRED_CLIENT_SCRIPTS entry, so a knob-off sweep
+                    # would 404 it.
+                    remove_retired_client_scripts
                 else
                     python3 "${PFB_SRC}/scripts/gen_landing.py" \
                         "${PKG_REPO}/docs" "$BASE_URL" \
@@ -555,7 +564,6 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                     # shellcheck disable=SC2086  # client_script_paths is a controlled, space-separated pathspec list
                     git -C "$PKG_REPO" add -- $client_script_paths
                 fi
-                remove_retired_client_scripts
                 if git -C "$PKG_REPO" diff --cached --quiet; then
                     if [ "$PUBLISH_STAGE" = stage ]; then
                         emit_stage_outputs true
@@ -576,10 +584,10 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 stage_commit=1
             else
                 # --- landing page regen — only for an actual publish ---------------
-                # Never on the catalogue-NOOP path above: gen_landing.py's page output
-                # embeds a generation timestamp, so running it there would manufacture
-                # a diff (and therefore a commit) on every run even when no catalogue
-                # changed.
+                # Unless PUBLISH_REFRESH_LANDING=1, never on the catalogue-NOOP path
+                # above: gen_landing.py's page output embeds a generation timestamp,
+                # so running it there would manufacture a diff (and therefore a
+                # commit) on every run even when no catalogue changed.
                 #
                 # landing_matrix.json's abi expression (pinned by
                 # tests/shell/publish_pkg_repo_spec.sh): freebsd_major alone feeds the

@@ -40,6 +40,12 @@ _IDENTITY_VALUES = {
     },
 }
 _SOURCE_RUN_ID_VALUE = "${{ github.run_id }}:${{ github.run_attempt }}"
+# issue #2416 follow-up: pkg-republish.yml's own `refresh_landing` workflow_dispatch
+# input (never `github.event.inputs.*`, which would read `${{ }}` context syntax
+# from the wrong namespace under `workflow_dispatch` — `inputs.*` is the one that
+# resolves) toggled to the '0'/'1' string publish-pkg-repo.sh's own
+# PUBLISH_REFRESH_LANDING case-statement parses.
+_PUBLISH_REFRESH_LANDING_VALUE = "${{ inputs.refresh_landing && '1' || '0' }}"
 
 
 def test_manual_republish_requires_exact_release_identity() -> None:
@@ -60,6 +66,15 @@ def test_republish_and_published_callbacks_forward_exact_run_identity() -> None:
             assert f"{key}: {value}" in step
         assert f"SOURCE_RUN_ID: {_SOURCE_RUN_ID_VALUE}" in step
         assert "gh release list" not in workflow
+
+
+def test_republish_env_carries_refresh_landing_toggle_expression() -> None:
+    # PUBLISHED (release-published.yml) never sets PUBLISH_REFRESH_LANDING — its
+    # "Stage the pkg catalogue" step always runs PUBLISH_STAGE=stage, and the knob
+    # is a usage error there (publish-pkg-repo.sh rejects PUBLISH_REFRESH_LANDING=1
+    # unless PUBLISH_STAGE=direct) — only REPUBLISH carries the toggle.
+    step = extract_step(REPUBLISH, _STEP_NAMES[REPUBLISH])
+    assert f"PUBLISH_REFRESH_LANDING: {_PUBLISH_REFRESH_LANDING_VALUE}" in step
 
 
 def test_manual_republish_rejects_release_selector_before_api(tmp_path: Path) -> None:
