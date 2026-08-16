@@ -137,8 +137,8 @@ def matrix_variants() -> list[Variant]:
 
 
 def _own_entry() -> Variant:
-    """This leg's ROW: matched by SMOKE_PFSENSE_VERSION, else SMOKE_ABI, else the matrix CE
-    entry (bare dispatch).
+    """This leg's ROW: matched by SMOKE_PFSENSE_VERSION, else SMOKE_ABI, else the matrix's
+    first row (bare dispatch).
 
     SMOKE_PFSENSE_VERSION is the row's own identity and is exported for every leg by
     smoke-single.yml and ui-tests.yml, so a leg never has to be inferred from a property it
