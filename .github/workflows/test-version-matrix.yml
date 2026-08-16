@@ -89,7 +89,9 @@ jobs:
           set -eu
           # `--print-ci` is the row-per-version view the reader filters on ci:true, so the only
           # invariant is that each row says so itself — never "which editions are allowed in
-          # CI" (Plus has been ci:true since ADR-24).
+          # CI" (Plus has been ci:true since ADR-24). `variant` is required below even though
+          # the reader defaults it to "": the smoke topology derives a catalog name from it,
+          # so a row without one yields a catalog like "-2.8" that no producer publishes.
           printf '%s' "$CI_MATRIX" | jq -e '
             length > 0 and all(.[]; . as $row |
               $row.ci == true and
@@ -100,9 +102,6 @@ jobs:
               ($row.php_version | test("^[0-9]+[.][0-9]+$")) and
               ($row.py_flavor | test("^py[0-9]+$"))
             )
-            # `variant` is required here even though the reader defaults it to "": the smoke
-            # topology derives this leg's catalog name from it, so a row without one produces
-            # a catalog like "-2.8" that no producer publishes.
           ' > /dev/null || {
             printf '::error::a CI row is not internally consistent, or is not ci:true\n'
             printf '%s' "$CI_MATRIX" | jq .
