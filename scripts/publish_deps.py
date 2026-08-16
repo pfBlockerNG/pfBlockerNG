@@ -1,4 +1,4 @@
-"""Dependency flow — CLI entry point (issue #2454 step 1).
+"""Dependency flow — CLI entry point (issue #2454).
 
 Given the pkg catalogue checkout, a FreeBSD-ports checkout, the pinned ROUTE matrix
 and the channel(s) being built, finds every ``docs/<channel>/<varver>/
@@ -20,7 +20,7 @@ the run is a nightly, a tagged stage, or a republish, and it targets ROUTE BUILD
 only (``publish_catalogues._normalize_route_matrix``'s ``build_rows`` — a route-only
 row is a frozen catalogue with no build this run and is never targeted, even when it
 declares ``extra_pkgs``). It publishes directly into ``<pkg-repo>/docs/`` — no staging,
-no ledger. It never runs git: the caller (the wrapper script, step 2) owns staging,
+no ledger. It never runs git: the caller (the wrapper script) owns staging,
 committing, and pushing. Canonical packages are never touched, pruned, or evicted here.
 
 stdlib-only, Python 3.11. The pfBlockerNG engine is loaded via
@@ -29,7 +29,7 @@ exactly as ``publish_release.py``/``publish_nightly.py`` load it. Report shape m
 theirs too: ``publish_release.PublishReport`` and its ``describe()`` output contract
 (``updated <channel>/<varver>`` lines, or one ``NOOP: ...`` line) are reused as-is.
 
-A second, unrelated mode (issue #2454 step 3a): ``--print-ports-sha --assets-dir
+A second, unrelated mode (issue #2454): ``--print-ports-sha --assets-dir
 <dir>`` prints the single ``freebsd_ports_sha`` shared by every canonical ``.pkg``
 under ``<dir>`` and exits — see ``ports_sha_from_assets``. Mutually exclusive with
 the dependency-build mode above; ``--pkg-repo``/``--ports-dir``/``--route-matrix``/
@@ -228,9 +228,9 @@ def run(
 
 def ports_sha_from_assets(engine: pc.Engine, assets_dir: str | Path) -> str:
     """The single ``freebsd_ports_sha`` shared by every canonical ``.pkg`` under
-    ``assets_dir`` (step 3b's carry-forward: it needs this to build the dependency
-    flow's ``--route-matrix`` FreeBSD-ports checkout at the SAME ports commit the
-    canonical build already used, without re-deriving that from anywhere else).
+    ``assets_dir`` (needed to check out the dependency flow's FreeBSD-ports tree at
+    the SAME ports commit the canonical build already used, without re-deriving that
+    from anywhere else).
 
     Scans every ``*.pkg`` for its optional ``pfb_build_record`` annotation
     (``build_repo_portable._canonical_build_record``) — ``None`` (a dependency
@@ -335,12 +335,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         engine.build_repo_portable.BuildRepoError,
         subprocess.CalledProcessError,
         bdp.DepPkgError,
+        bdp.bpp.BuildError,
     ) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1
 
-    for line in report.describe():
-        print(line)
+    # report.describe()'s own NOOP line names publish_release.py's destination/asset
+    # vocabulary, not this module's (dependency, not a run's canonical asset) — print
+    # this mode's own wording instead; the "updated <channel>/<varver>" lines it
+    # shares with the other publishers stay as-is.
+    if report.noop:
+        print("NOOP: every dependency already present at every destination")
+    else:
+        for line in report.describe():
+            print(line)
     return 0
 
 

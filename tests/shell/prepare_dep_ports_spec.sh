@@ -13,6 +13,7 @@
 #                    fixture URL can be a bogus, unreachable path).
 #   bad-sha        — a REF that is not a full 40-hex commit SHA (branch name,
 #                    short abbreviation, tag, ...) is a usage error, exit 1.
+#   existing-empty-dest — an existing but EMPTY DEST is accepted.
 #   non-empty-dest — an existing, non-empty DEST is refused, never silently
 #                    reused or overwritten.
 #
@@ -110,6 +111,17 @@ Describe 'prepare-dep-ports.sh'
     When call short_sha_result
     The status should be failure
     The output should include 'full 40-hex commit SHA'
+  End
+
+  empty_existing_dest_result() {
+    mkdir -p "$DEST"
+    run_prepare >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
+    [ -f "${DEST}/${DECLARED_PORT_A}/Makefile" ] && echo 'a=present' || echo 'a=absent'
+  }
+  It 'existing-empty-dest: a pre-existing but EMPTY DEST is accepted, not refused'
+    When call empty_existing_dest_result
+    The status should be success
+    The line 1 of output should equal 'a=present'
   End
 
   non_empty_dest_result() {

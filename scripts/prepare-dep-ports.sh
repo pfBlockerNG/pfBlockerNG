@@ -1,7 +1,7 @@
 #!/bin/sh
 # prepare-dep-ports.sh — blobless sparse checkout of the FreeBSD-ports tree at a
 # pinned full-SHA commit, materializing only the origins the given ROUTE
-# matrix's rows declare as extra_pkgs (issue #2454 step 3b).
+# matrix's rows declare as extra_pkgs (issue #2454).
 #
 # This is the dependency flow's OWN "prepare the ports tree" step -- the
 # sibling of sparse-clone-ports.sh, which prepares the tree for the CANONICAL
@@ -87,6 +87,5 @@ fi
 git -C "$DEST" init -q
 git -C "$DEST" remote add origin "$URL"
 git -C "$DEST" fetch --depth 1 --filter=blob:none origin -- "$SHA"
-# shellcheck disable=SC2086
-git -C "$DEST" sparse-checkout set --cone $origins
+printf '%s\n' "$origins" | git -C "$DEST" sparse-checkout set --cone --stdin
 git -C "$DEST" checkout FETCH_HEAD

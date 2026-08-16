@@ -797,7 +797,7 @@ class RoutingTests(_TempDirTestCase):
 
 # --------------------------------------------------------------------------- #
 # T8 — a stray, unreferenced file in a leg's results directory is ignored
-# (issue #2454 step 3a: no dependency verification loop reads the directory at all).
+# (issue #2454: no dependency verification loop reads the directory at all).
 # --------------------------------------------------------------------------- #
 
 

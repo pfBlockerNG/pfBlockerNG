@@ -600,10 +600,7 @@ class RejectionPropagationTests(_TempDirTestCase):
 class TargetResolutionTests(_TempDirTestCase):
     @_requires_engine
     def test_dependency_matching_no_build_row_is_ignored(self) -> None:
-        """The guarded mechanism this test used to pin (publish_release's OWN
-        target-fan-in rejection for a dependency whose ABI matches only a
-        route-only row) no longer exists (issue #2454 step 3a) — a dependency
-        asset is never routed to a target at all any more, so it is simply
+        """issue #2454: a dependency asset is never routed to a target — it is
         ignored, ABI mismatch or not, and publish succeeds."""
         assets_dir = self.new_assets_dir()
         digests = _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
