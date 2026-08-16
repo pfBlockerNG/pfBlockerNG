@@ -390,8 +390,9 @@ def deploy(vm: SmokeVM, pkg_path: str | None = None, *, timeout: float = 300.0) 
     """Install the branch's built .pkg onto the guest via install-pkg.sh.
 
     ``pkg add`` registers the package in pkg's DB, resolves RUN_DEPENDS from the
-    LOCAL pkg db (the smoke image bakes them — scripts/misc/install_deps_CE_2.8.sh
-    — so this is OFFLINE, no repo round-trip), and runs POST-INSTALL (menus,
+    LOCAL pkg db (this leg's image bakes its own row's RUN_DEPENDS — the CE 2.8 image
+    from scripts/misc/install_deps_CE_2.8.sh, other rows from their own dep set — so
+    this is OFFLINE, no repo round-trip), and runs POST-INSTALL (menus,
     services, Unbound wiring) — fidelity
     the rsync overlay (``deploy.sh``) does not give. The .pkg is produced by the
     portable Linux build job (build-pkg-linux.yml); its path is ``pkg_path`` or ``SMOKE_PKG``.
@@ -1008,8 +1009,9 @@ def assert_hsts_loaded(vm: SmokeVM, name: str, *, timeout: float = 30.0) -> None
 # name cannot secretly resolve upstream. Egress stays OPEN through deploy + the
 # reload/DNSBL-update phase instead — that path needs a working resolver (see
 # CaseContext.__enter__) — and is restored for teardown. NOTE: `pkg add` (deploy)
-# is OFFLINE: pfBlockerNG's RUN_DEPENDS are baked into the smoke image
-# (scripts/misc/install_deps_CE_2.8.sh), so the install never needs egress.
+# is OFFLINE: pfBlockerNG's RUN_DEPENDS are baked into this leg's smoke image (the
+# row's own dep set; CE 2.8's is scripts/misc/install_deps_CE_2.8.sh), so the install
+# never needs egress.
 # Guarded by SMOKE_BLOCK_EGRESS (CI sets it) so a local `pytest -m smoke` never
 # touches the dev machine's firewall. Loopback stays up (the mock feed server is
 # reached via SLIRP 192.168.89.2 -> runner 127.0.0.1) and established flows (the

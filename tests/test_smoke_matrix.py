@@ -31,6 +31,13 @@ _MATRIX = (
     '{"pfsense_version":"26.03.1","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"}]'
 )
 
+# The same two rows with Plus FIRST — pins that the bare-dispatch default is "row 0",
+# never "the CE one" (issue #2464).
+_PLUS_FIRST_MATRIX = (
+    '[{"pfsense_version":"26.03.1","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"},'
+    '{"pfsense_version":"2.8.0","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"}]'
+)
+
 # Two editions sharing the SAME freebsd_major (issue #1806: with `arch` retired,
 # this is a real possible shape now, not just an ADR-24 transition-window
 # hypothetical) — exercises the SMOKE_IMAGE_REF disambiguation in _own_entry().
@@ -49,7 +56,14 @@ def _clear_matrix_cache() -> Any:
 
 
 def _set_env(monkeypatch: pytest.MonkeyPatch, **kv: str | None) -> None:
-    for k in ("SMOKE_MATRIX_JSON", "SMOKE_ABI", "SMOKE_PHP_VERSION", "SMOKE_PY_FLAVOR", "SMOKE_IMAGE_REF"):
+    for k in (
+        "SMOKE_MATRIX_JSON",
+        "SMOKE_ABI",
+        "SMOKE_PHP_VERSION",
+        "SMOKE_PY_FLAVOR",
+        "SMOKE_IMAGE_REF",
+        "SMOKE_PFSENSE_VERSION",
+    ):
         monkeypatch.delenv(k, raising=False)
     for k, v in kv.items():
         if v is not None:
@@ -90,35 +104,63 @@ def test_build_matrix_none_on_malformed_or_empty(monkeypatch: pytest.MonkeyPatch
         assert mx.build_matrix() is None
 
 
-def test_variants_derived_per_abi_edition(monkeypatch: pytest.MonkeyPatch) -> None:
-    """One Variant per (ABI, edition), php/catalog/py derived from the matrix entry."""
+def test_variants_derived_per_matrix_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """One Variant per ROW, every field derived from that row.
+
+    Keyed by version, never by ABI: an ABI-keyed dict silently drops every row after the first
+    that shares an ABI, which would make this oracle vacuous on the real matrix (issue #2464).
+    """
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX)
-    by_abi = {v.abi: v for v in mx.matrix_variants()}
-    assert set(by_abi) == {"FreeBSD:15:amd64", "FreeBSD:16:amd64"}
-    assert by_abi["FreeBSD:15:amd64"] == mx.Variant("php83", "FreeBSD:15:amd64", "ce-2.8", "py311", "CE")
-    assert by_abi["FreeBSD:16:amd64"].php == "php85" and by_abi["FreeBSD:16:amd64"].catalog == "plus-26.03"
+    by_version = {v.version: v for v in mx.matrix_variants()}
+    assert set(by_version) == {"2.8.0", "26.03.1"}
+    assert by_version["2.8.0"] == mx.Variant(
+        php="php83", abi="FreeBSD:15:amd64", catalog="ce-2.8", py="py311", variant="CE", version="2.8.0"
+    )
+    assert by_version["26.03.1"] == mx.Variant(
+        php="php85", abi="FreeBSD:16:amd64", catalog="plus-26.03", py="py311", variant="Plus", version="26.03.1"
+    )
 
 
-def test_own_and_opposite_follow_smoke_abi(monkeypatch: pytest.MonkeyPatch) -> None:
-    """own = the SMOKE_ABI entry; opposite = the first entry of a DIFFERENT edition.
+def test_own_follows_smoke_abi(monkeypatch: pytest.MonkeyPatch) -> None:
+    """own = the entry SMOKE_ABI selects, with that entry's own php/py/catalog.
 
-    Before/after: the CE leg's own is CE / opposite is Plus; flipping SMOKE_ABI to the Plus
-    box swaps both — proving the selection tracks the matrix, not a hardcoded side.
+    Before/after: pointing SMOKE_ABI at the FreeBSD:15 box derives the FreeBSD:15 row;
+    flipping it to FreeBSD:16 derives that row instead — the selection tracks the matrix,
+    never a hardcoded side.
     """
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX, SMOKE_ABI="FreeBSD:15:amd64", SMOKE_PHP_VERSION="8.3")
-    assert mx.own_variant().variant == "CE" and mx.own_variant().abi == "FreeBSD:15:amd64"
-    assert mx.opposite_variant().variant == "Plus"  # a different edition
+    own = mx.own_variant()
+    assert (own.abi, own.php, own.catalog) == ("FreeBSD:15:amd64", "php83", "ce-2.8")
 
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX, SMOKE_ABI="FreeBSD:16:amd64", SMOKE_PHP_VERSION="8.5")
-    assert mx.own_variant().variant == "Plus" and mx.own_variant().abi == "FreeBSD:16:amd64"
-    assert mx.opposite_variant().variant == "CE"
+    own = mx.own_variant()
+    assert (own.abi, own.php, own.catalog) == ("FreeBSD:16:amd64", "php85", "plus-26.03")
 
 
-def test_bare_dispatch_defaults_to_ce_entry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With no SMOKE_ABI, own defaults to the matrix's CE entry (the bare-dispatch default)."""
+def test_bare_dispatch_defaults_to_the_first_matrix_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no leg env at all, own defaults to the matrix's FIRST ROW — not to an edition.
+
+    issue #2464: "the CE entry" is not a row identity. The matrix holds two CE rows (CE 2.8 and
+    CE 2.9), so an edition-keyed default picks one of them by list position and then derives an
+    ABI that may match several rows. The bare-dispatch default is deliberately just "row 0",
+    documented as arbitrary; a leg that cares names itself with SMOKE_PFSENSE_VERSION.
+    """
     _set_env(monkeypatch, SMOKE_MATRIX_JSON=_MATRIX)
-    assert mx.own_variant().variant == "CE" and mx.matrix_abi() == "FreeBSD:15:amd64"
+    assert mx.own_variant().version == "2.8.0" and mx.matrix_abi() == "FreeBSD:15:amd64"
     assert mx.matrix_py_flavor() == "py311"
+
+    # A matrix whose first row is Plus defaults to THAT row: no edition preference survives.
+    mx.build_matrix.cache_clear()  # a second matrix in one case: the lru_cache would serve the first
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_PLUS_FIRST_MATRIX)
+    own = mx.own_variant()
+    assert (own.variant, own.catalog) == ("Plus", "plus-26.03")
+
+
+def test_two_rows_sharing_an_abi_are_not_collapsed_by_the_unit_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows sharing a FreeBSD major stay distinct — CE 2.9 and Plus 26.03 both are FreeBSD:16."""
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX)
+    same_abi = sorted(v.catalog for v in mx.matrix_variants() if v.abi == "FreeBSD:16:amd64")
+    assert same_abi == ["ce-2.9", "plus-26.03", "plus-26.07"]
 
 
 def test_env_overrides_win_over_matrix(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -231,3 +273,75 @@ def test_smoke_topology_excludes_route_only_via_ci_matrix_injection(monkeypatch:
     assert "FreeBSD:14:amd64" not in abis_after, (
         f"after: route-only ABI must remain absent from smoke topology; got {abis_after!r}"
     )
+
+
+# The LIVE 2026-08 matrix shape (issue #2464): FOUR rows, two of which (Plus 26.07 and
+# Plus 26.03) share an edition AND a FreeBSD major, and two of which (CE 2.9 and Plus
+# 26.03) share a build target across editions. Nothing about a row is derivable from
+# another row's edition or major.
+_LIVE_SHAPE_MATRIX = (
+    '[{"pfsense_version":"2.8","freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE"},'
+    '{"pfsense_version":"26.03","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"},'
+    '{"pfsense_version":"26.07","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"Plus"},'
+    '{"pfsense_version":"2.9","freebsd_major":"16","php_version":"8.5","py_flavor":"py311","variant":"CE"}]'
+)
+
+
+def test_every_matrix_row_derives_its_own_variant(monkeypatch: pytest.MonkeyPatch) -> None:
+    """issue #2464 — one Variant per ROW. No row is collapsed into another's.
+
+    Keying the topology on (ABI, edition) silently dropped Plus 26.07 — it shares both
+    with Plus 26.03 — so that leg resolved to the ``plus-26.03`` catalog and asserted
+    against a release line it does not build. A matrix row is identified by its own
+    version, not by a property it happens to share with a sibling.
+    """
+    _set_env(monkeypatch, SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX)
+    catalogs = sorted(v.catalog for v in mx.matrix_variants())
+    assert catalogs == ["ce-2.8", "ce-2.9", "plus-26.03", "plus-26.07"], (
+        f"a matrix row was collapsed into another: got {catalogs}"
+    )
+
+
+def test_own_row_selected_by_smoke_pfsense_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The leg's own row is addressed by SMOKE_PFSENSE_VERSION — the identity CI exports.
+
+    smoke-single.yml and ui-tests.yml export SMOKE_PFSENSE_VERSION alongside SMOKE_ABI for
+    every leg, so a leg never has to be inferred from properties it shares with siblings.
+    The Plus 26.07 leg must resolve to plus-26.07, not to the first FreeBSD:16 Plus row.
+    """
+    _set_env(
+        monkeypatch,
+        SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX,
+        SMOKE_PFSENSE_VERSION="26.07",
+        SMOKE_ABI="FreeBSD:16:amd64",
+        SMOKE_PHP_VERSION="8.5",
+        SMOKE_IMAGE_REF="ghcr.io/pfblockerng/pfsense-plus:16.0.0",
+    )
+    own = mx.own_variant()
+    assert (own.catalog, own.variant, own.php, own.abi) == ("plus-26.07", "Plus", "php85", "FreeBSD:16:amd64")
+
+    _set_env(
+        monkeypatch,
+        SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX,
+        SMOKE_PFSENSE_VERSION="26.03",
+        SMOKE_ABI="FreeBSD:16:amd64",
+        SMOKE_PHP_VERSION="8.5",
+        SMOKE_IMAGE_REF="ghcr.io/pfblockerng/pfsense-plus:16.0.0",
+    )
+    assert mx.own_variant().catalog == "plus-26.03"
+
+
+def test_own_row_selection_needs_no_edition_to_major_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two editions on ONE major resolve to their own rows — no CE-is-15 / Plus-is-16 rule.
+
+    CE 2.9 and Plus 26.03 share FreeBSD:16 and php85; only the row identity separates them.
+    """
+    for version, expected in (("2.9", "ce-2.9"), ("26.03", "plus-26.03")):
+        _set_env(
+            monkeypatch,
+            SMOKE_MATRIX_JSON=_LIVE_SHAPE_MATRIX,
+            SMOKE_PFSENSE_VERSION=version,
+            SMOKE_ABI="FreeBSD:16:amd64",
+            SMOKE_PHP_VERSION="8.5",
+        )
+        assert mx.own_variant().catalog == expected

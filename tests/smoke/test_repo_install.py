@@ -35,8 +35,9 @@ HOW (throwaway spike — the reusable `scripts/build-repo.sh` generator is Phase
 NOT built here):
 
   * The branch `.pkg` is built by the harness and handed in via `SMOKE_PKG`
-    (`scripts/build-pkg-portable.py` on a Linux runner — the VM's exact ABI:
-    `FreeBSD:15:amd64` / php83 / py311). We do NOT re-invoke the builder, and do
+    (`scripts/build-pkg-portable.py` on a Linux runner, for the ABI / php / Python
+    flavor THIS leg's matrix row declares — read back here via `own_variant()` and
+    `matrix_py_flavor()`, never assumed from the edition). We do NOT re-invoke the builder, and do
     NOT re-version it: priority (not version) is the precedence lever, so the real
     release `.pkg` is published as-is.
   * On the guest, the guest's OWN `pkg repo` (libpkg) builds the catalog from that
@@ -91,7 +92,6 @@ import pytest
 from . import helpers as h
 from ._matrix import (
     matrix_py_flavor,
-    opposite_variant,
     own_variant,
 )
 from .conftest import SmokeVM
@@ -468,15 +468,22 @@ def _zstd_compress(data: bytes) -> bytes:
     return subprocess.run([zstd, "-q", "-19", "-c"], input=data, stdout=subprocess.PIPE, check=True).stdout
 
 
-def read_compact_version(src_pkg: Path) -> str:
-    """The ``version`` recorded in a ``.pkg``'s ``+COMPACT_MANIFEST`` (the base to re-version from)."""
+def read_compact_manifest(src_pkg: Path) -> dict[str, object]:
+    """A ``.pkg``'s ``+COMPACT_MANIFEST``, decoded — the built package's own declared identity."""
     tar_bytes = _zstd_decompress(src_pkg.read_bytes())
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
         member = tf.extractfile("+COMPACT_MANIFEST")
         if member is None:
             raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST member — not a libpkg .pkg?")
         obj = json.loads(member.read())
-    version = obj.get("version")
+    if not isinstance(obj, dict):
+        raise RuntimeError(f"{src_pkg.name}: +COMPACT_MANIFEST is not an object (got {type(obj).__name__})")
+    return obj
+
+
+def read_compact_version(src_pkg: Path) -> str:
+    """The ``version`` recorded in a ``.pkg``'s ``+COMPACT_MANIFEST`` (the base to re-version from)."""
+    version = read_compact_manifest(src_pkg).get("version")
     if not isinstance(version, str) or not version:
         raise RuntimeError(f"{src_pkg.name}: +COMPACT_MANIFEST has no version string (got {version!r})")
     return version
@@ -1391,10 +1398,9 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
 
     # BACKSTOP: prove the deploy actually serves the catalog from the RUNNER first
     # (independent of the guest) — polls through first-deploy / DNS / cert lag. The
-    # varver to poll is read from the BOX itself via the _box_real_varver oracle —
-    # NEVER own_variant().catalog / the matrix: matrix_variants() dedupes by (abi,
-    # variant), so two same-major editions (e.g. Plus 26.03 + 26.07) collapse onto
-    # the first, which would poll/serve the wrong catalog for this leg. This
+    # varver to poll is read from the BOX itself via the _box_real_varver oracle: the
+    # guest, not the matrix, is the authority for which release line this leg runs.
+    # This
     # The caller passes a selected channel root, so the subtree is the bare varver.
     varver = _box_real_varver(repo_vm)
     poll_catalog_served(base_url, varver)
@@ -1640,65 +1646,6 @@ def build_repo_via_portable_named(
     return guest_catalog_dir
 
 
-def forge_variant_pkg(src_pkg: Path, out_dir: Path, *, target_php: str, target_abi: str) -> Path:
-    """Forge a fake .pkg for a DIFFERENT variant from the branch .pkg.
-
-    Re-reads the +COMPACT_MANIFEST, replaces every ``php8N`` dep key with
-    ``target_php``, sets the ``abi`` to ``target_abi``, and repacks. No payload
-    change — the dep/ABI-mismatch guard fires before pkg ever checks the files.
-    Used by the wrong-variant guard to fabricate the OPPOSITE variant for this
-    box (CE box -> Plus pkg; Plus box -> CE pkg). The returned .pkg is placed in
-    ``out_dir``.
-    """
-    tar_bytes = _zstd_decompress(src_pkg.read_bytes())
-    repacked = io.BytesIO()
-    pkg_name = ""
-    with (
-        tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tin,
-        tarfile.open(fileobj=repacked, mode="w", format=tarfile.USTAR_FORMAT) as tout,
-    ):
-        for member in tin.getmembers():
-            extracted = tin.extractfile(member) if member.isfile() else None
-            data = extracted.read() if extracted is not None else b""
-            if member.name in _PKG_MANIFEST_MEMBERS:
-                obj = json.loads(data)
-                # Swap every php8N dep for the target variant's php (CE manifest has
-                # php83; forging a Plus pkg makes it php85, and vice-versa).
-                if "deps" in obj:
-                    old_deps: dict[str, object] = obj["deps"]
-                    new_deps: dict[str, object] = {}
-                    for key, val in old_deps.items():
-                        if re.match(r"php8\d", key):
-                            # Replace the key; keep the value dict unchanged (origin/version are fictional).
-                            new_deps[target_php] = val
-                        else:
-                            new_deps[key] = val
-                    obj["deps"] = new_deps
-                # Set the target ABI: the box's own `pkg install` ABI-compatibility check is
-                # the guard under test (a concrete-vs-wildcard bucket no longer exists —
-                # issue #1806 — so this must be a wildcard ABI or the portable generator
-                # itself hard-rejects it; callers pass "FreeBSD:<opp_major>:*").
-                obj["abi"] = target_abi
-                pkg_name = obj.get("name", pkg_name)
-                data = json.dumps(obj, separators=(",", ":"), ensure_ascii=False).encode() + b"\n"
-                ti = tarfile.TarInfo(name=member.name)
-                ti.size = len(data)
-                ti.mode = 0o644
-                ti.uid = ti.gid = 0
-                ti.uname, ti.gname = "root", "wheel"
-                ti.mtime = 0
-                ti.type = tarfile.REGTYPE
-                tout.addfile(ti, io.BytesIO(data))
-            else:
-                tout.addfile(member, io.BytesIO(data) if member.isfile() else None)
-    if not pkg_name:
-        raise RuntimeError(f"{src_pkg.name}: no +COMPACT_MANIFEST with a name — not a libpkg .pkg?")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{pkg_name}-{target_php}.pkg"
-    out_path.write_bytes(_zstd_compress(repacked.getvalue()))
-    return out_path
-
-
 def pkg_query_deps(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     """Return the raw ``pkg query '%dn %dv' <PKG_NAME>`` output (dep names + versions).
 
@@ -1724,25 +1671,29 @@ def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
     Scenario: package installed from the variant-correct catalog for THIS box.
       Background: hermetic file:// catalog at ``<own.catalog>/`` directly (no ABI
       leaf). The variant (ABI / php / Python flavor) comes from the ci-metadata
-      matrix (SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR), so the CE leg
-      asserts php83/FreeBSD:15 and the Plus leg asserts php85/FreeBSD:16 — no
-      hardcoded flavor.
+      matrix (SMOKE_ABI / SMOKE_PHP_VERSION / SMOKE_PY_FLAVOR), so each leg asserts
+      the deps ITS OWN matrix row declares — no hardcoded flavor.
+
+    The oracle is conformance to this leg's own matrix row, never a comparison with
+    another row (issue #2464). Two rows may legitimately share a build target — CE 2.9
+    and Plus 26.03 are both FreeBSD:16 / php85 — so "some other variant's php is absent"
+    asserts nothing about this build and is unfalsifiable exactly when the two rows agree.
 
     Given the package ABSENT and a variant-keyed catalog under ``<variant>/``
       built from the branch .pkg by the pure-Python generator,
     When ``pkg install -y <pkgname>`` resolves from this catalog,
-    Then ``pkg query '%dn %dv' <pkgname>`` shows the box's OWN php dep AND the matrix
-      Python flavor, the OPPOSITE variant's php dep is ABSENT, the version matches the
-      branch .pkg, and the origin is our repo.
+    Then ``pkg query '%dn %dv' <pkgname>`` shows the php dep AND the Python flavor this
+      leg's matrix row declares, the built .pkg's manifest ABI is the NO_ARCH wildcard on
+      that row's FreeBSD major, the version matches the branch .pkg, and the origin is
+      our repo.
     Assert BEFORE: ``pkg query '%n' <pkgname>`` returns empty (package absent).
-    Assert AFTER: dep list contains own php + Python flavor; opposite php absent; version
-      and origin correct.
+    Assert AFTER: dep list contains this row's php + Python flavor; manifest ABI matches
+      this row's FreeBSD major; version and origin correct.
     """
     pkg = os.environ.get("SMOKE_PKG")
     assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
 
     own = own_variant()
-    opp = opposite_variant()
 
     # GIVEN: build the box's variant catalog with the variant-keyed dir on the runner,
     # ship to guest, write a NONE-signed file:// repo conf above pfSense.
@@ -1767,14 +1718,10 @@ def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
     combined = proc.stdout + proc.stderr
     assert "Missing dependency" not in combined, f"variant catalog: RUN_DEPENDS did not resolve:\n{combined}"
 
-    # THEN: dep list carries the box's OWN php + the matrix Python flavor, NOT the opposite php.
+    # THEN: dep list carries the php + Python flavor THIS leg's matrix row declares.
     deps_out = pkg_query_deps(repo_vm)
     assert own.php in deps_out, (
         f"{own.php} dep not satisfied after {own.abi} variant install; pkg query '%dn %dv' output:\n{deps_out}"
-    )
-    assert opp.php not in deps_out, (
-        f"opposite-variant dep {opp.php} should not appear in a {own.abi} install; "
-        f"pkg query '%dn %dv' output:\n{deps_out}"
     )
     py_flavor = matrix_py_flavor()
     assert py_flavor in deps_out, (
@@ -1785,156 +1732,21 @@ def test_install_from_variant_catalog(repo_vm: SmokeVM, tmp_path: Path) -> None:
     version = pkg_installed_version(repo_vm)
     assert version is not None, "variant install: pkg query %v returned empty after install"
 
+    # AND the .pkg this leg built declares the ABI its own matrix row implies: the NO_ARCH
+    # wildcard on that row's FreeBSD major (issue #1806 — the catalog is arch-less, so the
+    # manifest carries "FreeBSD:<major>:*", never the concrete guest ABI).
+    own_major = own.abi.split(":")[1]
+    manifest_abi = read_compact_manifest(Path(pkg)).get("abi")
+    assert manifest_abi == f"FreeBSD:{own_major}:*", (
+        f"built .pkg declares abi {manifest_abi!r}, but this leg's matrix row "
+        f"({own.variant} / {own.catalog} / {own.abi}) implies 'FreeBSD:{own_major}:*'"
+    )
+
 
 def vm_pkg_query_name(vm: SmokeVM, *, timeout: float = 60.0) -> str:
     """``pkg query '%n' <PKG_NAME>`` — the package name if installed, else empty string."""
     result = vm.ssh("pkg", "query", "%n", PKG_NAME, timeout=timeout)
     return result.stdout.strip() if result.returncode == 0 else ""
-
-
-# --------------------------------------------------------------------------- #
-# ADR-20 Case 2 — wrong-variant guard: box rejects the OPPOSITE variant        #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.timeout(900)
-def test_wrong_variant_catalog_fails(repo_vm: SmokeVM, tmp_path: Path) -> None:
-    """ADR-20 P6 CASE 2 — Installing the OPPOSITE variant's package on this box fails;
-    that variant's php dep is unsatisfied; the package is NOT installed after the attempt.
-
-    The box's own variant and the wrong (opposite) variant both come from the ci-metadata
-    matrix (SMOKE_ABI / SMOKE_PHP_VERSION), so this runs symmetrically: a CE box rejects a
-    forged Plus (php85/FreeBSD:16) package, and a Plus box rejects a forged CE
-    (php83/FreeBSD:15) package — no hardcoded direction.
-
-    Scenario: installing the opposite-variant package fails with an unsatisfied dep.
-      Background: hermetic file:// catalog at ``<opp.catalog>/`` directly (no ABI leaf).
-
-    Before-state ASSERT: the box's OWN package (``<own.catalog>/``) installs CLEANLY
-      (own php dep satisfied) — proves the own path is correct and the AFTER failure is
-      caused by the variant mismatch, not an unrelated setup issue.
-    Given the own package uninstalled and the repo conf pointing at the opposite-variant
-      catalog (ABI mismatch),
-    When ``pkg install -y <pkgname>`` from the opposite catalog,
-    Then the guard fires (non-zero exit, or the package is absent),
-      AND the error output is variant-attributable — it names the opposite php dep,
-      the opposite ABI, an ABI/OS-version rejection, or no installable candidate,
-      AND ``pkg query '%n' <pkgname>`` confirms the package is NOT installed.
-    """
-    pkg = os.environ.get("SMOKE_PKG")
-    assert pkg and Path(pkg).is_file(), "SMOKE_PKG not set / not a file"
-    src = Path(pkg)
-
-    own = own_variant()
-    opp = opposite_variant()
-
-    # ---- Before-state: prove the box's OWN path works (the guard control) ----
-    own_catalog_dir = build_repo_via_portable_named(
-        repo_vm,
-        [src, *_smoke_dep_pkg_paths()],
-        tmp_path,
-        catalog_name=own.catalog,
-        guest_root=VARIANT_REPO_ROOT,
-    )
-    pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
-    pkg_delete(repo_vm)
-    write_repo_conf(repo_vm, own_catalog_dir, ours_priority=pfsense_prio + 100)
-    pkg_update(repo_vm)
-
-    # Assert before-state: absent before the own-variant control install.
-    assert vm_pkg_query_name(repo_vm) == "", "package unexpectedly present before own-variant control install"
-
-    own_install = pkg_install_from_repo(repo_vm)
-    own_combined = own_install.stdout + own_install.stderr
-    assert "Missing dependency" not in own_combined, (
-        f"Control ({own.abi}) install: RUN_DEPENDS did not resolve:\n{own_combined}"
-    )
-    own_deps = pkg_query_deps(repo_vm)
-    assert own.php in own_deps, f"Control ({own.abi}) install: {own.php} not in deps; pkg query '%dn %dv':\n{own_deps}"
-    # Own install succeeded — this is the before-state anchor.
-
-    # ---- Forge the OPPOSITE variant's .pkg (opp.php dep, opp's freebsd_major ABI) ----
-    # The portable generator now hard-rejects a concrete ABI (issue #1806 — production
-    # catalogs only ever hold wildcard/NO_ARCH pkgs), so the forged ABI must be
-    # wildcarded to the opposite major: "FreeBSD:<opp_major>:*". This still exercises
-    # the guard under test (the box's own OS-major mismatch), just with the ABI shape
-    # a real catalog would actually carry.
-    opp_major = opp.abi.split(":")[1]
-    opp_pkg = forge_variant_pkg(src, tmp_path / "opp_forge", target_php=opp.php, target_abi=f"FreeBSD:{opp_major}:*")
-
-    # ---- Build the opposite-variant catalog in <opp.catalog>/ directly (no ABI leaf) ----
-    # Deliberately NOT folding _smoke_dep_pkg_paths() here: this catalog exists only to
-    # be REJECTED (wrong variant, not dep resolution), and its one package already
-    # belongs to the box's own freebsd_major — the dep .pkgs built for this leg would be
-    # redundant, not a second competing ABI (the generator's per-run major is now single).
-    opp_catalog_dir = build_repo_via_portable_named(
-        repo_vm,
-        [opp_pkg],
-        tmp_path,
-        catalog_name=opp.catalog,
-        guest_root=VARIANT_REPO_ROOT,
-    )
-
-    # Remove the own install; point conf at the opposite-variant catalog.
-    pkg_delete(repo_vm)
-    assert vm_pkg_query_name(repo_vm) == "", "package still present after pkg_delete"
-    write_repo_conf(repo_vm, opp_catalog_dir, ours_priority=pfsense_prio + 100)
-
-    try:
-        pkg_update(repo_vm)
-    except RuntimeError:
-        # pkg update may fail on ABI mismatch (this box vs the opposite ABI) — that
-        # is itself evidence the guard fired; treat as acceptable.
-        pass
-
-    # WHEN: attempt install of the opposite variant on this box.
-    install_result = repo_vm.ssh("env", "ASSUME_ALWAYS_YES=yes", "pkg", "install", "-y", PKG_NAME, timeout=300.0)
-
-    # THEN: either the install failed non-zero, or it "succeeded" but the dep was
-    # unsatisfied (pkg may exit 0 on some error paths but the package is absent).
-    install_failed = install_result.returncode != 0
-    install_output = install_result.stdout + install_result.stderr
-    package_installed = vm_pkg_query_name(repo_vm) != ""
-
-    # The guard must fire: either the install returned non-zero, or the package is absent.
-    assert install_failed or not package_installed, (
-        f"Wrong-variant guard did NOT fire: {opp.abi} package installed successfully on a {own.abi} box.\n"
-        f"pkg install rc={install_result.returncode}\n"
-        f"pkg install output:\n{install_output}\n"
-        f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
-    )
-    # AND the failure names a CAUSE, not merely a non-zero exit. `install_failed` is
-    # deliberately NOT one of these clauses: it is already asserted above, so including
-    # it made every other clause unreachable and the intent ("the error names the
-    # opposite php or an ABI rejection") went unpinned (issue #1965).
-    #
-    # These markers do not fully separate "wrong variant" from "empty/broken catalog":
-    # pkg reports both as "No packages available…". What they DO exclude is a failure
-    # that names no pkg-level cause at all — an unusable box, a transport error, a
-    # crashed ssh — which the old clause set silently accepted as the guard firing.
-    lowered = install_output.lower()
-    reasons = {
-        f"names the opposite php dep ({opp.php})": opp.php in install_output,
-        f"names the opposite ABI (FreeBSD:{opp_major})": f"freebsd:{opp_major}" in lowered,
-        "reports an ABI / OS-version rejection": any(
-            kw in lowered for kw in ("wrong abi", "wrong os version", "mismatch", "incompatible")
-        ),
-        "reports no installable candidate from the catalog": any(
-            kw in lowered for kw in ("no packages available", "not found", "missing dependency", "unable to find")
-        ),
-    }
-    assert any(reasons.values()), (
-        f"Wrong-variant install failed, but for no variant-attributable reason — the guard "
-        f"under test may not be what fired.\n"
-        f"expected the output to satisfy at least one of: {sorted(reasons)}\n"
-        f"actual: {reasons}\n"
-        f"rc={install_result.returncode}\n{install_output}"
-    )
-    # Package must NOT be installed after the failed attempt.
-    assert not package_installed, (
-        f"Wrong-variant guard: package IS installed despite expected failure; "
-        f"pkg query '%n': {vm_pkg_query_name(repo_vm)!r}"
-    )
 
 
 # ADR-20 Case 3 (legacy ${ABI}/ conf transition window) retired: issue #1806 made

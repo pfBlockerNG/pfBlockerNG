@@ -210,9 +210,10 @@ def test_leg_fails_when_every_shard_of_a_full_scope_leg_is_empty(tmp_path: Path)
 
 
 def _two_leg_ce_plus_matrix() -> list[dict[str, str]]:
-    """Production shape (scripts/read-version-matrix.sh --print-ci): TWO ci:true
-    amd64 legs, CE 2.8 + Plus 26.03, 3 shards each -- unlike every other row in
-    this file, which only ever builds a single-leg matrix. Plus listed first:
+    """A representative MULTI-leg shape (>=2 ci:true amd64 legs, 3 shards each) -- unlike
+    every other row in this file, which only ever builds a single-leg matrix. The gate is
+    cardinality-agnostic and groups on image_name|pfsense_version, so the real
+    --print-ci row count (four today) does not belong in this fixture. Plus listed first:
     that ordering is what makes the mutation probe below (grouping collapsed
     to one bucket) demonstrate a false PASS rather than an accidental correct
     result -- see that test's docstring."""

@@ -9,8 +9,12 @@ unreachable); a local run falls back to running that script itself; when neither
 variant-topology cases SKIP. Per-leg selection still honours ``SMOKE_ABI`` / ``SMOKE_PHP_VERSION``
 / ``SMOKE_PY_FLAVOR`` (the fan-out exports them per matrix entry) plus ``SMOKE_IMAGE_REF``
 (issue #1806: disambiguates two editions sharing a freebsd_major, now that the matrix carries no
-``arch`` column) — SMOKE_ABI itself stays a CONCRETE guest ABI env var; a bare dispatch defaults to
-the matrix's CE entry. So adding a pfSense version to the matrix needs no edit here.
+``arch`` column) — SMOKE_ABI itself stays a CONCRETE guest ABI env var. A leg is addressed by its
+own row identity, ``SMOKE_PFSENSE_VERSION`` (exported per leg by smoke-single.yml and
+ui-tests.yml); a bare dispatch that names no leg falls back to the matrix's first row, an
+arbitrary but deterministic default. Nothing here maps an edition to an ABI, a php version, or a
+release line — two rows may share any of those (issue #2464). So adding a pfSense version to the
+matrix needs no edit here.
 
 Kept in its own stdlib-only module (no intra-package smoke imports) so the derivation is
 unit-testable off-box — see ``tests/test_smoke_matrix.py``.
@@ -34,14 +38,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 @dataclass(frozen=True)
 class Variant:
-    """A distributed pfSense variant, derived from a matrix entry: its pkg ``php`` dependency,
-    ABI, catalog dir, ``py`` flavor, and edition (``variant``)."""
+    """One MATRIX ROW, derived: its pkg ``php`` dependency, ABI, catalog dir, ``py`` flavor,
+    edition (``variant``) and the ``pfsense_version`` that identifies the row.
+
+    A row is identified by itself, never by a property it shares with a sibling: two rows may
+    share an edition and a FreeBSD major (Plus 26.03 / Plus 26.07), or a build target across
+    editions (CE 2.9 / Plus 26.03 are both FreeBSD:16 / php85) — issue #2464."""
 
     php: str
     abi: str
     catalog: str
     py: str
     variant: str
+    version: str
 
 
 def catalog_name(pfsense_version: str, variant: str) -> str:
@@ -92,8 +101,12 @@ def build_matrix() -> tuple[dict, ...] | None:
 
 
 def matrix_variants() -> list[Variant]:
-    """One Variant per distinct (ABI, edition) build target in the matrix. SKIPs when the matrix
-    is unavailable, so the topology cases never silently pass on hardcoded values."""
+    """One Variant per matrix ROW (duplicate rows collapse; distinct rows never do). SKIPs when
+    the matrix is unavailable, so the topology cases never silently pass on hardcoded values.
+
+    Keying this on (ABI, edition) is what issue #2464 removed: Plus 26.07 shares both with Plus
+    26.03, so it vanished from the topology and its leg silently resolved to the plus-26.03
+    catalog — a release line it does not build."""
     entries = build_matrix()
     if entries is None:
         pytest.skip(
@@ -101,7 +114,7 @@ def matrix_variants() -> list[Variant]:
             "readable by scripts/read-version-matrix.sh) — cannot derive the variant topology"
         )
     entries = cast(tuple[dict, ...], entries)
-    out: dict[tuple[str, str], Variant] = {}
+    out: dict[Variant, None] = {}
     for e in entries:
         major = str(e.get("freebsd_major", "")).strip()
         # issue #1806: the matrix carries no `arch` field at all any more (every
@@ -109,21 +122,28 @@ def matrix_variants() -> list[Variant]:
         # "amd64" here is an inert CPU placeholder, never read from the entry.
         abi = f"FreeBSD:{major}:amd64"
         variant = str(e.get("variant", "")).strip()
+        version = str(e.get("pfsense_version", "")).strip()
         out.setdefault(
-            (abi, variant),
             Variant(
                 php="php" + str(e.get("php_version", "")).replace(".", ""),
                 abi=abi,
-                catalog=catalog_name(str(e.get("pfsense_version", "")), variant),
+                catalog=catalog_name(version, variant),
                 py=str(e.get("py_flavor", "")).strip(),
                 variant=variant,
-            ),
+                version=version,
+            )
         )
-    return list(out.values())
+    return list(out)
 
 
 def _own_entry() -> Variant:
-    """This leg's variant: matched by SMOKE_ABI, else the matrix CE entry (bare dispatch).
+    """This leg's ROW: matched by SMOKE_PFSENSE_VERSION, else SMOKE_ABI, else the matrix CE
+    entry (bare dispatch).
+
+    SMOKE_PFSENSE_VERSION is the row's own identity and is exported for every leg by
+    smoke-single.yml and ui-tests.yml, so a leg never has to be inferred from a property it
+    shares with a sibling row (issue #2464). ABI matching stays as the fallback for a run that
+    sets only SMOKE_ABI.
 
     issue #1806: with `arch` retired, two editions CAN share a freebsd_major (not just an
     ADR-24 transition-window hypothetical) — SMOKE_ABI alone (a CONCRETE guest ABI env var;
@@ -134,10 +154,23 @@ def _own_entry() -> Variant:
     exactly one — a gate-A-era hazard this closes.
     """
     variants = matrix_variants()
+    version = os.environ.get("SMOKE_PFSENSE_VERSION", "").strip()
+    if version:
+        rows = [v for v in variants if v.version == version]
+        if not rows:
+            raise RuntimeError(
+                f"no matrix row for pfsense_version {version!r} (known: {sorted(v.version for v in variants)})"
+            )
+        if len(rows) > 1:
+            raise RuntimeError(f"pfsense_version {version!r} matches {len(rows)} matrix rows: {rows!r}")
+        return rows[0]
     abi = os.environ.get("SMOKE_ABI")
     if not abi:
-        ce = [v for v in variants if v.variant.lower() == "ce"]
-        abi = (ce[0] if ce else variants[0]).abi
+        # Bare dispatch names no leg at all: fall back to the matrix's FIRST ROW. Deliberately
+        # positional and documented as arbitrary — "the CE entry" was not a row identity once a
+        # second CE row existed (issue #2464), and an edition-keyed default then derived an ABI
+        # that several rows answer to. A leg that cares sets SMOKE_PFSENSE_VERSION.
+        return variants[0]
     matches = [v for v in variants if v.abi == abi]
     if not matches:
         raise RuntimeError(f"no matrix variant for ABI {abi!r} (known: {sorted(v.abi for v in variants)})")
@@ -181,13 +214,3 @@ def own_variant() -> Variant:
             f"matrix inconsistency: ABI {own.abi} maps to {own.php} but SMOKE_PHP_VERSION={env_php}"
         )
     return own
-
-
-def opposite_variant() -> Variant:
-    """The OTHER edition — the 'wrong' variant for this box (the forged package the wrong-variant
-    guard must reject): the first matrix variant of a different edition."""
-    own = own_variant()
-    others = [v for v in matrix_variants() if v.variant.lower() != own.variant.lower()]
-    if not others:
-        pytest.skip(f"matrix has no opposite-edition variant to {own.variant!r} — skipping the wrong-variant guard")
-    return others[0]

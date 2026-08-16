@@ -478,7 +478,12 @@ def _matrix(entries: list[dict[str, str]]) -> dict[str, Any]:
     return {"versions": entries}
 
 
-def _current_shape_matrix() -> dict[str, Any]:
+def _two_row_matrix() -> dict[str, Any]:
+    """A two-row parser fixture — NOT a mirror of the live matrix.
+
+    The live-matrix tripwire is `check_version_literals.py --verify-matrix` in test.yml,
+    which reads ci-metadata itself. Restating the live row set here would just be a copy
+    that goes stale (issue #2464: it already missed Plus 26.07 and CE 2.9)."""
     return _matrix(
         [
             {
@@ -499,9 +504,9 @@ def _current_shape_matrix() -> dict[str, Any]:
     )
 
 
-def test_matrix_tokens_current_shape_covered() -> None:
-    uncovered = cvl.uncovered_matrix_tokens(_current_shape_matrix())
-    assert uncovered == [], f"the live-shape matrix must be fully covered; got {uncovered}"
+def test_matrix_tokens_two_row_shape_covered() -> None:
+    uncovered = cvl.uncovered_matrix_tokens(_two_row_matrix())
+    assert uncovered == [], f"every token of the fixture matrix must be covered; got {uncovered}"
 
 
 def test_matrix_tokens_emit_and_cover_wildcard_abi() -> None:
@@ -509,7 +514,7 @@ def test_matrix_tokens_emit_and_cover_wildcard_abi() -> None:
     active entry (issue #1806: all pfSense-pkg-pfBlockerNG ports are NO_ARCH), and
     the detection regex covers it — so a new wildcard literal in source/docs gets
     the same allow-list treatment as a concrete one, exercised by the tripwire."""
-    m = _current_shape_matrix()
+    m = _two_row_matrix()
     tokens = cvl._matrix_tokens(m)
     assert _FREEBSD15_WILDCARD in tokens
     assert "FreeBSD" + ":16:*" in tokens
@@ -562,7 +567,7 @@ def test_matrix_tokens_future_versions_uncovered() -> None:
 
 def test_verify_matrix_cli_exit_codes(tmp_path: Path) -> None:
     good = tmp_path / "good.json"
-    good.write_text(json.dumps(_current_shape_matrix()), encoding="utf-8")
+    good.write_text(json.dumps(_two_row_matrix()), encoding="utf-8")
     bad = tmp_path / "bad.json"
     bad_entry = {
         "pfsense_version": "27" + ".01",
