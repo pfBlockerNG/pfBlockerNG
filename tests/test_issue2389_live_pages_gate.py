@@ -61,8 +61,12 @@ def test_release_published_stages_before_gate() -> None:
     # PUBLISH_STAGE value drifted away from "stage" (issue #2389).
     assert re.search(r"^\s+PUBLISH_STAGE: stage\s*$", job, re.MULTILINE), job
     assert "id: stage" in job
-    for out in ("staging_prefix", "touched", "noop", "route_matrix"):
+    # route_matrix is NOT a publish-pkg-repo output any more (issue #2450 step 3):
+    # promote-pkg-repo no longer reads it (publish-pkg-repo.sh's promote arm never
+    # required ROUTE_MATRIX), so the job stopped exporting an output nothing consumes.
+    for out in ("staging_prefix", "touched", "noop"):
         assert re.search(rf"^      {out}:", job, re.MULTILINE), f"publish-pkg-repo missing output {out!r}:\n{job}"
+    assert not re.search(r"^      route_matrix:", job, re.MULTILINE), job
 
 
 def test_release_published_resolve_exports_gate_identity() -> None:
@@ -93,16 +97,17 @@ def test_release_published_promotes_only_after_green_gate() -> None:
     assert "'promote'" in job
     assert "'discard'" in job
     assert "STAGING_PREFIX: ${{ needs.publish-pkg-repo.outputs.staging_prefix }}" in job
-    assert "ROUTE_MATRIX: ${{ needs.publish-pkg-repo.outputs.route_matrix }}" in job
     assert "exit 1" in job
 
 
 def test_release_published_promote_env_never_supplies_assets_dir() -> None:
     """publish-pkg-repo.sh's promote arm requires SOURCE_REPOSITORY, RELEASE_ID,
-    RELEASE_TAG, DESTINATIONS, SOURCE_RUN_ID, ROUTE_MATRIX, BASE_URL, STAGING_PREFIX,
-    and PUBLISH_STAGE -- but never ASSETS_DIR (issue #2389: the
-    script's tagged-mode env guard used to require ASSETS_DIR unconditionally,
-    which broke every promote since this job never exports it)."""
+    RELEASE_TAG, DESTINATIONS, SOURCE_RUN_ID, STAGING_PREFIX, and PUBLISH_STAGE --
+    but never ASSETS_DIR (issue #2389: the script's tagged-mode env guard used to
+    require ASSETS_DIR unconditionally, which broke every promote since this job
+    never exports it) nor ROUTE_MATRIX/BASE_URL (issue #2450 step 3: promote never
+    ran the publisher or a renderer, so both were always vestigial there; rendering
+    is now render-site's own job, downstream, with its own BASE_URL)."""
     job = _extract_job(_workflow("release-published.yml"), "promote-pkg-repo")
     for var in (
         "SOURCE_REPOSITORY",
@@ -110,13 +115,13 @@ def test_release_published_promote_env_never_supplies_assets_dir() -> None:
         "RELEASE_TAG",
         "DESTINATIONS",
         "SOURCE_RUN_ID",
-        "ROUTE_MATRIX",
-        "BASE_URL",
         "STAGING_PREFIX",
         "PUBLISH_STAGE",
     ):
         assert re.search(rf"^\s+{var}:", job, re.MULTILINE), f"promote-pkg-repo env missing {var!r}:\n{job}"
     assert not re.search(r"^\s+ASSETS_DIR:\s*", job, re.MULTILINE)
+    assert not re.search(r"^\s+ROUTE_MATRIX:\s*", job, re.MULTILINE)
+    assert not re.search(r"^\s+BASE_URL:\s*", job, re.MULTILINE)
 
 
 def test_release_published_serialises_publishes() -> None:

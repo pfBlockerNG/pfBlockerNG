@@ -313,7 +313,9 @@ def test_publish_pkg_repo_job_invokes_the_trusted_wrapper_with_nightly_kind() ->
     """W8: PUBLISH_KIND=nightly, SOURCE_RUN_ID = run_id:run_attempt (same
     composition as the handoff job's own stale-callback identity), path env vars
     exported in the RUN BODY not the env: map (issue #2231), and the wrapper is
-    invoked from the TRUSTED checkout, never the pkg-repo one."""
+    invoked from the TRUSTED checkout, never the pkg-repo one. BASE_URL is gone
+    (issue #2450 step 3): publish-pkg-repo.sh no longer renders anything --
+    render-site's own job carries BASE_URL for the site renderer instead."""
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
     assert "PUBLISH_KIND=nightly" in job
@@ -322,7 +324,7 @@ def test_publish_pkg_repo_job_invokes_the_trusted_wrapper_with_nightly_kind() ->
     assert 'PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"' in job
     assert 'HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"' in job
     assert 'RESULTS_DIR="$GITHUB_WORKSPACE/results"' in job
-    assert "BASE_URL=https://pfblockerng.github.io/pkg" in job
+    assert "BASE_URL" not in job
     assert "sh trusted/scripts/publish-pkg-repo.sh" in job
 
 

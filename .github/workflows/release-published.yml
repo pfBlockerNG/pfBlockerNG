@@ -151,10 +151,13 @@ jobs:
   # run does everything: verify the published Release's .pkg assets against the
   # pinned ROUTE matrix (scripts/publish_release.py, loading the engine straight
   # out of THIS checkout via PFB_SRC), drop them into pkg's docs/<channel>/<varver>/,
-  # prune + regenerate each touched catalogue, regenerate the landing page, and
-  # commit + fast-forward-push the result to pkg's own `main` — GitHub Pages serves
-  # that branch directly (build_type: legacy), so the push IS the deployment. See
-  # scripts/publish-pkg-repo.sh, the only thing here that touches git.
+  # prune + regenerate each touched catalogue, and commit + fast-forward-push the
+  # result to pkg's own `main` — GitHub Pages serves that branch directly
+  # (build_type: legacy), so the push IS the deployment. See
+  # scripts/publish-pkg-repo.sh, the only thing here that touches git. The site
+  # AROUND the catalogue (landing page, browse view, install.sh, …) is the
+  # render-site job's own concern (below, issue #2450 step 3) — this job never
+  # touches it.
   publish-pkg-repo:
     name: Stage the pkg catalogue
     runs-on: ubuntu-latest
@@ -172,18 +175,17 @@ jobs:
       contents: read
     # issue #2389: this job only STAGES (the "Stage the pkg catalogue" step below
     # pins PUBLISH_STAGE to the stage mode) — it is NOT the deploy/announce.
-    # Nothing is visible under <channel>/<varver> or on the landing page until
-    # promote-pkg-repo — the actual deploy/announce step — runs the SAME script
-    # in `promote` mode, downstream of a green validate-live-pages-install.
+    # Nothing is visible under <channel>/<varver> until promote-pkg-repo — the
+    # actual deploy/announce step — runs the SAME script in `promote` mode,
+    # downstream of a green validate-live-pages-install.
     # staging_prefix/touched/noop are the per-run identity that gate +
     # promote/discard consume without re-deriving them (pin-consumed-downstream,
-    # #2387); route_matrix carries the ROUTE step's already-fetched matrix
-    # through so promote-pkg-repo never re-reads the live ci-metadata ref itself.
+    # #2387). No route_matrix output (issue #2450 step 3): promote-pkg-repo never
+    # ran the publisher itself, so ROUTE_MATRIX was always vestigial there.
     outputs:
       staging_prefix: ${{ steps.stage.outputs.staging_prefix }}
       touched: ${{ steps.stage.outputs.touched }}
       noop: ${{ steps.stage.outputs.noop }}
-      route_matrix: ${{ steps.route.outputs.route_matrix }}
     steps:
       - name: Checkout pfBlockerNG (the engine + orchestration scripts — TRUSTED ref)
         uses: actions/checkout@v6
@@ -271,11 +273,10 @@ jobs:
           DESTINATIONS: ${{ needs.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
-          BASE_URL: https://pfblockerng.github.io/pkg
           # issue #2389: stage under docs/staging/<seg>/<channel>/<varver> instead
           # of publishing directly — nothing is visible under <channel>/<varver>
-          # or on the landing page until promote-pkg-repo runs the SAME script in
-          # `promote` mode, after a green live-install gate.
+          # until promote-pkg-repo runs the SAME script in `promote` mode, after a
+          # green live-install gate.
           PUBLISH_STAGE: stage
         # Path env vars are exported HERE, not in the env: map above — GitHub
         # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
@@ -406,10 +407,13 @@ jobs:
 
   # ── 4. Promote the pkg catalogue — the actual announce (issue #2389) ───────
   # This is the ONLY job that makes a publish visible: the catalogue only becomes
-  # reachable under <channel>/<varver> and the landing page only regenerates once
-  # this job runs the SAME script in `promote` mode. A red or skipped live-install
-  # gate flips PUBLISH_STAGE to `discard` instead — the staged tree is deleted and
-  # this job then fails the run (below) so nothing was silently announced.
+  # reachable under <channel>/<varver> once this job runs the SAME script in
+  # `promote` mode. A red or skipped live-install gate flips PUBLISH_STAGE to
+  # `discard` instead — the staged tree is deleted and this job then fails the
+  # run (below) so nothing was silently announced. The landing page itself is
+  # NOT regenerated here any more (issue #2450 step 3): render-site (below)
+  # renders it afterward, whenever this job's own publish (publish-pkg-repo)
+  # succeeded — after a promote, a discard, or a catalogue no-op alike.
   promote-pkg-repo:
     name: Promote the pkg catalogue
     runs-on: ubuntu-latest
@@ -465,8 +469,6 @@ jobs:
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
           DESTINATIONS: ${{ needs.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
-          ROUTE_MATRIX: ${{ needs.publish-pkg-repo.outputs.route_matrix }}
-          BASE_URL: https://pfblockerng.github.io/pkg
           STAGING_PREFIX: ${{ needs.publish-pkg-repo.outputs.staging_prefix }}
           # promote iff BOTH the matrix-prep and every live-install leg it fanned
           # out over came back green; anything else (a red leg, a red prep, a
@@ -490,3 +492,18 @@ jobs:
             echo "::error::live Pages install gate did not pass (prepare-live-gate or validate-live-pages-install failed/cancelled) — staging discarded, nothing announced"
             exit 1
           fi
+
+  # ── 5. Render the pkg website (issue #2450 step 3) ──────────────────────────
+  # Runs whenever this run's own publish-pkg-repo succeeded, regardless of what
+  # promote-pkg-repo did with it: a promote, a discard, and a catalogue no-op
+  # (where promote-pkg-repo is skipped entirely, issue #2408) are all cases the
+  # render must reflect, and the render is idempotent + always correct for the
+  # catalogue as it stands — a NOOP render commits nothing.
+  render-site:
+    name: Render the pkg website
+    needs: [publish-pkg-repo, promote-pkg-repo]
+    if: always() && needs.publish-pkg-repo.result == 'success'
+    uses: ./.github/workflows/pkg-render-site.yml
+    with:
+      source_ref: "${{ github.workflow_sha }}"
+    secrets: inherit

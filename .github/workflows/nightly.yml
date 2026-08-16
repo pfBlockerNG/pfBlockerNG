@@ -494,8 +494,15 @@ jobs:
           # Failed Nightly? Dispatch another one. No durable allocation exists to
           # recover or replay; each invocation gets its own timestamped version.
           export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
-          export BASE_URL=https://pfblockerng.github.io/pkg
           sh trusted/scripts/publish-pkg-repo.sh
+
+  render-site:
+    name: Render the pkg website
+    needs: [prepare, publish-pkg-repo]
+    uses: ./.github/workflows/pkg-render-site.yml
+    with:
+      source_ref: "${{ needs.prepare.outputs.tools_sha }}"
+    secrets: inherit
 
   validate-live-pages-install:
     name: Live Pages pkg install
