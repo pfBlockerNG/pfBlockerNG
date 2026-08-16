@@ -1,20 +1,24 @@
-"""Tests for scripts/gen_landing.py — the human-navigable pkg-repo landing page.
+"""Tests for scripts/gen_landing.py — the pkg-site renderer (issue #2450).
 
-The generator turns a built four-channel catalogue tree (stable/testing/edge/nightly,
-issue #2147) into a styled index: channel install cards, a Version x ABI table read
-from each .pkg manifest, and per-dir listings that show packages but hide pkg(8) catalog
-plumbing. Most cases inject the manifest reader or exercise pure render helpers. The
-record-epoch HTML pin (issue #2401) builds a real libpkg fixture for the listing
-and landing rows.
+The generator builds the declared pkg-site/ tree (install.sh, per-channel recipes,
+.nojekyll), renders the dynamic pages (landing index.html, browse.html, and a
+browse/<channel>/… view of every catalogue tree), and mirrors the result into
+docs/ — write every desired file, delete everything extraneous, never touching a
+catalogue-owned tree. Most cases inject the manifest reader or exercise pure render
+helpers. The record-epoch HTML pin (issue #2401) builds a real libpkg fixture for
+the browse and landing rows; rendering never reads a file's mtime.
 """
 
 from __future__ import annotations
 
+import html
 import importlib.util
 import inspect
 import io
 import json
 import os
+import re
+import stat
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,11 +35,22 @@ assert _SPEC and _SPEC.loader
 gl = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(gl)
 
-# Paths to the real scripts — used wherever tests exercise the live integration
-# (write_site + write_install_script) rather than fake fixtures.
+# Paths to the real scripts/site tree — used wherever tests exercise the live
+# integration (write_site + build_site_tree) rather than fake fixtures.
 _SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+_PKG_SITE_DIR = Path(__file__).resolve().parent.parent / "pkg-site"
 
 _CANON = gl.CANONICAL_EMITTED_IDENTITY  # "pfSense-pkg-pfBlockerNG" — the ONE channel-agnostic identity
+
+
+def _fixture_site_tree(base: str) -> dict[str, tuple[bytes, int]]:
+    """A minimal built site tree for pure render_page/card tests: one recipe per
+    channel, {base}-substituted — mirrors what build_site_tree(PKG-SITE, base)
+    would produce for pkg-site/recipes/*.sh without touching the real files."""
+    return {
+        f"recipes/{ch}.sh": (f"fetch -qo - {base}/install.sh | sh -s -- --channel {ch}\n".encode(), 0o644)
+        for ch in gl.CH_ORDER
+    }
 
 
 # ── Pure helpers ──────────────────────────────────────────────────────────────
@@ -156,30 +171,27 @@ def test_artifact_datetime_is_utc_minute_precision() -> None:
 
 
 def test_published_datetime_prefers_created_annotation() -> None:
-    """Scenario: a daily republish must NOT reset an artifact's shown creation time.
+    """Scenario: the published datetime never depends on when a file was written.
 
     Given a .pkg whose manifest carries a `created` build annotation (the source
-    commit epoch) AND a much-later mtime (a re-download/rebuild 'today'),
+    commit epoch),
     When the published datetime is computed,
-    Then the annotation wins — so a rebuilt channel stops showing the republish date.
-    And with no annotation, it falls back to the mtime.
+    Then the annotation wins,
+    And with no annotation (or a malformed/out-of-range one), it resolves to ""
+    — never a file mtime (issue #2450) — which the caller renders as an em dash.
     """
     commit_epoch = datetime(2026, 6, 10, 5, 52, tzinfo=timezone.utc).timestamp()
-    republish_mtime = datetime(2026, 6, 14, 9, 38, tzinfo=timezone.utc).timestamp()
     manifest_with = {"annotations": {"commit": "deadbeef", "created": str(int(commit_epoch))}}
-    assert gl.published_datetime(manifest_with, republish_mtime) == "2026-06-10 05:52 UTC"
-    # No annotation -> mtime fallback.
-    assert gl.published_datetime({"annotations": {}}, republish_mtime) == "2026-06-14 09:38 UTC"
-    assert gl.published_datetime({}, republish_mtime) == "2026-06-14 09:38 UTC"
-    # Malformed annotation -> mtime fallback, not a crash.
-    assert gl.published_datetime({"annotations": {"created": "nope"}}, republish_mtime) == "2026-06-14 09:38 UTC"
-    # Numeric-but-out-of-range epoch (inf / huge) -> mtime fallback, not a crash on the
-    # whole page (datetime.fromtimestamp raises OverflowError/OSError, not ValueError).
-    assert gl.published_datetime({"annotations": {"created": "1e309"}}, republish_mtime) == "2026-06-14 09:38 UTC"
-    assert (
-        gl.published_datetime({"annotations": {"created": "999999999999999999"}}, republish_mtime)
-        == "2026-06-14 09:38 UTC"
-    )
+    assert gl.published_datetime(manifest_with) == "2026-06-10 05:52 UTC"
+    # No annotation -> unknown, never a mtime.
+    assert gl.published_datetime({"annotations": {}}) == ""
+    assert gl.published_datetime({}) == ""
+    # Malformed annotation -> unknown, not a crash.
+    assert gl.published_datetime({"annotations": {"created": "nope"}}) == ""
+    # Numeric-but-out-of-range epoch (inf / huge) -> unknown, not a crash on the whole
+    # page (datetime.fromtimestamp raises OverflowError/OSError, not ValueError).
+    assert gl.published_datetime({"annotations": {"created": "1e309"}}) == ""
+    assert gl.published_datetime({"annotations": {"created": "999999999999999999"}}) == ""
 
 
 def test_published_datetime_falls_back_to_build_record_epoch() -> None:
@@ -188,26 +200,23 @@ def test_published_datetime_falls_back_to_build_record_epoch() -> None:
     Given a .pkg whose only annotation is `pfb_build_record` (the release/nightly
     builders stamp the record, and nothing stamps `created` — issue #2375),
     When the published datetime is computed,
-    Then the record's `source_date_epoch` wins over the checkout mtime,
+    Then the record's `source_date_epoch` wins,
     And a bare `created` annotation still takes precedence over the record,
-    And a malformed/incomplete record falls back to mtime instead of crashing.
+    And a malformed/incomplete record resolves to "" instead of crashing.
     """
     import json
 
     commit_epoch = datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp()
-    republish_mtime = datetime(2026, 8, 14, 22, 5, tzinfo=timezone.utc).timestamp()
     record = json.dumps({"source_date_epoch": int(commit_epoch), "source_sha": "f" * 40})
     manifest_record_only = {"annotations": {"pfb_build_record": record}}
-    assert gl.published_datetime(manifest_record_only, republish_mtime) == "2026-08-14 19:32 UTC"
+    assert gl.published_datetime(manifest_record_only) == "2026-08-14 19:32 UTC"
     # `created` still wins when both are present.
     created_epoch = datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc).timestamp()
     both = {"annotations": {"created": str(int(created_epoch)), "pfb_build_record": record}}
-    assert gl.published_datetime(both, republish_mtime) == "2026-08-01 00:00 UTC"
-    # Malformed record JSON, record without the key, non-numeric epoch -> mtime fallback.
+    assert gl.published_datetime(both) == "2026-08-01 00:00 UTC"
+    # Malformed record JSON, record without the key, non-numeric epoch -> unknown.
     for bad in ("{not json", json.dumps({}), json.dumps({"source_date_epoch": "nope"})):
-        assert (
-            gl.published_datetime({"annotations": {"pfb_build_record": bad}}, republish_mtime) == "2026-08-14 22:05 UTC"
-        )
+        assert gl.published_datetime({"annotations": {"pfb_build_record": bad}}) == ""
 
 
 def test_commit_sha_falls_back_to_build_record_source_sha() -> None:
@@ -228,21 +237,27 @@ def test_commit_sha_falls_back_to_build_record_source_sha() -> None:
     assert gl.commit_sha({"annotations": {"pfb_build_record": "{not json"}}) == ""
 
 
-def test_dir_entries_use_record_epoch_for_pkg_files(tmp_path: Path, monkeypatch: Any) -> None:
-    """Scenario: the per-directory listing must not show the publish run's mtime for packages.
+def test_display_epoch_uses_record_epoch_for_pkg_files_never_mtime(tmp_path: Path, monkeypatch: Any) -> None:
+    """Scenario: a browse-view row must not show the publish run's mtime for packages.
 
-    Given a cell directory holding a .pkg (whose embedded build record carries
-    source_date_epoch) and a catalog plumbing file,
-    When the directory entries are scanned,
-    Then the .pkg row carries the record epoch while the plumbing file keeps its mtime,
-    And an unreadable .pkg (corrupt/foreign) falls back to its mtime instead of crashing.
+    Given a .pkg (whose embedded build record carries source_date_epoch) and a
+    catalog plumbing file, both with an arbitrary mtime,
+    When each file's display epoch is resolved,
+    Then the .pkg resolves to the record epoch while the plumbing file resolves to
+    None (never its mtime, issue #2450),
+    And an unreadable .pkg (corrupt/foreign) also resolves to None instead of crashing.
     """
     record_epoch = int(datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp())
     project = tmp_path / "pfSense-pkg-pfBlockerNG-3.3.2.pkg"
     project.write_bytes(b"not a real pkg")
-    (tmp_path / "broken.pkg").write_bytes(b"also not a pkg")
-    (tmp_path / "packagesite.pkg").write_bytes(b"catalog")
-    (tmp_path / "meta.conf").write_text("meta")
+    broken = tmp_path / "broken.pkg"
+    broken.write_bytes(b"also not a pkg")
+    site_pkg = tmp_path / "packagesite.pkg"
+    site_pkg.write_bytes(b"catalog")
+    meta = tmp_path / "meta.conf"
+    meta.write_text("meta")
+    for path in (project, broken, site_pkg, meta):
+        os.utime(path, (1_700_000_000, 1_700_000_000))
 
     def fake_read(path: str) -> dict:
         if path.endswith("broken.pkg"):
@@ -250,24 +265,16 @@ def test_dir_entries_use_record_epoch_for_pkg_files(tmp_path: Path, monkeypatch:
         return {"annotations": {"pfb_build_record": json.dumps({"source_date_epoch": record_epoch})}}
 
     monkeypatch.setattr(gl, "read_compact_manifest", fake_read)
-    _, files = gl._dir_entries(str(tmp_path), "")
-    by_name = {name: mtime for name, _size, mtime in files}
-    assert by_name["pfSense-pkg-pfBlockerNG-3.3.2.pkg"] == float(record_epoch)
-    assert by_name["broken.pkg"] == os.stat(tmp_path / "broken.pkg").st_mtime
-    assert by_name["meta.conf"] == os.stat(tmp_path / "meta.conf").st_mtime
-    # Catalog plumbing stays on mtime even when the stub would hand it a record
+    assert gl._display_epoch(str(project)) == float(record_epoch)
+    assert gl._display_epoch(str(broken)) is None
+    assert gl._display_epoch(str(meta)) is None
+    # Catalog plumbing stays None even when the stub would hand it a record
     # (is_package_file is the gate — issue #2401 leftover of path.endswith(".pkg")).
-    assert by_name["packagesite.pkg"] == os.stat(tmp_path / "packagesite.pkg").st_mtime
-    # Out-of-range epoch (inf) must fall back to mtime, not crash the renderer later.
-    monkeypatch.setattr(
-        gl,
-        "read_compact_manifest",
-        lambda _p: {"annotations": {"created": "1e309"}},
-    )
-    _, files = gl._dir_entries(str(tmp_path), "")
-    by_name = {name: mtime for name, _size, mtime in files}
-    assert by_name["broken.pkg"] == os.stat(tmp_path / "broken.pkg").st_mtime
-    assert by_name[project.name] == os.stat(project).st_mtime
+    assert gl._display_epoch(str(site_pkg)) is None
+    # Out-of-range epoch (inf) resolves to None, not a crash later.
+    monkeypatch.setattr(gl, "read_compact_manifest", lambda _p: {"annotations": {"created": "1e309"}})
+    assert gl._display_epoch(str(broken)) is None
+    assert gl._display_epoch(str(project)) is None
 
 
 # Record-only fixture used by the write_site HTML pin (issue #2401). Epochs are
@@ -330,22 +337,20 @@ def _record_only_cell(root: Path) -> tuple[Path, Path]:
     return root, cell
 
 
-def test_artifact_epoch_prefers_created_then_record_then_mtime() -> None:
-    """One resolver: created annotation, then pfb_build_record, then the file mtime."""
+def test_artifact_epoch_prefers_created_then_record_then_none() -> None:
+    """One resolver: created annotation, then pfb_build_record, else None — never mtime."""
     record = json.dumps({"source_date_epoch": _RECORD_EPOCH, "source_sha": _SOURCE_SHA})
     created = {"annotations": {"created": "10", pfb_pkg.PFB_BUILD_RECORD_KEY: record}}
-    assert gl.artifact_epoch(created, float(_FILE_MTIME)) == 10.0
-    assert gl.artifact_epoch({"annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: record}}, float(_FILE_MTIME)) == float(
+    assert gl.artifact_epoch(created) == 10.0
+    assert gl.artifact_epoch({"annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: record}}) == float(_RECORD_EPOCH)
+    # Out-of-range created falls through to the record, then to None.
+    assert gl.artifact_epoch({"annotations": {"created": "1e309", pfb_pkg.PFB_BUILD_RECORD_KEY: record}}) == float(
         _RECORD_EPOCH
     )
-    # Out-of-range created falls through to the record, then to mtime.
-    assert gl.artifact_epoch(
-        {"annotations": {"created": "1e309", pfb_pkg.PFB_BUILD_RECORD_KEY: record}}, float(_FILE_MTIME)
-    ) == float(_RECORD_EPOCH)
-    assert gl.artifact_epoch({"annotations": {"created": "1e309"}}, float(_FILE_MTIME)) == float(_FILE_MTIME)
-    assert gl.artifact_epoch({}, float(_FILE_MTIME)) == float(_FILE_MTIME)
-    assert gl.artifact_epoch({"annotations": ["not", "a", "map"]}, float(_FILE_MTIME)) == float(_FILE_MTIME)
-    assert gl.artifact_epoch({"annotations": "created=1"}, float(_FILE_MTIME)) == float(_FILE_MTIME)
+    assert gl.artifact_epoch({"annotations": {"created": "1e309"}}) is None
+    assert gl.artifact_epoch({}) is None
+    assert gl.artifact_epoch({"annotations": ["not", "a", "map"]}) is None
+    assert gl.artifact_epoch({"annotations": "created=1"}) is None
 
 
 def test_published_datetime_and_display_epoch_share_artifact_epoch(tmp_path: Path, monkeypatch: Any) -> None:
@@ -356,27 +361,27 @@ def test_published_datetime_and_display_epoch_share_artifact_epoch(tmp_path: Pat
     assert "artifact_epoch(" in src_disp
 
     sentinel = 1111111111.0
-    seen: list[tuple[dict, float]] = []
+    seen: list[dict] = []
 
-    def fake_epoch(manifest: dict, mtime: float) -> float:
-        seen.append((manifest, mtime))
+    def fake_epoch(manifest: dict) -> float:
+        seen.append(manifest)
         return sentinel
 
     monkeypatch.setattr(gl, "artifact_epoch", fake_epoch)
-    assert gl.published_datetime({"annotations": {"created": "1"}}, 9.0) == gl.artifact_datetime(sentinel)
+    assert gl.published_datetime({"annotations": {"created": "1"}}) == gl.artifact_datetime(sentinel)
 
     pkg = tmp_path / f"{_CANON}-3.3.2.pkg"
     pkg.write_bytes(b"x")
     monkeypatch.setattr(gl, "read_compact_manifest", lambda _p: {"annotations": {}})
-    assert gl._display_epoch(str(pkg), 22.0) == sentinel
+    assert gl._display_epoch(str(pkg)) == sentinel
     assert len(seen) == 2
 
 
-def test_catalog_pkg_keeps_mtime_when_manifest_reader_returns_record(tmp_path: Path, monkeypatch: Any) -> None:
+def test_catalog_pkg_never_shown_via_a_stubbed_project_record(tmp_path: Path, monkeypatch: Any) -> None:
     """packagesite.pkg / data.pkg must not inherit a stubbed project record.
 
     is_package_file is the gate: even if read_compact_manifest would return the
-    project record for every path, catalog .pkg files keep their mtime.
+    project record for every path, catalog .pkg files resolve to None (issue #2450).
     """
     cell = tmp_path / "cell"
     cell.mkdir()
@@ -386,8 +391,6 @@ def test_catalog_pkg_keeps_mtime_when_manifest_reader_returns_record(tmp_path: P
     project.write_bytes(b"pkg")
     site_pkg.write_bytes(b"catalog")
     data_pkg.write_bytes(b"data")
-    for path in (project, site_pkg, data_pkg):
-        os.utime(path, (_FILE_MTIME, _FILE_MTIME))
 
     record = json.dumps({"source_date_epoch": _RECORD_EPOCH, "source_sha": _SOURCE_SHA})
     monkeypatch.setattr(
@@ -395,18 +398,17 @@ def test_catalog_pkg_keeps_mtime_when_manifest_reader_returns_record(tmp_path: P
         "read_compact_manifest",
         lambda _p: {"annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: record}},
     )
-    _, files = gl._dir_entries(str(cell), "")
-    by_name = {name: mtime for name, _size, mtime in files}
-    assert by_name[project.name] == float(_RECORD_EPOCH)
-    assert by_name["packagesite.pkg"] == float(_FILE_MTIME)
-    assert by_name["data.pkg"] == float(_FILE_MTIME)
+    assert gl._display_epoch(str(project)) == float(_RECORD_EPOCH)
+    assert gl._display_epoch(str(site_pkg)) is None
+    assert gl._display_epoch(str(data_pkg)) is None
 
 
-def test_write_site_record_only_pkg_drives_listing_and_landing(tmp_path: Path, monkeypatch: Any) -> None:
+def test_write_site_record_only_pkg_drives_browse_and_landing(tmp_path: Path, monkeypatch: Any) -> None:
     """A real record-only compact-manifest fixture drives write_site (issue #2401).
 
-    The cell listing and the landing Published / Commit cells show the record
-    epoch / source_sha, not the file mtime.
+    The browse-view row and the landing Published / Commit cells show the record
+    epoch / source_sha; a plumbing sibling's row shows an em dash, never a mtime
+    (issue #2450: no epoch ever falls back to a file's mtime).
     """
     site, cell = _record_only_cell(tmp_path / "site")
     # Prove the archive is a real record-only compact manifest before rendering.
@@ -417,17 +419,18 @@ def test_write_site_record_only_pkg_drives_listing_and_landing(tmp_path: Path, m
     assert pfb_pkg.PFB_BUILD_RECORD_KEY in annotations
 
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
     assert n == 1
 
-    listing = (cell / "index.html").read_text()
+    listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
     pkg_row = _autoindex_row(listing, f"{_CANON}-3.3.2.pkg")
     assert _RECORD_DATE in pkg_row
     assert _MTIME_DATE not in pkg_row
     for plumbing in ("packagesite.pkg", "data.pkg", "meta.conf"):
         row = _autoindex_row(listing, plumbing)
         assert _RECORD_DATE not in row
-        assert _MTIME_DATE in row
+        assert _MTIME_DATE not in row
+        assert "&mdash;" in row
 
     landing = (site / "index.html").read_text()
     assert _RECORD_DATE in landing
@@ -436,8 +439,8 @@ def test_write_site_record_only_pkg_drives_listing_and_landing(tmp_path: Path, m
     assert f">{_SOURCE_SHA[:7]}<" in landing
 
 
-def test_write_site_out_of_range_created_on_project_pkg_falls_back(tmp_path: Path, monkeypatch: Any) -> None:
-    """created=1e309 on the project .pkg falls back to mtime; write_site does not raise."""
+def test_write_site_out_of_range_created_on_project_pkg_renders_dash(tmp_path: Path, monkeypatch: Any) -> None:
+    """created=1e309 on the project .pkg renders an em dash; write_site does not raise."""
     site = tmp_path / "site"
     cell = site / "stable" / "ce-2.8"
     pkg = cell / f"{_CANON}-3.3.2.pkg"
@@ -445,12 +448,14 @@ def test_write_site_out_of_range_created_on_project_pkg_falls_back(tmp_path: Pat
     os.utime(pkg, (_FILE_MTIME, _FILE_MTIME))
 
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
     assert n == 1
-    listing = (cell / "index.html").read_text()
-    assert _MTIME_DATE in _autoindex_row(listing, pkg.name)
+    listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
+    row = _autoindex_row(listing, pkg.name)
+    assert _MTIME_DATE not in row
+    assert "&mdash;" in row
     landing = (site / "index.html").read_text()
-    assert _MTIME_DATE in landing
+    assert _MTIME_DATE not in landing
 
 
 def test_commit_cell_links_valid_sha_and_dashes_missing() -> None:
@@ -598,10 +603,15 @@ def test_collect_packages_and_write_site_skip_unknown_top_level_dir(tmp_path: Pa
 
     Given a catalog tree with a real 'stable/' channel package AND a stray unrecognized
     top-level dir ('quarantine/') holding what looks like a canonical package,
-    When packages are collected / the site is written,
-    Then only the real channel's package counts, the stray dir's file never appears in
-    the packages table/cards, and write_site still succeeds (the stray dir stays
-    browsable via its own autoindex — the directory walk doesn't consult channel_of_path).
+    When packages are collected,
+    Then only the real channel's package counts and the stray dir's file never appears
+    in the packages table/cards.
+    When the site is written,
+    Then write_site still succeeds — but the stray dir, sitting under neither a
+    CATALOGUE_DIRS prefix nor the site tree, is swept by the mirror (issue #2450: the
+    renderer owns everything outside the catalogue trees, so an unrecognized top-level
+    dir is extraneous, not "browsable" — that model retired with the old per-dir
+    autoindex).
     """
     site = tmp_path / "site"
     _touch(site / "stable" / "ce-2.8" / f"{_CANON}-1.0.0.pkg")
@@ -617,15 +627,15 @@ def test_collect_packages_and_write_site_skip_unknown_top_level_dir(tmp_path: Pa
 
     monkeypatch.setattr(gl, "read_compact_manifest", fake_read)
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://x/pkg")
+    n = gl.write_site(str(site), "https://x/pkg", str(_PKG_SITE_DIR))
 
     assert n == 1
     index_html = (site / "index.html").read_text()
     assert "9.9.9" not in index_html
-    # Still browsable: the stray dir gets its own autoindex, and appears in browse.html.
-    assert (site / "quarantine" / "ce-2.8" / "index.html").is_file()
+    # Swept by the mirror: not a catalogue prefix, not part of the site tree.
+    assert not (site / "quarantine").exists()
     browse = (site / "browse.html").read_text()
-    assert '<a href="./quarantine/">quarantine/</a>' in browse
+    assert "quarantine" not in browse
 
 
 def test_write_site_resolves_latest_version_per_channel_from_path_fixtures(tmp_path: Path, monkeypatch: Any) -> None:
@@ -1287,7 +1297,7 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
     install, or a conf snippet.
     """
     base = "https://pfblockerng.github.io/pkg"
-    page = gl.render_page(base, [], _stub_conf)
+    page = gl.render_page(base, [], _stub_conf, _fixture_site_tree(base))
 
     titles = {"stable": "Stable", "testing": "Testing", "edge": "Edge", "nightly": "Nightly"}
     audience_anchor = {
@@ -1330,7 +1340,7 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
         _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
     ]
     base = "https://pfblockerng.github.io/pkg"
-    page = gl.render_page(base, pkgs, _stub_conf, matrix)
+    page = gl.render_page(base, pkgs, _stub_conf, _fixture_site_tree(base), matrix)
 
     # Latest versions surfaced for the present channels.
     assert "3.2.16.20260614.9" in page
@@ -1406,7 +1416,9 @@ def test_render_page_snippets_have_copy_buttons() -> None:
       inline <code> spans, and unpublished cards have none.
     """
     pkgs = [_pkg("testing", _CANON, "3.2.16", "FreeBSD:15:amd64", "testing/ce-2.8/FreeBSD:15:amd64/d.pkg")]
-    page = gl.render_page("https://pfblockerng.github.io/pkg", pkgs, _stub_conf)
+    page = gl.render_page(
+        "https://pfblockerng.github.io/pkg", pkgs, _stub_conf, _fixture_site_tree("https://pfblockerng.github.io/pkg")
+    )
 
     # The button + wrapper exist, and the <pre> payload is unchanged (button is a sibling).
     assert '<div class="snip">' in page
@@ -1429,22 +1441,26 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     assert "<script>" in page  # the handler is wired
 
 
-def test_autoindex_has_no_copy_affordance() -> None:
-    """The copy button/script live only on the landing page, not the directory autoindex."""
-    out = gl.render_autoindex("stable", ["amd64"], [("notes.txt", 12, 1_700_000_000.0)])
+def test_autoindex_has_no_copy_affordance(tmp_path: Path) -> None:
+    """The copy button/script live only on the landing page, not a browse page."""
+    docs = tmp_path / "docs"
+    _touch(docs / "stable" / "amd64" / "notes.txt")
+
+    out = gl._render_catalogue_browse_page(str(docs), "stable")
+
     assert 'class="copy"' not in out
     assert "navigator.clipboard" not in out
 
 
 def test_render_page_table_empty_when_no_packages() -> None:
-    page = gl.render_page("https://x/pkg", [], _stub_conf)
+    page = gl.render_page("https://x/pkg", [], _stub_conf, _fixture_site_tree("https://x/pkg"))
     assert "No packages published yet." in page
     assert '<a class="browse" href="./browse.html">' in page  # browse link present even when empty
 
 
 def test_render_page_empty_channel_shows_not_yet_published_for_every_card() -> None:
     """Empty site: four unpublished cards, zero recipes, zero manual conf, zero copy buttons."""
-    page = gl.render_page("https://x/pkg", [], _stub_conf)
+    page = gl.render_page("https://x/pkg", [], _stub_conf, _fixture_site_tree("https://x/pkg"))
     assert page.count("not yet published") == 4
     assert "pkg install" not in page
     assert "install.sh" not in page
@@ -1461,7 +1477,7 @@ def test_render_page_shared_version_across_stable_testing_edge() -> None:
         _pkg("testing", _CANON, ver, "FreeBSD:15:*", f"testing/ce-2.8/x-{ver}.pkg"),
         _pkg("edge", _CANON, ver, "FreeBSD:15:*", f"edge/ce-2.8/x-{ver}.pkg"),
     ]
-    page = gl.render_page("https://x/pkg", pkgs, _stub_conf)
+    page = gl.render_page("https://x/pkg", pkgs, _stub_conf, _fixture_site_tree("https://x/pkg"))
 
     # Same version string surfaces on stable, testing, AND edge's card (3 occurrences).
     assert page.count(f'<p class="ver">Latest <code>{ver}</code></p>') == 3
@@ -1475,7 +1491,7 @@ def test_render_page_edge_ahead_of_testing_and_stable_shows_divergence() -> None
         _pkg("testing", _CANON, "4.0.1.b1", "FreeBSD:15:*", "testing/ce-2.8/x.pkg"),
         _pkg("edge", _CANON, "4.1.0.a1", "FreeBSD:15:*", "edge/ce-2.8/x.pkg"),
     ]
-    page = gl.render_page("https://x/pkg", pkgs, _stub_conf)
+    page = gl.render_page("https://x/pkg", pkgs, _stub_conf, _fixture_site_tree("https://x/pkg"))
 
     assert '<p class="ver">Latest <code>4.0.0</code></p>' in page
     assert '<p class="ver">Latest <code>4.0.1.b1</code></p>' in page
@@ -1485,7 +1501,9 @@ def test_render_page_edge_ahead_of_testing_and_stable_shows_divergence() -> None
 def test_unpublished_nightly_card_has_no_install_recipe() -> None:
     """Issue #2382: unpublished Nightly keeps the badge/blurb and ships no recipe."""
     pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
-    page = gl.render_page("https://pfblockerng.github.io/pkg", pkgs, _stub_conf)
+    page = gl.render_page(
+        "https://pfblockerng.github.io/pkg", pkgs, _stub_conf, _fixture_site_tree("https://pfblockerng.github.io/pkg")
+    )
     nightly = page[page.index('"card nightly"') :]
     # The nightly card ends at the next footer-ish boundary; search the nightly
     # slice up to the published-packages heading.
@@ -1504,7 +1522,7 @@ def test_published_card_recipe_is_the_one_line_channel_installer() -> None:
     cards)."""
     pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
     base = "https://pfblockerng.github.io/pkg"
-    page = gl.render_page(base, pkgs, _stub_conf)
+    page = gl.render_page(base, pkgs, _stub_conf, _fixture_site_tree(base))
     # Anchored to the <pre> element boundary so a trailing `sh -s --` (or any other
     # tail) fails this assertion rather than slipping past a bare substring check.
     assert f"<pre>fetch -qo - {base}/install.sh | sh -s -- --channel stable</pre>" in page
@@ -1515,7 +1533,7 @@ def test_published_card_recipe_is_the_one_line_channel_installer() -> None:
 
 def test_render_page_omits_internal_trust_and_channel_model() -> None:
     """Development and implementation details do not leak into the user-facing page."""
-    page = gl.render_page("https://x/pkg", [], _stub_conf)
+    page = gl.render_page("https://x/pkg", [], _stub_conf, _fixture_site_tree("https://x/pkg"))
 
     assert "Every channel installs the same canonical package" not in page
     assert "Trust &amp; channel model" not in page
@@ -1524,40 +1542,53 @@ def test_render_page_omits_internal_trust_and_channel_model() -> None:
     assert "Channel switching" not in page
 
 
-def test_render_autoindex_lists_dirs_files_and_parent() -> None:
-    """A non-root autoindex shows a Parent Directory row, subdirs (name/), and files (name+size),
-    with './'-prefixed hrefs so a colon-bearing ABI segment stays a relative path."""
-    out = gl.render_autoindex(
-        "stable/ce-2.8",
-        ["amd64"],
-        [("notes.txt", 12, 1_700_000_000.0)],
-    )
+def test_catalogue_browse_page_lists_dirs_files_and_parent(tmp_path: Path) -> None:
+    """A non-channel-root browse page shows a Parent Directory row, subdirs (name/),
+    and files (name+size), the file linking OUT of browse/ into the real tree."""
+    docs = tmp_path / "docs"
+    _touch(docs / "stable" / "ce-2.8" / "amd64" / "placeholder")
+    (docs / "stable" / "ce-2.8" / "notes.txt").write_bytes(b"x" * 12)
+
+    out = gl._render_catalogue_browse_page(str(docs), "stable/ce-2.8")
+
     assert "Index of /stable/ce-2.8" in out
-    assert '<a href="../">../</a>' in out  # Parent Directory row
-    assert '<a href="./amd64/">amd64/</a>' in out  # subdir, trailing slash
-    assert '<a href="./notes.txt">notes.txt</a>' in out  # file
+    assert '<a href="../">../</a>' in out  # Parent Directory row (not the channel root)
+    assert '<a href="./amd64/">amd64/</a>' in out  # subdir stays within the browse mirror
+    assert 'href="../../../stable/ce-2.8/notes.txt">notes.txt</a>' in out  # file climbs into the real tree
     assert "12 B" in out  # size column rendered
 
 
-def test_render_autoindex_root_has_no_parent_and_is_colon_safe() -> None:
-    """The browse root omits Parent Directory; an ABI dir with ':' links via './' (RFC 3986 §4.2)."""
-    out = gl.render_autoindex("", ["stable", "nightly"], [("meta.json", 99, 1_700_000_000.0)], is_root=True)
-    assert "Index of /" in out
-    assert "Parent Directory" not in out and 'href="../"' not in out
-    assert '<a href="./stable/">stable/</a>' in out and '<a href="./nightly/">nightly/</a>' in out
-    # A colon-ABI subdir would link with the scheme-safe './' prefix.
-    deep = gl.render_autoindex("stable", ["FreeBSD:16:aarch64"], [])
+def test_browse_root_has_no_parent_and_channel_root_links_browse_html(tmp_path: Path) -> None:
+    """browse.html has no Parent Directory row; a channel-root browse page's Parent
+    Directory instead links back to browse.html (issue #2450)."""
+    docs = tmp_path / "docs"
+    _touch(docs / "stable" / "ce-2.8" / "x")
+    _touch(docs / "nightly" / "ce-2.8" / "x")
+    built = {"meta.json": (b"x" * 99, 0o644)}
+
+    root = gl.render_browse_root(str(docs), built)
+    assert "Index of /" in root
+    assert "Parent Directory" not in root and 'href="../"' not in root
+    assert '<a href="./browse/stable/">stable/</a>' in root and '<a href="./browse/nightly/">nightly/</a>' in root
+
+    channel_page = gl._render_catalogue_browse_page(str(docs), "stable")
+    assert '<a href="../../browse.html">../</a>' in channel_page  # channel root's Parent -> browse.html
+
+    # A colon-ABI subdir links with the scheme-safe './' prefix, staying within the mirror.
+    _touch(docs / "stable" / "FreeBSD:16:aarch64" / "x")
+    deep = gl._render_catalogue_browse_page(str(docs), "stable")
     assert 'href="./FreeBSD:16:aarch64/"' in deep
 
 
-def test_render_autoindex_escapes_special_chars_in_names() -> None:
+def test_catalogue_browse_page_escapes_special_chars_in_names(tmp_path: Path) -> None:
     """Hostile input: a filename carrying HTML-special characters renders escaped, never
     raw markup — a directory listing walks whatever bytes are on disk."""
-    out = gl.render_autoindex(
-        "stable/ce-2.8",
-        ["<script>evil"],
-        [("py311-charset<script>&normalizer-3.4.4.pkg", 12, 1_700_000_000.0)],
-    )
+    docs = tmp_path / "docs"
+    _touch(docs / "stable" / "ce-2.8" / "<script>evil" / "placeholder")
+    (docs / "stable" / "ce-2.8" / "py311-charset<script>&normalizer-3.4.4.pkg").write_bytes(b"x" * 12)
+
+    out = gl._render_catalogue_browse_page(str(docs), "stable/ce-2.8")
+
     assert "<script>evil" not in out.split("<tbody>")[1].replace("&lt;script&gt;evil", "")
     assert "&lt;script&gt;evil" in out
     assert "&lt;script&gt;&amp;normalizer" in out or "py311-charset&lt;script&gt;&amp;normalizer" in out
@@ -1569,17 +1600,17 @@ def test_render_page_handles_varver_dir_with_spaces_no_crash() -> None:
     and never breaks out of the relative-link scheme (no raw path escape)."""
     weird = _pkg("stable", _CANON, "1.0.0", "FreeBSD:15:*", "stable/ce 2.8 beta/pfSense-pkg-pfBlockerNG-1.0.0.pkg")
 
-    page = gl.render_page("https://x/pkg", [weird], _stub_conf)
+    page = gl.render_page("https://x/pkg", [weird], _stub_conf, _fixture_site_tree("https://x/pkg"))
 
     assert "1.0.0" in page
     assert 'href="./stable/ce 2.8 beta/pfSense-pkg-pfBlockerNG-1.0.0.pkg"' in page
 
 
 def test_write_site_keeps_dependency_packages_browsable(tmp_path: Path, monkeypatch: Any) -> None:
-    """A dependency package stays in the directory listing while leaving the page alone.
+    """A dependency package stays in the browse view while leaving the landing page alone.
 
     Filtering it out of the channel tables (issue #1863) must not make it unreachable: the
-    autoindex is how a user gets at everything we publish, including the CE-only
+    browse view is how a user gets at everything we publish, including the CE-only
     `py311-charset-normalizer` (issue #1806). The returned count is OUR packages.
     """
     site = tmp_path / "site"
@@ -1600,43 +1631,50 @@ def test_write_site_keeps_dependency_packages_browsable(tmp_path: Path, monkeypa
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifests[os.path.basename(p)])
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
 
     assert n == 1  # the count is pfBlockerNG packages, not everything published
-    listing = (site / "stable" / "ce-2.8" / "index.html").read_text()
+    # No index.html is ever written INSIDE the catalogue tree any more (issue #2450).
+    assert not (site / "stable" / "ce-2.8" / "index.html").is_file()
+    listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
     assert "py311-charset-normalizer-3.4.4.pkg" in listing  # still reachable by browsing
     assert "3.4.4" not in (site / "index.html").read_text()  # but never on the landing page
 
 
-def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, monkeypatch: Any) -> None:
-    """write_site emits the landing page, browse.html, and an autoindex index.html at EVERY
-    directory level (intermediate dirs too) so the whole tree is folder-navigable."""
+def test_write_site_emits_browse_pages_outside_the_catalogue_tree(tmp_path: Path, monkeypatch: Any) -> None:
+    """write_site emits the landing page, browse.html, and a browse/<ch>/… page at EVERY
+    directory level of a present channel (intermediate dirs too) — all OUTSIDE the
+    catalogue tree itself (issue #2450): nothing is ever written under stable/…"""
     site = tmp_path / "site"
     _touch(site / "stable" / "ce-2.8" / "FreeBSD:15:amd64" / f"{_CANON}-3.2.16.pkg")
     _touch(site / "stable" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg")
-    _touch(site / "meta.json")
 
     manifest = {"name": _CANON, "version": "3.2.16", "abi": "FreeBSD:15:amd64"}
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
 
     assert n == 1
     # Landing page (root) links to the browse entry; browse.html exists and lists the top dirs.
     assert (site / "index.html").is_file()
     assert '<a class="browse" href="./browse.html">' in (site / "index.html").read_text()
     browse = (site / "browse.html").read_text()
-    assert '<a href="./stable/">stable/</a>' in browse
-    # An autoindex index.html exists at EVERY level — intermediate dirs too, not just the leaf.
+    assert '<a href="./browse/stable/">stable/</a>' in browse
+    # A browse page exists at EVERY level under browse/ — intermediate dirs too.
     for rel in ("stable", "stable/ce-2.8", "stable/ce-2.8/FreeBSD:15:amd64"):
-        assert (site / rel / "index.html").is_file(), f"missing autoindex at {rel}"
+        assert (site / "browse" / rel / "index.html").is_file(), f"missing browse page at {rel}"
+        # ...and NOTHING is ever written inside the real catalogue tree.
+        assert not (site / rel / "index.html").is_file(), f"catalogue dir {rel} must carry no autoindex"
     # Intermediate dir lists its subdir; leaf lists the package + the catalog plumbing (a real
     # directory listing, unlike the old package-only view).
-    assert '<a href="./ce-2.8/">ce-2.8/</a>' in (site / "stable" / "index.html").read_text()
-    leaf = (site / "stable" / "ce-2.8" / "FreeBSD:15:amd64" / "index.html").read_text()
+    assert '<a href="./ce-2.8/">ce-2.8/</a>' in (site / "browse" / "stable" / "index.html").read_text()
+    leaf = (site / "browse" / "stable" / "ce-2.8" / "FreeBSD:15:amd64" / "index.html").read_text()
     assert f"{_CANON}-3.2.16.pkg" in leaf
     assert "packagesite.pkg" in leaf  # the catalog files ARE shown in a directory listing
+    # The file link climbs OUT of browse/ back into the real catalogue tree: 4 hops
+    # (browse, stable, ce-2.8, FreeBSD:15:amd64) up to the docs root, then back down.
+    assert 'href="../../../../stable/ce-2.8/FreeBSD:15:amd64/packagesite.pkg"' in leaf
     # The generated index pages themselves are hidden from listings (not repository content).
     assert "browse.html" not in browse.split("<tbody>")[1]
 
@@ -1644,10 +1682,11 @@ def test_write_site_emits_browse_and_autoindex_at_every_level(tmp_path: Path, mo
 def test_write_site_never_indexes_docs_staging(tmp_path: Path, monkeypatch: Any) -> None:
     """A staged (not-yet-gated) tree under docs/staging/<seg>/<channel>/<varver>/ (issue
     #2389's stage->gate->promote flow) stays SERVED as plain files, but write_site must
-    never emit an autoindex under it and must never link it from the root/browse
+    never emit a browse page under it and must never link it from the root/browse
     listing -- a concurrent `direct` publish (nightly.yml, pkg-republish.yml -- both
     outside release-published.yml's concurrency group) during a stage window would
-    otherwise make the un-gated staged tree browsable."""
+    otherwise make the un-gated staged tree browsable. It is also never touched by the
+    mirror sweep (issue #2450: ``staging`` is a CATALOGUE_DIRS prefix)."""
     site = tmp_path / "site"
     _touch(site / "edge" / "ce-2.8" / "FreeBSD:15:amd64" / f"{_CANON}-3.2.16.pkg")
     _touch(site / "edge" / "ce-2.8" / "FreeBSD:15:amd64" / "packagesite.pkg")
@@ -1659,24 +1698,26 @@ def test_write_site_never_indexes_docs_staging(tmp_path: Path, monkeypatch: Any)
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/")
+    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
 
     # The staged package never counts toward a real channel (it sits under an
     # unrecognized top-level dir, exactly like any other stray future dir).
     assert n == 1
     # The staged files themselves are untouched -- still served, just not indexed.
     assert (site / "staging" / "10-1" / "stable" / "ce-2.8" / "meta.conf").is_file()
-    # No autoindex anywhere under docs/staging.
+    assert (site / "staging" / "10-1" / "stable" / "ce-2.8" / "data.pkg").is_file()
+    assert (site / "staging" / "10-1" / "stable" / "ce-2.8" / "packagesite.pkg").is_file()
+    # No browse page anywhere for staging.
+    assert not (site / "browse" / "staging").exists()
     assert not list(site.glob("staging/**/index.html"))
-    assert not (site / "staging" / "index.html").is_file()
     # Root/browse listing carries no link to staging at all.
     root_index = (site / "index.html").read_text()
     browse = (site / "browse.html").read_text()
     assert "staging" not in root_index
-    assert 'href="./staging/"' not in browse
-    # A real channel is unaffected — still gets its own autoindex + browse link.
-    assert (site / "edge" / "ce-2.8" / "index.html").is_file()
-    assert 'href="./edge/"' in browse
+    assert "staging" not in browse
+    # A real channel is unaffected — still gets its own browse page + browse link.
+    assert (site / "browse" / "edge" / "ce-2.8" / "index.html").is_file()
+    assert '<a href="./browse/edge/">edge/</a>' in browse
 
 
 def test_write_site_empty_site_root_renders_four_empty_cards_exit_zero(tmp_path: Path, monkeypatch: Any) -> None:
@@ -1686,7 +1727,7 @@ def test_write_site_empty_site_root_renders_four_empty_cards_exit_zero(tmp_path:
     site.mkdir()
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://x/pkg")
+    n = gl.write_site(str(site), "https://x/pkg", str(_PKG_SITE_DIR))
 
     assert n == 0
     index_html = (site / "index.html").read_text()
@@ -1700,13 +1741,13 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
     """Scenario: the browse view is derived purely by walking the tree — no hardcoded layout.
 
     Given a deliberately NOVEL tree under two real channels ('stable', 'edge') — extra
-    nesting beneath the channel dir, an `_archive/` subtree, an exotic ABI no current matrix
-    entry covers, and a stray top-level file,
+    nesting beneath the channel dir, an `_archive/` subtree, and an exotic ABI no
+    current matrix entry covers,
     When write_site runs,
-    Then an autoindex index.html appears at EVERY level (whatever the names/depth), browse.html
-    lists the new top-level entries, packages are discovered wherever they live under a KNOWN
-    channel, and the deepest dir's autoindex still climbs correctly — proving a future folder
-    restructure below the channel segment needs NO code change.
+    Then a browse page appears at EVERY level (whatever the names/depth), browse.html
+    lists the two real channels, packages are discovered wherever they live under a
+    KNOWN channel, and the deepest browse page still climbs correctly — proving a
+    future folder restructure below the channel segment needs NO code change.
     """
     site = tmp_path / "site"
     # A structure we do NOT use today: +1 nesting level, an archive subtree, an ABI/varver the
@@ -1718,7 +1759,6 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
     ]
     for rel in novel:
         _touch(site / rel)
-    _touch(site / "CHECKSUMS.txt")
 
     # The manifest is read from each .pkg wherever it sits (path-agnostic); every package
     # carries the ONE canonical name — channel comes from the path, not the name.
@@ -1729,16 +1769,16 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
     monkeypatch.setattr(gl, "read_compact_manifest", fake_manifest)
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://x/pkg/")
+    n = gl.write_site(str(site), "https://x/pkg/", str(_PKG_SITE_DIR))
 
     # Packages found wherever they live (both novel locations), not by an assumed path.
     assert n == 2
-    # browse.html lists the top-level entries (both real channels + the stray file).
+    # browse.html lists the two catalogue channels.
     browse = (site / "browse.html").read_text()
-    assert '<a href="./stable/">stable/</a>' in browse
-    assert '<a href="./edge/">edge/</a>' in browse
-    assert '<a href="./CHECKSUMS.txt">CHECKSUMS.txt</a>' in browse
-    # An autoindex exists at EVERY directory of the novel tree — arbitrary names + extra depth.
+    assert '<a href="./browse/stable/">stable/</a>' in browse
+    assert '<a href="./browse/edge/">edge/</a>' in browse
+    # A browse page exists at EVERY directory of the novel tree — arbitrary names + extra
+    # depth — and NOTHING is written inside the real catalogue tree itself.
     for rel in (
         "stable",
         "stable/ce-2.9",
@@ -1748,11 +1788,13 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
         "edge/_archive/plus-99.03",
         "edge/_archive/plus-99.03/FreeBSD:99:powerpc64",
     ):
-        assert (site / rel / "index.html").is_file(), f"no autoindex generated at {rel}"
-    # The deepest dir lists its package and climbs to the repository root (depth-correct home link).
-    deep = (site / "stable/ce-2.9/FreeBSD:16:riscv64/extra" / "index.html").read_text()
+        assert (site / "browse" / rel / "index.html").is_file(), f"no browse page generated at {rel}"
+        assert not (site / rel / "index.html").is_file(), f"catalogue dir {rel} must carry no autoindex"
+    # The deepest browse page lists its package and climbs to the repository root
+    # (depth-correct home link: browse + 4 real segments = 5 hops to the docs root).
+    deep = (site / "browse" / "stable/ce-2.9/FreeBSD:16:riscv64/extra" / "index.html").read_text()
     assert f"{_CANON}-9.9.9.pkg" in deep
-    assert 'href="../../../../"' in deep  # 4 levels deep -> 4 hops to the site root
+    assert 'href="../../../../../"' in deep  # repository-home link: 5 hops to the docs root
 
 
 # ── EOL pfSense versions ──────────────────────────────────────────────────────
@@ -2052,7 +2094,13 @@ def test_eol_versions_section_absent_from_rendered_page_when_no_route_only() -> 
     pkgs = [_pkg("testing", _CANON, "3.2.16", "FreeBSD:15:amd64", "d.pkg")]
     matrix = [_mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311")]
 
-    page = gl.render_page("https://pfblockerng.github.io/pkg", pkgs, _stub_conf, matrix)
+    page = gl.render_page(
+        "https://pfblockerng.github.io/pkg",
+        pkgs,
+        _stub_conf,
+        _fixture_site_tree("https://pfblockerng.github.io/pkg"),
+        matrix,
+    )
 
     assert "EOL pfSense versions" not in page
 
@@ -2082,7 +2130,13 @@ def test_eol_versions_section_present_in_rendered_page_with_route_only() -> None
         _mx_eol("FreeBSD:15:aarch64", "25.03", "Plus", "8.3", "py311"),
     ]
 
-    page = gl.render_page("https://pfblockerng.github.io/pkg", [live_pkg, eol_ce, eol_plus], _stub_conf, matrix)
+    page = gl.render_page(
+        "https://pfblockerng.github.io/pkg",
+        [live_pkg, eol_ce, eol_plus],
+        _stub_conf,
+        _fixture_site_tree("https://pfblockerng.github.io/pkg"),
+        matrix,
+    )
 
     # EOL section is present, after 'Published packages'.
     assert "EOL pfSense versions" in page
@@ -2165,9 +2219,10 @@ def test_embed_hook_keeps_the_marker_lines_around_the_heredoc_in_the_output() ->
 
 
 def test_write_site_publishes_install_script(tmp_path: Path, monkeypatch: Any) -> None:
-    """write_site() publishes a self-contained install.sh (issue #2416 follow-up) —
-    the SOLE client entry point for all four channels: the boot hook is embedded via
-    the PFB_EMBED_HOOK splice, so the published script needs no sibling file on disk.
+    """write_site() publishes a self-contained install.sh from the pkg-site tree
+    (issue #2450) — the SOLE client entry point for all four channels: the boot
+    hook is embedded via the PFB_EMBED_HOOK splice, so the published script needs
+    no sibling file on disk. Sibling recipes/*.sh are also mirrored.
     """
     import subprocess
 
@@ -2175,11 +2230,13 @@ def test_write_site_publishes_install_script(tmp_path: Path, monkeypatch: Any) -
     site.mkdir()
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    gl.write_site(str(site), f"file://{site}")
+    gl.write_site(str(site), f"file://{site}", str(_PKG_SITE_DIR))
 
-    assert sorted(p.name for p in site.iterdir() if p.name.startswith("install")) == sorted(gl.CLIENT_SCRIPTS), (
+    assert sorted(p.name for p in site.iterdir() if p.name.startswith("install")) == ["install.sh"], (
         "write_site must publish EXACTLY install.sh, no per-channel/legacy scripts"
     )
+    for ch in gl.CH_ORDER:
+        assert (site / "recipes" / f"{ch}.sh").is_file(), f"missing mirrored recipe for {ch}"
 
     published = site / "install.sh"
     assert published.exists(), "write_site must produce site/install.sh"
@@ -2210,7 +2267,7 @@ def test_published_installer_runs_piped_with_embedded_hook(tmp_path: Path, monke
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
     base = f"file://{site}"
-    gl.write_site(str(site), base)
+    gl.write_site(str(site), base, str(_PKG_SITE_DIR))
     published_text = (site / "install.sh").read_text()
 
     root = tmp_path / "root"
@@ -2286,7 +2343,7 @@ def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
     base = f"file://{site}"
-    gl.write_site(str(site), base)
+    gl.write_site(str(site), base, str(_PKG_SITE_DIR))
     published_text = (site / "install.sh").read_text()
 
     root = tmp_path / "root"
@@ -2361,7 +2418,7 @@ def test_published_installer_saved_to_disk_still_replaces_a_stale_on_box_hook(tm
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
     base = f"file://{site}"
-    gl.write_site(str(site), base)
+    gl.write_site(str(site), base, str(_PKG_SITE_DIR))
     published_text = (site / "install.sh").read_text()
 
     root = tmp_path / "root"
@@ -2430,7 +2487,7 @@ def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_pa
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
     fork_base = "https://fork.example.org/mypkg"
-    gl.write_site(str(site), fork_base)
+    gl.write_site(str(site), fork_base, str(_PKG_SITE_DIR))
 
     text = (site / "install.sh").read_text()
     assert f"PFB_DEFAULT_BASE_URL='{fork_base}'" in text, (
@@ -2500,7 +2557,7 @@ def test_write_site_bakes_a_base_url_containing_shell_metacharacters_as_inert_da
 
     probe = tmp_path / "pwned"
     evil_base = f"https://evil.example.org/$(touch {probe})`touch {probe}`'\"&"
-    gl.write_site(str(site), evil_base)
+    gl.write_site(str(site), evil_base, str(_PKG_SITE_DIR))
 
     published_text = (site / "install.sh").read_text()
     sh_n = subprocess.run(["sh", "-n"], input=published_text, text=True, capture_output=True)
@@ -2551,69 +2608,410 @@ def test_write_site_bakes_a_base_url_containing_shell_metacharacters_as_inert_da
     )
 
 
-# ── write_site / CLI interface — call-compatible with publish-pkg-repo.sh ─────
+# ── build_site_tree: the pkg-site source tree, baked + {base}-substituted ─────
 
 
-def test_write_site_signature_matches_publish_pkg_repo_call_site() -> None:
-    """Pins the write_site(site, base, matrix=None) signature that
-    publish-pkg-repo.sh's `python3 gen_landing.py <site> <base> --matrix <f>`
-    invocation (via main()) depends on — a rename/reorder here breaks production silently.
-    """
+def _write_tree_file(root: Path, rel: str, content: bytes, *, mode: int = 0o644) -> Path:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(content)
+    path.chmod(mode)
+    return path
+
+
+def test_build_site_tree_copies_a_plain_file_verbatim_and_preserves_mode(tmp_path: Path) -> None:
+    """R1: a tree file with no .sh/{base} relevance is copied byte-for-byte, mode kept —
+    both an executable and a non-executable fixture file."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, "bin/tool", b"#!/bin/sh\necho hi\n", mode=0o755)
+    _write_tree_file(tree, "notes.txt", b"just some bytes, no markers here\n", mode=0o644)
+
+    built = gl.build_site_tree(str(tree), "https://x/pkg")
+
+    data, mode = built["bin/tool"]
+    assert data == b"#!/bin/sh\necho hi\n"
+    assert stat.S_IMODE(mode) == 0o755
+    data, mode = built["notes.txt"]
+    assert data == b"just some bytes, no markers here\n"
+    assert stat.S_IMODE(mode) == 0o644
+
+
+def test_build_site_tree_bakes_and_embeds_install_sh(tmp_path: Path) -> None:
+    """R2: a .sh carrying BOTH the default-URL line and the embed markers gets baked
+    and hook-embedded — exercised against the REAL scripts/install.sh via a symlink,
+    mirroring the pkg-site/install.sh convention."""
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "install.sh").symlink_to(_SCRIPTS_DIR / "install.sh")
+
+    built = gl.build_site_tree(str(tree), "https://fork.example/pkg")
+
+    data, mode = built["install.sh"]
+    text = data.decode()
+    assert "PFB_DEFAULT_BASE_URL='https://fork.example/pkg'" in text
+    assert f"cat <<'{gl._HOOK_HEREDOC}'" in text
+    assert stat.S_IMODE(mode) == 0o755  # the real install.sh is executable
+
+
+def test_build_site_tree_recipe_only_substitutes_base_no_bake_no_embed(tmp_path: Path) -> None:
+    """R3: a .sh file with neither the default-URL line nor the embed markers gets
+    ONLY its {base} token substituted — the recipe convention."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, "recipes/stable.sh", b"fetch -qo - {base}/install.sh | sh -s -- --channel stable\n")
+
+    built = gl.build_site_tree(str(tree), "https://x/pkg")
+
+    data, _mode = built["recipes/stable.sh"]
+    assert data == b"fetch -qo - https://x/pkg/install.sh | sh -s -- --channel stable\n"
+
+
+def test_build_site_tree_substitutes_base_in_non_sh_utf8_and_copies_binary_unchanged(tmp_path: Path) -> None:
+    """R4: a non-.sh UTF-8 file with {base} gets it substituted; a binary (non-UTF-8)
+    file is copied unchanged, never crashing the {base} substitution pass."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, "readme.txt", "see {base}/install.sh\n".encode())
+    binary = bytes(range(256))
+    _write_tree_file(tree, "blob.bin", binary)
+
+    built = gl.build_site_tree(str(tree), "https://x/pkg")
+
+    assert built["readme.txt"][0] == b"see https://x/pkg/install.sh\n"
+    assert built["blob.bin"][0] == binary
+
+
+def test_build_site_tree_mirrors_a_dotfile(tmp_path: Path) -> None:
+    """R5: a dotfile (.nojekyll) in the tree is mirrored like any other file."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, ".nojekyll", b"")
+
+    built = gl.build_site_tree(str(tree), "https://x/pkg")
+
+    assert built[".nojekyll"] == (b"", 0o644)
+
+
+def test_build_site_tree_two_default_url_lines_raises(tmp_path: Path) -> None:
+    """H6: a .sh carrying the default-URL line TWICE fails loud (existing _bake_base_url
+    rule), never silently baking the first occurrence."""
+    tree = tmp_path / "tree"
+    doubled = f"{gl._BASE_URL_DEFAULT_LINE}\n{gl._BASE_URL_DEFAULT_LINE}\n"
+    _write_tree_file(tree, "bad.sh", doubled.encode())
+
+    with pytest.raises(ValueError, match="found 2"):
+        gl.build_site_tree(str(tree), "https://x/pkg")
+
+
+# ── sync_site: mirror the desired tree into docs/, never touching a catalogue dir ──
+
+
+def test_sync_site_writes_every_desired_file_and_deletes_extraneous(tmp_path: Path) -> None:
+    """R10: extraneous renderer-side files (legacy scripts, a stray browse/ leftover,
+    a junk dir) are removed and their now-empty parent dirs pruned; a stray non-index
+    file INSIDE a catalogue dir survives untouched."""
+    docs = tmp_path / "docs"
+    _touch(docs / "add-repo.sh")
+    _touch(docs / "migrate-channel.sh")
+    _touch(docs / "browse" / "edge" / "old-varver" / "index.html")
+    _touch(docs / "junk" / "x.txt")
+    _touch(docs / "testing" / "ce-2.9" / "whatever")
+
+    desired = {"install.sh": (b"#!/bin/sh\n", 0o755)}
+    written, deleted = gl.sync_site(str(docs), desired)
+
+    assert written == ["install.sh"]
+    assert (docs / "install.sh").read_bytes() == b"#!/bin/sh\n"
+    assert not (docs / "add-repo.sh").exists()
+    assert not (docs / "migrate-channel.sh").exists()
+    assert not (docs / "browse").exists()  # emptied and pruned
+    assert not (docs / "junk").exists()
+    assert (docs / "testing" / "ce-2.9" / "whatever").is_file()  # catalogue-owned, untouched
+    assert sorted(deleted) == sorted(
+        [
+            "add-repo.sh",
+            "browse/edge/old-varver/index.html",
+            "junk/x.txt",
+            "migrate-channel.sh",
+        ]
+    )
+
+
+def test_sync_site_legacy_index_html_swept_from_every_catalogue_dir(tmp_path: Path) -> None:
+    """R9: a pre-existing legacy index.html anywhere under a catalogue prefix is
+    deleted (the one-time sweep); every sibling file (meta.conf/.pkg bytes) is
+    left byte-for-byte untouched; nothing is ever WRITTEN under a catalogue prefix."""
+    docs = tmp_path / "docs"
+    _touch(docs / "stable" / "index.html")
+    _touch(docs / "stable" / "ce-2.8" / "index.html")
+    meta = docs / "stable" / "ce-2.8" / "meta.conf"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_bytes(b"version = 2;\n")
+    pkg = docs / "stable" / "ce-2.8" / f"{_CANON}-1.0.0.pkg"
+    pkg.write_bytes(b"pkg-bytes")
+
+    written, deleted = gl.sync_site(str(docs), {})
+
+    assert written == []
+    assert "stable/index.html" in deleted
+    assert "stable/ce-2.8/index.html" in deleted
+    assert not (docs / "stable" / "index.html").exists()
+    assert not (docs / "stable" / "ce-2.8" / "index.html").exists()
+    assert meta.read_bytes() == b"version = 2;\n"
+    assert pkg.read_bytes() == b"pkg-bytes"
+
+
+def test_sync_site_refuses_a_desired_path_under_a_catalogue_prefix(tmp_path: Path) -> None:
+    """H3: a desired site path rooted under a catalogue prefix raises BEFORE writing
+    anything — the renderer must be structurally unable to write there."""
+    docs = tmp_path / "docs"
+    _touch(docs / "existing.txt")
+    desired = {"install.sh": (b"x", 0o644), "stable/x": (b"evil", 0o644)}
+
+    with pytest.raises(ValueError, match="catalogue-owned"):
+        gl.sync_site(str(docs), desired)
+
+    assert not (docs / "install.sh").exists()  # nothing written — checked before any write
+    assert (docs / "existing.txt").is_file()  # untouched
+
+
+def test_sync_site_never_follows_a_symlink_inside_docs(tmp_path: Path) -> None:
+    """A symlink living directly under docs/ (not inside a catalogue prefix) is
+    skipped by the walk — never deleted, never mistaken for a desired/extraneous
+    regular file."""
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    target = tmp_path / "outside.txt"
+    target.write_text("outside")
+    (docs / "link.txt").symlink_to(target)
+
+    written, deleted = gl.sync_site(str(docs), {})
+
+    assert written == [] and deleted == []
+    assert (docs / "link.txt").is_symlink()
+
+
+# ── render_page / _channel_card: recipe text from the built site tree ─────────
+
+
+def test_channel_card_recipe_is_verbatim_built_tree_text() -> None:
+    """R6: a published channel's card shows recipes/<channel>.sh's built (already
+    {base}-substituted) text verbatim, HTML-escaped."""
+    base = "https://x/pkg"
+    pkgs = [_pkg("stable", _CANON, "1.0.0", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
+    site_tree = {"recipes/stable.sh": (f"fetch -qo - {base}/install.sh | sh -s -- --channel stable\n".encode(), 0o644)}
+
+    page = gl.render_page(base, pkgs, _stub_conf, site_tree)
+
+    assert f"<pre>fetch -qo - {base}/install.sh | sh -s -- --channel stable</pre>" in page
+
+
+def test_channel_card_missing_recipe_for_published_channel_raises() -> None:
+    """R6: a published channel with NO recipes/<channel>.sh in the site tree fails
+    loudly, naming the missing path — never a silently blank recipe."""
+    pkgs = [_pkg("stable", _CANON, "1.0.0", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
+
+    with pytest.raises(ValueError, match="recipes/stable.sh"):
+        gl.render_page("https://x/pkg", pkgs, _stub_conf, {})
+
+
+def test_channel_card_hostile_recipe_text_escaped_and_base_substituted() -> None:
+    """H1: a recipe carrying HTML-special characters and a literal $ is HTML-escaped
+    in the card exactly once (no double-escaping), with {base} still substituted."""
+    base = "https://x/pkg"
+    pkgs = [_pkg("stable", _CANON, "1.0.0", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
+    hostile = 'fetch -qo - {base}/i.sh | sh -s -- --channel "<stable>" && echo $HOME\n'
+    site_tree = {"recipes/stable.sh": (hostile.replace("{base}", base).encode(), 0o644)}
+
+    page = gl.render_page(base, pkgs, _stub_conf, site_tree)
+
+    escaped = html.escape(hostile.replace("{base}", base).strip())
+    assert f"<pre>{escaped}</pre>" in page
+    assert "&amp;lt;" not in page  # never double-escaped
+    assert '<stable>"' not in page  # the raw (unescaped) text never appears
+
+
+def test_write_site_base_with_trailing_slash_stripped_once(tmp_path: Path, monkeypatch: Any) -> None:
+    """H2: write_site strips a trailing '/' from base ONCE before it drives
+    build_site_tree's {base} substitution (existing rstrip("/") behaviour) — the
+    published recipe carries exactly one slash between base and install.sh."""
+    site = tmp_path / "site"
+    _touch(site / "stable" / "ce-2.8" / f"{_CANON}-1.0.0.pkg")
+    monkeypatch.setattr(gl, "read_compact_manifest", lambda p: {"name": _CANON, "version": "1.0.0", "abi": "x"})
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    gl.write_site(str(site), "https://x/pkg/", str(_PKG_SITE_DIR))
+
+    recipe = (site / "recipes" / "stable.sh").read_text()
+    assert recipe == "fetch -qo - https://x/pkg/install.sh | sh -s -- --channel stable\n"
+    assert "https://x/pkg//install.sh" not in recipe
+
+
+# ── write_site / main(): the pkg-site renderer CLI (issue #2450) ──────────────
+
+
+def test_write_site_signature_pins_the_positional_shape() -> None:
+    """Pins write_site(site, base, site_tree, matrix=None) — a rename/reorder here
+    breaks step 2's (render-pkg-site.sh) call site silently."""
     sig = inspect.signature(gl.write_site)
-    assert list(sig.parameters) == ["site", "base", "matrix"]
+    assert list(sig.parameters) == ["site", "base", "site_tree", "matrix"]
     assert sig.parameters["matrix"].default is None
 
 
-def test_main_cli_accepts_the_production_positional_and_matrix_flag_shape(tmp_path: Path, monkeypatch: Any) -> None:
-    """main(argv) accepts exactly the shape publish-pkg-repo.sh invokes:
-    <site> <base_url> --matrix <file>."""
+def test_main_cli_accepts_the_production_positional_and_flag_shape(tmp_path: Path, monkeypatch: Any) -> None:
+    """main(argv) accepts <site> <base_url> --site-tree <tree> --matrix <file>."""
     site = tmp_path / "site"
     site.mkdir()
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text("[]")
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    rc = gl.main([str(site), "https://x/pkg", "--matrix", str(matrix_file)])
+    rc = gl.main([str(site), "https://x/pkg", "--site-tree", str(_PKG_SITE_DIR), "--matrix", str(matrix_file)])
 
     assert rc == 0
     assert (site / "index.html").is_file()
 
 
-def test_main_client_scripts_only_writes_scripts_and_nothing_else(tmp_path: Path) -> None:
-    """``--client-scripts-only`` publishes ONLY the deterministic client script:
-    install.sh, --channel parameterized — the SOLE client entry point (issue #2416
-    follow-up).
-
-    publish-pkg-repo.sh's catalogue-NOOP path (issue #2408) uses this mode to ship a
-    script-only fix; writing any timestamped landing/browse/autoindex page here would
-    manufacture a commit on every republish run instead.
-    """
+def test_main_requires_site_tree(tmp_path: Path) -> None:
+    """R14: --site-tree is REQUIRED — a missing flag is a usage error, exit != 0,
+    nothing written."""
     site = tmp_path / "site"
     site.mkdir()
 
-    rc = gl.main([str(site), "https://x/pkg", "--client-scripts-only"])
+    with pytest.raises(SystemExit) as exc:
+        gl.main([str(site), "https://x/pkg"])
 
-    assert rc == 0
-    assert sorted(p.name for p in site.iterdir()) == sorted(gl.CLIENT_SCRIPTS)
-    installer = (site / "install.sh").read_text()
-    assert f"cat <<'{gl._HOOK_HEREDOC}'" in installer, (
-        "install.sh's boot hook must be embedded, not left as the stub body"
-    )
+    assert exc.value.code != 0
+    assert list(site.iterdir()) == []
 
 
-def test_main_client_scripts_only_rejects_matrix(tmp_path: Path) -> None:
-    """``--client-scripts-only`` with ``--matrix`` is a usage error, not a silent ignore.
-
-    The matrix drives the landing page's per-edition tables, which this mode never
-    writes — accepting both would let a caller believe the matrix was applied.
-    """
+def test_main_client_scripts_only_flag_is_gone(tmp_path: Path) -> None:
+    """R14: --client-scripts-only no longer exists — passing it is an argparse
+    usage error, not a silently-ignored flag."""
     site = tmp_path / "site"
+    site.mkdir()
+
+    with pytest.raises(SystemExit) as exc:
+        gl.main([str(site), "https://x/pkg", "--site-tree", str(_PKG_SITE_DIR), "--client-scripts-only"])
+
+    assert exc.value.code == 2
+    assert list(site.iterdir()) == []
+
+
+def test_main_production_shape_with_real_pkg_site_and_matrix(tmp_path: Path, monkeypatch: Any) -> None:
+    """The full production CLI shape: gen_landing.py <docs> <base> --site-tree
+    <pkg-site> --matrix <file>, against the REAL pkg-site/ tree."""
+    site = tmp_path / "docs"
     site.mkdir()
     matrix_file = tmp_path / "matrix.json"
     matrix_file.write_text("[]")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    with pytest.raises(SystemExit) as exc:
-        gl.main([str(site), "https://x/pkg", "--client-scripts-only", "--matrix", str(matrix_file)])
+    rc = gl.main([str(site), "https://x/pkg", "--site-tree", str(_PKG_SITE_DIR), "--matrix", str(matrix_file)])
 
-    assert exc.value.code == 2
-    assert list(site.iterdir()) == [], "a usage error must write nothing"
+    assert rc == 0
+    assert (site / "install.sh").is_file()
+    assert (site / ".nojekyll").is_file()
+    assert (site / "index.html").is_file()
+    assert (site / "browse.html").is_file()
+
+
+# ── Determinism: two renders of the same input are byte-identical (issue #2450) ──
+
+
+def _snapshot(root: Path) -> dict[str, bytes]:
+    return {str(p.relative_to(root)): p.read_bytes() for p in root.rglob("*") if p.is_file() and not p.is_symlink()}
+
+
+def test_write_site_is_deterministic_across_two_renders_even_with_mtime_churn(tmp_path: Path, monkeypatch: Any) -> None:
+    """R12: rendering the SAME inputs twice produces byte-identical output — even
+    when a file's mtime changes between runs (no mtime ever leaks into a render).
+    A .pkg with no epoch at all, and its meta.conf sibling, both render an em dash.
+    """
+    site = tmp_path / "site"
+    cell = site / "stable" / "ce-2.8"
+    pkg = cell / f"{_CANON}-1.0.0.pkg"
+    _write_pkg(pkg, annotations={}, version="1.0.0")
+    (cell / "meta.conf").write_text("version = 2;\n")
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    gl.write_site(str(site), "https://x/pkg", str(_PKG_SITE_DIR))
+    first = _snapshot(site)
+
+    listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
+    assert "&mdash;" in _autoindex_row(listing, pkg.name)
+    assert "&mdash;" in _autoindex_row(listing, "meta.conf")
+
+    # Touch every file's mtime forward between runs — must not change a single byte.
+    for p in site.rglob("*"):
+        if p.is_file() and not p.is_symlink():
+            os.utime(p, (2_000_000_000, 2_000_000_000))
+
+    gl.write_site(str(site), "https://x/pkg", str(_PKG_SITE_DIR))
+    second = _snapshot(site)
+
+    assert first == second
+
+
+# ── README drift guard + install.sh symlink (issue #2450) ─────────────────────
+
+_README_FETCH_RE = re.compile(r"fetch -qo - .*install\.sh \| sh -s -- --channel (\w+)")
+
+
+def test_readme_install_snippets_match_the_pkg_site_recipes() -> None:
+    """R15: every README install one-liner equals its pkg-site/recipes/<ch>.sh with
+    {base} substituted to the production base URL — the README never drifts from
+    the recipe the renderer actually ships."""
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    channels = _README_FETCH_RE.findall(readme)
+    assert channels, "README.md carries no fetch|sh --channel snippet to check"
+
+    base = "https://pfblockerng.github.io/pkg"
+    for line in readme.splitlines():
+        m = _README_FETCH_RE.search(line)
+        if not m:
+            continue
+        ch = m.group(1)
+        recipe = (_PKG_SITE_DIR / "recipes" / f"{ch}.sh").read_text().replace("{base}", base).strip()
+        assert line.strip() == recipe, f"README {ch} snippet drifted from pkg-site/recipes/{ch}.sh"
+
+
+def test_pkg_site_install_sh_is_a_symlink_to_scripts_install_sh() -> None:
+    """R16: pkg-site/install.sh is a git symlink resolving to scripts/install.sh —
+    the repository copy stays the one source of truth."""
+    link = _PKG_SITE_DIR / "install.sh"
+    assert link.is_symlink()
+    assert os.path.realpath(link) == os.path.realpath(_SCRIPTS_DIR / "install.sh")
+
+
+# ── Hostile: a site-tree file shadowing a rendered page name (issue #2450) ────
+
+
+def test_rendered_page_wins_over_a_same_named_site_tree_file(tmp_path: Path, monkeypatch: Any) -> None:
+    """H4: a site-tree file literally named index.html/browse.html loses to the
+    rendered page of the same name — the render always wins."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, "index.html", b"<p>not the real landing page</p>")
+    _write_tree_file(tree, "browse.html", b"<p>not the real browse page</p>")
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    gl.write_site(str(site), "https://x/pkg", str(tree))
+
+    assert "not the real landing page" not in (site / "index.html").read_text()
+    assert "not the real browse page" not in (site / "browse.html").read_text()
+
+
+def test_write_site_empty_tree_and_docs_renders_four_cards_no_crash(tmp_path: Path, monkeypatch: Any) -> None:
+    """H5: an almost-empty site tree (only .nojekyll, no recipes) over empty docs
+    still renders four 'not yet published' cards without crashing — no channel is
+    published, so the missing recipes are never looked up."""
+    tree = tmp_path / "tree"
+    _write_tree_file(tree, ".nojekyll", b"")
+    site = tmp_path / "site"
+    site.mkdir()
+    monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
+
+    n = gl.write_site(str(site), "https://x/pkg", str(tree))
+
+    assert n == 0
+    index_html = (site / "index.html").read_text()
+    assert index_html.count("not yet published") == 4
