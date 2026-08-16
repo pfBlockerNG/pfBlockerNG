@@ -860,6 +860,7 @@ class MainCliTests(_TempDirTestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("::error::", err.getvalue())
+        self.assertNotIn("Traceback", err.getvalue())
 
 
 # --------------------------------------------------------------------------- #
