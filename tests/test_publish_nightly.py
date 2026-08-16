@@ -22,7 +22,6 @@ validation would otherwise refuse to construct them honestly.
 from __future__ import annotations
 
 import hashlib
-import inspect
 import io
 import itertools
 import json
@@ -232,28 +231,10 @@ def _wrap_dependency_pkg(
 # --------------------------------------------------------------------------- #
 
 
-_CHARSET_DEP_SPEC: tuple[str, str] = ("py311-charset-normalizer", "3.4.0")
-_CHARSET_ORIGIN = "textproc/py-charset-normalizer"
-
-
 @dataclass(frozen=True)
 class _LegSpec:
     row: dict[str, object]
-    # None = derive from row extra_pkgs (issue #2405: count must match).
-    dep_specs: Sequence[tuple[str, str]] | None = None
     source_date_epoch: int = _EPOCH
-
-
-def _resolved_dep_specs(spec: _LegSpec) -> Sequence[tuple[str, str]]:
-    if spec.dep_specs is not None:
-        return spec.dep_specs
-    raw_extras = spec.row.get("extra_pkgs") or []
-    extras = list(raw_extras) if isinstance(raw_extras, (list, tuple)) else []
-    if extras == [_CHARSET_ORIGIN]:
-        return (_CHARSET_DEP_SPEC,)
-    if extras:
-        raise AssertionError(f"fixture has no default dep for extra_pkgs={extras!r}")
-    return ()
 
 
 def _make_record(snapshot: _Snapshot, row: dict[str, object], epoch: int = _EPOCH) -> dict[str, object]:
@@ -267,27 +248,23 @@ def _make_record(snapshot: _Snapshot, row: dict[str, object], epoch: int = _EPOC
 
 
 def _build_leg_result(snapshot: Any, spec: _LegSpec, *, assets_root: Path) -> dict[str, Any]:
-    """Mint one leg's genuine record + canonical/dep .pkg archives under
+    """Mint one leg's genuine record + canonical .pkg archive under
     assets_root/nightly-result-<major>/, and return the handoff-shaped `result` dict
-    nightly_provenance.build_handoff itself expects as one entry of `results`."""
+    nightly_provenance.build_handoff itself expects as one entry of `results`.
+
+    issue #2454 step 3a: a BUILD result carries only matrix_row/record/artifact —
+    dependency .pkgs are no longer part of the handoff at all; publish_deps.py
+    builds and places them as its own, earlier step."""
     major = str(spec.row["freebsd_major"])
     legdir = assets_root / f"{pn._LEG_DIR_PREFIX}{major}"
     legdir.mkdir(parents=True, exist_ok=True)
     record = _make_record(snapshot, spec.row, spec.source_date_epoch)
     canonical_name = f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{snapshot.pkg_version}.pkg"
     _path, digest = _wrap_canonical_pkg(legdir, record, local_name=canonical_name)
-    dep_artifacts = []
-    for name, version in _resolved_dep_specs(spec):
-        dep_name = f"{name}-{version}.pkg"
-        _dep_path, dep_digest = _wrap_dependency_pkg(
-            legdir, name=name, version=version, abi=f"FreeBSD:{major}:*", local_name=dep_name
-        )
-        dep_artifacts.append({"abi": f"FreeBSD:{major}:*", "name": dep_name, "sha256": dep_digest})
     return {
         "matrix_row": spec.row,
         "record": record,
         "artifact": {"abi": f"FreeBSD:{major}:*", "name": canonical_name, "sha256": digest},
-        "dep_artifacts": dep_artifacts,
     }
 
 
@@ -373,11 +350,13 @@ class HappyFanOutTests(_TempDirTestCase):
         results_dir = self.new_results_dir()
         snapshot = _snapshot()
         legs = [
-            _LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")]),
+            _LegSpec(row=ROW_CE15),
             _LegSpec(row=ROW_PLUS16_03),
         ]
         route_rows = [ROW_CE15, ROW_PLUS16_03, ROW_PLUS16_07]
         handoff = _build_handoff(snapshot, legs=legs, route_rows=route_rows, assets_root=results_dir)
+        # issue #2454 step 3a: no dep_artifacts key anywhere in the handoff shape.
+        self.assertNotIn("dep_artifacts", handoff["builds"][0])
 
         report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
 
@@ -388,11 +367,8 @@ class HappyFanOutTests(_TempDirTestCase):
         docs = self.pkg_repo / "docs" / "nightly"
         canonical_name = f"pfSense-pkg-pfBlockerNG-{snapshot.pkg_version}.pkg"
         self.assertTrue((docs / "ce-2.8" / canonical_name).is_file())
-        self.assertTrue((docs / "ce-2.8" / "py311-charset-normalizer-3.4.0.pkg").is_file())
         self.assertTrue((docs / "plus-26.03" / canonical_name).is_file())
         self.assertTrue((docs / "plus-26.07" / canonical_name).is_file())
-        self.assertFalse((docs / "plus-26.03" / "py311-charset-normalizer-3.4.0.pkg").exists())
-        self.assertFalse((docs / "plus-26.07" / "py311-charset-normalizer-3.4.0.pkg").exists())
         self.assertEqual(
             (docs / "plus-26.03" / canonical_name).read_bytes(),
             (docs / "plus-26.07" / canonical_name).read_bytes(),
@@ -559,6 +535,18 @@ class RetentionTests(_TempDirTestCase):
                 assets_root=results_dir,
             )
             _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+            if seq == 0:
+                # issue #2454 step 3a: this publisher never places a dependency —
+                # plant it directly, mirroring what publish_deps.py (or a Nightly
+                # run from before this change) would have already left behind.
+                _wrap_dependency_pkg(
+                    catalogue_dir,
+                    name="py311-charset-normalizer",
+                    version="3.4.0",
+                    abi="FreeBSD:15:*",
+                    local_name=dep_name,
+                )
+                ca.regenerate_catalogue(self.pkg_repo / "docs", "nightly", "ce-2.8", engine=_ENGINE)
 
         remaining = sorted(p.name for p in catalogue_dir.glob("pfSense-pkg-pfBlockerNG-*.pkg"))
         self.assertEqual(len(remaining), keep)
@@ -652,7 +640,7 @@ class HandoffIntegrityTests(_TempDirTestCase):
     def test_build_entry_field_missing_rejected(self) -> None:
         handoff, results_dir, _alloc = self.base_handoff()
         mutated = _mutate(handoff)
-        del mutated["builds"][0]["dep_artifacts"]
+        del mutated["builds"][0]["artifact"]
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
         self.assertIn("build entry", str(ctx.exception))
@@ -662,6 +650,18 @@ class HandoffIntegrityTests(_TempDirTestCase):
         handoff, results_dir, _alloc = self.base_handoff()
         mutated = _mutate(handoff)
         mutated["builds"][0]["bogus"] = 1
+        with self.assertRaises(pn.PublishNightlyError) as ctx:
+            _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
+        self.assertIn("build entry", str(ctx.exception))
+
+    @_requires_engine
+    def test_build_entry_dep_artifacts_key_rejected(self) -> None:
+        """issue #2454 step 3a: dep_artifacts is no longer part of the BUILD entry
+        shape — a handoff still carrying that key (e.g. one produced by a stale
+        nightly_provenance build) is REJECTED, not tolerated."""
+        handoff, results_dir, _alloc = self.base_handoff()
+        mutated = _mutate(handoff)
+        mutated["builds"][0]["dep_artifacts"] = []
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
         self.assertIn("build entry", str(ctx.exception))
@@ -787,102 +787,42 @@ class RoutingTests(_TempDirTestCase):
             manifest={},
             record=record_b,
         )
-        leg_a = pn._Leg(major="15", matrix_row=ROW_CE15, canonical=asset_a, dependencies=())
-        leg_b = pn._Leg(major="15", matrix_row=ROW_CE15, canonical=asset_b, dependencies=())
+        leg_a = pn._Leg(major="15", matrix_row=ROW_CE15, canonical=asset_a)
+        leg_b = pn._Leg(major="15", matrix_row=ROW_CE15, canonical=asset_b)
 
         with self.assertRaises(pn.PublishNightlyError) as ctx:
             pn._route_targets(_ENGINE, [ROW_CE15], [leg_a, leg_b])
         self.assertIn("more than one built asset", str(ctx.exception))
 
-    @_requires_engine
-    def test_dep_abi_mismatch_rejected_via_route_targets(self) -> None:
-        """N3a: a leg's dependency manifest ABI that does NOT belong to that
-        leg's own FreeBSD major (a forged handoff -- a genuine
-        nightly_provenance.build_handoff run would never construct this
-        shape, since _validate_dep_artifacts pins every dep to the leg's own
-        wildcard ABI) is rejected by _route_targets's own ABI cross-check,
-        exercised directly via hand-built _Leg/VerifiedAsset objects, same
-        idiom as test_two_legs_same_major_rejected_via_route_targets above."""
-        snapshot = _snapshot()
-        record = _make_record(snapshot, ROW_CE15)
-        canonical = pc.VerifiedAsset(
-            asset_class="canonical",
-            declared_name="a.pkg",
-            canonical_name="a.pkg",
-            work_path=Path("a.pkg"),
-            sha256="0" * 64,
-            manifest={},
-            record=record,
-        )
-        mismatched_dep = pc.VerifiedAsset(
-            asset_class="dependency",
-            declared_name="dep.pkg",
-            canonical_name="dep.pkg",
-            work_path=Path("dep.pkg"),
-            sha256="1" * 64,
-            manifest={"abi": "FreeBSD:16:*"},
-        )
-        leg = pn._Leg(major="15", matrix_row=ROW_CE15, canonical=canonical, dependencies=(mismatched_dep,))
-
-        with self.assertRaises(pn.PublishNightlyError) as ctx:
-            pn._route_targets(_ENGINE, [ROW_CE15], [leg])
-        self.assertIn("dependency ABI does not match FreeBSD major", str(ctx.exception))
-
 
 # --------------------------------------------------------------------------- #
-# T8 — dependency verification failures.
+# T8 — a stray, unreferenced file in a leg's results directory is ignored
+# (issue #2454 step 3a: no dependency verification loop reads the directory at all).
 # --------------------------------------------------------------------------- #
 
 
-class DependencyTests(_TempDirTestCase):
+class StrayLegFileTests(_TempDirTestCase):
     @_requires_engine
-    def test_dep_file_missing_from_leg_dir_rejected(self) -> None:
+    def test_stray_extra_pkg_in_leg_dir_is_ignored(self) -> None:
         results_dir = self.new_results_dir()
         snapshot = _snapshot()
         handoff = _build_handoff(
-            snapshot,
-            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
-            route_rows=[ROW_CE15],
-            assets_root=results_dir,
-        )
-        (results_dir / f"{pn._LEG_DIR_PREFIX}15" / "py311-charset-normalizer-3.4.0.pkg").unlink()
-        with self.assertRaises(pn.PublishNightlyError) as ctx:
-            _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
-        self.assertIn("missing dependency asset", str(ctx.exception))
-
-    @_requires_engine
-    def test_dep_sha_mismatch_rejected(self) -> None:
-        results_dir = self.new_results_dir()
-        snapshot = _snapshot()
-        handoff = _build_handoff(
-            snapshot,
-            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
-            route_rows=[ROW_CE15],
-            assets_root=results_dir,
-        )
-        mutated = _mutate(handoff)
-        mutated["builds"][0]["dep_artifacts"][0]["sha256"] = "0" * 64
-        with self.assertRaises(pc.AssetVerificationError):
-            _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
-
-    @_requires_engine
-    def test_dep_tagged_style_suffixed_name_rejected(self) -> None:
-        results_dir = self.new_results_dir()
-        snapshot = _snapshot()
-        handoff = _build_handoff(
-            snapshot,
-            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
-            route_rows=[ROW_CE15],
-            assets_root=results_dir,
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
         )
         legdir = results_dir / f"{pn._LEG_DIR_PREFIX}15"
-        suffixed_name = "py311-charset-normalizer-3.4.0-CE-2.8.pkg"
-        (legdir / "py311-charset-normalizer-3.4.0.pkg").rename(legdir / suffixed_name)
-        mutated = _mutate(handoff)
-        mutated["builds"][0]["dep_artifacts"][0]["name"] = suffixed_name
-        with self.assertRaises(pc.AssetVerificationError) as ctx:
-            _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
-        self.assertIn("declared name", str(ctx.exception))
+        # A leftover dependency .pkg sitting in the leg dir, unreferenced by the
+        # handoff (e.g. a stale artifact from a build step that no longer uploads
+        # it) — must be neither read, verified, nor copied anywhere.
+        _wrap_dependency_pkg(
+            legdir, name="py311-charset-normalizer", version="3.4.0", abi="FreeBSD:15:*", local_name="stray.pkg"
+        )
+
+        report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+
+        self.assertEqual(report.touched, (("nightly", "ce-2.8"),))
+        dest = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self.assertFalse((dest / "stray.pkg").exists())
+        self.assertFalse((dest / "py311-charset-normalizer-3.4.0.pkg").exists())
 
 
 # --------------------------------------------------------------------------- #
@@ -951,23 +891,6 @@ class HostileNameTests(_TempDirTestCase):
                 )
                 mutated = _mutate(handoff)
                 mutated["builds"][0]["artifact"]["name"] = hostile
-                with self.assertRaises((pc.AssetVerificationError, np.ProvenanceError)):
-                    _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
-
-    @_requires_engine
-    def test_hostile_dep_artifact_name_rejected(self) -> None:
-        for hostile in ("../x.pkg", "a/b.pkg", "a\\b.pkg"):
-            with self.subTest(hostile=hostile):
-                results_dir = self.new_results_dir()
-                snapshot = _snapshot()
-                handoff = _build_handoff(
-                    snapshot,
-                    legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
-                    route_rows=[ROW_CE15],
-                    assets_root=results_dir,
-                )
-                mutated = _mutate(handoff)
-                mutated["builds"][0]["dep_artifacts"][0]["name"] = hostile
                 with self.assertRaises((pc.AssetVerificationError, np.ProvenanceError)):
                     _run(handoff=mutated, results_dir=results_dir, pkg_repo=self.pkg_repo)
 
@@ -1143,16 +1066,15 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
 
     @_requires_engine
     def test_declared_ce_extra_kept_on_new_canonical(self) -> None:
+        # issue #2454 step 3a: this publisher never places a dependency — plant
+        # it directly after the first run, mirroring what publish_deps.py (or a
+        # Nightly run from before this change) would have already left behind.
         first = _snapshot(build_date=date(2026, 8, 4))
         results_1 = self.new_results_dir()
-        handoff_1 = _build_handoff(
-            first,
-            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
-            route_rows=[ROW_CE15],
-            assets_root=results_1,
-        )
+        handoff_1 = _build_handoff(first, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_1)
         _run(handoff=handoff_1, results_dir=results_1, pkg_repo=self.pkg_repo)
         dest = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self._plant_charset(dest, major="15")
         self.assertTrue((dest / _CHARSET_PKG).is_file())
 
         second = _snapshot(build_date=date(2026, 8, 5))
@@ -1166,14 +1088,10 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
     def test_undeclared_ce_extra_evicted_when_row_drops_extra_pkgs(self) -> None:
         first = _snapshot(build_date=date(2026, 8, 4))
         results_1 = self.new_results_dir()
-        handoff_1 = _build_handoff(
-            first,
-            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
-            route_rows=[ROW_CE15],
-            assets_root=results_1,
-        )
+        handoff_1 = _build_handoff(first, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_1)
         _run(handoff=handoff_1, results_dir=results_1, pkg_repo=self.pkg_repo)
         dest = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self._plant_charset(dest, major="15")
         self.assertTrue((dest / _CHARSET_PKG).is_file())
 
         second = _snapshot(build_date=date(2026, 8, 5))
@@ -1186,16 +1104,24 @@ class ExtraPkgsEvictionTests(_TempDirTestCase):
         self.assertNotIn(_CHARSET_NAME, _packagesite_names(dest))
 
 
+# --------------------------------------------------------------------------- #
+# T15 — same-major fan-out (issue #2403) with a dependency asset in the mix: the
+# guarded per-row extra_pkgs scoping this used to pin (SameMajorDestScopeTests) no
+# longer exists (issue #2454 step 3a) — a dependency is ignored for every row.
+# --------------------------------------------------------------------------- #
+
+
 class SameMajorDestScopeTests(_TempDirTestCase):
-    """issue #2403: one Nightly major fans to CE + Plus; extra follows extra_pkgs."""
+    """issue #2403 (superseded by #2454 step 3a): CE + Plus share a FreeBSD major;
+    neither destination's asset_map ever carries a dependency entry any more."""
 
     @_requires_engine
-    def test_same_major_dep_not_published_to_row_with_empty_extra_pkgs(self) -> None:
+    def test_same_major_dep_asset_never_enters_any_asset_map(self) -> None:
         snapshot = _snapshot()
         results_dir = self.new_results_dir()
         handoff = _build_handoff(
             snapshot,
-            legs=[_LegSpec(row=ROW_CE15, dep_specs=[("py311-charset-normalizer", "3.4.0")])],
+            legs=[_LegSpec(row=ROW_CE15)],
             route_rows=[ROW_CE15, ROW_PLUS15_03],
             assets_root=results_dir,
         )
@@ -1209,20 +1135,11 @@ class SameMajorDestScopeTests(_TempDirTestCase):
         with mock.patch.object(pr, "_drop_assets", side_effect=_spy):
             _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
 
-        self.assertIn(_CHARSET_PKG, captured["ce-2.8"])
+        self.assertNotIn(_CHARSET_PKG, captured["ce-2.8"])
         self.assertNotIn(_CHARSET_PKG, captured["plus-26.03"])
         docs = self.pkg_repo / "docs" / "nightly"
-        self.assertTrue((docs / "ce-2.8" / _CHARSET_PKG).is_file())
+        self.assertFalse((docs / "ce-2.8" / _CHARSET_PKG).exists())
         self.assertFalse((docs / "plus-26.03" / _CHARSET_PKG).exists())
-        self.assertIn(_CHARSET_NAME, _packagesite_names(docs / "ce-2.8"))
-        self.assertNotIn(_CHARSET_NAME, _packagesite_names(docs / "plus-26.03"))
-
-    @_requires_engine
-    def test_route_targets_continue_filter_required_for_same_major_plus(self) -> None:
-        """Nightly dest attach must skip a dest whose row does not declare the extra."""
-        source = inspect.getsource(pn._route_targets)
-        self.assertIn("_row_declares_dep", source)
-        self.assertIn("continue", source)
 
 
 if __name__ == "__main__":

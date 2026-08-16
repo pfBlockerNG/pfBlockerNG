@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -26,15 +25,6 @@ def _row() -> dict[str, object]:
         "status": "active",
         "extra_pkgs": [],
     }
-
-
-def _dep(
-    *,
-    abi: str = "FreeBSD:15:*",
-    name: str = "py311-charset-normalizer-3.4.0.pkg",
-    digest: str = sha256(b"dep").hexdigest(),
-) -> dict[str, str]:
-    return {"abi": abi, "name": name, "sha256": digest}
 
 
 def test_build_record_binds_stateless_snapshot_identity() -> None:
@@ -68,44 +58,3 @@ def test_duplicate_json_keys_fail_closed(tmp_path: Path) -> None:
 
     with pytest.raises(np.ProvenanceError, match="duplicate JSON key"):
         np._read_json(path)
-
-
-def test_validate_dep_artifacts_accepts_empty_list() -> None:
-    assert np._validate_dep_artifacts([], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg") == []
-
-
-def test_validate_dep_artifacts_sorts_by_name() -> None:
-    result = np._validate_dep_artifacts(
-        [_dep(name="b.pkg"), _dep(name="a.pkg")],
-        leg_abi="FreeBSD:15:*",
-        canonical_name="canonical.pkg",
-    )
-    assert [item["name"] for item in result] == ["a.pkg", "b.pkg"]
-
-
-@pytest.mark.parametrize("abi", ["FreeBSD:16:*", "FreeBSD:15:amd64"])
-def test_validate_dep_artifacts_rejects_abi_not_equal_to_leg(abi: str) -> None:
-    with pytest.raises(np.ProvenanceError, match="abi"):
-        np._validate_dep_artifacts([_dep(abi=abi)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
-
-
-def test_validate_dep_artifacts_rejects_duplicate_name_within_leg() -> None:
-    with pytest.raises(np.ProvenanceError, match="unique"):
-        np._validate_dep_artifacts([_dep(), _dep()], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
-
-
-def test_validate_dep_artifacts_rejects_name_equal_to_canonical() -> None:
-    with pytest.raises(np.ProvenanceError, match="canonical"):
-        np._validate_dep_artifacts([_dep(name="canonical.pkg")], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
-
-
-@pytest.mark.parametrize("name", ["../evil.pkg", "a/b.pkg", "a\\b.pkg", "evil\n.pkg", "no-suffix", ""])
-def test_validate_dep_artifacts_rejects_hostile_names(name: str) -> None:
-    with pytest.raises(np.ProvenanceError, match="name"):
-        np._validate_dep_artifacts([_dep(name=name)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")
-
-
-@pytest.mark.parametrize("digest", [sha256(b"dep").hexdigest().upper(), "f" * 63, "z" * 64])
-def test_validate_dep_artifacts_rejects_malformed_sha256(digest: str) -> None:
-    with pytest.raises(np.ProvenanceError, match="sha256"):
-        np._validate_dep_artifacts([_dep(digest=digest)], leg_abi="FreeBSD:15:*", canonical_name="canonical.pkg")

@@ -197,6 +197,64 @@ def _wrap_dependency_pkg(
     return path
 
 
+# --------------------------------------------------------------------------- #
+# Genuine canonical build-record fixture (issue #2454 step 3a: --print-ports-sha
+# reads build_repo_portable._canonical_build_record, so the manifest needs a real,
+# validate_build_record-shaped pfb_build_record annotation — mirrors
+# tests/test_publish_release.py's _record, trimmed to what ports_sha_from_assets
+# actually reads: it only calls read_compact_manifest, never validate_project_pkg,
+# so the archive itself only needs +COMPACT_MANIFEST).
+# --------------------------------------------------------------------------- #
+
+_TAG_FOR_CHANNEL = {"edge": "v4.0.0.b1"}
+
+
+def _canonical_record(*, row: dict[str, object], ports_sha: str, source_sha: str = "a" * 40) -> dict[str, object]:
+    pfb_pkg = _ENGINE.pfb_pkg
+    channel = "edge"
+    major_minor = ".".join(str(row["pfsense_version"]).split(".")[:2])
+    tag = _TAG_FOR_CHANNEL[channel]
+    info = pfb_pkg.parse_release_tag(tag, channel)
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": channel,
+        "release_line": info.release_line,
+        "classification": info.stage,
+        "source_tag": tag,
+        "source_sha": source_sha,
+        "canonical_package_version": info.pkg_version,
+        "native_recipe_identity": f"{pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{channel}",
+        "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "matrix_row": row,
+        "freebsd_ports_sha": ports_sha,
+        "route": f"{channel}/{str(row['variant']).lower()}-{major_minor}",
+        "source_date_epoch": 0,
+        "build_input_digest": "",
+    }
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
+def _wrap_canonical_pkg_with_record(directory: Path, record: dict[str, object], *, local_name: str) -> Path:
+    """A minimal canonical .pkg carrying ``record`` as its pfb_build_record
+    annotation — sufficient for ports_sha_from_assets, which only ever calls
+    pfb_pkg.read_compact_manifest, never validate_project_pkg."""
+    pfb_pkg = _ENGINE.pfb_pkg
+    row = record["matrix_row"]
+    assert isinstance(row, dict)
+    manifest = {
+        "name": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "version": record["canonical_package_version"],
+        "abi": f"FreeBSD:{row['freebsd_major']}:*",
+        "origin": "net/pfSense-pkg-pfBlockerNG",
+        "annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record, separators=(",", ":"), sort_keys=True)},
+    }
+    compact = json.dumps(manifest, separators=(",", ":")).encode()
+    path = directory / local_name
+    _write_tar_pkg(path, [("+COMPACT_MANIFEST", compact, 0o644, 0)])
+    return path
+
+
 class _TempDirTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory(prefix="pub-deps-test-")
@@ -715,6 +773,190 @@ class MainCliTests(_TempDirTestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("::error::", err.getvalue())
+
+
+# --------------------------------------------------------------------------- #
+# 14. --print-ports-sha / ports_sha_from_assets (issue #2454 step 3a): the single
+# freebsd_ports_sha shared by every canonical .pkg under --assets-dir.
+# --------------------------------------------------------------------------- #
+
+
+class PrintPortsShaTests(_TempDirTestCase):
+    @_requires_engine
+    def test_single_canonical_prints_its_sha(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        record = _canonical_record(row=ROW_CE_28, ports_sha="a" * 40)
+        _wrap_canonical_pkg_with_record(assets_dir, record, local_name="canonical.pkg")
+
+        sha = pd.ports_sha_from_assets(_ENGINE, assets_dir)
+
+        self.assertEqual(sha, "a" * 40)
+
+    @_requires_engine
+    def test_dependency_pkg_is_skipped_canonical_sha_wins(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        record = _canonical_record(row=ROW_CE_28, ports_sha="b" * 40)
+        _wrap_canonical_pkg_with_record(assets_dir, record, local_name="canonical.pkg")
+        _wrap_dependency_pkg(
+            assets_dir,
+            name="py311-charset-normalizer",
+            version=_DEP_VERSION,
+            abi="FreeBSD:15:*",
+            local_name=_EXPECTED_NAME,
+        )
+
+        sha = pd.ports_sha_from_assets(_ENGINE, assets_dir)
+
+        self.assertEqual(sha, "b" * 40)
+
+    @_requires_engine
+    def test_two_canonicals_same_sha_prints_once(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        record_a = _canonical_record(row=ROW_CE_28, ports_sha="c" * 40)
+        record_b = _canonical_record(row=ROW_PLUS_03, ports_sha="c" * 40)
+        _wrap_canonical_pkg_with_record(assets_dir, record_a, local_name="a.pkg")
+        _wrap_canonical_pkg_with_record(assets_dir, record_b, local_name="b.pkg")
+
+        sha = pd.ports_sha_from_assets(_ENGINE, assets_dir)
+
+        self.assertEqual(sha, "c" * 40)
+
+    @_requires_engine
+    def test_two_canonicals_different_sha_rejected(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        record_a = _canonical_record(row=ROW_CE_28, ports_sha="c" * 40)
+        record_b = _canonical_record(row=ROW_PLUS_03, ports_sha="d" * 40)
+        _wrap_canonical_pkg_with_record(assets_dir, record_a, local_name="a.pkg")
+        _wrap_canonical_pkg_with_record(assets_dir, record_b, local_name="b.pkg")
+
+        with self.assertRaises(pd.PublishDepsError) as ctx:
+            pd.ports_sha_from_assets(_ENGINE, assets_dir)
+        self.assertIn("disagree", str(ctx.exception))
+
+    @_requires_engine
+    def test_no_canonical_rejected(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        _wrap_dependency_pkg(
+            assets_dir,
+            name="py311-charset-normalizer",
+            version=_DEP_VERSION,
+            abi="FreeBSD:15:*",
+            local_name=_EXPECTED_NAME,
+        )
+
+        with self.assertRaises(pd.PublishDepsError) as ctx:
+            pd.ports_sha_from_assets(_ENGINE, assets_dir)
+        self.assertIn("no canonical", str(ctx.exception))
+
+    @_requires_engine
+    def test_empty_dir_rejected(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+
+        with self.assertRaises(pd.PublishDepsError):
+            pd.ports_sha_from_assets(_ENGINE, assets_dir)
+
+
+class MainCliPrintPortsShaTests(_TempDirTestCase):
+    @_requires_engine
+    def test_main_prints_sha_and_returns_zero(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        record = _canonical_record(row=ROW_CE_28, ports_sha="e" * 40)
+        _wrap_canonical_pkg_with_record(assets_dir, record, local_name="canonical.pkg")
+        argv = ["--print-ports-sha", "--assets-dir", str(assets_dir)]
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().strip(), "e" * 40)
+
+    @_requires_engine
+    def test_main_missing_assets_dir_flag_returns_one(self) -> None:
+        argv = ["--print-ports-sha"]
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 1)
+        self.assertIn("::error::", err.getvalue())
+        self.assertIn("--assets-dir", err.getvalue())
+
+    @_requires_engine
+    def test_main_disagreeing_sha_returns_one(self) -> None:
+        assets_dir = self.tmp / "assets"
+        assets_dir.mkdir()
+        record_a = _canonical_record(row=ROW_CE_28, ports_sha="c" * 40)
+        record_b = _canonical_record(row=ROW_PLUS_03, ports_sha="d" * 40)
+        _wrap_canonical_pkg_with_record(assets_dir, record_a, local_name="a.pkg")
+        _wrap_canonical_pkg_with_record(assets_dir, record_b, local_name="b.pkg")
+        argv = ["--print-ports-sha", "--assets-dir", str(assets_dir)]
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 1)
+        self.assertIn("::error::", err.getvalue())
+
+    @_requires_engine
+    def test_main_publish_mode_missing_args_returns_one(self) -> None:
+        """--print-ports-sha not given: --pkg-repo/--ports-dir/--route-matrix/
+        --channels are required again — proven by omitting all but --pkg-repo."""
+        argv = ["--pkg-repo", str(self.pkg_repo)]
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 1)
+        self.assertIn("::error::", err.getvalue())
+        self.assertIn("--ports-dir", err.getvalue())
+
+    @_requires_engine
+    def test_main_publish_mode_still_works_without_print_ports_sha(self) -> None:
+        """--assets-dir is simply unused in the publish mode — pinning that its
+        presence in argparse's namespace does not perturb the existing flow."""
+        self.seed_dest("nightly", "ce-2.8", major="15", dependency=False)
+        argv = [
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--ports-dir",
+            str(self.ports_dir),
+            "--route-matrix",
+            json.dumps((ROW_CE_28,)),
+            "--channels",
+            '["nightly"]',
+        ]
+
+        def fake_subprocess_builder(ports_dir: object) -> pd._Builder:
+            return _StubBuilder()
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch.object(pd, "_subprocess_builder", side_effect=fake_subprocess_builder),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 0)
+        self.assertIn("updated nightly/ce-2.8", out.getvalue())
 
 
 if __name__ == "__main__":

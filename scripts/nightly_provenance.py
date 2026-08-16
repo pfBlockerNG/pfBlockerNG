@@ -25,11 +25,6 @@ _ARTIFACT_FIELDS = {"abi", "name", "sha256"}
 _SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _ABI = re.compile(r"^FreeBSD:[0-9]+:(?:[A-Za-z0-9._+-]+|\*)$")
-# Dependency .pkg filename (issue #2146 S1): printable-ASCII segment charset
-# (excludes '/', '\\', control bytes incl. newline) ending in the literal
-# ".pkg" suffix; ".." is rejected separately below (the charset alone would
-# allow it mid-string, e.g. "a..pkg").
-_DEP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*\.pkg$")
 
 
 def _exact_fields(value: Mapping[str, object], expected: set[str], label: str) -> None:
@@ -67,43 +62,6 @@ def _validate_artifacts(value: object) -> list[dict[str, str]]:
             raise ProvenanceError("artifact.sha256 must be lowercase 64-character hex")
         artifacts.append({"abi": abi, "name": name, "sha256": digest})
     return sorted(artifacts, key=lambda item: item["abi"])
-
-
-def _validate_dep_artifacts(value: object, *, leg_abi: str, canonical_name: str) -> list[dict[str, str]]:
-    """Validate one BUILD leg's extra_pkgs dependency .pkgs (issue #2146 S1).
-
-    Unlike _validate_artifacts (the canonical per-leg artifact, unique ABI
-    ACROSS the whole handoff), a leg may ship zero or more dependency
-    packages, all sharing that SAME leg's own wildcard ABI -- uniqueness here
-    is per (abi, name) WITHIN this one leg only, never across the handoff (a
-    different leg/major may legitimately carry a dep .pkg of the same name).
-    Dep names come from build output filenames, so they are untrusted input:
-    reject path separators, "..", control bytes, and anything not ending in
-    the literal ".pkg" suffix.
-    """
-    if not isinstance(value, list):
-        raise ProvenanceError("dep_artifacts must be a list")
-    artifacts: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for item in value:
-        if not isinstance(item, dict):
-            raise ProvenanceError("dep_artifacts entry must be an object")
-        _exact_fields(item, _ARTIFACT_FIELDS, "dep_artifacts entry")
-        abi, name, digest = item["abi"], item["name"], item["sha256"]
-        if abi != leg_abi:
-            raise ProvenanceError("dep_artifacts entry abi must match the leg's wildcard ABI")
-        if not isinstance(name, str) or ".." in name or not _DEP_NAME.fullmatch(name):
-            raise ProvenanceError("dep_artifacts entry name is unsafe or malformed")
-        if name == canonical_name:
-            raise ProvenanceError("dep_artifacts entry name must not equal the canonical artifact name")
-        if not isinstance(digest, str) or not _DIGEST.fullmatch(digest):
-            raise ProvenanceError("dep_artifacts entry sha256 must be lowercase 64-character hex")
-        key = (abi, name)
-        if key in seen:
-            raise ProvenanceError("dep_artifacts entries must be unique per (abi, name) within a leg")
-        seen.add(key)
-        artifacts.append({"abi": abi, "name": name, "sha256": digest})
-    return sorted(artifacts, key=lambda item: item["name"])
 
 
 def make_build_record(
@@ -206,7 +164,7 @@ def build_handoff(
     for result in results:
         if not isinstance(result, dict):
             raise ProvenanceError("BUILD result must be an object")
-        if set(result) != {"matrix_row", "record", "artifact", "dep_artifacts"}:
+        if set(result) != {"matrix_row", "record", "artifact"}:
             raise ProvenanceError("BUILD result has unexpected fields")
         row = validate_build_matrix_row(dict(result["matrix_row"]))
         major = str(row["freebsd_major"])
@@ -224,19 +182,8 @@ def build_handoff(
         artifact = _validate_artifacts([result["artifact"]])[0]
         if artifact["name"] != f"pfSense-pkg-pfBlockerNG-{pkg_version}.pkg":
             raise ProvenanceError("BUILD artifact name does not match Nightly snapshot")
-        dep_artifacts = _validate_dep_artifacts(
-            result["dep_artifacts"],
-            leg_abi=f"FreeBSD:{major}:*",
-            canonical_name=artifact["name"],
-        )
-        # issue #2405: empty extra_pkgs still requires dep_artifacts == []
-        expected_deps = len(row.get("extra_pkgs") or [])
-        if len(dep_artifacts) != expected_deps:
-            raise ProvenanceError(
-                f"dep_artifacts count must match extra_pkgs (got {len(dep_artifacts)}, expected {expected_deps})"
-            )
         seen_majors.add(major)
-        builds.append({"matrix_row": row, "record": record, "artifact": artifact, "dep_artifacts": dep_artifacts})
+        builds.append({"matrix_row": row, "record": record, "artifact": artifact})
     if seen_majors != set(expected_rows):
         raise ProvenanceError("BUILD results do not cover every BUILD matrix row")
 

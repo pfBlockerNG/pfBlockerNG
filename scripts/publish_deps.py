@@ -28,6 +28,12 @@ stdlib-only, Python 3.11. The pfBlockerNG engine is loaded via
 exactly as ``publish_release.py``/``publish_nightly.py`` load it. Report shape mirrors
 theirs too: ``publish_release.PublishReport`` and its ``describe()`` output contract
 (``updated <channel>/<varver>`` lines, or one ``NOOP: ...`` line) are reused as-is.
+
+A second, unrelated mode (issue #2454 step 3a): ``--print-ports-sha --assets-dir
+<dir>`` prints the single ``freebsd_ports_sha`` shared by every canonical ``.pkg``
+under ``<dir>`` and exits — see ``ports_sha_from_assets``. Mutually exclusive with
+the dependency-build mode above; ``--pkg-repo``/``--ports-dir``/``--route-matrix``/
+``--channels`` are not required in this mode.
 """
 
 from __future__ import annotations
@@ -220,22 +226,71 @@ def run(
     return pr.PublishReport(touched=tuple(sorted(touched)))
 
 
+def ports_sha_from_assets(engine: pc.Engine, assets_dir: str | Path) -> str:
+    """The single ``freebsd_ports_sha`` shared by every canonical ``.pkg`` under
+    ``assets_dir`` (step 3b's carry-forward: it needs this to build the dependency
+    flow's ``--route-matrix`` FreeBSD-ports checkout at the SAME ports commit the
+    canonical build already used, without re-deriving that from anywhere else).
+
+    Scans every ``*.pkg`` for its optional ``pfb_build_record`` annotation
+    (``build_repo_portable._canonical_build_record``) — ``None`` (a dependency
+    ``.pkg``, or an unannotated legacy canonical) is skipped, exactly as the
+    retention/eviction code already treats a recordless package. Exactly one
+    distinct ``freebsd_ports_sha`` among the remaining (canonical, annotated)
+    packages is required: zero is an error (nothing to report), more than one is an
+    error (the assets directory mixes ports checkouts across builds — never silently
+    pick one).
+    """
+    assets_dir = Path(assets_dir)
+    brp = engine.build_repo_portable
+    pfb_pkg = engine.pfb_pkg
+    by_sha: dict[str, list[str]] = {}
+    for path in sorted(assets_dir.glob("*.pkg")):
+        if not path.is_file():
+            continue
+        manifest = pfb_pkg.read_compact_manifest(path)
+        record = brp._canonical_build_record(path, manifest)
+        if record is None:
+            continue
+        by_sha.setdefault(record["freebsd_ports_sha"], []).append(path.name)
+    if not by_sha:
+        raise PublishDepsError(f"no canonical .pkg with build-record provenance found under {assets_dir}")
+    if len(by_sha) > 1:
+        detail = "; ".join(f"{sha}: {names}" for sha, names in sorted(by_sha.items()))
+        raise PublishDepsError(f"canonical .pkg assets under {assets_dir} disagree on freebsd_ports_sha: {detail}")
+    return next(iter(by_sha))
+
+
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Build and place every ROUTE build row's extra_pkgs dependency .pkg missing "
-            "from the given channel(s) (never runs git)."
+            "from the given channel(s) (never runs git); or, with --print-ports-sha, print "
+            "the freebsd_ports_sha shared by every canonical .pkg under --assets-dir."
         )
     )
     parser.add_argument(
         "--pkg-repo",
-        required=True,
-        help="the checked-out pfBlockerNG/pkg working tree (site is <pkg-repo>/docs)",
+        help="the checked-out pfBlockerNG/pkg working tree (site is <pkg-repo>/docs) — required "
+        "unless --print-ports-sha is given",
     )
-    parser.add_argument("--ports-dir", required=True, help="FreeBSD-ports checkout root")
-    parser.add_argument("--route-matrix", required=True, help="compact JSON array")
-    parser.add_argument("--channels", required=True, help="compact JSON array, e.g. '[\"nightly\"]'")
+    parser.add_argument("--ports-dir", help="FreeBSD-ports checkout root — required unless --print-ports-sha is given")
+    parser.add_argument("--route-matrix", help="compact JSON array — required unless --print-ports-sha is given")
+    parser.add_argument(
+        "--channels",
+        help="compact JSON array, e.g. '[\"nightly\"]' — required unless --print-ports-sha is given",
+    )
+    parser.add_argument(
+        "--print-ports-sha",
+        action="store_true",
+        help="print the freebsd_ports_sha shared by every canonical .pkg under --assets-dir, then exit "
+        "(mutually exclusive with the publish mode above)",
+    )
+    parser.add_argument("--assets-dir", help="directory of downloaded .pkg assets — only used with --print-ports-sha")
     return parser.parse_args(argv)
+
+
+_PUBLISH_MODE_ARGS = ("pkg_repo", "ports_dir", "route_matrix", "channels")
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -245,6 +300,23 @@ def main(argv: Sequence[str] | None = None) -> int:
         engine = pc.load_engine()
     except pc.EngineError as exc:
         print(f"::error::{exc}", file=sys.stderr)
+        return 1
+
+    if args.print_ports_sha:
+        if not args.assets_dir:
+            print("::error::--print-ports-sha requires --assets-dir", file=sys.stderr)
+            return 1
+        try:
+            sha = ports_sha_from_assets(engine, args.assets_dir)
+        except (PublishDepsError, engine.pfb_pkg.PkgError, engine.build_repo_portable.BuildRepoError) as exc:
+            print(f"::error::{exc}", file=sys.stderr)
+            return 1
+        print(sha)
+        return 0
+
+    missing = [f"--{name.replace('_', '-')}" for name in _PUBLISH_MODE_ARGS if getattr(args, name) is None]
+    if missing:
+        print(f"::error::{', '.join(missing)} required unless --print-ports-sha is given", file=sys.stderr)
         return 1
 
     try:
