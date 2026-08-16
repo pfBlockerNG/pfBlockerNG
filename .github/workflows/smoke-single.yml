@@ -129,7 +129,7 @@ on:
         required: false
         default: "[]"
       dep_artifact:
-        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-<pfsense_version>-s<shard>."
         required: false
         default: ""
       checkout_ref:
@@ -255,7 +255,7 @@ on:
         type: string
         default: "[]"
       dep_artifact:
-        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-s<shard>."
+        description: "Name of a pre-built dep-pkgs artifact to download instead of building one here. The smoke.yml fan-out composes this (same pattern as pkg_artifact); blank = this workflow's own build-pkg job built it (self-build path), named pfBlockerNG-deppkgs-<image_name>-<pfsense_version>-s<shard>."
         required: false
         type: string
         default: ""
@@ -306,8 +306,11 @@ jobs:
       php_version: ${{ inputs.php_version }}
       py_flavor: ${{ inputs.py_flavor }}
       # Per-leg artifact name: the fan-out builds a CE and a Plus .pkg in ONE run,
-      # so a shared name would collide / cross-feed. Keying on image_name keeps each
-      # leg's artifact distinct (and the download below follows build-pkg.outputs.artifact).
+      # so a shared name would collide / cross-feed. Keying on image_name AND
+      # pfsense_version keeps each leg's artifact distinct (issue #2453: CE 2.8 and
+      # CE 2.9 share image_name=pfsense-ce, so image_name alone let the CE 2.9 leg
+      # download the CE 2.8 FreeBSD:15 .pkg -> "wrong architecture"); the download
+      # below follows build-pkg.outputs.artifact.
       # The `-s<shard>` suffix (issue #797) keys it further: two shards of the SAME
       # leg each build their own .pkg on THIS path — only reached when pkg_artifact
       # is blank, so it never collides with the shared per-leg artifact smoke.yml builds.
@@ -316,7 +319,7 @@ jobs:
       # the dynamic name GH assigned, never matched by this literal elsewhere), so the
       # major-collapse naming that matters for cross-workflow/cross-run consumers
       # (release.yml/smoke.yml) buys nothing here.
-      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-s${{ inputs.shard }}
+      artifact_name: pfBlockerNG-pkg-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
       # Optional Option-A validation: point the .pkg build at a FreeBSD-ports branch
       # carrying a new plist entry. Blank -> build-pkg-linux's own defaults
       # (pfBlockerNG/FreeBSD-ports @ pfblockerng/use-github), so a normal run is unchanged.
@@ -328,11 +331,11 @@ jobs:
       # uploads its dep artifact, which the "Download dep packages" step below
       # (same workflow, same run) then downloads.
       extra_pkgs: ${{ inputs.extra_pkgs }}
-      # W1: mirror artifact_name's OWN discriminator (image_name + shard) — this
+      # W1: mirror artifact_name's OWN discriminator (image_name + pfsense_version + shard) — this
       # build-pkg job's matrix (indirectly, one invocation per caller-side leg)
       # can share a run with sibling invocations of THIS reusable workflow (e.g.
       # repo-install.yml's fan-out); the plain per-major default would collide.
-      dep_artifact_name: pfBlockerNG-deppkgs-${{ inputs.image_name }}-s${{ inputs.shard }}
+      dep_artifact_name: pfBlockerNG-deppkgs-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
 
   smoke:
     name: pytest -m smoke (live pfSense VM)
@@ -558,7 +561,7 @@ jobs:
         if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
         uses: actions/download-artifact@v8
         with:
-          name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-s{1}', inputs.image_name, inputs.shard) }}
+          name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-{1}-s{2}', inputs.image_name, inputs.pfsense_version, inputs.shard) }}
           path: deppkgs
 
       - name: Export SMOKE_DEP_PKGS
