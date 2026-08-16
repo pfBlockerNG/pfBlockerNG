@@ -14,18 +14,28 @@ module only calls their public contracts. Never runs git: the caller (the releas
 workflow) owns staging exactly the touched directories, committing, and pushing —
 this module only reports which ``(channel, varver)`` directories it touched.
 
-No-op behaviour: a ``(channel, varver)`` target whose desired files (this run's
-canonical asset + any dependency assets that ABI-match its ROUTE row and whose
-origin is listed in that row's ``extra_pkgs``) are already
-present, byte-identical, at the destination AND whose catalog descriptor
-(meta.conf/data.pkg/packagesite.pkg) is complete is left untouched entirely — no
-copy, no prune, no regenerate. There is no ledger; "already published" is read
-straight off the files already on disk. A destination whose descriptor is
-incomplete (a prior run's write-back fault) is regenerated even when the ``.pkg``
-payload itself is unchanged. A destination file sharing an incoming asset's
-canonical name but carrying DIFFERENT bytes is never overwritten: same
+No-op behaviour: a ``(channel, varver)`` target whose desired file (this run's
+canonical asset alone — issue #2454 step 3a: this module never places dependency
+assets, see below) is already present, byte-identical, at the destination AND whose
+catalog descriptor (meta.conf/data.pkg/packagesite.pkg) is complete is left
+untouched entirely — no copy, no prune, no regenerate. There is no ledger; "already
+published" is read straight off the files already on disk. A destination whose
+descriptor is incomplete (a prior run's write-back fault) is regenerated even when
+the ``.pkg`` payload itself is unchanged. A destination file sharing the incoming
+canonical asset's name but carrying DIFFERENT bytes is never overwritten: same
 name/version with different bytes, source, or provenance raises
 ``DestinationConflictError`` instead.
+
+Dependency assets (issue #2454 step 3a): this module never places, byte-compares, or
+conflict-checks a dependency ``.pkg`` — ``scripts/publish_deps.py`` owns building and
+placing every ROUTE build row's ``extra_pkgs`` dependency, as its OWN step, before
+this publisher ever runs. ``verify_run`` (S1, gated) still verifies any dependency
+asset present in ``--assets-dir`` (a Release published before this change may still
+attach one), but ``RunResult.dependency_assets`` is read by nothing here — a legacy
+dependency file already sitting at a destination (from a Release published before
+this change) is left exactly as-is, whatever its bytes, and survives retention
+untouched by ``_evict_undeclared_deps`` for as long as its ROUTE row still declares
+its origin.
 
 Nightly intake is not handled here: ``run()`` accepts only ``kind == "tagged"`` intake
 and fails closed otherwise.
@@ -51,7 +61,7 @@ import shutil
 import sys
 import tempfile
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 # scripts/ is not a package (no __init__.py); catalogue_assembly.py itself imports
@@ -145,7 +155,6 @@ def _verify_all_assets(
 class _Target:
     row: Mapping[str, object]
     canonical: pc.VerifiedAsset
-    dependencies: list[pc.VerifiedAsset] = field(default_factory=list)
 
 
 def _origin_key(value: object) -> tuple[str, str] | None:
@@ -179,12 +188,14 @@ def _row_declares_origin(row: Mapping[str, object], origin: object) -> bool:
     return any(_origin_key(extra) == key for extra in extras)
 
 
-def _row_declares_dep(row: Mapping[str, object], dep: pc.VerifiedAsset) -> bool:
-    """True iff this ROUTE/BUILD row lists the dependency's origin in extra_pkgs."""
-    return _row_declares_origin(row, dep.manifest.get("origin"))
-
-
 def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Target]:
+    """One ``_Target`` per (channel-independent) varver, from this run's canonical
+    assets ONLY. ``run_result.dependency_assets`` is intentionally never read here
+    (issue #2454 step 3a) — ``publish_deps.py`` builds and places every ROUTE build
+    row's ``extra_pkgs`` dependency as its own, earlier step; a dependency asset that
+    still rides along in ``--assets-dir`` (a Release published before this change may
+    still attach one) was already verified by ``verify_run`` (S1, gated) but is simply
+    never placed by this module."""
     brp = engine.build_repo_portable
     targets: dict[str, _Target] = {}
     for asset in run_result.canonical_assets:
@@ -196,42 +207,13 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
                 f"{targets[varver].canonical.declared_name!r} and {asset.declared_name!r}"
             )
         targets[varver] = _Target(row=row, canonical=asset)
-
-    for dep in run_result.dependency_assets:
-        # Same-major ABI is not enough: a CE extra must not land in a Plus
-        # catalogue whose extra_pkgs is empty (issue #2383).
-        matched = [
-            varver
-            for varver, target in targets.items()
-            if brp._pkg_matches_abi(dep.manifest, f"FreeBSD:{target.row['freebsd_major']}:*")
-            and _row_declares_dep(target.row, dep)
-        ]
-        if not matched:
-            raise PublishReleaseError(
-                f"dependency asset {dep.declared_name!r} matches no varver targeted "
-                "by this run's own canonical assets (ABI + extra_pkgs declaration)"
-            )
-        for varver in matched:
-            targets[varver].dependencies.append(dep)
-
     return targets
 
 
 def _asset_map(target: _Target) -> dict[str, Path]:
-    mapping = {target.canonical.canonical_name: target.canonical.work_path}
-    for dep in target.dependencies:
-        existing = mapping.get(dep.canonical_name)
-        if existing is not None:
-            if _files_identical(existing, dep.work_path):
-                continue
-            raise DestinationConflictError(
-                f"{dep.canonical_name}: two verified assets share this canonical name "
-                f"with different bytes — "
-                f"existing sha256={hashlib.sha256(existing.read_bytes()).hexdigest()}, "
-                f"incoming sha256={hashlib.sha256(dep.work_path.read_bytes()).hexdigest()}"
-            )
-        mapping[dep.canonical_name] = dep.work_path
-    return mapping
+    """Canonical-only (issue #2454 step 3a) — the destination's dependency file, if
+    any, is never included, so ``_drop_assets`` never reads or compares it."""
+    return {target.canonical.canonical_name: target.canonical.work_path}
 
 
 def _files_identical(a: Path, b: Path) -> bool:

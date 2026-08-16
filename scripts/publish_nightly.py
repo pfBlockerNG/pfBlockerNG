@@ -40,7 +40,15 @@ contracts, plus established private cross-module seams in the same spirit as
 (``publish_catalogues._canonical_record``/``_normalize_route_matrix``/
 ``_validate_asset_name``, ``publish_release._Target``/``_asset_map``/``_drop_assets``/
 ``_catalogue_descriptor_complete``, ``nightly_provenance._validate_artifacts``/
-``_validate_dep_artifacts``/``_DIGEST``) — never copies their logic.
+``_DIGEST``) — never copies their logic.
+
+Dependency assets (issue #2454 step 3a): this module never places, verifies, or
+routes one — ``scripts/publish_deps.py`` builds and places every ROUTE build row's
+``extra_pkgs`` dependency, as its OWN, earlier step. A handoff build entry carries
+only ``matrix_row``/``record``/``artifact``; a legacy dependency file already sitting
+at a Nightly destination (from before this change) is left exactly as-is, whatever
+its bytes, and survives retention untouched by ``pr._evict_undeclared_deps`` for as
+long as its ROUTE row still declares its origin.
 
 stdlib-only, Python 3.11. The engine is loaded via ``publish_catalogues.load_engine()``
 — explicit ``src_root`` or the ``PFB_SRC`` environment variable, same as
@@ -114,7 +122,7 @@ _HANDOFF_FIELDS = frozenset(
         "builds",
     }
 )
-_BUILD_ENTRY_FIELDS = frozenset({"matrix_row", "record", "artifact", "dep_artifacts"})
+_BUILD_ENTRY_FIELDS = frozenset({"matrix_row", "record", "artifact"})
 
 
 @dataclass(frozen=True)
@@ -123,11 +131,11 @@ class _ValidatedHandoff:
     source_sha: str
     ports_sha: str
     route_matrix: list[Mapping[str, object]]
-    # Each entry: {"matrix_row": normalized dict, "artifact": {abi,name,sha256},
-    # "dep_artifacts": [{abi,name,sha256}, ...]}. The handoff's own literal "record"
-    # field is intentionally NOT carried past the shape check below — this module
-    # never trusts it; per-canonical provenance is always re-derived from the
-    # downloaded .pkg's own annotation by publish_catalogues.verify_asset instead.
+    # Each entry: {"matrix_row": normalized dict, "artifact": {abi,name,sha256}}. The
+    # handoff's own literal "record" field is intentionally NOT carried past the shape
+    # check below — this module never trusts it; per-canonical provenance is always
+    # re-derived from the downloaded .pkg's own annotation by
+    # publish_catalogues.verify_asset instead.
     builds: list[dict[str, object]]
 
 
@@ -191,12 +199,9 @@ def _validate_handoff(handoff: object, *, engine: pc.Engine, source_run_id: str)
             raise PublishNightlyError(f"handoff builds contain duplicate FreeBSD major {major!r}")
         majors.add(major)
         # Same per-result shape nightly_provenance.build_handoff itself validates —
-        # reused verbatim rather than re-deriving the artifact/dep_artifacts rules.
+        # reused verbatim rather than re-deriving the artifact rule.
         artifact = np._validate_artifacts([entry["artifact"]])[0]
-        dep_artifacts = np._validate_dep_artifacts(
-            entry["dep_artifacts"], leg_abi=f"FreeBSD:{major}:*", canonical_name=artifact["name"]
-        )
-        normalized_builds.append({"matrix_row": matrix_row, "artifact": artifact, "dep_artifacts": dep_artifacts})
+        normalized_builds.append({"matrix_row": matrix_row, "artifact": artifact})
 
     route_matrix = handoff["route_matrix"]
     if not isinstance(route_matrix, list) or not route_matrix:
@@ -221,7 +226,6 @@ class _Leg:
     major: str
     matrix_row: Mapping[str, object]
     canonical: pc.VerifiedAsset
-    dependencies: tuple[pc.VerifiedAsset, ...]
 
 
 def _verify_builds(
@@ -231,6 +235,11 @@ def _verify_builds(
     results_dir: Path,
     work_dir: Path,
 ) -> list[_Leg]:
+    """One ``_Leg`` per BUILD entry, canonical asset only (issue #2454 step 3a) —
+    ``scripts/publish_deps.py`` builds and places every ROUTE build row's
+    ``extra_pkgs`` dependency as its own, earlier step; any OTHER file still sitting
+    in a leg's results directory (e.g. a legacy dependency .pkg from before this
+    change) is simply never looked at here."""
     legs: list[_Leg] = []
     for index, entry in enumerate(validated.builds):
         matrix_row = entry["matrix_row"]
@@ -273,28 +282,7 @@ def _verify_builds(
                 f"FreeBSD {major} canonical asset matrix_row does not match this build entry's matrix_row"
             )
 
-        dependencies: list[pc.VerifiedAsset] = []
-        dep_artifacts = entry["dep_artifacts"]
-        assert isinstance(dep_artifacts, list)
-        for dep_index, dep in enumerate(dep_artifacts):
-            pc._validate_asset_name(dep["name"])
-            dep_path = legdir / dep["name"]
-            if not dep_path.is_file():
-                raise PublishNightlyError(f"missing dependency asset {dep['name']!r} for FreeBSD {major}: {dep_path}")
-            dependencies.append(
-                pc.verify_asset(
-                    engine,
-                    dep_path,
-                    dep["name"],
-                    intake=intake,
-                    expected_sha256=dep["sha256"],
-                    work_dir=work_dir / f"leg-{index}-dep-{dep_index}",
-                )
-            )
-
-        legs.append(
-            _Leg(major=major, matrix_row=matrix_row, canonical=canonical_asset, dependencies=tuple(dependencies))
-        )
+        legs.append(_Leg(major=major, matrix_row=matrix_row, canonical=canonical_asset))
     return legs
 
 
@@ -331,17 +319,7 @@ def _route_targets(
         if varver in targets:
             raise PublishNightlyError(f"two ROUTE build rows resolve to the same varver {varver!r}")
 
-        # Canonical fan-out is per-major; extra_pkgs deps attach only to
-        # ROUTE rows that declare their origin (issue #2383).
-        dependencies: list[pc.VerifiedAsset] = []
-        for dep in leg.dependencies:
-            if not brp._pkg_matches_abi(dep.manifest, f"FreeBSD:{major}:*"):
-                raise PublishNightlyError(f"{dep.declared_name!r}: dependency ABI does not match FreeBSD major {major}")
-            if not pr._row_declares_dep(row, dep):
-                continue
-            dependencies.append(dep)
-
-        targets[varver] = pr._Target(row=row, canonical=leg.canonical, dependencies=dependencies)
+        targets[varver] = pr._Target(row=row, canonical=leg.canonical)
         used_majors.add(major)
 
     unused = {leg.major for leg in legs} - used_majors

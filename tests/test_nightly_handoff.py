@@ -53,7 +53,6 @@ def _result(row: dict[str, object] | None = None) -> dict[str, object]:
             "name": f"pfSense-pkg-pfBlockerNG-{VERSION}.pkg",
             "sha256": sha256(f"pkg{row['freebsd_major']}".encode()).hexdigest(),
         },
-        "dep_artifacts": [],
     }
 
 
@@ -96,7 +95,8 @@ def test_handoff_accepts_complete_build_and_route_rows() -> None:
     assert route_matrix[1]["role"] == "route-only"
     assert route_matrix[1]["ci"] is False
     assert "role" not in route_matrix[0]
-    assert builds[0]["dep_artifacts"] == []
+    # issue #2454 step 3a: a BUILD result carries only matrix_row/record/artifact.
+    assert set(builds[0]) == {"matrix_row", "record", "artifact"}
 
 
 def test_handoff_rejects_missing_build_result() -> None:
@@ -109,23 +109,12 @@ def test_handoff_rejects_version_for_different_source() -> None:
         _call_handoff([_result()], pkg_version=f"20260814153045.{'f' * 7}")
 
 
-def test_handoff_carries_one_dep_artifact_sorted() -> None:
-    row = _row()
-    row["extra_pkgs"] = ["textproc/py-charset-normalizer"]
-    result = _result(row)
-    dep = {
-        "abi": "FreeBSD:15:*",
-        "name": "py311-charset-normalizer-3.4.0.pkg",
-        "sha256": sha256(b"dep").hexdigest(),
-    }
-    result["dep_artifacts"] = [dep]
-    handoff = _call_handoff([result], build_rows=[row])
-    assert handoff["builds"][0]["dep_artifacts"] == [dep]
-
-
-def test_handoff_rejects_result_missing_dep_artifacts_key() -> None:
+def test_handoff_rejects_result_with_dep_artifacts_key() -> None:
+    """issue #2454 step 3a: dep_artifacts is no longer part of the BUILD result
+    shape — a result carrying that key is now REJECTED, not merely tolerated
+    empty."""
     result = _result()
-    del result["dep_artifacts"]
+    result["dep_artifacts"] = []
     with pytest.raises(np.ProvenanceError, match="unexpected fields"):
         _call_handoff([result])
 
@@ -135,109 +124,3 @@ def test_handoff_rejects_result_with_extra_unknown_field() -> None:
     result["bogus"] = "nope"
     with pytest.raises(np.ProvenanceError, match="unexpected fields"):
         _call_handoff([result])
-
-
-CHARSET_ORIGIN = "textproc/py-charset-normalizer"
-CHARSET_PKG = "py311-charset-normalizer-3.4.0.pkg"
-
-
-def _plus_row() -> dict[str, object]:
-    return {
-        "pfsense_version": "26.03",
-        "channel": "Plus",
-        "freebsd_version": "16.0-RELEASE",
-        "freebsd_major": "16",
-        "php_version": "8.3",
-        "py_flavor": "py311",
-        "variant": "Plus",
-        "status": "GA",
-        "extra_pkgs": [],
-    }
-
-
-def _charset_dep(*, abi: str = "FreeBSD:15:*") -> dict[str, str]:
-    return {
-        "abi": abi,
-        "name": CHARSET_PKG,
-        "sha256": sha256(b"dep").hexdigest(),
-    }
-
-
-def test_handoff_rejects_empty_dep_artifacts_when_extra_pkgs_declared() -> None:
-    """issue #2405: extra_pkgs=[charset] with dep_artifacts=[] must fail-close."""
-    row = _row()
-    row["extra_pkgs"] = [CHARSET_ORIGIN]
-    result = _result(row)
-    assert result["dep_artifacts"] == []
-    with pytest.raises(np.ProvenanceError, match="extra_pkgs"):
-        _call_handoff([result], build_rows=[row])
-
-
-def test_handoff_accepts_one_dep_artifact_for_declared_charset_extra() -> None:
-    """issue #2405: declared charset extra_pkgs with matching dep .pkg is accepted."""
-    row = _row()
-    row["extra_pkgs"] = [CHARSET_ORIGIN]
-    result = _result(row)
-    result["dep_artifacts"] = [_charset_dep()]
-    handoff = _call_handoff([result], build_rows=[row])
-    assert handoff["builds"][0]["dep_artifacts"] == [_charset_dep()]
-
-
-def test_handoff_rejects_undeclared_dep_artifact_when_extra_pkgs_empty() -> None:
-    """issue #2405: extra_pkgs=[] still requires dep_artifacts == []."""
-    row = _row()
-    assert row["extra_pkgs"] == []
-    result = _result(row)
-    result["dep_artifacts"] = [_charset_dep()]
-    with pytest.raises(np.ProvenanceError, match="extra_pkgs"):
-        _call_handoff([result], build_rows=[row])
-
-
-def test_handoff_rejects_extra_pkgs_length_two_with_one_dep_artifact() -> None:
-    """issue #2405: two origins / one .pkg (overwrite) is a count mismatch."""
-    row = _row()
-    row["extra_pkgs"] = ["net/py-foo", CHARSET_ORIGIN]
-    result = _result(row)
-    result["dep_artifacts"] = [_charset_dep()]
-    with pytest.raises(np.ProvenanceError, match="extra_pkgs"):
-        _call_handoff([result], build_rows=[row])
-
-
-def test_handoff_accepts_two_legs_only_ce_declares_charset() -> None:
-    """issue #2405: CE carries charset extra; Plus extra_pkgs=[] stays empty."""
-    ce_row = _row()
-    ce_row["extra_pkgs"] = [CHARSET_ORIGIN]
-    plus_row = _plus_row()
-    ce_result = _result(ce_row)
-    ce_result["dep_artifacts"] = [_charset_dep()]
-    plus_result = _result(plus_row)
-    assert plus_result["dep_artifacts"] == []
-
-    handoff = _call_handoff(
-        [ce_result, plus_result],
-        build_rows=[ce_row, plus_row],
-        route_rows=[ce_row, plus_row],
-    )
-    by_major = {str(build["matrix_row"]["freebsd_major"]): build for build in handoff["builds"]}
-    assert by_major["15"]["dep_artifacts"] == [_charset_dep()]
-    assert by_major["16"]["dep_artifacts"] == []
-    assert by_major["15"]["matrix_row"]["extra_pkgs"] == [CHARSET_ORIGIN]
-    assert by_major["16"]["matrix_row"]["extra_pkgs"] == []
-
-
-def test_handoff_accepts_same_dep_name_across_different_legs() -> None:
-    row15 = _row()
-    row15["extra_pkgs"] = [CHARSET_ORIGIN]
-    row16 = {**_row(), "freebsd_major": "16", "freebsd_version": "16.0-RELEASE", "extra_pkgs": [CHARSET_ORIGIN]}
-    result15 = _result(row15)
-    result16 = _result(row16)
-    dep_name = "py311-charset-normalizer-3.4.0.pkg"
-    result15["dep_artifacts"] = [{"abi": "FreeBSD:15:*", "name": dep_name, "sha256": sha256(b"dep15").hexdigest()}]
-    result16["dep_artifacts"] = [{"abi": "FreeBSD:16:*", "name": dep_name, "sha256": sha256(b"dep16").hexdigest()}]
-
-    handoff = _call_handoff([result15, result16], build_rows=[row15, row16])
-
-    names = {
-        str(build["matrix_row"]["freebsd_major"]): build["dep_artifacts"][0]["name"] for build in handoff["builds"]
-    }
-    assert names["15"] == names["16"] == dep_name
