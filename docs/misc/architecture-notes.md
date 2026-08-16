@@ -1206,8 +1206,17 @@ Full design: ADR-39.
   branch `.pkg`s (frozen together — the EOL/route-only story wants this); the draft healthcheck
   counts one main asset per release row plus the total `extra_pkgs` entries. The publisher folds
   those attached dep `.pkg` assets into the served catalogue itself — `publish_catalogues.py`
-  verifies each one against its ROUTE row's ABI and `publish_release.py` drops it into the same
-  destination as the canonical package.
+  verifies each one against its ROUTE row's ABI. **A dependency `.pkg`'s identity is its
+  filename alone** (`<name>-<version>.pkg`, from the pinned ports tree) — never its bytes:
+  publishers place a dependency only when it is missing at a destination, and never
+  byte-compare or overwrite one already there. A tagged run's dependency assets are per-row
+  Release assets, each routed to its OWN row's varver by its `-<Variant>-<pfsense_version>`
+  suffix — never by ABI-matching every same-major declaring row, so two rows on the same
+  FreeBSD major can each carry their own build without colliding. Canonical packages keep the
+  strict byte-conflict check (`DestinationConflictError` on a same-name, different-bytes
+  destination). Nightly rebuilds its dependency every run and reuses the identical
+  place-if-missing rule, so a byte-only rebuild under an unchanged name-version is expected,
+  not an error (issue #2468).
 - **Generators:** `scripts/build-repo-portable.py` (primary catalog gen) and
   `scripts/build-repo.sh` (fallback + `--print-conf` conf template) both emit the client
   repo-conf; `priority: 100` — one equal priority across every project channel repo, above

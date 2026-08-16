@@ -348,6 +348,10 @@ class VerifiedAsset:
     sha256: str
     manifest: Mapping[str, object]
     record: Mapping[str, object] | None = None
+    # (variant, pfsense_version) from a tagged dependency asset's own suffix (issue
+    # #2468 per-suffix routing target) — set only there; None for canonical (uses
+    # record.matrix_row) and Nightly dependency (no suffix) assets.
+    release_suffix: tuple[str, str] | None = None
 
 
 def _validate_asset_name(name: str) -> None:
@@ -513,6 +517,7 @@ def _verify_dependency_asset(
         raise AssetVerificationError(f"{asset_name}: dependency manifest version is missing or unsafe")
 
     canonical_name = f"{name}-{version}.pkg"
+    release_suffix: tuple[str, str] | None = None
     if intake.kind == "tagged":
         prefix = f"{name}-{version}-"
         if not asset_name.startswith(prefix):
@@ -526,6 +531,7 @@ def _verify_dependency_asset(
             raise AssetVerificationError(
                 f"{asset_name}: declared name does not carry a valid -<Variant>-<pfsense_version> Release-asset suffix"
             )
+        release_suffix = (variant, pfsense_version)
     elif asset_name != canonical_name:
         raise AssetVerificationError(
             f"{asset_name}: declared name does not match the package's manifest identity; expected {canonical_name!r}"
@@ -541,6 +547,7 @@ def _verify_dependency_asset(
         sha256=digest,
         manifest=manifest,
         record=None,
+        release_suffix=release_suffix,
     )
 
 

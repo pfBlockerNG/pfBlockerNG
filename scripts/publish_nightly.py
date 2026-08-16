@@ -17,7 +17,19 @@ Nightly leg's canonical asset is targeted at every build-role ROUTE row whose
 therefore both receive the SAME canonical bytes — a genuine multi-destination fan-out,
 verified byte/checksum/provenance-identical by
 ``catalogue_assembly.verify_multi_destination_identity`` exactly as a tagged run's own
-fan-out is.
+fan-out is. A leg's dependency asset attaches only to the ROUTE rows sharing its major
+that also declare its origin (``extra_pkgs``) — never fed into that identity check
+(dependency identity is the filename alone, place-if-missing — see below).
+
+Dependency identity (issue #2468): reuses ``publish_release._drop_assets``/
+``_asset_map`` verbatim, so a dependency ``.pkg`` here follows the SAME rule as a
+tagged run's — identity is its filename (``<name>-<version>.pkg``), a destination
+already holding one is left exactly as-is (never read, never byte-compared, never
+overwritten), and a missing one is copied in. Nightly rebuilds its dependency every
+run, so this is expected, not an error: the ``py311-charset-normalizer`` dep that
+tripped ``publish_nightly`` on a byte-only rebuild (source commit changed, name/version
+did not — the symptom behind this issue) now simply stays whatever was already
+published. The canonical package keeps the strict byte-conflict check below.
 
 Staleness guard: this publisher runs inside the SAME workflow run that produced the
 handoff (``handoff["run_id"] == --source-run-id``); an inequality means a stale or
@@ -414,8 +426,9 @@ def publish(
             changed = True
         if not changed and not pr._catalogue_descriptor_complete(dest_dir, engine):
             changed = True
-        for src in asset_map.values():
-            source_index.setdefault(src.resolve(), []).append((_CHANNEL, varver))
+        # issue #2468: only the canonical asset feeds the fan-out identity index —
+        # see publish_release.publish's own comment on this same exclusion.
+        source_index.setdefault(target.canonical.work_path.resolve(), []).append((_CHANNEL, varver))
         if changed:
             ca.prune_retained(site_root, _CHANNEL, varver, engine=engine)
             ca.regenerate_catalogue(site_root, _CHANNEL, varver, engine=engine)

@@ -106,6 +106,11 @@ ROW_PLUS16_03 = _row(freebsd_major="16", pfsense_version="26.03", variant="Plus"
 ROW_PLUS16_07 = _row(freebsd_major="16", pfsense_version="26.07", variant="Plus")
 ROW_PLUS15_03 = _row(freebsd_major="15", pfsense_version="26.03", variant="Plus")
 ROW_ROUTE_ONLY_17 = _row(freebsd_major="17", pfsense_version="17.0", variant="CE", role="route-only")
+# Same major as ROW_CE15, ALSO declaring the charset extra — two build-role ROUTE
+# rows sharing one leg, both declaring the dep (issue #2468 coverage).
+ROW_CE15_29 = _row(
+    freebsd_major="15", pfsense_version="2.9", variant="CE", extra_pkgs=["textproc/py-charset-normalizer"]
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -217,10 +222,14 @@ def _wrap_dependency_pkg(
     version: str,
     abi: str,
     local_name: str,
+    payload: dict[str, bytes] | None = None,
 ) -> tuple[Path, str]:
     manifest = {"name": name, "version": version, "abi": abi, "origin": f"textproc/{name}"}
     compact = json.dumps(manifest, separators=(",", ":")).encode()
     members = [("+COMPACT_MANIFEST", compact, 0o644, 0)]
+    # Extra members vary the archive BYTES under an identical manifest identity —
+    # how a nightly rebuild of the same name-version ends up byte-distinct.
+    members.extend((member, data, 0o644, 0) for member, data in (payload or {}).items())
     path = directory / local_name
     _write_tar_pkg(path, members)
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
@@ -242,6 +251,9 @@ class _LegSpec:
     # None = derive from row extra_pkgs (issue #2405: count must match).
     dep_specs: Sequence[tuple[str, str]] | None = None
     source_date_epoch: int = _EPOCH
+    # Extra archive member(s) so a rebuilt dep of the SAME name-version ends up
+    # byte-distinct from a prior leg's — issue #2468's place-if-missing rule.
+    dep_payload: dict[str, bytes] | None = None
 
 
 def _resolved_dep_specs(spec: _LegSpec) -> Sequence[tuple[str, str]]:
@@ -280,7 +292,7 @@ def _build_leg_result(snapshot: Any, spec: _LegSpec, *, assets_root: Path) -> di
     for name, version in _resolved_dep_specs(spec):
         dep_name = f"{name}-{version}.pkg"
         _dep_path, dep_digest = _wrap_dependency_pkg(
-            legdir, name=name, version=version, abi=f"FreeBSD:{major}:*", local_name=dep_name
+            legdir, name=name, version=version, abi=f"FreeBSD:{major}:*", local_name=dep_name, payload=spec.dep_payload
         )
         dep_artifacts.append({"abi": f"FreeBSD:{major}:*", "name": dep_name, "sha256": dep_digest})
     return {
@@ -564,6 +576,46 @@ class RetentionTests(_TempDirTestCase):
         self.assertEqual(len(remaining), keep)
         self.assertNotIn(f"pfSense-pkg-pfBlockerNG-{first_version}.pkg", remaining)
         self.assertTrue((catalogue_dir / dep_name).is_file())
+
+
+# --------------------------------------------------------------------------- #
+# issue #2468 nightly analogue: dependency identity = filename, place-if-missing,
+# never byte-compared or overwritten. Nightly rebuilds its dep every run.
+# --------------------------------------------------------------------------- #
+
+
+class DependencyPlaceIfMissingTests(_TempDirTestCase):
+    @_requires_engine
+    def test_rebuilt_dependency_different_bytes_publishes_without_conflict(self) -> None:
+        """RED CANARY (issue #2468), nightly analogue: Nightly rebuilds its
+        dependency every run from whatever source commit triggered it — new archive
+        bytes under the identical name-version is expected, not an error. A second
+        Nightly run publishing a byte-different rebuild of the same dep must succeed
+        without DestinationConflictError, and the already-published dep bytes must
+        stay untouched (place-if-missing, never compared, never overwritten)."""
+        handoff, results_dir, _snap = self.base_handoff()
+        first = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+        self.assertTrue(first.touched)
+
+        catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        dep_path = catalogue_dir / "py311-charset-normalizer-3.4.0.pkg"
+        original_dep_bytes = dep_path.read_bytes()
+
+        newer = _snapshot(build_date=date(2026, 8, 5))
+        results_dir_2 = self.new_results_dir()
+        handoff_2 = _build_handoff(
+            newer,
+            legs=[_LegSpec(row=ROW_CE15, dep_payload={"filler.bin": b"rebuilt-from-new-source-commit"})],
+            route_rows=[ROW_CE15],
+            assets_root=results_dir_2,
+        )
+
+        second = _run(handoff=handoff_2, results_dir=results_dir_2, pkg_repo=self.pkg_repo)
+
+        self.assertTrue(second.touched)
+        canonical_name = f"pfSense-pkg-pfBlockerNG-{newer.pkg_version}.pkg"
+        self.assertTrue((catalogue_dir / canonical_name).is_file())
+        self.assertEqual(dep_path.read_bytes(), original_dep_bytes)
 
 
 # --------------------------------------------------------------------------- #
@@ -1216,6 +1268,32 @@ class SameMajorDestScopeTests(_TempDirTestCase):
         self.assertFalse((docs / "plus-26.03" / _CHARSET_PKG).exists())
         self.assertIn(_CHARSET_NAME, _packagesite_names(docs / "ce-2.8"))
         self.assertNotIn(_CHARSET_NAME, _packagesite_names(docs / "plus-26.03"))
+
+    @_requires_engine
+    def test_two_same_major_rows_both_declaring_dep_both_receive_it(self) -> None:
+        """issue #2468 coverage: two build-role ROUTE rows sharing one FreeBSD major
+        (ce-2.8 + ce-2.9, both major 15), BOTH declaring the same extra_pkgs origin,
+        both receive the identical dep bytes from the ONE leg that major built —
+        _route_targets's existing per-row extra_pkgs gate is unchanged by this issue,
+        only the place-if-missing rule for an already-published dep is new."""
+        snapshot = _snapshot()
+        results_dir = self.new_results_dir()
+        handoff = _build_handoff(
+            snapshot,
+            legs=[_LegSpec(row=ROW_CE15)],
+            route_rows=[ROW_CE15, ROW_CE15_29],
+            assets_root=results_dir,
+        )
+        report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+
+        self.assertEqual(set(report.touched), {("nightly", "ce-2.8"), ("nightly", "ce-2.9")})
+        docs = self.pkg_repo / "docs" / "nightly"
+        self.assertTrue((docs / "ce-2.8" / _CHARSET_PKG).is_file())
+        self.assertTrue((docs / "ce-2.9" / _CHARSET_PKG).is_file())
+        self.assertEqual(
+            (docs / "ce-2.8" / _CHARSET_PKG).read_bytes(),
+            (docs / "ce-2.9" / _CHARSET_PKG).read_bytes(),
+        )
 
     @_requires_engine
     def test_route_targets_continue_filter_required_for_same_major_plus(self) -> None:
