@@ -1,7 +1,10 @@
 #!/bin/sh
 # publish-pkg-repo.sh — verify + publish a Tagged release's or a Nightly snapshot's
 # .pkg assets into the pfBlockerNG/pkg catalogue tree, then commit + fast-forward-push
-# the result.
+# the result. Site rendering is NOT this script's job: pfBlockerNG/pkg's docs/ site
+# (index.html, browse/, .nojekyll, install.sh, …) is render-pkg-site.sh's own,
+# separately dispatched (issue #2450 step 2). This script owns catalogue paths
+# only: docs/<stable|testing|edge|nightly>/<varver>/ and docs/staging/<segment>/.
 #
 # PUBLISH_KIND selects the mode (default "tagged" when unset):
 #   tagged   PFB_SRC/scripts/publish_release.py verifies + assembles a tagged
@@ -19,41 +22,33 @@
 # strictly AFTER a successful publisher run, and a non-zero exit from it
 # is `exit 1` on the spot, before any git add ever runs. There is no
 # `git add -A` / `git add .` anywhere below — only the exact touched (channel,
-# varver) directories the publisher reports, plus the landing page's own
-# output and docs/.nojekyll; on a catalogue no-op, only the regenerated
-# client script (issue #2408) unless PUBLISH_REFRESH_LANDING=1 (issue #2416
-# follow-up) — see below. Any retired client script still on the live site is
-# swept ONLY in a commit that also regenerates the landing page — a
-# PUBLISH_REFRESH_LANDING=1 no-op, a direct/nightly real publish, or a
-# "promote" — never a knob-off (default) no-op or a "stage" no-op/run, which
-# would 404 a script the live index.html still links.
+# varver) directories the publisher reports. A second, independent guard runs
+# right before every commit (every mode): the staged diff must touch ONLY
+# docs/<stable|testing|edge|nightly|staging>/ paths — catches a hostile or buggy
+# "updated <path>" report (e.g. a `..`-bearing target) that the per-target `git
+# add` alone would otherwise trust blindly.
 #
 # On a rejected push (another run advanced origin/main first), the ENTIRE cycle
 # reruns from a fresh sync — not a rebase of the local commit — because
-# the publisher's retention/regeneration must see the racing run's tree, not
-# stale local state. checkout -B restores tracked files; `git clean -fd -- docs`
-# drops untracked leftovers under docs/ (issue #2407) so a dest autoindex
-# without its .pkgs cannot survive into landing_regen_and_stage.
+# the publisher's retention must see the racing run's tree, not stale local
+# state. checkout -B restores tracked files; `git clean -fd -- docs` drops
+# untracked leftovers under docs/ (issue #2407) so a dest autoindex without its
+# .pkgs cannot survive into the next attempt.
 #
 # PUBLISH_STAGE additionally selects WHEN a tagged catalogue commit becomes the
 # live Pages site (issue #2389 — gate-before-announce). docs/ on `main` IS the
 # Pages site, so a plain publish (PUBLISH_STAGE=direct, the default) commits the
-# catalogue and the landing page atomically, and nothing can be live-gated before
-# announce. The three extra values split that into a stage-then-promote flow:
+# catalogue directly. The three extra values split that into a stage-then-promote
+# flow:
 #   stage    run the publisher exactly as "direct" does, against the real tree,
 #            then relocate its output under docs/staging/<run-segment>/ instead
 #            of leaving it at its real (channel, varver) location — restoring
 #            the original bytes there — so a live install can be gated against
-#            the staged path while nothing else on the site moves. No landing
-#            regen: staging is never served as the site. The catalogue-no-op
-#            path is the ONE exception — it still regenerates + pushes the
-#            deterministic client script (docs/install.sh, the --channel
-#            parameterized installer; issue #2408, issue #2416, shared with
-#            "direct") even though nothing was staged, and reports
-#            GITHUB_OUTPUT noop=true.
+#            the staged path while nothing else on the site moves. A catalogue
+#            no-op stages nothing and reports GITHUB_OUTPUT noop=true.
 #   promote  move a previously staged tree (STAGING_PREFIX) into its real
-#            location and run the landing regen — this is the step that
-#            actually goes live. Never runs the publisher.
+#            location — this is the step that actually goes live. Never runs
+#            the publisher.
 #   discard  drop a previously staged tree (STAGING_PREFIX) without ever going
 #            live. Never runs the publisher.
 # promote/discard act on STAGING_PREFIX as staged (a prior "stage" run's own
@@ -73,22 +68,12 @@
 #                        segment: `:` is translated to `-` (the real workflows
 #                        set SOURCE_RUN_ID="<run_id>:<run_attempt>"), and it must
 #                        otherwise match [0-9A-Za-z_:-]+.
-#   BASE_URL               Pages base URL passed to gen_landing.py
 # Optional — every mode:
 #   PUBLISH_KIND           "tagged" (default) or "nightly"; anything else is a
 #                        usage error
 #   PUBLISH_STAGE           "direct" (default), "stage", "promote", or "discard";
 #                        anything else is a usage error. Only "direct" is valid
 #                        when PUBLISH_KIND=nightly.
-#   PUBLISH_REFRESH_LANDING "0" (default) or "1"; on an otherwise catalogue-NOOP
-#                        run, "1" regenerates the FULL landing page
-#                        (index.html/browse.html/every autoindex) instead of
-#                        just CLIENT_SCRIPTS — for shipping a landing
-#                        template/card fix via a republish of an
-#                        already-published release (issue #2416 follow-up).
-#                        Valid only with PUBLISH_KIND=tagged and
-#                        PUBLISH_STAGE=direct; any other combination is a usage
-#                        error.
 #   MAX_PUSH_ATTEMPTS      bounded retry count (default 5)
 # Optional — PUBLISH_STAGE=stage only, when GITHUB_ACTIONS-style outputs are
 # wanted:
@@ -105,16 +90,15 @@
 #
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=promote only:
 #   RELEASE_TAG, DESTINATIONS  the promote commit message's own trailers
-#   ROUTE_MATRIX             landing_regen_and_stage's tagged-mode matrix source
-#                        Never ASSETS_DIR — promote never runs publish_release.py,
-#                        and the workflow's promote-pkg-repo job does not export it
-#                        (issue #2389); SOURCE_REPOSITORY/RELEASE_ID are exported
-#                        there but unused by promote, so they are not required.
+#                        Never ASSETS_DIR/ROUTE_MATRIX — promote never runs
+#                        publish_release.py or any renderer, and the workflow's
+#                        promote-pkg-repo job does not export ASSETS_DIR (issue
+#                        #2389).
 #
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=discard only:
-#   (none beyond the unconditional PFB_SRC/PKG_REPO/SOURCE_RUN_ID/BASE_URL and
-#   STAGING_PREFIX below) — discard only removes a staged tree and commits the
-#   removal; it never runs the publisher or the landing regen.
+#   (none beyond the unconditional PFB_SRC/PKG_REPO/SOURCE_RUN_ID above) —
+#   discard only removes a staged tree and commits the removal; it never runs
+#   the publisher.
 #
 # Required environment — PUBLISH_KIND=nightly only:
 #   HANDOFF_FILE            path to the verified nightly_provenance.build_handoff JSON
@@ -126,18 +110,6 @@
 #                        staging/[0-9A-Za-z_-]+
 
 set -eu
-
-# Every deterministic client script gen_landing.py publishes at the site root:
-# the one --channel-parameterized installer (issue #2416 follow-up) — the SOLE
-# client entry point. Single source of truth for both the catalogue-NOOP `git add`
-# list and the direct/promote stage_paths list below.
-CLIENT_SCRIPTS="install.sh"
-
-# Scripts the landing generator used to publish before the issue #2416
-# follow-up collapsed every client entry point down to install.sh above —
-# gen_landing.py no longer writes them, but a republish of an
-# already-published release must still sweep them off an already-live site.
-RETIRED_CLIENT_SCRIPTS="add-repo.sh migrate-channel.sh"
 
 PUBLISH_KIND="${PUBLISH_KIND:-tagged}"
 case "$PUBLISH_KIND" in
@@ -157,28 +129,18 @@ case "$PUBLISH_STAGE" in
         ;;
 esac
 
-PUBLISH_REFRESH_LANDING="${PUBLISH_REFRESH_LANDING:-0}"
-case "$PUBLISH_REFRESH_LANDING" in
-    0 | 1) ;;
-    *)
-        echo "::error::PUBLISH_REFRESH_LANDING must be '0' or '1', got '${PUBLISH_REFRESH_LANDING}'" >&2
-        exit 1
-        ;;
-esac
-
 : "${PFB_SRC:?PFB_SRC is required}"
 : "${PKG_REPO:?PKG_REPO is required}"
 : "${SOURCE_RUN_ID:?SOURCE_RUN_ID is required}"
-: "${BASE_URL:?BASE_URL is required}"
 
 case "$PUBLISH_KIND" in
     tagged)
         # Required-var set depends on PUBLISH_STAGE: direct/stage run the publisher
-        # (needs the full publish_release.py intake); promote only regenerates the
-        # landing page + writes a commit trailer (needs a strict subset); discard
-        # needs nothing here at all (issue #2389) — the workflow's promote-pkg-repo
-        # job never exports ASSETS_DIR, so requiring it unconditionally broke every
-        # promote/discard; only what each mode reads is required.
+        # (needs the full publish_release.py intake); promote only writes a commit
+        # + its own trailers (needs a strict subset); discard needs nothing here at
+        # all (issue #2389) — the workflow's promote-pkg-repo job never exports
+        # ASSETS_DIR, so requiring it unconditionally broke every promote/discard;
+        # only what each mode reads is required.
         case "$PUBLISH_STAGE" in
             direct | stage)
                 : "${SOURCE_REPOSITORY:?SOURCE_REPOSITORY is required}"
@@ -191,7 +153,6 @@ case "$PUBLISH_KIND" in
             promote)
                 : "${RELEASE_TAG:?RELEASE_TAG is required}"
                 : "${DESTINATIONS:?DESTINATIONS is required}"
-                : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
                 ;;
             discard) ;;
         esac
@@ -206,13 +167,6 @@ esac
 # snapshot is out of scope here (see the header docblock).
 if [ "$PUBLISH_KIND" = nightly ] && [ "$PUBLISH_STAGE" != direct ]; then
     echo "::error::PUBLISH_STAGE must be 'direct' when PUBLISH_KIND=nightly, got '${PUBLISH_STAGE}'" >&2
-    exit 1
-fi
-
-# PUBLISH_REFRESH_LANDING=1 only makes sense on the real single-push publish
-# flow — stage/promote/discard and nightly keep their own flows untouched.
-if [ "$PUBLISH_REFRESH_LANDING" = 1 ] && { [ "$PUBLISH_KIND" != tagged ] || [ "$PUBLISH_STAGE" != direct ]; }; then
-    echo "::error::PUBLISH_REFRESH_LANDING=1 requires PUBLISH_KIND=tagged and PUBLISH_STAGE=direct, got PUBLISH_KIND='${PUBLISH_KIND}' PUBLISH_STAGE='${PUBLISH_STAGE}'" >&2
     exit 1
 fi
 
@@ -270,7 +224,12 @@ esac
 
 export PFB_SRC
 
-# --- shell helpers (PUBLISH_STAGE stage/promote/discard) --------------------
+# Catalogue-owned top-level prefixes — MUST equal render-pkg-site.sh's own
+# CATALOGUE_DIRS (the two scripts own disjoint, complementary halves of docs/).
+CATALOGUE_DIRS="stable testing edge nightly staging"
+
+# --- shell helpers (PUBLISH_STAGE stage/promote/discard, plus the
+# catalogue-only guard shared by every mode) ---------------------------------
 
 # Removes any docs/staging tree entirely — used both to sweep a stale tree left
 # by an earlier crashed "stage" run (before laying down a fresh one) and, on
@@ -283,14 +242,31 @@ remove_docs_staging_tree() {
     rm -rf "${PKG_REPO}/docs/staging"
 }
 
-# Stages the removal of every RETIRED_CLIENT_SCRIPTS entry still present on the
-# live site, so the deletion rides the same commit as whatever else this run is
-# already about to commit (NOOP script/landing refresh, or a real publish).
-# --ignore-unmatch is a no-op once a script is already gone.
-remove_retired_client_scripts() {
-    for retired in $RETIRED_CLIENT_SCRIPTS; do
-        git -C "$PKG_REPO" rm -q --ignore-unmatch -- "docs/${retired}"
+# Direct/nightly mode only: stage exactly docs/<target> for every $touched —
+# never -A. A hostile or drifted "updated <target>" report reaching outside
+# docs/<catalogue dir>/ is caught by assert_catalogue_only_staged below, not here.
+stage_touched_targets() {
+    for target in $touched; do
+        git -C "$PKG_REPO" add -- "docs/${target}"
     done
+}
+
+# GUARD, called right before every `git commit` below, in every mode: the
+# staged diff must touch ONLY docs/<CATALOGUE_DIRS>/ paths. Backstops the
+# per-target `git add` above (and promote_from_staging's `git mv`) against a
+# hostile or drifted "updated <path>" report reaching outside the catalogue
+# trees — a `..`-bearing target is the canonical case, never structurally
+# impossible from a shell loop alone.
+assert_catalogue_only_staged() {
+    catalogue_alt=$(printf '%s' "$CATALOGUE_DIRS" | tr ' ' '|')
+    staged=$(git -C "$PKG_REPO" diff --cached --name-only)
+    bad=$(printf '%s\n' "$staged" | grep -vE "^docs/(${catalogue_alt})/" || true)
+    if [ -n "$bad" ]; then
+        echo "::error::publisher commit touched non-catalogue path(s):" >&2
+        printf '%s\n' "$bad" >&2
+        git -C "$PKG_REPO" reset --quiet
+        exit 1
+    fi
 }
 
 # Relocates every $touched (channel, varver) target under
@@ -344,54 +320,6 @@ promote_from_staging() {
     remove_docs_staging_tree
 }
 
-# Shared by "direct" (non-noop) and "promote": regenerate the landing page and
-# stage the landing output, every $touched target's directory, that dest's
-# channel-level autoindex, and already-tracked dest/channel autoindexes
-# gen_landing rewrote. Never a site-wide find of every docs/**/index.html —
-# an untracked leftover dest from a rejected push is not this run's
-# (issue #2407).
-landing_regen_and_stage() {
-    case "$PUBLISH_KIND" in
-        tagged) landing_input="$ROUTE_MATRIX" ;;
-        nightly) landing_input="$(jq -ec '.route_matrix' "$HANDOFF_FILE")" ;;
-    esac
-    landing_matrix_file=$(mktemp)
-    printf '%s' "$landing_input" | jq -c \
-        '[.[] | {abi: "FreeBSD:\(.freebsd_major):*", pfsense_version, variant, php_version, py_flavor}]' \
-        >"$landing_matrix_file"
-    python3 "${PFB_SRC}/scripts/gen_landing.py" \
-        "${PKG_REPO}/docs" "$BASE_URL" \
-        --matrix "$landing_matrix_file"
-    rm -f "$landing_matrix_file"
-    true >"${PKG_REPO}/docs/.nojekyll"
-
-    stage_paths="docs/.nojekyll"
-    [ -f "${PKG_REPO}/docs/index.html" ] && stage_paths="${stage_paths} docs/index.html"
-    [ -f "${PKG_REPO}/docs/browse.html" ] && stage_paths="${stage_paths} docs/browse.html"
-    for client_script in $CLIENT_SCRIPTS; do
-        if [ ! -f "${PKG_REPO}/docs/${client_script}" ]; then
-            echo "::error::gen_landing.py did not write docs/${client_script} (CLIENT_SCRIPTS/generator drift)" >&2
-            exit 1
-        fi
-        stage_paths="${stage_paths} docs/${client_script}"
-    done
-    for target in $touched; do
-        stage_paths="${stage_paths} docs/${target}"
-        ch="${target%%/*}"
-        [ -f "${PKG_REPO}/docs/${ch}/index.html" ] && stage_paths="${stage_paths} docs/${ch}/index.html"
-    done
-    # Already-tracked dest/channel autoindexes only. ls-files cannot name a
-    # dest that is not in the index, so a leftover dest autoindex cannot
-    # appear here (issue #2407).
-    tracked_indexes=$(git -C "$PKG_REPO" ls-files -- 'docs/*/index.html' 'docs/*/*/index.html')
-    if [ -n "$tracked_indexes" ]; then
-        stage_paths="${stage_paths}
-${tracked_indexes}"
-    fi
-    # shellcheck disable=SC2086  # stage_paths is a controlled, space/newline-separated pathspec list
-    git -C "$PKG_REPO" add -- $stage_paths
-}
-
 # GITHUB_OUTPUT for PUBLISH_STAGE=stage only ($1 = noop true|false). $touched is
 # newline-separated "channel/varver" tokens, possibly empty.
 emit_stage_outputs() {
@@ -418,22 +346,17 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     # to docs/ so G1 debris at the repo root stays untracked (issue #2407).
     git -C "$PKG_REPO" clean -fd -- docs
 
-    stage_commit=0
-
     case "$PUBLISH_STAGE" in
         promote)
             # --- promote: move a staged tree live; never runs the publisher ---
             promote_from_staging
             # A staged prefix carrying no (channel, varver) directory at all (a
-            # stray file, an empty tree) is not a valid promote — regenerating the
-            # landing page and committing would announce nothing while still
-            # advancing main, silently.
+            # stray file, an empty tree) is not a valid promote — committing
+            # would advance main while promoting nothing, silently.
             [ -n "$touched" ] || {
                 echo "::error::PUBLISH_STAGE=promote: no <channel>/<varver> under docs/${STAGING_PREFIX}" >&2
                 exit 1
             }
-            landing_regen_and_stage
-            remove_retired_client_scripts
             commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Promoted-From: %s\n' \
                 "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$STAGING_PREFIX")
             ;;
@@ -518,7 +441,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             # byte-identical content, a mid-fix regression). Filtering here, before
             # stage_touched's own mv, means the empty-touched branch just below
             # (unconditional for every mode) already handles "all dropped" as the
-            # ordinary STAGE NOOP case — no separate code path needed.
+            # ordinary NOOP case — no separate code path needed.
             if [ "$PUBLISH_STAGE" = stage ] && [ -n "$touched" ]; then
                 real_touched=""
                 for target in $touched; do
@@ -532,76 +455,20 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 touched="$real_touched"
             fi
 
-            script_refresh=0
             if [ -z "$touched" ]; then
-                # --- catalogue unchanged: the client scripts (or, with
-                # PUBLISH_REFRESH_LANDING=1, the whole landing page) may still have
-                # drifted --------------------------------------------------------
-                # Every client script (CLIENT_SCRIPTS) is generated from the PFB_SRC
-                # checkout, not from the release assets, so a script-only fix must ship
-                # even when every destination already matches (issue #2408, issue #2416).
-                # By default only the deterministic script set is regenerated here —
-                # the landing/browse/autoindex pages embed a generation timestamp, and
-                # writing them on every no-op would manufacture a commit on every run.
-                # PUBLISH_REFRESH_LANDING=1 (validated tagged+direct-only above) opts
-                # into the full regen instead, for a landing-only fix (issue #2416
-                # follow-up).
-                if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
-                    landing_regen_and_stage
-                    # Only here: the sweep must never ride a commit that does not
-                    # also regenerate the landing page — the live index.html still
-                    # links every RETIRED_CLIENT_SCRIPTS entry, so a knob-off sweep
-                    # would 404 it.
-                    remove_retired_client_scripts
-                else
-                    python3 "${PFB_SRC}/scripts/gen_landing.py" \
-                        "${PKG_REPO}/docs" "$BASE_URL" \
-                        --client-scripts-only
-                    client_script_paths=""
-                    for client_script in $CLIENT_SCRIPTS; do
-                        client_script_paths="${client_script_paths} docs/${client_script}"
-                    done
-                    # shellcheck disable=SC2086  # client_script_paths is a controlled, space-separated pathspec list
-                    git -C "$PKG_REPO" add -- $client_script_paths
+                # --- catalogue unchanged: nothing to stage or commit ----------------
+                if [ "$PUBLISH_STAGE" = stage ]; then
+                    emit_stage_outputs true
+                    echo "publish-pkg-repo: STAGE NOOP — nothing to gate."
                 fi
-                if git -C "$PKG_REPO" diff --cached --quiet; then
-                    if [ "$PUBLISH_STAGE" = stage ]; then
-                        emit_stage_outputs true
-                        echo "publish-pkg-repo: STAGE NOOP — nothing to gate."
-                    fi
-                    echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
-                    exit 0
-                fi
-                if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
-                    echo "publish-pkg-repo: catalogue unchanged — PUBLISH_REFRESH_LANDING=1; committing a landing refresh."
-                else
-                    echo "publish-pkg-repo: catalogue unchanged — client script(s) drifted; committing a script refresh."
-                fi
-                script_refresh=1
+                echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
+                exit 0
             elif [ "$PUBLISH_STAGE" = stage ]; then
                 # --- stage: relocate the publisher's output, never serve it --------
                 stage_touched
-                stage_commit=1
             else
-                # --- landing page regen — only for an actual publish ---------------
-                # Unless PUBLISH_REFRESH_LANDING=1, never on the catalogue-NOOP path
-                # above: gen_landing.py's page output embeds a generation timestamp,
-                # so running it there would manufacture a diff (and therefore a
-                # commit) on every run even when no catalogue changed.
-                #
-                # landing_matrix.json's abi expression (pinned by
-                # tests/shell/publish_pkg_repo_spec.sh): freebsd_major alone feeds the
-                # CPU-wildcarded ABI string. The retired `arch` matrix field is never
-                # interpolated — every published .pkg is NO_ARCH, so the honest ABI is the
-                # wildcard the packages themselves carry, never a per-arch value. The two
-                # modes share this ONE transform, differing only in the matrix array's
-                # source: tagged's pinned $ROUTE_MATRIX, nightly's own handoff-carried
-                # route_matrix (the handoff is what this run actually verified against —
-                # never a freshly re-read live matrix, which could have moved since).
-                landing_regen_and_stage
-                remove_retired_client_scripts
-
-                # --- stage EXACTLY what changed — never -A / . ----------------------
+                # --- direct/nightly: stage EXACTLY what changed — never -A / . -----
+                stage_touched_targets
                 if git -C "$PKG_REPO" diff --cached --quiet; then
                     echo "publish-pkg-repo: NOOP — the publisher reported changes but nothing is staged; discarding."
                     git -C "$PKG_REPO" reset --quiet
@@ -609,17 +476,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                 fi
             fi
 
-            if [ "$script_refresh" -eq 1 ]; then
-                # Mode-independent: the refresh carries no release/nightly identity —
-                # its content comes from PFB_SRC, so the run id is the whole provenance.
-                if [ "$PUBLISH_REFRESH_LANDING" = 1 ]; then
-                    commit_message=$(printf 'publish: refresh landing page\n\npfBlockerNG-Source-Run-Id: %s\n' \
-                        "$SOURCE_RUN_ID")
-                else
-                    commit_message=$(printf 'publish: refresh client scripts\n\npfBlockerNG-Source-Run-Id: %s\n' \
-                        "$SOURCE_RUN_ID")
-                fi
-            elif [ "$PUBLISH_STAGE" = stage ]; then
+            if [ "$PUBLISH_STAGE" = stage ]; then
                 commit_message=$(printf 'publish: stage %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Staging-Prefix: %s\n' \
                     "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$stage_prefix")
             else
@@ -641,6 +498,8 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             ;;
     esac
 
+    assert_catalogue_only_staged
+
     # Fixed bot identity via per-invocation -c flags, not repo config: a bare CI
     # checkout carries no git identity, and this script must not depend on one
     # being configured elsewhere (matches release.yml/module-durations.yml's
@@ -654,15 +513,10 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
         printf '%s\n' "$push_out" >&2
         echo "publish-pkg-repo: ADVANCE — pushed $(git -C "$PKG_REPO" rev-parse HEAD)"
         if [ "$PUBLISH_STAGE" = stage ]; then
-            # stage_commit=0 here means the ADVANCE was a script-only refresh
-            # (script_refresh=1: touched was empty, but the client scripts had
-            # drifted) — there is nothing to gate, so this is a noop from the
-            # caller's point of view even though a commit landed.
-            if [ "$stage_commit" -eq 1 ]; then
-                emit_stage_outputs false
-            else
-                emit_stage_outputs true
-            fi
+            # The only way to reach a commit under PUBLISH_STAGE=stage is via
+            # stage_touched (the empty-touched branch above always exits 0
+            # first) — there is always something to gate here.
+            emit_stage_outputs false
         fi
         exit 0
     fi
