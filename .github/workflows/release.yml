@@ -1237,13 +1237,7 @@ jobs:
           # own repo doesn't carry, e.g. textproc/py-charset-normalizer) --
           # SAME loop as build-pkg-linux.yml, from the SAME ports checkout
           # build-leg.sh just prepared above (never a second clone).
-          # issue #2454: the exact-name artifact below is smoke/UI test input
-          # only (pkg_artifact_prefix: pfBlockerNG-relpkg, "Download dep
-          # packages" in smoke.yml/ui-tests.yml) -- never a Release asset:
-          # attach-pkgs only attaches canonical pfSense-pkg-pfBlockerNG-*.pkg
-          # files; publish_deps.py (release-published.yml/pkg-republish.yml)
-          # publishes dep .pkgs to the pkg catalogue, built once per
-          # (origin, py_flavor, freebsd_major) rather than once per row here.
+          # this release row is the only one building its row-identified dep .pkgs.
           DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
           HAS_DEP_PKGS=0
           ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
@@ -1295,9 +1289,7 @@ jobs:
       - name: Upload this leg's dep .pkg artifact (issue #1806 B1)
         # Name MUST equal pfBlockerNG-relpkg-deppkgs-<variant>-<pfsense_version>
         # -- the exact row identity consumers compose. Never uploaded when
-        # extra_pkgs is empty (no empty artifacts). issue #2454: this run's own
-        # ui-suite/smoke-suite legs are the ONLY consumers -- never a Release
-        # asset (see the comment above building it).
+        # extra_pkgs is empty (no empty artifacts).
         if: env.HAS_DEP_PKGS == '1'
         uses: actions/upload-artifact@v7
         with:
@@ -1346,15 +1338,12 @@ jobs:
       - name: Download .pkg artifacts from portable builder
         # Each build-pkgs-portable leg uploads its OWN row artifact, named
         # pfBlockerNG-relpkg-<variant>-<pfsense_version>; merge every
-        # leg's artifact into pkgs/. The pattern also sweeps up each row's
-        # dependency artifact (issue #1806 B1, pfBlockerNG-relpkg-deppkgs-...)
-        # into pkgs/ -- issue #2454: that download is harmless (both share the
-        # pfBlockerNG-relpkg- prefix), but dep .pkgs are NEVER Release assets;
-        # the next step below attaches only canonical pfSense-pkg-pfBlockerNG-*.pkg
-        # names, so a dep .pkg landing here is swept into pkgs/ and then left
-        # on the runner, never uploaded. The dependency flow in
-        # release-published.yml/pkg-republish.yml (publish_deps.py) is what
-        # actually publishes dep .pkgs.
+        # leg's artifact into pkgs/. The pattern also sweeps
+        # up each row's dependency artifact
+        # (issue #1806 B1) -- INTENTIONAL: dep .pkgs (e.g. CE's
+        # py311-charset-normalizer) are deliberate release assets, frozen
+        # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
+        # story. The draft healthcheck counts them (EXPECTED_PKGS).
         uses: actions/download-artifact@v7
         with:
           pattern: pfBlockerNG-relpkg-*
@@ -1366,18 +1355,15 @@ jobs:
         # `gh release upload` (the release is published later, by hand, once the notes
         # are written — immutable-release repos only accept assets while it is a draft).
         # This is idempotent: re-uploading an asset with --clobber replaces it.
-        # If pkgs/ has no CANONICAL .pkg files (download miss or every build
-        # failed), this step fails closed so a Release is never published with
-        # no .pkg. issue #2454: the glob is canonical-only
-        # (pfSense-pkg-pfBlockerNG-*.pkg) -- a dep .pkg swept into pkgs/ by the
-        # download above never matches and is never attached.
+        # If pkgs/ has no .pkg files (download miss or every build failed), this
+        # step fails closed so a Release is never published with no .pkg.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG:      ${{ needs.release.outputs.tag }}
         run: |
           set -eu
 
-          PKGS=$(find pkgs -type f -name "pfSense-pkg-pfBlockerNG-*.pkg" 2>/dev/null | head -20)
+          PKGS=$(find pkgs -type f -name "*.pkg" 2>/dev/null | head -20)
           if [ -z "$PKGS" ]; then
             echo "::error::No .pkg artifacts to attach — download failed or build-pkgs-portable produced none."
             echo "Check the download and build-pkgs-portable job logs for details."
@@ -1388,7 +1374,7 @@ jobs:
           # artifact, and merge-multiple downloads them all flat under pkgs/ --
           # a non-recursive pkgs/*.pkg glob would already find them, but find
           # -type f is used here (and above) to stay robust either way.
-          find pkgs -type f -name "pfSense-pkg-pfBlockerNG-*.pkg" -print | while IFS= read -r f; do
+          find pkgs -type f -name "*.pkg" -print | while IFS= read -r f; do
             echo "Uploading: $(basename "$f")"
             gh release upload "$TAG" "$f" --clobber
           done
@@ -1454,12 +1440,9 @@ jobs:
     steps:
       - name: Health-check the draft release is complete
         id: verify
-        # Expected assets: the source archive + exactly one CANONICAL .pkg per
-        # release-matrix row. issue #2454: dep .pkgs are never Release assets --
-        # attach-pkgs only ever attaches pfSense-pkg-pfBlockerNG-*.pkg names, so
-        # this check both counts EXPECTED_PKGS as the plain row count and
-        # verifies, per row, that ZERO other assets carry that row's suffix
-        # (catches a leak even when the aggregate .pkg count happens to match).
+        # Expected assets: the source archive + exactly one .pkg per release-matrix row
+        # PLUS one dep .pkg per extra_pkgs entry across every row. The
+        # pfBlockerNG-relpkg-* sweep also picks up each row's dependency artifact.
         # A published release is stale for this draft handoff; never claim a
         # complete draft or allow notes mutation against it.
         env:
@@ -1478,11 +1461,10 @@ jobs:
             exit 1
           fi
 
-          # issue #2454: EXPECTED_PKGS is just the release-row count -- a dep
-          # .pkg is never its own release asset any more (see attach-pkgs's
-          # comment); the per-row loop below independently asserts zero
-          # non-canonical assets leaked in alongside it.
-          EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq 'length')
+          # issue #1806 B1: the release-row count PLUS the total number of
+          # extra_pkgs entries across the release-matrix rows -- each
+          # dep .pkg is its own release asset (see attach-pkgs's comment).
+          EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
           PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
           SRC_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
 
@@ -1495,10 +1477,9 @@ jobs:
           [ "$EXPECTED_PKGS" -ge 1 ] || { echo "::error::build matrix is empty"; FAIL=1; }
           [ "$PKG_COUNT" -eq "$EXPECTED_PKGS" ] || { echo "::error::expected ${EXPECTED_PKGS} .pkg assets, found ${PKG_COUNT} — the draft is incomplete"; FAIL=1; }
 
-          # Every release row has one exact main asset, and NO other asset may
-          # carry that row's suffix (issue #2454: a dep .pkg -- or anything
-          # else -- attached under a row's naming pattern is a leak, not a
-          # legitimate release asset).
+          # Every release row has one exact main asset. Dependency assets carry
+          # the same row suffix; this catches a dropped or cross-row artifact
+          # even when the aggregate .pkg count happens to match.
           while IFS= read -r ROW; do
             VARIANT=$(printf '%s' "$ROW" | jq -r '.variant')
             VERSION=$(printf '%s' "$ROW" | jq -r '.pfsense_version')
@@ -1507,9 +1488,10 @@ jobs:
               echo "::error::missing release-row asset ${MAIN}"
               FAIL=1
             fi
+            NEED_DEPS=$(printf '%s' "$ROW" | jq '(.extra_pkgs // []) | length')
             HAVE_DEPS=$(printf '%s' "$META" | jq --arg suffix "-${VARIANT}-${VERSION}.pkg" --arg main "$MAIN" '[.assets[].name | select(endswith($suffix) and . != $main)] | length')
-            if [ "$HAVE_DEPS" -ne 0 ]; then
-              echo "::error::row ${VARIANT}-${VERSION} carries unexpected non-canonical asset(s)"
+            if [ "$HAVE_DEPS" -ne "$NEED_DEPS" ]; then
+              echo "::error::row ${VARIANT}-${VERSION} expected ${NEED_DEPS} dependency assets, found ${HAVE_DEPS}"
               FAIL=1
             fi
           done <<EOF_ROWS

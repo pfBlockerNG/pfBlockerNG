@@ -16,26 +16,6 @@
 # in the whole flow: syncing PKG_REPO to origin/main, staging exactly what the
 # publisher reports touched, committing, and pushing.
 #
-# DEPENDENCY FLOW (issue #2454): before either publisher runs (tagged
-# PUBLISH_STAGE=direct|stage, and nightly — never promote/discard, which never run
-# a publisher at all), this script first runs PFB_SRC/scripts/publish_deps.py: it
-# builds and publishes every ROUTE build row's extra_pkgs dependency .pkg still
-# missing from the channel(s) about to be touched. A dependency write always lands
-# directly at its real docs/<channel>/<varver>/ location — never under
-# docs/staging/<segment>, even when PUBLISH_STAGE=stage — as its OWN commit
-# ("deps: publish missing dependency packages -> [...]"), committed and pushed
-# BEFORE the publisher's own commit (one push carries both). Nothing missing
-# anywhere is a NOOP: no deps commit, and the rest of this script's behaviour is
-# byte-for-byte what it was before this dependency flow existed. A non-zero exit
-# from publish_deps.py aborts the whole run, `exit 1`, before any git add/commit/
-# push — same containment rule the publisher itself gets below. The channel(s) and
-# route matrix handed to it mirror what the publisher is about to use this same
-# run: tagged forwards DESTINATIONS/ROUTE_MATRIX verbatim; nightly forwards the
-# literal '["nightly"]' and the handoff's own .route_matrix (a missing/null value
-# there aborts the same way, via `jq -e`, before any git mutation). A catalogue
-# no-op from the publisher itself, with a deps commit already made, still pushes —
-# just the deps commit, with no publisher commit alongside it.
-#
 # CONTAINMENT: a publisher failure — verification, or a mid-regeneration
 # write-back fault inside catalogue_assembly.py — must never reach a commit. This
 # script enforces that structurally: every git mutation (add/commit/push) happens
@@ -107,10 +87,6 @@
 #                        the rest of the publish_release.py intake — see its --help
 #   ASSETS_DIR             directory of downloaded .pkg assets + digests.json sidecar
 #   ROUTE_MATRIX           the pinned ROUTE matrix, compact JSON array text
-#   PORTS_DIR              FreeBSD-ports checkout (sparse; provided by the workflow)
-#                        the dependency flow reads port definitions from — see
-#                        "DEPENDENCY FLOW" above. Not required (and ignored) for
-#                        PUBLISH_STAGE=promote|discard, which never run it.
 #
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=promote only:
 #   RELEASE_TAG, DESTINATIONS  the promote commit message's own trailers
@@ -127,10 +103,6 @@
 # Required environment — PUBLISH_KIND=nightly only:
 #   HANDOFF_FILE            path to the verified nightly_provenance.build_handoff JSON
 #   RESULTS_DIR             directory of downloaded nightly-result-<major>/ legs
-#   PORTS_DIR              FreeBSD-ports checkout (sparse; provided by the workflow)
-#                        the dependency flow reads port definitions from — see
-#                        "DEPENDENCY FLOW" above (PUBLISH_STAGE is always "direct"
-#                        under PUBLISH_KIND=nightly, so this is always required).
 #
 # Required environment — PUBLISH_STAGE=promote|discard only:
 #   STAGING_PREFIX          "staging/<segment>", as emitted by a prior "stage"
@@ -177,7 +149,6 @@ case "$PUBLISH_KIND" in
                 : "${DESTINATIONS:?DESTINATIONS is required}"
                 : "${ASSETS_DIR:?ASSETS_DIR is required}"
                 : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
-                : "${PORTS_DIR:?PORTS_DIR is required}"
                 ;;
             promote)
                 : "${RELEASE_TAG:?RELEASE_TAG is required}"
@@ -189,7 +160,6 @@ case "$PUBLISH_KIND" in
     nightly)
         : "${HANDOFF_FILE:?HANDOFF_FILE is required}"
         : "${RESULTS_DIR:?RESULTS_DIR is required}"
-        : "${PORTS_DIR:?PORTS_DIR is required}"
         ;;
 esac
 
@@ -281,16 +251,6 @@ stage_touched_targets() {
     done
 }
 
-# Dependency-flow (issue #2454) only: stage exactly docs/<target> for
-# every $dep_touched — never -A. Mirrors stage_touched_targets over a separate
-# report/variable — the dependency flow's own commit is independent of, and
-# always precedes, the publisher's.
-stage_dep_targets() {
-    for target in $dep_touched; do
-        git -C "$PKG_REPO" add -- "docs/${target}"
-    done
-}
-
 # GUARD, called right before every `git commit` below, in every mode: the
 # staged diff must touch ONLY docs/<CATALOGUE_DIRS>/ paths. Backstops the
 # per-target `git add` above (and promote_from_staging's `git mv`) against a
@@ -305,7 +265,7 @@ assert_catalogue_only_staged() {
     staged=$(git -C "$PKG_REPO" diff --cached --name-only --no-renames)
     bad=$(printf '%s\n' "$staged" | grep -vE "^docs/(${catalogue_alt})/" || true)
     if [ -n "$bad" ]; then
-        echo "::error::commit touched non-catalogue path(s):" >&2
+        echo "::error::publisher commit touched non-catalogue path(s):" >&2
         printf '%s\n' "$bad" >&2
         git -C "$PKG_REPO" reset --quiet
         exit 1
@@ -389,13 +349,6 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
     # to docs/ so G1 debris at the repo root stays untracked (issue #2407).
     git -C "$PKG_REPO" clean -fd -- docs
 
-    # Reset every loop-scoped flag at the top of each attempt: a rejected push
-    # (below) redoes the WHOLE attempt from this fresh sync, so a flag left set
-    # from a discarded prior attempt must never leak into the redo.
-    deps_committed=0
-    stage_committed=0
-    commit_message=""
-
     case "$PUBLISH_STAGE" in
         promote)
             # --- promote: move a staged tree live; never runs the publisher ---
@@ -430,71 +383,6 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             commit_message=$(printf 'publish: discard %s\n\npfBlockerNG-Source-Run-Id: %s\n' "$STAGING_PREFIX" "$SOURCE_RUN_ID")
             ;;
         direct | stage)
-            # --- dependency flow (issue #2454): runs BEFORE the publisher,
-            # own commit, direct at the real location even under PUBLISH_STAGE=stage.
-            # Channels/route matrix mirror what the publisher below is about to use
-            # this same run.
-            case "$PUBLISH_KIND" in
-                tagged)
-                    dep_channels="$DESTINATIONS"
-                    dep_route_matrix="$ROUTE_MATRIX"
-                    ;;
-                nightly)
-                    dep_channels='["nightly"]'
-                    # jq -e: a missing/null route_matrix (or, since the dependency
-                    # flow is the FIRST thing to read HANDOFF_FILE this run,
-                    # malformed JSON) aborts here — wrapped, not a bare `set -e`
-                    # propagation, so every failure shape gets the same ::error::
-                    # tag and exit 1, before any git mutation, same containment
-                    # rule as the existing jq -er '.pkg_version' further down.
-                    dep_route_matrix=$(jq -ec '.route_matrix' "$HANDOFF_FILE") || {
-                        echo "::error::HANDOFF_FILE .route_matrix could not be read — aborting before any git mutation" >&2
-                        exit 1
-                    }
-                    ;;
-            esac
-
-            dep_out_file=$(mktemp)
-            # Same trap idiom as the publisher's own out_file below — see its
-            # comment for the rationale (a bare `rm` paired with `exit 1` would
-            # leave the NEXT unconditional `cat` tripping over a missing file).
-            trap 'rm -f "$dep_out_file"' EXIT
-            dep_rc=0
-            python3 "${PFB_SRC}/scripts/publish_deps.py" \
-                --pkg-repo "$PKG_REPO" \
-                --ports-dir "$PORTS_DIR" \
-                --route-matrix "$dep_route_matrix" \
-                --channels "$dep_channels" >"$dep_out_file" 2>&1 || dep_rc=$?
-            if [ "$dep_rc" -ne 0 ]; then
-                echo "::error::publish_deps.py failed — aborting before any git mutation" >&2
-                cat "$dep_out_file" >&2
-                exit 1
-            fi
-            cat "$dep_out_file"
-            dep_touched=$(grep '^updated ' "$dep_out_file" | sed 's/^updated //') || true
-            trap - EXIT
-            rm -f "$dep_out_file"
-
-            if [ -n "$dep_touched" ]; then
-                stage_dep_targets
-                assert_catalogue_only_staged
-                if git -C "$PKG_REPO" diff --cached --quiet; then
-                    # Phantom: the dependency flow reported targets touched but the
-                    # tree didn't actually change — mirrors the publisher's own
-                    # phantom-discard branch further down.
-                    git -C "$PKG_REPO" reset --quiet
-                else
-                    dep_targets_json=$(printf '%s\n' "$dep_touched" | jq -Rc . | jq -sc .)
-                    dep_commit_message=$(printf 'deps: publish missing dependency packages -> %s\n\npfBlockerNG-Source-Run-Id: %s\n' \
-                        "$dep_targets_json" "$SOURCE_RUN_ID")
-                    git -C "$PKG_REPO" \
-                        -c user.name="github-actions[bot]" \
-                        -c user.email="github-actions[bot]@users.noreply.github.com" \
-                        commit --quiet -m "$dep_commit_message"
-                    deps_committed=1
-                fi
-            fi
-
             # --- verify + assemble (never runs git) ----------------------------
             # A non-zero exit here is fatal to the WHOLE run, on the spot: no git add,
             # no commit, no push follows. The publisher's own stderr (already tagged
@@ -541,7 +429,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                     ;;
             esac
             if [ "$publish_rc" -ne 0 ]; then
-                echo "::error::${publisher_script} failed — aborting; nothing pushed (a local deps commit, if any, is discarded on the next sync)" >&2
+                echo "::error::${publisher_script} failed — aborting before any git mutation" >&2
                 cat "$out_file" >&2
                 exit 1
             fi
@@ -573,93 +461,65 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             if [ -z "$touched" ]; then
                 # --- catalogue unchanged: nothing to stage or commit ----------------
                 if [ "$PUBLISH_STAGE" = stage ]; then
+                    emit_stage_outputs true
                     echo "publish-pkg-repo: STAGE NOOP — nothing to gate."
                 fi
-                if [ "$deps_committed" -eq 1 ]; then
-                    # The dependency flow already made its own commit above — push
-                    # THAT, with no publisher commit alongside it (commit_message
-                    # stays "" from the top of this loop iteration). Under
-                    # PUBLISH_STAGE=stage, noop=true is emitted only once that push
-                    # actually lands (below) — a rejected push redoes this whole
-                    # block and must not emit noop= twice for the same output file.
-                    echo "publish-pkg-repo: catalogue NOOP — pushing the deps commit only"
-                else
-                    if [ "$PUBLISH_STAGE" = stage ]; then
-                        emit_stage_outputs true
-                    fi
-                    echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
-                    exit 0
-                fi
+                echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
+                exit 0
             elif [ "$PUBLISH_STAGE" = stage ]; then
                 # --- stage: relocate the publisher's output, never serve it --------
                 stage_touched
-                stage_committed=1
             else
                 # --- direct/nightly: stage EXACTLY what changed — never -A / . -----
                 stage_touched_targets
                 if git -C "$PKG_REPO" diff --cached --quiet; then
                     echo "publish-pkg-repo: NOOP — the publisher reported changes but nothing is staged; discarding."
                     git -C "$PKG_REPO" reset --quiet
-                    if [ "$deps_committed" -eq 1 ]; then
-                        echo "publish-pkg-repo: catalogue NOOP — pushing the deps commit only"
-                        touched=""
-                    else
-                        exit 0
-                    fi
+                    exit 0
                 fi
             fi
 
-            if [ -n "$touched" ]; then
-                if [ "$PUBLISH_STAGE" = stage ]; then
-                    commit_message=$(printf 'publish: stage %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Staging-Prefix: %s\n' \
-                        "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$stage_prefix")
-                else
-                    case "$PUBLISH_KIND" in
-                        tagged)
-                            commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\n' \
-                                "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID")
-                            ;;
-                        nightly)
-                            # jq -er: a missing/null pkg_version aborts here (via
-                            # set -e) before any commit — same containment rule as a non-zero
-                            # exit from the publisher itself further up.
-                            nightly_pkg_version=$(jq -er '.pkg_version' "$HANDOFF_FILE")
-                            commit_message=$(printf 'publish: nightly %s -> ["nightly"]\n\npfBlockerNG-Nightly-Version: %s\npfBlockerNG-Source-Run-Id: %s\n' \
-                                "$nightly_pkg_version" "$nightly_pkg_version" "$SOURCE_RUN_ID")
-                            ;;
-                    esac
-                fi
+            if [ "$PUBLISH_STAGE" = stage ]; then
+                commit_message=$(printf 'publish: stage %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\npfBlockerNG-Staging-Prefix: %s\n' \
+                    "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID" "$stage_prefix")
+            else
+                case "$PUBLISH_KIND" in
+                    tagged)
+                        commit_message=$(printf 'publish: %s -> %s\n\npfBlockerNG-Release-Tag: %s\npfBlockerNG-Source-Run-Id: %s\n' \
+                            "$RELEASE_TAG" "$DESTINATIONS" "$RELEASE_TAG" "$SOURCE_RUN_ID")
+                        ;;
+                    nightly)
+                        # jq -er: a missing/null pkg_version aborts here (via
+                        # set -e) before any commit — same containment rule as a non-zero
+                        # exit from the publisher itself further up.
+                        nightly_pkg_version=$(jq -er '.pkg_version' "$HANDOFF_FILE")
+                        commit_message=$(printf 'publish: nightly %s -> ["nightly"]\n\npfBlockerNG-Nightly-Version: %s\npfBlockerNG-Source-Run-Id: %s\n' \
+                            "$nightly_pkg_version" "$nightly_pkg_version" "$SOURCE_RUN_ID")
+                        ;;
+                esac
             fi
             ;;
     esac
 
-    # The publisher's own commit is conditional: a deps-only push (commit_message
-    # still "" here — see the direct|stage NOOP branches above) has nothing left
-    # to stage or commit for the publisher, and the dependency flow already ran
-    # its own assert_catalogue_only_staged + commit earlier in this iteration.
-    if [ -n "$commit_message" ]; then
-        assert_catalogue_only_staged
+    assert_catalogue_only_staged
 
-        # Fixed bot identity via per-invocation -c flags, not repo config: a bare CI
-        # checkout carries no git identity, and this script must not depend on one
-        # being configured elsewhere (matches release.yml/module-durations.yml's
-        # direct-to-repo commits).
-        git -C "$PKG_REPO" \
-            -c user.name="github-actions[bot]" \
-            -c user.email="github-actions[bot]@users.noreply.github.com" \
-            commit --quiet -m "$commit_message"
-    fi
+    # Fixed bot identity via per-invocation -c flags, not repo config: a bare CI
+    # checkout carries no git identity, and this script must not depend on one
+    # being configured elsewhere (matches release.yml/module-durations.yml's
+    # direct-to-repo commits).
+    git -C "$PKG_REPO" \
+        -c user.name="github-actions[bot]" \
+        -c user.email="github-actions[bot]@users.noreply.github.com" \
+        commit --quiet -m "$commit_message"
 
     if push_out=$(git -C "$PKG_REPO" push origin HEAD:main 2>&1); then
         printf '%s\n' "$push_out" >&2
         echo "publish-pkg-repo: ADVANCE — pushed $(git -C "$PKG_REPO" rev-parse HEAD)"
-        if [ "$PUBLISH_STAGE" = stage ] && [ "$stage_committed" -eq 1 ]; then
+        if [ "$PUBLISH_STAGE" = stage ]; then
+            # The only way to reach a commit under PUBLISH_STAGE=stage is via
+            # stage_touched (the empty-touched branch above always exits 0
+            # first) — there is always something to gate here.
             emit_stage_outputs false
-        elif [ "$PUBLISH_STAGE" = stage ] && [ "$deps_committed" -eq 1 ]; then
-            # Deps-only NOOP under stage: the publisher made no commit this
-            # iteration (stage_committed=0) but the dependency flow did —
-            # emit noop=true only now that the push carrying it has landed.
-            emit_stage_outputs true
         fi
         exit 0
     fi
