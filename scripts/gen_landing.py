@@ -3,7 +3,8 @@
 # tree (this repo's pkg-site/: install.sh, per-channel recipes, .nojekyll, …),
 # renders the dynamic pages (landing index.html, browse.html, and a browse/<ch>/…
 # view of every catalogue tree), and mirrors the result into the pkg repo's docs/ —
-# write every desired file, delete everything extraneous. Run by pfBlockerNG/pkg's
+# write every desired file, delete everything extraneous outside the catalogue
+# trees, touch nothing inside them. Run by pfBlockerNG/pkg's
 # publish.yml AFTER the per-channel catalog trees are built under <site>/.
 #
 # It is the human-facing sibling of build-repo-portable.py: that tool emits the
@@ -53,10 +54,11 @@ _CHANNELS: frozenset[str] = frozenset(CH_ORDER)
 # this top-level dir (issue #2389) -- files there stay served, but this generator
 # never indexes, browses, or writes it (CATALOGUE_DIRS below).
 STAGING_TOP_DIR = "staging"
-# Publisher-owned top-level prefixes: the renderer may never write, delete, or
-# autoindex anything under one of these (issue #2450) — the one exception is a
-# one-time sweep of a legacy `index.html` leftover (sync_site). Derived from
-# CH_ORDER + STAGING_TOP_DIR so the two never drift apart.
+# Publisher-owned top-level prefixes: the renderer may never add, modify, or
+# delete anything under one of these — no exceptions (issue #2450; a stray legacy
+# autoindex `index.html` under one of these is an operator's one-time cleanup after
+# the first publish with this script, never logic this script performs). Derived
+# from CH_ORDER + STAGING_TOP_DIR so the two never drift apart.
 CATALOGUE_DIRS: tuple[str, ...] = (*CH_ORDER, STAGING_TOP_DIR)
 # Embed markers in a site-tree .sh file that delimit the hook placeholder body.
 _HOOK_EMBED_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
@@ -1092,7 +1094,7 @@ def _render_catalogue_browse_page(docs: str, full_rel: str) -> str:
     files: list[str] = []
     for name in sorted(os.listdir(src_dir)):
         if name == "index.html":
-            continue  # a legacy autoindex leftover — never repository content (issue #2450)
+            continue  # a leftover autoindex is never repository content (issue #2450)
         (subdirs if os.path.isdir(os.path.join(src_dir, name)) else files).append(name)
 
     for name in subdirs:
@@ -1254,11 +1256,14 @@ def _prune_empty_dirs(root: str) -> None:
 
 def sync_site(docs: str, desired: dict[str, tuple[bytes, int]]) -> tuple[list[str], list[str]]:
     """Mirror *desired* into *docs*: write every desired file, then delete whatever
-    under docs is neither under a ``CATALOGUE_DIRS`` prefix nor in *desired* — plus a
-    one-time sweep of a legacy ``index.html`` leftover under a catalogue prefix
-    (issue #2450). Every OTHER file under a catalogue prefix is left untouched: the
-    assert below makes the renderer unable to write one from *desired* in the first
-    place. Returns ``(written, deleted)``, each the sorted "/"-relative paths.
+    under docs is neither under a ``CATALOGUE_DIRS`` prefix nor in *desired* (issue
+    #2450). A catalogue-prefixed path is never added, modified, or deleted here —
+    strictly, with no exception: the assert below makes the renderer unable to even
+    WRITE one from *desired* in the first place. A one-time cleanup of a legacy
+    autoindex leftover under a catalogue dir (from the generator this replaces) is
+    an operator task run once after the first successful publish with this script,
+    never logic this script carries forward. Returns ``(written, deleted)``, each
+    the sorted "/"-relative paths.
     """
     for rel in desired:
         if _catalogue_prefix(rel) is not None:
@@ -1280,12 +1285,8 @@ def sync_site(docs: str, desired: dict[str, tuple[bytes, int]]) -> tuple[list[st
             if os.path.islink(full):
                 continue  # never follow/touch a symlink inside docs
             rel = f"{rel_dir}/{fname}" if rel_dir else fname
-            prefix = _catalogue_prefix(rel)
-            if prefix is not None:
-                if fname == "index.html":
-                    os.remove(full)
-                    deleted.append(rel)
-                continue  # every other catalogue-owned file is untouched
+            if _catalogue_prefix(rel) is not None:
+                continue  # catalogue-owned — never touched, no exceptions
             if rel not in desired:
                 os.remove(full)
                 deleted.append(rel)
