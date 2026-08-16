@@ -658,6 +658,31 @@ class AssetVerificationTests(unittest.TestCase):
                 work_dir=self.work_dir,
             )
 
+    def test_dependency_tagged_malformed_suffix_rejected(self) -> None:
+        """issue #2468 promotes the -<Variant>-<pfsense_version> suffix from a cosmetic
+        label into the routing key that decides which varver a dependency lands in, so
+        every malformed shape must be rejected here rather than routed somewhere by
+        accident: an empty version ('-CE-'), a bare version with no variant, and an
+        empty variant. (A well-formed suffix naming a row this run never built is a
+        routing rejection instead — publish_release's own target fan-in.)"""
+        intake = self._intake(channel="testing", destinations='["testing","edge"]')
+        path, digest = _wrap_dependency_pkg(self.tmp_path)
+        for malformed in (
+            "py311-charset-normalizer-3.4.0-CE-.pkg",
+            "py311-charset-normalizer-3.4.0-2.8.pkg",
+            "py311-charset-normalizer-3.4.0--2.8.pkg",
+        ):
+            with self.subTest(malformed=malformed), self.assertRaises(pc.AssetVerificationError) as ctx:
+                pc.verify_asset(
+                    _ENGINE,
+                    path,
+                    malformed,
+                    intake=intake,
+                    expected_sha256=digest,
+                    work_dir=self.work_dir,
+                )
+            self.assertIn("Release-asset suffix", str(ctx.exception))
+
     # --- hostile asset name rows ---
 
     def test_asset_name_with_parent_traversal_rejected(self) -> None:

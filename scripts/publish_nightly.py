@@ -421,8 +421,11 @@ def publish(
         target = targets[varver]
         asset_map = pr._asset_map(target)
         dest_dir = site_root / _CHANNEL / varver
-        changed = pr._drop_assets(dest_dir, asset_map)
-        if pr._evict_undeclared_deps(dest_dir, engine=engine, row=target.row):
+        # Evict before dropping, for the reason publish_release.publish spells out:
+        # place-if-missing would otherwise skip the incoming dependency and then
+        # unlink the undeclared leftover holding its name.
+        changed = pr._evict_undeclared_deps(dest_dir, engine=engine, row=target.row)
+        if pr._drop_assets(dest_dir, asset_map):
             changed = True
         if not changed and not pr._catalogue_descriptor_complete(dest_dir, engine):
             changed = True
