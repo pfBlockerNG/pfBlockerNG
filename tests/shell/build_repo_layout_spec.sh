@@ -201,7 +201,7 @@ Describe 'build-repo.sh pkg repo abort retry (issue #2447)'
   setup_2447() {
     work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/brrepo2447.XXXXXX")"
     mkdir -p "${work}/bin" "${work}/in" "${work}/out"
-    : > "${work}/repo.count"
+    true > "${work}/repo.count"
 
     cat > "${work}/bin/pkg" <<'EOF'
 #!/bin/sh
