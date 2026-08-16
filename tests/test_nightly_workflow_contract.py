@@ -158,65 +158,36 @@ def test_build_leg_ports_ref_pin_rejects_moving_branch() -> None:
         _assert_build_leg_pins_prepare_sha(mutated)
 
 
-_ORIGIN_COUNT_COMPARE = 'if [ "$DEP_COPIED" -ne "$ORIGIN_COUNT" ]; then'
-_DEP_PKG_GLOB = 'for DEP_PKG in "$DEP_PKG_DIR"/*.pkg;'
-
-
-def _assert_build_step_compares_dep_pkg_count(step: str) -> None:
-    """issue #2405: after the glob, ORIGIN_COUNT == copied dep *.pkg count."""
-    assert _DEP_PKG_GLOB in step
-    assert _ORIGIN_COUNT_COMPARE in step
-    assert step.index(_DEP_PKG_GLOB) < step.index(_ORIGIN_COUNT_COMPARE)
-    compare_tail = step[step.index(_ORIGIN_COUNT_COMPARE) :]
-    assert 'echo "::error::' in compare_tail
-    assert "exit 1" in compare_tail
-
-
-def test_build_step_compares_origin_count_to_copied_dep_pkgs() -> None:
-    """issue #2405: BUILD step compares ORIGIN_COUNT to copied dep *.pkg files."""
+def test_build_step_never_builds_dependency_packages() -> None:
+    """issue #2454: the BUILD leg no longer builds this row's extra_pkgs dep
+    .pkgs itself -- the dependency flow (publish_deps.py, run once by
+    publish-pkg-repo.sh, BEFORE the publisher) builds only what is actually
+    missing from the catalogue, instead of every BUILD leg re-building its
+    own copy. Supersedes the old #2146 S1 / #1806 build-and-hand-off contract."""
     step = _build_and_verify_step(WORKFLOW.read_text(encoding="utf-8"))
-    _assert_build_step_compares_dep_pkg_count(step)
-    assert "result/*.pkg" in step
+
+    assert "build-dep-pkg-portable.py" not in step
+    assert "DEP_PKG_DIR" not in step
+    assert "DEP_ARTIFACTS_JSON" not in step
+    assert "ORIGIN_COUNT" not in step
+    assert "DEP_COPIED" not in step
+    assert ".extra_pkgs" not in step
 
 
-def test_dropping_origin_count_compare_leaves_glob_and_goes_red() -> None:
-    """issue #2405: deleting the ORIGIN_COUNT compare, leaving the glob, is RED."""
+def test_build_step_result_json_has_no_dep_artifacts() -> None:
+    """issue #2454: result.json's shape is exactly {matrix_row, record,
+    artifact} -- nightly_provenance.py's handoff command now rejects any other
+    key set (issue #2454 step 3a), so a leftover dep_artifacts field would fail
+    every handoff, not just silently carry dead data."""
     step = _build_and_verify_step(WORKFLOW.read_text(encoding="utf-8"))
-    _assert_build_step_compares_dep_pkg_count(step)
-    mutated = step.replace(_ORIGIN_COUNT_COMPARE, "", 1)
-    assert _DEP_PKG_GLOB in mutated
-    with pytest.raises(AssertionError):
-        _assert_build_step_compares_dep_pkg_count(mutated)
+    assert "dep_artifacts" not in step
 
-
-def test_build_step_builds_and_hands_off_dependency_packages() -> None:
-    """issue #2146 S1: the BUILD leg also builds this leg's extra_pkgs dep
-    .pkgs (issue #1806), with NO tagged-style rename, and folds them into
-    result.json's dep_artifacts."""
-    text = WORKFLOW.read_text(encoding="utf-8")
-    start = text.index("      - name: Build and verify package")
-    end = text.index("\n      - name: Upload verified build", start)
-    step = text[start:end]
-
-    # W1: build-dep-pkg-portable.py invoked with the full flag set.
-    assert "build-dep-pkg-portable.py" in step
-    assert "--ports" in step
-    assert "--port" in step
-    assert "--py-flavor" in step
-    assert "--freebsd-major" in step
-    assert "--out-dir" in step
-
-    # W2: loop driven by the matrix row's extra_pkgs, sparse-checkout add per origin.
-    assert ".extra_pkgs" in step
-    assert 'git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"' in step
-
-    # W3: no rename -- nightly dep .pkgs keep their canonical filename.
-    assert "-${VARIANT}-${PFSENSE_VERSION}.pkg" not in step
-    assert "RENAMED_DEP" not in step
-
-    # W4: result.json construction includes dep_artifacts.
-    assert "dep_artifacts" in step
-    assert "DEP_ARTIFACTS_JSON" in step
+    jq_start = step.index("jq -n \\")
+    jq_end = step.index("> result/result.json", jq_start)
+    jq_block = step[jq_start:jq_end]
+    assert "{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}}" in (
+        jq_block
+    )
 
 
 def test_handoff_step_has_no_durable_completion() -> None:
@@ -333,3 +304,43 @@ def test_publish_pkg_repo_job_documents_new_dispatch_after_failure() -> None:
     job = _extract_job(text, "publish-pkg-repo")
     assert "Failed Nightly? Dispatch another one." in job
     assert "No durable allocation exists" in job
+
+
+def test_publish_pkg_repo_job_prepares_the_dependency_ports_checkout() -> None:
+    """issue #2454 step 3b: before the wrapper runs, publish-pkg-repo derives
+    PORTS_SHA/ROUTE_MATRIX from the verified handoff (never re-resolved), runs
+    prepare-dep-ports.sh against them, and the wrapper-invoking step exports
+    PORTS_DIR -- all of it strictly BEFORE `sh trusted/scripts/publish-pkg-repo.sh`
+    runs, since that script requires PORTS_DIR under PUBLISH_KIND=nightly."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+
+    assert "PORTS_SHA=$(jq -er .ports_sha handoff/nightly-handoff.json)" in job
+    assert "ROUTE_MATRIX=$(jq -ec .route_matrix handoff/nightly-handoff.json)" in job
+    assert 'case "$PORTS_REPO" in' in job
+    assert 'http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;' in job
+    assert (
+        'sh trusted/scripts/prepare-dep-ports.sh "$PORTS_URL" "$PORTS_SHA" "$GITHUB_WORKSPACE/ports" "$ROUTE_MATRIX"'
+        in job
+    )
+    assert 'PORTS_DIR="$GITHUB_WORKSPACE/ports"' in job
+
+    prepare_idx = job.index("sh trusted/scripts/prepare-dep-ports.sh")
+    ports_dir_export_idx = job.index('export PORTS_DIR="$GITHUB_WORKSPACE/ports"')
+    wrapper_idx = job.index("sh trusted/scripts/publish-pkg-repo.sh")
+    assert prepare_idx < wrapper_idx, "prepare-dep-ports.sh must run before the publish-pkg-repo.sh wrapper"
+    assert ports_dir_export_idx < wrapper_idx, "PORTS_DIR must be exported before the publish-pkg-repo.sh wrapper"
+
+
+def test_dropping_ports_dir_export_from_the_wrapper_step_goes_red() -> None:
+    """Deleting the PORTS_DIR export from the wrapper-invoking step, while
+    leaving prepare-dep-ports.sh's own step intact, must be caught -- pins the
+    export as its own assertion, not merely inferred from the earlier test."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    mutated = job.replace('export PORTS_DIR="$GITHUB_WORKSPACE/ports"\n', "", 1)
+    assert (
+        'sh trusted/scripts/prepare-dep-ports.sh "$PORTS_URL" "$PORTS_SHA" "$GITHUB_WORKSPACE/ports" "$ROUTE_MATRIX"'
+        in mutated
+    )
+    assert 'PORTS_DIR="$GITHUB_WORKSPACE/ports"' not in mutated

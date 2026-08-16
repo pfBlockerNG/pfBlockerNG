@@ -29,6 +29,8 @@ UI_WORKFLOW = ROOT / ".github/workflows/ui-tests.yml"
 SMOKE_WORKFLOW = ROOT / ".github/workflows/smoke.yml"
 SMOKE_SINGLE_WORKFLOW = ROOT / ".github/workflows/smoke-single.yml"
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+RELEASE_PUBLISHED_WORKFLOW = ROOT / ".github/workflows/release-published.yml"
+PKG_REPUBLISH_WORKFLOW = ROOT / ".github/workflows/pkg-republish.yml"
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 _STEP_HEADER_RE = re.compile(r"^      - ")
@@ -511,7 +513,9 @@ def test_attach_pkgs_empty_pkgs_fails_the_step(tmp_path: Path) -> None:
     empty_branch = re.search(r'if \[ -z "\$PKGS" \]; then(?P<body>.*?)\n\s*fi', script, re.DOTALL)
     assert empty_branch is not None, script
     assert "exit 0" not in empty_branch.group("body"), empty_branch.group("body")
-    assert re.search(r'find pkgs -type f -name "\*\.pkg"', script), script
+    # issue #2454: canonical-only glob -- a dep .pkg swept into pkgs/ by the
+    # download step is never a match, only pfSense-pkg-pfBlockerNG-*.pkg is.
+    assert re.search(r'find pkgs -type f -name "pfSense-pkg-pfBlockerNG-\*\.pkg"', script), script
 
     (tmp_path / "pkgs").mkdir()
     (tmp_path / "pkgs" / "empty.pkg").mkdir()
@@ -530,7 +534,9 @@ def test_attach_pkgs_upload_step_runs_under_posix_sh(tmp_path: Path) -> None:
     assert "read -r -d" not in script
     pkg_dir = tmp_path / "pkgs" / "CE row;safe"
     pkg_dir.mkdir(parents=True)
-    packages = [pkg_dir / "first package.pkg", pkg_dir / "second.pkg"]
+    # Canonical-only glob (issue #2454): names must carry the
+    # pfSense-pkg-pfBlockerNG- prefix to be picked up at all.
+    packages = [pkg_dir / "pfSense-pkg-pfBlockerNG-first package.pkg", pkg_dir / "pfSense-pkg-pfBlockerNG-second.pkg"]
     for package in packages:
         package.touch()
 
@@ -1096,18 +1102,16 @@ def test_healthcheck_rejects_wrong_main_asset_when_pkg_count_matches(tmp_path: P
     assert completed.returncode != 0, completed.stdout + completed.stderr
 
 
-def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
-    """issue #1806 B1 (delta review finding): attach-pkgs's pfBlockerNG-relpkg-*
-    sweep ALSO attaches each row's dep .pkg artifact
-    (pfBlockerNG-relpkg-deppkgs-<Variant>-<version>) -- a deliberate release asset, not
-    a leak. EXPECTED_PKGS must count those too, or a release with any major's
-    extra_pkgs non-empty (CE today) fails this healthcheck and gets stuck as a
-    draft even though every expected asset IS present (dry-run CI never
-    exercises attach/publish, so no workflow run catches this pre-merge).
+def test_healthcheck_expected_pkgs_ignores_extra_pkgs(tmp_path: Path) -> None:
+    """issue #2454: a dep .pkg is never a Release asset any more -- EXPECTED_PKGS
+    is the plain release-row count, so a matrix row with a non-empty extra_pkgs
+    (CE today) whose draft carries ONLY the canonical assets (no dep .pkg at
+    all) still passes. Supersedes the old #1806 B1 "count dep assets too" test:
+    that contract is now inverted (see the rejection test below).
 
     Two build-matrix rows: major 15 with one extra_pkgs entry, major 16 with
-    none. Draft carries exactly 2 branch .pkgs + 1 dep .pkg (the CE dep) + the
-    source archive -- a fully complete, correct draft. Must pass.
+    none. Draft carries exactly 2 canonical branch .pkgs + the source archive --
+    a fully complete, correct draft under the new no-dep-assets contract.
     """
     completed = _run_healthcheck(
         tmp_path,
@@ -1118,8 +1122,88 @@ def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
         assets_json=(
             '[{"name":"pfBlockerNG-src.tar.gz"},'
             '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"},'
-            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-Plus-26.03.pkg"},'
-            '{"name":"py311-charset-normalizer-3.4.4-CE-2.8.pkg"}]'
+            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-Plus-26.03.pkg"}]'
         ),
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_healthcheck_rejects_leaked_noncanonical_row_asset(tmp_path: Path) -> None:
+    """issue #2454: a dep .pkg (or anything else) attached alongside a row's
+    canonical asset, carrying that row's suffix, is a LEAK -- attach-pkgs's
+    canonical-only glob should never produce one, but the healthcheck still
+    catches it independently rather than trusting attach-pkgs alone. Same
+    fixture as the old #1806 B1 test above, but the dep asset now FAILS this
+    check instead of being required by it."""
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix='[{"variant":"CE","pfsense_version":"2.8","extra_pkgs":["textproc/py-charset-normalizer"]}]',
+        assets_json=(
+            '[{"name":"pfBlockerNG-src.tar.gz"},'
+            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"},'
+            '{"name":"py311-charset-normalizer-3.4.4-CE-2.8.pkg"}]'
+        ),
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+    assert "carries unexpected non-canonical asset(s)" in completed.stdout + completed.stderr
+
+
+# --------------------------------------------------------------------------- #
+# release-published.yml / pkg-republish.yml: the dependency-flow ports
+# checkout, wired the same way in both (issue #2454 step 3b). Both derive
+# PORTS_SHA from the downloaded canonical .pkg assets' own build-record
+# provenance (publish_deps.py --print-ports-sha), never a fresh ls-remote --
+# republish must resolve an OLD release's own ports commit, not today's tip.
+# --------------------------------------------------------------------------- #
+
+_DEP_FLOW_TARGETS = [
+    (RELEASE_PUBLISHED_WORKFLOW, "publish-pkg-repo", "sh scripts/publish-pkg-repo.sh"),
+    (PKG_REPUBLISH_WORKFLOW, "publish", "sh scripts/publish-pkg-repo.sh"),
+]
+
+
+@pytest.mark.parametrize(("workflow", "job_name", "wrapper_call"), _DEP_FLOW_TARGETS)
+def test_publish_job_prepares_the_dependency_ports_checkout(workflow: Path, job_name: str, wrapper_call: str) -> None:
+    jobs = _jobs(workflow)
+    assert job_name in jobs, f"{workflow.name} must have a {job_name} job"
+    job_text = "\n".join(jobs[job_name])
+
+    prepare_step = _step(jobs[job_name], "Prepare the FreeBSD-ports checkout for the dependency flow")
+    prepare_text = "\n".join(prepare_step)
+    assert 'export PFB_SRC="$GITHUB_WORKSPACE"' in prepare_text
+    assert (
+        'PORTS_SHA="$(python3 scripts/publish_deps.py --print-ports-sha --assets-dir "$RUNNER_TEMP/assets")"'
+        in prepare_text
+    )
+    assert (
+        "sh scripts/prepare-dep-ports.sh https://github.com/pfBlockerNG/FreeBSD-ports.git "
+        '"$PORTS_SHA" "$RUNNER_TEMP/ports" "$ROUTE_MATRIX"' in prepare_text
+    )
+
+    # ordering: "Read the pinned ROUTE matrix" -> "Prepare the ... dependency
+    # flow" -> the wrapper-invoking step ("Stage the pkg catalogue" /
+    # "Publish the pkg catalogue"), which must export PORTS_DIR before calling
+    # scripts/publish-pkg-repo.sh (that script requires PORTS_DIR whenever it
+    # actually runs the publisher).
+    route_idx = job_text.index("- name: Read the pinned ROUTE matrix")
+    prepare_idx = job_text.index("- name: Prepare the FreeBSD-ports checkout for the dependency flow")
+    ports_dir_idx = job_text.index('export PORTS_DIR="$RUNNER_TEMP/ports"')
+    wrapper_idx = job_text.index(wrapper_call)
+    assert route_idx < prepare_idx < ports_dir_idx < wrapper_idx, (
+        f"{workflow.name}/{job_name}: expected Read-ROUTE-matrix < Prepare-dep-ports < "
+        f"export-PORTS_DIR < wrapper call, got indices "
+        f"{route_idx}, {prepare_idx}, {ports_dir_idx}, {wrapper_idx}"
+    )
+
+
+@pytest.mark.parametrize(("workflow", "job_name", "wrapper_call"), _DEP_FLOW_TARGETS)
+def test_dropping_ports_dir_export_before_the_wrapper_goes_red(
+    workflow: Path, job_name: str, wrapper_call: str
+) -> None:
+    """Deleting the PORTS_DIR export from the wrapper-invoking step, while
+    leaving prepare-dep-ports.sh's own step intact, must be caught."""
+    jobs = _jobs(workflow)
+    job_text = "\n".join(jobs[job_name])
+    mutated = job_text.replace('export PORTS_DIR="$RUNNER_TEMP/ports"\n', "", 1)
+    assert '"$RUNNER_TEMP/ports" "$ROUTE_MATRIX"' in mutated
+    assert 'export PORTS_DIR="$RUNNER_TEMP/ports"' not in mutated

@@ -290,57 +290,20 @@ jobs:
           PKG_SHA="$(sha256sum "$PKG" | cut -d' ' -f1)"
           cp "$PKG" "result/$PKG_NAME"
 
-          DEP_PKG_DIR="${RUN_ROOT}/${RUN_ID}/deppkgs"
-          DEP_ARTIFACTS_JSON="[]"
-          EXTRA_PKGS="$(jq -c '.extra_pkgs // []' row.json)"
-          ORIGIN_COUNT="$(printf '%s' "$EXTRA_PKGS" | jq 'length // 0')"
-          if [ "$ORIGIN_COUNT" -gt 0 ]; then
-            mkdir -p "$DEP_PKG_DIR"
-            I=0
-            while [ "$I" -lt "$ORIGIN_COUNT" ]; do
-              ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
-              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
-              python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" \
-                --ports "$PORTS_DIR" \
-                --port "$ORIGIN" \
-                --py-flavor "$PY_FLAVOR" \
-                --freebsd-major "$FREEBSD_MAJOR" \
-                --out-dir "$DEP_PKG_DIR"
-              I=$((I + 1))
-            done
-            for DEP_PKG in "$DEP_PKG_DIR"/*.pkg; do
-              [ -f "$DEP_PKG" ] || continue
-              DEP_NAME="$(basename "$DEP_PKG")"
-              DEP_SHA="$(sha256sum "$DEP_PKG" | cut -d' ' -f1)"
-              cp "$DEP_PKG" "result/$DEP_NAME"
-              DEP_ARTIFACTS_JSON="$(
-                printf '%s' "$DEP_ARTIFACTS_JSON" | jq \
-                  --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
-                  --arg name "$DEP_NAME" \
-                  --arg sha256 "$DEP_SHA" \
-                  '. + [{abi: $abi, name: $name, sha256: $sha256}]'
-              )"
-            done
-          fi
-          DEP_COPIED=0
-          for RESULT_PKG in result/*.pkg; do
-            [ -f "$RESULT_PKG" ] || continue
-            [ "$(basename "$RESULT_PKG")" = "$PKG_NAME" ] && continue
-            DEP_COPIED=$((DEP_COPIED + 1))
-          done
-          if [ "$DEP_COPIED" -ne "$ORIGIN_COUNT" ]; then
-            echo "::error::dep .pkg count ($DEP_COPIED) != extra_pkgs ($ORIGIN_COUNT)"
-            exit 1
-          fi
-
+          # issue #2454: the BUILD leg no longer builds this row's extra_pkgs dep
+          # .pkgs itself -- the dependency flow (publish_deps.py, run once by
+          # publish-pkg-repo.sh below, BEFORE the publisher) builds only the
+          # (origin, py_flavor, freebsd_major) combinations still missing from
+          # the catalogue, instead of every BUILD leg re-building its own copy.
+          # result.json below carries exactly nightly_provenance.py's
+          # {matrix_row, record, artifact} shape -- no other field.
           jq -n \
             --argjson matrix_row "$MATRIX_ROW" \
             --slurpfile record build-record.json \
             --arg abi "FreeBSD:${FREEBSD_MAJOR}:*" \
             --arg name "$PKG_NAME" \
             --arg sha256 "$PKG_SHA" \
-            --argjson dep_artifacts "$DEP_ARTIFACTS_JSON" \
-            '{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}, dep_artifacts: $dep_artifacts}' \
+            '{matrix_row: $matrix_row, record: $record[0], artifact: {abi: $abi, name: $name, sha256: $sha256}}' \
             > result/result.json
 
       - name: Upload verified build
@@ -476,6 +439,24 @@ jobs:
           name: nightly-handoff-${{ github.run_id }}
           path: handoff
 
+      - name: Prepare the FreeBSD-ports checkout for the dependency flow
+        # issue #2454 step 3b: publish-pkg-repo.sh's dependency flow
+        # (publish_deps.py, run before the publisher below) needs a ports
+        # checkout of the SAME FreeBSD-ports commit this Nightly's own BUILD
+        # legs used -- the handoff's own ports_sha, never re-derived. PORTS_URL
+        # is derived from env.PORTS_REPO exactly like the prepare job's own
+        # ls-remote step above (case http://*|https://*|file://* -- anything
+        # else is an owner/repo shorthand).
+        run: |
+          set -eu
+          PORTS_SHA=$(jq -er .ports_sha handoff/nightly-handoff.json)
+          ROUTE_MATRIX=$(jq -ec .route_matrix handoff/nightly-handoff.json)
+          case "$PORTS_REPO" in
+            http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;
+            *) PORTS_URL="https://github.com/${PORTS_REPO}.git" ;;
+          esac
+          sh trusted/scripts/prepare-dep-ports.sh "$PORTS_URL" "$PORTS_SHA" "$GITHUB_WORKSPACE/ports" "$ROUTE_MATRIX"
+
       - name: Download every BUILD result
         uses: actions/download-artifact@v7
         with:
@@ -490,6 +471,7 @@ jobs:
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
           export RESULTS_DIR="$GITHUB_WORKSPACE/results"
+          export PORTS_DIR="$GITHUB_WORKSPACE/ports"
           export PUBLISH_KIND=nightly
           # Failed Nightly? Dispatch another one. No durable allocation exists to
           # recover or replay; each invocation gets its own timestamped version.
