@@ -290,11 +290,10 @@ jobs:
           PKG_SHA="$(sha256sum "$PKG" | cut -d' ' -f1)"
           cp "$PKG" "result/$PKG_NAME"
 
-          # issue #2454: the BUILD leg no longer builds this row's extra_pkgs dep
-          # .pkgs itself -- the dependency flow (publish_deps.py, run once by
-          # publish-pkg-repo.sh below, BEFORE the publisher) builds only the
-          # (origin, py_flavor, freebsd_major) combinations still missing from
-          # the catalogue, instead of every BUILD leg re-building its own copy.
+          # issue #2454: the BUILD leg never builds this row's extra_pkgs dep
+          # .pkgs -- publish_deps.py (run by publish-pkg-repo.sh, BEFORE the
+          # publisher) builds only the (origin, py_flavor, freebsd_major)
+          # combinations still missing from the catalogue.
           # result.json below carries exactly nightly_provenance.py's
           # {matrix_row, record, artifact} shape -- no other field.
           jq -n \
@@ -440,13 +439,13 @@ jobs:
           path: handoff
 
       - name: Prepare the FreeBSD-ports checkout for the dependency flow
-        # issue #2454 step 3b: publish-pkg-repo.sh's dependency flow
-        # (publish_deps.py, run before the publisher below) needs a ports
-        # checkout of the SAME FreeBSD-ports commit this Nightly's own BUILD
-        # legs used -- the handoff's own ports_sha, never re-derived. PORTS_URL
-        # is derived from env.PORTS_REPO exactly like the prepare job's own
-        # ls-remote step above (case http://*|https://*|file://* -- anything
-        # else is an owner/repo shorthand).
+        # issue #2454: publish-pkg-repo.sh's dependency flow (publish_deps.py,
+        # run before the publisher below) needs a ports checkout of the SAME
+        # FreeBSD-ports commit this Nightly's own BUILD legs used -- the
+        # handoff's own ports_sha, never re-derived. PORTS_URL is derived from
+        # env.PORTS_REPO exactly like the prepare job's own ls-remote step
+        # above (case http://*|https://*|file://* -- anything else is an
+        # owner/repo shorthand).
         run: |
           set -eu
           PORTS_SHA=$(jq -er .ports_sha handoff/nightly-handoff.json)

@@ -110,9 +110,8 @@ def test_handoff_rejects_version_for_different_source() -> None:
 
 
 def test_handoff_rejects_result_with_dep_artifacts_key() -> None:
-    """issue #2454 step 3a: dep_artifacts is no longer part of the BUILD result
-    shape — a result carrying that key is now REJECTED, not merely tolerated
-    empty."""
+    """issue #2454: dep_artifacts is not part of the BUILD result shape — a
+    result carrying that key is REJECTED, not merely tolerated empty."""
     result = _result()
     result["dep_artifacts"] = []
     with pytest.raises(np.ProvenanceError, match="unexpected fields"):

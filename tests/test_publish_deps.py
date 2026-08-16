@@ -567,6 +567,31 @@ class HostileInputTests(_TempDirTestCase):
         self.assertFalse((self.dest_dir("nightly", "ce-2.8") / _EXPECTED_NAME).exists())
 
     @_requires_engine
+    def test_builder_version_mismatch_rejected_no_dest_written(self) -> None:
+        self.seed_dest("nightly", "ce-2.8", major="15", dependency=False)
+
+        def wrong_version_builder(origin: str, py_flavor: str, freebsd_major: str, out_dir: Path) -> None:
+            _wrap_dependency_pkg(
+                out_dir,
+                name=f"{py_flavor}-{_PORTNAME}",
+                version="9.9.9",  # PORTVERSION pinned by the ports checkout is _PORTVERSION
+                abi=f"FreeBSD:{freebsd_major}:*",
+                local_name=_EXPECTED_NAME,
+            )
+
+        with self.assertRaises(pd.PublishDepsError) as ctx:
+            pd.run(
+                pkg_repo=self.pkg_repo,
+                ports_dir=self.ports_dir,
+                route_matrix=json.dumps((ROW_CE_28,)),
+                channels='["nightly"]',
+                engine=_ENGINE,
+                builder=wrong_version_builder,
+            )
+        self.assertIn("version", str(ctx.exception))
+        self.assertFalse((self.dest_dir("nightly", "ce-2.8") / _EXPECTED_NAME).exists())
+
+    @_requires_engine
     def test_builder_abi_mismatch_rejected_no_dest_written(self) -> None:
         self.seed_dest("nightly", "ce-2.8", major="15", dependency=False)
 
@@ -751,6 +776,32 @@ class MainCliTests(_TempDirTestCase):
         self.assertIn("updated nightly/ce-2.8", out.getvalue())
 
     @_requires_engine
+    def test_main_noop_prints_dependency_specific_wording_and_returns_zero(self) -> None:
+        """issue #2454: report.describe()'s default NOOP line names
+        publish_release.py's own destination/asset vocabulary -- this module
+        prints its own wording instead when nothing was missing."""
+        self.seed_dest("nightly", "ce-2.8", major="15", dependency=True)
+        argv = [
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--ports-dir",
+            str(self.ports_dir),
+            "--route-matrix",
+            json.dumps((ROW_CE_28,)),
+            "--channels",
+            '["nightly"]',
+        ]
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch("sys.stdout", new_callable=io.StringIO) as out,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(out.getvalue().strip(), "NOOP: every dependency already present at every destination")
+
+    @_requires_engine
     def test_main_failure_prints_error_and_returns_one(self) -> None:
         empty_ports_dir = self.tmp / "empty-ports"
         empty_ports_dir.mkdir()
@@ -759,6 +810,42 @@ class MainCliTests(_TempDirTestCase):
             str(self.pkg_repo),
             "--ports-dir",
             str(empty_ports_dir),
+            "--route-matrix",
+            json.dumps((ROW_CE_28,)),
+            "--channels",
+            '["nightly"]',
+        ]
+
+        with (
+            mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err,
+        ):
+            code = pd.main(argv)
+
+        self.assertEqual(code, 1)
+        self.assertIn("::error::", err.getvalue())
+
+    @_requires_engine
+    def test_main_makefile_if_directive_returns_one_not_traceback(self) -> None:
+        """issue #2454: the Makefile evaluator has no conditional/loop support and
+        raises build_pkg_portable.BuildError for a .if-bearing dep port Makefile --
+        main() must report that as ::error:: + rc 1, never let it escape as an
+        uncaught traceback."""
+        hostile_makefile = (
+            f"PORTNAME=\t{_PORTNAME}\n"
+            f"PORTVERSION=\t{_PORTVERSION}\n"
+            ".if 1\n"
+            "EXTRA_PATCHES=\tfiles/extra-patch\n"
+            ".endif\n"
+            "CATEGORIES=\ttextproc python\n"
+            ".include <bsd.port.mk>\n"
+        )
+        (self.ports_dir / _ORIGIN / "Makefile").write_text(hostile_makefile)
+        argv = [
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--ports-dir",
+            str(self.ports_dir),
             "--route-matrix",
             json.dumps((ROW_CE_28,)),
             "--channels",

@@ -159,11 +159,11 @@ def test_build_leg_ports_ref_pin_rejects_moving_branch() -> None:
 
 
 def test_build_step_never_builds_dependency_packages() -> None:
-    """issue #2454: the BUILD leg no longer builds this row's extra_pkgs dep
-    .pkgs itself -- the dependency flow (publish_deps.py, run once by
+    """issue #2454: the BUILD leg never builds this row's extra_pkgs dep .pkgs
+    itself -- the dependency flow (publish_deps.py, run once by
     publish-pkg-repo.sh, BEFORE the publisher) builds only what is actually
     missing from the catalogue, instead of every BUILD leg re-building its
-    own copy. Supersedes the old #2146 S1 / #1806 build-and-hand-off contract."""
+    own copy."""
     step = _build_and_verify_step(WORKFLOW.read_text(encoding="utf-8"))
 
     assert "build-dep-pkg-portable.py" not in step
@@ -176,9 +176,9 @@ def test_build_step_never_builds_dependency_packages() -> None:
 
 def test_build_step_result_json_has_no_dep_artifacts() -> None:
     """issue #2454: result.json's shape is exactly {matrix_row, record,
-    artifact} -- nightly_provenance.py's handoff command now rejects any other
-    key set (issue #2454 step 3a), so a leftover dep_artifacts field would fail
-    every handoff, not just silently carry dead data."""
+    artifact} -- nightly_provenance.py's handoff command rejects any other
+    key set, so a leftover dep_artifacts field would fail every handoff, not
+    just silently carry dead data."""
     step = _build_and_verify_step(WORKFLOW.read_text(encoding="utf-8"))
     assert "dep_artifacts" not in step
 
@@ -306,12 +306,29 @@ def test_publish_pkg_repo_job_documents_new_dispatch_after_failure() -> None:
     assert "No durable allocation exists" in job
 
 
+def _assert_dep_flow_wiring(job: str) -> None:
+    """prepare-dep-ports.sh must run, PORTS_DIR must be exported, and both
+    must precede the publish-pkg-repo.sh wrapper (which requires PORTS_DIR
+    under PUBLISH_KIND=nightly)."""
+    prepare_call = (
+        'sh trusted/scripts/prepare-dep-ports.sh "$PORTS_URL" "$PORTS_SHA" "$GITHUB_WORKSPACE/ports" "$ROUTE_MATRIX"'
+    )
+    ports_dir_export = 'export PORTS_DIR="$GITHUB_WORKSPACE/ports"'
+    wrapper_call = "sh trusted/scripts/publish-pkg-repo.sh"
+    for marker in (prepare_call, ports_dir_export, wrapper_call):
+        assert marker in job, f"missing {marker!r}"
+
+    prepare_idx = job.index(prepare_call)
+    ports_dir_export_idx = job.index(ports_dir_export)
+    wrapper_idx = job.index(wrapper_call)
+    assert prepare_idx < wrapper_idx, "prepare-dep-ports.sh must run before the publish-pkg-repo.sh wrapper"
+    assert ports_dir_export_idx < wrapper_idx, "PORTS_DIR must be exported before the publish-pkg-repo.sh wrapper"
+
+
 def test_publish_pkg_repo_job_prepares_the_dependency_ports_checkout() -> None:
-    """issue #2454 step 3b: before the wrapper runs, publish-pkg-repo derives
-    PORTS_SHA/ROUTE_MATRIX from the verified handoff (never re-resolved), runs
-    prepare-dep-ports.sh against them, and the wrapper-invoking step exports
-    PORTS_DIR -- all of it strictly BEFORE `sh trusted/scripts/publish-pkg-repo.sh`
-    runs, since that script requires PORTS_DIR under PUBLISH_KIND=nightly."""
+    """issue #2454: before the wrapper runs, publish-pkg-repo derives
+    PORTS_SHA/ROUTE_MATRIX from the verified handoff (never re-resolved) and
+    runs prepare-dep-ports.sh against them."""
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
 
@@ -319,28 +336,15 @@ def test_publish_pkg_repo_job_prepares_the_dependency_ports_checkout() -> None:
     assert "ROUTE_MATRIX=$(jq -ec .route_matrix handoff/nightly-handoff.json)" in job
     assert 'case "$PORTS_REPO" in' in job
     assert 'http://*|https://*|file://*) PORTS_URL="$PORTS_REPO" ;;' in job
-    assert (
-        'sh trusted/scripts/prepare-dep-ports.sh "$PORTS_URL" "$PORTS_SHA" "$GITHUB_WORKSPACE/ports" "$ROUTE_MATRIX"'
-        in job
-    )
-    assert 'PORTS_DIR="$GITHUB_WORKSPACE/ports"' in job
 
-    prepare_idx = job.index("sh trusted/scripts/prepare-dep-ports.sh")
-    ports_dir_export_idx = job.index('export PORTS_DIR="$GITHUB_WORKSPACE/ports"')
-    wrapper_idx = job.index("sh trusted/scripts/publish-pkg-repo.sh")
-    assert prepare_idx < wrapper_idx, "prepare-dep-ports.sh must run before the publish-pkg-repo.sh wrapper"
-    assert ports_dir_export_idx < wrapper_idx, "PORTS_DIR must be exported before the publish-pkg-repo.sh wrapper"
+    _assert_dep_flow_wiring(job)
 
 
 def test_dropping_ports_dir_export_from_the_wrapper_step_goes_red() -> None:
     """Deleting the PORTS_DIR export from the wrapper-invoking step, while
-    leaving prepare-dep-ports.sh's own step intact, must be caught -- pins the
-    export as its own assertion, not merely inferred from the earlier test."""
+    leaving prepare-dep-ports.sh's own step intact, must be caught."""
     text = WORKFLOW.read_text(encoding="utf-8")
     job = _extract_job(text, "publish-pkg-repo")
     mutated = job.replace('export PORTS_DIR="$GITHUB_WORKSPACE/ports"\n', "", 1)
-    assert (
-        'sh trusted/scripts/prepare-dep-ports.sh "$PORTS_URL" "$PORTS_SHA" "$GITHUB_WORKSPACE/ports" "$ROUTE_MATRIX"'
-        in mutated
-    )
-    assert 'PORTS_DIR="$GITHUB_WORKSPACE/ports"' not in mutated
+    with pytest.raises(AssertionError):
+        _assert_dep_flow_wiring(mutated)

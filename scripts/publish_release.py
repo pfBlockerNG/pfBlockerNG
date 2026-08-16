@@ -15,8 +15,8 @@ workflow) owns staging exactly the touched directories, committing, and pushing 
 this module only reports which ``(channel, varver)`` directories it touched.
 
 No-op behaviour: a ``(channel, varver)`` target whose desired file (this run's
-canonical asset alone — issue #2454 step 3a: this module never places dependency
-assets, see below) is already present, byte-identical, at the destination AND whose
+canonical asset alone — issue #2454: this module never places dependency assets,
+see below) is already present, byte-identical, at the destination AND whose
 catalog descriptor (meta.conf/data.pkg/packagesite.pkg) is complete is left
 untouched entirely — no copy, no prune, no regenerate. There is no ledger; "already
 published" is read straight off the files already on disk. A destination whose
@@ -26,16 +26,15 @@ canonical asset's name but carrying DIFFERENT bytes is never overwritten: same
 name/version with different bytes, source, or provenance raises
 ``DestinationConflictError`` instead.
 
-Dependency assets (issue #2454 step 3a): this module never places, byte-compares, or
+Dependency assets (issue #2454): this module never places, byte-compares, or
 conflict-checks a dependency ``.pkg`` — ``scripts/publish_deps.py`` owns building and
-placing every ROUTE build row's ``extra_pkgs`` dependency, as its OWN step, before
+placing every ROUTE build row's ``extra_pkgs`` dependency, as its own step, before
 this publisher ever runs. ``verify_run`` (S1, gated) still verifies any dependency
-asset present in ``--assets-dir`` (a Release published before this change may still
-attach one), but ``RunResult.dependency_assets`` is read by nothing here — a legacy
-dependency file already sitting at a destination (from a Release published before
-this change) is left exactly as-is, whatever its bytes, and survives retention
-untouched by ``_evict_undeclared_deps`` for as long as its ROUTE row still declares
-its origin.
+asset present in ``--assets-dir`` (a legacy Release may still attach one), but
+``RunResult.dependency_assets`` is read by nothing here — a legacy dependency file
+already sitting at a destination is left exactly as-is, whatever its bytes, and
+survives retention untouched by ``_evict_undeclared_deps`` for as long as its ROUTE
+row still declares its origin.
 
 Nightly intake is not handled here: ``run()`` accepts only ``kind == "tagged"`` intake
 and fails closed otherwise.
@@ -191,11 +190,11 @@ def _row_declares_origin(row: Mapping[str, object], origin: object) -> bool:
 def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Target]:
     """One ``_Target`` per (channel-independent) varver, from this run's canonical
     assets ONLY. ``run_result.dependency_assets`` is intentionally never read here
-    (issue #2454 step 3a) — ``publish_deps.py`` builds and places every ROUTE build
-    row's ``extra_pkgs`` dependency as its own, earlier step; a dependency asset that
-    still rides along in ``--assets-dir`` (a Release published before this change may
-    still attach one) was already verified by ``verify_run`` (S1, gated) but is simply
-    never placed by this module."""
+    (issue #2454) — ``publish_deps.py`` builds and places every ROUTE build row's
+    ``extra_pkgs`` dependency as its own, earlier step; a dependency asset that still
+    rides along in ``--assets-dir`` (a legacy Release may still attach one) was
+    already verified by ``verify_run`` (S1, gated) but is simply never placed by this
+    module."""
     brp = engine.build_repo_portable
     targets: dict[str, _Target] = {}
     for asset in run_result.canonical_assets:
@@ -211,8 +210,8 @@ def _build_targets(engine: pc.Engine, run_result: pc.RunResult) -> dict[str, _Ta
 
 
 def _asset_map(target: _Target) -> dict[str, Path]:
-    """Canonical-only (issue #2454 step 3a) — the destination's dependency file, if
-    any, is never included, so ``_drop_assets`` never reads or compares it."""
+    """Canonical-only (issue #2454) — the destination's dependency file, if any, is
+    never included, so ``_drop_assets`` never reads or compares it."""
     return {target.canonical.canonical_name: target.canonical.work_path}
 
 

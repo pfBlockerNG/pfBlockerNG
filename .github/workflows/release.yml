@@ -1237,15 +1237,13 @@ jobs:
           # own repo doesn't carry, e.g. textproc/py-charset-normalizer) --
           # SAME loop as build-pkg-linux.yml, from the SAME ports checkout
           # build-leg.sh just prepared above (never a second clone).
-          # issue #2454: this build is smoke/UI gate INPUT ONLY -- the exact-name
-          # artifact below is what THIS run's own ui-suite/smoke-suite legs
-          # consume (pkg_artifact_prefix: pfBlockerNG-relpkg, "Download dep
-          # packages" in smoke.yml/ui-tests.yml). It is NEVER a Release asset:
+          # issue #2454: the exact-name artifact below is smoke/UI test input
+          # only (pkg_artifact_prefix: pfBlockerNG-relpkg, "Download dep
+          # packages" in smoke.yml/ui-tests.yml) -- never a Release asset:
           # attach-pkgs only attaches canonical pfSense-pkg-pfBlockerNG-*.pkg
-          # files; the dependency flow in release-published.yml/pkg-republish.yml
-          # (publish_deps.py) is what actually publishes dep .pkgs to the pkg
-          # catalogue, built once per (origin, py_flavor, freebsd_major) rather
-          # than once per release row here.
+          # files; publish_deps.py (release-published.yml/pkg-republish.yml)
+          # publishes dep .pkgs to the pkg catalogue, built once per
+          # (origin, py_flavor, freebsd_major) rather than once per row here.
           DEP_PKG_DIR="${PFB_RUN_ROOT}/${RUN_ID}/deppkgs"
           HAS_DEP_PKGS=0
           ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"

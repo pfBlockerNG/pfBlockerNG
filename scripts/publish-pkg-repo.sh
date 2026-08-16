@@ -16,7 +16,7 @@
 # in the whole flow: syncing PKG_REPO to origin/main, staging exactly what the
 # publisher reports touched, committing, and pushing.
 #
-# DEPENDENCY FLOW (issue #2454 step 2): before either publisher runs (tagged
+# DEPENDENCY FLOW (issue #2454): before either publisher runs (tagged
 # PUBLISH_STAGE=direct|stage, and nightly — never promote/discard, which never run
 # a publisher at all), this script first runs PFB_SRC/scripts/publish_deps.py: it
 # builds and publishes every ROUTE build row's extra_pkgs dependency .pkg still
@@ -281,7 +281,7 @@ stage_touched_targets() {
     done
 }
 
-# Dependency-flow (issue #2454 step 2) only: stage exactly docs/<target> for
+# Dependency-flow (issue #2454) only: stage exactly docs/<target> for
 # every $dep_touched — never -A. Mirrors stage_touched_targets over a separate
 # report/variable — the dependency flow's own commit is independent of, and
 # always precedes, the publisher's.
@@ -305,7 +305,7 @@ assert_catalogue_only_staged() {
     staged=$(git -C "$PKG_REPO" diff --cached --name-only --no-renames)
     bad=$(printf '%s\n' "$staged" | grep -vE "^docs/(${catalogue_alt})/" || true)
     if [ -n "$bad" ]; then
-        echo "::error::publisher commit touched non-catalogue path(s):" >&2
+        echo "::error::commit touched non-catalogue path(s):" >&2
         printf '%s\n' "$bad" >&2
         git -C "$PKG_REPO" reset --quiet
         exit 1
@@ -430,7 +430,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             commit_message=$(printf 'publish: discard %s\n\npfBlockerNG-Source-Run-Id: %s\n' "$STAGING_PREFIX" "$SOURCE_RUN_ID")
             ;;
         direct | stage)
-            # --- dependency flow (issue #2454 step 2): runs BEFORE the publisher,
+            # --- dependency flow (issue #2454): runs BEFORE the publisher,
             # own commit, direct at the real location even under PUBLISH_STAGE=stage.
             # Channels/route matrix mirror what the publisher below is about to use
             # this same run.
@@ -541,7 +541,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                     ;;
             esac
             if [ "$publish_rc" -ne 0 ]; then
-                echo "::error::${publisher_script} failed — aborting before any git mutation" >&2
+                echo "::error::${publisher_script} failed — aborting; nothing pushed (a local deps commit, if any, is discarded on the next sync)" >&2
                 cat "$out_file" >&2
                 exit 1
             fi
@@ -573,15 +573,20 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             if [ -z "$touched" ]; then
                 # --- catalogue unchanged: nothing to stage or commit ----------------
                 if [ "$PUBLISH_STAGE" = stage ]; then
-                    emit_stage_outputs true
                     echo "publish-pkg-repo: STAGE NOOP — nothing to gate."
                 fi
                 if [ "$deps_committed" -eq 1 ]; then
                     # The dependency flow already made its own commit above — push
                     # THAT, with no publisher commit alongside it (commit_message
-                    # stays "" from the top of this loop iteration).
+                    # stays "" from the top of this loop iteration). Under
+                    # PUBLISH_STAGE=stage, noop=true is emitted only once that push
+                    # actually lands (below) — a rejected push redoes this whole
+                    # block and must not emit noop= twice for the same output file.
                     echo "publish-pkg-repo: catalogue NOOP — pushing the deps commit only"
                 else
+                    if [ "$PUBLISH_STAGE" = stage ]; then
+                        emit_stage_outputs true
+                    fi
                     echo "publish-pkg-repo: NOOP — nothing touched, nothing to commit."
                     exit 0
                 fi
@@ -649,10 +654,12 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
         printf '%s\n' "$push_out" >&2
         echo "publish-pkg-repo: ADVANCE — pushed $(git -C "$PKG_REPO" rev-parse HEAD)"
         if [ "$PUBLISH_STAGE" = stage ] && [ "$stage_committed" -eq 1 ]; then
-            # Only when stage_touched actually ran this iteration — the
-            # NOOP-with-deps-only path above already emitted noop=true and must
-            # not emit a second (noop=false) line for the same GITHUB_OUTPUT.
             emit_stage_outputs false
+        elif [ "$PUBLISH_STAGE" = stage ] && [ "$deps_committed" -eq 1 ]; then
+            # Deps-only NOOP under stage: the publisher made no commit this
+            # iteration (stage_committed=0) but the dependency flow did —
+            # emit noop=true only now that the push carrying it has landed.
+            emit_stage_outputs true
         fi
         exit 0
     fi

@@ -265,14 +265,12 @@ jobs:
           echo "route_matrix=${ROUTE_MATRIX}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare the FreeBSD-ports checkout for the dependency flow
-        # issue #2454 step 3b: publish-pkg-repo.sh's dependency flow
-        # (publish_deps.py, run before the publisher below) needs a ports
-        # checkout at the SAME FreeBSD-ports commit the canonical .pkg assets
-        # downloaded above were themselves built against --
-        # publish_deps.py --print-ports-sha derives that straight from the
-        # assets' own build-record provenance, never re-resolved independently
-        # (a republish of an OLD release that still carries legacy dep assets
-        # is exactly why this reads the assets, not a fresh ls-remote).
+        # issue #2454: publish-pkg-repo.sh's dependency flow (publish_deps.py,
+        # run before the publisher below) needs a ports checkout at the same
+        # FreeBSD-ports commit the canonical .pkg assets downloaded above
+        # were themselves built against -- publish_deps.py --print-ports-sha
+        # derives that straight from the assets' own build-record provenance,
+        # never re-resolved independently.
         env:
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
         run: |

@@ -42,13 +42,13 @@ contracts, plus established private cross-module seams in the same spirit as
 ``_catalogue_descriptor_complete``, ``nightly_provenance._validate_artifacts``/
 ``_DIGEST``) — never copies their logic.
 
-Dependency assets (issue #2454 step 3a): this module never places, verifies, or
-routes one — ``scripts/publish_deps.py`` builds and places every ROUTE build row's
-``extra_pkgs`` dependency, as its OWN, earlier step. A handoff build entry carries
-only ``matrix_row``/``record``/``artifact``; a legacy dependency file already sitting
-at a Nightly destination (from before this change) is left exactly as-is, whatever
-its bytes, and survives retention untouched by ``pr._evict_undeclared_deps`` for as
-long as its ROUTE row still declares its origin.
+Dependency assets (issue #2454): this module never places, verifies, or routes
+one — ``scripts/publish_deps.py`` builds and places every ROUTE build row's
+``extra_pkgs`` dependency, in its own earlier step. A handoff build entry carries
+only ``matrix_row``/``record``/``artifact``; a legacy dependency file already
+sitting at a Nightly destination is left exactly as-is, whatever its bytes, and
+survives retention untouched by ``pr._evict_undeclared_deps`` for as long as its
+ROUTE row still declares its origin.
 
 stdlib-only, Python 3.11. The engine is loaded via ``publish_catalogues.load_engine()``
 — explicit ``src_root`` or the ``PFB_SRC`` environment variable, same as
@@ -235,11 +235,11 @@ def _verify_builds(
     results_dir: Path,
     work_dir: Path,
 ) -> list[_Leg]:
-    """One ``_Leg`` per BUILD entry, canonical asset only (issue #2454 step 3a) —
+    """One ``_Leg`` per BUILD entry, canonical asset only (issue #2454) —
     ``scripts/publish_deps.py`` builds and places every ROUTE build row's
-    ``extra_pkgs`` dependency as its own, earlier step; any OTHER file still sitting
-    in a leg's results directory (e.g. a legacy dependency .pkg from before this
-    change) is simply never looked at here."""
+    ``extra_pkgs`` dependency as its own, earlier step; any OTHER file still
+    sitting in a leg's results directory (e.g. a legacy dependency .pkg) is
+    simply never looked at here."""
     legs: list[_Leg] = []
     for index, entry in enumerate(validated.builds):
         matrix_row = entry["matrix_row"]

@@ -212,8 +212,11 @@ PY
     # before this dependency flow existed): "touch" writes a dep-marker.pkg per
     # FAKE_DEPS_TOUCHED target and prints "updated <target>" (a `..`-bearing
     # target resolves outside docs/ exactly like the publish_release.py stub's
-    # own g1/g1b hostile case, for the identical guard to catch); "fail" prints
-    # ::error:: and exits 1.
+    # own g1/g1b hostile case, for the identical guard to catch); "phantom"
+    # prints "updated <target>" for every FAKE_DEPS_TOUCHED target WITHOUT
+    # writing anything, so the wrapper's `git diff --cached --quiet` phantom
+    # check is the only thing standing between that and an empty commit;
+    # "fail" prints ::error:: and exits 1.
     cat >"${base}/fake-src/scripts/publish_deps.py" <<'PY'
 import os
 import sys
@@ -242,7 +245,15 @@ def main():
         return 1
 
     if mode == "noop":
-        print("NOOP: every dependency already present")
+        print("NOOP: every dependency already present at every destination")
+        return 0
+
+    if mode == "phantom":
+        for target in os.environ.get("FAKE_DEPS_TOUCHED", "").split(","):
+            target = target.strip()
+            if not target:
+                continue
+            print(f"updated {target}")
         return 0
 
     # mode == "touch"
@@ -330,7 +341,7 @@ JSON
     export FAKE_TOUCHED='../README.txt'
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The stderr should include '::error::commit touched non-catalogue path(s):'
     The stderr should include 'README.txt'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
@@ -343,7 +354,7 @@ JSON
     export FAKE_TOUCHED='stable/../../x'
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The stderr should include '::error::commit touched non-catalogue path(s):'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
     staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
@@ -372,7 +383,7 @@ JSON
     export FAKE_MODE=rename_fold
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The stderr should include '::error::commit touched non-catalogue path(s):'
     The stderr should include 'docs/index.html'
     The result of function local_head_now should equal "$pretest_head"
     The result of function remote_head_now should equal "$pretest_remote_head"
@@ -1363,7 +1374,7 @@ PY
     export FAKE_TOUCHED=edge/ce-2.8
     When run script "$script"
     The status should equal 1
-    The stderr should include '::error::publisher commit touched non-catalogue path(s):'
+    The stderr should include '::error::commit touched non-catalogue path(s):'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
     staged="$(git_fixture -C "${base}/pkg-repo" diff --cached --name-only)"
@@ -1411,7 +1422,27 @@ HOOK
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
     The status should equal 1
+    The stderr should include '::error::HANDOFF_FILE .route_matrix could not be read'
     The result of function local_head_now should equal "$original_head"
     The result of function remote_head_now should equal "$original_remote_head"
   End
+
+  It 'x13: a phantom dependency touch alongside a real publisher touch makes exactly ONE commit (publish only)'
+    export FAKE_DEPS_MODE=phantom
+    export FAKE_DEPS_TOUCHED=edge/ce-2.8
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    commit_count="$(git_fixture -C "${base}/pkg-repo" rev-list --count "${original_head}..main")"
+    The variable commit_count should equal 1
+    subject="$(git_fixture -C "${base}/pkg-repo" log --format=%s -1)"
+    The variable subject should equal 'publish: v4.0.0.b1 -> ["edge"]'
+    remote_commit_count="$(git_fixture -C "${base}/remote.git" rev-list --count "${original_remote_head}..main")"
+    The variable remote_commit_count should equal 1
+    The path "${base}/pkg-repo/docs/edge/ce-2.8/dep-marker.pkg" should not be exist
+  End
+
 End

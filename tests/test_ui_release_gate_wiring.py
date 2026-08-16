@@ -1103,11 +1103,10 @@ def test_healthcheck_rejects_wrong_main_asset_when_pkg_count_matches(tmp_path: P
 
 
 def test_healthcheck_expected_pkgs_ignores_extra_pkgs(tmp_path: Path) -> None:
-    """issue #2454: a dep .pkg is never a Release asset any more -- EXPECTED_PKGS
-    is the plain release-row count, so a matrix row with a non-empty extra_pkgs
-    (CE today) whose draft carries ONLY the canonical assets (no dep .pkg at
-    all) still passes. Supersedes the old #1806 B1 "count dep assets too" test:
-    that contract is now inverted (see the rejection test below).
+    """issue #2454: a dep .pkg is never a Release asset -- EXPECTED_PKGS is the
+    plain release-row count, so a matrix row with a non-empty extra_pkgs (CE
+    today) whose draft carries ONLY the canonical assets (no dep .pkg at all)
+    still passes (see the rejection test below for a draft that attaches one).
 
     Two build-matrix rows: major 15 with one extra_pkgs entry, major 16 with
     none. Draft carries exactly 2 canonical branch .pkgs + the source archive --
@@ -1132,9 +1131,7 @@ def test_healthcheck_rejects_leaked_noncanonical_row_asset(tmp_path: Path) -> No
     """issue #2454: a dep .pkg (or anything else) attached alongside a row's
     canonical asset, carrying that row's suffix, is a LEAK -- attach-pkgs's
     canonical-only glob should never produce one, but the healthcheck still
-    catches it independently rather than trusting attach-pkgs alone. Same
-    fixture as the old #1806 B1 test above, but the dep asset now FAILS this
-    check instead of being required by it."""
+    catches it independently rather than trusting attach-pkgs alone."""
     completed = _run_healthcheck(
         tmp_path,
         build_matrix='[{"variant":"CE","pfsense_version":"2.8","extra_pkgs":["textproc/py-charset-normalizer"]}]',
@@ -1150,7 +1147,7 @@ def test_healthcheck_rejects_leaked_noncanonical_row_asset(tmp_path: Path) -> No
 
 # --------------------------------------------------------------------------- #
 # release-published.yml / pkg-republish.yml: the dependency-flow ports
-# checkout, wired the same way in both (issue #2454 step 3b). Both derive
+# checkout, wired the same way in both (issue #2454). Both derive
 # PORTS_SHA from the downloaded canonical .pkg assets' own build-record
 # provenance (publish_deps.py --print-ports-sha), never a fresh ls-remote --
 # republish must resolve an OLD release's own ports commit, not today's tip.
@@ -1160,6 +1157,28 @@ _DEP_FLOW_TARGETS = [
     (RELEASE_PUBLISHED_WORKFLOW, "publish-pkg-repo", "sh scripts/publish-pkg-repo.sh"),
     (PKG_REPUBLISH_WORKFLOW, "publish", "sh scripts/publish-pkg-repo.sh"),
 ]
+
+
+def _assert_dep_flow_wiring(job_text: str, wrapper_call: str) -> None:
+    """Ordering: "Read the pinned ROUTE matrix" -> "Prepare the ... dependency
+    flow" -> the wrapper-invoking step ("Stage the pkg catalogue" / "Publish
+    the pkg catalogue"), which must export PORTS_DIR before calling
+    scripts/publish-pkg-repo.sh (that script requires PORTS_DIR whenever it
+    actually runs the publisher)."""
+    route_marker = "- name: Read the pinned ROUTE matrix"
+    prepare_marker = "- name: Prepare the FreeBSD-ports checkout for the dependency flow"
+    ports_dir_export = 'export PORTS_DIR="$RUNNER_TEMP/ports"'
+    for marker in (route_marker, prepare_marker, ports_dir_export, wrapper_call):
+        assert marker in job_text, f"missing {marker!r}"
+
+    route_idx = job_text.index(route_marker)
+    prepare_idx = job_text.index(prepare_marker)
+    ports_dir_idx = job_text.index(ports_dir_export)
+    wrapper_idx = job_text.index(wrapper_call)
+    assert route_idx < prepare_idx < ports_dir_idx < wrapper_idx, (
+        f"expected Read-ROUTE-matrix < Prepare-dep-ports < export-PORTS_DIR < wrapper call, got indices "
+        f"{route_idx}, {prepare_idx}, {ports_dir_idx}, {wrapper_idx}"
+    )
 
 
 @pytest.mark.parametrize(("workflow", "job_name", "wrapper_call"), _DEP_FLOW_TARGETS)
@@ -1180,20 +1199,7 @@ def test_publish_job_prepares_the_dependency_ports_checkout(workflow: Path, job_
         '"$PORTS_SHA" "$RUNNER_TEMP/ports" "$ROUTE_MATRIX"' in prepare_text
     )
 
-    # ordering: "Read the pinned ROUTE matrix" -> "Prepare the ... dependency
-    # flow" -> the wrapper-invoking step ("Stage the pkg catalogue" /
-    # "Publish the pkg catalogue"), which must export PORTS_DIR before calling
-    # scripts/publish-pkg-repo.sh (that script requires PORTS_DIR whenever it
-    # actually runs the publisher).
-    route_idx = job_text.index("- name: Read the pinned ROUTE matrix")
-    prepare_idx = job_text.index("- name: Prepare the FreeBSD-ports checkout for the dependency flow")
-    ports_dir_idx = job_text.index('export PORTS_DIR="$RUNNER_TEMP/ports"')
-    wrapper_idx = job_text.index(wrapper_call)
-    assert route_idx < prepare_idx < ports_dir_idx < wrapper_idx, (
-        f"{workflow.name}/{job_name}: expected Read-ROUTE-matrix < Prepare-dep-ports < "
-        f"export-PORTS_DIR < wrapper call, got indices "
-        f"{route_idx}, {prepare_idx}, {ports_dir_idx}, {wrapper_idx}"
-    )
+    _assert_dep_flow_wiring(job_text, wrapper_call)
 
 
 @pytest.mark.parametrize(("workflow", "job_name", "wrapper_call"), _DEP_FLOW_TARGETS)
@@ -1205,5 +1211,5 @@ def test_dropping_ports_dir_export_before_the_wrapper_goes_red(
     jobs = _jobs(workflow)
     job_text = "\n".join(jobs[job_name])
     mutated = job_text.replace('export PORTS_DIR="$RUNNER_TEMP/ports"\n', "", 1)
-    assert '"$RUNNER_TEMP/ports" "$ROUTE_MATRIX"' in mutated
-    assert 'export PORTS_DIR="$RUNNER_TEMP/ports"' not in mutated
+    with pytest.raises(AssertionError):
+        _assert_dep_flow_wiring(mutated, wrapper_call)
