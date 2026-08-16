@@ -222,9 +222,10 @@ def _wrap_dependency_pkg(
     version: str,
     abi: str,
     local_name: str,
+    origin: str | None = None,
     payload: dict[str, bytes] | None = None,
 ) -> tuple[Path, str]:
-    manifest = {"name": name, "version": version, "abi": abi, "origin": f"textproc/{name}"}
+    manifest = {"name": name, "version": version, "abi": abi, "origin": origin or f"textproc/{name}"}
     compact = json.dumps(manifest, separators=(",", ":")).encode()
     members = [("+COMPACT_MANIFEST", compact, 0o644, 0)]
     # Extra members vary the archive BYTES under an identical manifest identity —
@@ -616,6 +617,72 @@ class DependencyPlaceIfMissingTests(_TempDirTestCase):
         canonical_name = f"pfSense-pkg-pfBlockerNG-{newer.pkg_version}.pkg"
         self.assertTrue((catalogue_dir / canonical_name).is_file())
         self.assertEqual(dep_path.read_bytes(), original_dep_bytes)
+
+    @_requires_engine
+    def test_dep_already_different_at_one_varver_does_not_trip_identity_check(self) -> None:
+        """issue #2468: two build-role ROUTE rows of one major (ce-2.8 + ce-2.9) both
+        declare the dep, so one leg's dep artifact reaches two catalogues. When one of
+        them already holds a byte-different build of that same name-version, the run
+        must still succeed: dependency bytes are deliberately NOT part of the
+        multi-destination fan-out identity invariant, which covers the canonical
+        package alone."""
+        stale_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        stale_dir.mkdir(parents=True)
+        stale_path, _digest = _wrap_dependency_pkg(
+            stale_dir,
+            name=_CHARSET_NAME,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name=_CHARSET_PKG,
+            payload={"filler.bin": b"an-earlier-nights-build"},
+        )
+        stale_bytes = stale_path.read_bytes()
+
+        results_dir = self.new_results_dir()
+        handoff = _build_handoff(
+            _snapshot(),
+            legs=[_LegSpec(row=ROW_CE15)],
+            route_rows=[ROW_CE15, ROW_CE15_29],
+            assets_root=results_dir,
+        )
+        report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+
+        self.assertEqual(set(report.touched), {("nightly", "ce-2.8"), ("nightly", "ce-2.9")})
+        docs = self.pkg_repo / "docs" / "nightly"
+        self.assertEqual((docs / "ce-2.8" / _CHARSET_PKG).read_bytes(), stale_bytes)  # left as it was
+        fresh = docs / "ce-2.9" / _CHARSET_PKG
+        self.assertTrue(fresh.is_file())
+        self.assertNotEqual(fresh.read_bytes(), stale_bytes)  # this run's own build, placed where missing
+
+    @_requires_engine
+    def test_undeclared_same_name_leftover_replaced_by_this_runs_dependency(self) -> None:
+        """A Nightly destination holding a same-name dependency whose origin the row no
+        longer declares (the port moved category, issue #2403) must end ONE run
+        advertising the dependency this run verified — place-if-missing and eviction
+        together may never leave the catalogue with the extra silently absent."""
+        dest = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        dest.mkdir(parents=True)
+        _wrap_dependency_pkg(
+            dest,
+            name=_CHARSET_NAME,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name=_CHARSET_PKG,
+            origin="www/py-charset-normalizer",
+            payload={"filler.bin": b"leftover-from-the-other-category"},
+        )
+
+        handoff, results_dir, _snap = self.base_handoff()
+        report = _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+
+        self.assertEqual(report.touched, (("nightly", "ce-2.8"),))
+        published = dest / _CHARSET_PKG
+        self.assertTrue(published.is_file(), "this run's verified dependency is missing from the catalogue")
+        self.assertEqual(
+            _ENGINE.pfb_pkg.read_compact_manifest(published)["origin"],
+            f"textproc/{_CHARSET_NAME}",
+        )
+        self.assertIn(_CHARSET_NAME, _packagesite_names(dest))
 
 
 # --------------------------------------------------------------------------- #

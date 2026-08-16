@@ -503,8 +503,10 @@ def _verify_dependency_asset(
     dependency assets with the SAME ``-<Variant>-<pfsense_version>`` suffix it applies
     to the canonical package (the "Build the .pkg via build-leg.sh" step's
     ``RENAMED_DEP``); a nightly dependency artifact carries no such suffix. Which exact
-    ROUTE row a dep belongs to is decided later, by ABI, in verify_run (axis 9) — this
-    only needs the suffix to be well-formed, not tied to a specific row.
+    varver a tagged dep lands in is decided later, by that suffix, in
+    ``publish_release._build_targets`` (issue #2468) — axis 9 in verify_run only checks
+    the ABI against SOME ROUTE row. Here the suffix only has to be well-formed; it is
+    returned on the VerifiedAsset (``release_suffix``) for the publisher to route on.
     """
     brp = engine.build_repo_portable
     pfb_pkg = engine.pfb_pkg

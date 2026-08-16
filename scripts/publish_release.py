@@ -337,8 +337,12 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
         asset_map = _asset_map(target)
         for channel in intake.destinations:
             dest_dir = site_root / channel / varver
-            changed = _drop_assets(dest_dir, asset_map)
-            if _evict_undeclared_deps(dest_dir, engine=engine, row=target.row):
+            # Eviction runs FIRST: a dependency is placed only when its name is
+            # missing, so an undeclared leftover under that same name has to go
+            # before the drop, or the run would skip the incoming dependency and
+            # then unlink the leftover — publishing a catalogue without the extra.
+            changed = _evict_undeclared_deps(dest_dir, engine=engine, row=target.row)
+            if _drop_assets(dest_dir, asset_map):
                 changed = True
             if not changed and not _catalogue_descriptor_complete(dest_dir, engine):
                 changed = True

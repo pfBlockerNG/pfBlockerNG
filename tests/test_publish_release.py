@@ -268,13 +268,14 @@ def _wrap_dependency_pkg(
     version: str = "3.4.0",
     abi: str = "FreeBSD:15:*",
     local_name: str,
+    origin: str | None = None,
     payload: dict[str, bytes] | None = None,
 ) -> tuple[Path, str]:
     manifest = {
         "name": name,
         "version": version,
         "abi": abi,
-        "origin": f"textproc/{name}",
+        "origin": origin or f"textproc/{name}",
     }
     compact = json.dumps(manifest, separators=(",", ":")).encode()
     members = [("+COMPACT_MANIFEST", compact, 0o644, 0)]
@@ -294,6 +295,49 @@ def _canonical_declared_name(record: dict) -> str:
 
 def _dependency_declared_name(*, name: str, version: str, row: dict) -> str:
     return f"{name}-{version}-{row['variant']}-{row['pfsense_version']}.pkg"
+
+
+# Hand-built VerifiedAssets for the unit-level _build_targets rows: no archive on
+# disk, so each gate can be isolated from everything verify_asset/verify_run would
+# otherwise reject first.
+def _canonical_verified_asset(row: dict[str, object]) -> pc.VerifiedAsset:
+    record = _record(channel="edge", row=row, source_tag="v4.0.0.b1")
+    return pc.VerifiedAsset(
+        asset_class="canonical",
+        declared_name=_canonical_declared_name(record),
+        canonical_name=f"{_ENGINE.pfb_pkg.CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}.pkg",
+        work_path=Path("canonical.pkg"),
+        sha256="a" * 64,
+        manifest={},
+        record=record,
+    )
+
+
+def _dependency_verified_asset(
+    *,
+    abi: str,
+    release_suffix: tuple[str, str] | None,
+    name: str = "py311-charset-normalizer",
+    version: str = "3.4.0",
+) -> pc.VerifiedAsset:
+    return pc.VerifiedAsset(
+        asset_class="dependency",
+        declared_name=f"{name}-{version}.pkg",
+        canonical_name=f"{name}-{version}.pkg",
+        work_path=Path(f"{name}-{version}.pkg"),
+        sha256="b" * 64,
+        manifest={"name": name, "version": version, "abi": abi, "origin": f"textproc/{name}"},
+        release_suffix=release_suffix,
+    )
+
+
+def _run_result(*, canonical: pc.VerifiedAsset, dependency: pc.VerifiedAsset) -> pc.RunResult:
+    return pc.RunResult(
+        intake=pc.parse_intake(_REPO, "1", "v4.0.0.b1", '["edge"]', "10:1"),
+        canonical_assets=(canonical,),
+        dependency_assets=(dependency,),
+        build_route_rows=(ROW_CE,),
+    )
 
 
 def _populate_assets_dir(
@@ -902,10 +946,10 @@ class DependencyPlaceIfMissingTests(_TempDirTestCase):
     def test_asset_map_two_deps_same_canonical_name_rejected(self) -> None:
         """Unit test on _asset_map directly (issue #2468 coverage row 6): two
         dependency VerifiedAssets that resolve to the SAME canonical name always
-        conflict — no byte-compare-then-tolerate branch, no file reads. Never
-        reachable end-to-end from one tagged run (a real asset set cannot carry
-        two on-disk files sharing one declared filename); reachable via nightly
-        handoffs or direct API use."""
+        conflict — no byte-compare-then-tolerate branch, no file reads. Two assets
+        with the SAME suffix cannot reach this from one tagged run (they would be
+        one on-disk filename), but two differing suffixes whose varvers collapse
+        together (2.8 vs 2.8.1), a nightly handoff, or direct API use all can."""
         canonical = pc.VerifiedAsset(
             asset_class="canonical",
             declared_name="pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.8.pkg",
@@ -942,6 +986,35 @@ class DependencyPlaceIfMissingTests(_TempDirTestCase):
         self.assertIn(dep_two.declared_name, message)
         self.assertIn(dep_one.sha256, message)
         self.assertIn(dep_two.sha256, message)
+
+        # The reject is unconditional: identical bytes are a duplicate too, not a
+        # tolerated dedupe (the branch this issue removed).
+        twin = pc.VerifiedAsset(**{**vars(dep_two), "sha256": dep_one.sha256})
+        with self.assertRaises(pr.DestinationConflictError):
+            pr._asset_map(pr._Target(row=ROW_CE, canonical=canonical, dependencies=[dep_one, twin]))
+
+    @_requires_engine
+    def test_dependency_without_release_suffix_rejected(self) -> None:
+        """_build_targets routes by suffix alone, so a dependency VerifiedAsset that
+        carries none has no target to resolve and must be rejected rather than
+        silently dropped (verify_asset always populates it on the tagged path; this
+        pins the module's own guard for any other caller)."""
+        canonical = _canonical_verified_asset(ROW_CE)
+        dep = _dependency_verified_asset(abi="FreeBSD:15:*", release_suffix=None)
+        with self.assertRaises(pr.PublishReleaseError) as ctx:
+            pr._build_targets(_ENGINE, _run_result(canonical=canonical, dependency=dep))
+        self.assertIn("matches no varver targeted", str(ctx.exception))
+
+    @_requires_engine
+    def test_dependency_abi_mismatch_rejected_by_build_targets_itself(self) -> None:
+        """The ABI gate inside _build_targets, isolated: the suffix names a real
+        canonical target that declares the origin, and only the manifest ABI is
+        wrong — so nothing downstream can produce this rejection for us."""
+        canonical = _canonical_verified_asset(ROW_CE)
+        dep = _dependency_verified_asset(abi="FreeBSD:16:*", release_suffix=("CE", "2.8"))
+        with self.assertRaises(pr.PublishReleaseError) as ctx:
+            pr._build_targets(_ENGINE, _run_result(canonical=canonical, dependency=dep))
+        self.assertIn("matches no varver targeted", str(ctx.exception))
 
     @_requires_engine
     def test_multi_channel_fanout_dep_differs_at_one_channel_no_identity_violation(self) -> None:
@@ -1004,6 +1077,37 @@ class DependencyPlaceIfMissingTests(_TempDirTestCase):
         self.assertEqual(testing_dep.read_bytes(), stale_bytes)  # untouched, already present
         self.assertTrue(edge_dep.is_file())
         self.assertNotEqual(edge_dep.read_bytes(), stale_bytes)  # placed fresh, missing before
+
+    @_requires_engine
+    def test_undeclared_same_name_leftover_replaced_by_this_runs_dependency(self) -> None:
+        """A destination holding a same-name dependency whose origin the row no longer
+        declares (the port moved category, issue #2403) must end ONE run advertising
+        the dependency this run actually verified. Place-if-missing skips a name
+        already on disk and eviction unlinks that undeclared leftover, so the two
+        together may never leave the catalogue with the extra silently absent."""
+        dest = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        dest.mkdir(parents=True)
+        _wrap_dependency_pkg(
+            dest,
+            version="3.4.0",
+            abi="FreeBSD:15:*",
+            local_name=_CHARSET_PKG,
+            origin="www/py-charset-normalizer",
+            payload={"filler.bin": b"leftover-from-the-other-category"},
+        )
+
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1")
+        report = _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1")
+
+        self.assertEqual(report.touched, (("edge", "ce-2.8"),))
+        published = dest / _CHARSET_PKG
+        self.assertTrue(published.is_file(), "this run's verified dependency is missing from the catalogue")
+        self.assertEqual(
+            _ENGINE.pfb_pkg.read_compact_manifest(published)["origin"],
+            "textproc/py311-charset-normalizer",
+        )
+        self.assertIn(_CHARSET_NAME, _packagesite_names(dest))
 
 
 # --------------------------------------------------------------------------- #
