@@ -2,7 +2,7 @@
 ADR-20 repo smoke. Loaded by path (like test_gen_landing) so no live-VM / conftest baggage.
 
 These pin that ALL ABI/PHP/Python/catalog facts come from the version matrix (never a literal):
-the JSON source of truth, the per-(ABI, edition) variant derivation, own/opposite selection,
+the JSON source of truth, the per-ROW variant derivation, this leg's own-row selection,
 and the env overrides — so adding a pfSense version to the matrix needs no edit in the smoke test.
 """
 

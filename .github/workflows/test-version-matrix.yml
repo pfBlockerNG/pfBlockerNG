@@ -93,6 +93,7 @@ jobs:
           printf '%s' "$CI_MATRIX" | jq -e '
             length > 0 and all(.[]; . as $row |
               $row.ci == true and
+              ($row.pfsense_version | test("^[0-9]+[.][0-9]+")) and
               ($row.channel | test("^(CE|Plus)$")) and
               ($row.variant == $row.channel) and
               ($row.freebsd_version | startswith($row.freebsd_major + ".")) and

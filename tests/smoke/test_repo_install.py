@@ -1400,7 +1400,6 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     # (independent of the guest) — polls through first-deploy / DNS / cert lag. The
     # varver to poll is read from the BOX itself via the _box_real_varver oracle: the
     # guest, not the matrix, is the authority for which release line this leg runs.
-    # This
     # The caller passes a selected channel root, so the subtree is the bare varver.
     varver = _box_real_varver(repo_vm)
     poll_catalog_served(base_url, varver)

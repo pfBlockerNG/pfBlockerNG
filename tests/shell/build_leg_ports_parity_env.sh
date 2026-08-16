@@ -99,7 +99,7 @@ if not pfsense_version:
 
     rows = json.loads(
         subprocess.run(
-            ["sh", "scripts/read-version-matrix.sh", "--print-ci"],
+            ["sh", str(Path(os.environ["PFB_ROOT"]) / "scripts" / "read-version-matrix.sh"), "--print-ci"],
             capture_output=True,
             text=True,
             check=True,
