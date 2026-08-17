@@ -7,22 +7,27 @@ requires only extra.inc and then calls ``pfb_global()`` is fatal under ``pfSsh.p
     PHP ERROR: Uncaught Error: Call to undefined function pfb_global()
 
 That errored every smoke test using ``pin_cron_due()`` (24 occurrences in one full run)
-and every test in ``test_log_age_retention.py`` at fixture setup.
+and every test in ``test_log_age_retention.py`` at fixture setup. The defect has been
+introduced TWICE (most recently by ``074b359c``), and smoke dispatch defaults to
+``scope=impacted``, so a re-introduction can land without any leg that exercises it.
 
-A snippet is SAFE if either holds:
+Coverage here is TWO-TIER, honestly labelled:
 
-* it requires ``pfblockerng.inc`` (so the symbol exists), or
-* it guards the call with ``function_exists('pfb_global')``.
+* **Executable rows** for the two historical sites — ``pin_cron_due`` and
+  ``_prime_idle_schedule`` — run the real helper against a monkeypatched ``php_eval``
+  and assert the emitted PHP. These are the real guard; both are mutation-verified.
+* **A source sweep** over ``tests/smoke/`` as a tripwire for NEW call sites. It is
+  per-occurrence (a call must have a guard or a require in the PRECEDING window, so a
+  later snippet's require cannot excuse an earlier bare call), but it reads Python
+  source, not emitted PHP — string concatenation, negated guards
+  (``!function_exists``), or exotic call shapes can evade it. It is a tripwire, not a
+  proof; the executable rows are the proof for the sites that have burned us.
 
-Both are accepted deliberately. Which one is correct for a given snippet is an empirical
-question, not a stylistic one — for ``pin_cron_due`` the require was measured WORSE than
-the guard (19 passed/3 failed guarded, versus 12/13 with the require after extra.inc and
-25 errors with it before), so that call site guards. Other snippets legitimately require
-it. This row pins only the invariant both satisfy.
-
-Pinned hermetically because the defect has been introduced TWICE (most recently by
-``074b359c``) and smoke dispatch defaults to ``scope=impacted``, so a re-introduction can
-land without any leg that exercises it.
+Which remedy is correct per snippet is EMPIRICAL, not stylistic: for ``pin_cron_due``
+the require was measured worse than the guard (19 passed/3 failed guarded; 12/13 with
+the require after extra.inc — guest reporting "A valid config file could not be
+recovered" x12; 25 errors, twice, with it before). Other snippets legitimately require
+the file. Both remedies satisfy the invariant pinned here.
 """
 
 from __future__ import annotations
@@ -35,53 +40,109 @@ import pytest
 
 from tests.smoke import helpers
 
-_MAIN_INC = "pfblockerng.inc"
-_GUARD = "function_exists('pfb_global')"
 _SMOKE_DIR = Path(__file__).resolve().parents[1] / "tests" / "smoke"
+_GUARD = "function_exists('pfb_global')"
 
-# A call that is NOT preceded on the same line by the function_exists guard.
-_UNGUARDED_CALL = re.compile(r"(?<!function_exists\('pfb_global'\)\) \{ )pfb_global\(\);")
+# A call-shaped occurrence in source: pfb_global ( ) ;  with optional spacing.
+_CALL = re.compile(r"pfb_global\s*\(\s*\)\s*;")
+
+# A require/include whose target is the MAIN inc. Deliberately does NOT match
+# pfblockerng_extra.inc (the dot must follow "pfblockerng"), and does not match prose
+# mentions in comments/docstrings ("do not require pfblockerng.inc" has no require-().
+_REQUIRE_MAIN = re.compile(r"require(?:_once)?\s*\([^)\n]{0,200}pfblockerng\.inc")
+
+# A Python constant holding the main-inc path (e.g. _PFB_INC = ".../pfblockerng.inc").
+# Checked file-wide: a file that defines such a constant is requiring the file through
+# it. Weaker than the windowed require check; accepted as tripwire slack.
+_MAIN_CONST = re.compile(r"""(?m)^\s*\w+\s*=\s*["'][^"']*/pfblockerng\.inc["']""")
+
+# How far back (in characters) a require/guard may sit from the call it licenses.
+# Sized for the worst legitimate case in-tree: test_schedule_runtime.py keeps one
+# r-string snippet whose require sits ~80 lines above its second call.
+_WINDOW = 8000
 
 
-def test_pin_cron_due_does_not_call_pfb_global_unguarded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """pin_cron_due's emitted PHP must not call pfb_global() without a guard or the require."""
+def _capture_emitted_snippet(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     seen: list[str] = []
 
     def fake_php_eval(_vm: object, snippet: str, **_kw: object) -> subprocess.CompletedProcess[str]:
         seen.append(snippet)
+        # Shaped to satisfy each helper's own success check: pin_cron_due parses the
+        # sentinel pair; _prime_idle_schedule only wants "OK" in stdout. The literals
+        # duplicate pin_cron_due's local sentinels on purpose — if that protocol
+        # changes, the helper raises and this row fails LOUD (re-shape the fake then).
         return subprocess.CompletedProcess([], 0, "OK<<<HOUR>>>7<<<END>>>", "")
 
     monkeypatch.setattr(helpers, "php_eval", fake_php_eval)
+    return seen
 
+
+def _assert_snippet_safe(snippet: str, *, origin: str) -> None:
+    """The emitted PHP must load the symbol or guard the call — checked on the SNIPPET,
+    so a require elsewhere in the same file cannot excuse it (each php_eval is a fresh
+    PHP process; nothing carries over between snippets)."""
+    assert "pfb_global" in snippet, f"{origin}: row is vacuous if the call vanished — rewrite it"
+    if _REQUIRE_MAIN.search(snippet):
+        return
+    assert _GUARD in snippet, (
+        f"{origin} calls pfb_global() with neither a require of pfblockerng.inc nor a "
+        f"function_exists guard; under pfSsh.php that is 'Call to undefined function "
+        f"pfb_global()' (issue #2492)"
+    )
+
+
+def test_pin_cron_due_emits_safe_php(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = _capture_emitted_snippet(monkeypatch)
     assert helpers.pin_cron_due(object()) == 7  # type: ignore[arg-type]
     assert len(seen) == 1, f"expected exactly one php_eval, got {len(seen)}"
-    snippet = seen[0]
+    _assert_snippet_safe(seen[0], origin="pin_cron_due")
 
-    assert "pfb_global" in snippet, "row is vacuous if the call vanished entirely — rewrite it"
-    if _MAIN_INC in snippet:
-        return  # symbol is loaded; safe
-    assert _GUARD in snippet, (
-        "pin_cron_due calls pfb_global() with neither a require of pfblockerng.inc nor a "
-        "function_exists guard; under pfSsh.php that is 'Call to undefined function "
-        "pfb_global()' (issue #2492)"
-    )
-    assert not _UNGUARDED_CALL.search(snippet), "a second, unguarded pfb_global() call slipped in"
+
+def test_prime_idle_schedule_emits_safe_php(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The second historical site (its module fixture errored every test in the file).
+    # Imported here, not exercised via the live suite, precisely so scope=impacted
+    # cannot skip it.
+    from tests.smoke import test_log_age_retention as tlar
+
+    seen = _capture_emitted_snippet(monkeypatch)
+    tlar._prime_idle_schedule(object())  # type: ignore[arg-type]
+    assert len(seen) == 1, f"expected exactly one php_eval, got {len(seen)}"
+    _assert_snippet_safe(seen[0], origin="_prime_idle_schedule")
+
+
+def _swept_sources() -> list[Path]:
+    # Collection-time filter instead of pytest.skip: the #2359 skip-allowlist gate
+    # fails ANY skip not in tests/skip-allowlist.txt, so a skip-per-uninvolved-file
+    # design (107 of them) reds the main CI job outright.
+    out = []
+    for p in sorted(_SMOKE_DIR.rglob("*.py")):
+        if p.name == "__init__.py":
+            continue
+        if _CALL.search(p.read_text(encoding="utf-8")):
+            out.append(p)
+    return out
 
 
 @pytest.mark.parametrize(
     "source",
-    sorted(p for p in _SMOKE_DIR.rglob("*.py") if p.name != "__init__.py"),
-    ids=lambda p: p.name,
+    _swept_sources(),
+    ids=lambda p: p.relative_to(_SMOKE_DIR).as_posix(),
 )
-def test_no_smoke_source_calls_pfb_global_unguarded(source: Path) -> None:
-    """Sweep every smoke source, so a third call site is caught here, not by a red suite."""
+def test_no_new_bare_pfb_global_call_site(source: Path) -> None:
+    """Tripwire: every call-shaped pfb_global(); must have a guard or a main-inc
+    require in the text WINDOW preceding it (or the file defines a main-inc path
+    constant). Preceding-only is deliberate: a require in a LATER snippet cannot
+    license an earlier call, and comment prose matches neither pattern."""
     text = source.read_text(encoding="utf-8")
-    if "pfb_global" not in text:
-        pytest.skip("does not mention pfb_global")
-    if _MAIN_INC in text or _GUARD in text:
-        return  # loads the symbol, or guards the call
-    assert not _UNGUARDED_CALL.search(text), (
-        f"{source.name} calls pfb_global() with neither a require of {_MAIN_INC} nor a "
-        f"function_exists guard. pfblockerng_extra.inc defines neither pfb_global() nor "
-        f"any require, so the call is fatal under pfSsh.php (issue #2492)."
-    )
+    file_has_const = bool(_MAIN_CONST.search(text))
+    for m in _CALL.finditer(text):
+        window = text[max(0, m.start() - _WINDOW) : m.start()]
+        if _GUARD in window or _REQUIRE_MAIN.search(window) or file_has_const:
+            continue
+        line = text.count("\n", 0, m.start()) + 1
+        raise AssertionError(
+            f"{source.relative_to(_SMOKE_DIR).as_posix()}:{line} calls pfb_global() with "
+            f"no function_exists guard and no require of pfblockerng.inc in the preceding "
+            f"{_WINDOW} chars. pfblockerng_extra.inc defines neither the symbol nor any "
+            f"require, so this is fatal under pfSsh.php (issue #2492)."
+        )

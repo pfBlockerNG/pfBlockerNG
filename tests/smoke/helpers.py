@@ -1195,6 +1195,8 @@ def pin_cron_due(vm: SmokeVM) -> int:
         # Nothing below needs $pfb: the only read is schedule_state_dir, which no production
         # code assigns — every consumer uses the same `?? '/usr/local/etc'` fallback, and
         # pfblockerng_cron.inc:291 reads exactly where this writes.
+        # Latent (#2495): pfb_schedule_runtime_config() reaches pfb_filter()/
+        # PFB_FILTER_CSV (pfblockerng.inc-only) once blacklist_selected is populated.
         "if (function_exists('pfb_global')) { pfb_global(); }\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"

@@ -132,6 +132,8 @@ def _prime_idle_schedule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         # issue #2492: guard, do not require pfblockerng.inc — see the measured
         # comparison at helpers.py pin_cron_due. Nothing here needs $pfb beyond
         # schedule_state_dir, which uses the same production fallback below.
+        # Latent (#2495): pfb_schedule_runtime_config() reaches pfb_filter()/
+        # PFB_FILTER_CSV (pfblockerng.inc-only) once blacklist_selected is populated.
         "if (function_exists('pfb_global')) { pfb_global(); }"
         "$now = time();"
         "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';"
