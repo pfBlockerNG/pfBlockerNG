@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/SyncPrereqSeedTrait.php';
+
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -29,6 +31,8 @@ use PHPUnit\Framework\TestCase;
  */
 final class SyncGuardLoggingTest extends TestCase
 {
+	use SyncPrereqSeedTrait;
+
 	private const APPLY = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_apply.inc';
 	private const EXTRA = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 
@@ -63,6 +67,10 @@ final class SyncGuardLoggingTest extends TestCase
 		]);
 		// A previous test (or a reentrant caller) must not lend us its locks.
 		unset($GLOBALS['pfb_schedule_dispatch_lock'], $GLOBALS['pfb_feed_pass_lock']);
+
+		// Seed the config keys pfb_global() reads, so these rows do not add
+		// "Undefined array key" trigger listings to the suite's warning detail.
+		$this->seedSyncPrereqs();
 	}
 
 	protected function tearDown(): void
@@ -129,6 +137,14 @@ final class SyncGuardLoggingTest extends TestCase
 	public function testStagePublishRecoverFailureLogsThePrecondition(): void
 	{
 		// scandir(FALSE) path: dbdir vanished out from under the run.
+		//
+		// This reaches the stage/publish guard only because pfb_feed_pass_acquire()
+		// FAILS OPEN (pfblockerng.inc:17685): with dbdir gone its lock fopen() fails, it
+		// logs "Feed pass lock: open failed [...], proceeding unlocked" and returns TRUE,
+		// so pfb_feed_pass_begin('sync') — which runs FIRST — does not abort the sync.
+		// If that policy ever flips to fail-closed this row goes RED (the log would carry
+		// the feed-pass skip wording instead of stage/publish), which is the correct
+		// signal: the row would no longer be testing what it claims.
 		$GLOBALS['pfb']['dbdir'] = "{$this->dir}/db-nonexistent";
 
 		$this->assertFalse(sync_package_pfblockerng('noupdates'),
