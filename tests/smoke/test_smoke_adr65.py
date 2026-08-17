@@ -447,9 +447,52 @@ def _count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0)
     return int(out[start + len("<<<NC>>>") : end])
 
 
-def _close_notice(vm: SmokeVM, notice_id: str, *, timeout: float = 60.0) -> None:
-    """Close every notice carrying ``notice_id`` -- best-effort teardown, leaves the VM clean."""
+def _close_all_notices(vm: SmokeVM, notice_id: str, *, timeout: float = 60.0) -> None:
+    """Close every notice carrying ``notice_id`` -- teardown, leaves the VM clean."""
     h.php_eval(vm, f"close_notice({h._php_str(notice_id)});\necho 'OK';", timeout=timeout)
+
+
+def _file_notice(vm: SmokeVM, notice_id: str, notice: str, *, timeout: float = 60.0) -> None:
+    """File TWO queue rows carrying ``notice_id`` and ``notice``, one second apart.
+
+    ``file_notice`` keys each row by its own timestamp, so the sleep guarantees two
+    distinct keys rather than one row overwriting the other; the caller's ``== 2``
+    precondition fails loudly if that assumption ever stops holding.
+    """
+    snippet = (
+        f"file_notice({h._php_str(notice_id)}, {h._php_str(notice)});\n"
+        "sleep(1);\n"
+        f"file_notice({h._php_str(notice_id)}, {h._php_str(notice)});\n"
+        "echo '<<<NF>>>OK<<<NFE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    if res.returncode != 0 or "<<<NF>>>OK<<<NFE>>>" not in out:
+        raise RuntimeError(
+            f"file_notice({notice_id!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+
+
+def test_notice_teardown_closes_every_row_of_its_id(smoke_vm: SmokeVM) -> None:
+    """The teardown drains EVERY row carrying our id, not just the oldest (issue #2478).
+
+    pfSense's ``close_notice($id)`` removes ONE row per call -- the first row in queue
+    order carrying that id -- and ``file_notice`` appends a timestamp-keyed row per call
+    without de-duplicating by id, so a two-row queue survives a single close. Five
+    production sites file the ``pfBlockerNG DNSBL`` id (the ``pfblockerng.inc`` VIP
+    notice, manifest-not-loaded x3, raw-generation publish failure), so this module's
+    teardown routinely faces more than one row.
+    """
+    needle = f"adr65 teardown probe {h.unique_domain('adr65notice')}"
+    assert _count_matching_notices(smoke_vm, needle) == 0, f"probe needle {needle!r} was already in the queue"
+
+    _file_notice(smoke_vm, _MANIFEST_NOTICE_ID, needle)
+    filed = _count_matching_notices(smoke_vm, needle)
+    assert filed == 2, f"expected both filed probe rows to be queued, got {filed}"
+
+    _close_all_notices(smoke_vm, _MANIFEST_NOTICE_ID)
+    left = _count_matching_notices(smoke_vm, needle)
+    assert left == 0, f"the teardown left {left} row(s) of id {_MANIFEST_NOTICE_ID!r} standing"
 
 
 @pytest.mark.timeout(300)  # a full DNSBL update pass + the swap-applied wait exceeds the smoke tier's 30s default
@@ -539,7 +582,7 @@ def test_manifest_absent_fails_loud_and_force_reload_self_heals(adr65_vm: SmokeV
                 f"after the self-heal, still open: {parse_after!r}"
             )
     finally:
-        _close_notice(adr65_vm, _MANIFEST_NOTICE_ID)
+        _close_all_notices(adr65_vm, _MANIFEST_NOTICE_ID)
 
 
 # --------------------------------------------------------------------------- #
