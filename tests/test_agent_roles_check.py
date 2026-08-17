@@ -153,14 +153,50 @@ def test_live_repository_registry_is_consistent() -> None:
     assert count >= 7  # explorer/planner/implementer/verifier/reviewer/publisher/coordinator
 
 
+# The workflow gates BOTH agent-config checkers (issue #2473): the role registry
+# (this module's subject) and scripts/agent/check-agent-config-parity.sh, whose
+# own surfaces are the two paths below plus the ones the role checker already
+# declares (.agents/skills/, .claude/workflows/, .codex/agents/, .github/agents/,
+# .agents/model-tiers.conf). Kept literal: the parity guard is POSIX sh with no
+# importable trigger table.
+_PARITY_GUARD = "scripts/agent/check-agent-config-parity.sh"
+_PARITY_EXTRA_TRIGGERS = {".claude/skills/**", _PARITY_GUARD}
+
+
+def _workflow_text() -> str:
+    return (_REPO_ROOT / ".github/workflows/agent-config.yml").read_text(encoding="utf-8")
+
+
 def test_ci_workflow_paths_match_checker_triggers() -> None:
-    # The CI trigger must mirror the checker's role surfaces: test.yml's global
+    # The CI trigger must mirror both checkers' surfaces: test.yml's global
     # `paths-ignore: '**/*.md'` skips that whole workflow for md-only changes,
-    # so the agent-roles gate rides its own path-filtered workflow instead.
-    text = (_REPO_ROOT / ".github/workflows/agent-roles.yml").read_text(encoding="utf-8")
-    listed = re.findall(r"^\s+- '([^']+)'\s*$", text, re.MULTILINE)
-    expected = set(car._TRIGGER_FILES) | {f"{d}**" for d in car._TRIGGER_DIRS}
-    assert set(listed) == expected, f"workflow paths {sorted(listed)} != checker triggers {sorted(expected)}"
+    # so the agent-config gates ride their own path-filtered workflow instead.
+    text = _workflow_text()
+    expected = set(car._TRIGGER_FILES) | {f"{d}**" for d in car._TRIGGER_DIRS} | _PARITY_EXTRA_TRIGGERS
+    # Compare each trigger block INDEPENDENTLY: the two hand-duplicated paths
+    # lists drift exactly one-block-at-a-time, and a whole-file set comparison
+    # cannot see an entry dropped from only one of them.
+    push_block, _, tail = text.partition("pull_request:")
+    pr_block = tail.partition("permissions:")[0]
+    for name, block in (("push", push_block), ("pull_request", pr_block)):
+        listed = re.findall(r"^\s+- '([^']+)'\s*$", block, re.MULTILINE)
+        assert len(listed) == len(expected), f"{name} paths list has duplicates or gaps: {sorted(listed)}"
+        assert set(listed) == expected, f"{name} paths {sorted(listed)} != checker triggers {sorted(expected)}"
+
+
+def test_ci_workflow_runs_on_push() -> None:
+    # Dev-only classes (skills, agent config, policy docs) land as direct pushes
+    # to devel, so a pull_request-only gate never sees the dominant landing path.
+    text = _workflow_text()
+    push_block = text.partition("pull_request:")[0]
+    assert "push:" in push_block, "dev-only surfaces land as direct pushes to devel"
+    assert re.search(r"^\s+branches: \[main, devel\]$", push_block, re.MULTILINE), push_block
+
+
+def test_ci_workflow_runs_the_parity_gate() -> None:
+    # The parity guard's only other CI reach is test.yml's shell-tests job, which
+    # `paths-ignore: '**/*.md'` skips for a SKILL.md-only change — its own subject.
+    assert _PARITY_GUARD in _workflow_text()
 
 
 # --------------------------------------------------------------------------- #
