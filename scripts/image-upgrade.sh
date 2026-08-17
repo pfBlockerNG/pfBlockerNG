@@ -830,9 +830,11 @@ PFB_METADATA_PROBE='if /bin/test -f /var/run/pfSense_version.rc; then echo prese
 pfb_wait_pkg_metadata() {
     _pwpm_timeout="${1:-${METADATA_TIMEOUT:-600}}"
     _pwpm_interval="${METADATA_INTERVAL:-5}"
-    # A zero, negative or non-numeric interval would pin the elapsed counter and
-    # leave the deadline unreachable, i.e. an unbounded wait. Floor it.
+    # An unusable interval pins the elapsed counter and an unusable cap makes the
+    # deadline test error on every iteration ("Illegal number"); either way the
+    # loop never reaches its failure path, i.e. an unbounded wait. Floor both.
     [ "$_pwpm_interval" -ge 1 ] 2>/dev/null || _pwpm_interval=5
+    [ "$_pwpm_timeout" -ge 0 ] 2>/dev/null || _pwpm_timeout=600
     _pwpm_elapsed=0
     _pwpm_seen=0
     log "waiting for the pfSense package metadata refresh to settle"
