@@ -1004,3 +1004,78 @@ def test_publish_workflow_checks_for_a_clash_before_it_pushes() -> None:
     assert re.search(r"publish:\n(?:.*\n)*?\s+needs: \[preflight, build\]", workflow), (
         "the manifest publish must depend on both the guard and every architecture build"
     )
+
+
+# ── Composer vendor tree (issue #2502) ───────────────────────────────────────────────
+# Resolving `vendor/` per job pulled 27 dev packages through api.github.com on every run,
+# so the 2026-08-17 GitHub API incident turned three PHP gates red on a PR with no PHP in
+# it. The tree is baked into the image instead, which makes a dependency change require a
+# published image — one path, versioned like every other baked tool.
+
+BAKED_VENDOR = "/opt/pfb-composer"
+VENDOR_SCRIPT = ROOT / "scripts/ci-vendor.sh"
+WORKFLOW_DIR = ROOT / ".github/workflows"
+
+
+def test_image_bakes_the_composer_vendor_tree() -> None:
+    blocks = _run_blocks(_read(BASE_DOCKERFILE))
+
+    copies = [b for b in blocks if b.startswith("COPY") and "composer.lock" in b]
+    assert copies, "the image must COPY composer.lock so the baked tree is pinned to it"
+    assert any("composer.json" in b for b in copies), (
+        "composer.json must be copied beside the lock; composer hard-errors on a mismatch"
+    )
+    assert all(BAKED_VENDOR in b for b in copies), (
+        f"the composer metadata must land under {BAKED_VENDOR}; blocks were: {copies}"
+    )
+
+    installs = [b for b in blocks if b.startswith("RUN") and "composer install" in b]
+    assert installs, "the image must resolve the vendor tree at build time"
+    assert any(BAKED_VENDOR in b for b in installs), (
+        f"composer install must run in {BAKED_VENDOR}; blocks were: {installs}"
+    )
+
+
+def test_self_check_exercises_the_baked_vendor_binaries() -> None:
+    """A baked tool nobody executes is a tool the image can ship broken."""
+    checks = " ".join(b for b in _expanded_blocks(_read(BASE_DOCKERFILE)) if b.startswith("RUN set -eu"))
+    for tool in ("phpstan", "phpunit", "phpcs"):
+        assert f"{BAKED_VENDOR}/vendor/bin/{tool}" in checks, f"the in-Dockerfile self-check must run the baked {tool}"
+
+
+def test_no_workflow_resolves_composer_per_job() -> None:
+    """One path: every leg materialises the baked tree through scripts/ci-vendor.sh."""
+    offenders = []
+    for workflow in sorted(WORKFLOW_DIR.glob("*.yml")):
+        for number, line in enumerate(_read(workflow).splitlines(), 1):
+            if "composer install" in line and not line.lstrip().startswith("#"):
+                offenders.append(f"{workflow.name}:{number}: {line.strip()}")
+    assert not offenders, (
+        "workflow legs must call scripts/ci-vendor.sh, not resolve composer themselves:\n" + "\n".join(offenders)
+    )
+
+
+def test_every_php_leg_materialises_the_baked_tree() -> None:
+    text = _read(ROOT / ".github/workflows/test.yml")
+    php_legs = ("php-static-analysis:", "php-codesniffer:", "php-unit:")
+    for leg in php_legs:
+        assert leg in text, f"{leg} is gone — retarget this guard at the leg that replaced it"
+    assert text.count("scripts/ci-vendor.sh") >= len(php_legs), (
+        "each Composer-backed leg must materialise the baked tree through the one script"
+    )
+
+
+def test_a_lock_change_reaches_the_image_workflow() -> None:
+    """Without this trigger a dependency bump would leave the published image behind the
+    lock, and the drift would only surface as a red leg in some later PR."""
+    text = _read(PUBLISH_WORKFLOW)
+    for path in ("composer.json", "composer.lock"):
+        assert text.count(f"      - {path}\n") == 2, (
+            f"{path} must trigger the image workflow on both push and pull_request"
+        )
+
+
+def test_the_vendor_script_is_posix_sh_and_executable() -> None:
+    assert VENDOR_SCRIPT.is_file(), "scripts/ci-vendor.sh must exist"
+    assert os.access(VENDOR_SCRIPT, os.X_OK), "scripts/ci-vendor.sh must be executable"
+    assert _read(VENDOR_SCRIPT).startswith("#!/bin/sh"), "repo shell is POSIX sh"

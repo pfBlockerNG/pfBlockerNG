@@ -85,7 +85,7 @@ EOF
     # the variable-default half of a `${PFB_LAN_REGISTRY:-ghcr.io}` fragment.
     When call bootstrap --ref dummy
     The output should include 'docker run'
-    The output should include 'pfblockerng/ci-runner-vm:9'
+    The output should include 'pfblockerng/ci-runner-vm:10'
   End
 
   It 'passes /dev/kvm into the container'
@@ -117,7 +117,7 @@ EOF
     # literal fragment survives the caller-side double quotes rather than asserting
     # its (unreachable, from here) expansion.
     When call bootstrap --ref dummy
-    The output should include '${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:9'
+    The output should include '${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:10'
   End
 
   It 'no longer add-hosts ghcr.io to the LAN registry (issue #2247)'
