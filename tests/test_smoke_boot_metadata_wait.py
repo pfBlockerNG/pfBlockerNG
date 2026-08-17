@@ -1,12 +1,18 @@
-"""Issue #2242: boot readiness includes pfSense package metadata settlement.
+"""Issue #2458: boot readiness must not treat a not-yet-started metadata job as done.
 
-Owner residual (2026-08-15 02:55): ``pfSense-upgrade -uf`` only publishes
-``/var/run/pfSense_version.rc`` on SUCCESS. A finished-but-failed run leaves the
-metadata job gone and the sentinel never written, so the old ``test -f`` probe
-spun until the full 180s timeout instead of recognising "job exited, no
-sentinel" as metadata FAILURE. The predicate now asks a single probe for one of
-three words (``present``/``running``/``gone``) and returns on either
-``present`` or ``gone`` -- only ``running`` keeps polling.
+Issue #2242 taught ``wait_boot_complete`` that ``pfSense-upgrade -uf`` only
+publishes ``/var/run/pfSense_version.rc`` on SUCCESS, so a finished-but-failed
+run leaves the sentinel absent forever. The fix returned on ``gone`` -- which
+also matches the FIRST probe of a perfectly healthy boot, because
+``is_platform_booting()`` can clear seconds BEFORE ``rc.update_pkg_metadata``
+starts (#2242 measured ABI 15 with no metadata process at 10:16:37Z and ABI 16
+with the job active at 10:17:03Z). Callers then ran ``pkg add`` straight
+through the ABI flip window.
+
+``gone`` is therefore not a verdict on its own: it means "job not started yet"
+until a ``running`` probe has been seen, and "job died without the sentinel"
+after one. The waiter keeps polling in the first case and RAISES in the second;
+only ``present`` is success.
 """
 
 from __future__ import annotations
@@ -49,12 +55,82 @@ def test_wait_boot_complete_waits_for_boot_metadata_sentinel(
     assert "PFB_BOOT_METADATA" not in capsys.readouterr().out
 
 
-def test_wait_boot_complete_returns_when_metadata_job_exits_without_sentinel(
+def test_wait_boot_complete_keeps_polling_when_first_probe_finds_no_metadata_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #2458: ``gone`` on the FIRST probe means rc.update_pkg_metadata has
+    not started yet, not that it finished. The waiter must keep polling, and a
+    job that never appears must end the wait by RAISING, never by returning and
+    letting callers pkg-add through the ABI flip window."""
+    ticks = iter([0.0, 0.0] + [float(n) for n in range(1, 200)])
+
+    def fake_monotonic() -> float:
+        try:
+            return next(ticks)
+        except StopIteration:
+            return 1000.0
+
+    calls: list[tuple[str, ...]] = []
+
+    class FakeVM:
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            calls.append(remote)
+            if remote != _PROBE_ARGV:
+                return subprocess.CompletedProcess(remote, 1, "", "")
+            return subprocess.CompletedProcess(remote, 0, "gone", "")
+
+    monkeypatch.setattr(
+        helpers,
+        "php_eval",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "<<BOOT>>0<<END>>", ""),
+    )
+    monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
+    monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
+
+    with pytest.raises(RuntimeError, match="did not settle"):
+        helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=10, delay=0)
+
+    assert len([c for c in calls if c == _PROBE_ARGV]) >= 2
+
+
+def test_wait_boot_complete_accepts_a_metadata_job_that_starts_late(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Issue #2242 owner residual 02:55: two probes see the job still running,
-    the third sees it gone with no sentinel published -- must return (not
-    time out) and print the one loud metadata-failure line."""
+    """Issue #2458: the #2242 timestamps (absent at 10:16:37Z, active at
+    10:17:03Z) are the NORMAL boot, so ``gone`` then ``running`` then
+    ``present`` must succeed quietly -- a waiter that treats ``gone`` as
+    terminal fails closed on every healthy boot."""
+    probe_words = iter(["gone", "running", "present"])
+    calls: list[tuple[str, ...]] = []
+
+    class FakeVM:
+        def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
+            calls.append(remote)
+            if remote != _PROBE_ARGV:
+                return subprocess.CompletedProcess(remote, 1, "", "")
+            return subprocess.CompletedProcess(remote, 0, next(probe_words), "")
+
+    monkeypatch.setattr(
+        helpers,
+        "php_eval",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "<<BOOT>>0<<END>>", ""),
+    )
+    monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
+
+    helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=5, delay=0)
+
+    assert [c for c in calls if c == _PROBE_ARGV] == [_PROBE_ARGV] * 3
+    assert "PFB_BOOT_METADATA" not in capsys.readouterr().out
+
+
+def test_wait_boot_complete_raises_when_metadata_job_exits_without_sentinel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #2458 (replaces the #2242-era row that pinned the fail-open, which
+    required ``running, running, gone`` to RETURN): once the job has been seen
+    running, ``gone`` with no sentinel is a FAILED metadata refresh. Returning
+    there let ``pkg add`` / the artifact ABI sample / ``shutdown -p`` proceed
+    against a box whose pkg ABI was mid-rewrite, so it must raise."""
     probe_words = ["running", "running", "gone"]
     calls: list[tuple[str, ...]] = []
 
@@ -64,11 +140,6 @@ def test_wait_boot_complete_returns_when_metadata_job_exits_without_sentinel(
 
         def ssh(self, *remote: str, timeout: float = 60.0) -> subprocess.CompletedProcess[str]:
             calls.append(remote)
-            # OLD-shape probe (pre-fix production code) never matches _PROBE_ARGV and
-            # always reports a non-zero rc here, so the pre-fix code cannot return early
-            # (its success test is bare `returncode == 0`) and instead spins to timeout --
-            # the RED failure this fixture proves is "raise on timeout", not a StopIteration
-            # or an argv-mismatch assertion error.
             if remote != _PROBE_ARGV:
                 return subprocess.CompletedProcess(remote, 1, "", "")
             word = probe_words[min(self._n, len(probe_words) - 1)]
@@ -82,14 +153,10 @@ def test_wait_boot_complete_returns_when_metadata_job_exits_without_sentinel(
     )
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
 
-    helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=2, delay=0)
+    with pytest.raises(RuntimeError, match="metadata refresh"):
+        helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=5, delay=0)
 
     assert [c for c in calls if c == _PROBE_ARGV] == [_PROBE_ARGV] * 3
-    printed = capsys.readouterr().out
-    assert (
-        "PFB_BOOT_METADATA sentinel=absent job=gone — pfSense metadata refresh exited without "
-        "publishing /var/run/pfSense_version.rc (metadata FAILED, not still booting; issue #2242)"
-    ) in printed
 
 
 def test_wait_boot_complete_metadata_job_stuck_running_times_out(monkeypatch: pytest.MonkeyPatch) -> None:

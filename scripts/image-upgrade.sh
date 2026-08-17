@@ -806,9 +806,59 @@ pfb_be_is_permanent() {
 }
 # pfb_promote_be END
 
+# pfb_wait_pkg_metadata BEGIN
+# The three-word predicate tests/smoke/helpers.py drives (issues #2242, #2458): one
+# round-trip answers present / running / gone. Both alternatives are bracket-escaped
+# (`[-]`, `[.]`) so the pattern text in this command's own argv never satisfies itself
+# as a `pgrep -f` match. pfSense's root login shell is tcsh, so it runs under /bin/sh.
+PFB_METADATA_PROBE='if /bin/test -f /var/run/pfSense_version.rc; then echo present; elif /bin/pgrep -f "pfSense[-]upgrade|rc[.]update_pkg_metadata" >/dev/null 2>&1; then echo running; else echo gone; fi'
+
+# pfb_wait_pkg_metadata [TIMEOUT] — block until pfSense's post-boot package metadata
+# refresh has published /var/run/pfSense_version.rc, which rc.update_pkg_metadata does
+# only after `pfSense-upgrade -uf` finishes both phases. While that job runs it rewrites
+# pkg's effective ABI, so reading `pkg config ABI` / `pkg query`, applying a pkg upgrade
+# or powering the VM off mid-refresh samples or freezes a half-written state (#2242).
+#
+# `gone` is not a verdict on its own: the boot flag clears before the job starts, so it
+# means "not started yet" until a `running` probe has been seen and "exited without the
+# sentinel" after one. Only `present` is success; both failure shapes die loudly rather
+# than let the caller proceed against an unsettled box (#2458).
+pfb_wait_pkg_metadata() {
+    _pwpm_timeout="${1:-${METADATA_TIMEOUT:-600}}"
+    _pwpm_interval="${METADATA_INTERVAL:-5}"
+    _pwpm_elapsed=0
+    _pwpm_seen=0
+    log "waiting for the pfSense package metadata refresh to settle"
+    while true; do
+        # 2>/dev/null + last-non-empty-line for the same reason pfb_refresh_pkgs does it:
+        # ssh_guest always prints a known-hosts warning on stderr (issue #2299).
+        _pwpm_word=$(ssh_guest "/bin/sh -c '${PFB_METADATA_PROBE}'" 2>/dev/null | tr -d '\r' | awk 'NF { v = $0 } END { print v }')
+        if [ "$_pwpm_word" = present ]; then
+            return 0
+        fi
+        if [ "$_pwpm_word" = running ]; then
+            _pwpm_seen=1
+        elif [ "$_pwpm_word" = gone ] && [ "$_pwpm_seen" -eq 1 ]; then
+            die "pfSense package metadata refresh exited without publishing /var/run/pfSense_version.rc — the job was seen running and is now gone, so the refresh FAILED (issues #2242, #2458)"
+        fi
+        if [ "$_pwpm_elapsed" -ge "$_pwpm_timeout" ]; then
+            die "pfSense package metadata did not settle within ${_pwpm_timeout}s (last probe: ${_pwpm_word:-<empty>}) — refusing to read pkg state or power the box off mid-refresh (issues #2242, #2458)"
+        fi
+        sleep "$_pwpm_interval"
+        _pwpm_elapsed=$((_pwpm_elapsed + _pwpm_interval))
+    done
+}
+# pfb_wait_pkg_metadata END
+
+# wait_guest_ssh BEGIN
 # wait_guest_ssh TIMEOUT [CONSOLE] — poll until root SSH answers or TIMEOUT
 # seconds elapse; CONSOLE names the boot's console log for the failure message
 # (the verification boot writes verify-console.log, not console.log).
+#
+# Answering SSH is not a settled box. Every caller here goes straight on to read
+# pkg's ABI, apply a pkg upgrade, sample the exported artifact's ABI, or power the
+# verify VM off — all of which race pfSense's post-boot metadata refresh — so the
+# metadata wait belongs here, once, rather than at each call site (issue #2458).
 wait_guest_ssh() {
     _wgs_timeout="$1"
     _wgs_console="${2:-console.log}"
@@ -818,7 +868,9 @@ wait_guest_ssh() {
             die "VM did not answer SSH within ${_wgs_timeout}s (see $REMOTE_DIR/${_wgs_console} on the KVM host)"
         sleep 5; _wgs_elapsed=$((_wgs_elapsed + 5))
     done
+    pfb_wait_pkg_metadata
 }
+# wait_guest_ssh END
 
 # nth_mac N — echo the Nth line (0-based) of the newline-separated MAC list, i.e.
 # the MAC for NIC net${N}. Mirrors boot_vm.sh so every NIC gets the source-VM MAC.
