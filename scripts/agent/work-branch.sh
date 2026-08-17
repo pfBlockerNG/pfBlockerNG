@@ -2,7 +2,7 @@
 # work-branch.sh -- derive the canonical work-item branch name (the CLAUDE.md
 # "Branch naming" sanitiser) and optionally cut the worktree for it.
 #
-# Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--path PATH] [--base REF]
+# Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--claim] [--path PATH] [--base REF]
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
 #   --worktree  also `git fetch origin` + `git worktree add -b BRANCH PATH BASE` at an
 #               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>,
@@ -10,13 +10,22 @@
 #               at the primary checkout); an existing branch or path gets a `-<epoch>` suffix
 #               (collision rule). Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
+#   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
+#               (`gh issue edit NN --add-assignee @me`) before cutting the worktree.
+#
+# Claim gate (workflow.md "Claim": the assignee IS the claim, set before any work):
+# `issue NN --worktree` refuses (exit 3) when the issue is unassigned or assigned
+# to someone other than the caller (`gh api user`); someone else's claim is refused
+# even with --claim. gh absent/unreachable = loud "claim NOT verified" warning and
+# proceed (MCP-only sessions verify the assignee themselves). ADR worktrees and
+# bare name derivation never touch gh.
 #
 # Sanitiser (pinned by tests/shell/agent_work_branch_spec.sh): lowercase; every
 # non-[a-z0-9] run collapses to one '-'; trim leading/trailing '-'; truncate to <=30
 # chars at a '-' boundary (never a trailing '-').
 
 usage() {
-	echo "usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--path PATH] [--base REF]" >&2
+	echo "usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--claim] [--path PATH] [--base REF]" >&2
 	exit 2
 }
 
@@ -40,16 +49,50 @@ slugify() {
 	printf '%s' "$s"
 }
 
+# claim_gate NN DO_CLAIM -- refuse (exit 3) on POSITIVE evidence that issue NN is
+# not the caller's claim: no assignee, or assigned to someone else (the caller
+# is `gh api user`). With DO_CLAIM=1 an unassigned issue is claimed first. When
+# gh is absent or cannot answer (MCP-only or offline sessions) the claim is not
+# verifiable here: warn loudly and proceed -- the session verifies the assignee
+# with its own GitHub tools; the gate must not strand environments without gh.
+claim_gate() {
+	cg_nn=$1 cg_claim=$2
+	cg_unverified() {
+		echo "work-branch.sh: WARNING claim NOT verified for issue #$cg_nn ($1) — the assignee IS the claim (workflow.md \"Claim\"); confirm it is assigned to you with your GitHub tools before working" >&2
+		return 0
+	}
+	command -v gh >/dev/null 2>&1 || { cg_unverified "gh not installed"; return 0; }
+	cg_me=$(gh api user --jq .login 2>/dev/null) && [ -n "$cg_me" ] ||
+		{ cg_unverified "gh api user failed"; return 0; }
+	cg_assignees=$(gh issue view "$cg_nn" --json assignees --jq '[.assignees[].login] | join(",")' 2>/dev/null) ||
+		{ cg_unverified "gh issue view failed"; return 0; }
+	case ",$cg_assignees," in
+		*",$cg_me,"*) return 0 ;;
+	esac
+	if [ -n "$cg_assignees" ]; then
+		echo "work-branch.sh: issue #$cg_nn is claimed by $cg_assignees, not $cg_me — one claimed ticket maps to one live session (workflow.md \"Claim\"); coordinate or take over per the staleness rule before cutting a worktree" >&2
+		exit 3
+	fi
+	if [ "$cg_claim" -eq 1 ]; then
+		gh issue edit "$cg_nn" --add-assignee @me >/dev/null 2>&1 ||
+			{ echo "work-branch.sh: could not claim issue #$cg_nn (gh issue edit --add-assignee @me failed)" >&2; exit 3; }
+		return 0
+	fi
+	echo "work-branch.sh: issue #$cg_nn is not claimed (no assignee) — the assignee IS the claim and is set before any work (workflow.md \"Claim\"); re-run with --claim to assign it to $cg_me, or \`gh issue edit $cg_nn --add-assignee @me\`" >&2
+	exit 3
+}
+
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
 	scrub_git_env "$0"
-	kind='' nn='' title='' do_worktree=0 path='' base='origin/devel'
+	kind='' nn='' title='' do_worktree=0 do_claim=0 path='' base='origin/devel'
 	case "$1" in issue|adr) kind=$1; shift ;; *) usage ;; esac
 	case "$1" in *[!0-9]*|'') usage ;; *) nn=$1; shift ;; esac
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--worktree) do_worktree=1; shift ;;
+			--claim) do_claim=1; shift ;;
 			--path) [ $# -ge 2 ] || usage; path=$2; shift 2 ;;
 			--base) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
 			*) title="$title $1"; shift ;;
@@ -65,6 +108,7 @@ main() {
 	fi
 
 	require_tool git
+	[ "$kind" = issue ] && claim_gate "$nn" "$do_claim"
 	# Anchor at the PRIMARY checkout: rc-mode/managed sessions run inside a linked
 	# session worktree, where --show-toplevel would nest the new worktree in a tree
 	# whose lifecycle the harness owns (pinned by agent_work_branch_spec.sh).

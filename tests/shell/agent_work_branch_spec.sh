@@ -71,7 +71,25 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
     git_fixture init -q "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init &&
-      git_fixture -C "$primary" worktree add -q --detach "$fixture/session" >/dev/null 2>&1
+      git_fixture -C "$primary" worktree add -q --detach "$fixture/session" >/dev/null 2>&1 || return 1
+    # Claim gate stub: `gh` answers from WB_ASSIGNEES (comma list, default: the
+    # caller) and WB_ME; WB_GH_RC makes every gh call fail; every call is logged.
+    stubdir="$fixture/bin"; mkdir -p "$stubdir"
+    gh_log="$fixture/gh.log"
+    cat > "$stubdir/gh" <<'GH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$WB_GH_LOG"
+[ "${WB_GH_RC:-0}" -eq 0 ] || exit "$WB_GH_RC"
+case "$*" in
+  "api user --jq .login") printf '%s\n' "${WB_ME:-me}" ;;
+  "issue view "*"--json assignees"*) printf '%s\n' "${WB_ASSIGNEES-me}" ;;
+  "issue edit "*"--add-assignee @me"*) : ;;
+  *) echo "gh stub: unexpected argv: $*" >&2; exit 9 ;;
+esac
+GH
+    chmod +x "$stubdir/gh"
+    export WB_GH_LOG="$gh_log"
+    PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
   BeforeEach 'setup'
@@ -128,6 +146,109 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
     The status should equal 0
     The output should equal "$(printf 'issue/12-tld\t%s/abs-target' "$fixture")"
     The stderr should include 'Preparing worktree'
+  End
+End
+
+Describe 'work-branch.sh --worktree claim gate (workflow.md "Claim")'
+  # The assignee IS the claim, set before any work: an issue worktree is refused
+  # unless the issue is assigned to the caller; --claim assigns an unclaimed one.
+  script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/work-branch.sh"
+
+  setup() {
+    . "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/lib/git-env-scrub.sh"
+    pfb_scrub_git_env
+    fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_claim.XXXXXX") || return 1
+    fixture=$(cd "$fixture" && pwd -P) || return 1
+    primary="$fixture/primary"
+    git_fixture init -q "$primary" &&
+      git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q --allow-empty -m init || return 1
+    stubdir="$fixture/bin"; mkdir -p "$stubdir"
+    gh_log="$fixture/gh.log"
+    cat > "$stubdir/gh" <<'GH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$WB_GH_LOG"
+[ "${WB_GH_RC:-0}" -eq 0 ] || exit "$WB_GH_RC"
+case "$*" in
+  "api user --jq .login") printf '%s\n' "${WB_ME:-me}" ;;
+  "issue view "*"--json assignees"*) printf '%s\n' "${WB_ASSIGNEES-me}" ;;
+  "issue edit "*"--add-assignee @me"*) : ;;
+  *) echo "gh stub: unexpected argv: $*" >&2; exit 9 ;;
+esac
+GH
+    chmod +x "$stubdir/gh"
+    export WB_GH_LOG="$gh_log"
+    PATH="$stubdir:$PATH"; export PATH
+  }
+  cleanup() { rm -rf "$fixture"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'refuses to cut an issue worktree when the issue is unassigned'
+    When run sh -c 'cd "$1" && WB_ASSIGNEES= exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 3
+    The stderr should include 'issue #7 is not claimed'
+    The stderr should include '--claim'
+    Assert [ ! -e "$primary/.claude/worktrees/issue-7" ]
+  End
+
+  It 'refuses to cut an issue worktree claimed by someone else'
+    When run sh -c 'cd "$1" && WB_ASSIGNEES=other exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 3
+    The stderr should include 'claimed by other'
+    Assert [ ! -e "$primary/.claude/worktrees/issue-7" ]
+  End
+
+  It 'proceeds when the issue is assigned to the caller (among others)'
+    When run sh -c 'cd "$1" && WB_ASSIGNEES=other,me exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The stderr should include 'Preparing worktree'
+  End
+
+  It '--claim assigns an unclaimed issue to the caller and proceeds'
+    When run sh -c 'cd "$1" && WB_ASSIGNEES= exec sh "$2" issue 7 tld --worktree --base HEAD --claim' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The stderr should include 'Preparing worktree'
+    The contents of file "$gh_log" should include 'issue edit 7 --add-assignee @me'
+  End
+
+  It '--claim still refuses an issue claimed by someone else'
+    When run sh -c 'cd "$1" && WB_ASSIGNEES=other exec sh "$2" issue 7 tld --worktree --base HEAD --claim' _ "$primary" "$script_abs"
+    The status should equal 3
+    The stderr should include 'claimed by other'
+    The contents of file "$gh_log" should not include 'issue edit'
+  End
+
+  It 'warns and proceeds when gh cannot answer (MCP-only or offline sessions verify the claim themselves)'
+    When run sh -c 'cd "$1" && WB_GH_RC=1 exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The stderr should include 'claim NOT verified'
+    The stderr should include 'issue #7'
+  End
+
+  It 'warns and proceeds when gh is not installed at all'
+    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$(dirname "$(command -v git)"):/usr/bin:/bin"
+    The status should equal 0
+    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The stderr should include 'claim NOT verified'
+  End
+
+  It 'does not gate ADR worktrees on a claim'
+    When run sh -c 'cd "$1" && WB_GH_RC=1 exec sh "$2" adr 9 x --worktree --base HEAD' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'adr/9-x\t%s/.claude/worktrees/adr-9' "$primary")"
+    The stderr should include 'Preparing worktree'
+    Assert [ ! -e "$gh_log" ]
+  End
+
+  It 'does not touch gh when only printing the branch name'
+    When run sh -c 'cd "$1" && WB_GH_RC=1 exec sh "$2" issue 7 tld' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal 'issue/7-tld'
+    Assert [ ! -e "$gh_log" ]
   End
 End
 
