@@ -23,12 +23,16 @@ on:
       - .dockerignore
       - .github/docker/**
       - .github/workflows/ci-images.yml
+      - composer.json
+      - composer.lock
       - tests/smoke/requirements.txt
   pull_request:
     paths:
       - .dockerignore
       - .github/docker/**
       - .github/workflows/ci-images.yml
+      - composer.json
+      - composer.lock
       - tests/smoke/requirements.txt
   workflow_dispatch:
 

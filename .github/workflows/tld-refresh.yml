@@ -52,7 +52,7 @@ jobs:
     name: Refresh TLD lists and open PR on change
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -88,8 +88,8 @@ jobs:
       # The refresh stages a .php file, so pre-commit enters its PHP block: php -l,
       # PHPStan and PHPCS out of vendor/bin (issue #1793). They run on the OLDEST
       # supported PHP — the floor a diagnostic has to clear — never the runner default.
-      - name: Install Composer dependencies for the pre-commit PHP gates
-        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Materialise the baked Composer vendor tree for the pre-commit PHP gates
+        run: scripts/ci-vendor.sh
 
       - name: Refresh arrays from IANA
         id: refresh

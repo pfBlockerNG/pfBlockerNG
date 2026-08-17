@@ -72,7 +72,7 @@ jobs:
     name: Read supported-version matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -105,7 +105,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -171,7 +171,7 @@ jobs:
     name: Test type checking (mypy)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -198,7 +198,7 @@ jobs:
     name: Ruff (lint + format)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -226,7 +226,7 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -327,7 +327,7 @@ jobs:
     name: actionlint (workflow files)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -386,7 +386,7 @@ jobs:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -473,7 +473,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -513,7 +513,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -544,8 +544,11 @@ jobs:
           ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
           echo /tmp/bin >> "$GITHUB_PATH"
 
-      - name: Install PHPStan
-        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Materialise the baked Composer vendor tree
+        # The image bakes vendor/ from composer.lock; this copies it into the checkout.
+        # It fails loud if the lock has moved past the baked tree — that is a stale image
+        # and wants a .github/docker/VERSION bump, not a per-job download (issue #2502).
+        run: scripts/ci-vendor.sh
 
       - name: Run PHPStan
         # phpstan.neon configures paths, level, stubs, and includes the
@@ -558,7 +561,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -589,10 +592,11 @@ jobs:
           ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
           echo /tmp/bin >> "$GITHUB_PATH"
 
-      - name: Install PHP dependencies
-        # composer itself is baked; the project's vendor/ tree is not and must be resolved
-        # per run from composer.json.
-        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Materialise the baked Composer vendor tree
+        # The image bakes vendor/ from composer.lock; this copies it into the checkout.
+        # It fails loud if the lock has moved past the baked tree — that is a stale image
+        # and wants a .github/docker/VERSION bump, not a per-job download (issue #2502).
+        run: scripts/ci-vendor.sh
 
       - name: Run PHPCS
         # Config auto-discovered from phpcs.xml.dist: the custom PfBlockerNG standard
@@ -604,7 +608,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -636,10 +640,11 @@ jobs:
           ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
           echo /tmp/bin >> "$GITHUB_PATH"
 
-      - name: Install PHP dependencies
-        # composer itself is baked; the project's vendor/ tree is not and must be resolved
-        # per run from composer.json.
-        run: composer install --no-interaction --prefer-dist --no-progress
+      - name: Materialise the baked Composer vendor tree
+        # The image bakes vendor/ from composer.lock; this copies it into the checkout.
+        # It fails loud if the lock has moved past the baked tree — that is a stale image
+        # and wants a .github/docker/VERSION bump, not a per-job download (issue #2502).
+        run: scripts/ci-vendor.sh
 
       - name: Run PHPUnit (with coverage)
         # Config in phpunit.xml. tests/php/bootstrap.php loads the real
@@ -667,7 +672,7 @@ jobs:
     name: markdownlint
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -692,7 +697,7 @@ jobs:
     name: Widget JS unit tests (node --test)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -719,7 +724,7 @@ jobs:
     name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -776,7 +781,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -843,7 +848,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -946,7 +951,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -987,7 +992,7 @@ jobs:
     needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

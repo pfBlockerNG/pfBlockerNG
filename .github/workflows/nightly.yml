@@ -40,7 +40,7 @@ jobs:
     name: Pin inputs and identify snapshot
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -200,7 +200,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -356,7 +356,7 @@ jobs:
     needs: [prepare, build]
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -425,7 +425,7 @@ jobs:
     needs: [prepare, handoff]
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:9
+      image: ghcr.io/pfblockerng/ci-runner:10
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

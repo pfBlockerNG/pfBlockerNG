@@ -230,7 +230,7 @@ _bootstrap="cd /root/pfBlockerNG \
       -e SMOKE_REPO_EXPECTED_CHANNEL='$_REPO_EXPECTED_CHANNEL_Q' \
       -e SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='$_NIGHTLY_EXPECTED_SOURCE_SHA_Q' -e SMOKE_NIGHTLY_EXPECTED_VERSION='$_NIGHTLY_EXPECTED_VERSION_Q' \
       -w /root/pfBlockerNG \
-      \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:9 \
+      \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:10 \
       sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \

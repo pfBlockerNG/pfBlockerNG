@@ -44,7 +44,10 @@ _HOOKS_RE = re.compile(r"scripts/setup-hooks\.sh|core\.hooksPath")
 # chained `git commit` is not a staged path.
 _GIT_ADD_RE = re.compile(r"\bgit add\b(?P<paths>[^\n#;|&]*)")
 _GIT_COMMIT_RE = re.compile(r"\bgit commit\b")
-_COMPOSER_INSTALL_RE = re.compile(r"\bcomposer install\b")
+# Either way a job can end up with a vendor tree: the baked one materialised by
+# scripts/ci-vendor.sh (issue #2502, the only shape workflows use now), or a plain
+# `composer install` — still recognised so this guard keeps meaning outside CI's image.
+_VENDOR_TREE_RE = re.compile(r"\bcomposer install\b|\bci-vendor\.sh\b")
 
 # The hook's php -l / PHPStan / PHPCS gates must run on a supported PHP, which
 # means setup-php fed from read-version-matrix rather than the runner default.
@@ -155,13 +158,15 @@ def _offenders(name: str, text: str) -> tuple[list[str], list[str]]:
     for job, job_start, job_lines in _hook_php_jobs(text):
         inspected.append(f"{name}:{job}")
 
-        install_offset = _first_line_matching(job_lines, _COMPOSER_INSTALL_RE)
+        install_offset = _first_line_matching(job_lines, _VENDOR_TREE_RE)
         commit_offset = _first_line_matching(job_lines, _GIT_COMMIT_RE)
         if install_offset is None:
-            offenders.append(f"{name}: job `{job}` stages PHP under the git hooks but never runs `composer install`")
+            offenders.append(
+                f"{name}: job `{job}` stages PHP under the git hooks but never materialises a Composer vendor tree"
+            )
         elif commit_offset is not None and install_offset > commit_offset:
             offenders.append(
-                f"{name}: job `{job}` runs `composer install` at line {job_start + install_offset - 1}, "
+                f"{name}: job `{job}` materialises its vendor tree at line {job_start + install_offset - 1}, "
                 f"after `git commit` at line {job_start + commit_offset - 1}"
             )
     return offenders, inspected
@@ -248,7 +253,7 @@ def test_guard_flags_a_job_that_stages_php_without_installing_composer() -> None
     )
     assert inspected == ["synthetic.yml:refresh"]
     assert offenders == [
-        "synthetic.yml: job `refresh` stages PHP under the git hooks but never runs `composer install`"
+        "synthetic.yml: job `refresh` stages PHP under the git hooks but never materialises a Composer vendor tree"
     ]
 
 
@@ -268,7 +273,7 @@ def test_guard_flags_composer_installed_in_a_different_job() -> None:
         "          git commit -m 'x'\n",
     )
     assert offenders == [
-        "synthetic.yml: job `refresh` stages PHP under the git hooks but never runs `composer install`"
+        "synthetic.yml: job `refresh` stages PHP under the git hooks but never materialises a Composer vendor tree"
     ]
 
 
@@ -285,7 +290,9 @@ def test_guard_flags_composer_installed_after_the_commit() -> None:
         "          git commit -m 'x'\n"
         "      - run: composer install\n",
     )
-    assert offenders == ["synthetic.yml: job `refresh` runs `composer install` at line 8, after `git commit` at line 7"]
+    assert offenders == [
+        "synthetic.yml: job `refresh` materialises its vendor tree at line 8, after `git commit` at line 7"
+    ]
 
 
 def test_guard_treats_a_broad_pathspec_as_php_staging() -> None:
