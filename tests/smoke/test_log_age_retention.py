@@ -50,6 +50,9 @@ PFB_LOGDIR = "/var/log/pfblockerng"
 PFB_DBDIR = "/var/db/pfblockerng"
 
 _PFB_EXTRA_INC = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
+# issue #2492: extra.inc has no requires of its own, so anything calling pfb_global()
+# (defined in pfblockerng.inc:3211) must load this too.
+_PFB_MAIN_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 # Host-side (non-chrooted) PHP-written CSV log; timestamp at CSV field 0.
 LOG_IP_BLOCKLOG = f"{PFB_LOGDIR}/ip_block.log"
@@ -129,6 +132,10 @@ def _prime_idle_schedule(vm: SmokeVM, *, timeout: float = 60.0) -> None:
     """Publish completed schedule state and a matching future runtime cache."""
     snippet = (
         f"require_once('{_PFB_EXTRA_INC}');"
+        # issue #2492: pfb_global() lives in pfblockerng.inc and extra.inc requires
+        # nothing, so without this the call is fatal under pfSsh.php and errors every
+        # test in this module at fixture setup.
+        f"require_once('{_PFB_MAIN_INC}');"
         "pfb_global();"
         "$now = time();"
         "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';"
