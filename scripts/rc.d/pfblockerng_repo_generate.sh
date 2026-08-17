@@ -146,20 +146,29 @@ _base_from_conf() {
     _bc_url="${_bc_url%/}"
     _bc_head="${_bc_url%/*}"
     [ "${_bc_head}" != "${_bc_url}" ] || return 2
-    # The trailing segment must look like a varver this hook emits. A url
-    # carrying a query string or fragment is not one: rewriting the path would
-    # silently drop credentials the operator put there.
-    case "${_bc_url##*/}" in
-        '' | *[!a-z0-9.-]*) return 2 ;;
+    # The trailing segment must be a varver this hook emits — _detect_catalog()
+    # above produces exactly `ce-` or `plus-` followed by major.minor, nothing
+    # else. Anything looser accepts a directory the operator chose (and would
+    # then replace it), or a url carrying a query string or fragment (and would
+    # drop credentials they put there while rewriting the path).
+    _bc_varver="${_bc_url##*/}"
+    case "${_bc_varver}" in
+        ce-[0-9]* | plus-[0-9]*) ;;
+        *) return 2 ;;
+    esac
+    case "${_bc_varver#*-}" in
+        *[!0-9.]*) return 2 ;;
     esac
     [ "${_bc_head##*/}" = "${_bc_channel}" ] || return 2
     _bc_base="${_bc_head%/*}"
     [ "${_bc_base}" != "${_bc_head}" ] || return 2
-    # A bare scheme is what is left when the channel segment was in fact the
-    # host (e.g. "https://nightly/ce-2.7") — rebuilding from it yields a
-    # malformed url, so that conf is foreign too.
+    # The base must carry a whole scheme separator. Without one it is either a
+    # bare scheme — what is left when the channel segment was in fact the host,
+    # e.g. "https://nightly/ce-2.7" — or a one-slash scheme, neither of which
+    # this hook emits and both of which rebuild into a malformed url.
     case "${_bc_base}" in
-        '' | *: | *:/) return 2 ;;
+        *://*) ;;
+        *) return 2 ;;
     esac
     printf '%s' "${_bc_base}"
 }

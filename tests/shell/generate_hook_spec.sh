@@ -819,3 +819,45 @@ ARCHLEAF
       The value "$(cksum < "${PFB_NIGHTLY_CONF}")" should equal "${_al_sum}"
     End
 End
+
+Describe 'generate hook — the varver segment must be one this hook emits'
+    # `<channel>/<anything>` is not our shape: only `<edition>-<major.minor>` is,
+    # and `_detect_catalog` emits exactly `ce-` or `plus-` prefixes. Accepting a
+    # foreign leaf preserved the operator's base but still replaced their
+    # directory. A scheme with one slash is malformed and equally not ours.
+    setup() {
+        _ns_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_notshape.XXXXXX")"
+        _make_box "${_ns_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_STABLE_CONF}" <<'NOTVARVER'
+pfblockerng-stable: {
+  url: "https://mirror.example.net/pkg/stable/mycustomdir",
+  enabled: yes
+}
+NOTVARVER
+        cat > "${PFB_EDGE_CONF}" <<'ONESLASH'
+pfblockerng-edge: {
+  url: "https:/mirror.example.net/pkg/edge/ce-2.7",
+  enabled: yes
+}
+ONESLASH
+        _ns_sums="$(cat "${PFB_STABLE_CONF}" "${PFB_EDGE_CONF}" | cksum)"
+    }
+    cleanup() { rm -rf "${_ns_dir}"; _unset_box; unset _ns_sums; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: one url has a non-catalog leaf, one a one-slash scheme'
+      The contents of file "${PFB_STABLE_CONF}" should include "stable/mycustomdir"
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https:/mirror.example.net/pkg/edge/ce-2.7"'
+    End
+
+    It 'leaves both byte-unchanged, warns, and exits 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "did not write"
+      The value "$(cat "${PFB_STABLE_CONF}" "${PFB_EDGE_CONF}" | cksum)" should equal "${_ns_sums}"
+      The contents of file "${PFB_STABLE_CONF}" should include "mycustomdir"
+      The contents of file "${PFB_EDGE_CONF}" should include "ce-2.7"
+      The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.8"
+    End
+End
