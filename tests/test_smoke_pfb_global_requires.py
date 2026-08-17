@@ -48,7 +48,7 @@ _CALL = re.compile(r"pfb_global\s*\(\s*\)\s*;")
 
 # A require/include whose target is the MAIN inc. Deliberately does NOT match
 # pfblockerng_extra.inc (the dot must follow "pfblockerng"), and does not match prose
-# mentions in comments/docstrings ("do not require pfblockerng.inc" has no require-().
+# mentions in comments/docstrings ("do not require pfblockerng.inc" has no require-paren).
 _REQUIRE_MAIN = re.compile(r"require(?:_once)?\s*\([^)\n]{0,200}pfblockerng\.inc")
 
 # A Python constant holding the main-inc path (e.g. _PFB_INC = ".../pfblockerng.inc").
