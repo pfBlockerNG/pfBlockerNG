@@ -660,6 +660,9 @@ function sync_package_pfblockerng($cron=''): bool {
 	$pfb_dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 	if (!pfb_schedule_dispatch_begin()) {
+		// issue #2496: pfblockerng.php exits 1 on a FALSE from this function with no
+		// other output, so every guard must name itself or the failure is undiagnosable.
+		pfb_logger("\n sync aborted: dispatcher lock unavailable; pending changes retained.\n", 1);
 		pfb_mark_pending_changes();
 		return FALSE;
 	}
@@ -678,6 +681,7 @@ function sync_package_pfblockerng($cron=''): bool {
 		return FALSE;
 	}
 	if (!pfb_stage_publish_dir_recover($pfb['dbdir'])) {
+		pfb_logger("\n sync aborted: stage/publish recovery failed in {$pfb['dbdir']}; pending changes retained.\n", 1);
 		pfb_mark_pending_changes();
 		if ($pfb_feed_pass_owner) {
 			pfb_feed_pass_release();
@@ -688,6 +692,7 @@ function sync_package_pfblockerng($cron=''): bool {
 		return FALSE;
 	}
 	if (!pfb_geoip_generation_ready()) {
+		pfb_logger("\n sync aborted: GeoIP generation swap in progress; pending changes retained.\n", 1);
 		pfb_mark_pending_changes();
 		if ($pfb_feed_pass_owner) {
 			pfb_feed_pass_release();
