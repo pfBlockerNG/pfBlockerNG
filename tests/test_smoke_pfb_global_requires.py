@@ -15,13 +15,15 @@ Coverage here is TWO-TIER, honestly labelled:
 
 * **Executable rows** for the two historical sites — ``pin_cron_due`` and
   ``_prime_idle_schedule`` — run the real helper against a monkeypatched ``php_eval``
-  and assert the emitted PHP. These are the real guard; both are mutation-verified.
+  and assert the emitted PHP. These are the primary tier; both are mutation-verified.
+  (Their snippet checks are substring-based too, so the evasions below apply to both
+  tiers — "executable" means exercising the real helper, not parsing PHP.)
 * **A source sweep** over ``tests/smoke/`` as a tripwire for NEW call sites. It is
   per-occurrence (a call must have a guard or a require in the PRECEDING window, so a
   later snippet's require cannot excuse an earlier bare call), but it reads Python
   source, not emitted PHP — string concatenation, negated guards
   (``!function_exists``), or exotic call shapes can evade it. It is a tripwire, not a
-  proof; the executable rows are the proof for the sites that have burned us.
+  proof; the executable rows are the stronger tier for the sites that have burned us.
 
 Which remedy is correct per snippet is EMPIRICAL, not stylistic: for ``pin_cron_due``
 the require was measured worse than the guard (19 passed/3 failed guarded; 12/13 with
