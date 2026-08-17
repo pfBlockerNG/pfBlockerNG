@@ -1184,8 +1184,13 @@ def pin_cron_due(vm: SmokeVM) -> int:
     """
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
+        # issue #2492: pfblockerng.inc FIRST, extra.inc second — the order the working
+        # sibling snippets use (test_schedule_runtime.py:122, test_smoke_tick.py:627).
+        # Loading extra.inc first and pfblockerng.inc second was measured to leave the
+        # guest reporting "A valid config file could not be recovered" (12/12 runs).
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        # issue #2492: load pfblockerng.inc BEFORE calling pfb_global(). It is defined
+        # It is defined
         # there (pfblockerng.inc:3211) and pfblockerng_extra.inc has no requires at all, so
         # requiring extra.inc alone left the call fatal under pfSsh.php ("Call to undefined
         # function pfb_global()"), erroring every test that uses this helper.
@@ -1199,7 +1204,6 @@ def pin_cron_due(vm: SmokeVM) -> int:
         # This matches the sibling snippets that already load it under php_eval:
         # test_schedule_runtime.py:122, test_smoke_ip_recompute.py:911, helpers.py:4414,
         # test_smoke_tick.py:627 — including one that calls write_config() afterwards.
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "pfb_global();\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
