@@ -42,6 +42,8 @@
 #               design (issue #2497): repointing a box's origin is persistent state
 #               that silently changes later runs and records nothing in the artifacts.
 #               Lets a run target a local mirror, a fork, or an air-gapped copy.
+#               An EMPTY env value falls back to origin (the ${VAR:-} convention);
+#               only an explicit --git-remote '' is rejected.
 #
 # Test-only (env):
 #   PFB_SELECT_BOX  override the select-box.sh path (default: scripts/select-box.sh).
@@ -60,7 +62,7 @@
 set -eu
 
 usage() {
-    sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
@@ -170,6 +172,21 @@ _sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
 
 _REF_Q="$(_sq "$_REF")"
 _GIT_REMOTE_Q="$(_sq "$_GIT_REMOTE")"
+# issue #2497 review B3: with a non-origin remote, seed ci-metadata into a NEUTRAL
+# local ref and tell the box's read-version-matrix.sh to read it (MATRIX_REF).
+# Seeding refs/remotes/origin/ci-metadata would race the script's own tolerated
+# `git fetch origin ci-metadata`: on a box whose origin is reachable, that re-fetch
+# overwrites the seed and the run reads a matrix from a DIFFERENT source than the
+# code under test — silently. The + prefix force-updates the neutral ref on reuse.
+if [ "$_GIT_REMOTE" = "origin" ]; then
+    _CIMETA_REFSPEC="ci-metadata:refs/remotes/origin/ci-metadata"
+    _MATRIX_REF=""
+else
+    _CIMETA_REFSPEC="+ci-metadata:refs/pfb/ci-metadata"
+    _MATRIX_REF="refs/pfb/ci-metadata"
+fi
+_CIMETA_REFSPEC_Q="$(_sq "$_CIMETA_REFSPEC")"
+_MATRIX_REF_Q="$(_sq "$_MATRIX_REF")"
 _ABI_Q="$(_sq "$_ABI")"
 _MARKER_Q="$(_sq "$_MARKER")"
 _REPO_LIVE_URL_Q="$(_sq "${SMOKE_REPO_LIVE_URL:-}")"
@@ -195,7 +212,7 @@ _bootstrap="cd /root/pfBlockerNG \
  && git sparse-checkout set src scripts stubs/python tests/smoke pkg-site \
  && git fetch --quiet '$_GIT_REMOTE_Q' '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
- && git fetch --quiet --no-tags '$_GIT_REMOTE_Q' ci-metadata:refs/remotes/origin/ci-metadata \
+ && git fetch --quiet --no-tags '$_GIT_REMOTE_Q' '$_CIMETA_REFSPEC_Q' \
  && exec docker run --rm --init \
       --device /dev/kvm \
       --sysctl net.ipv4.ip_unprivileged_port_start=53 \
@@ -204,7 +221,7 @@ _bootstrap="cd /root/pfBlockerNG \
       -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
       -e SMOKE_GHCR_TOKEN -e SMOKE_ADMIN_USER -e SMOKE_ADMIN_PASSWORD \
       -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \
-      -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY \
+      -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY -e MATRIX_REF='$_MATRIX_REF_Q' \
       -e SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' -e SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \
       -e SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' -e SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \
       -e SMOKE_REPO_EXPECTED_CHANNEL='$_REPO_EXPECTED_CHANNEL_Q' \

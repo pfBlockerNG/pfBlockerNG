@@ -57,6 +57,10 @@ scripts/local-smoke.sh --marker ui_render
 
 # A different pkg channel (stable|testing|edge|nightly; default edge):
 scripts/local-smoke.sh --channel testing
+
+# Fetch the ref (and ci-metadata) from a different git source — a local mirror, a
+# fork, or an air-gapped copy (issue #2497). Per-run; never repoint a box's origin:
+scripts/local-smoke.sh --git-remote git://mirror.lan/pfBlockerNG.git --ref mybranch
 ```
 
 `--channel` decides which port `.pkg` built from, and port NAMES package
