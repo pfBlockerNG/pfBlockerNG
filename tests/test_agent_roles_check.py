@@ -196,7 +196,10 @@ def test_ci_workflow_runs_on_push() -> None:
 def test_ci_workflow_runs_the_parity_gate() -> None:
     # The parity guard's only other CI reach is test.yml's shell-tests job, which
     # `paths-ignore: '**/*.md'` skips for a SKILL.md-only change — its own subject.
-    assert _PARITY_GUARD in _workflow_text()
+    # Match the RUN step, not the guard's name anywhere: it is also a trigger path,
+    # so a bare substring stays green with the step deleted.
+    steps = _workflow_text().partition("\njobs:")[2]
+    assert re.search(rf"^\s+run: sh {re.escape(_PARITY_GUARD)}$", steps, re.MULTILINE), steps
 
 
 # --------------------------------------------------------------------------- #
