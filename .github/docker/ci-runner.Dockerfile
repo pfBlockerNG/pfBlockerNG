@@ -158,17 +158,15 @@ RUN curl -fsSLo /tmp/composer.phar "https://getcomposer.org/download/${COMPOSER_
  && install -m 0755 /tmp/composer.phar /usr/local/bin/composer \
  && rm -f /tmp/composer.phar
 
-# The project's dev toolchain (PHPStan, PHPUnit, PHP_CodeSniffer) is baked, not resolved
-# per job. `composer install` in a workflow leg pulls every dist through api.github.com,
-# so the 2026-08-17 GitHub API incident turned three PHP gates red on a pull request that
-# touched no PHP at all. Legs copy this tree into their checkout with scripts/ci-vendor.sh
-# (a copy, not a symlink: composer's autoloader derives $baseDir from its own real path).
+# The project's dev toolchain (PHPStan, PHPUnit, PHP_CodeSniffer) is baked rather than
+# resolved per job: `composer install` in a workflow leg pulls every dist through
+# api.github.com, putting a third-party outage on the critical path of every PHP gate.
+# Legs copy this tree into their checkout with scripts/ci-vendor.sh (a copy, not a
+# symlink: composer's autoloader derives $baseDir from its own real path).
 #
-# The tree is pinned to the composer.lock copied here, which is what makes a dependency
-# change require a published image: ci-images.yml triggers on the lock, and its immutable
-# tag guard then refuses to republish without a .github/docker/VERSION bump. A checkout
-# whose lock has moved past this tree fails loud in ci-vendor.sh instead of being analysed
-# against the wrong tool versions.
+# The tree is pinned to the composer.json/composer.lock copied here, so a dependency
+# change needs a published image: ci-images.yml triggers on both files, and the immutable
+# tag guard refuses to republish without a .github/docker/VERSION bump.
 COPY composer.json composer.lock /opt/pfb-composer/
 RUN cd /opt/pfb-composer \
  && composer install --no-interaction --prefer-dist --no-progress \

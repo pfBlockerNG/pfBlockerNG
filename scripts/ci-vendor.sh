@@ -1,22 +1,19 @@
 #!/bin/sh
 # ci-vendor.sh -- materialise the Composer vendor tree from the copy baked into the
-# ci-runner image (issue #2502).
-#
-# CI legs used to run `composer install` per job, which resolved 27 dev packages from
-# api.github.com every run; the 2026-08-17 GitHub API incident turned three PHP gates red
-# on a pull request that touched no PHP. The tree is baked into the image instead, and
-# this is the one path every leg uses to get it.
+# ci-runner image. Requires the baked tree, so it runs inside that image, not on a host.
 #
 # The tree is COPIED, not symlinked: composer's generated autoloader derives $baseDir
 # from its own real path, so a symlinked vendor/ would resolve autoload-dev's
 # PfBlockerNG\PHPStan\ => tests/phpstan/ mapping outside the checkout (which is why
 # check_composer_vendor.py rejects a symlinked vendor outright).
 #
-# The baked tree is pinned to the composer.lock the image was built from. If the
-# checkout's lock has moved past it, that is a stale image, not a stale checkout, and the
-# leg fails here naming the fix rather than analysing against the wrong tool versions.
+# The baked tree is pinned to the Composer metadata the image was built from. A checkout
+# whose metadata has moved past it means a stale image, not a stale checkout, so this
+# exits nonzero naming that fix rather than letting the caller analyse against the wrong
+# tool versions.
 #
 # Usage: ci-vendor.sh          (PFB_BAKED_VENDOR overrides the baked location)
+# Exit:  0 materialised · 1 no baked tree / metadata drift / checker unusable
 
 set -eu
 
