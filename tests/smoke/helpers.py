@@ -4052,8 +4052,11 @@ def wait_unbound_ready(vm: SmokeVM, *, attempts: int = 60, delay: float = 2.0) -
 # residual 02:55): `pfSense-upgrade -uf` only publishes the sentinel on SUCCESS, so a
 # finished-but-failed run leaves it absent forever -- the old probe could not tell that
 # apart from "still running" and spun to the full timeout. One ssh round-trip answers
-# present/running/gone. Both alternatives are bracket-escaped (``[-]``, ``[.]``) so the
-# pattern text embedded in THIS command's own argv never satisfies itself as a match --
+# present/running/gone. `gone` alone is NOT a verdict (issue #2458): the boot flag can
+# clear before rc.update_pkg_metadata starts, so it reads "not started yet" until a
+# `running` probe has been seen and "died without the sentinel" after one. Both
+# alternatives are bracket-escaped (``[-]``, ``[.]``) so the pattern text
+# embedded in THIS command's own argv never satisfies itself as a match --
 # unescaped, `pgrep -f` matches its own invoking shell (verified live: an unescaped
 # `pfSense-upgrade` branch made every probe report "running" with no job anywhere).
 _METADATA_PROBE_CMD = (
@@ -4087,11 +4090,17 @@ def wait_boot_complete(
     ``rc.update_pkg_metadata`` still runs ``pfSense-upgrade`` and temporarily rewrites
     pkg's effective ABI. That job atomically publishes ``pfSense_version.rc`` only after
     both update phases finish, so the per-boot file is the stable completion signal.
+
+    That job can also start AFTER the boot flag clears (issue #2458; #2242 measured the
+    metadata process absent at 10:16:37Z and active 26s later), so an absent job is only
+    conclusive once the job has been observed running -- and then it means the refresh
+    FAILED, which raises rather than letting callers pkg-add through the ABI flip window.
     """
     deadline = time.monotonic() + timeout
     snippet = "echo '<<BOOT>>' . (is_platform_booting() ? '1' : '0') . '<<END>>';"
     last = "?"
     last_metadata = "not checked"
+    seen_metadata_job = False
     while True:
         remaining = deadline - time.monotonic()
         if not remaining > 0:
@@ -4126,14 +4135,17 @@ def wait_boot_complete(
                 word = metadata.stdout.strip()
                 if word == "present":
                     return
-                if word == "gone":
-                    print(
-                        "PFB_BOOT_METADATA sentinel=absent job=gone — pfSense metadata refresh exited "
-                        "without publishing /var/run/pfSense_version.rc (metadata FAILED, not still "
-                        "booting; issue #2242)"
+                if word == "running":
+                    seen_metadata_job = True
+                elif word == "gone" and seen_metadata_job:
+                    raise RuntimeError(
+                        "PFB_BOOT_METADATA sentinel=absent job=gone — pfSense metadata refresh "
+                        "started and then exited without publishing /var/run/pfSense_version.rc "
+                        "(metadata FAILED, not still booting; issues #2242, #2458). Last probe: "
+                        f"{last_metadata}"
                     )
-                    return
-                # "running" (or an unrecognised word) -- job still working; keep polling.
+                # A `gone` before any `running` means the job has not STARTED yet, and an
+                # unrecognised word means we cannot tell -- either way keep polling.
         remaining = deadline - time.monotonic()
         if not remaining > 0:
             break
