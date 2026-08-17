@@ -89,11 +89,6 @@
 set -eu
 
 # ── Defaults ──────────────────────────────────────────────────────────────────
-# issue #2497: a caller that pre-fetched the matrix passes MATRIX_REF (e.g.
-# local-smoke.sh --git-remote seeds refs/pfb/ci-metadata). Remember whether it was
-# provided so the opportunistic origin fetch below cannot clobber a seeded ref.
-MATRIX_REF_PROVIDED=0
-[ -n "${MATRIX_REF:-}" ] && MATRIX_REF_PROVIDED=1
 MATRIX_REF="${MATRIX_REF:-origin/ci-metadata}"
 MATRIX_FILE="${MATRIX_FILE:-supported-versions.json}"
 DO_GITHUB_OUTPUT=0
@@ -106,7 +101,7 @@ VARIANT_FILTER=""
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [ $# -gt 0 ]; do
   case "$1" in
-    --ref)       MATRIX_REF="$2"; MATRIX_REF_PROVIDED=1; shift 2 ;;
+    --ref)       MATRIX_REF="$2";  shift 2 ;;
     --file)      MATRIX_FILE="$2"; shift 2 ;;
     --variant)   VARIANT_FILTER="$2"; shift 2 ;;
     --github-output) DO_GITHUB_OUTPUT=1; shift ;;
@@ -139,12 +134,7 @@ fi
 
 # ── Read the matrix JSON from the ref ─────────────────────────────────────────
 # Verify the ref is reachable before trying to cat.
-if [ "$MATRIX_REF_PROVIDED" -eq 1 ]; then
-  # The caller pre-fetched into MATRIX_REF; fetching origin here could overwrite
-  # the default ref with a DIFFERENT source's matrix (issue #2497 review B3) and
-  # is pointless for a non-default ref. Skip it.
-  :
-elif ! git fetch origin ci-metadata >/dev/null 2>&1; then
+if ! git fetch origin ci-metadata >/dev/null 2>&1; then
   # If fetch fails (e.g. offline or --ref is a local path), proceed with whatever
   # is already in the local repo. Not an error — the caller may have pre-fetched.
   :

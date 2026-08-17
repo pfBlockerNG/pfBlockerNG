@@ -62,7 +62,10 @@
 set -eu
 
 usage() {
-    sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'
+    # Self-terminating: print the header up to (not including) the Test-only
+    # section, so a growing flag block can never be silently truncated again
+    # (issue #2497 review: this drifted twice with fixed line ranges).
+    sed -n '2,/^# Test-only (env):/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
