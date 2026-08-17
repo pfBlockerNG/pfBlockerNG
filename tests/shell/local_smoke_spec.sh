@@ -182,4 +182,40 @@ FAKEEOF
     End
   End
 
+  # ── --git-remote (issue #2497): per-run git source, default origin ────────── #
+  Describe '--git-remote'
+    It 'substitutes the given remote into BOTH bootstrap fetches (ref + ci-metadata)'
+      When call run_and_diag --ref dummy --git-remote 'git://10.20.41.1/pfBlockerNG.git'
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include "git fetch --quiet 'git://10.20.41.1/pfBlockerNG.git' 'dummy'"
+      The output should include "git fetch --quiet --no-tags 'git://10.20.41.1/pfBlockerNG.git' ci-metadata:refs/remotes/origin/ci-metadata"
+      # the substituted bootstrap must not still fetch from origin
+      The output should not include "git fetch --quiet origin"
+    End
+
+    It 'defaults to origin when neither flag nor env is given'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include "git fetch --quiet 'origin' 'dummy'"
+      The output should include "git fetch --quiet --no-tags 'origin' ci-metadata:refs/remotes/origin/ci-metadata"
+    End
+
+    It 'honours PFB_GIT_REMOTE from the environment, with the flag taking precedence'
+      preserve_env() { PFB_GIT_REMOTE='env-remote'; export PFB_GIT_REMOTE; }
+      BeforeCall 'preserve_env'
+      When call run_and_diag --ref dummy --git-remote flag-remote
+      The line 1 of output should equal 'exit=0'
+      The output should include "git fetch --quiet 'flag-remote' 'dummy'"
+      The output should not include "env-remote"
+    End
+
+    It 'rejects an empty value before leasing anything'
+      When call run_and_diag --ref dummy --git-remote ''
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+    End
+  End
+
 End
