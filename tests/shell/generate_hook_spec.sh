@@ -2,11 +2,12 @@
 # pfblockerng_repo_generate.sh — boot-time repo-conf regenerator (ADR-39;
 # arch-less/NO_ARCH since issue #1806).
 #
-# The hook is a pure REGENERATOR: for each of our conf files that EXISTS, it
-# detects the box's <varver> and unconditionally overwrites the conf with the
-# canonical body. No pkg call at all (issue #1806 retired the `pkg config abi`
-# read — arch-less catalogs have no per-arch leaf left to detect), no network,
-# no snapshot, no reconcile.
+# The hook is a REGENERATOR: for each of our conf files that EXISTS, it detects
+# the box's <varver> and overwrites the conf with the canonical body. No pkg
+# call at all (issue #1806 retired the `pkg config abi` read — arch-less
+# catalogs have no per-arch leaf left to detect), no network, no snapshot, no
+# reconcile. The one thing it does NOT re-derive is the catalog BASE — see the
+# DEST BASE contract below (issue #2459).
 #
 # Behavioural contracts pinned here:
 #   orphan      — neither conf present → nothing written, pkg never invoked, exit 0.
@@ -17,6 +18,10 @@
 #                 unchanged (issue #2416).
 #   unconditional — a STALE-varver conf is rewritten to the box's current varver
 #                 (before: stale present; after: stale gone, current present).
+#   dest base   — the base the conf was generated from survives a boot with no
+#                 environment (fork site, staging prefix, file:// catalogue); an
+#                 explicit PFB_BASE_URL still wins; a url this hook could not
+#                 have written leaves the conf byte-unchanged (issue #2459).
 #   detection   — edition = "/etc/product_label contains 'Plus'": Plus vs CE; the
 #                 varver prefix and the catalog path follow. Version-only —
 #                 arch-less (issue #1806): the hook never calls `pkg` at all.
@@ -520,7 +525,7 @@ FOREIGN
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "WARNING"
-      The stderr should include "foreign url"
+      The stderr should include "did not write"
       The value "$(cksum < "${PFB_NIGHTLY_CONF}")" should equal "${_fo_sum}"
       The contents of file "${PFB_NIGHTLY_CONF}" should not include "pfblockerng.github.io"
     End
@@ -556,5 +561,193 @@ OLDBASE
       The stderr should include "regenerated"
       The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://override.example/pkg/testing/ce-2.8"'
       The contents of file "${PFB_TESTING_CONF}" should not include "file:///root/pfb_repo"
+    End
+End
+
+# ── The "no url at all" branch must not swallow an UNPARSEABLE url ────────────
+#
+# The stub-vs-foreign discriminator is "does the conf carry a url line", NOT
+# "did our double-quoted pattern match one". Unquoted and single-quoted strings
+# are valid UCL that libpkg reads fine, so an operator can hand-write one; an
+# unterminated quote is what a botched hand edit leaves behind. None of those
+# are a pending install.sh stub, and rewriting them from the built-in default
+# would silently redirect the box — the very defect of issue #2459.
+
+Describe 'generate hook — a url line it cannot parse is foreign, not a stub'
+    setup() {
+        _up_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_unparsed.XXXXXX")"
+        _make_box "${_up_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_STABLE_CONF}" <<'UNQUOTED'
+pfblockerng-stable: {
+  url: file:///root/pfb_repo/stable/ce-2.7,
+  enabled: yes
+}
+UNQUOTED
+        cat > "${PFB_EDGE_CONF}" <<'SINGLEQ'
+pfblockerng-edge: {
+  url: 'https://fork.example.org/pkg/edge/ce-2.7',
+  enabled: yes
+}
+SINGLEQ
+        cat > "${PFB_NIGHTLY_CONF}" <<'UNTERM'
+pfblockerng-nightly: {
+  url: "https://fork.example.org/pkg/nightly/ce-2.7,
+  enabled: yes
+}
+UNTERM
+        _up_sums="$(cat "${PFB_STABLE_CONF}" "${PFB_EDGE_CONF}" "${PFB_NIGHTLY_CONF}" | cksum)"
+    }
+    cleanup() { rm -rf "${_up_dir}"; _unset_box; unset _up_sums; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: three confs carry a url line our pattern cannot parse'
+      The contents of file "${PFB_STABLE_CONF}" should include "url: file:///root/pfb_repo/stable/ce-2.7"
+      The contents of file "${PFB_EDGE_CONF}" should include "url: 'https://fork.example.org/pkg/edge/ce-2.7'"
+      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "https://fork.example.org/pkg/nightly/ce-2.7,'
+    End
+
+    It 'leaves all three byte-unchanged, warns, and exits 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "did not write"
+      The value "$(cat "${PFB_STABLE_CONF}" "${PFB_EDGE_CONF}" "${PFB_NIGHTLY_CONF}" | cksum)" should equal "${_up_sums}"
+      The contents of file "${PFB_STABLE_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_EDGE_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_NIGHTLY_CONF}" should not include "pfblockerng.github.io"
+    End
+End
+
+Describe 'generate hook — a varver segment it never emits is foreign too'
+    # The channel segment matching is not enough: the last segment must also look
+    # like a varver this hook wrote. A query string carries credentials an
+    # operator put there, and dropping it while rewriting the path would break
+    # the subscription silently; a host literally named after the channel would
+    # collapse the base to a bare scheme.
+    setup() {
+        _vv_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_varver.XXXXXX")"
+        _make_box "${_vv_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_TESTING_CONF}" <<'QUERY'
+pfblockerng-testing: {
+  url: "https://mirror.example.net/pkg/testing/ce-2.7?token=abc",
+  enabled: yes
+}
+QUERY
+        cat > "${PFB_NIGHTLY_CONF}" <<'BARESCHEME'
+pfblockerng-nightly: {
+  url: "https://nightly/ce-2.7",
+  enabled: yes
+}
+BARESCHEME
+        _vv_sums="$(cat "${PFB_TESTING_CONF}" "${PFB_NIGHTLY_CONF}" | cksum)"
+    }
+    cleanup() { rm -rf "${_vv_dir}"; _unset_box; unset _vv_sums; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: one url carries a query string, one has the channel as its host'
+      The contents of file "${PFB_TESTING_CONF}" should include "ce-2.7?token=abc"
+      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "https://nightly/ce-2.7"'
+    End
+
+    It 'leaves both byte-unchanged, warns, and exits 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "did not write"
+      The value "$(cat "${PFB_TESTING_CONF}" "${PFB_NIGHTLY_CONF}" | cksum)" should equal "${_vv_sums}"
+      The contents of file "${PFB_TESTING_CONF}" should include "token=abc"
+      The contents of file "${PFB_NIGHTLY_CONF}" should not include "https:/nightly"
+    End
+End
+
+# ── Base composition edge cases ───────────────────────────────────────────────
+
+Describe 'generate hook — a catalogue rooted at / keeps its third slash'
+    # `file:///stable/ce-2.7` derives the base `file://`. Stripping a trailing
+    # slash off THAT (which the env branch must do, and only the env branch)
+    # would emit `file://stable/...` — a host-form url pointing somewhere else
+    # entirely, written with an INFO line rather than a warning.
+    setup() {
+        _fr_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_fsroot.XXXXXX")"
+        _make_box "${_fr_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_STABLE_CONF}" <<'FSROOT'
+# Generated at boot by pfblockerng_repo_generate (ADR-39)
+pfblockerng-stable: {
+  url: "file:///stable/ce-2.7",
+  enabled: yes
+}
+FSROOT
+    }
+    cleanup() { rm -rf "${_fr_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the catalogue root is the filesystem root'
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "file:///stable/ce-2.7"'
+    End
+
+    It 'regenerates to a path url, not a host url, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "file:///stable/ce-2.8"'
+      The contents of file "${PFB_STABLE_CONF}" should not include "file://stable"
+    End
+End
+
+Describe 'generate hook — an env base with a trailing slash does not double it'
+    setup() {
+        _ts_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_envslash.XXXXXX")"
+        _make_box "${_ts_dir}" "pfSense" "2.8.1"
+        printf '# stub pending\n' > "${PFB_EDGE_CONF}"
+        PFB_BASE_URL="https://fork.example.org/pkg/"
+        export PFB_BASE_URL
+    }
+    cleanup() { rm -rf "${_ts_dir}"; _unset_box; unset PFB_BASE_URL; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf is the unresolved stub'
+      The contents of file "${PFB_EDGE_CONF}" should include "pending"
+    End
+
+    It 'emits exactly one slash between base and channel, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should not include "pkg//edge"
+    End
+End
+
+Describe 'generate hook — one trailing slash on a conf url is tolerated'
+    # A conf whose url is otherwise exactly our shape but carries a trailing
+    # slash is still one we wrote (or a harmless hand edit of one); freezing it
+    # as foreign would strand the box on a stale varver after an OS upgrade.
+    setup() {
+        _cs_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_confslash.XXXXXX")"
+        _make_box "${_cs_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_TESTING_CONF}" <<'CONFSLASH'
+# Generated at boot by pfblockerng_repo_generate (ADR-39)
+pfblockerng-testing: {
+  url: "https://fork.example.org/pkg/testing/ce-2.7/",
+  enabled: yes
+}
+CONFSLASH
+    }
+    cleanup() { rm -rf "${_cs_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf url carries a trailing slash and a stale varver'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://fork.example.org/pkg/testing/ce-2.7/"'
+    End
+
+    It 'keeps the fork base and moves the varver, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://fork.example.org/pkg/testing/ce-2.8"'
+      The contents of file "${PFB_TESTING_CONF}" should not include "pfblockerng.github.io"
     End
 End

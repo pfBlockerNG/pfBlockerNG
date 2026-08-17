@@ -1038,12 +1038,23 @@ one-pkg-run lag. The boot-time generator hook below closes that lag.
 **`rc.d` generator hook (`scripts/rc.d/pfblockerng_repo_generate.sh`).** Installed on-box by
 `install.sh` (issue #2416 follow-up: one script, `--channel` parameterized) into
 `/usr/local/etc/rc.d/`; runs at every boot. It is a pure conf **regenerator**: for each of the four channel conf files that
-exists, it detects the box's `<varver>` (arch-less, issue #1806) and **unconditionally
-overwrites** the conf with the canonical body (channel-correct URL + a marker comment). The
+exists, it detects the box's `<varver>` (arch-less, issue #1806) and overwrites the conf with
+the canonical body (channel-correct URL + a marker comment). The
 legacy shared release conf (`pfblockerng.conf`, pre-#2148) is retired by install.sh and
 NEVER regenerated — a leftover survives byte-unchanged. **No `pkg` call, no network, no
-snapshot, no reconcile, no parse-and-compare** — re-deriving the conf from scratch is
+snapshot, no reconcile** — re-deriving the conf from scratch is
 strictly simpler than diffing and patching one in place, and never wrong. Key properties:
+
+- **The catalog BASE is not re-derived (issue #2459):** an explicit `PFB_BASE_URL` wins
+  (`install.sh` drives the hook with one precisely to MOVE a box onto another base);
+  otherwise the base is read back out of the conf's own `url:`, whose canonical shape is
+  `<base>/<channel>/<varver>`. Only the `<varver>` moves, so a fork site, a staging prefix
+  and a smoke guest's `file://` catalogue survive a boot with no environment instead of
+  being redirected to the primary Pages site. A conf with no `url:` line at all (an
+  `install.sh` stub pending first generation) falls back to the built-in default; a `url:`
+  the hook could not have written — unparseable, foreign channel segment, a varver segment
+  carrying a query string, a base that is a bare scheme — leaves the conf byte-unchanged
+  with a warning.
 
 - **Self-guarding:** a channel conf is regenerated only if it already exists; if none of the
   four channel confs is present the hook is a complete no-op (an orphaned hook left after
