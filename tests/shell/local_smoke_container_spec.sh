@@ -17,8 +17,9 @@
 #     the namespaced sysctl replaces it, so if it is dropped the mock DNS fails to bind.
 #   * the bind mounts — the repo, ports tree and guest SSH key live on the box and must be
 #     visible inside; image artifacts stay in the disposable container writable layer.
-#   * the sparse checkout — a smoke leg reads src/, scripts/, stubs/python/ and tests/smoke/.
-#     Checking out the whole tree costs 38 MB against 13 MB for what it uses.
+#   * the sparse checkout — a smoke leg reads src/, scripts/, stubs/python/, tests/smoke/
+#     and pkg-site/ (the channel-installer cases render it through gen_landing.py).
+#     Checking out the whole tree costs 34 MB against 13 MB for what it uses.
 #
 # The flag-encoding examples are inherited responsibility: smoke_on_box_channel_spec.sh used
 # to pin that a --channel carrying shell metacharacters survived the re-exec argv rebuild.
@@ -187,10 +188,11 @@ EOF
 
   It 'checks out only the paths a smoke leg reads'
     # src/ (the .pkg build), scripts/ (the harness), stubs/python/ (root conftest's
-    # unboundmodule import) and tests/smoke/ (the suite). Excludes .ADRs, tests/php and
-    # plugins, none of which smoke touches.
+    # unboundmodule import), tests/smoke/ (the suite) and pkg-site/ (the site tree the
+    # channel-installer cases render through gen_landing.py --site-tree, issue #2450).
+    # Excludes .ADRs, tests/php and plugins, none of which smoke touches.
     When call bootstrap --ref dummy
-    The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke'
+    The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke pkg-site'
   End
 
   It 'still fetches the ci-metadata orphan ref the version matrix reads'
