@@ -28,6 +28,10 @@ Describe 'ci-vendor.sh'
     cp "$SCRIPT" "${ROOT}/scripts/"
     lock_json 1.0.0 aaaa > "${ROOT}/composer.lock"
     installed_json 1.0.0 aaaa > "${BAKED}/composer/installed.json"
+    # The image bakes composer.json beside the tree; an autoload-only edit leaves
+    # composer.lock byte-identical, so this file is the only witness to that drift.
+    printf '{"autoload-dev":{"psr-4":{"Acme\\\\":"tests/acme/"}}}' > "${WORK}/baked/composer.json"
+    cp "${WORK}/baked/composer.json" "${ROOT}/composer.json"
     printf '#!/bin/sh\nexit 0\n' > "${BAKED}/bin/phpstan"
     chmod +x "${BAKED}/bin/phpstan"
     export PFB_BAKED_VENDOR="$BAKED"
@@ -57,8 +61,19 @@ Describe 'ci-vendor.sh'
     lock_json 2.0.0 bbbb > "${ROOT}/composer.lock"
     When run sh "${ROOT}/scripts/ci-vendor.sh"
     The status should be failure
-    The stdout should include 'materialised'
+    The stdout should not include 'materialised'
     The stderr should include 'acme/tool'
+    The stderr should include '.github/docker/VERSION'
+  End
+
+  It 'fails when composer.json has moved past the baked tree'
+    # composer.lock does not change when only autoload mappings do, so the lock
+    # comparison alone certifies a stale autoloader as fresh.
+    printf '{"autoload-dev":{"psr-4":{"Acme\\\\":"tests/acme/","New\\\\":"tests/new/"}}}' > "${ROOT}/composer.json"
+    When run sh "${ROOT}/scripts/ci-vendor.sh"
+    The status should be failure
+    The stdout should not include 'materialised'
+    The stderr should include 'composer.json'
     The stderr should include '.github/docker/VERSION'
   End
 
