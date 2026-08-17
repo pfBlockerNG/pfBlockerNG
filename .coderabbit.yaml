@@ -9,10 +9,6 @@
 reviews:
   auto_review:
     enabled: false
-    drafts: false
-    # Dead while `enabled` is false; kept until the quota machinery
-    # that pins it is removed.
-    auto_pause_after_reviewed_commits: 2
   # Hide "Review skipped" / status-only comments (quota + no-new-commits).
   review_status: false
 
