@@ -31,6 +31,9 @@ Describe 'image-upgrade.sh package-metadata wait'
 
   # run_wait WORDS — drive pfb_wait_pkg_metadata with a stub ssh_guest that
   # answers the space-separated WORDS in order, repeating the last one forever.
+  # The cap has headroom over the longest row (the late-start row succeeds on
+  # probe 4) so that reordering the deadline check cannot flip a row to a
+  # timeout failure for a reason it does not pin.
   run_wait() {
     _words="$1" sh -c '
       set -e
@@ -53,7 +56,7 @@ Describe 'image-upgrade.sh package-metadata wait'
         [ -n "$_pick" ] || _pick=$_w
         printf "%s\r\n" "$_pick"
       }
-      pfb_wait_pkg_metadata "${METADATA_TIMEOUT:-4}"
+      pfb_wait_pkg_metadata "${METADATA_TIMEOUT:-10}"
     ' _ "$SCRIPT"
   }
 
