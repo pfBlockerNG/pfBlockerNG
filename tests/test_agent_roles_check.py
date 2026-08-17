@@ -160,11 +160,14 @@ def test_live_repository_registry_is_consistent() -> None:
 # .agents/model-tiers.conf). Kept literal: the parity guard is POSIX sh with no
 # importable trigger table.
 _PARITY_GUARD = "scripts/agent/check-agent-config-parity.sh"
-_PARITY_EXTRA_TRIGGERS = {".claude/skills/**", _PARITY_GUARD}
+_WORKFLOW = ".github/workflows/agent-config.yml"
+# The workflow gates its own definition too, exactly as it gates the checkers'
+# sources: an edit to the triggers or the steps must re-run both gates.
+_PARITY_EXTRA_TRIGGERS = {".claude/skills/**", _PARITY_GUARD, _WORKFLOW}
 
 
 def _workflow_text() -> str:
-    return (_REPO_ROOT / ".github/workflows/agent-config.yml").read_text(encoding="utf-8")
+    return (_REPO_ROOT / _WORKFLOW).read_text(encoding="utf-8")
 
 
 def test_ci_workflow_paths_match_checker_triggers() -> None:
