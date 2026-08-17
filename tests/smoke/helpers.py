@@ -1184,27 +1184,18 @@ def pin_cron_due(vm: SmokeVM) -> int:
     """
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
-        # issue #2492: pfblockerng.inc FIRST, extra.inc second — the order the working
-        # sibling snippets use (test_schedule_runtime.py:122, test_smoke_tick.py:627).
-        # Loading extra.inc first and pfblockerng.inc second was measured to leave the
-        # guest reporting "A valid config file could not be recovered" (12/12 runs).
-        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        # It is defined
-        # there (pfblockerng.inc:3211) and pfblockerng_extra.inc has no requires at all, so
-        # requiring extra.inc alone left the call fatal under pfSsh.php ("Call to undefined
-        # function pfb_global()"), erroring every test that uses this helper.
-        #
-        # extra.inc is not self-contained: it calls 39 symbols it does not define. On this
-        # path pfb_schedule_runtime_config() reaches pfb_filter()/PFB_FILTER_CSV
-        # (pfblockerng.inc:1672 and :466), short-circuited only while blacklist_selected is
-        # empty. So dropping the pfb_global() call instead would merely move the fatal to
-        # pfb_filter() on any box where a blacklist provider has been selected.
-        #
-        # This matches the sibling snippets that already load it under php_eval:
-        # test_schedule_runtime.py:122, test_smoke_ip_recompute.py:911, helpers.py:4414,
-        # test_smoke_tick.py:627 — including one that calls write_config() afterwards.
-        "pfb_global();\n"
+        # issue #2492: pfb_global() lives in pfblockerng.inc (:3211) and extra.inc requires
+        # nothing, so a bare call is fatal under pfSsh.php and errors every test using this
+        # helper. MEASURED, do not "fix" by requiring pfblockerng.inc here:
+        #   guard (this)                -> 19 passed / 3 failed
+        #   require after extra.inc     -> 12 passed / 13 failed, guest reports
+        #                                  "A valid config file could not be recovered" x12
+        #   require before extra.inc    -> 25 errors, reproduced twice
+        # Nothing below needs $pfb: the only read is schedule_state_dir, which no production
+        # code assigns — every consumer uses the same `?? '/usr/local/etc'` fallback, and
+        # pfblockerng_cron.inc:291 reads exactly where this writes.
+        "if (function_exists('pfb_global')) { pfb_global(); }\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
         "$g['pfb_scheduled_feed_updates'] = 'on';\n"
