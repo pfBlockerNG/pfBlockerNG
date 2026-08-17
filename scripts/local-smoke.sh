@@ -10,7 +10,7 @@
 #
 # Usage:
 #   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR]
-#                          [--no-two-vm] [--shards N]
+#                          [--no-two-vm] [--shards N] [--git-remote URL|NAME]
 #
 # Required (env):
 #   PFB_BOXES   space-separated ssh targets, e.g. "root@10.0.0.23 root@10.0.0.24"
@@ -37,6 +37,11 @@
 #               select-box.sh's own pool-exhaustion path -- this script does
 #               NOT pre-count the pool. Logs land in a kept mktemp dir printed
 #               at start/end; exits non-zero iff any shard failed.
+#   --git-remote URL|NAME  which git remote the BOX fetches the ref and ci-metadata
+#               from (default: origin; env PFB_GIT_REMOTE, flag wins). Per-run by
+#               design (issue #2497): repointing a box's origin is persistent state
+#               that silently changes later runs and records nothing in the artifacts.
+#               Lets a run target a local mirror, a fork, or an air-gapped copy.
 #
 # Test-only (env):
 #   PFB_SELECT_BOX  override the select-box.sh path (default: scripts/select-box.sh).
@@ -87,6 +92,10 @@ _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
 _SHARDS=1
+# issue #2497: which git remote the BOX fetches the ref (and ci-metadata) from.
+# Per-run, never box state: repointing each box's origin is persistent and invisible
+# in the artifacts, so a forgotten switch-back silently changes every later run.
+_GIT_REMOTE="${PFB_GIT_REMOTE:-origin}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -97,6 +106,7 @@ while [ "$#" -gt 0 ]; do
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;        shift ;;
         --shards)   shift; _SHARDS="$1"; shift ;;
+        --git-remote) shift; _GIT_REMOTE="$1"; shift ;;
         --) shift; break ;;
         -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
         *)  break ;;
@@ -104,6 +114,11 @@ while [ "$#" -gt 0 ]; do
 done
 if [ "$#" -gt 0 ]; then
     printf 'local-smoke: unexpected positional args (use --marker/--filter): %s\n' "$*" >&2
+    exit 2
+fi
+
+if [ -z "$_GIT_REMOTE" ]; then
+    printf 'local-smoke: --git-remote requires a non-empty url or remote name\n' >&2
     exit 2
 fi
 
@@ -154,6 +169,7 @@ _REF="${_REF#origin/}"
 _sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
 
 _REF_Q="$(_sq "$_REF")"
+_GIT_REMOTE_Q="$(_sq "$_GIT_REMOTE")"
 _ABI_Q="$(_sq "$_ABI")"
 _MARKER_Q="$(_sq "$_MARKER")"
 _REPO_LIVE_URL_Q="$(_sq "${SMOKE_REPO_LIVE_URL:-}")"
@@ -177,9 +193,9 @@ fi
 _bootstrap="cd /root/pfBlockerNG \
  && git sparse-checkout init --cone \
  && git sparse-checkout set src scripts stubs/python tests/smoke pkg-site \
- && git fetch --quiet origin '$_REF_Q' \
+ && git fetch --quiet '$_GIT_REMOTE_Q' '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
- && git fetch --quiet --no-tags origin ci-metadata:refs/remotes/origin/ci-metadata \
+ && git fetch --quiet --no-tags '$_GIT_REMOTE_Q' ci-metadata:refs/remotes/origin/ci-metadata \
  && exec docker run --rm --init \
       --device /dev/kvm \
       --sysctl net.ipv4.ip_unprivileged_port_start=53 \
