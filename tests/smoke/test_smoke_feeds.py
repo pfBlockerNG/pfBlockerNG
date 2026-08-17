@@ -1855,6 +1855,13 @@ def test_cron_304_skips_unchanged_remote_feed(
         # the marker appears (the #572 fix aligned the read base to {header}.orig), capped so
         # a genuine failure still surfaces.
         for _pass in range(4):
+            # issue #2489: pin_cron_due() reserves a ONE-SHOT pending occurrence, which the
+            # first pass consumes. Without re-arming, passes 2..4 return at "No Updates
+            # required." before reaching pfb_update_check(), so the validator this loop
+            # depends on is stored and never read. The production tick reserves each
+            # scheduled occurrence the same way, one per pass.
+            if _pass:
+                h.pin_cron_due(deployed_vm)
             h.reload(deployed_vm, "cron")
             if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
                 break
@@ -2224,6 +2231,13 @@ def test_cron_lastmod_304_skips_unchanged_feed(
         # ingest above. Run cron until the marker appears, capped so a genuine failure still
         # surfaces.
         for _pass in range(4):
+            # issue #2489: pin_cron_due() reserves a ONE-SHOT pending occurrence, which the
+            # first pass consumes. Without re-arming, passes 2..4 return at "No Updates
+            # required." before reaching pfb_update_check(), so the validator this loop
+            # depends on is stored and never read. The production tick reserves each
+            # scheduled occurrence the same way, one per pass.
+            if _pass:
+                h.pin_cron_due(deployed_vm)
             h.reload(deployed_vm, "cron")
             if h.count_log_marker(deployed_vm, h.PFB_LOG, not_mod_marker) > not_mod_before:
                 break
