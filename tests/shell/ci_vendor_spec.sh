@@ -46,7 +46,7 @@ Describe 'ci-vendor.sh'
 
   It 'replaces a stale vendor tree instead of merging into it'
     mkdir -p "${ROOT}/vendor"
-    : > "${ROOT}/vendor/leftover"
+    true > "${ROOT}/vendor/leftover"
     When run sh "${ROOT}/scripts/ci-vendor.sh"
     The status should be success
     The path "${ROOT}/vendor/leftover" should not be exist
