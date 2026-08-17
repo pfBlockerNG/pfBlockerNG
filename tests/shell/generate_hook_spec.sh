@@ -421,3 +421,140 @@ Describe 'generate hook — fail-proof: detection failure leaves conf unchanged'
         End
     End
 End
+
+# ── DEST BASE: the hook preserves the base its conf was generated from ────────
+#
+# Issue #2459. `_regen_one` used to compose the url from PFB_BASE_URL alone,
+# defaulting to the primary Pages site. At boot there is no env, so a fork site,
+# a staging prefix and a `file://` guest catalogue were all silently rewritten to
+# `https://pfblockerng.github.io/pkg` — a redirect of where the box fetches
+# packages from. The base now comes from the conf the hook is about to rewrite
+# (its url's `<base>/<channel>/<varver>` shape), so only the varver moves; an
+# explicit PFB_BASE_URL still wins, and a url the hook cannot parse as its own
+# is left alone instead of being clobbered.
+
+Describe 'generate hook — a file:// catalogue base survives a boot with no env'
+    setup() {
+        _fb_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_fileurl.XXXXXX")"
+        _make_box "${_fb_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_STABLE_CONF}" <<'FILEURL'
+# Generated at boot by pfblockerng_repo_generate (ADR-39)
+pfblockerng-stable: {
+  url: "file:///root/pfb_repo/stable/ce-2.7",
+  enabled: yes
+}
+FILEURL
+    }
+    cleanup() { rm -rf "${_fb_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf points at the file:// catalogue with a stale varver'
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "file:///root/pfb_repo/stable/ce-2.7"'
+    End
+
+    It 'keeps the file:// base and only moves the varver, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "file:///root/pfb_repo/stable/ce-2.8"'
+      The contents of file "${PFB_STABLE_CONF}" should not include "pfblockerng.github.io"
+    End
+End
+
+Describe 'generate hook — a staging-prefixed fork base survives a boot with no env'
+    setup() {
+        _sp_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_stageurl.XXXXXX")"
+        _make_box "${_sp_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_EDGE_CONF}" <<'STAGEURL'
+# Generated at boot by pfblockerng_repo_generate (ADR-39)
+pfblockerng-edge: {
+  url: "https://fork.example.org/pkg/staging/pr-7/edge/ce-2.7",
+  enabled: yes
+}
+STAGEURL
+    }
+    cleanup() { rm -rf "${_sp_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf carries the fork site and its staging prefix'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/staging/pr-7/edge/ce-2.7"'
+    End
+
+    It 'keeps host and staging prefix and only moves the varver, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/staging/pr-7/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should not include "pfblockerng.github.io"
+    End
+End
+
+Describe 'generate hook — a url the hook did not write is left alone'
+    # The channel segment does not match the conf's channel, so this url is not
+    # one this hook generated: rewriting it would silently move the box to
+    # another catalogue. Leave it, warn, exit 0.
+    setup() {
+        _fo_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_foreign.XXXXXX")"
+        _make_box "${_fo_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_NIGHTLY_CONF}" <<'FOREIGN'
+# hand-written by the operator — FOREIGN-CONF
+pfblockerng-nightly: {
+  url: "https://mirror.example.net/custom-layout",
+  enabled: yes
+}
+FOREIGN
+        _fo_sum="$(cksum < "${PFB_NIGHTLY_CONF}")"
+    }
+    cleanup() { rm -rf "${_fo_dir}"; _unset_box; unset _fo_sum; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf carries a url of a shape the hook never emits'
+      The contents of file "${PFB_NIGHTLY_CONF}" should include "FOREIGN-CONF"
+      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "https://mirror.example.net/custom-layout"'
+    End
+
+    It 'leaves the conf byte-unchanged, warns, and exits 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "WARNING"
+      The stderr should include "foreign url"
+      The value "$(cksum < "${PFB_NIGHTLY_CONF}")" should equal "${_fo_sum}"
+      The contents of file "${PFB_NIGHTLY_CONF}" should not include "pfblockerng.github.io"
+    End
+End
+
+Describe 'generate hook — an explicit PFB_BASE_URL still overrides the conf base'
+    # install.sh drives the hook with PFB_BASE_URL set, precisely to MOVE a box
+    # onto another base; the conf-derived base must not defeat that.
+    setup() {
+        _ov_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_override.XXXXXX")"
+        _make_box "${_ov_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_TESTING_CONF}" <<'OLDBASE'
+# Generated at boot by pfblockerng_repo_generate (ADR-39)
+pfblockerng-testing: {
+  url: "file:///root/pfb_repo/testing/ce-2.8",
+  enabled: yes
+}
+OLDBASE
+        PFB_BASE_URL="https://override.example/pkg"
+        export PFB_BASE_URL
+    }
+    cleanup() { rm -rf "${_ov_dir}"; _unset_box; unset PFB_BASE_URL; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf still carries the old file:// base'
+      The contents of file "${PFB_TESTING_CONF}" should include "file:///root/pfb_repo/testing"
+    End
+
+    It 'rewrites to the base given in the environment, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "regenerated"
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://override.example/pkg/testing/ce-2.8"'
+      The contents of file "${PFB_TESTING_CONF}" should not include "file:///root/pfb_repo"
+    End
+End
