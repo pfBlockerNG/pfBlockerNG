@@ -3,7 +3,8 @@
 # The single implementation of the CI wait the pr-merge skill used to inline.
 #
 # Usage: wait-checks.sh --repo OWNER/REPO --pr N [options]
-#   --sha SHA           pin polling to this commit (default: PR's head SHA at arm time)
+#   --sha SHA           pin polling to this commit (default: PR's head SHA at arm time).
+#                      May be abbreviated: it is resolved to the full OID at arm time.
 #   --exclude REGEX    check-name exclusion, matched against the LOWERCASED check name
 #                      (so an all-lowercase pattern is effectively case-insensitive; an
 #                      uppercase one matches nothing). The default is ANCHORED to the
@@ -81,6 +82,19 @@ checks_to_buckets() {
 	'
 }
 
+# Resolve the pin to the full 40-character OID every head read returns. Without --sha
+# that is the PR's head; with one it is that ref, which the caller may have abbreviated
+# -- and the pre-verdict identity check compares against `headRefOid`, which is always
+# full, so an unexpanded pin could only ever report STALE (#2476). Resolving here also
+# turns an unknown ref into a loud GH-ERROR instead of a blind poll.
+resolve_pin() {
+	if [ "$sha_set" -eq 0 ]; then
+		gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid
+	else
+		gh_bounded api "repos/$repo/commits/$sha" --jq .sha
+	fi
+}
+
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
@@ -125,27 +139,26 @@ main() {
 	# PFB_WAIT_DEADLINE (epoch seconds) overrides for tests/ops.
 	deadline=${PFB_WAIT_DEADLINE:-$(( $(date +%s) + max_iter * interval + 300 ))}
 
+	# Bounded retry (same 3-strike tolerance as the poll loop below) before
+	# failing loud: a single transient blip on the very first call -- right
+	# after a force-push, exactly when this wait is armed and the API is
+	# least settled -- must not kill the whole wait. Still capped by the
+	# wall-clock deadline via gh_bounded; a wait that still cannot pin a SHA
+	# after that tolerance is exhausted must fail loudly, never poll blind.
 	ghfail=0
-	if [ "$sha_set" -eq 0 ]; then
-		# Bounded retry (same 3-strike tolerance as the poll loop below) before
-		# failing loud: a single transient blip on the very first call -- right
-		# after a force-push, exactly when this wait is armed and the API is
-		# least settled -- must not kill the whole wait. Still capped by the
-		# wall-clock deadline via gh_bounded; a wait that still cannot pin a SHA
-		# after that tolerance is exhausted must fail loudly, never poll blind.
-		while true; do
-			if sha=$(gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid) && [ -n "$sha" ]; then
-				break
-			fi
-			ghfail=$((ghfail + 1))
-			if [ "$ghfail" -ge 3 ]; then
-				printf 'GH-ERROR\n%s\n' "$sha"
-				exit 1
-			fi
-			sleep_bounded "$interval" || { printf 'GH-ERROR\n%s\n' "$sha"; exit 1; }
-		done
-		ghfail=0
-	fi
+	while true; do
+		if resolved=$(resolve_pin) && [ -n "$resolved" ]; then
+			sha=$resolved
+			break
+		fi
+		ghfail=$((ghfail + 1))
+		if [ "$ghfail" -ge 3 ]; then
+			printf 'GH-ERROR\n%s\n' "$resolved"
+			exit 1
+		fi
+		sleep_bounded "$interval" || { printf 'GH-ERROR\n%s\n' "$resolved"; exit 1; }
+	done
+	ghfail=0
 
 	i=0
 	while [ "$i" -lt "$max_iter" ]; do
