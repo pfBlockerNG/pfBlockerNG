@@ -19,6 +19,10 @@ cannot (the query channel only answers on a live matcher):
   sinkhole (VIP block-page) hit attributes via the SAME query channel the DNS
   path uses, and its widget counter increments by exactly the observed event count.
 
+Plus one teardown-contract row (``test_notice_teardown_closes_every_row_of_its_id``,
+issue #2478): the module's notice teardown drains EVERY row carrying its id, so the
+next case's before-state is genuinely clean.
+
 DESELECTED from the default ``python -m pytest`` (``--ignore=tests/smoke``).
 Run via the smoke workflow or locally::
 
@@ -479,16 +483,15 @@ def _close_all_notices(vm: SmokeVM, notice_id: str, *, timeout: float = 60.0) ->
         raise RuntimeError(f"_close_all_notices left {left} notice(s) with id {notice_id!r} standing")
 
 
-def _file_notice(vm: SmokeVM, notice_id: str, notice: str, *, timeout: float = 60.0) -> None:
-    """File TWO queue rows carrying ``notice_id`` and ``notice``, one second apart.
+def _file_two_notice_rows(vm: SmokeVM, notice_id: str, notice: str, *, timeout: float = 60.0) -> None:
+    """File TWO queue rows carrying ``notice_id`` and ``notice``.
 
-    ``file_notice`` keys each row by its own timestamp, so the sleep guarantees two
-    distinct keys rather than one row overwriting the other; the caller's ``== 2``
-    precondition fails loudly if that assumption ever stops holding.
+    ``file_notice`` keys each row by timestamp and bumps the key while one is taken, so
+    two calls in the same second still yield two rows; the caller's ``== 2`` precondition
+    fails loudly if that ever stops holding.
     """
     snippet = (
         f"file_notice({h._php_str(notice_id)}, {h._php_str(notice)});\n"
-        "sleep(1);\n"
         f"file_notice({h._php_str(notice_id)}, {h._php_str(notice)});\n"
         "echo '<<<NF>>>OK<<<NFE>>>';"
     )
@@ -500,6 +503,7 @@ def _file_notice(vm: SmokeVM, notice_id: str, notice: str, *, timeout: float = 6
         )
 
 
+@pytest.mark.timeout(300)  # six pfSsh.php round-trips exceed the smoke tier's 30s default
 def test_notice_teardown_closes_every_row_of_its_id(smoke_vm: SmokeVM) -> None:
     """The teardown drains EVERY row carrying our id, not just the oldest (issue #2478).
 
@@ -513,13 +517,16 @@ def test_notice_teardown_closes_every_row_of_its_id(smoke_vm: SmokeVM) -> None:
     needle = f"adr65 teardown probe {h.unique_domain('adr65notice')}"
     assert _count_matching_notices(smoke_vm, needle) == 0, f"probe needle {needle!r} was already in the queue"
 
-    _file_notice(smoke_vm, _MANIFEST_NOTICE_ID, needle)
-    filed = _count_matching_notices(smoke_vm, needle)
-    assert filed == 2, f"expected both filed probe rows to be queued, got {filed}"
+    try:
+        _file_two_notice_rows(smoke_vm, _MANIFEST_NOTICE_ID, needle)
+        filed = _count_matching_notices(smoke_vm, needle)
+        assert filed == 2, f"expected both filed probe rows to be queued, got {filed}"
 
-    _close_all_notices(smoke_vm, _MANIFEST_NOTICE_ID)
-    left = _count_matching_notices(smoke_vm, needle)
-    assert left == 0, f"the teardown left {left} row(s) of id {_MANIFEST_NOTICE_ID!r} standing"
+        _close_all_notices(smoke_vm, _MANIFEST_NOTICE_ID)
+        left = _count_matching_notices(smoke_vm, needle)
+        assert left == 0, f"the teardown left {left} probe row(s) standing"
+    finally:
+        _close_all_notices(smoke_vm, _MANIFEST_NOTICE_ID)
 
 
 @pytest.mark.timeout(300)  # a full DNSBL update pass + the swap-applied wait exceeds the smoke tier's 30s default
