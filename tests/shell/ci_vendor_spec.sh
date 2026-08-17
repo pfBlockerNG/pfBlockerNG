@@ -77,6 +77,19 @@ Describe 'ci-vendor.sh'
     The stderr should include '.github/docker/VERSION'
   End
 
+  It 'separates an unusable checker from a drift verdict'
+    # Statuses outside the checker's own {0,1} mean it could not run at all. Saying
+    # "bump VERSION" there would send the reader to fix the wrong thing.
+    # Valid Python: the script is run through python3, so a shell stub would die as a
+    # SyntaxError (status 1) and read as a drift verdict instead.
+    printf 'import sys\nsys.exit(3)\n' > "${ROOT}/scripts/check_composer_vendor.py"
+    When run sh "${ROOT}/scripts/ci-vendor.sh"
+    The status should be failure
+    The stdout should not include 'materialised'
+    The stderr should include 'could not run scripts/check_composer_vendor.py'
+    The stderr should not include '.github/docker/VERSION'
+  End
+
   It 'fails when no baked tree is present'
     rm -rf "$BAKED"
     When run sh "${ROOT}/scripts/ci-vendor.sh"
