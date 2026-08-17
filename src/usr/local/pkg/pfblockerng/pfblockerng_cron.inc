@@ -252,7 +252,8 @@ function pfb_update_check($header, $list_url, $pfbfolder, $pfborig, $pflex, $for
 // $scope — 'both' (default), 'ip', or 'dnsbl'; filters which list types are probed.
 //   Defaults to 'both' so existing callers (case 'cron') are unchanged.
 function pfblockerng_sync_cron(
-	$force_all = FALSE,
+	// issue #2491: typed because the RETURN VALUE now depends on its truthiness.
+	bool $force_all = FALSE,
 	$scope = 'both',
 	bool $pending_change = FALSE,
 	bool $clear_hashes = FALSE
@@ -263,7 +264,18 @@ function pfblockerng_sync_cron(
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 	if (!pfb_schedule_dispatch_begin()) {
 		pfb_logger("\n Scheduled feed pass deferred: dispatcher lock unavailable; durable pending occurrences retained.\n", 1);
-		return FALSE;
+		// issue #2491: a deferral is benign for the UNATTENDED cron verb and a real
+		// non-event for Force Check. Both reach here; only $force_all separates them
+		// (pfblockerng.php:255 passes nothing, :304 passes TRUE).
+		//
+		// Scheduled tick: another pass holds the lock, this tick stood down with its
+		// durable pending occurrence intact and the next tick retries. Exiting 1 there
+		// tells cron the run FAILED and produces recurring MTA noise with nothing
+		// actionable in it, so report success.
+		//
+		// Force Check: the operator asked for an update NOW and did not get one. That
+		// must stay observable (SyncCronFeedPassDeferralTest pins it).
+		return !$force_all;
 	}
 
 	// issue #1175: serialize feed passes -- same ownership discipline as
@@ -274,7 +286,9 @@ function pfblockerng_sync_cron(
 		if ($pfb_dispatch_owner) {
 			pfb_schedule_dispatch_release();
 		}
-		return FALSE;
+		// issue #2491: benign for the scheduled tick, observable for Force Check —
+		// see the dispatcher-lock guard above.
+		return !$force_all;
 	}
 	if ($force_all) {
 		$dirs = pfb_force_scope_dirs($scope, $pfb['origdir'], $pfb['dnsorigdir']);

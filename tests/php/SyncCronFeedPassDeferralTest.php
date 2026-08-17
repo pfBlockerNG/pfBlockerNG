@@ -70,7 +70,15 @@ final class SyncCronFeedPassDeferralTest extends TestCase
 		$beforeLedger = file_get_contents("{$this->dbdir}/pfb_due_ledger.json");
 		$beforeState = file_get_contents("{$stateDir}/pfb_schedule_state.json");
 
-		$this->assertFalse(pfblockerng_sync_cron(), 'feed-lock deferral must be observable by Force Check');
+		// issue #2491: this row's no-args call is the ORIGINAL deliberate intent (#1315:
+		// the tick's advisory busy probe, i.e. the $force_all = FALSE path); the
+		// "Force Check" wording was a later addition and is the half that was wrong.
+		// The cron path now reports a deferral as success, so the expectation flips —
+		// but the call stays on the cron path, because the state/cache assertions below
+		// are this file's reason to exist and they must keep covering it.
+		// Force Check's own return contract is pinned in CronDeferralExitCodeTest.
+		$this->assertTrue(pfblockerng_sync_cron(),
+			'a deferred scheduled pass reports success, and must still preserve state');
 
 		$this->assertSame($beforeLedger, file_get_contents("{$this->dbdir}/pfb_due_ledger.json"),
 			'lost feed-pass lock must not mutate the runtime cache');
