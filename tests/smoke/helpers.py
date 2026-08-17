@@ -1185,14 +1185,22 @@ def pin_cron_due(vm: SmokeVM) -> int:
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        # issue #2492: pfb_global() lives in pfblockerng.inc, which extra.inc does NOT
-        # require, so under pfSsh.php eval the bare call is fatal ("Call to undefined
-        # function pfb_global()"). Do NOT fix that by requiring pfblockerng.inc here:
-        # measured, it removes the fatal but breaks the already-loaded, locked config
-        # ("A valid config file could not be recovered"), which is the eval-scope gotcha
-        # in docs/misc/local-smoke-debian.md. The call is not needed — it only populates
-        # $pfb, and the sole use below already falls back to /usr/local/etc.
-        "if (function_exists('pfb_global')) { pfb_global(); }\n"
+        # issue #2492: load pfblockerng.inc BEFORE calling pfb_global(). It is defined
+        # there (pfblockerng.inc:3211) and pfblockerng_extra.inc has no requires at all, so
+        # requiring extra.inc alone left the call fatal under pfSsh.php ("Call to undefined
+        # function pfb_global()"), erroring every test that uses this helper.
+        #
+        # extra.inc is not self-contained: it calls 39 symbols it does not define. On this
+        # path pfb_schedule_runtime_config() reaches pfb_filter()/PFB_FILTER_CSV
+        # (pfblockerng.inc:1672 and :466), short-circuited only while blacklist_selected is
+        # empty. So dropping the pfb_global() call instead would merely move the fatal to
+        # pfb_filter() on any box where a blacklist provider has been selected.
+        #
+        # This matches the sibling snippets that already load it under php_eval:
+        # test_schedule_runtime.py:122, test_smoke_ip_recompute.py:911, helpers.py:4414,
+        # test_smoke_tick.py:627 — including one that calls write_config() afterwards.
+        "require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');\n"
+        "pfb_global();\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
         "$g['pfb_scheduled_feed_updates'] = 'on';\n"
