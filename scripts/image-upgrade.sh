@@ -99,7 +99,11 @@
 #   Env knobs (mainly for the spec): VERIFY_BOOT_TIMEOUT — seconds to wait for
 #   the artifact-verification boot's SSH (default: 600); PROMOTE_TIMEOUT /
 #   PROMOTE_INTERVAL — seconds to wait / poll step for pfSense's own boot
-#   verification to promote the new BE (defaults: 300 / 10).
+#   verification to promote the new BE (defaults: 300 / 10); METADATA_TIMEOUT /
+#   METADATA_INTERVAL — seconds to wait / poll step for pfSense's post-boot
+#   package metadata refresh to settle (defaults: 600 / 5). Every boot wait adds
+#   the metadata wait to its own budget, so a boot wait's worst case is its own
+#   timeout PLUS METADATA_TIMEOUT.
 #   --upgrade-pkgs   before pfSense-upgrade, run `pkg update -f` + `pkg upgrade -y`
 #                    to upgrade baked deps (qemu-guest-agent, etc.) to their latest
 #                    versions; reboots the guest and waits for SSH before proceeding.
@@ -891,8 +895,11 @@ pfb_wait_upgraded_box() {
 
 # wait_guest_ssh BEGIN
 # wait_guest_ssh TIMEOUT [CONSOLE] — poll until root SSH answers or TIMEOUT
-# seconds elapse; CONSOLE names the boot's console log for the failure message
-# (the verification boot writes verify-console.log, not console.log).
+# seconds elapse, then until the package metadata refresh has settled; CONSOLE
+# names the boot's console log for the failure message (the verification boot
+# writes verify-console.log, not console.log). TIMEOUT bounds the SSH poll only,
+# so the call's worst case is TIMEOUT + METADATA_TIMEOUT — both hard caps, and
+# both end by dying rather than returning.
 #
 # Answering SSH is not a settled box. Every caller here goes straight on to read
 # pkg's ABI, apply a pkg upgrade, sample the exported artifact's ABI, or power the
