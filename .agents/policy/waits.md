@@ -26,7 +26,7 @@ Only **untracked** state gets wait, and always wait on something harness has no 
 | A `Workflow` you launched | yes | end the turn; the completion notification wakes you |
 | An `Agent` / subagent you spawned | yes | same |
 | `wait-checks.sh` / `wait-reviewer.sh` run with `run_in_background: true` | yes | same — the script self-exits and notifies; do not also poll it |
-| CodeRabbit posting a review; a CI run; a remote queue | **no** | a bounded wait: the script above, or the ladder in §1. Quota notice: wait the stated "Next review available in" then one `@coderabbitai review` ([`coderabbit.md`](coderabbit.md)) — do not drop because that wait exceeds five minutes |
+| CodeRabbit answering an `@coderabbitai review` you asked for; a CI run; a remote queue | **no** | a bounded wait: the script above, or the ladder in §1. Never wait on CodeRabbit before asking — automatic review is off. Quota notice: wait the stated "Next review available in", then one more `@coderabbitai review` ([`coderabbit.md`](coderabbit.md)) |
 
 Ladder's self-invalidating discipline applies to **every** timer you arm, not just `ScheduleWakeup`: on firing, CHECK concrete state first; if resolved, no-op and do NOT re-arm. Chain of re-armed sleeps with no resolution check = unbounded ladder wearing a cap — cap is per-rung, loop never ends.
 

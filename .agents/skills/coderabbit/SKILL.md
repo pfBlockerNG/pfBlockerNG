@@ -1,31 +1,47 @@
 ---
 name: coderabbit
 description: >
-  CodeRabbit Fair Usage and CLI review. Run immediately before opening a
-  GitHub PR, when a quota / "Review limit reached" notice appears, or when
-  dispatching the CLI-in-CI workflow. Loads `.agents/policy/coderabbit.md`.
-  Triggers: "open a PR", "Fair Usage", "rate limit", "coderabbit",
-  "@coderabbitai", "/coderabbit".
+  Asking CodeRabbit for a review, handling its Fair Usage quota notices, and
+  dispatching the CLI-in-CI workflow. Run when a PR is ready to merge, when a
+  quota / "Review limit reached" notice appears, or before dispatching the CLI
+  workflow. Loads `.agents/policy/coderabbit.md`. Triggers: "ready to merge",
+  "Fair Usage", "rate limit", "coderabbit", "@coderabbitai", "/coderabbit".
 ---
 
 Canonical contract: [`.agents/policy/coderabbit.md`](../../policy/coderabbit.md).
 Read that file; do not invent mute labels or post `@coderabbitai rate limit`.
 
-## Before `gh pr create`
+## Automatic review is off
+
+Opening or pushing a PR triggers no CodeRabbit review. Nothing to wait on until
+you ask. Do not arm a reviewer wait at PR-open time.
+
+## Asking for the review
+
+Post exactly one top-level `@coderabbitai review` comment, and only once all of
+these hold:
+
+- development is finished;
+- the adversarial review of `landing.md` is complete and its findings resolved;
+- CI is green on the head SHA;
+- you judge the code ready to merge.
+
+Then arm the bounded wait:
 
 ```sh
-scripts/agent/before-pr-create.sh --repo OWNER/REPO
+scripts/agent/wait-reviewer.sh --repo OWNER/REPO --pr N \
+  --handle coderabbitai --until finished --since "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-- Exit 0 → open the PR.
-- Exit 3 → wait until the printed `next slot`, unless the owner overrode in this conversation.
-- Exit 2 → tool/auth error; stop.
+FINISHED → triage every finding. QUOTA → wait the stated window, then one more
+ask; a second quota notice ends it with a recorded miss. Never nudge while a
+countdown is live.
 
-The printed block is the full picture (plan hourly columns, 7-day band, remaining slots). Do not re-derive it.
+## Do not re-ask
 
-## Quota notice on an open PR
-
-A quota notice is not a review. Do not nudge while the countdown is live. Pause first, then one `@coderabbitai review` after the window. Details in the policy.
+Not for format-only, comment-only, lint, or mechanical APPLY of CodeRabbit's own
+suggestions. Only a material behaviour change after the review earns a second
+ask, and only one.
 
 ## CLI review (separate hourly budget)
 

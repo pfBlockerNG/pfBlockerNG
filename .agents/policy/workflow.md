@@ -92,7 +92,8 @@ Every code PR gets independent adversarial review in fresh read-only context usi
 client's native reviewer surface, plus mechanical gates and CI. Reviewer never edits.
 Findings return as PR review comments. Loop limits below. Landing mechanics — review
 sources, reviewer contract, CI waits, rebase-merge — specified in [`landing.md`](landing.md).
-  CodeRabbit Fair Usage and wait-then-nudge — [`coderabbit.md`](coderabbit.md).
+  CodeRabbit is not automatic — it is asked for once, when the PR is ready to merge
+  ([`coderabbit.md`](coderabbit.md)).
 
 ### Continuation
 

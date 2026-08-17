@@ -22,7 +22,7 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 
 ## Preflight
 
-- **Identify the PR:** given PR number, else current branch's open PR (number, head ref, base ref, state, draft flag, mergeability, URL). None → stop and ask. Resolve `OWNER/REPO` once. Opening a new PR: run `scripts/agent/before-pr-create.sh` first (exit 3 = wait).
+- **Identify the PR:** given PR number, else current branch's open PR (number, head ref, base ref, state, draft flag, mergeability, URL). None → stop and ask. Resolve `OWNER/REPO` once.
 - **Scope check:** flow is for code-bearing PRs. Dev-only classes (documentation, ADR text, skills, agent config) land straight on `devel` with no PR — say so and stop.
 - **Transport check (once):** confirm GitHub CLI present and authenticated. Absent → use client's GitHub MCP tools with wakeup-paced bounded checks ([`waits.md`](waits.md) §4 "Managed environments"); neither transport → stop and report.
 - **Refusal cases (re-checked immediately before merging):** never merge PR that is not OPEN, is draft (ask user to mark ready), or is CONFLICTING (conflict resolution is separate work). Mergeability UNKNOWN means GitHub still computing — re-read after few seconds.
@@ -35,7 +35,7 @@ Three things start together at top of review step:
 
 1. **The CI wait — arm it NOW.** CI run on pushed head regardless of review state: start check-poll (`scripts/agent/wait-checks.sh --repo OWNER/REPO --pr N`, self-exiting, result file's LAST line is verdict) so clean PR's checks already green when review gate close. Fix push re-trigger CI — stop stale wait, re-arm after LAST fix push. Early verdict valid only for head SHA it watched. Flow abort anywhere → stop this wait as part of trigger sweep.
 2. **The adversarial review — ALWAYS, spawned first.** Every PR get three independent leg reviewers, each in fresh read-only context via client's native reviewer surface (per-client mapping below). Client-tracked: never arm wait for them; act on completions. Review additive to CodeRabbit, never fallback: run regardless, stand alone when CodeRabbit never review. **Self-review exemption** (owner, 2026-08-08): for small, relatively contained change, session at ≤ 50% context usage may run three lenses itself instead of spawning legs — past 50% context it MUST spawn. Self-review stay adversarial, cover same three-lens criteria and evidence bar as spawned legs — only spawn waived. Audit comments still record model, head SHA, self-review. Vendored `mattpocock-skills:code-review` skill (Spec + Standards axes) may drive contract lens and add standards/smell pass; never replace executed-probe or mutation mandates.
-3. **The CodeRabbit acknowledgement window** (next section) — the one untracked external that get bounded poll.
+CodeRabbit is **not** armed here. Automatic review is off; it is asked for once at the end of the flow, and only if the PR reach that end (next section).
 
 Whichever reviews arrive, **every comment of every review received is handled**; triage below never change with source.
 
@@ -55,29 +55,19 @@ Mechanics that hold for every pass:
 - **Model by leg**, never by diff size (tiers per `.agents/model-tiers.conf`; owner-approved from 100-PR findings audit, 2026-08-08): correctness + hostile inputs → **top** (cross-system/state/environment catches live here; mid take over iff top unavailable); contract conformance → **mid**; test honesty → **small**, with executed mutations mandatory — execution discipline, not model size, drive that leg. Re-review rounds run every leg on small tier. Record model + leg in each audit comment; never dated model ID.
 - **No build-mode styling propagates to a reviewer** — reviewers build nothing.
 
-### CodeRabbit availability (hook only — path is coderabbit.md)
+### CodeRabbit (asked for at the end — path is coderabbit.md)
 
-The five-minute "drop CodeRabbit on quota" rule is **retired**. Full path:
-[`coderabbit.md`](coderabbit.md). Short hook for the landing wait:
+Automatic review is **off** (`.coderabbit.yaml`). Opening or pushing a PR triggers nothing, so there is no acknowledgement window to wait on and no auto-review to poll. Full path: [`coderabbit.md`](coderabbit.md). Short hook for landing:
 
-Judge availability per-PR with **10-minute acknowledgement window** anchored on PR's creation time, polled via `scripts/agent/wait-reviewer.sh --until ack` (self-exiting; result file's LAST line is verdict). PR already older than 10 minutes with no CodeRabbit message → conclude NOACK immediately.
-
-- **ACK is a real review** (finished body or inline review on the head SHA) → wait for `--until finished` if not already terminal, then triage.
-- **ACK is only a quota notice** → do **not** drop. Do **not** pause-comment every PR. Do **not** open another ready PR until `scripts/agent/before-pr-create.sh` says open (or the owner overrode). Then `@coderabbitai review` once on that PR. Details in coderabbit.md.
-- **NOACK** → nudge **once** (`@coderabbitai review`), then re-run ack wait with a fresh 10-minute window anchored on *now* (`--since`). Still silent → CodeRabbit unavailable; three-leg carries the review step. Never a second no-ack nudge.
-- **Spend:** after a finished review, do not `@coderabbitai review` for format-only / comment-only / mechanical APPLY. Every quota notice triggers the spend inspection in coderabbit.md before the next PR opens.
-
-Waiting on finished review (`--until finished`; handle matching case-insensitive and anchored — never append `[bot]` yourself):
-
-- **FINISHED** — terminal result posted, including clean pass. Content beat quota phrase: real review content beside notice is FINISHED.
-- **QUOTA `<mins>`** — not a review. Follow the wait-then-nudge path above (coderabbit.md). Do **not** drop solely because `mins > 5`. Always surface a miss; a skipped bot is never "PR clean".
-- **NOTPRESENT** — zero engagement within presence window (~5 min): handle not reviewing this PR; skip without blocking (not failure).
-- **DECLINE** (base isn't default branch) — post one comment asking for full review (`@coderabbitai trigger full review and tell me when you are finished`), re-arm **finished-only** with `--since` now (never re-trigger on repeat decline).
-- **PAUSE** (branch too active) — if the latest commits are format-only or mechanical review-fixes, leave paused. If product behaviour changed **and** no quota notice is in force, post `@coderabbitai resume` once, re-arm finished-only.
-- **TIMEOUT** — first check for **silent pause** (walkthrough stuck with no terminal result): treat as PAUSE. Otherwise report and ask: keep waiting or proceed.
-- CodeRabbit acked but never finished → three-leg may proceed; late review folds in before merge gate. A quota-only ACK is not this case.
-- Bot's wording drifts — diagnostics show finished/declined review the matcher missed: read comment body and adjust patterns instead of waiting out timeout.
-- Multiple handles (e.g. adding Snyk explicitly): run wait once per handle, continue when all **engaged** reviewers finish; tolerate absent ones. DECLINE/PAUSE/nudge machinery is CodeRabbit-specific; other handles use only FINISHED / QUOTA / NOTPRESENT / TIMEOUT. For human handle, first new review or comment since wait started is FINISHED.
+- **Ask once, when the PR is actually ready** — adversarial review complete and its findings resolved, CI green on the head SHA, and you judge the code mergeable. Then post exactly one top-level `@coderabbitai review`. Not before: an earlier ask spends the slot on code that is going to change.
+- **Then** arm `scripts/agent/wait-reviewer.sh --handle coderabbitai --until finished --since <now>` (self-exiting; result file's LAST line is the verdict; handle matching is case-insensitive and anchored — never append `[bot]` yourself).
+- **FINISHED** — terminal result posted, including a clean pass. Content beat quota phrase: real review content beside a notice is FINISHED. Triage per below.
+- **QUOTA `<mins>`** — not a review. Wait the stated window, then one more ask; a second quota notice ends it with a recorded miss (coderabbit.md). Never nudge inside a live countdown. Always surface a miss; a skipped bot is never "PR clean".
+- **NOACK / NOTPRESENT / TIMEOUT** — re-ask once with a fresh window, then treat CodeRabbit as unavailable and let three-leg carry the review step. First check TIMEOUT for a **silent pause** (walkthrough stuck with no terminal result).
+- **DECLINE** (base isn't default branch) — post one comment asking for a full review (`@coderabbitai trigger full review and tell me when you are finished`), re-arm finished-only with `--since` now (never re-trigger on repeat decline).
+- **Spend:** after a finished review, do not ask again for format-only, comment-only, lint, or mechanical APPLY rounds. Only a material behaviour change earns a second ask, and only one.
+- Bot's wording drifts — diagnostics show a finished review the matcher missed: read the comment body and adjust patterns instead of waiting out the timeout.
+- Multiple handles (e.g. adding Snyk explicitly): run the wait once per handle, continue when all **engaged** reviewers finish; tolerate absent ones. The DECLINE/re-ask machinery is CodeRabbit-specific; other handles use only FINISHED / QUOTA / NOTPRESENT / TIMEOUT. For a human handle, the first new review or comment since the wait started is FINISHED.
 
 ### Finding intake — enumerate everything
 
@@ -134,7 +124,7 @@ Proceed to merge ONLY when review step finished cleanly:
 - **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to merge while any item lack outcome.
 - **No external reviewer** (CodeRabbit dropped, nobody else reviewed): note skip in audit trail; three legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before merge — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
-- **CodeRabbit at merge:** if the head SHA has no finished CodeRabbit review, follow [`coderabbit.md`](coderabbit.md) or record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
+- **CodeRabbit at merge:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`coderabbit.md`](coderabbit.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
 - Unresolved, contested, or user-decision findings → stop and report; do not merge.
 
 ## Merge step
