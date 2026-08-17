@@ -1185,7 +1185,14 @@ def pin_cron_due(vm: SmokeVM) -> int:
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        "pfb_global();\n"
+        # issue #2492: pfb_global() lives in pfblockerng.inc, which extra.inc does NOT
+        # require, so under pfSsh.php eval the bare call is fatal ("Call to undefined
+        # function pfb_global()"). Do NOT fix that by requiring pfblockerng.inc here:
+        # measured, it removes the fatal but breaks the already-loaded, locked config
+        # ("A valid config file could not be recovered"), which is the eval-scope gotcha
+        # in docs/misc/local-smoke-debian.md. The call is not needed — it only populates
+        # $pfb, and the sole use below already falls back to /usr/local/etc.
+        "if (function_exists('pfb_global')) { pfb_global(); }\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
         "$g['pfb_scheduled_feed_updates'] = 'on';\n"
