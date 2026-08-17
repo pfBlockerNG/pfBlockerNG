@@ -40,9 +40,11 @@ issues, process improvements become a PR against this skill.
    parity across siblings — v4/v6, CE/Plus, channels, languages). For each, find
    where the code enforces it and try to break it with an EXECUTED probe (`scripts/
    run-in-docker.sh` for suites; scratch dirs under `/tmp`; never the live boxes
-   from the cloud). Also run `/code-review` (the repo's `code-review` skill,
-   high effort) over the roots when the delta is large — its findings enter the
-   same dedupe below.
+   from the cloud). Also run `/code-review` at `medium` effort over the roots
+   when the delta is large — its findings enter the same dedupe below. That
+   command is a Claude Code client built-in, not a repo skill under
+   `.agents/skills/`; a client without it skips this step and relies on the
+   invariant probes above.
 4. **Dedupe + cluster.** Before filing: `gh issue list --search` on the symptom
    words and the file names, open AND closed. One root cause = ONE issue with
    sub-items; siblings of the same rule are sub-items, never separate tickets.
