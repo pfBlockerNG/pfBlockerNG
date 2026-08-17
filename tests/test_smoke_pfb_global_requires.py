@@ -38,6 +38,7 @@ import importlib
 import re
 import subprocess
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -63,7 +64,7 @@ _MAIN_CONST = re.compile(r"""(?m)^\s*\w+\s*=\s*["'][^"']*/pfblockerng\.inc["']""
 _WINDOW = 8000
 
 
-def _live_helpers():  # -> module
+def _live_helpers() -> ModuleType:
     # Resolve at CALL time, never at import time: tests/test_adr47_conftest_lane.py
     # deliberately EVICTS tests.smoke.helpers from sys.modules and re-imports it (to
     # test import-time env reads), orphaning any module-level binding taken during
