@@ -1087,11 +1087,16 @@ def test_no_workflow_resolves_composer_per_job() -> None:
 def test_every_php_leg_materialises_the_baked_tree() -> None:
     text = _read(ROOT / ".github/workflows/test.yml")
     php_legs = ("php-static-analysis:", "php-codesniffer:", "php-unit:")
+    # Per leg, not a whole-file count: deleting the step from one leg and duplicating it
+    # in another keeps any total intact while leaving a leg with no vendor tree.
     for leg in php_legs:
         assert leg in text, f"{leg} is gone — retarget this guard at the leg that replaced it"
-    assert text.count("scripts/ci-vendor.sh") >= len(php_legs), (
-        "each Composer-backed leg must materialise the baked tree through the one script"
-    )
+        start = text.index(leg)
+        body = text[start:]
+        following = [text.index(other) for other in php_legs if text.index(other) > start]
+        if following:
+            body = text[start : min(following)]
+        assert "scripts/ci-vendor.sh" in body, f"leg {leg} must materialise the baked tree through scripts/ci-vendor.sh"
 
 
 def test_a_lock_change_reaches_the_image_workflow() -> None:

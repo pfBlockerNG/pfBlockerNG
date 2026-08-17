@@ -29,14 +29,41 @@ if [ ! -d "$baked" ]; then
 	exit 1
 fi
 
-# cp -R, never cp -a: the baked tree is root-owned and the legs run as uid 1001, so
-# preserving ownership would fail for every file.
+# cp -R rather than cp -a: the tree carries no symlinks and nothing else worth
+# preserving, and -a's ownership preservation is a no-op for an unprivileged leg anyway.
 rm -rf "${root}/vendor"
 cp -R "$baked" "${root}/vendor"
-echo "ci-vendor.sh: vendor/ materialised from ${baked}"
 
-if ! python3 "${root}/scripts/check_composer_vendor.py" "$root" >&2; then
-	echo "ci-vendor.sh: composer.lock does not match the tree baked into this image." >&2
+# composer.lock is only half the witness. Adding or moving an autoload mapping leaves it
+# byte-identical -- composer's content-hash does not cover autoload* -- so the package
+# comparison below would certify a stale autoloader as fresh, and the leg would run
+# against a vendor/ that has never heard of the new mapping. The image bakes composer.json
+# beside the tree so that half is checkable too.
+stale=0
+baked_root=$(dirname -- "$baked")
+if [ -f "${baked_root}/composer.json" ] && ! cmp -s "${baked_root}/composer.json" "${root}/composer.json"; then
+	echo "ci-vendor.sh: composer.json differs from the one this image baked" >&2
+	stale=1
+fi
+
+# Separated from the drift verdict on purpose: a missing python3 or a missing checker is
+# an infrastructure failure, and telling its reader to bump VERSION would send them to fix
+# the wrong thing.
+rc=0
+python3 "${root}/scripts/check_composer_vendor.py" "$root" >&2 || rc=$?
+case "$rc" in
+	0) ;;
+	1) stale=1 ;;
+	*)
+		echo "ci-vendor.sh: could not run scripts/check_composer_vendor.py (exit ${rc})" >&2
+		exit 1
+		;;
+esac
+
+if [ "$stale" -eq 1 ]; then
+	echo "ci-vendor.sh: this checkout's Composer metadata does not match the tree baked into this image." >&2
 	echo "ci-vendor.sh: bump .github/docker/VERSION and publish a new image, then repin the workflows." >&2
 	exit 1
 fi
+
+echo "ci-vendor.sh: vendor/ materialised from ${baked}"
