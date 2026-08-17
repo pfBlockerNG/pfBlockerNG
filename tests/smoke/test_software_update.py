@@ -198,8 +198,10 @@ def file_sha256(vm: SmokeVM, path: str, *, timeout: float = 60.0) -> str | None:
 # --------------------------------------------------------------------------- #
 # pfSense's notices API (upstream src/etc/inc/notices.inc):
 #   file_notice($id, $notice, $category="General", $url="", $priority=1, $local_only=false)
-#   get_notices()  -> array of {id, notice, category, url, priority, time} rows
-#   close_notice($id) -> removes every row whose id matches
+#   get_notices()  -> array of {id, notice, category, url, priority} rows keyed by timestamp,
+#                     or FALSE when the queue file is empty
+#   close_notice($id_or_key) -> removes ONE row: the row keyed by that timestamp, else the
+#                     oldest row whose id matches (then breaks)
 # pfSsh.php runs them in the fully-bootstrapped pfSense env (notices.inc is auto-loaded), the
 # same env the real cron uses, so this proves the cron-context delivery path end-to-end.
 
@@ -255,7 +257,7 @@ def count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0) 
     """
     snippet = (
         "$n = 0;\n"
-        "foreach (get_notices() as $row) {\n"
+        "foreach ((get_notices() ?: []) as $row) {\n"
         f"  if (strpos((string)($row['notice'] ?? ''), {_php_str(needle)}) !== FALSE) {{ $n++; }}\n"
         "}\n"
         f"echo {_php_str(_NOTICE_OPEN)} . $n . {_php_str(_NOTICE_CLOSE)};"
@@ -271,21 +273,32 @@ def count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0) 
 def close_all_notices(vm: SmokeVM, *, timeout: float = 120.0) -> None:
     """Close EVERY notice carrying our id — leave the VM CLEAN (teardown counterpart).
 
-    pfSense's ``close_notice($id)`` removes ONE row per call — the oldest with that id — and
-    the package itself files ``pfBlockerNG``-id notices too (schedule-migration and DNSBL-VIP
-    install warnings), so a single ``close_notice(NOTICE_ID)`` drained those and left every
+    pfSense's ``close_notice($id)`` removes ONE row per call — the first row in queue order
+    carrying that id (queue order is timestamp order, so the oldest) — and the package itself
+    files ``pfBlockerNG``-id notices too (e.g. schedule-migration and DNSBL-VIP install
+    warnings), so a single ``close_notice(NOTICE_ID)`` drained those and left every
     ``available (<channel>)`` row standing (issue #2465). Close by timestamp key instead, one
-    call per matching row, so the next case's ``count == 0`` before-state is genuinely clean.
+    call per matching row, then re-count: the teardown is its own oracle and raises if any
+    row of our id survives, so the next case's ``count == 0`` before-state is genuinely clean.
     """
     snippet = (
         "foreach ((get_notices() ?: []) as $key => $row) {\n"
         f"  if ((string)($row['id'] ?? '') === {_php_str(NOTICE_ID)}) {{ close_notice($key); }}\n"
         "}\n"
-        "echo 'OK';"
+        "$left = 0;\n"
+        "foreach ((get_notices() ?: []) as $row) {\n"
+        f"  if ((string)($row['id'] ?? '') === {_php_str(NOTICE_ID)}) {{ $left++; }}\n"
+        "}\n"
+        f"echo {_php_str(_NOTICE_OPEN)} . $left . {_php_str(_NOTICE_CLOSE)};"
     )
     out = _pfssh(vm, snippet, timeout=timeout)
-    if "OK" not in out:
-        raise RuntimeError(f"close_all_notices did not confirm: {out!r}")
+    start = out.find(_NOTICE_OPEN)
+    end = out.find(_NOTICE_CLOSE)
+    if start == -1 or end == -1:
+        raise RuntimeError(f"close_all_notices: no delimited count in pfSsh.php output: {out!r}")
+    left = int(out[start + len(_NOTICE_OPEN) : end])
+    if left != 0:
+        raise RuntimeError(f"close_all_notices left {left} notice(s) with id {NOTICE_ID!r} standing")
 
 
 def _php_str(value: str) -> str:
