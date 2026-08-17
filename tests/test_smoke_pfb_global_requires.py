@@ -6,30 +6,24 @@ requires only extra.inc and then calls ``pfb_global()`` is fatal under ``pfSsh.p
 
     PHP ERROR: Uncaught Error: Call to undefined function pfb_global()
 
-That errored every smoke test using ``pin_cron_due()`` (24 occurrences in one full run)
-and every test in ``test_log_age_retention.py`` at fixture setup. The defect has been
-introduced TWICE (most recently by ``074b359c``), and smoke dispatch defaults to
-``scope=impacted``, so a re-introduction can land without any leg that exercises it.
+Without it, every smoke test using ``pin_cron_due()`` and every test in
+``test_log_age_retention.py`` errors at fixture setup. The defect has been introduced
+twice, and smoke dispatch defaults to ``scope=impacted``, so a re-introduction can land
+without any leg that exercises it — hence a hermetic pin here.
 
-Coverage here is TWO-TIER, honestly labelled:
+A snippet is SAFE if it requires ``pfblockerng.inc`` OR guards the call with
+``function_exists``. Both are accepted: which one suits a given snippet is an empirical
+question (for ``pin_cron_due`` the require was measured to break the loaded config — see
+issue #2492), not a stylistic one.
 
-* **Executable rows** for the two historical sites — ``pin_cron_due`` and
-  ``_prime_idle_schedule`` — run the real helper against a monkeypatched ``php_eval``
-  and assert the emitted PHP. These are the primary tier; both are mutation-verified.
-  (Their snippet checks are substring-based too, so the evasions below apply to both
-  tiers — "executable" means exercising the real helper, not parsing PHP.)
+Coverage is two-tier:
+
+* **Executable rows** for the two known sites run the real helper against a
+  monkeypatched ``php_eval`` and assert the emitted PHP.
 * **A source sweep** over ``tests/smoke/`` as a tripwire for NEW call sites. It is
-  per-occurrence (a call must have a guard or a require in the PRECEDING window, so a
-  later snippet's require cannot excuse an earlier bare call), but it reads Python
-  source, not emitted PHP — string concatenation, negated guards
-  (``!function_exists``), or exotic call shapes can evade it. It is a tripwire, not a
-  proof; the executable rows are the stronger tier for the sites that have burned us.
-
-Which remedy is correct per snippet is EMPIRICAL, not stylistic: for ``pin_cron_due``
-the require was measured worse than the guard (19 passed/3 failed guarded; 12/13 with
-the require after extra.inc — guest reporting "A valid config file could not be
-recovered" x12; 25 errors, twice, with it before). Other snippets legitimately require
-the file. Both remedies satisfy the invariant pinned here.
+  per-occurrence (a require in a LATER snippet cannot excuse an earlier bare call), but
+  it reads Python source, not emitted PHP: string concatenation, negated guards, or
+  exotic call shapes evade it. Tripwire, not proof.
 """
 
 from __future__ import annotations
@@ -136,6 +130,15 @@ def _swept_sources() -> list[Path]:
             continue
         if _CALL.search(p.read_text(encoding="utf-8")):
             out.append(p)
+    if not out:
+        # An empty parametrize list would emit a skip, which the #2359 allowlist gate
+        # then fails as an unallowlisted skip — a confusing way to learn the sweep
+        # covers nothing. Fail collection with the actual reason instead.
+        raise RuntimeError(
+            "pfb_global() sweep matched no files under tests/smoke — either every call "
+            "site was removed (delete this sweep) or _CALL no longer matches the call "
+            "shape (fix the pattern). Refusing to report vacuous coverage."
+        )
     return out
 
 
