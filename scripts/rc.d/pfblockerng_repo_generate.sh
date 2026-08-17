@@ -135,7 +135,10 @@ _base_from_conf() {
     _bc_channel="$2"
     _bc_url="$(sed -n 's/^[[:space:]]*url:[[:space:]]*"\([^"]*\)".*/\1/p' "${_bc_conf}" 2>/dev/null | head -n 1)"
     if [ -z "${_bc_url}" ]; then
-        grep -q '^[[:space:]]*url[[:space:]]*:' "${_bc_conf}" 2>/dev/null && return 2
+        # -i: a conf spelling the key `URL:` matches neither the extractor above
+        # nor a case-sensitive presence check, and taking it for a conf with no
+        # url at all would clobber it from the fallback base.
+        grep -qi '^[[:space:]]*url[[:space:]]*:' "${_bc_conf}" 2>/dev/null && return 2
         return 1
     fi
     # One trailing slash is still our shape — a conf frozen as foreign over it
