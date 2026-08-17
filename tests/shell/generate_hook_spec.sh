@@ -751,3 +751,71 @@ CONFSLASH
       The contents of file "${PFB_TESTING_CONF}" should not include "pfblockerng.github.io"
     End
 End
+
+Describe 'generate hook — the url-line discriminator ignores case'
+    # A hand-edited conf spelling the key `URL:` matches neither the extractor
+    # nor a case-sensitive presence check, so it would be taken for a conf with
+    # no url at all and rewritten from the fallback base — the same defect class
+    # as an unparseable url, reached through a different variant.
+    setup() {
+        _uc_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_upcase.XXXXXX")"
+        _make_box "${_uc_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_EDGE_CONF}" <<'UPCASE'
+pfblockerng-edge: {
+  URL: "https://decoy.example.org/pkg/edge/ce-2.7",
+  enabled: yes
+}
+UPCASE
+        _uc_sum="$(cksum < "${PFB_EDGE_CONF}")"
+    }
+    cleanup() { rm -rf "${_uc_dir}"; _unset_box; unset _uc_sum; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf spells the key in upper case'
+      The contents of file "${PFB_EDGE_CONF}" should include 'URL: "https://decoy.example.org/pkg/edge/ce-2.7"'
+    End
+
+    It 'leaves the conf byte-unchanged, warns, and exits 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "did not write"
+      The value "$(cksum < "${PFB_EDGE_CONF}")" should equal "${_uc_sum}"
+      The contents of file "${PFB_EDGE_CONF}" should not include "pfblockerng.github.io"
+    End
+End
+
+Describe 'generate hook — a pre-#1806 arch-leaf conf is frozen, not healed'
+    # Before issue #1806 the url carried a per-arch leaf: <base>/<channel>/
+    # <varver>/<arch>. The old hook healed one on the next boot; the dest-base
+    # guard now freezes it, because a url of that shape is indistinguishable
+    # from any other four-segment tail. The warning names the install.sh re-run
+    # that re-points it — this row pins that deliberate trade.
+    setup() {
+        _al_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_archleaf.XXXXXX")"
+        _make_box "${_al_dir}" "pfSense" "2.8.1"
+        cat > "${PFB_NIGHTLY_CONF}" <<'ARCHLEAF'
+# Generated at boot by pfblockerng_repo_generate (ADR-39)
+pfblockerng-nightly: {
+  url: "https://pfblockerng.github.io/pkg/nightly/ce-2.7/FreeBSD:15:amd64",
+  enabled: yes
+}
+ARCHLEAF
+        _al_sum="$(cksum < "${PFB_NIGHTLY_CONF}")"
+    }
+    cleanup() { rm -rf "${_al_dir}"; _unset_box; unset _al_sum; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the conf carries the retired per-arch leaf'
+      The contents of file "${PFB_NIGHTLY_CONF}" should include "ce-2.7/FreeBSD:15:amd64"
+    End
+
+    It 'leaves it byte-unchanged and points at the install.sh re-run, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "did not write"
+      The stderr should include "install.sh --channel nightly"
+      The value "$(cksum < "${PFB_NIGHTLY_CONF}")" should equal "${_al_sum}"
+    End
+End
