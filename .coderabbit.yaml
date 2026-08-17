@@ -1,25 +1,18 @@
 # CodeRabbit configuration.
 #
 # Reviews are beneficial and stay advisory (they never gate merge).
-# First look plus one incremental (the APPLY round). Agents decide
-# when to open a PR from scripts/agent/before-pr-create.sh.
+# Automatic review is OFF: a PR is reviewed only when we ask for it
+# with an `@coderabbitai review` comment, once the change is finished,
+# self-reviewed and green. Fair Usage slots are scarce enough that
+# spending them on every intermediate push is not worth it.
 # Path: .agents/policy/coderabbit.md.
 reviews:
   auto_review:
-    enabled: true
+    enabled: false
     drafts: false
-    # Pause after the first look and one incremental. Turning
-    # incrementals off dropped the APPLY review — that is where
-    # the #2432 / #2434 defects lived. Format-only pushes after
-    # pause do not spend a slot.
+    # Dead while `enabled` is false; kept until the quota machinery
+    # that pins it is removed.
     auto_pause_after_reviewed_commits: 2
-    ignore_title_keywords:
-      - "WIP"
-      - "[skip review]"
-    # !label = skip auto-review. WIP is unfinished work, not a
-    # Fair Usage mute. See .agents/policy/coderabbit.md.
-    labels:
-      - "!WIP"
   # Hide "Review skipped" / status-only comments (quota + no-new-commits).
   review_status: false
 
