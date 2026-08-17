@@ -865,13 +865,21 @@ def test_the_marker_is_produced_as_well_as_consumed() -> None:
     # and a dependency change keeps the marker identical, the guard reports "already
     # published from these exact inputs", and the run goes green having rebuilt nothing —
     # the series can then never be rebuilt under that VERSION.
+    #
+    # Matched against the rev-parse TARGETS, never the step text: the rationale comment
+    # above names composer.lock in prose, so a containment test over the whole step passes
+    # with the real input removed — and any new source merely SHARING a leading segment
+    # with something hashed (`tests/anything` against `tests/smoke/requirements.txt`)
+    # would pass too. Both are the unhashed-input defect this assertion exists to catch.
+    hashed = set(re.findall(r'HEAD:([^"]+)"', version_step))
+    assert hashed, f"no HEAD:<path> rev-parse targets found in the marker step:\n{version_step}"
     for copied in _context_copy_sources(_read(BASE_DOCKERFILE)) | _context_copy_sources(_read(VM_DOCKERFILE)):
         # A git tree id covers everything beneath it, so a path under an already-hashed
         # directory needs no entry of its own.
-        covered = [copied, *(str(parent) for parent in PurePosixPath(copied).parents if str(parent) != ".")]
-        assert any(candidate in version_step for candidate in covered), (
+        covered = {copied, *(str(parent) for parent in PurePosixPath(copied).parents if str(parent) != ".")}
+        assert covered & hashed, (
             f"the marker must cover {copied}, which the image COPYs from the build context; "
-            f"neither it nor any parent directory is hashed"
+            f"neither it nor any parent directory is hashed (hashed: {sorted(hashed)})"
         )
 
     # Written in the SAME imagetools call that creates the series, so the two cannot
@@ -1096,17 +1104,36 @@ def test_every_php_leg_materialises_the_baked_tree() -> None:
         following = [text.index(other) for other in php_legs if text.index(other) > start]
         if following:
             body = text[start : min(following)]
-        assert "scripts/ci-vendor.sh" in body, f"leg {leg} must materialise the baked tree through scripts/ci-vendor.sh"
-
-
-def test_a_lock_change_reaches_the_image_workflow() -> None:
-    """Without this trigger a dependency bump would leave the published image behind the
-    lock, and the drift would only surface as a red leg in some later PR."""
-    text = _read(PUBLISH_WORKFLOW)
-    for path in ("composer.json", "composer.lock"):
-        assert text.count(f"      - {path}\n") == 2, (
-            f"{path} must trigger the image workflow on both push and pull_request"
+        # `run:` line, not a bare substring: a comment naming the script reads the same to
+        # a containment test while the leg materialises nothing.
+        assert "run: scripts/ci-vendor.sh" in body, (
+            f"leg {leg} must materialise the baked tree through scripts/ci-vendor.sh"
         )
+
+
+def test_every_build_input_triggers_the_image_workflow() -> None:
+    """A COPY source with no matching path trigger is a file that decides the image and can
+    never rebuild it: edit it, the workflow never runs, and the published series silently
+    no longer matches the tree it was built from.
+
+    Derived from the Dockerfiles for the same reason the marker is — the trigger list was
+    the last place restating by hand what the images actually read.
+    """
+    text = _read(PUBLISH_WORKFLOW)
+    blocks = re.findall(r"\n    paths:\n((?:      - \S+\n)+)", text)
+    assert len(blocks) == 2, f"expected a paths: list on both push and pull_request; found {len(blocks)}"
+
+    sources = _context_copy_sources(_read(BASE_DOCKERFILE)) | _context_copy_sources(_read(VM_DOCKERFILE))
+    for block in blocks:
+        entries = [line.strip()[2:] for line in block.splitlines()]
+        for copied in sources:
+            covered = any(
+                entry == copied or (entry.endswith("/**") and copied.startswith(entry[:-2])) for entry in entries
+            )
+            assert covered, (
+                f"{copied} is COPYed into the image but no path trigger matches it, so a change "
+                f"to it would never rebuild the series; triggers were: {entries}"
+            )
 
 
 def test_the_vendor_script_is_posix_sh_and_executable() -> None:
