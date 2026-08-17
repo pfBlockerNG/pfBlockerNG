@@ -133,6 +133,44 @@ Describe 'image-upgrade.sh package-metadata wait'
     ' _ "$SCRIPT"
   }
 
+  # run_wait_counted TIMEOUT_ARG — same stub, but counting probes and letting the
+  # interval fall back too, so the number of probes before the wait dies is a
+  # direct readout of the effective cap: probes = cap / interval + 1.
+  run_wait_counted() {
+    _arg="$1" timeout 20 sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# pfb_wait_pkg_metadata BEGIN/,/^# pfb_wait_pkg_metadata END/p" "$1")"
+      sleep() { :; }
+      ssh_guest() {
+        _n=$(cat "$COUNT"); _n=$((_n + 1)); printf "%s\n" "$_n" > "$COUNT"
+        printf "gone\r\n"
+      }
+      pfb_wait_pkg_metadata "$_arg"
+    ' _ "$SCRIPT"
+  }
+
+  It 'falls back to the documented 600s cap when the timeout is unusable'
+    # Pins the fallback VALUE, not just that something bounded happens: with the
+    # 5s interval fallback, a 600s cap is 121 probes. A fallback of 0 would be 1.
+    When call run_wait_counted not-a-number
+    The status should be failure
+    The stderr should include 'did not settle'
+    The contents of file "$COUNT" should equal '121'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
+  It 'treats a zero timeout as fail-on-first-probe, not as unusable'
+    # Pins the -ge 0 boundary: 0 is a legitimate cap meaning "probe once, then
+    # give up", so it must NOT be swept into the 600s fallback.
+    When call run_wait_counted 0
+    The status should be failure
+    The stderr should include 'did not settle'
+    The contents of file "$COUNT" should equal '1'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
   It 'stays bounded when the timeout is not a number'
     When call run_wait_bad_timeout
     The status should be failure
