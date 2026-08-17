@@ -134,4 +134,42 @@ Describe 'read-version-matrix.sh derived test matrices'
       The stderr should include 'missing/empty php_version'
     End
   End
+
+  # ── issue #2497 review B3: a provided ref must skip the opportunistic fetch ── #
+  # The reader's tolerated `git fetch origin ci-metadata` can OVERWRITE a seeded
+  # matrix ref with a different source's matrix. When the caller chose the ref
+  # (--ref flag or MATRIX_REF env), the fetch must not run. Observable: give the
+  # fixture a REAL origin carrying a ci-metadata branch — an un-skipped fetch
+  # creates refs/remotes/origin/ci-metadata; a skipped one leaves it absent.
+  run_ref_flag_with_origin() {
+    _ro_repo="$(make_matrix_repo "$1")"
+    _ro_side="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/vermxorigin.XXXXXX")"
+    (
+      cd "$_ro_repo" || exit 1
+      scrub_git_env
+      cp -a "$_ro_repo/." "$_ro_side/"
+      git_fixture -C "$_ro_side" branch -f ci-metadata HEAD
+      git_fixture remote add origin "$_ro_side"
+      sh "$READER" --ref HEAD --file supported-versions.json --print-test >/dev/null || exit 1
+      # assertion payload: print whether the remote-tracking ref materialised
+      if git_fixture rev-parse --verify -q refs/remotes/origin/ci-metadata >/dev/null 2>&1; then
+        printf 'origin-ref=present\n'
+      else
+        printf 'origin-ref=absent\n'
+      fi
+    )
+    _ro_status=$?
+    rm -rf "$_ro_repo" "$_ro_side"
+    return "$_ro_status"
+  }
+
+  Describe 'provided ref skips the origin ci-metadata fetch (issue #2497)'
+    It 'leaves refs/remotes/origin/ci-metadata absent when --ref chose the source'
+      json='{"versions":[{"channel":"CE","ci":true,"php_version":"8.3","py_flavor":"py311"}]}'
+      When call run_ref_flag_with_origin "$json"
+      The status should be success
+      The output should include 'origin-ref=absent'
+    End
+  End
+
 End

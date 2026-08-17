@@ -25,6 +25,7 @@ Describe 'local-smoke.sh --shards'
   setup() {
     scrub_git_env
     unset PFB_REF
+    unset PFB_GIT_REMOTE
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/localsmokespec.XXXXXX")"
     CALLS_DIR="${WORK}/calls"
     mkdir -p "$CALLS_DIR"
@@ -189,7 +190,7 @@ FAKEEOF
       The line 1 of output should equal 'exit=0'
       The line 2 of output should equal 'calls=1'
       The output should include "git fetch --quiet 'git://10.20.41.1/pfBlockerNG.git' 'dummy'"
-      The output should include "git fetch --quiet --no-tags 'git://10.20.41.1/pfBlockerNG.git' ci-metadata:refs/remotes/origin/ci-metadata"
+      The output should include "git fetch --quiet --no-tags 'git://10.20.41.1/pfBlockerNG.git' '+ci-metadata:refs/pfb/ci-metadata'"
       # the substituted bootstrap must not still fetch from origin
       The output should not include "git fetch --quiet origin"
     End
@@ -199,7 +200,7 @@ FAKEEOF
       The line 1 of output should equal 'exit=0'
       The line 2 of output should equal 'calls=1'
       The output should include "git fetch --quiet 'origin' 'dummy'"
-      The output should include "git fetch --quiet --no-tags 'origin' ci-metadata:refs/remotes/origin/ci-metadata"
+      The output should include "git fetch --quiet --no-tags 'origin' 'ci-metadata:refs/remotes/origin/ci-metadata'"
     End
 
     It 'honours PFB_GIT_REMOTE from the environment, with the flag taking precedence'
@@ -215,6 +216,34 @@ FAKEEOF
       When call run_and_diag --ref dummy --git-remote ''
       The line 1 of output should equal 'exit=2'
       The line 2 of output should equal 'calls=0'
+      The output should include 'non-empty'
+    End
+
+    It 'honours PFB_GIT_REMOTE alone (no flag) — review B2: env support must be failable'
+      env_only() { PFB_GIT_REMOTE='env-remote'; export PFB_GIT_REMOTE; }
+      BeforeCall 'env_only'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include "git fetch --quiet 'env-remote' 'dummy'"
+    End
+
+    It 'seeds a NEUTRAL ci-metadata ref for a non-origin remote and exports MATRIX_REF (review B3)'
+      When call run_and_diag --ref dummy --git-remote mirror-remote
+      The line 1 of output should equal 'exit=0'
+      # the box-side read-version-matrix.sh must be pointed at the seeded ref, so its
+      # own tolerated `git fetch origin ci-metadata` cannot clobber the seed
+      The output should include "'+ci-metadata:refs/pfb/ci-metadata'"
+      The output should include "MATRIX_REF='refs/pfb/ci-metadata'"
+      The output should not include "ci-metadata:refs/remotes/origin/ci-metadata"
+    End
+
+    It 'keeps the default origin path on the classic refspec with MATRIX_REF empty'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The output should include "'ci-metadata:refs/remotes/origin/ci-metadata'"
+      The output should include "MATRIX_REF=''"
+      The output should not include "refs/pfb/ci-metadata"
     End
   End
 
