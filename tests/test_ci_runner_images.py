@@ -24,7 +24,7 @@ import os
 import re
 import subprocess
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -152,6 +152,22 @@ def test_base_image_is_a_digest_pinned_numbered_debian_13_slim() -> None:
         assert re.search(r"debian:13\.\d+-slim@sha256:[0-9a-f]{64}", ref), (
             f"the Debian base must be a NUMBERED 13.x slim tag pinned by digest; got:\n{ref}"
         )
+
+
+def _context_copy_sources(dockerfile: str) -> set[str]:
+    """Every path a COPY reads from the BUILD CONTEXT (not from another stage).
+
+    `COPY --from=<stage>` reads from an image, which the stage pin already covers; a
+    bare COPY reads a repository path, whose contents decide what the image ends up
+    carrying.
+    """
+    sources: set[str] = set()
+    for block in _run_blocks(dockerfile):
+        if not block.startswith("COPY ") or "--from=" in block:
+            continue
+        # Last field is the destination; everything between is a context path.
+        sources.update(block.split()[1:-1])
+    return sources
 
 
 def test_every_stage_base_is_pinned_by_digest() -> None:
@@ -844,6 +860,19 @@ def test_the_marker_is_produced_as_well_as_consumed() -> None:
     version_step = _step(workflow, "Read the image tag series")
     assert 'git rev-parse "HEAD:.github/docker"' in version_step, "the marker must hash the Dockerfile tree"
     assert "tests/smoke/requirements.txt" in version_step, "the marker must cover the requirement files COPYed in"
+    # Every build-context path a Dockerfile COPYs decides the image CONTENT, so each one
+    # has to be in the fingerprint. composer.lock is the case that proves it: leave it out
+    # and a dependency change keeps the marker identical, the guard reports "already
+    # published from these exact inputs", and the run goes green having rebuilt nothing —
+    # the series can then never be rebuilt under that VERSION.
+    for copied in _context_copy_sources(_read(BASE_DOCKERFILE)) | _context_copy_sources(_read(VM_DOCKERFILE)):
+        # A git tree id covers everything beneath it, so a path under an already-hashed
+        # directory needs no entry of its own.
+        covered = [copied, *(str(parent) for parent in PurePosixPath(copied).parents if str(parent) != ".")]
+        assert any(candidate in version_step for candidate in covered), (
+            f"the marker must cover {copied}, which the image COPYs from the build context; "
+            f"neither it nor any parent directory is hashed"
+        )
 
     # Written in the SAME imagetools call that creates the series, so the two cannot
     # diverge: no state exists where the series is published without its marker.

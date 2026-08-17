@@ -66,6 +66,10 @@ Describe 'ci-vendor.sh'
     rm -rf "$BAKED"
     When run sh "${ROOT}/scripts/ci-vendor.sh"
     The status should be failure
+    # The guard's OWN message, not just any failure: letting `cp` fail naturally also
+    # exits nonzero and echoes the path, so a bare failure assertion cannot tell the
+    # guard from its absence.
+    The stderr should include 'no baked Composer tree at'
     The stderr should include "$BAKED"
     The path "${ROOT}/vendor" should not be exist
   End
