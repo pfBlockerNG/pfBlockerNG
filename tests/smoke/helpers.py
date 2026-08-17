@@ -1185,18 +1185,11 @@ def pin_cron_due(vm: SmokeVM) -> int:
     sentinel_open, sentinel_close = "<<<HOUR>>>", "<<<END>>>"
     snippet = (
         "require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');\n"
-        # issue #2492: pfb_global() lives in pfblockerng.inc (:3211) and extra.inc requires
-        # nothing, so a bare call is fatal under pfSsh.php and errors every test using this
-        # helper. MEASURED, do not "fix" by requiring pfblockerng.inc here:
-        #   guard (this)                -> 19 passed / 3 failed
-        #   require after extra.inc     -> 12 passed / 13 failed, guest reports
-        #                                  "A valid config file could not be recovered" x12
-        #   require before extra.inc    -> 25 errors, reproduced twice
-        # Nothing below needs $pfb: the only read is schedule_state_dir, which no production
-        # code assigns — every consumer uses the same `?? '/usr/local/etc'` fallback, and
-        # pfblockerng_cron.inc:291 reads exactly where this writes.
-        # Latent (#2495): pfb_schedule_runtime_config() reaches pfb_filter()/
-        # PFB_FILTER_CSV (pfblockerng.inc-only) once blacklist_selected is populated.
+        # issue #2492: pfb_global() lives in pfblockerng.inc, which extra.inc does not
+        # require, so a bare call is fatal here. Guard rather than requiring
+        # pfblockerng.inc: that was measured to break the loaded config (see #2492).
+        # Nothing below needs $pfb — schedule_state_dir has no assigner and every
+        # consumer shares the `?? '/usr/local/etc'` fallback used below.
         "if (function_exists('pfb_global')) { pfb_global(); }\n"
         f"$g = config_get_path({_php_str(CFG_GLOBAL)}, array());\n"
         "$g['pfb_reuse'] = '';\n"
