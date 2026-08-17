@@ -75,10 +75,14 @@ name="pfblockerng_repo_generate"
 # The catalog base. NOT defaulted into PFB_BASE_URL: an explicitly exported
 # PFB_BASE_URL (install.sh, the smoke guests, a fork bootstrap) must stay
 # distinguishable from "nothing in the environment", because at boot the base
-# comes from the conf itself — see _base_from_conf() and issue #2459. The
-# built-in default is used only for a conf that carries no url at all (an
-# install.sh stub still pending its first generation).
-PFB_DEFAULT_BASE_URL='https://pfblockerng.github.io/pkg'
+# comes from the conf itself — see _base_from_conf() and issue #2459.
+#
+# The fallback below is reached only by a conf that carries no url line at all —
+# today only the off-box test harnesses, since install.sh always supplies a base
+# of its own. Deliberately NOT named PFB_DEFAULT_BASE_URL: gen_landing.py injects
+# a variable of that name into install.sh, and the published installer carries
+# this hook embedded in it.
+PFB_FALLBACK_BASE_URL='https://pfblockerng.github.io/pkg'
 
 CONF_PRIORITY=100
 
@@ -117,20 +121,43 @@ _detect_catalog() {
 # from. Reading the base back out of the conf keeps the OS-upgrade job the hook
 # exists for (move the <varver>) without moving anything else.
 #
-# Prints the base on success. Returns 1 when the conf carries no url line at all
-# (an install.sh stub pending first generation — the caller falls back to the
-# built-in default); 2 when the url is of a shape this hook never emits (a
-# hand-written or foreign conf — the caller leaves it alone).
+# Prints the base on success. Returns 1 ONLY when the conf carries no url line at
+# all (an install.sh stub pending first generation — the caller falls back to the
+# built-in default); 2 whenever a url IS present but is not one this hook could
+# have written (the caller leaves the conf alone). The discriminator is the
+# presence of the url line, never whether the pattern below matched it:
+# unquoted and single-quoted strings are valid UCL an operator can hand-write,
+# and an unterminated quote is what a botched hand edit leaves behind — treating
+# any of those as a pending stub would rewrite them from the built-in default,
+# which is the redirect this whole guard exists to prevent.
 _base_from_conf() {
     _bc_conf="$1"
     _bc_channel="$2"
     _bc_url="$(sed -n 's/^[[:space:]]*url:[[:space:]]*"\([^"]*\)".*/\1/p' "${_bc_conf}" 2>/dev/null | head -n 1)"
-    [ -n "${_bc_url}" ] || return 1
+    if [ -z "${_bc_url}" ]; then
+        grep -q '^[[:space:]]*url[[:space:]]*:' "${_bc_conf}" 2>/dev/null && return 2
+        return 1
+    fi
+    # One trailing slash is still our shape — a conf frozen as foreign over it
+    # would sit on a stale varver forever after an OS upgrade.
+    _bc_url="${_bc_url%/}"
     _bc_head="${_bc_url%/*}"
     [ "${_bc_head}" != "${_bc_url}" ] || return 2
+    # The trailing segment must look like a varver this hook emits. A url
+    # carrying a query string or fragment is not one: rewriting the path would
+    # silently drop credentials the operator put there.
+    case "${_bc_url##*/}" in
+        '' | *[!a-z0-9.-]*) return 2 ;;
+    esac
     [ "${_bc_head##*/}" = "${_bc_channel}" ] || return 2
     _bc_base="${_bc_head%/*}"
-    [ -n "${_bc_base}" ] && [ "${_bc_base}" != "${_bc_head}" ] || return 2
+    [ "${_bc_base}" != "${_bc_head}" ] || return 2
+    # A bare scheme is what is left when the channel segment was in fact the
+    # host (e.g. "https://nightly/ce-2.7") — rebuilding from it yields a
+    # malformed url, so that conf is foreign too.
+    case "${_bc_base}" in
+        '' | *: | *:/) return 2 ;;
+    esac
     printf '%s' "${_bc_base}"
 }
 
@@ -170,15 +197,15 @@ _regen_one() {
     # precisely to MOVE a box onto another base); otherwise it is read back out
     # of the conf, so a boot with no environment preserves it (issue #2459).
     if [ -n "${PFB_BASE_URL:-}" ]; then
-        _ro_base="${PFB_BASE_URL}"
+        _ro_base="${PFB_BASE_URL%/}"
     else
         _ro_base="$(_base_from_conf "${_ro_conf}" "${_ro_channel}")"
         _ro_rc=$?
         if [ "${_ro_rc}" -eq 1 ]; then
-            _ro_base="${PFB_DEFAULT_BASE_URL}"
+            _ro_base="${PFB_FALLBACK_BASE_URL}"
         elif [ "${_ro_rc}" -ne 0 ]; then
-            printf '[%s] WARNING: %s carries a foreign url — leaving it unchanged\n' \
-                "${name}" "${_ro_conf}" >&2
+            printf '[%s] WARNING: %s carries a url this hook did not write (expected <base>/%s/<varver>) — leaving it unchanged; re-run install.sh --channel %s to re-point it\n' \
+                "${name}" "${_ro_conf}" "${_ro_channel}" "${_ro_channel}" >&2
             return 0
         fi
     fi
@@ -187,7 +214,9 @@ _regen_one() {
             "${name}" "${_ro_conf}" >&2
         return 0
     }
-    _ro_url="${_ro_base%/}/${_ro_channel}/${_ro_catalog}"
+    # No %/ here: a base derived from the conf is already bare, except for the
+    # degenerate "file://" (a catalogue rooted at /), whose slash is load-bearing.
+    _ro_url="${_ro_base}/${_ro_channel}/${_ro_catalog}"
     if _emit_conf "${_ro_channel}" "${_ro_repo}" "${_ro_url}" > "${_ro_conf}.tmp" 2>/dev/null \
         && mv "${_ro_conf}.tmp" "${_ro_conf}" 2>/dev/null; then
         printf '[%s] INFO: regenerated %s -> %s\n' "${name}" "${_ro_conf}" "${_ro_url}" >&2
