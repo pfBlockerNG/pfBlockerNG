@@ -146,11 +146,13 @@ _base_from_conf() {
     _bc_url="${_bc_url%/}"
     _bc_head="${_bc_url%/*}"
     [ "${_bc_head}" != "${_bc_url}" ] || return 2
-    # The trailing segment must be a varver this hook emits — _detect_catalog()
-    # above produces exactly `ce-` or `plus-` followed by major.minor, nothing
-    # else. Anything looser accepts a directory the operator chose (and would
-    # then replace it), or a url carrying a query string or fragment (and would
-    # drop credentials they put there while rewriting the path).
+    # The trailing segment must be shaped like the varver _detect_catalog()
+    # above emits: a `ce-` or `plus-` prefix followed by major.minor. Anything
+    # looser accepts a directory the operator chose (and would then replace it),
+    # or a url carrying a query string or fragment (and would drop credentials
+    # they put there while rewriting the path). Deliberately a shape check and
+    # not an equality one — the point is to recognise OUR url, including the
+    # pre-upgrade varver we are about to move off.
     _bc_varver="${_bc_url##*/}"
     case "${_bc_varver}" in
         ce-[0-9]* | plus-[0-9]*) ;;
