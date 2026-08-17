@@ -722,6 +722,12 @@ case "$argv" in
 			esac
 		fi
 		;;
+	*"/commits/"*)
+		# The arm-time pin resolution (#2476): the real endpoint expands an
+		# abbreviated ref to the commit's full 40-character OID.
+		[ -z "${GH_STUB_RESOLVE_FAIL:-}" ] || { printf '%s\n' 'HTTP 422' >&2; exit 1; }
+		printf '%s\n' "${GH_STUB_RESOLVED_SHA:-${GH_STUB_HEAD_SHA_1:-}}"
+		;;
 	*)
 		exit 1
 		;;
@@ -802,7 +808,7 @@ STUB
     The line 3 of output should equal 'PASS'
   End
 
-  It '--sha skips arm-time resolution (never calls pr view to resolve) but still re-verifies before the verdict'
+  It '--sha resolves without a pr view (that read stays for the pre-verdict re-verification)'
     explicit_sha='cccccccccccccccccccccccccccccccccccccccc'
     export GH_STUB_PRVIEW_COUNT_FILE="$stubdir/prview-count"
     export GH_STUB_HEAD_SHA_1="$explicit_sha"
@@ -813,6 +819,32 @@ STUB
     The status should equal 0
     The line 3 of output should equal 'PASS'
     The contents of file "$GH_STUB_PRVIEW_COUNT_FILE" should equal '1'
+  End
+
+  # #2476: `headRefOid` is always the full 40-character OID, so an abbreviated --sha
+  # could never equal it at the pre-verdict identity check -- a completed, fully green
+  # wait was discarded as STALE. The pin is resolved to the full OID at arm time, so
+  # both the SHA-addressed polls and `pinned=` carry the resolved value.
+  It 'resolves an abbreviated --sha to the full OID, reaching the verdict instead of STALE'
+    full_sha='cccccccccccccccccccccccccccccccccccccccc'
+    export GH_STUB_HEAD_SHA_1="$full_sha"
+    export GH_STUB_RESOLVED_SHA="$full_sha"
+    export GH_STUB_EXPECT_SHA="$full_sha"
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha ccccccccc --interval 0 --max-iter 1
+    The status should equal 0
+    The line 1 of output should equal "pinned=$full_sha"
+    The line 3 of output should equal 'PASS'
+    The output should not include 'STALE'
+  End
+
+  It 'fails loudly with GH-ERROR when the --sha pin cannot be resolved, never polling an unresolved ref'
+    export GH_STUB_RESOLVE_FAIL=1
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha nosuchsha --interval 0 --max-iter 1
+    The status should equal 1
+    The line 1 of output should equal 'GH-ERROR'
+    The output should include 'HTTP 422'
   End
 
   It 'fails loudly with GH-ERROR when arm-time SHA resolution itself errors (gh exits nonzero)'
