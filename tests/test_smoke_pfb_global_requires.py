@@ -34,13 +34,12 @@ the file. Both remedies satisfy the invariant pinned here.
 
 from __future__ import annotations
 
+import importlib
 import re
 import subprocess
 from pathlib import Path
 
 import pytest
-
-from tests.smoke import helpers
 
 _SMOKE_DIR = Path(__file__).resolve().parents[1] / "tests" / "smoke"
 _GUARD = "function_exists('pfb_global')"
@@ -64,6 +63,16 @@ _MAIN_CONST = re.compile(r"""(?m)^\s*\w+\s*=\s*["'][^"']*/pfblockerng\.inc["']""
 _WINDOW = 8000
 
 
+def _live_helpers():  # -> module
+    # Resolve at CALL time, never at import time: tests/test_adr47_conftest_lane.py
+    # deliberately EVICTS tests.smoke.helpers from sys.modules and re-imports it (to
+    # test import-time env reads), orphaning any module-level binding taken during
+    # collection. A patch applied to the orphan is invisible to code holding the new
+    # instance — observed as this file passing standalone and failing in the full
+    # suite with the REAL php_eval running ('object' has no attribute 'ssh_argv').
+    return importlib.import_module("tests.smoke.helpers")
+
+
 def _capture_emitted_snippet(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     seen: list[str] = []
 
@@ -75,7 +84,7 @@ def _capture_emitted_snippet(monkeypatch: pytest.MonkeyPatch) -> list[str]:
         # changes, the helper raises and this row fails LOUD (re-shape the fake then).
         return subprocess.CompletedProcess([], 0, "OK<<<HOUR>>>7<<<END>>>", "")
 
-    monkeypatch.setattr(helpers, "php_eval", fake_php_eval)
+    monkeypatch.setattr(_live_helpers(), "php_eval", fake_php_eval)
     return seen
 
 
@@ -95,7 +104,7 @@ def _assert_snippet_safe(snippet: str, *, origin: str) -> None:
 
 def test_pin_cron_due_emits_safe_php(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture_emitted_snippet(monkeypatch)
-    assert helpers.pin_cron_due(object()) == 7  # type: ignore[arg-type]
+    assert _live_helpers().pin_cron_due(object()) == 7  # type: ignore[arg-type]
     assert len(seen) == 1, f"expected exactly one php_eval, got {len(seen)}"
     _assert_snippet_safe(seen[0], origin="pin_cron_due")
 
@@ -104,7 +113,11 @@ def test_prime_idle_schedule_emits_safe_php(monkeypatch: pytest.MonkeyPatch) -> 
     # The second historical site (its module fixture errored every test in the file).
     # Imported here, not exercised via the live suite, precisely so scope=impacted
     # cannot skip it.
-    from tests.smoke import test_log_age_retention as tlar
+    tlar = importlib.import_module("tests.smoke.test_log_age_retention")
+    if getattr(tlar, "h", None) is not _live_helpers():
+        # tlar's `h` is a stale instance from before an eviction — re-import so the
+        # helper under test calls the same module object the patch lands on.
+        tlar = importlib.reload(tlar)
 
     seen = _capture_emitted_snippet(monkeypatch)
     tlar._prime_idle_schedule(object())  # type: ignore[arg-type]
