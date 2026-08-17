@@ -873,6 +873,13 @@ def test_the_marker_is_produced_as_well_as_consumed() -> None:
     # would pass too. Both are the unhashed-input defect this assertion exists to catch.
     hashed = set(re.findall(r'HEAD:([^"]+)"', version_step))
     assert hashed, f"no HEAD:<path> rev-parse targets found in the marker step:\n{version_step}"
+    # Not derivable from a COPY line, because it is what decides which files a COPY can
+    # even see: docker applies .dockerignore while assembling the build context. Excluding
+    # a path there changes the image while every COPY source stays byte-identical.
+    assert ".dockerignore" in hashed, (
+        f"the marker must cover .dockerignore, which shapes the build context every COPY "
+        f"reads from (hashed: {sorted(hashed)})"
+    )
     for copied in _context_copy_sources(_read(BASE_DOCKERFILE)) | _context_copy_sources(_read(VM_DOCKERFILE)):
         # A git tree id covers everything beneath it, so a path under an already-hashed
         # directory needs no entry of its own.
@@ -1124,6 +1131,7 @@ def test_every_build_input_triggers_the_image_workflow() -> None:
     assert len(blocks) == 2, f"expected a paths: list on both push and pull_request; found {len(blocks)}"
 
     sources = _context_copy_sources(_read(BASE_DOCKERFILE)) | _context_copy_sources(_read(VM_DOCKERFILE))
+    sources.add(".dockerignore")  # shapes the context itself; see the marker test
     for block in blocks:
         entries = [line.strip()[2:] for line in block.splitlines()]
         for copied in sources:

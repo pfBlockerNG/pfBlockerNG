@@ -100,12 +100,12 @@ jobs:
           # for a comment. The asymmetry is safe — an equal marker can only ever mean
           # "publish nothing", never an overwrite — so the cost is a lost warning, not a
           # mutated tag. Every path COPYed from the build context is hashed too, whether
-          # by its own entry or by a directory already listed: composer.lock decides which
-          # dev toolchain the image bakes, and leaving it out would let a dependency change
-          # keep the marker identical — the guard would report "already published from
-          # these exact inputs" and the run would go green having rebuilt nothing, leaving
-          # the series unrebuildable under that VERSION.
-          inputs="$(git rev-parse "HEAD:.github/docker") $(git rev-parse "HEAD:tests/smoke/requirements.txt") $(git rev-parse "HEAD:composer.json") $(git rev-parse "HEAD:composer.lock")"
+          # by its own entry or by a directory already listed, and so is .dockerignore,
+          # which decides what those COPY sources can even see. An input left out here
+          # keeps the marker identical across a real content change: the guard reports
+          # "already published from these exact inputs", the run goes green having rebuilt
+          # nothing, and the series can never be rebuilt under that VERSION.
+          inputs="$(git rev-parse "HEAD:.dockerignore") $(git rev-parse "HEAD:.github/docker") $(git rev-parse "HEAD:tests/smoke/requirements.txt") $(git rev-parse "HEAD:composer.json") $(git rev-parse "HEAD:composer.lock")"
           marker="inputs-$(printf '%s' "$inputs" | sha256sum | cut -c1-16)"
           echo "marker=$marker" >> "$GITHUB_OUTPUT"
           echo "Building ci-runner / ci-runner-vm tag ${version} (${marker})"
