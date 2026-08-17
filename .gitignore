@@ -93,3 +93,6 @@ id_ed25519.pub
 smoke-diag/
 pfb-runs/
 smoke_key
+
+# -- Jetbrains -- #
+.idea/
