@@ -432,7 +432,7 @@ def _count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0)
     count_matching_notices (module-local copy; this module imports no other test module)."""
     snippet = (
         "$n = 0;\n"
-        "foreach (get_notices() as $row) {\n"
+        "foreach ((get_notices() ?: []) as $row) {\n"
         f"  if (strpos((string)($row['notice'] ?? ''), {h._php_str(needle)}) !== FALSE) {{ $n++; }}\n"
         "}\n"
         "echo '<<<NC>>>' . $n . '<<<NCE>>>';"
@@ -448,8 +448,35 @@ def _count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0)
 
 
 def _close_all_notices(vm: SmokeVM, notice_id: str, *, timeout: float = 60.0) -> None:
-    """Close every notice carrying ``notice_id`` -- teardown, leaves the VM clean."""
-    h.php_eval(vm, f"close_notice({h._php_str(notice_id)});\necho 'OK';", timeout=timeout)
+    """Close EVERY notice carrying ``notice_id`` -- teardown, leaves the VM clean.
+
+    ``close_notice($id)`` removes ONE row per call -- the first row in queue order carrying
+    that id -- and ``file_notice`` appends a timestamp-keyed row per call without replacing
+    an earlier row of the same id, so a single call leaves every later row standing (issue
+    #2478, the ``pfBlockerNG`` sibling of #2465). Close by timestamp key, one call per
+    matching row, then re-count: the teardown is its own oracle and raises if any row of
+    ``notice_id`` survives.
+    """
+    snippet = (
+        "foreach ((get_notices() ?: []) as $key => $row) {\n"
+        f"  if ((string)($row['id'] ?? '') === {h._php_str(notice_id)}) {{ close_notice($key); }}\n"
+        "}\n"
+        "$left = 0;\n"
+        "foreach ((get_notices() ?: []) as $row) {\n"
+        f"  if ((string)($row['id'] ?? '') === {h._php_str(notice_id)}) {{ $left++; }}\n"
+        "}\n"
+        "echo '<<<NL>>>' . $left . '<<<NLE>>>';"
+    )
+    res = h.php_eval(vm, snippet, timeout=timeout)
+    out = res.stdout or ""
+    start, end = out.find("<<<NL>>>"), out.find("<<<NLE>>>")
+    if res.returncode != 0 or start == -1 or end == -1:
+        raise RuntimeError(
+            f"_close_all_notices({notice_id!r}) failed: rc={res.returncode} stdout={out!r} stderr={res.stderr!r}"
+        )
+    left = int(out[start + len("<<<NL>>>") : end])
+    if left != 0:
+        raise RuntimeError(f"_close_all_notices left {left} notice(s) with id {notice_id!r} standing")
 
 
 def _file_notice(vm: SmokeVM, notice_id: str, notice: str, *, timeout: float = 60.0) -> None:
