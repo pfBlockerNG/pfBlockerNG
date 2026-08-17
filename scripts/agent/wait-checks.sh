@@ -82,11 +82,9 @@ checks_to_buckets() {
 	'
 }
 
-# Resolve the pin to the full 40-character OID every head read returns. Without --sha
-# that is the PR's head; with one it is that ref, which the caller may have abbreviated
-# -- and the pre-verdict identity check compares against `headRefOid`, which is always
-# full, so an unexpanded pin could only ever report STALE (#2476). Resolving here also
-# turns an unknown ref into a loud GH-ERROR instead of a blind poll.
+# Resolve the pin to the full 40-character OID `headRefOid` always returns: a `--sha`
+# ref may be abbreviated, and the pre-verdict identity check compares against that OID,
+# so an unexpanded pin could only ever report STALE (#2476).
 resolve_pin() {
 	if [ "$sha_set" -eq 0 ]; then
 		gh_bounded pr view "$pr" --repo "$repo" --json headRefOid --jq .headRefOid

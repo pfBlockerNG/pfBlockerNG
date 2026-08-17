@@ -724,8 +724,17 @@ case "$argv" in
 		;;
 	*"/commits/"*)
 		# The arm-time pin resolution (#2476): the real endpoint expands an
-		# abbreviated ref to the commit's full 40-character OID.
+		# abbreviated ref to the commit's full 40-character OID. Serving the
+		# canned value on ANY ref would let a resolution of the WRONG ref pass,
+		# so GH_STUB_EXPECT_RAW_SHA pins the ref actually asked for, exactly as
+		# GH_STUB_EXPECT_SHA pins the polled one above.
 		[ -z "${GH_STUB_RESOLVE_FAIL:-}" ] || { printf '%s\n' 'HTTP 422' >&2; exit 1; }
+		if [ -n "${GH_STUB_EXPECT_RAW_SHA:-}" ]; then
+			case "$argv" in
+				*"/commits/$GH_STUB_EXPECT_RAW_SHA "*|*"/commits/$GH_STUB_EXPECT_RAW_SHA") ;;
+				*) exit 1 ;;
+			esac
+		fi
 		printf '%s\n' "${GH_STUB_RESOLVED_SHA:-${GH_STUB_HEAD_SHA_1:-}}"
 		;;
 	*)
@@ -829,12 +838,28 @@ STUB
     full_sha='cccccccccccccccccccccccccccccccccccccccc'
     export GH_STUB_HEAD_SHA_1="$full_sha"
     export GH_STUB_RESOLVED_SHA="$full_sha"
+    export GH_STUB_EXPECT_RAW_SHA='ccccccccc'
     export GH_STUB_EXPECT_SHA="$full_sha"
     export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
     export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
     When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha ccccccccc --interval 0 --max-iter 1
     The status should equal 0
     The line 1 of output should equal "pinned=$full_sha"
+    The line 3 of output should equal 'PASS'
+    The output should not include 'STALE'
+  End
+
+  # The example above pins the polled address too, so the pre-fix script died at the
+  # address rather than at the identity check. Here the API accepts the abbreviated
+  # address -- as GitHub really does -- which is the shape that reported STALE.
+  It 'reports the real verdict, never STALE, for an abbreviated --sha the API resolves'
+    full_sha='cccccccccccccccccccccccccccccccccccccccc'
+    export GH_STUB_HEAD_SHA_1="$full_sha"
+    export GH_STUB_RESOLVED_SHA="$full_sha"
+    export GH_STUB_CHECK_RUNS='{"check_runs":[{"name":"pytest","status":"completed","conclusion":"success"}]}'
+    export GH_STUB_STATUS_PAYLOAD='{"statuses":[]}'
+    When run sh scripts/agent/wait-checks.sh --repo o/r --pr 1 --sha ccccccccc --interval 0 --max-iter 1
+    The status should equal 0
     The line 3 of output should equal 'PASS'
     The output should not include 'STALE'
   End
