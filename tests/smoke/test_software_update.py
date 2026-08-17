@@ -247,11 +247,11 @@ def raise_notice(vm: SmokeVM, message: str, *, timeout: float = 120.0) -> None:
 def count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0) -> int:
     """How many ``get_notices()`` rows carry ``needle`` in their ``notice`` text (the oracle).
 
-    Counts by the message SUBSTRING (a per-version string), not the id: file_notice with a
-    repeated id REPLACES the prior row of that id (notices are id-keyed by their md5), so the
-    de-dupe being proven is the CALLER not re-raising — a count keyed on the version string is
-    what distinguishes "raised once" from "raised again at a new version". Delimited so
-    pfSsh.php's startup banner never pollutes the integer.
+    Counts by the message SUBSTRING (a per-version string), not the id: pfSense's
+    ``file_notice`` appends a row keyed by its timestamp and never replaces an earlier row
+    of the same id, so the de-dupe being proven is the CALLER not re-raising — a count keyed
+    on the version string is what distinguishes "raised once" from "raised again at a new
+    version". Delimited so pfSsh.php's startup banner never pollutes the integer.
     """
     snippet = (
         "$n = 0;\n"
@@ -269,9 +269,23 @@ def count_matching_notices(vm: SmokeVM, needle: str, *, timeout: float = 120.0) 
 
 
 def close_all_notices(vm: SmokeVM, *, timeout: float = 120.0) -> None:
-    """Close every notice carrying our id — leave the VM CLEAN (teardown counterpart)."""
-    snippet = f"close_notice({_php_str(NOTICE_ID)});\necho 'OK';"
-    _pfssh(vm, snippet, timeout=timeout)
+    """Close EVERY notice carrying our id — leave the VM CLEAN (teardown counterpart).
+
+    pfSense's ``close_notice($id)`` removes ONE row per call — the oldest with that id — and
+    the package itself files ``pfBlockerNG``-id notices too (schedule-migration and DNSBL-VIP
+    install warnings), so a single ``close_notice(NOTICE_ID)`` drained those and left every
+    ``available (<channel>)`` row standing (issue #2465). Close by timestamp key instead, one
+    call per matching row, so the next case's ``count == 0`` before-state is genuinely clean.
+    """
+    snippet = (
+        "foreach ((get_notices() ?: []) as $key => $row) {\n"
+        f"  if ((string)($row['id'] ?? '') === {_php_str(NOTICE_ID)}) {{ close_notice($key); }}\n"
+        "}\n"
+        "echo 'OK';"
+    )
+    out = _pfssh(vm, snippet, timeout=timeout)
+    if "OK" not in out:
+        raise RuntimeError(f"close_all_notices did not confirm: {out!r}")
 
 
 def _php_str(value: str) -> str:
