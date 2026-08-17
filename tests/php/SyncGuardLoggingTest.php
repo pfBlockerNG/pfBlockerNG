@@ -39,6 +39,10 @@ final class SyncGuardLoggingTest extends TestCase
 	private string $dir = '';
 	private bool $hadPfb = FALSE;
 	private array $originalPfb = [];
+	// seedSyncPrereqs() sets this when absent; restore it so the seeded value cannot
+	// leak into a later test (CLAUDE.md: self-encapsulated, never order-dependent).
+	private bool $hadChrootPath = FALSE;
+	private mixed $originalChrootPath = NULL;
 	/** @var array<int, resource> */
 	private array $rawFps = [];
 
@@ -52,6 +56,8 @@ final class SyncGuardLoggingTest extends TestCase
 	{
 		$this->hadPfb      = array_key_exists('pfb', $GLOBALS);
 		$this->originalPfb = $GLOBALS['pfb'] ?? [];
+		$this->hadChrootPath      = array_key_exists('unbound_chroot_path', $GLOBALS['g'] ?? []);
+		$this->originalChrootPath = $GLOBALS['g']['unbound_chroot_path'] ?? NULL;
 
 		$this->dir = sys_get_temp_dir() . '/pfb_sync_guard_' . uniqid('', TRUE);
 		mkdir("{$this->dir}/db", 0755, TRUE);
@@ -112,6 +118,11 @@ final class SyncGuardLoggingTest extends TestCase
 			$GLOBALS['pfb'] = $this->originalPfb;
 		} else {
 			unset($GLOBALS['pfb']);
+		}
+		if ($this->hadChrootPath) {
+			$GLOBALS['g']['unbound_chroot_path'] = $this->originalChrootPath;
+		} else {
+			unset($GLOBALS['g']['unbound_chroot_path']);
 		}
 	}
 
