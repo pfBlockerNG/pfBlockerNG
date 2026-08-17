@@ -13481,7 +13481,7 @@
                 "name": "force_all",
                 "byRef": false,
                 "variadic": false,
-                "type": null,
+                "type": "bool",
                 "default": "false"
             },
             {

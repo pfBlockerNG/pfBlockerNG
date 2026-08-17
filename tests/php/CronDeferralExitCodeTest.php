@@ -18,15 +18,27 @@ require_once __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.in
  *   cron.inc:266  dispatcher lock unavailable  -> deferred, occurrences retained
  *   cron.inc:277  feed lock unavailable        -> deferred, occurrences retained
  *   cron.inc:306  runtime model/state missing  -> genuine failure (logged as logtype 2)
+ *                   (inside `if (\$scheduled_runtime)`, so cron-path only —
+ *                    unreachable under Force Check)
  *
- * The first two mean another pass is already doing the work and this tick stood down
- * with its durable pending occurrence intact — the next tick retries. Reporting that as
- * exit 1 tells cron (and any operator wrapper or MTA) the run FAILED when nothing was
- * lost, producing recurring noise with no actionable content. The code's own wording
+ * The first two mean another pass is already doing the work and the run stood down with
+ * its durable pending occurrence intact — the next tick retries. The code's own wording
  * says as much: "deferred ... durable pending occurrences retained".
+ *
+ * SCOPE, precisely: the installed crontab entry is `pfblockerng.php cron-tick`
+ * (pfblockerng.inc:7665), which always exits 0 and whose feed dispatch discards this
+ * boolean — and pfblockerng.inc:7685 actively REMOVES any legacy `pfblockerng.php cron`
+ * entry on every sync pass. So no scheduled job has surfaced this exit code. What
+ * changes is the `cron` verb run by hand at the CLI or by a third-party wrapper: it no
+ * longer reports failure for a benign deferral, which also makes production agree with
+ * tests/smoke/test_feed_pass_lock.py:127 for the first time.
  *
  * The third is a real failure and must keep exiting non-zero, otherwise this change
  * would trade false alarms for silent breakage.
+ *
+ * The benign reading applies ONLY to the unattended cron verb. Force Check
+ * (`pfblockerng.php:304`, `$force_all = TRUE`) means an operator asked for an update NOW
+ * and did not get one — that stays observable, as `SyncCronFeedPassDeferralTest` pins.
  *
  * Rows 1-2 are RED before the fix (they return FALSE); row 3 is the before-state guard
  * that keeps the fix honest and passes both before and after.
@@ -134,6 +146,38 @@ final class CronDeferralExitCodeTest extends TestCase
 			'before-state: the run must actually have taken the feed-pass deferral path');
 		$this->assertTrue($result,
 			'a deferred pass retains its occurrences and retries next tick — cron must exit 0 (issue #2491)');
+	}
+
+	public function testForceCheckDeferralStaysObservable(): void
+	{
+		$this->feedLockFp = fopen("{$this->dbdir}/pfb_feed_pass.lock", 'c');
+		$this->assertIsResource($this->feedLockFp, 'test setup: could not open the feed-pass lock');
+		$this->assertTrue(flock($this->feedLockFp, LOCK_EX), 'test setup: could not hold the feed-pass lock');
+
+		// $force_all = TRUE is the Force Check caller (pfblockerng.php:304).
+		$result = pfblockerng_sync_cron(TRUE);
+
+		$this->assertStringContainsString('feed lock unavailable', $this->mainLog(),
+			'before-state: the run must actually have taken the feed-pass deferral path');
+		$this->assertFalse($result,
+			'an operator-initiated Force Check that was deferred must still report failure — '
+			. 'the benign reading is for the unattended cron verb only (issue #2491)');
+	}
+
+	public function testForceCheckDispatcherDeferralStaysObservable(): void
+	{
+		// Without this row, reverting the dispatcher guard to a bare `return TRUE`
+		// fails nothing: the feed-lock row below covers only that one guard.
+		$this->dispatchLockFp = fopen("{$this->dbdir}/pfb_schedule_dispatch.lock", 'c');
+		$this->assertIsResource($this->dispatchLockFp, 'test setup: could not open the dispatcher lock');
+		$this->assertTrue(flock($this->dispatchLockFp, LOCK_EX), 'test setup: could not hold the dispatcher lock');
+
+		$result = pfblockerng_sync_cron(TRUE);
+
+		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
+			'before-state: the run must actually have taken the dispatcher-deferral path');
+		$this->assertFalse($result,
+			'Force Check deferred at the dispatcher lock must still report failure (issue #2491)');
 	}
 
 	public function testRuntimeUnavailableStillFails(): void
