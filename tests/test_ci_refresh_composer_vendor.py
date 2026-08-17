@@ -1,13 +1,13 @@
-"""Guard: a job that commits a PHP file under the git hooks installs Composer first.
+"""Guard: a job that commits a PHP file under the git hooks has a vendor tree first.
 
 Issue #1793: tld-refresh.yml activates the repository git hooks on purpose
 ("automated commits must hit the same local gates as a human commit"), then
 stages src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php and commits. Staging
 a PHP-family file sets `staged_php=1` in .githooks/pre-commit, which runs the
 fail-closed `composer vendor` gate and, behind it, PHPStan and PHPCS out of
-vendor/bin. With no `composer install` on the runner there is no vendor tree,
-the gate fails closed, and the whole refresh -- commit, push, PR, CI dispatch --
-is aborted. The gate is right to fail; the workflow was missing its half of the
+vendor/bin. With neither `composer install` nor scripts/ci-vendor.sh on the
+runner there is no vendor tree, the gate fails closed, and the whole refresh --
+commit, push, PR, CI dispatch -- is aborted. The gate is right to fail; the workflow was missing its half of the
 contract.
 
 The invariant is stated over every workflow rather than over tld-refresh alone:

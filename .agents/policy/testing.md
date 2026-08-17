@@ -30,7 +30,9 @@ Tests = how change proves itself. **Five non-negotiable principles govern every 
 scripts/run-in-docker.sh python3 -m pytest -q      # any command, same argv
 scripts/run-in-docker.sh vendor/bin/phpunit        # PHP suite: loads the REAL .inc off-appliance
 scripts/run-in-docker.sh shellspec --shell dash
-scripts/run-in-docker.sh composer install          # if it 403s in a managed cloud session,
+scripts/run-in-docker.sh scripts/ci-vendor.sh       # vendor/ from the tree baked into the image
+scripts/run-in-docker.sh composer install          # only OUTSIDE the image; if it 403s in a
+                                                   # managed cloud session, use
                                                    # scripts/composer-cloud-install.sh (issue #950)
 PFB_VM=1 scripts/run-in-docker.sh ...              # ci-runner-vm (qemu, oras, Playwright)
 PFB_BUILD=1 scripts/run-in-docker.sh ...           # build the image locally (unpublished series)
