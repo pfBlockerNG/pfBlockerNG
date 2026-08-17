@@ -238,6 +238,14 @@ FAKEEOF
       The output should not include "ci-metadata:refs/remotes/origin/ci-metadata"
     End
 
+    It 'prints the WHOLE --git-remote help block (usage truncated twice with fixed ranges)'
+      When call run_and_diag --help
+      The line 1 of output should equal 'exit=0'
+      # the last line of the flag block — a fixed sed range silently drops it
+      The output should include "only an explicit --git-remote '' is rejected."
+      The output should not include 'Test-only (env):'
+    End
+
     It 'keeps the default origin path on the classic refspec with MATRIX_REF empty'
       When call run_and_diag --ref dummy
       The line 1 of output should equal 'exit=0'
