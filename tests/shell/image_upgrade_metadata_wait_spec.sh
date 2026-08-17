@@ -117,6 +117,29 @@ Describe 'image-upgrade.sh package-metadata wait'
     ' _ "$SCRIPT"
   }
 
+  # A non-numeric cap makes the `-ge` deadline test error on every iteration
+  # (dash: "Illegal number"), so the loop never reaches its failure path — the
+  # same unbounded-wait class as a zero interval, on the other variable.
+  run_wait_bad_timeout() {
+    timeout 10 sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# pfb_wait_pkg_metadata BEGIN/,/^# pfb_wait_pkg_metadata END/p" "$1")"
+      METADATA_INTERVAL=1
+      sleep() { :; }
+      ssh_guest() { printf "gone\r\n"; }
+      pfb_wait_pkg_metadata not-a-number
+    ' _ "$SCRIPT"
+  }
+
+  It 'stays bounded when the timeout is not a number'
+    When call run_wait_bad_timeout
+    The status should be failure
+    The stderr should include 'did not settle'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
   It 'stays bounded when the poll interval is zero'
     When call run_wait_zero_interval
     The status should be failure
