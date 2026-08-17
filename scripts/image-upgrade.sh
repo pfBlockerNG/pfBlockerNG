@@ -826,6 +826,9 @@ PFB_METADATA_PROBE='if /bin/test -f /var/run/pfSense_version.rc; then echo prese
 pfb_wait_pkg_metadata() {
     _pwpm_timeout="${1:-${METADATA_TIMEOUT:-600}}"
     _pwpm_interval="${METADATA_INTERVAL:-5}"
+    # A zero, negative or non-numeric interval would pin the elapsed counter and
+    # leave the deadline unreachable, i.e. an unbounded wait. Floor it.
+    [ "$_pwpm_interval" -ge 1 ] 2>/dev/null || _pwpm_interval=5
     _pwpm_elapsed=0
     _pwpm_seen=0
     log "waiting for the pfSense package metadata refresh to settle"
@@ -849,6 +852,42 @@ pfb_wait_pkg_metadata() {
     done
 }
 # pfb_wait_pkg_metadata END
+
+# pfb_wait_upgraded_box BEGIN
+# pfb_wait_upgraded_box OLD_VERSION LOG — block until the box pfSense-upgrade
+# rebooted comes back reporting a version other than OLD_VERSION, then until its
+# package metadata refresh has settled. Sets the global NEW_VER; dies if the
+# version never changes within UPGRADE_TIMEOUT.
+#
+# This path never reaches wait_guest_ssh, so it needs its own settle gate. The
+# version poll is not one: /etc/version is written by the installer BEFORE
+# rc.update_pkg_metadata runs, so it can answer while pkg's effective ABI is
+# still being rewritten (issues #2242, #2458). Everything after this point reads
+# or writes the pkg database — the dependency reconcile's `pkg query` / `pkg
+# install` / `pkg delete` / `pkg info -e`, the health gate — and then powers the
+# disk off for export, so a half-written refresh would be captured into the
+# published artifact.
+pfb_wait_upgraded_box() {
+    _pwub_old=$1
+    _pwub_log=$2
+    log "waiting for the upgraded box to come back..."
+    NEW_VER=""
+    _pwub_elapsed=0
+    sleep 20  # let the reboot begin so we don't read the pre-reboot version
+    while [ "$_pwub_elapsed" -lt "$UPGRADE_TIMEOUT" ]; do
+        _pwub_v=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
+        if [ -n "$_pwub_v" ] && [ "$_pwub_v" != "$_pwub_old" ]; then
+            NEW_VER="$_pwub_v"
+            break
+        fi
+        sleep 15; _pwub_elapsed=$((_pwub_elapsed + 15))
+    done
+    if [ -z "$NEW_VER" ]; then
+        die "version did not change within ${UPGRADE_TIMEOUT}s (still '${_pwub_old}'; see ${_pwub_log})"
+    fi
+    pfb_wait_pkg_metadata
+}
+# pfb_wait_upgraded_box END
 
 # wait_guest_ssh BEGIN
 # wait_guest_ssh TIMEOUT [CONSOLE] — poll until root SSH answers or TIMEOUT
@@ -1041,21 +1080,7 @@ if [ "$SKIP_OS_UPGRADE" -eq 0 ]; then
     pfb_call_site_upgrade "$LOCAL_DIR/upgrade.log"
 
     # --- wait for the new version to come up -----------------------------------
-    log "waiting for the upgraded box to come back..."
-    NEW_VER=""
-    _elapsed=0
-    sleep 20  # let the reboot begin so we don't read the pre-reboot version
-    while [ "$_elapsed" -lt "$UPGRADE_TIMEOUT" ]; do
-        _v=$(ssh_guest 'cat /etc/version' 2>/dev/null | tr -d '\r' || true)
-        if [ -n "$_v" ] && [ "$_v" != "$OLD_VER" ]; then
-            NEW_VER="$_v"
-            break
-        fi
-        sleep 15; _elapsed=$((_elapsed + 15))
-    done
-    if [ -z "$NEW_VER" ]; then
-        die "version did not change within ${UPGRADE_TIMEOUT}s (still '${OLD_VER}'; see $LOCAL_DIR/upgrade.log)"
-    fi
+    pfb_wait_upgraded_box "$OLD_VER" "$LOCAL_DIR/upgrade.log"
 fi
 log "upgraded: ${OLD_VER} -> ${NEW_VER}"
 

@@ -80,10 +80,42 @@ Describe 'image-upgrade.sh package-metadata wait'
     The stdout should include 'waiting for the pfSense package metadata refresh'
   End
 
+  It 'dies when the job never stops running before the deadline'
+    # The stuck-job row. `running` forever is not success and not a reason to
+    # return; the wait ends through the deadline, loudly.
+    When call run_wait 'running'
+    The status should be failure
+    The stderr should include 'did not settle'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
   It 'dies when the job never appears before the deadline'
     # A box where the metadata job never runs must not be handed to `pkg add`
     # or powered off silently: the wait ends by dying, never by returning.
     When call run_wait 'gone'
+    The status should be failure
+    The stderr should include 'did not settle'
+    The stdout should include 'waiting for the pfSense package metadata refresh'
+  End
+
+  # run_wait_zero_interval — METADATA_INTERVAL=0 would leave the elapsed counter
+  # pinned at 0 and the deadline unreachable, i.e. an unbounded wait. `timeout`
+  # bounds the example so a regression fails the row instead of hanging the suite.
+  run_wait_zero_interval() {
+    timeout 10 sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# pfb_wait_pkg_metadata BEGIN/,/^# pfb_wait_pkg_metadata END/p" "$1")"
+      METADATA_INTERVAL=0
+      sleep() { :; }
+      ssh_guest() { printf "gone\r\n"; }
+      pfb_wait_pkg_metadata 4
+    ' _ "$SCRIPT"
+  }
+
+  It 'stays bounded when the poll interval is zero'
+    When call run_wait_zero_interval
     The status should be failure
     The stderr should include 'did not settle'
     The stdout should include 'waiting for the pfSense package metadata refresh'
@@ -108,5 +140,56 @@ Describe 'image-upgrade.sh package-metadata wait'
     When call run_ssh_wait
     The status should be success
     The output should include 'metadata-waited'
+  End
+
+  # The OS-upgrade path never calls wait_guest_ssh: after pfSense-upgrade reboots
+  # the box it polls /etc/version itself and breaks the moment the version
+  # differs. /etc/version is written by the installer BEFORE
+  # rc.update_pkg_metadata runs, so that poll answers while pkg's effective ABI
+  # is still being rewritten -- and everything after it reads or writes the pkg
+  # database (dependency reconcile, health gate) and then powers the disk off for
+  # export. It needs the same settle gate (issue #2458).
+  #
+  # run_upgraded_wait VERSIONS — drive pfb_wait_upgraded_box with a stub guest
+  # answering the space-separated VERSIONS in order, repeating the last forever.
+  run_upgraded_wait() {
+    _words="$1" sh -c '
+      set -e
+      log()  { printf "==> %s\n" "$*"; }
+      die()  { printf "ERROR: %s\n" "$*" >&2; exit 1; }
+      eval "$(sed -n "/^# pfb_wait_upgraded_box BEGIN/,/^# pfb_wait_upgraded_box END/p" "$1")"
+      UPGRADE_TIMEOUT=45
+      sleep() { :; }
+      pfb_wait_pkg_metadata() { printf "metadata-waited\n"; }
+      ssh_guest() {
+        _n=$(cat "$COUNT"); _n=$((_n + 1)); printf "%s\n" "$_n" > "$COUNT"
+        _i=0
+        _pick=
+        for _w in $_words; do
+          _i=$((_i + 1))
+          if [ -z "$_pick" ] && [ "$_i" -ge "$_n" ]; then
+            _pick=$_w
+          fi
+        done
+        [ -n "$_pick" ] || _pick=$_w
+        printf "%s\r\n" "$_pick"
+      }
+      pfb_wait_upgraded_box 2.8.0-RELEASE /tmp/upgrade.log
+      printf "NEW_VER=%s\n" "$NEW_VER"
+    ' _ "$SCRIPT"
+  }
+
+  It 'waits for package metadata after the upgraded box reports its new version'
+    When call run_upgraded_wait '2.8.0-RELEASE 2.8.0-RELEASE 2.9.0-RELEASE'
+    The status should be success
+    The output should include 'NEW_VER=2.9.0-RELEASE'
+    The output should include 'metadata-waited'
+  End
+
+  It 'dies when the upgraded box never reports a new version'
+    When call run_upgraded_wait '2.8.0-RELEASE'
+    The status should be failure
+    The stderr should include 'version did not change'
+    The output should not include 'metadata-waited'
   End
 End
