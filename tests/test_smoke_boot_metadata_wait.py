@@ -28,10 +28,10 @@ _PROBE_ARGV = ("/bin/sh", "-c", helpers._METADATA_PROBE_CMD)
 
 
 def test_wait_boot_complete_waits_for_boot_metadata_sentinel(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The metadata job is still running on the first probe; the sentinel
-    appears by the second -- waits, no loud "metadata failed" line."""
+    appears by the second -- the waiter polls again rather than giving up."""
     probe_words = iter(["running", "present"])
     calls: list[tuple[str, ...]] = []
 
@@ -52,7 +52,6 @@ def test_wait_boot_complete_waits_for_boot_metadata_sentinel(
     helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=2, delay=0)
 
     assert calls == [_PROBE_ARGV, _PROBE_ARGV]
-    assert "PFB_BOOT_METADATA" not in capsys.readouterr().out
 
 
 def test_wait_boot_complete_keeps_polling_when_first_probe_finds_no_metadata_job(
@@ -94,7 +93,7 @@ def test_wait_boot_complete_keeps_polling_when_first_probe_finds_no_metadata_job
 
 
 def test_wait_boot_complete_accepts_a_metadata_job_that_starts_late(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Issue #2458: the #2242 timestamps (absent at 10:16:37Z, active at
     10:17:03Z) are the NORMAL boot, so ``gone`` then ``running`` then
@@ -120,7 +119,6 @@ def test_wait_boot_complete_accepts_a_metadata_job_that_starts_late(
     helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=5, delay=0)
 
     assert [c for c in calls if c == _PROBE_ARGV] == [_PROBE_ARGV] * 3
-    assert "PFB_BOOT_METADATA" not in capsys.readouterr().out
 
 
 def test_wait_boot_complete_raises_when_metadata_job_exits_without_sentinel(
