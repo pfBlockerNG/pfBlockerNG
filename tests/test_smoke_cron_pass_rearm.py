@@ -65,26 +65,35 @@ def _call_name(node: ast.AST) -> str:
 
 
 def _is_cron_pass(node: ast.AST) -> bool:
-    """A call that runs one cron pass: ``h.reload(vm, "cron")``."""
+    """A call that runs one cron pass: ``h.reload(vm, "cron")``, positional or keyword."""
     if not isinstance(node, ast.Call) or not _call_name(node).endswith("reload"):
         return False
-    return any(isinstance(a, ast.Constant) and a.value == "cron" for a in node.args)
+    args: list[ast.expr] = [*node.args, *(kw.value for kw in node.keywords)]
+    return any(isinstance(a, ast.Constant) and a.value == "cron" for a in args)
 
 
 def _rearms(node: ast.AST) -> bool:
     return isinstance(node, ast.Call) and _call_name(node).endswith("pin_cron_due")
 
 
-def _loops_running_cron(source: Path) -> list[tuple[ast.For, str]]:
-    tree = ast.parse(source.read_text(encoding="utf-8"))
-    out: list[tuple[ast.For, str]] = []
+# Both loop forms count: `while` reads as "keep passing until the marker appears", which is
+# exactly the shape this defect wore, and a for-only sweep would wave it through.
+_LOOP_NODES = (ast.For, ast.While)
+
+
+def _loops_running_cron_in(tree: ast.AST) -> list[tuple[ast.stmt, str]]:
+    out: list[tuple[ast.stmt, str]] = []
     for enclosing in ast.walk(tree):
         if not isinstance(enclosing, ast.FunctionDef):
             continue
         for node in ast.walk(enclosing):
-            if isinstance(node, ast.For) and any(_is_cron_pass(n) for n in ast.walk(node)):
+            if isinstance(node, _LOOP_NODES) and any(_is_cron_pass(n) for n in ast.walk(node)):
                 out.append((node, enclosing.name))
     return out
+
+
+def _loops_running_cron(source: Path) -> list[tuple[ast.stmt, str]]:
+    return _loops_running_cron_in(ast.parse(source.read_text(encoding="utf-8")))
 
 
 def _smoke_sources() -> list[Path]:
@@ -126,6 +135,39 @@ def test_repeated_cron_pass_rearms_its_reservation(source: Path) -> None:
             f"a ONE-SHOT pending occurrence, so pass 1 consumes it and every later pass returns "
             f"at 'No Updates required.' — the loop reads as N passes but exercises one (#2489)."
         )
+
+
+def _wrap(body: str) -> ast.AST:
+    """Crafted source for the detector rows below (a sweep is only as good as it detects)."""
+    return ast.parse("def t(vm):\n    " + body.replace("\n", "\n    "))
+
+
+@pytest.mark.parametrize(
+    ("label", "body", "detected"),
+    [
+        ("for-positional", "for _ in range(2):\n    h.reload(vm, 'cron')", True),
+        ("while-positional", "while True:\n    h.reload(vm, 'cron')", True),
+        ("for-keyword-verb", "for _ in range(2):\n    h.reload(vm, verb='cron')", True),
+        ("nested-in-with", "for _ in range(2):\n    with x():\n        h.reload(vm, 'cron')", True),
+        ("other-verb", "for _ in range(2):\n    h.reload(vm, 'updatednsbl')", False),
+        ("single-pass", "h.reload(vm, 'cron')", False),
+    ],
+)
+def test_detector_sees_every_repeat_shape(label: str, body: str, detected: bool) -> None:
+    """The sweep only protects the shapes it can see; these rows fix that surface.
+
+    Without them a later refactor to ``while`` or to a keyword verb would silently empty the
+    sweep while every row still reported green (issue #2489).
+    """
+    assert bool(_loops_running_cron_in(_wrap(body))) is detected, label
+
+
+def test_rule_accepts_a_rearmed_loop() -> None:
+    """Negative control: the rule must PASS a loop that re-arms, or it proves nothing."""
+    tree = _wrap("for i in range(2):\n    if i:\n        h.pin_cron_due(vm)\n    h.reload(vm, 'cron')")
+    loops = _loops_running_cron_in(tree)
+    assert loops, "the crafted loop must be detected in the first place"
+    assert all(any(_rearms(n) for n in ast.walk(loop)) for loop, _ in loops)
 
 
 def test_pin_cron_due_still_reserves_one_shot(monkeypatch: pytest.MonkeyPatch) -> None:
