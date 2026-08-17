@@ -153,16 +153,12 @@ def test_live_repository_registry_is_consistent() -> None:
     assert count >= 7  # explorer/planner/implementer/verifier/reviewer/publisher/coordinator
 
 
-# The workflow gates BOTH agent-config checkers (issue #2473): the role registry
-# (this module's subject) and scripts/agent/check-agent-config-parity.sh, whose
-# own surfaces are the two paths below plus the ones the role checker already
-# declares (.agents/skills/, .claude/workflows/, .codex/agents/, .github/agents/,
-# .agents/model-tiers.conf). Kept literal: the parity guard is POSIX sh with no
-# importable trigger table.
+# One workflow gates both agent-config checkers (issue #2473). The parity guard is
+# POSIX sh with no importable trigger table, so the surfaces it needs beyond the role
+# checker's stay literal here.
 _PARITY_GUARD = "scripts/agent/check-agent-config-parity.sh"
 _WORKFLOW = ".github/workflows/agent-config.yml"
-# The workflow gates its own definition too, exactly as it gates the checkers'
-# sources: an edit to the triggers or the steps must re-run both gates.
+# The workflow gates its own definition too: editing a trigger or a step re-runs both.
 _PARITY_EXTRA_TRIGGERS = {".claude/skills/**", _PARITY_GUARD, _WORKFLOW}
 
 
@@ -197,10 +193,8 @@ def test_ci_workflow_runs_on_push() -> None:
 
 
 def test_ci_workflow_runs_the_parity_gate() -> None:
-    # The parity guard's only other CI reach is test.yml's shell-tests job, which
-    # `paths-ignore: '**/*.md'` skips for a SKILL.md-only change — its own subject.
-    # Match the RUN step, not the guard's name anywhere: it is also a trigger path,
-    # so a bare substring stays green with the step deleted.
+    # Match the RUN step, not the guard's name anywhere: the name is also a trigger
+    # path, so a bare substring assertion stays green with the step deleted.
     steps = _workflow_text().partition("\njobs:")[2]
     assert re.search(rf"^\s+run: sh {re.escape(_PARITY_GUARD)}$", steps, re.MULTILINE), steps
 
