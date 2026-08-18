@@ -408,12 +408,14 @@ STUBEOF
     The contents of file "$FAKE_UV_LOG" should equal "${FAKE_ROOT}|sync --locked --group smoke"
   End
 
-  # Parametrised over one tool the box always had (iptables) and one this migration
-  # added (uv): a single-tool example proves the mechanism but not the LIST, so dropping
-  # an entry from it would otherwise go unnoticed.
+  # Parametrised over three entries drawn from different corners of the list: a box-only
+  # binary (iptables), the venv driver (uv), and the process reaper the teardown calls
+  # (pkill). A single-tool example proves the mechanism but not the LIST, so dropping an
+  # entry from it would otherwise go unnoticed.
   Parameters
     uv
     iptables
+    pkill
   End
 
   It 'refuses to run at all when a required tool is missing from the box'

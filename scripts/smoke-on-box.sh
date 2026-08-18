@@ -137,7 +137,7 @@ printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
 # One preflight for every tool the leg shells out to, before anything expensive. Reported
 # as a single list: a box missing three tools should say so once, not fail three runs.
 _missing=''
-for _tool in git jq curl uv oras python3 ssh qemu-system-x86_64 qemu-img dig iptables zstd tar unzip; do
+for _tool in git jq curl uv oras python3 ssh qemu-system-x86_64 qemu-img dig iptables zstd tar unzip pkill; do
 	command -v "$_tool" >/dev/null 2>&1 || _missing="${_missing} ${_tool}"
 done
 if [ -n "$_missing" ]; then

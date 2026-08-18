@@ -13,6 +13,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# `pip` and `pip3` name the same installer, and both spellings are on a runner's PATH.
+_PIP_INSTALL = re.compile(r"\bpip3?\s+install\b")
+
 
 def _bench_group() -> list[str]:
     pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -47,7 +50,7 @@ def test_benchmarks_job_syncs_the_locked_bench_group() -> None:
         "the benchmarks job must install its deps with `uv sync --locked --group bench`, "
         "or the pyproject `bench` group stops governing what CI resolves"
     )
-    assert "pip install" not in job, (
+    assert not _PIP_INSTALL.search(job), (
         "a pip install in the benchmarks job would resolve alongside the synced environment "
         "and silently re-introduce the drift the locked group removes"
     )
@@ -57,13 +60,15 @@ def _ad_hoc_installs(text: str, pinned: set[str]) -> list[str]:
     """Lines installing a pinned benchmark dep by name instead of from the group.
 
     `-r` requirements installs are not ad-hoc, and a trailing ` #` comment is prose.
+    A shell-quoted spec (`"pympler==1.1"`) names the same package as a bare one, so
+    the quotes come off before the name is read.
     """
     offenders: list[str] = []
     for line in text.splitlines():
         code = line.split(" #", 1)[0]
-        if "pip install" not in code or "-r" in code.split():
+        if not _PIP_INSTALL.search(code) or "-r" in code.split():
             continue
-        args = {re.split(r"[=<>!~\[]", arg, maxsplit=1)[0].lower() for arg in code.split()}
+        args = {re.split(r"[=<>!~\[]", arg.strip("\"'"), maxsplit=1)[0].strip("\"'").lower() for arg in code.split()}
         if pinned & args:
             offenders.append(line.strip())
     return offenders
@@ -84,5 +89,10 @@ def test_the_ad_hoc_scanner_reports_a_planted_bypass() -> None:
     requirements-file install and a mention in a comment stay clean."""
     pinned = {"pympler"}
     assert _ad_hoc_installs("        run: pip install pympler==1.1\n", pinned) == ["run: pip install pympler==1.1"]
+    assert _ad_hoc_installs("        run: pip3 install pympler==1.1\n", pinned) == ["run: pip3 install pympler==1.1"]
+    assert _ad_hoc_installs('        run: pip install "pympler==1.1"\n', pinned) == ['run: pip install "pympler==1.1"']
+    assert _ad_hoc_installs("        run: python3 -m pip install 'pympler==1.1'\n", pinned) == [
+        "run: python3 -m pip install 'pympler==1.1'"
+    ]
     assert _ad_hoc_installs("        run: pip install -r legacy/benchmarks/reqs.txt\n", pinned) == []
     assert _ad_hoc_installs("        # never pip install pympler here\n", pinned) == []
