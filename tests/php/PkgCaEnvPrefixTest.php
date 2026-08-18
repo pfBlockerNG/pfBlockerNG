@@ -196,10 +196,22 @@ final class PkgCaEnvPrefixTest extends TestCase
 			$body,
 			'the catalog read must carry the CA locations'
 		);
+		// Asserting a COUNT would let a third, unprefixed exec() slip in unnoticed — which is
+		// the regression this test exists to catch. Assert the property instead: every command
+		// this function shells out must lead with the prefix.
 		$this->assertSame(
-			2,
-			preg_match_all('/exec\("\{\$ca\}\{\$tmo\}/', $body),
-			'both networked commands must place the CA prefix before the timeout wrapper'
+			1,
+			preg_match_all('/exec\(/', $body) > 0 ? 1 : 0,
+			'pfb_pkg_latest() must still shell out at all'
 		);
+		preg_match_all('/exec\(\s*"([^"]*)"/', $body, $m);
+		$this->assertNotEmpty($m[1], 'no double-quoted exec() command found to inspect');
+		foreach ($m[1] as $cmd) {
+			$this->assertStringStartsWith(
+				'{$ca}{$tmo}',
+				$cmd,
+				"every command pfb_pkg_latest() runs must carry the CA prefix before the timeout wrapper, found: {$cmd}"
+			);
+		}
 	}
 }
