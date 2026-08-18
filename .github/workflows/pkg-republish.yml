@@ -32,14 +32,6 @@ jobs:
   publish:
     name: Publish the pkg catalogue
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     steps:
       - name: Validate immutable source Release identity
         env:

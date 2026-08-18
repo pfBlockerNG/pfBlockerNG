@@ -30,7 +30,61 @@ repo. This guide is the *how-to* (setup, subsystems, build, test, release); `CLA
   [pfBlockerNG/FreeBSD-ports](https://github.com/pfBlockerNG/FreeBSD-ports), branch
   `pfblockerng/use-github` (the build-input branch carrying our port; ADR-17 self-hosted
   distribution — we do **not** use the upstream `pfsense/FreeBSD-ports`)
-- Python 3.11+ for running tests locally
+- The developer toolchain below (Python via `uv`, PHP, and the pinned shell/workflow linters)
+
+### Toolchain setup
+
+CI runs every gate directly on the runner with pinned tool versions, and a local run is
+graded by whatever is on your `PATH` — so install the same versions. What the workflows
+pin today:
+
+| Tool | Version | Used by |
+| --- | --- | --- |
+| Python | 3.11 (`.python-version`); packages from `uv.lock` | pytest, mypy, Ruff, the policy checkers |
+| PHP | 8.3 **and** 8.5 (from the supported-version matrix) | `php -l`, PHPStan, PHPCS, PHPUnit |
+| ShellCheck | v0.11.0 | shell lint |
+| shellspec | 0.28.1 | the shell suite (run under `dash`) |
+| actionlint | 1.7.12 | workflow lint |
+| Node | current LTS | markdownlint, the widget and webassets JS tests |
+
+macOS (Homebrew):
+
+```sh
+brew install uv jq dash-shell shellcheck shellspec actionlint composer node
+brew install php@8.3 php@8.5    # php@8.5 is Homebrew's alias for the current `php`
+brew install kcov               # optional: informational shellspec coverage
+```
+
+`php@8.3` is keg-only, so it stays off `PATH`: invoke it as
+`"$(brew --prefix php@8.3)/bin/php"`, or `brew link --overwrite --force php@8.3` to make it
+the default `php`.
+
+Debian/Ubuntu:
+
+```sh
+sudo apt-get install -y jq dash shellcheck composer unzip iprange \
+  php8.3-cli php8.3-curl php8.3-intl php8.3-mbstring php8.3-xml
+```
+
+`uv`, `shellspec`, `actionlint` and `kcov` are not in the Ubuntu 24.04 archive: install
+`uv` per [the Astral install docs](https://docs.astral.sh/uv/getting-started/installation/),
+and shellspec/actionlint from the same pinned, checksum-verified release assets the
+workflows use (see [`.github/workflows/test.yml`](.github/workflows/test.yml)). PHP 8.5 is
+not in that archive either — covering the second matrix leg locally needs a third-party PHP
+repository or a source build, and CI covers it in any case.
+
+Then create the Python environment once. `uv` puts it in a project-local `.venv`, resolved
+from the committed lock file:
+
+```sh
+uv sync --locked --group dev
+```
+
+`--locked` fails rather than silently re-resolving when `uv.lock` is stale — that is what
+stops a transitive package from moving a gate with no diff. The groups are declared in
+`pyproject.toml` under `[dependency-groups]`: `dev` (lint, typing, unit suites), `smoke`
+(the ADR-04 live-VM harness) and `bench` (the benchmark suite). Run a tool from that
+environment with `uv run <cmd>`; no manual activation needed.
 
 ### IDE setup (VS Code)
 
@@ -118,10 +172,10 @@ it only prints the optional `sudo` commands for those.
 
 ### Running the test suite locally
 
-Python (the bulk of the suite):
+Python (the bulk of the suite), from the locked environment created above:
 
 ```sh
-python3 -m pytest
+uv run pytest
 ```
 
 Test paths and options are configured in `pyproject.toml`; no `cd` is required.
@@ -130,11 +184,18 @@ Optional **branch**-coverage report for the Unbound matcher (issue #38 — line
 coverage hides one-sided decision branches; this surfaces them):
 
 ```sh
-python3 -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
+uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
 ```
 
-Needs `pytest-cov` (`pip install pytest-cov`). It is informational only — CI runs
-the same report (non-blocking), with no enforced floor.
+`pytest-cov` is already in the `dev` group. The report is informational only — CI runs
+the same one (non-blocking), with no enforced floor.
+
+Type checking for the test suite (the `tests.*` mypy override requires full
+annotations):
+
+```sh
+uv run mypy tests/
+```
 
 PHP unit tests (PHPUnit) cover the pure/extractable PHP helpers
 (input filtering, IDN/textarea decode, ABP-IP extraction, IPv4 normalisation,
@@ -151,37 +212,13 @@ plus behavioural doubles for the pfSense runtime functions) — see
 [`tests/php/README.md`](tests/php/README.md). Deep pfSense-runtime integration
 stays the live-VM smoke's job (ADR-04).
 
-Run any of these inside the same image CI grades with by prefixing the command with
-`scripts/run-in-docker.sh`:
-
-```sh
-scripts/run-in-docker.sh python3 -m pytest -q
-scripts/run-in-docker.sh vendor/bin/phpunit
-scripts/run-in-docker.sh                       # no command: an interactive shell
-```
-
-This is the recommended way to run the suites, not just a fallback for a failure that
-reproduces only in CI: every job in `test.yml` executes inside this image, so a local
-verdict from it is the verdict the PR will get. On Apple Silicon it is also simply
-faster for the Python suite — 59 s against 201 s, measured back to back — because the
-suite is process-spawn bound and Linux `fork`/`exec` costs far less than macOS.
-
-It runs in the container or not at all: if Docker is missing, the daemon is down, the
-image cannot be pulled (`PFB_BUILD=1` builds it locally instead), or your working
-directory resolves outside the tree git names, it prints why and exits 125 rather than
-quietly grading against your
-host toolchain. `PFB_ALLOW_HOST=1` opts back into a host run when that is what you
-want; `PFB_RUNNER` is then set to `container` or `host` so you can tell which happened
-after the fact.
-
-Every suite is green in the image — pytest 5206 passed, PHPUnit 5242 tests with no
-failures, shellspec 1331 examples — so a red there is yours. What differs between the
-image and a macOS host is which tests *skip*, not which fail: its locale and `file(1)`
-classify a few inputs differently, one case needs a PHP build whose `php://memory` can
-fail `flock()`, and it runs as your own uid rather than root. Read the skip list, not just
-the exit status; a skip is not coverage. Four PHPUnit cases skip there today; the nine
-that used to join them are gone (#2356), and `/usr/bin/tar` in the image is bsdtar, as it
-is on the appliance.
+CI grades on Linux with the pinned versions listed under
+[Toolchain setup](#toolchain-setup); your host is only as close to that as you make it.
+Where the two disagree, CI is the answer that counts — and the disagreement usually shows
+up as a test that *skips*, not one that fails. Locale data, `file(1)` classification, the
+PHP build (whether `php://memory` can fail `flock()`), the uid you run as and the `tar`
+flavour on the box each decide whether a case runs at all. Read the skip list, not just
+the exit status; a skip is not coverage.
 
 CI gates the skip *set*, not just its count (issue #2359): each suite's job writes a
 JUnit report and a `Skip allowlist` step runs `scripts/check_skip_allowlist.py` against
@@ -192,11 +229,10 @@ file fails the build. To add a legitimately new skip, add its id as its own line
 is itself a build failure) — run the suite locally to get the exact id from its report,
 never hand-guess it.
 
-`scripts/agent/run-gates.sh` routes every gate it runs through this wrapper, and the
-`pre-commit` hook routes its `php -l` and PHPCS gates the same way — those two need a
-PHP matching the matrix, which a host PHP is not. The hook's other linters (ruff,
-ShellCheck, markdownlint, the Python policy checks) still run natively, so committing
-does not require Docker unless the commit stages PHP.
+`scripts/agent/run-gates.sh` runs these same commands for whatever a diff touches, and
+the `pre-commit` hook runs the fast subset. A gate whose tool is missing is a **failure**
+for `run-gates.sh` (pass `--allow-missing` to downgrade it to a skip); the hook is the
+lenient one and skips what is not installed, because CI is the hard gate.
 
 ### Shell tests (shellspec)
 
@@ -245,9 +281,9 @@ footprint). It is dev-only, not shipped, and not collected by the default
 `pytest` run. See [`legacy/benchmarks/README.md`](legacy/benchmarks/README.md):
 
 ```sh
-python -m pip install -r legacy/benchmarks/requirements.txt
-python -m pytest legacy/benchmarks/test_bench_matching.py --benchmark-columns=min,mean,ops
-python -m pytest legacy/benchmarks/test_memory.py -s
+uv sync --locked --group bench
+uv run pytest legacy/benchmarks/test_bench_matching.py --benchmark-columns=min,mean,ops
+uv run pytest legacy/benchmarks/test_memory.py -s
 ```
 
 It also holds the ADR-06 init-time / peak-RAM spike for the Python DNSBL build —
@@ -255,8 +291,8 @@ the kill-gate that gated moving preprocessing into the plugin (build wall-time a
 retained dict footprint on a large, un-pruned ≥1M-entry corpus):
 
 ```sh
-python -m pip install pympler    # dev-only retained-footprint tool (ADR-05 §3a)
-SPIKE_N=5 SPIKE_SIZES=1000000 python legacy/benchmarks/spike_adr06_build.py
+# pympler (the dev-only retained-footprint tool, ADR-05 §3a) is in the `bench` group
+SPIKE_N=5 SPIKE_SIZES=1000000 uv run python legacy/benchmarks/spike_adr06_build.py
 ```
 
 …and the ADR-07 regex/ReDoS spike (`spike_adr07_regex.py`, stdlib only) — the
@@ -265,8 +301,8 @@ count, added per-query latency at feed scale, and the worst real ReDoS first-hit
 on a ≤253-char input vs the kill-threshold (run with `tracemalloc` off):
 
 ```sh
-python legacy/benchmarks/spike_adr07_regex.py
-SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 python legacy/benchmarks/spike_adr07_regex.py
+uv run python legacy/benchmarks/spike_adr07_regex.py
+SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 uv run python legacy/benchmarks/spike_adr07_regex.py
 ```
 
 ## Linting
@@ -277,11 +313,13 @@ SPIKE_COUNTS=10,100,1000 SPIKE_ROUNDS=50 python legacy/benchmarks/spike_adr07_re
 in CI (`ruff check .` + `ruff format --check .`), and can be run locally:
 
 ```sh
-pip install ruff
-ruff check .        # lint
-ruff check . --fix  # lint and auto-fix
-ruff format .       # format
+uv run ruff check .        # lint
+uv run ruff check . --fix  # lint and auto-fix
+uv run ruff format .       # format
 ```
+
+Ruff is pinned in the `dev` group, so `uv sync --locked --group dev` is the only install
+step.
 
 ### PHP
 
@@ -431,7 +469,7 @@ QEMU/KVM, installs the branch's freshly-built `.pkg`, and asserts pfBlockerNG's
 real behaviour end-to-end — the DNS path (Unbound + `pfb_unbound.py`, probed
 with `dig`/`dnspython`) and the IP path (`pfctl` alias tables + rules, over
 SSH). It is **dev-only**, marked `@pytest.mark.smoke`, and **deselected from the
-default `python -m pytest`** (`pyproject.toml` `addopts: --ignore=tests/smoke`),
+default `uv run pytest`** (`pyproject.toml` `addopts: --ignore=tests/smoke`),
 so the normal unit run is unaffected.
 
 ### Running it in CI
@@ -483,12 +521,12 @@ Needs `/dev/kvm`, `qemu-system-x86_64` + `qemu-img`, `oras`, `ssh`, and a built
 `.pkg`. Then:
 
 ```sh
-python -m pip install -r tests/smoke/requirements.txt
+uv sync --locked --group smoke
 export SMOKE_IMAGE_REF=ghcr.io/<org>/pfsense-ce@sha256:<digest>   # private GHCR
 export SMOKE_SSH_KEY=/path/to/guest_priv_key                      # mode 600
 export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg                       # from build-pkg
 oras login ghcr.io                                                # for the pull
-python -m pytest tests/smoke -m smoke --override-ini="addopts="
+uv run pytest tests/smoke -m smoke --override-ini="addopts="
 ```
 
 The fixture pulls the image by `SMOKE_IMAGE_REF` and boots an ephemeral overlay
@@ -599,7 +637,7 @@ The UI suite (ADR-14, `tests/smoke/ui/`) drives the **webConfigurator** on the
 same ADR-04 smoke VM — reusing the `smoke_vm` fixture and `helpers.py` — to catch
 WebUI regressions that `php -l`/PHPStan structurally cannot (pages that 500,
 render a PHP `Warning`/`Notice`, or break form persistence). It is **dev-only**,
-deselected from the default `python -m pytest` exactly like the smoke suite
+deselected from the default `uv run pytest` exactly like the smoke suite
 (`--ignore=tests/smoke`), so the normal unit run is unaffected. Three tiers, by
 cost/frequency:
 
@@ -660,15 +698,15 @@ Same prerequisites as the smoke suite (`/dev/kvm`, `qemu`, `oras`, `ssh`, a buil
 (a separate download from the `playwright` wheel) and skips cleanly without it:
 
 ```sh
-python -m pip install -r tests/smoke/requirements.txt
-python -m playwright install chromium                 # browser tier only
+uv sync --locked --group smoke
+uv run playwright install chromium                    # browser tier only
 export SMOKE_IMAGE_REF=ghcr.io/<org>/pfsense-ce@sha256:<digest>
 export SMOKE_SSH_KEY=/path/to/guest_priv_key          # mode 600
 export SMOKE_PKG=/path/to/pfBlockerNG-*.pkg           # from build-pkg
 export SMOKE_ADMIN_PASSWORD=<baked admin password>    # REQUIRED — else the UI fixtures FAIL
-python -m pytest tests/smoke/ui -m ui_render   --override-ini="addopts="   # Tier A
-python -m pytest tests/smoke/ui -m ui_e2e      --override-ini="addopts="   # Tier B functional
-python -m pytest tests/smoke/ui -m ui_browser  --override-ini="addopts="   # Tier B browser
+uv run pytest tests/smoke/ui -m ui_render   --override-ini="addopts="   # Tier A
+uv run pytest tests/smoke/ui -m ui_e2e      --override-ini="addopts="   # Tier B functional
+uv run pytest tests/smoke/ui -m ui_browser  --override-ini="addopts="   # Tier B browser
 ```
 
 Without `SMOKE_ADMIN_PASSWORD` the UI fixtures **fail** (never skip) — the tests cannot

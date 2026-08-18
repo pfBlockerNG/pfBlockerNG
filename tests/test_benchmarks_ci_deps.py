@@ -1,56 +1,88 @@
-"""Benchmarks CI job installs its deps from legacy/benchmarks/requirements.txt (issue #1337).
+"""Benchmarks CI job resolves its deps from the pyproject `bench` group (issue #1337).
 
-The pins in legacy/benchmarks/requirements.txt only govern CI dependency resolution if the
-workflow actually installs from that file; an ad-hoc `pip install <pkg>` resolves
-unpinned latest and silently bypasses them.
+The group's pins only govern CI dependency resolution if the workflow actually
+installs from it; an ad-hoc `pip install <pkg>` resolves unpinned latest and silently
+bypasses them.
 """
 
 from __future__ import annotations
 
 import re
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def _bench_group() -> list[str]:
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    return pyproject["dependency-groups"]["bench"]
+
+
 def _pinned_benchmark_packages() -> set[str]:
-    names: set[str] = set()
-    for line in (ROOT / "legacy/benchmarks/requirements.txt").read_text().splitlines():
-        spec = line.split("#", 1)[0].strip()
-        if spec:
-            names.add(re.split(r"[=<>!~\[]", spec, maxsplit=1)[0].strip().lower())
-    return names
+    return {re.split(r"[=<>!~\[]", spec, maxsplit=1)[0].strip().lower() for spec in _bench_group()}
 
 
-def test_benchmarks_pins_govern_ci_via_the_runner_image() -> None:
-    """The job no longer installs anything: it runs inside ci-runner, which bakes these
-    pins. The property is unchanged -- legacy/benchmarks/requirements.txt must govern what CI
-    resolves -- but its mechanism moved from a `pip install -r` step into the image, so
-    the guard follows it rather than being dropped."""
-    baked = (ROOT / ".github/docker/ci-requirements.txt").read_text()
-    for name in _pinned_benchmark_packages():
-        assert name in baked.lower(), (
-            f"the runner image must bake the benchmarks pin {name!r}, or the job resolves "
-            f"whatever PyPI serves and legacy/benchmarks/requirements.txt stops governing CI"
-        )
+def _benchmarks_job() -> str:
+    """The `benchmarks` job of test.yml, sliced at the next job key."""
+    rest = (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8").split("\n  benchmarks:\n", 1)[1]
+    end = re.search(r"^  [A-Za-z0-9_.-]+:\s*$", rest, re.MULTILINE)
+    return rest[: end.start()] if end else rest
 
-    workflow = (ROOT / ".github/workflows/test.yml").read_text()
-    assert "pip install" not in workflow, (
-        "a pip install in the workflow would resolve alongside the baked toolchain and "
-        "silently re-introduce the drift the image removes"
+
+def test_every_benchmark_dep_is_pinned_to_one_version() -> None:
+    """A range would let the job resolve a different build run to run, which is the
+    drift the group exists to stop -- uv.lock only freezes what the group constrains."""
+    unpinned = sorted(spec for spec in _bench_group() if "==" not in spec)
+    assert _bench_group(), "the `bench` dependency group must pin at least one package"
+    assert unpinned == [], f"these benchmark deps are not pinned to an exact version: {unpinned}"
+
+
+def test_benchmarks_job_syncs_the_locked_bench_group() -> None:
+    """`--locked` is the whole point: it resolves against uv.lock, so the TRANSITIVE
+    graph is pinned too. A bare `uv sync --group bench` would re-resolve and move a
+    benchmark's dependencies with no diff anywhere."""
+    job = _benchmarks_job()
+    assert "uv sync --locked --group bench" in job, (
+        "the benchmarks job must install its deps with `uv sync --locked --group bench`, "
+        "or the pyproject `bench` group stops governing what CI resolves"
+    )
+    assert "pip install" not in job, (
+        "a pip install in the benchmarks job would resolve alongside the synced environment "
+        "and silently re-introduce the drift the locked group removes"
     )
 
 
-def test_no_ad_hoc_install_of_pinned_benchmark_deps() -> None:
-    pinned = _pinned_benchmark_packages()
-    assert pinned, "legacy/benchmarks/requirements.txt must pin at least one package"
-    for line in (ROOT / ".github/workflows/test.yml").read_text().splitlines():
+def _ad_hoc_installs(text: str, pinned: set[str]) -> list[str]:
+    """Lines installing a pinned benchmark dep by name instead of from the group.
+
+    `-r` requirements installs are not ad-hoc, and a trailing ` #` comment is prose.
+    """
+    offenders: list[str] = []
+    for line in text.splitlines():
         code = line.split(" #", 1)[0]
         if "pip install" not in code or "-r" in code.split():
             continue
         args = {re.split(r"[=<>!~\[]", arg, maxsplit=1)[0].lower() for arg in code.split()}
-        offending = pinned & args
-        assert not offending, (
-            f"ad-hoc install of pinned benchmark dep(s) {sorted(offending)} bypasses "
-            f"legacy/benchmarks/requirements.txt: {line.strip()!r}"
-        )
+        if pinned & args:
+            offenders.append(line.strip())
+    return offenders
+
+
+def test_no_ad_hoc_install_of_pinned_benchmark_deps() -> None:
+    pinned = _pinned_benchmark_packages()
+    assert pinned, "the `bench` dependency group must pin at least one package"
+    offenders = _ad_hoc_installs((ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8"), pinned)
+    assert offenders == [], (
+        f"these lines install a pinned benchmark dep by name, bypassing the pyproject `bench` group: {offenders}"
+    )
+
+
+def test_the_ad_hoc_scanner_reports_a_planted_bypass() -> None:
+    """Vacuity guard: no workflow installs these by name today, so the guard above can
+    only be trusted if the scanner still recognises the shape it forbids -- while a
+    requirements-file install and a mention in a comment stay clean."""
+    pinned = {"pympler"}
+    assert _ad_hoc_installs("        run: pip install pympler==1.1\n", pinned) == ["run: pip install pympler==1.1"]
+    assert _ad_hoc_installs("        run: pip install -r legacy/benchmarks/reqs.txt\n", pinned) == []
+    assert _ad_hoc_installs("        # never pip install pympler here\n", pinned) == []

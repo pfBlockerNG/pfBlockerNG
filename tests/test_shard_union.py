@@ -35,7 +35,7 @@ tests above can never surface.
 
 Guarded by `pytest.importorskip("dns")`: collecting the whole `tests/smoke` tree
 imports every module in it, and `test_stub_shapes.py` needs the optional
-`dnspython` dependency (`tests/smoke/requirements.txt`) that a BARE local
+`dnspython` dependency (pyproject's `smoke` dependency group) that a BARE local
 `python -m pytest` does not install (pyproject.toml's default addopts
 `--ignore=tests/smoke` only skips *collecting* tests/smoke directly -- this file
 lives in tests/ and still imports `dns` itself at module scope).

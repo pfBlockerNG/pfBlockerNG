@@ -32,14 +32,6 @@ jobs:
   discover:
     name: Discover Top1M providers
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     outputs:
       matrix: ${{ steps.extract.outputs.matrix }}
     steps:
@@ -74,14 +66,6 @@ jobs:
     name: Check (${{ matrix.name }})
     needs: discover
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     strategy:
       fail-fast: false
       matrix:
@@ -120,17 +104,10 @@ jobs:
     concurrency:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
     permissions:
       packages: read
       issues: write
     env:
-      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -195,18 +172,11 @@ jobs:
     concurrency:
       group: top1m-provider-alert
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
     permissions:
       packages: read
       issues: write
       contents: read
     env:
-      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

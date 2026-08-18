@@ -46,8 +46,8 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m hostile
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      The output should include 'python3 -m pytest'
-      The output should include 'ruff check .'
+      The output should include 'uv run pytest'
+      The output should include 'uv run ruff check .'
       The stderr should equal ''
     End
   End
@@ -105,97 +105,51 @@ Describe 'run-gates.sh over a C-quoted path'
     End
   End
 
-  # ── every gate runs in the CI runner image (issue #2350) ───────────────────── #
+  # ── the planned command text is what actually runs ────────────────────────── #
   #
-  # The gates an agent runs locally and the gates CI runs must be the same binaries:
-  # every job in test.yml executes inside ghcr.io/pfblockerng/ci-runner, so a gate
-  # graded against whatever the host happens to have installed answers a different
-  # question. gates_for() stays a pure file-type -> canonical-command mapping (pinned
-  # by the sibling agent_run_gates_spec.sh); the wrapping happens once, in main().
-  Describe 'CI-image routing'
-    It 'wraps every planned gate in the CI runner image'
+  # gates_for() stays a pure file-type -> canonical-command mapping (pinned by the
+  # sibling agent_run_gates_spec.sh); these examples cover main() handing those exact
+  # commands to the shell, which is the half the AGENT_SOURCE_ONLY seam bypasses.
+  Describe 'planned commands reach the shell verbatim'
+    It 'plans the canonical Python gate commands in order'
       printf 'x = 1\n' > "$repo/scripts/mod.py"
       gitc add -A
       gitc commit -q -m python
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      # `sh -c` and not a bare argv: the shellspec gate's command text contains a
-      # command substitution that must resolve to the CONTAINER's dash, not the host's.
-      The line 1 of output should equal "scripts/run-in-docker.sh sh -c 'python3 -m pytest'"
-      The line 2 of output should equal "scripts/run-in-docker.sh sh -c 'ruff check .'"
-      The output should not include 'PFB_ALLOW_HOST'
+      The line 1 of output should equal 'uv run pytest'
+      The line 2 of output should equal 'uv run ruff check .'
     End
 
-    It 'keeps the command substitution inside the container for the shellspec gate'
-      # Expanded host-side this resolves to /opt/homebrew/bin/dash, a path that does
-      # not exist in the image — the gate would die on an unusable --shell argument.
+    It 'leaves the shellspec command substitution unexpanded for the gate shell to resolve'
+      # run_gate re-parses the command through `sh -c`, so `$(command -v dash || ...)`
+      # must survive main() unexpanded: expanded here it would freeze whatever this
+      # orchestrating shell resolves instead of what the gate shell does.
       printf '#!/bin/sh\necho hi\n' > "$repo/scripts/plain.sh"
       gitc add -A
       gitc commit -q -m shell
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      # shellcheck disable=SC2016 # the literal $( ) must survive into the container
-      The output should include "run-in-docker.sh sh -c 'shellspec --shell \$(command -v dash || command -v sh)'"
+      # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+      The output should include 'shellspec --shell $(command -v dash || command -v sh)'
     End
 
-    It 'executes the gate through the wrapper rather than the host tool'
-      # A stub wrapper proves the routing end to end: the real gate binaries are never
-      # invoked, so a run that reached them would leave the marker unwritten.
-      mkdir -p "$repo/scripts"
-      printf '#!/bin/sh\necho "WRAPPED $*" >> "%s"\nexit 0\n' "$repo/wrapper.log" \
-        > "$repo/scripts/run-in-docker.sh"
-      chmod +x "$repo/scripts/run-in-docker.sh"
+    It 'executes the planned command rather than a rewritten one'
+      # A stub named for the gate's own tool proves the argv end to end: a run that
+      # reached anything else would leave the log unwritten.
+      stub="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesuv.XXXXXX")"
+      printf '#!/bin/sh\necho "UV $*" >> "%s"\nexit 0\n' "$repo/uv.log" > "$stub/uv"
+      chmod +x "$stub/uv"
       printf 'x = 1\n' > "$repo/scripts/mod.py"
       gitc add -A
       gitc commit -q -m python
-      When run sh "$SCRIPT" --worktree "$repo" --diff base
+      When run sh -c "PATH='$stub:$PATH' sh '$SCRIPT' --worktree '$repo' --diff base"
       The status should equal 0
       The output should include 'GATES: PASS'
       The output should not include 'TOOL-MISSING'
-      The contents of file "$repo/wrapper.log" should include 'python3 -m pytest'
-      The contents of file "$repo/wrapper.log" should include 'mypy tests/'
-    End
-
-    It 'drops an inherited PFB_ALLOW_HOST so no gate can silently grade on the host'
-      # The wrapper honours PFB_ALLOW_HOST by design, and run_gate suppresses a PASSING
-      # gate's output entirely -- so an exported PFB_ALLOW_HOST would put the silent host
-      # fallback straight back: rows of GATE PASS with nothing on screen saying which
-      # toolchain produced them. This runner's verdict is a CI-parity verdict by
-      # definition, so it drops the variable; the escape hatch stays on the wrapper for
-      # ad-hoc use.
-      mkdir -p "$repo/scripts"
-      printf '#!/bin/sh\nprintf "allow_host=%%s\\n" "${PFB_ALLOW_HOST:-unset}" >&2\nexit 1\n' \
-        > "$repo/scripts/run-in-docker.sh"
-      chmod +x "$repo/scripts/run-in-docker.sh"
-      printf 'x = 1\n' > "$repo/scripts/mod.py"
-      gitc add -A
-      gitc commit -q -m python
-      When run sh -c "PFB_ALLOW_HOST=1 sh '$SCRIPT' --worktree '$repo' --diff base"
-      The status should equal 1
-      The output should include 'allow_host=unset'
-      The output should not include 'allow_host=1'
-    End
-
-    It 'fails the gate when the container is unreachable instead of skipping it'
-      # The defect this pins: a missing host tool used to report `GATE SKIP`, and a
-      # skipped gate reads greener than a failed one. With the run routed through the
-      # image there is no host tool to be missing — a wrapper that cannot reach a
-      # container is a hard FAIL, and --allow-missing must not soften it either.
-      mkdir -p "$repo/scripts"
-      printf '#!/bin/sh\necho "no container" >&2\nexit 125\n' > "$repo/scripts/run-in-docker.sh"
-      chmod +x "$repo/scripts/run-in-docker.sh"
-      printf 'x = 1\n' > "$repo/scripts/mod.py"
-      gitc add -A
-      gitc commit -q -m python
-      When run sh "$SCRIPT" --worktree "$repo" --diff base --allow-missing
-      The status should equal 1
-      # The stub's own stderr, which run_gate captures and prints before GATE FAIL:
-      # without it a red run proves only that SOME gate failed, not that the gate
-      # reached the wrapper at all.
-      The output should include 'no container'
-      The output should include 'GATE FAIL'
-      The output should not include 'GATE SKIP'
-      The output should include 'GATES: FAIL'
+      The contents of file "$repo/uv.log" should include 'UV run pytest'
+      The contents of file "$repo/uv.log" should include 'UV run mypy tests/'
+      rm -rf "$stub"
     End
   End
 End

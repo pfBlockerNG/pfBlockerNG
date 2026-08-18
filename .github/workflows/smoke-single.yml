@@ -353,17 +353,6 @@ jobs:
     # other caller (PR gate, nightly, bare dispatch) keeps the hard veto.
     continue-on-error: ${{ inputs.nonblocking }}
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner-vm:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # Pass KVM into the container explicitly or qemu silently falls back to TCG.
-      # The sysctl lets the non-root mock DNS bind :53 inside its namespace.
-      # NET_ADMIN: helpers.block_egress() (armed by SMOKE_BLOCK_EGRESS below) flips this
-      # container netns's iptables OUTPUT policy for the hermetic probes -- Docker's
-      # default capability set lacks it and every hermetic case then errors (issue #2261).
-      options: --init --device /dev/kvm --cap-add=NET_ADMIN --sysctl net.ipv4.ip_unprivileged_port_start=53
     timeout-minutes: 45
     steps:
       - name: Checkout
@@ -376,8 +365,50 @@ jobs:
           ref: ${{ inputs.checkout_ref }}
           persist-credentials: false
 
+      - name: Enable KVM access for the runner user
+        # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
+        # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making
+        # /dev/kvm world-RW fixes it in the same login session (no group-membership
+        # re-login needed). Same fix as the other KVM jobs.
+        run: |
+          set -eu
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Install host tools (qemu, dnsutils, iptables, zstd)
+        # zstd: the ADR-17 `repo` flow re-versions the branch .pkg (a zstd tar) on
+        # the runner to forge a lower+higher build for the pkg-upgrade transition
+        # test; the re-version helper decodes/encodes the .pkg via the zstd binary.
+        # Harmless for the default `smoke` marker (the helper just isn't called).
+        # iptables: the hermetic egress gate (tests/smoke/helpers.py block_egress,
+        # issue #2261) flips the runner's OUTPUT policy.
+        run: |
+          set -eu
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils dnsutils openssh-client iptables zstd
+
+      - name: Install oras
+        # oras pulls/pushes the pfSense qcow2 images stored as OCI artifacts in GHCR.
+        # Pinned and SHA-256 verified: oras-project/setup-oras resolved a floating
+        # latest on every run, so the tool that moves the images could change under a
+        # green gate with no diff.
+        env:
+          ORAS_VERSION: 1.3.3
+          ORAS_SHA256: 9ce999f8d2de03fc03968b29d743077a58783e545e5eaa53917ca177352d0e59
+        run: |
+          set -eu
+          curl -fsSLo "$RUNNER_TEMP/oras.tar.gz" \
+            "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_linux_amd64.tar.gz"
+          echo "${ORAS_SHA256}  $RUNNER_TEMP/oras.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/oras.tar.gz" -C "$RUNNER_TEMP" oras
+          sudo install -m 0755 "$RUNNER_TEMP/oras" /usr/local/bin/oras
+          rm -f "$RUNNER_TEMP/oras.tar.gz" "$RUNNER_TEMP/oras"
+          oras version
+
       - name: Assert KVM acceleration and the egress gate are available
-        # The container gets /dev/kvm via `--device`. Assert rather than log:
+        # The udev rule above makes /dev/kvm world-RW. Assert rather than log:
         # without working KVM qemu falls back to TCG, and a FreeBSD guest under TCG
         # does not fail, it runs until the job's timeout and reads as a flake.
         run: |
@@ -390,12 +421,12 @@ jobs:
             echo '::error::this qemu has no KVM accelerator'; exit 1; }
           echo 'KVM acceleration: available'
           # Same assert-early contract for the hermetic egress gate (issue #2261): the
-          # suite arms SMOKE_BLOCK_EGRESS, and a missing iptables binary or a container
-          # without CAP_NET_ADMIN would otherwise surface as dozens of per-case errors
-          # an hour from now. `-S` lists rules without modifying anything; it fails on
-          # either a missing binary or a capability denial.
+          # suite arms SMOKE_BLOCK_EGRESS, and a missing iptables binary or a runner
+          # that denies the capability would otherwise surface as dozens of per-case
+          # errors an hour from now. `-S` lists rules without modifying anything; it
+          # fails on either a missing binary or a capability denial.
           sudo iptables -w -S OUTPUT >/dev/null || {
-            echo '::error::iptables unusable in the job container (missing package or --cap-add=NET_ADMIN) -- block_egress would fail every hermetic case'
+            echo '::error::iptables unusable on the runner (missing package or insufficient privileges) -- block_egress would fail every hermetic case'
             exit 1; }
           echo 'Egress gate: iptables usable'
 
@@ -597,11 +628,21 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "pkg=${PKGFILE}  img=${IMG}"
 
+      - name: Set up uv and the pinned Python
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs;
+        # activate-environment puts the project environment on PATH, so the `python3`
+        # scripts/run-smoke.sh shells out to is the synced interpreter (.python-version
+        # pins the same minor the appliance carries).
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          activate-environment: true
+
       - name: Install the smoke harness Python deps
-        run: |
-          set -eu
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r tests/smoke/requirements.txt pytest
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this suite with no diff.
+        run: uv sync --locked --group smoke
 
       # ADR-18: the `repo` flow's nightly cases (test_nightly_install.py) need a
       # builder-produced -nightly .pkg (the deep rename can't be cheaply forged).
@@ -768,8 +809,7 @@ jobs:
           # lowering the privileged-port floor so the non-root mock (in pytest) can bind
           # :53 — the runner's /etc/resolv.conf is left untouched (host DNS keeps working
           # throughout; nothing to restore, and immune to how the runner does resolution).
-          # The port floor is set by the job's container `--sysctl`; it is namespaced,
-          # so the container carries its own and no runner-side prep is needed.
+          sudo sysctl -w net.ipv4.ip_unprivileged_port_start=53
           # Delegate to the canonical argv emitter (ADR-47 P4 — drift-kill).
           # RUN_ID minted here (CI is the degenerate lease: runner IS the box,
           # --print-id emits the id without acquiring a real lease).

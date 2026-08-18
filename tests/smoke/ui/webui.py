@@ -36,7 +36,7 @@ The WebUI protocol on the smoke image is plain HTTP (``wait_ready.sh`` polls
 ``requests`` is imported lazily (inside ``__init__``), mirroring how the smoke
 suite defers ``dnspython`` -- so importing this module during default collection
 (which never runs it) needs no third-party dep. ``requests`` is listed in
-``tests/smoke/requirements.txt``.
+pyproject's ``smoke`` dependency group.
 """
 
 from __future__ import annotations

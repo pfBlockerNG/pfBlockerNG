@@ -24,25 +24,27 @@ Tests = how change proves itself. **Five non-negotiable principles govern every 
 
 ## Running tests
 
-**Every suite runs inside the CI toolchain — `scripts/run-in-docker.sh <cmd>`** (issue #2350). Wraps any repo command in `ghcr.io/pfblockerng/ci-runner`, the image `test.yml` runs every job inside, so a local red/green answers the same question CI does. Also the faster path on Apple Silicon (59 s vs 201 s for `python3 -m pytest -q`: the suite is process-spawn bound and Linux `fork`/`exec` is far cheaper than macOS). This is the default way to run anything, not an option reserved for reproducing a CI-only failure.
+**Tools run directly on the host — no container** (issue #2513 deleted `scripts/run-in-docker.sh` and the `ci-runner` images). Python comes from `uv` against the committed `uv.lock`; PHP tools from `vendor/bin` after `composer install`.
 
 ```sh
-scripts/run-in-docker.sh python3 -m pytest -q      # any command, same argv
-scripts/run-in-docker.sh vendor/bin/phpunit        # PHP suite: loads the REAL .inc off-appliance
-scripts/run-in-docker.sh shellspec --shell dash
-scripts/run-in-docker.sh scripts/ci-vendor.sh       # vendor/ from the tree baked into the image
-scripts/run-in-docker.sh composer install          # only OUTSIDE the image; if it 403s in a
-                                                   # managed cloud session, use
-                                                   # scripts/composer-cloud-install.sh (issue #950)
-PFB_VM=1 scripts/run-in-docker.sh ...              # ci-runner-vm (qemu, oras, Playwright)
-PFB_BUILD=1 scripts/run-in-docker.sh ...           # build the image locally (unpublished series)
+uv sync --locked --group dev    # pyproject [dependency-groups]; .python-version pins 3.11
+uv run pytest                   # testpaths/addopts live in pyproject.toml
+uv run mypy tests/
+uv run ruff check . && uv run ruff format --check .
+uv sync --locked --group smoke  # ADR-04 live-VM harness (--group bench: the benchmarks)
+composer install                # if it 403s in a managed cloud session, use
+                                # scripts/composer-cloud-install.sh (issue #950)
+vendor/bin/phpunit              # PHP suite: loads the REAL .inc off-appliance
+vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+vendor/bin/phpcs
+shellspec --shell dash          # POSIX gate; bash-as-sh masks ash divergence
 ```
 
-**It runs in the container or not at all.** Docker missing, daemon down, image unpullable, a failed build, no work tree, a working directory that resolves outside the tree git names — each prints one reason line and exits **125**, docker's own "could not run the container" status, so a caller can tell it apart from the wrapped command going red. `scripts/agent/run-gates.sh` routes every gate through it and treats 125 as a gate FAILURE, never a skip; `.githooks/pre-commit` routes its two PHP style gates the same way and keeps its other linters host-native.
+`--locked` FAILS rather than re-resolving when `uv.lock` is stale — that is the gate keeping a transitive package from moving a verdict with no diff, so never downgrade it to a bare `uv sync` or `uv pip install`. `scripts/agent/run-gates.sh` and `.githooks/pre-commit` invoke these same tools directly; a gate whose tool is missing is a FAILURE for run-gates, never a skip.
 
-**`PFB_ALLOW_HOST=1` restores the old degrade-to-host behaviour**, and then WHERE it ran has to be verified before any containerised claim. The reason line is lost to `2>/dev/null` and to a captured `$(...)`, so the fact rides the environment: **`PFB_RUNNER` is `container` or `host`, and unset when the wrapper was not involved.** Reporting "ran in the CI image" on a `PFB_RUNNER=host` run is a fabricated verification claim — check it, or say "on the host". **CI grades on Linux, so the container is the authoritative answer where they disagree** — a host run carries only the host's verdict.
+**The host toolchain is NOT automatically CI's** — accepted regression of #2513 (parity was the container's whole job; ADR-47 rests on the same idea). CI grades on Linux with pinned tools: ShellCheck **v0.11.0**, shellspec **0.28.1**, actionlint **1.7.12**, PHP **8.3** and **8.5**, `dash` as the shellspec shell, Python from `uv.lock`. Install those same versions locally; when a claim rides a local run, say which toolchain produced it, and where host and CI disagree **CI is the authoritative answer**.
 
-**No suite fails in the image** (re-probed 2026-08-14, #2356): pytest 5206 passed / 6 skipped, PHPUnit 5242 tests / 0 failures / 4 skipped, shellspec 1331 examples / 0 failures. An earlier note here claimed the process-group signal cases and one mtime race test failed in the container; that no longer reproduces — `test_bench_top1m_fixed_file.py`, its salvage sibling, `test_issue1542_top1m_fixed_file_races.py` and `test_adr10_watcher.py` are 58 passed. **Divergence now shows up as a SKIP, not a red**, which is the harder thing to notice, so read the skip list rather than the exit status. The four PHPUnit skips left are gated on locale data (two `PfbFeedNormalizeTest` cases), on `file(1)` classification (`OctetStreamRecoveryWiringTest`) and on the PHP build (`PfbFlockBoundedTest`); never read a skip as coverage. The other nine skipped in CI as well, and #2356 removed both causes: `/usr/bin/tar` in the image is now bsdtar, as it is on FreeBSD (GNU tar stays at `/usr/sbin/tar` because dpkg needs it), and `FeedUrlLocalFileTest` drives `$pfb['dbdir']` instead of a `/var/db/pfblockerng` path only root can create. The invoking uid still matters for the `chmod`-based permission cases — `run-in-docker.sh` passes `--user "$(id -u)"` and the `php-unit` job pins `--user 1001:1001` for the same reason, so the two agree.
+**Divergence shows up as a SKIP, not a red**, which is the harder thing to notice — read the skip list, never just the exit status. Locale data, `file(1)` classification, the PHP build (whether `php://memory` can fail `flock()`), the invoking uid and the `tar` flavour (bsdtar on macOS and the appliance, GNU tar on Linux) each decide whether a case runs at all. Never read a skip as coverage.
 
 **The skip SET is gated, not just readable** (issue #2359): each of the three suite jobs writes a JUnit report (`--junitxml` / `--log-junit` / `-o junit`) and a `Skip allowlist` step then runs `scripts/check_skip_allowlist.py` against `tests/skip-allowlist.txt` — the one file shared by all three suites (ids are suite-prefixed `<suite>:<classname>::<name>`). A skip not on that file fails the job; an allowlisted id the run did NOT observe is informational only (a PHP-build-gated case skips on one PHP version and not the other). Add a legitimately new skip as its own `# <reason>`-carrying entry in `tests/skip-allowlist.txt` — an entry with no reason is itself a parse error (exit 2), so the file cannot rot into a bare id list.
 

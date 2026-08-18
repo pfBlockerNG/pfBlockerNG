@@ -14,17 +14,8 @@ Describe '.githooks/pre-commit with a C-quoted path'
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommithostile.XXXXXX")"
     git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
-    mkdir -p "$repo/.githooks" "$repo/scripts" "$repo/src" "$repo/vendor/bin"
+    mkdir -p "$repo/.githooks" "$repo/src" "$repo/vendor/bin"
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
-    # The PHP style gates run in the CI runner image (issue #2350). A passthrough
-    # wrapper keeps this spec about WHICH gates the hook decides to run — what it is
-    # actually pinning — rather than about docker reachability. Git-excluded, because
-    # the examples stage with `add -A`: a staged .sh would switch on the hook's SHELL
-    # gates too and change what each row is measuring.
-    printf 'scripts/\n' > "$repo/.git/info/exclude"
-    printf '#!/bin/sh\nexec "$@"\n' > "$repo/scripts/run-in-docker.sh"
-    chmod +x "$repo/scripts/run-in-docker.sh"
-
     # Stubs stand in for the real analysis tools: this spec pins WHICH gates the
     # hook decides to run and what its own scans see, not what those tools conclude.
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommithostilestub.XXXXXX")"

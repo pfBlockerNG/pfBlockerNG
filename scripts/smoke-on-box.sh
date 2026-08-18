@@ -44,7 +44,7 @@
 #   PFB_ONBOX_PORTS_DIR  override the ports checkout (default /root/FreeBSD-ports); same
 #                        purpose, never set on a box.
 #   PFB_ONBOX_IMAGES_DIR override the image root (default /root/images); test-only seam,
-#                        never set on a box. The container writable layer owns this root.
+#                        never set on a box.
 #
 # RESPONSIBILITIES (in order):
 #   1. (the caller resolved the ref before invoking this script)
@@ -130,7 +130,7 @@ done
 # The caller (local-smoke.sh's bootstrap, via select-box.sh) fetches the requested ref and
 # checks out its FETCHED TIP before invoking this script, so there is nothing to resolve
 # here. This script used to re-fetch and re-exec itself at the same ref, which duplicated
-# the caller's work and put the choice of WHICH code runs inside the container.
+# the caller's work and moved the choice of WHICH code runs away from the caller.
 [ -n "$_REF" ] || _REF="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
 # Echo the whole resolved configuration, not just the ref: a flag that silently
@@ -143,21 +143,19 @@ printf 'smoke-on-box: config abi=%s channel=%s marker=%s filter=%s shard=%s/%s t
 
 # Checked FIRST: this is a property of how we were INVOKED, so failing here costs
 # nothing, while discovering it after the ports refresh and the image pull wastes minutes
-# and reports as a mock-DNS failure rather than a missing docker flag.
-# The unprivileged-port floor (so the non-root mock DNS can bind :53) is set by the
-# caller's `docker run --sysctl net.ipv4.ip_unprivileged_port_start=53`: the sysctl is
-# namespaced, and a container cannot set it on the host. Fail loudly rather than let the
-# mock DNS fail to bind halfway through a run.
+# and reports as a mock-DNS failure rather than as unprepared host state.
+# The unprivileged-port floor (so the non-root mock DNS can bind :53) is lowered by the
+# caller, which is the side that has the privilege to write it. Fail loudly rather than
+# let the mock DNS fail to bind halfway through a run.
 # Seam: the spec pins this at a fixture file so the gate fires deterministically. Without
-# it the examples depend on the AMBIENT floor, and on a host that already has it lowered --
-# which is exactly what this script's own container is -- the run would sail past the gate
-# and reach the real host prep, whose `pkill -9 -f qemu-system-x86_64` would kill a
-# concurrent leg's VMs on a shared box.
+# it the examples depend on the AMBIENT floor, and on a host that already has it lowered
+# the run would sail past the gate and reach the real host prep, whose
+# `pkill -9 -f qemu-system-x86_64` would kill a concurrent leg's VMs on a shared box.
 _floor_file="${PFB_ONBOX_PORT_FLOOR_FILE:-/proc/sys/net/ipv4/ip_unprivileged_port_start}"
 _floor="$(cat "$_floor_file" 2>/dev/null || echo 1024)"
 if [ "$_floor" -gt 53 ]; then
-    printf 'smoke-on-box: ip_unprivileged_port_start is %s; the caller must pass\n' "$_floor" >&2
-    printf 'smoke-on-box:   --sysctl net.ipv4.ip_unprivileged_port_start=53\n' >&2
+    printf 'smoke-on-box: ip_unprivileged_port_start is %s; the caller must run\n' "$_floor" >&2
+    printf 'smoke-on-box:   sysctl -w net.ipv4.ip_unprivileged_port_start=53\n' >&2
     exit 1
 fi
 
@@ -351,25 +349,26 @@ if [ ! -f "$SMOKE_SSH_KEY" ]; then
 fi
 
 # ── Step 5c: provision the Python test deps into a repo-root venv ──────────── #
-# The box ships python3 but not pytest; install the harness deps (version-pinned
-# by the checked-out ref's tests/smoke/requirements.txt, + pytest explicitly, the
-# same set CI installs) into ${REPO_ROOT}/.venv so run-smoke.sh's non-CI .venv
-# preference uses it. Idempotent: reuse a valid existing venv; pip is a no-op when the
-# pinned deps are already satisfied.
+# The box ships python3 but not pytest. `uv sync --locked` materialises the checked-out
+# ref's pinned harness -- pyproject's `smoke` group resolved against uv.lock, so the
+# TRANSITIVE graph matches CI's too -- into ${REPO_ROOT}/.venv, which run-smoke.sh's
+# non-CI .venv preference then uses. Idempotent: an already-synced venv is a no-op.
 printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
 _VENV_DIR="${REPO_ROOT}/.venv"
-# `venv --clear` follows a directory symlink and erases its target before failing.
+# `uv sync` recreates an unusable environment in place, which would follow a directory
+# symlink and erase its target.
 if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; then
     printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
     exit 2
 fi
-if [ ! -x "${_VENV_DIR}/bin/python" ] || ! "${_VENV_DIR}/bin/python" -m pip --version >/dev/null 2>&1; then
-    python3 -m venv --clear "$_VENV_DIR"
+if ! command -v uv >/dev/null 2>&1; then
+    printf 'smoke-on-box: uv not found on this box; the smoke harness deps are pinned by\n' >&2
+    printf 'smoke-on-box:   uv sync --locked --group smoke\n' >&2
+    exit 2
 fi
-"${REPO_ROOT}/.venv/bin/python" -m pip install --quiet --upgrade pip
-"${REPO_ROOT}/.venv/bin/python" -m pip install --quiet -r "${REPO_ROOT}/tests/smoke/requirements.txt" pytest
+uv sync --locked --group smoke  # cwd is REPO_ROOT; uv reads pyproject and uv.lock from it
 
-# The Tier-B browser marker needs the Chromium BINARY (the pip wheel above ships the
+# The Tier-B browser marker needs the Chromium BINARY (the playwright wheel ships the
 # bindings only); mirrors ui-tests.yml. The install order and its apt-failure fallback are
 # the testable bit — they live in the lib, pinned by tests/shell/smoke_tier_spec.sh.
 if pfb_smoke_tier_needs_browser "$_MARKER"; then

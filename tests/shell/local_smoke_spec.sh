@@ -183,6 +183,21 @@ FAKEEOF
     End
   End
 
+  # ── the bootstrap runs the suite with the box's own tools ─────────────────── #
+  Describe 'on-box invocation'
+    It 'lowers the unprivileged port floor before handing off to smoke-on-box.sh'
+      # smoke-on-box.sh refuses to run while the floor is above 53 (the non-root mock DNS
+      # binds :53), and it is the caller that holds the privilege to lower it -- so the
+      # bootstrap must do it, and must do it BEFORE the handoff.
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include 'sysctl -w net.ipv4.ip_unprivileged_port_start=53'
+      The output should include 'sh scripts/smoke-on-box.sh'
+      The output should not include 'docker run'
+    End
+  End
+
   # ── --git-remote (issue #2497): per-run git source, default origin ────────── #
   Describe '--git-remote'
     It 'substitutes the given remote into BOTH bootstrap fetches (ref + ci-metadata)'

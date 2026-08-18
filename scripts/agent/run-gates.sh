@@ -3,10 +3,12 @@
 # Mechanical runner for the "Canonical gates" table (CLAUDE.md stays the documented
 # source; this script implements it -- change them together).
 #
-# Every gate runs inside the CI runner image via scripts/run-in-docker.sh (issue #2350),
-# so the toolchain grading a local run is the toolchain grading the PR. An unreachable
-# container is a gate FAILURE, not a skip; PFB_ALLOW_HOST=1 in the environment is the
-# documented escape hatch and is honoured by the wrapper, not by this script.
+# Gates run against the host toolchain: Python through the locked uv environment
+# (`uv sync --locked --group dev`), PHP and the shell tools from the versions
+# CONTRIBUTING.md pins. A host is not automatically CI, so those pins are what keeps the
+# two answering the same question. A MISSING tool is a gate FAILURE, not a skip -- a
+# skipped gate reads greener than a failed one; --allow-missing downgrades that
+# deliberately for an incomplete workstation.
 #
 # Usage: run-gates.sh [--worktree PATH] [--diff BASE] [--plan] [--allow-missing]
 #   --worktree       repo checkout to run in (default: cwd's repo root)
@@ -78,10 +80,10 @@ gates_for() {
 		out="${out}printf 'unsafe filename in diff\\n' >&2; false${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -q '\.py$'; then
-		out="${out}python3 -m pytest${nl}ruff check .${nl}ruff format --check .${nl}mypy tests/${nl}"
+		out="${out}uv run pytest${nl}uv run ruff check .${nl}uv run ruff format --check .${nl}uv run mypy tests/${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
-		out="${out}python3 scripts/check_composer_vendor.py${nl}"
+		out="${out}uv run python scripts/check_composer_vendor.py${nl}"
 		for f in $(printf '%s\n' "$files" | grep -E '\.(php|inc)$'); do
 			out="${out}php -l $f${nl}"
 		done
@@ -106,9 +108,7 @@ gates_for() {
 
 # The Composer vendor guard is fail-closed: a failure there stops the run before any
 # Composer-backed PHP gate, which is unsafe against a missing or stale vendor tree. Matched
-# by substring rather than by whole-command equality because wrap_gates() below rewrites
-# the command text, and a comparison against the unwrapped literal would silently stop
-# recognising it — turning the hard stop into an ordinary gate failure.
+# by substring so the check keeps recognising it if the invocation around it changes.
 is_vendor_gate() {
 	case "$1" in
 	*'scripts/check_composer_vendor.py'*) return 0 ;;
@@ -116,48 +116,10 @@ is_vendor_gate() {
 	return 1
 }
 
-# Every gate runs in the CI runner image rather than against whatever the host happens to
-# have installed: test.yml executes each of its jobs inside ghcr.io/pfblockerng/ci-runner,
-# so a gate graded anywhere else answers a different question (issue #2350). gates_for()
-# stays the pure file-type -> canonical-command mapping its own spec pins; the wrapping
-# happens once, here.
-#
-# `sh -c '<cmd>'` and not a bare argv: the shellspec gate's text carries a command
-# substitution that has to resolve to the CONTAINER's dash — expanded host-side it yields
-# a path the image does not have. Single-quoting is safe because gates_for() already drops
-# any filename outside [A-Za-z0-9._/-] from the per-file buckets.
-#
-# The injection guard is NOT wrapped. It is a refusal, not a gate: it needs no toolchain,
-# and routing it through a container would make "this diff has an unsafe filename" depend
-# on docker being reachable.
-wrap_gates() {
-	while IFS= read -r c; do
-		[ -n "$c" ] || continue
-		case "$c" in
-		"printf 'unsafe filename in diff"*) printf '%s\n' "$c" ;;
-		*) printf "scripts/run-in-docker.sh sh -c '%s'\n" "$c" ;;
-		esac
-	done
-}
-
-# The per-gate report line names the GATE, not the plumbing. wrap_gates() puts the same
-# `scripts/run-in-docker.sh sh -c '...'` around every command, so repeating it on each
-# PASS/FAIL line would push the thing that actually failed off to the right for no added
-# information -- and a failing gate already prints the wrapper's own reason line above its
-# verdict. --plan still prints the real invocation, which is what gets copy-pasted.
-gate_label() {
-	case "$1" in
-	"scripts/run-in-docker.sh sh -c '"*)
-		label=${1#scripts/run-in-docker.sh sh -c \'}
-		printf '%s' "${label%\'}"
-		;;
-	*) printf '%s' "$1" ;;
-	esac
-}
 
 run_gate() {
 	# $1 = command line
-	label=$(gate_label "$1")
+	label=$1
 	tool=${1%% *}
 	if ! (cd "$worktree" && { command -v "$tool" >/dev/null 2>&1 || [ -x "$tool" ]; }); then
 		if is_vendor_gate "$1"; then
@@ -193,12 +155,6 @@ main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
 	scrub_git_env "$0"
-	# The wrapper honours PFB_ALLOW_HOST, and run_gate suppresses a PASSING gate's output
-	# entirely -- so an inherited PFB_ALLOW_HOST would restore the silent host fallback
-	# here: rows of GATE PASS with nothing on screen naming the toolchain that produced
-	# them. This runner's verdict is a CI-parity verdict by definition, so it drops the
-	# variable outright; the escape hatch stays on the wrapper for ad-hoc use.
-	unset PFB_ALLOW_HOST
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--worktree) worktree=$2; shift 2 ;;
@@ -238,7 +194,7 @@ main() {
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
-	cmds=$(printf '%s\n' "$files" | gates_for | wrap_gates)
+	cmds=$(printf '%s\n' "$files" | gates_for)
 
 	if [ "$plan" -eq 1 ]; then
 		printf '%s' "$cmds"

@@ -15,15 +15,15 @@ GitHub Actions. These cost real time to relearn; CI workflow
 ### On each LXC box (pre-provisioned once)
 
 - `/dev/kvm` present + writable (hardware virtualisation). Everything need KVM.
-- `docker` and `git`. **Nothing else**: qemu, oras, dig, Playwright browser now
-  live in `ghcr.io/pfblockerng/ci-runner-vm`, which leg runs inside (issue #2223).
-  Image public — box need no registry credentials.
+- `git`, `uv`, qemu (`qemu-system-x86`, `qemu-utils`), `oras`, `dig` (`dnsutils`),
+  `iptables`, `openssh-client`, `zstd`. The leg runs against the box's own toolchain
+  (issue #2513); `scripts/smoke-on-box.sh` refuses loudly when one is missing rather
+  than falling back. Python dependencies come from `uv sync --locked --group smoke`.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by `smoke-on-box.sh`).
 
-Image storage is not a box prerequisite. Each `docker run --rm` workload pulls its selected
-pfSense image (and civm image unless `--no-two-vm`) into container-local
-`/root/images/{pfsense,civm}`; Docker removes that writable layer when the workload exits.
+Image storage is not a box prerequisite. Each workload pulls its selected pfSense image
+(and civm image unless `--no-two-vm`) into `/root/images/{pfsense,civm}` on the box.
 Set `PFB_LAN_REGISTRY` on the box to use the durable LAN zot cache; without it, pulls use
 GHCR and `SMOKE_GHCR_TOKEN` may authenticate the pull.
 
@@ -117,12 +117,11 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
 2. On box, `smoke-on-box.sh` (invoked by bootstrap) runs in order:
    - `git sparse-checkout` (only `src`, `scripts`, `stubs/python`, `tests/smoke`, `pkg-site` —
      13 MB of a 34 MB tree),
-     then `git fetch` + `git checkout FETCH_HEAD`. Ref resolved HERE; container
-     runs already-resolved tree and never fetches.
+     then `git fetch` + `git checkout FETCH_HEAD`. Ref resolved HERE; the leg
+     runs the already-resolved tree and never fetches.
    - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.
-   - `docker run --rm` leg inside `ci-runner-vm`, with `--device /dev/kvm` and
-     `--sysctl net.ipv4.ip_unprivileged_port_start=53`. Inside it, `oras` pulls pfSense
-     civm images directly into disposable `/root/images/{pfsense,civm}` directories.
+   - the leg on the box itself, after `sysctl -w net.ipv4.ip_unprivileged_port_start=53`.
+     `oras` pulls pfSense and civm images into `/root/images/{pfsense,civm}`.
      The LAN zot registry remains the durable fleet cache when `PFB_LAN_REGISTRY` is set;
      no qcow2 store is shared between boxes.
    - `pkill -9 -f qemu-system-x86_64`. Port floor set by caller's `--sysctl`
@@ -155,7 +154,7 @@ civm OCI image at `ghcr.io/pfblockerng/civm:v1` (~600 MB). qcow2 named
 lie**; image is Debian client, not pfSense.
 
 Each `SMOKE_*_IMAGE_DIR` must hold **exactly one** `*.qcow2` after its direct pull. The
-directories disappear with the container after the workload exits.
+leg removes those directories when the workload exits.
 
 ## Building the `.pkg` off-FreeBSD (CI reference)
 

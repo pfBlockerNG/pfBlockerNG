@@ -12,12 +12,6 @@ Describe '.githooks/pre-commit Composer vendor guard'
     cp "$PFB_ROOT/.githooks/pre-commit" "$repo/.githooks/pre-commit"
     printf '<?php echo 1;\n' > "$repo/src/a.php"
     gitc add src/a.php
-    # The PHP style gates run in the CI runner image (issue #2350); a passthrough
-    # wrapper keeps these examples about the vendor guard's ORDERING, which is what
-    # they pin, rather than about docker reachability. The sibling
-    # precommit_ci_image_spec.sh covers the routing itself.
-    printf '#!/bin/sh\nexec "$@"\n' > "$repo/scripts/run-in-docker.sh"
-    chmod +x "$repo/scripts/run-in-docker.sh"
 
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitphpstub.XXXXXX")"
     checker_marker="$stubdir/checker-ran"

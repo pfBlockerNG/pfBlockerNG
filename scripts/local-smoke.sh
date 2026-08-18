@@ -2,8 +2,11 @@
 # local-smoke.sh — run the ADR-04 live-VM smoke suite locally via a leased LXC box.
 #
 # Leases one box from the PFB_BOXES pool (scripts/select-box.sh), bootstraps it
-# to the requested git ref, and runs the ENTIRE smoke suite ON the box — images,
-# build, pytest all run there. The orchestrator only provides the bootstrap command.
+# to the requested git ref, and runs the ENTIRE smoke suite ON the box with the box's
+# own tools — images, build, pytest all run there. The orchestrator only provides the
+# bootstrap command. The box needs qemu, oras and uv; SMOKE_GHCR_TOKEN,
+# SMOKE_ADMIN_USER, SMOKE_ADMIN_PASSWORD, SMOKE_LANE, PFB_DIAG_DIR and
+# PFB_LAN_REGISTRY are inherited from the box's own environment.
 # The EXIT trap in select-box.sh releases the lease automatically.
 #
 # Full background + rationale: docs/misc/local-smoke-debian.md
@@ -52,8 +55,8 @@
 # The leased box runs scripts/smoke-on-box.sh, which:
 #   - checks out the requested ref
 #   - updates FreeBSD-ports (pfblockerng/use-github)
-#   - pulls pfSense + civm images into disposable container-local paths via oras
-#   - lowers ip_unprivileged_port_start + kills stale qemu
+#   - pulls pfSense + civm images into disposable per-run paths via oras
+#   - kills stale qemu (the bootstrap above lowers ip_unprivileged_port_start)
 #   - builds the .pkg via build-leg.sh
 #   - runs scripts/run-smoke.sh (the canonical pytest argv)
 #
@@ -216,21 +219,14 @@ _bootstrap="cd /root/pfBlockerNG \
  && git fetch --quiet '$_GIT_REMOTE_Q' '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
  && git fetch --quiet --no-tags '$_GIT_REMOTE_Q' '$_CIMETA_REFSPEC_Q' \
- && exec docker run --rm --init \
-      --device /dev/kvm \
-      --sysctl net.ipv4.ip_unprivileged_port_start=53 \
-      -v /root/pfBlockerNG:/root/pfBlockerNG \
-      -v /root/FreeBSD-ports:/root/FreeBSD-ports \
-      -v /root/smoke-ssh-key:/root/smoke-ssh-key:ro \
-      -e SMOKE_GHCR_TOKEN -e SMOKE_ADMIN_USER -e SMOKE_ADMIN_PASSWORD \
-      -e SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' -e CIVM_REF='$_CIVM_REF_Q' \
-      -e SMOKE_LANE -e PFB_DIAG_DIR -e PFB_LAN_REGISTRY -e MATRIX_REF='$_MATRIX_REF_Q' \
-      -e SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' -e SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \
-      -e SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' -e SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \
-      -e SMOKE_REPO_EXPECTED_CHANNEL='$_REPO_EXPECTED_CHANNEL_Q' \
-      -e SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='$_NIGHTLY_EXPECTED_SOURCE_SHA_Q' -e SMOKE_NIGHTLY_EXPECTED_VERSION='$_NIGHTLY_EXPECTED_VERSION_Q' \
-      -w /root/pfBlockerNG \
-      \${PFB_LAN_REGISTRY:-ghcr.io}/pfblockerng/ci-runner-vm:11 \
+ && sysctl -w net.ipv4.ip_unprivileged_port_start=53 >/dev/null \
+ && exec env \
+      SMOKE_PFSENSE_REF='$_PFSENSE_REF_Q' CIVM_REF='$_CIVM_REF_Q' \
+      MATRIX_REF='$_MATRIX_REF_Q' \
+      SMOKE_REPO_LIVE_URL='$_REPO_LIVE_URL_Q' SMOKE_NIGHTLY_LIVE_URL='$_NIGHTLY_LIVE_URL_Q' \
+      SMOKE_REPO_EXPECTED_SOURCE_SHA='$_REPO_EXPECTED_SOURCE_SHA_Q' SMOKE_REPO_EXPECTED_VERSION='$_REPO_EXPECTED_VERSION_Q' \
+      SMOKE_REPO_EXPECTED_CHANNEL='$_REPO_EXPECTED_CHANNEL_Q' \
+      SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='$_NIGHTLY_EXPECTED_SOURCE_SHA_Q' SMOKE_NIGHTLY_EXPECTED_VERSION='$_NIGHTLY_EXPECTED_VERSION_Q' \
       sh scripts/smoke-on-box.sh $_ob_flags"
 
 printf 'local-smoke: leasing box (REF=%s marker=%s%s)\n' \

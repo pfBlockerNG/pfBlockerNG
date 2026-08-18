@@ -6,7 +6,7 @@ ADR-04 smoke VM (``tests.smoke.conftest.smoke_vm``). Like the rest of
 (``pyproject.toml`` ``addopts = "... --ignore=tests/smoke"``) and is collected
 only by the smoke/ui workflow, e.g.::
 
-    python -m pip install -r tests/smoke/requirements.txt
+    uv sync --locked --group smoke
     python -m pytest tests/smoke -m ui_render --override-ini="addopts="
 
 Phase 1 (this commit) ships only the reusable authenticated session helper

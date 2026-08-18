@@ -62,10 +62,20 @@ esac
 exit 0
 STUBEOF
     chmod +x "${WORK}/bin/oras"
+    # The venv step shells out to uv; these examples cover the steps around it, not
+    # dependency resolution, so the stub records its argv and cwd instead.
+    cat > "${WORK}/bin/uv" <<'STUBEOF'
+#!/bin/sh
+printf '%s|%s\n' "$PWD" "$*" >> "${FAKE_UV_LOG:-/dev/null}"
+exit "${FAKE_UV_EXIT:-0}"
+STUBEOF
+    chmod +x "${WORK}/bin/uv"
     PATH="${WORK}/bin:${PATH}"
     ORAS_ARGV_LOG="${WORK}/oras-argv"
+    FAKE_UV_LOG="${WORK}/uv-argv"
     true > "$ORAS_ARGV_LOG"
-    export PATH ORAS_ARGV_LOG
+    true > "$FAKE_UV_LOG"
+    export PATH ORAS_ARGV_LOG FAKE_UV_LOG
 
     git_fixture -C "$FAKE_ROOT" init --quiet . >/dev/null 2>&1
     git_fixture -C "$FAKE_ROOT" -c user.name=t -c user.email=t@example.com \
@@ -73,9 +83,8 @@ STUBEOF
 
     # Pin the port floor ABOVE 53 so the gate fires on every host. Reading the ambient
     # /proc value would make these examples host-dependent: on a host that already has the
-    # floor lowered (this script's own container does exactly that) the run sails past the
-    # gate into the real host prep, whose `pkill -9 -f qemu-system-x86_64` would kill a
-    # concurrent leg's VMs on a shared box.
+    # floor lowered the run sails past the gate into the real host prep, whose
+    # `pkill -9 -f qemu-system-x86_64` would kill a concurrent leg's VMs on a shared box.
     printf '1024\n' > "${WORK}/port-floor"
     PFB_ONBOX_PORT_FLOOR_FILE="${WORK}/port-floor"
 
@@ -94,16 +103,16 @@ STUBEOF
   # ── the port-floor precondition ──────────────────────────────────────────── #
 
   It 'refuses to run when the unprivileged port floor is above 53'
-    # The floor used to be lowered in-script with `sysctl -w`, which a container cannot do
-    # against the host; the caller now passes --sysctl instead. If this precondition is
-    # dropped the run continues and the non-root mock DNS fails to bind :53 halfway
-    # through, which reads as a test failure rather than a missing docker flag.
-    # A host that has NOT lowered the floor (any dev machine, and the spec runner) takes
-    # this path, so the example is meaningful wherever the suite runs.
+    # The floor is the caller's to lower -- it needs a privilege this script does not
+    # assume. If this precondition is dropped the run continues and the non-root mock DNS
+    # fails to bind :53 halfway through, which reads as a test failure rather than as
+    # unprepared host state. A host that has NOT lowered the floor (any dev machine, and
+    # the spec runner) takes this path, so the example is meaningful wherever the suite
+    # runs.
     When run sh "$SCRIPT" --ref HEAD
     The status should equal 1
     The stderr should include 'ip_unprivileged_port_start'
-    The stderr should include '--sysctl'
+    The stderr should include 'sysctl -w'
   End
 
   It 'reads the floor from the seam, not from the ambient host'
@@ -157,7 +166,7 @@ STUBEOF
   End
 
   It 'rejects an unknown flag instead of silently ignoring it'
-    # A typo in the docker command would otherwise be dropped on the floor and the leg
+    # A typo in the bootstrap command would otherwise be dropped on the floor and the leg
     # would run with defaults, producing a green result for the wrong configuration.
     When run sh "$SCRIPT" --not-a-real-flag
     The status should not equal 0
@@ -205,7 +214,7 @@ STUBEOF
     The path "$SPARSE_CHANNEL_FILE" should not be exist
   End
 
-  It 'pulls both images into distinct container-local directories'
+  It 'pulls both images into distinct per-run directories'
     printf '0\n' > "${WORK}/port-floor"
     cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
 #!/bin/sh
@@ -342,7 +351,11 @@ STUBEOF
     The contents of file "$ORAS_ARGV_LOG" should not include 'pull ghcr.io/pfblockerng/pfsense-ce'
   End
 
-  It 'clears an invalid existing venv before recreating it'
+  It 'syncs the LOCKED smoke group into the repo-root venv, and fails the run when that fails'
+    # `--locked` is the property: it resolves against the checked-out ref's uv.lock, so
+    # the box gets the same transitive graph CI does. Run from REPO_ROOT, since uv reads
+    # the pyproject and lock relative to its cwd. A sync failure must abort the run, not
+    # fall through to a pytest that would import whatever the box happens to have.
     printf '0\n' > "${WORK}/port-floor"
 
     # Reach only the venv boundary: package/image work is unrelated and remains stubbed.
@@ -360,35 +373,67 @@ printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_v
 STUBEOF
     chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
 
-    mkdir -p "${FAKE_ROOT}/.venv/bin"
-    cat > "${FAKE_ROOT}/.venv/bin/python" <<'STUBEOF'
-#!/bin/sh
-printf '%s\n' "$*" > "$VENV_PYTHON_ARGS_FILE"
-exit 1
-STUBEOF
-    chmod +x "${FAKE_ROOT}/.venv/bin/python"
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
-    VENV_ARGS_FILE="${WORK}/venv-args"
-    VENV_PYTHON_ARGS_FILE="${WORK}/venv-python-args"
-    export SMOKE_SSH_KEY VENV_ARGS_FILE VENV_PYTHON_ARGS_FILE
+    FAKE_UV_EXIT=42
+    export SMOKE_SSH_KEY FAKE_UV_EXIT
 
-    cat > "${WORK}/bin/python3" <<'STUBEOF'
-#!/bin/sh
-printf '%s\n' "$*" > "$VENV_ARGS_FILE"
-exit 42
-STUBEOF
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
 exit 0
 STUBEOF
-    chmod +x "${WORK}/bin/python3" "${WORK}/bin/pkill"
+    chmod +x "${WORK}/bin/pkill"
 
     When run sh "$SCRIPT" --ref HEAD --no-two-vm
     The status should equal 42
     The stderr should include 'provisioning test venv'
-    The contents of file "$VENV_PYTHON_ARGS_FILE" should equal '-m pip --version'
-    The contents of file "$VENV_ARGS_FILE" should equal "-m venv --clear ${FAKE_ROOT}/.venv"
+    The contents of file "$FAKE_UV_LOG" should equal "${FAKE_ROOT}|sync --locked --group smoke"
+  End
+
+  It 'refuses to run at all when uv is not on the box'
+    # Without uv the pinned harness cannot be materialised; a run that continued would
+    # grade against whatever python the box happens to carry.
+    printf '0\n' > "${WORK}/port-floor"
+
+    cat > "${FAKE_ROOT}/scripts/lib/lan-registry.sh" <<'STUBEOF'
+pfb_lan_registry_active() { return 1; }
+pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":[],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh"
+
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    export SMOKE_SSH_KEY
+
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    # Drop every PATH entry that carries a uv, the stub's included: a bare
+    # "$WORK/bin only" PATH would fail on a missing `sh` instead, which proves nothing.
+    rm -f "${WORK}/bin/uv"
+    NOUV_PATH=''
+    _oldifs="$IFS"; IFS=':'
+    for _d in $PATH; do
+      [ -x "${_d}/uv" ] && continue
+      NOUV_PATH="${NOUV_PATH:+${NOUV_PATH}:}${_d}"
+    done
+    IFS="$_oldifs"
+
+    When run sh -c "PATH='$NOUV_PATH' sh '$SCRIPT' --ref HEAD --no-two-vm"
+    The status should equal 2
+    The stderr should include 'uv not found on this box'
+    The stderr should include 'uv sync --locked --group smoke'
   End
 
   It 'refuses a symlinked venv root without clearing its target'
@@ -411,7 +456,6 @@ STUBEOF
     VENV_TARGET="${WORK}/external-venv-target"
     mkdir -p "$VENV_TARGET" "${FAKE_ROOT}/tests/smoke"
     true > "${VENV_TARGET}/sentinel"
-    true > "${FAKE_ROOT}/tests/smoke/requirements.txt"
     ln -s "$VENV_TARGET" "${FAKE_ROOT}/.venv"
     true > "${WORK}/smoke-ssh-key"
     SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"

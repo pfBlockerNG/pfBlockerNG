@@ -39,14 +39,6 @@ jobs:
   prepare:
     name: Pin inputs and identify snapshot
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     outputs:
       pkg_version: ${{ steps.plan.outputs.pkg_version }}
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
@@ -199,14 +191,6 @@ jobs:
     name: Build Nightly (${{ matrix.variant }} FreeBSD ${{ matrix.freebsd_major }})
     needs: prepare
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     strategy:
       fail-fast: false
       matrix:
@@ -355,14 +339,6 @@ jobs:
     name: Verify and hand off Nightly snapshot
     needs: [prepare, build]
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     steps:
       - name: Checkout trusted workflow tools for handoff validation
         uses: actions/checkout@v6
@@ -424,14 +400,6 @@ jobs:
     name: "Publish the pkg catalogue"
     needs: [prepare, handoff]
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     permissions:
       packages: read
       contents: read

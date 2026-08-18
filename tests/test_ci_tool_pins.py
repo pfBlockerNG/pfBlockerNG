@@ -1,4 +1,5 @@
 import re
+from collections.abc import Iterable
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -8,16 +9,32 @@ SHELLSPEC_PIN = "0.28.1"
 KCOV_PIN = "a39874f938ce13f7a65f253120d1ec946b349ffe"  # the commit tag v43 pointed at
 
 
-def _workflow() -> str:
-    return (ROOT / ".github/workflows/test.yml").read_text(encoding="utf-8")
+_WORKFLOWS = ROOT / ".github/workflows"
+
+# A pinned tool version, upstream commit or release-asset checksum, as the workflows
+# spell it: an env key whose value is a literal. `${{ ... }}` values are expressions
+# resolved per run (a matrix leg, an input), not pins, so they are skipped.
+_PIN_ENTRY = re.compile(r"^\s*([A-Z][A-Z0-9_]*(?:_VERSION|_COMMIT|_SHA256)):\s*(\S+)\s*$")
 
 
-def _dockerfile() -> str:
-    return (ROOT / ".github/docker/ci-runner.Dockerfile").read_text(encoding="utf-8")
+def _pin_index(sources: Iterable[tuple[str, str]]) -> dict[str, dict[str, list[str]]]:
+    """{PIN: {value: [where:line, ...]}} over (name, text) pairs."""
+    found: dict[str, dict[str, list[str]]] = {}
+    for where, text in sources:
+        for line_no, line in enumerate(text.splitlines(), 1):
+            match = _PIN_ENTRY.match(line)
+            if not match:
+                continue
+            name, value = match.group(1), match.group(2).strip("\"'")
+            if value.startswith("${{"):
+                continue
+            found.setdefault(name, {}).setdefault(value, []).append(f"{where}:{line_no}")
+    return found
 
 
-def _ci_requirements() -> str:
-    return (ROOT / ".github/docker/ci-requirements.txt").read_text(encoding="utf-8")
+def _pins() -> dict[str, dict[str, list[str]]]:
+    paths = sorted([*_WORKFLOWS.glob("*.yml"), *_WORKFLOWS.glob("*.yaml")])
+    return _pin_index((path.name, path.read_text(encoding="utf-8")) for path in paths)
 
 
 def _docs_under(root: Path) -> list[Path]:
@@ -36,30 +53,50 @@ def _docs_under(root: Path) -> list[Path]:
     return [path for path in root.rglob("*.md") if not skip & set(path.parts) and worktrees not in path.parents]
 
 
-def test_the_gate_deciding_pins_live_in_the_image_and_nowhere_else() -> None:
-    """The toolchain moved from per-job installs into ci-runner. These pins decide gate
-    verdicts, so they need exactly ONE home: a workflow that re-installs a pinned tool
-    would grade against a different build than the image everyone else runs."""
-    workflow, dockerfile, requirements = _workflow(), _dockerfile(), _ci_requirements()
+def test_gate_deciding_pins_agree_wherever_they_appear() -> None:
+    """A tool version decides gate verdicts, so every job that installs it must install
+    the SAME build. The installs are per job again, and the same pin is spelled out in
+    more than one job (ShellCheck twice in test.yml, shellspec in test.yml and
+    build-pkg-linux.yml) — two spellings of one pin drift, and the jobs then grade
+    against different binaries while both read as green (#2185)."""
+    pins = _pins()
 
-    assert f"SHELLCHECK_VERSION={SHELLCHECK_PIN}" in dockerfile
-    assert f"SHELLSPEC_VERSION={SHELLSPEC_PIN}" in dockerfile
-    assert f"KCOV_COMMIT={KCOV_PIN}" in dockerfile
-    assert "ruff==" in requirements
-
-    # and must NOT have been left behind in the workflow, where they would drift apart
-    for stale in (
-        "setup-python",
-        "setup-php",
-        "setup-node",
-        "pip install ruff",
-        "SHELLCHECK_VERSION",
-        "SHELLSPEC_VERSION",
-        "KCOV_COMMIT",
+    # Floor: the three pins whose drift changes a verdict must actually be found. A
+    # workflow that renames or restructures them would otherwise pass vacuously.
+    for name, expected in (
+        ("SHELLCHECK_VERSION", SHELLCHECK_PIN),
+        ("SHELLSPEC_VERSION", SHELLSPEC_PIN),
+        ("KCOV_COMMIT", KCOV_PIN),
     ):
-        assert stale not in workflow, (
-            f"{stale!r} still in test.yml: the pin now lives in the image, and two homes drift"
+        assert name in pins, f"no workflow pins {name} any more — the install moved; retarget this gate"
+        assert set(pins[name]) == {expected}, (
+            f"workflows pin {name} to {sorted(pins[name])}, this gate records {expected}"
         )
+
+    split = {
+        name: {value: sorted(where) for value, where in values.items()}
+        for name, values in pins.items()
+        if len(values) > 1
+    }
+    assert not split, (
+        "these pins have more than one value across the workflows, so the jobs grade against different builds: "
+        + repr(split)
+    )
+
+
+def test_pin_scanner_reports_a_planted_disagreement() -> None:
+    """Vacuity guard for the scanner: two jobs pinning one tool differently are
+    reported with both sites, a matching pair is not, and an expression value is
+    never read as a pin (it resolves per run, so it has no fixed value to compare)."""
+    index = _pin_index(
+        [
+            ("a.yml", "        env:\n          TOOL_VERSION: 1.0.0\n          KEPT_VERSION: 9\n"),
+            ("b.yml", "        env:\n          TOOL_VERSION: 2.0.0\n          KEPT_VERSION: 9\n"),
+            ("c.yml", "        env:\n          TOOL_VERSION: ${{ matrix.tool }}\n"),
+        ]
+    )
+    assert index["TOOL_VERSION"] == {"1.0.0": ["a.yml:2"], "2.0.0": ["b.yml:2"]}
+    assert index["KEPT_VERSION"] == {"9": ["a.yml:3", "b.yml:3"]}
 
 
 def _contributing() -> str:

@@ -51,12 +51,6 @@ jobs:
   refresh:
     name: Refresh dnsbl_psl and open PR on change
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
     timeout-minutes: 10
     permissions:
       packages: read
@@ -64,7 +58,6 @@ jobs:
       pull-requests: write    # open/label the PR
       actions: write          # dispatch the CI gate onto the branch head
     env:
-      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       BRANCH: psl-refresh/auto
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}

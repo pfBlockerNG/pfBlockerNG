@@ -427,8 +427,8 @@ def _ui_pfb_isolation(request: pytest.FixtureRequest) -> Iterator[None]:
 # browser context so the browser never logs in a second time (a second login is
 # a second flake source — ADR §2 "inject the session cookie to avoid a second
 # login"). Playwright is imported lazily/guarded so collecting this package
-# without it installed does NOT hard-error (it is a dev-only smoke dep added to
-# tests/smoke/requirements.txt; the Chromium binary download is a Phase-5 CI
+# without it installed does NOT hard-error (it is a dev-only smoke dep in
+# pyproject's `smoke` group; the Chromium binary download is a Phase-5 CI
 # setup step). All fixtures here run only under the smoke/ui override.
 # --------------------------------------------------------------------------- #
 

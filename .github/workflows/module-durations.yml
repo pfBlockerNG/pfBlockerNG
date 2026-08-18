@@ -47,14 +47,6 @@ jobs:
   refresh:
     name: Rebuild + commit module-durations.txt
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     # workflow_run: only the nightly (schedule) full run, and only if it passed.
     # workflow_dispatch: the operator vouches the given run was a full fan-out.
     if: >-
