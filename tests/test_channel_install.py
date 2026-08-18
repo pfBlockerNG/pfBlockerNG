@@ -1158,7 +1158,7 @@ def test_ca_bundle_is_exported_alongside_the_path() -> None:
         ca_dir = _ca_dir(root)
         ca_dir.mkdir(parents=True)
         bundle = _ca_bundle(root)
-        bundle.write_text("")
+        bundle.write_text("# CA bundle\n")
 
         proc = _run_install(root, "stable")
         assert proc.returncode == 0, proc.stderr
@@ -1190,7 +1190,7 @@ def test_ca_locations_survive_a_path_containing_a_space() -> None:
         spaced_dir = Path(root) / "ssl store" / "certs"
         spaced_dir.mkdir(parents=True)
         spaced_file = Path(root) / "ssl store" / "cert bundle.pem"
-        spaced_file.write_text("")
+        spaced_file.write_text("# CA bundle\n")
 
         proc = _run_install(
             root,
@@ -1214,7 +1214,7 @@ def test_bundle_without_a_directory_exports_only_the_bundle() -> None:
     with tempfile.TemporaryDirectory() as root:
         bundle = _ca_bundle(root)
         bundle.parent.mkdir(parents=True)
-        bundle.write_text("")
+        bundle.write_text("# CA bundle\n")
         assert not _ca_dir(root).exists()
 
         proc = _run_install(root, "stable")
@@ -1232,7 +1232,7 @@ def test_empty_path_override_opts_out_of_the_directory() -> None:
     with tempfile.TemporaryDirectory() as root:
         _ca_dir(root).mkdir(parents=True)
         bundle = _ca_bundle(root)
-        bundle.write_text("")
+        bundle.write_text("# CA bundle\n")
 
         proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_PATH": ""})
         assert proc.returncode == 0, proc.stderr
@@ -1249,7 +1249,7 @@ def test_empty_bundle_override_opts_out_of_the_file() -> None:
     with tempfile.TemporaryDirectory() as root:
         ca_dir = _ca_dir(root)
         ca_dir.mkdir(parents=True)
-        _ca_bundle(root).write_text("")
+        _ca_bundle(root).write_text("# CA bundle\n")
 
         proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_FILE": ""})
         assert proc.returncode == 0, proc.stderr
@@ -1259,3 +1259,25 @@ def test_empty_bundle_override_opts_out_of_the_file() -> None:
         assert files, "no pkg calls were made — the run cannot prove the opt-out"
         assert set(files) == {"<unset>"}, f"opt-out ignored, saw {sorted(set(files))}"
         assert set(paths) == {str(ca_dir)}, f"the other half must still export, saw {sorted(set(paths))}"
+
+
+def test_empty_bundle_file_is_not_exported() -> None:
+    """A zero-byte bundle is refused, because loading it would cost the path too.
+
+    X509_STORE_load_locations() reads the file eagerly and abandons the CApath when that
+    read fails, so pointing pkg at a truncated /etc/ssl/cert.pem would break a box whose
+    hashed directory is perfectly healthy — a state set_default_verify_paths() tolerates.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        ca_dir = _ca_dir(root)
+        ca_dir.mkdir(parents=True)
+        _ca_bundle(root).write_text("")
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        paths = _pkg_ca_path_capture(root).read_text().splitlines()
+        assert files, "no pkg calls were made — the run cannot prove the guard"
+        assert set(files) == {"<unset>"}, f"empty bundle was exported, saw {sorted(set(files))}"
+        assert set(paths) == {str(ca_dir)}, f"the path must still export, saw {sorted(set(paths))}"
