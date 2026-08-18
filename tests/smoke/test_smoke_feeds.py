@@ -3860,3 +3860,90 @@ def test_adr46_hostile_member_blacklist_rejected(deployed_vm: SmokeVM, mock_feed
         )
     finally:
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} {escape_file}")
+
+
+# --------------------------------------------------------------------------- #
+# Structured-text feed shapes + the reject path (issue #2511)
+#
+# The download MIME allow-list ($pfb['mime_types'], pfblockerng.inc) admits JSON, NDJSON,
+# CSV and XML alongside plain text, because real feeds are served in those shapes and the
+# normaliser scrapes address tokens out of the surrounding syntax. That behaviour had no
+# live coverage, and neither did the refusal of a type the list does NOT admit.
+# --------------------------------------------------------------------------- #
+
+_STRUCTURED_SHAPES = [
+    # (label, fixture, member imported, sibling that must NOT be imported)
+    ("json", "ip_json.json", "192.0.2.71", "192.0.2.171"),
+    ("csv", "ip_csv.csv", "192.0.2.72", "192.0.2.172"),
+    ("xml", "ip_xml.xml", "192.0.2.73", "192.0.2.173"),
+    ("ndjson", "ip_ndjson.ndjson", "192.0.2.74", "192.0.2.174"),
+]
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(120)  # a full update + targeted reload exceeds the tier's 30s default
+@pytest.mark.parametrize(
+    ("label", "fixture", "member", "non_member"),
+    _STRUCTURED_SHAPES,
+    ids=[row[0] for row in _STRUCTURED_SHAPES],
+)
+def test_structured_text_feed_imports(
+    deployed_vm: SmokeVM,
+    mock_feeds: _MockFeedServer,
+    label: str,
+    fixture: str,
+    member: str,
+    non_member: str,
+) -> None:
+    """An allow-listed structured-text body loads its addresses into the pf table.
+
+    The MIME gate sniffs the DOWNLOADED FILE (``file -b --mime-type``), not the HTTP
+    header, so each fixture's own bytes decide the branch taken. The non-member assertion
+    is what stops a row passing by importing everything in sight.
+    """
+    feed_url = mock_feeds.feed_url(fixture)
+    spec = h.IpCase(aliasname=f"smokemime{label}", feed_url=feed_url, header=f"smokemime{label}", family="v4")
+
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before the {label} feed was ever loaded"
+    )
+
+    with h.CaseContext(deployed_vm, spec):
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        assert h.member_present(members, member), (
+            f"{member} not in {spec.alias} after loading the {label} feed: {members}"
+        )
+        assert not h.member_present(members, non_member), (
+            f"{non_member} was never in the {label} feed yet appears in {spec.alias}: {members}"
+        )
+
+
+@pytest.mark.smoke
+@pytest.mark.timeout(120)
+def test_unsupported_mime_feed_rejected(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """A body whose sniffed type is NOT allow-listed is refused, and no alias is created.
+
+    ``.xz`` is absent from ``$pfb['mime_types']`` by design. Both halves matter: the reject
+    line names the detected type, and the table stays absent — a partially imported list
+    would be a worse failure than a refusal, and only the second assertion catches it.
+    """
+    feed_url = mock_feeds.feed_url("ip_unsupported_xz.xz")
+    spec = h.IpCase(aliasname="smokemimexz", feed_url=feed_url, header="smokemimexz", family="v4")
+    marker = "reason=mime_not_allowed"
+
+    assert spec.alias not in h.pfctl_tables(deployed_vm), (
+        f"{spec.alias} present before the unsupported feed was ever loaded"
+    )
+    before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+    with h.CaseContext(deployed_vm, spec):
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert after > before, (
+            f"expected a NEW {marker!r} line after the .xz feed download; "
+            f"before={before} after={after}\n"
+            f"recent pfb_validate lines:\n{_recent_validate_lines(deployed_vm)}"
+        )
+        assert spec.alias not in h.pfctl_tables(deployed_vm), (
+            f"{spec.alias} exists after an unsupported-MIME rejection — a refused feed must "
+            f"never leave a table behind (a partial import is the failure this row guards)"
+        )

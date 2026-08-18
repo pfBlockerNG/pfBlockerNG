@@ -185,3 +185,17 @@ IDN/punycode line, a reused old-dialect `.txt`, and a TLD-enabled run — each
 delivered via `write_local_feed` (not a committed fixture here) because every case
 needs a per-run `unique_domain()` body, matching the established pattern for
 runtime-unique DNSBL bodies (`test_abp_perline_detection_in_plain_feed` et al.).
+
+## Structured-text shapes + the reject control (issue #2511)
+
+| File | Shape | Purpose |
+| --- | --- | --- |
+| `ip_json.json` | JSON document with an `entries` array | allow-listed `application/json`; addresses are scraped from the surrounding syntax |
+| `ip_csv.csv` | header row + `cidr,note` rows | allow-listed `text/csv` / `application/csv` |
+| `ip_xml.xml` | `<feed><ip>…</ip></feed>` | allow-listed `text/xml` |
+| `ip_ndjson.ndjson` | one JSON object per line | allow-listed `application/x-ndjson` |
+| `ip_unsupported_xz.xz` | xz stream over a plain list | NOT allow-listed — the reject control (`reason=mime_not_allowed`, no table created) |
+
+All five hold RFC 5737 documentation addresses only. Each import fixture pairs with a
+never-listed sibling in the test (`192.0.2.1xx`) so a row cannot pass by importing
+everything.
