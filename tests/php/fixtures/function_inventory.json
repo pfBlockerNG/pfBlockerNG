@@ -8879,6 +8879,26 @@
             }
         ]
     },
+    "pfb_pkg_ca_env_prefix": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "ca_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/etc/ssl/certs'"
+            },
+            {
+                "name": "ca_file",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/etc/ssl/cert.pem'"
+            }
+        ]
+    },
     "pfb_pkg_installed_name": {
         "returnsRef": false,
         "returnType": "string",
