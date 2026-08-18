@@ -45,6 +45,7 @@ ROOT="${PFB_TEST_ROOT}"
 LOG="${ROOT}/pkg-invocations.log"
 printf '%s\n' "$*" >> "${LOG}"
 printf '%s\n' "${SSL_CA_CERT_PATH-<unset>}" >> "${ROOT}/pkg-ca-path.log"
+printf '%s\n' "${SSL_CA_CERT_FILE-<unset>}" >> "${ROOT}/pkg-ca-file.log"
 _stub_byte="$(head -c 1 2>/dev/null)"
 printf '%s' "${_stub_byte}" >> "${ROOT}/pkg-stdin"
 
@@ -208,6 +209,11 @@ def _pkg_ca_path_capture(root: str) -> Path:
     return Path(root) / "pkg-ca-path.log"
 
 
+def _pkg_ca_file_capture(root: str) -> Path:
+    """One line per pkg call: the SSL_CA_CERT_FILE it saw, or <unset>."""
+    return Path(root) / "pkg-ca-file.log"
+
+
 def _write_pkg_stub(root: str) -> str:
     """Install the fake pkg(8) binary under root/bin/pkg; return its path."""
     bin_dir = os.path.join(root, "bin")
@@ -221,7 +227,7 @@ def _write_pkg_stub(root: str) -> str:
     # CREATE, never truncate: _run_install re-seeds the stub on every call (including
     # repeated calls on the same root for idempotency/resume tests), and the log must
     # accumulate across those calls for callers that diff before/after content.
-    for p in (_pkg_stdin_capture(root), _pkg_log(root), _pkg_ca_path_capture(root)):
+    for p in (_pkg_stdin_capture(root), _pkg_log(root), _pkg_ca_path_capture(root), _pkg_ca_file_capture(root)):
         if not p.exists():
             p.write_text("")
     return stub_path
@@ -321,6 +327,7 @@ def _run_install(
         **(extra_env or {}),
     }
     env.pop("SSL_CA_CERT_PATH", None)
+    env.pop("SSL_CA_CERT_FILE", None)
     if update_fails:
         env["PFB_STUB_UPDATE_FAIL"] = "1"
     if version_t_broken:
@@ -1103,6 +1110,9 @@ def test_absent_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
         assert seen, "no pkg calls were made — the run cannot prove the guard"
         assert set(seen) == {"<unset>"}, f"expected SSL_CA_CERT_PATH unset, saw {sorted(set(seen))}"
 
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert set(files) == {"<unset>"}, f"expected SSL_CA_CERT_FILE unset, saw {sorted(set(files))}"
+
 
 def test_ca_path_is_overridable() -> None:
     """PFB_SSL_CA_CERT_PATH overrides the default location."""
@@ -1116,3 +1126,90 @@ def test_ca_path_is_overridable() -> None:
         seen = _pkg_ca_path_capture(root).read_text().splitlines()
         assert seen, "no pkg calls were made — the run cannot prove the override"
         assert set(seen) == {str(override)}, f"override ignored, saw {sorted(set(seen))}"
+
+
+def _ca_bundle(root: str) -> Path:
+    return Path(root) / "etc" / "ssl" / "cert.pem"
+
+
+def test_ca_bundle_is_exported_alongside_the_path() -> None:
+    """The default bundle is exported too, so setting the path cannot shrink the store.
+
+    libfetch takes `SSL_CTX_load_verify_locations(file, path)` as soon as EITHER variable
+    is set, skipping `SSL_CTX_set_default_verify_paths()`. Exporting only the path would
+    therefore drop /etc/ssl/cert.pem from the store on a box that has no PKG_ENV pin (CE),
+    turning a working box into the very failure this change exists to fix whenever its
+    hashed directory is empty or stale. On Plus, PKG_ENV overwrites this value with
+    Netgate's bundle, which is exactly what should happen there.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        ca_dir = _ca_dir(root)
+        ca_dir.mkdir(parents=True)
+        bundle = _ca_bundle(root)
+        bundle.write_text("")
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert seen, "no pkg calls were made — the run cannot prove the export"
+        assert set(seen) == {str(bundle)}, (
+            f"expected every pkg call to export SSL_CA_CERT_FILE={bundle}, saw {sorted(set(seen))}"
+        )
+
+
+def test_absent_ca_bundle_leaves_ssl_ca_cert_file_unset() -> None:
+    """No bundle on the box -> nothing is exported (never point pkg at a missing file)."""
+    with tempfile.TemporaryDirectory() as root:
+        _ca_dir(root).mkdir(parents=True)
+        assert not _ca_bundle(root).exists()
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert seen, "no pkg calls were made — the run cannot prove the guard"
+        assert set(seen) == {"<unset>"}, f"expected SSL_CA_CERT_FILE unset, saw {sorted(set(seen))}"
+
+
+def test_ca_locations_survive_a_path_containing_a_space() -> None:
+    """Quoting holds: a location with a space reaches pkg intact, not word-split."""
+    with tempfile.TemporaryDirectory() as root:
+        spaced_dir = Path(root) / "ssl store" / "certs"
+        spaced_dir.mkdir(parents=True)
+        spaced_file = Path(root) / "ssl store" / "cert bundle.pem"
+        spaced_file.write_text("")
+
+        proc = _run_install(
+            root,
+            "stable",
+            extra_env={
+                "PFB_SSL_CA_CERT_PATH": str(spaced_dir),
+                "PFB_SSL_CA_CERT_FILE": str(spaced_file),
+            },
+        )
+        assert proc.returncode == 0, proc.stderr
+
+        paths = _pkg_ca_path_capture(root).read_text().splitlines()
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert paths and files, "no pkg calls were made — the run cannot prove the quoting"
+        assert set(paths) == {str(spaced_dir)}, f"path mangled, saw {sorted(set(paths))}"
+        assert set(files) == {str(spaced_file)}, f"file mangled, saw {sorted(set(files))}"
+
+
+def test_bundle_without_a_directory_exports_only_the_bundle() -> None:
+    """Only the bundle present -> only it is exported (the third guard combination)."""
+    with tempfile.TemporaryDirectory() as root:
+        bundle = _ca_bundle(root)
+        bundle.parent.mkdir(parents=True)
+        bundle.write_text("")
+        assert not _ca_dir(root).exists()
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        paths = _pkg_ca_path_capture(root).read_text().splitlines()
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert files, "no pkg calls were made — the run cannot prove the branch"
+        assert set(paths) == {"<unset>"}, f"expected SSL_CA_CERT_PATH unset, saw {sorted(set(paths))}"
+        assert set(files) == {str(bundle)}, f"expected the bundle exported, saw {sorted(set(files))}"
