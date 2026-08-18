@@ -268,10 +268,14 @@ function pfblockerng_sync_cron(
 		// non-event for Force Check. Both reach here; only $force_all separates them
 		// (pfblockerng.php:255 passes nothing, :304 passes TRUE).
 		//
-		// Scheduled tick: another pass holds the lock, this tick stood down with its
-		// durable pending occurrence intact and the next tick retries. Exiting 1 there
-		// tells cron the run FAILED and produces recurring MTA noise with nothing
-		// actionable in it, so report success.
+		// Unattended cron verb: another pass holds the lock, this run stood down with its
+		// durable pending occurrence intact, and the next tick retries. Nothing failed, so
+		// a hand-run `pfblockerng.php cron` or a third-party wrapper must not be told one
+		// did -- and rc=0 is what tests/smoke/test_feed_pass_lock.py has asserted for this
+		// path since ee8af959. No SCHEDULED job reaches this: the installed entry is
+		// `cron-tick` (pfblockerng.inc pfblockerng_configure_tick_cron()), which returns
+		// void and exits 0, and any legacy bare `pfblockerng.php cron` entry is removed
+		// there on every sync pass.
 		//
 		// Force Check: the operator asked for an update NOW and did not get one. That
 		// must stay observable (SyncCronFeedPassDeferralTest pins it).
