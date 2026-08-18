@@ -92,7 +92,7 @@ die() {
 # path-only would turn a working stock box into this very failure. On Plus, PKG_ENV
 # overwrites this value with Netgate's bundle, which is what should happen there.
 #
-# The bundle is checked with -s, not -f: load_verify_locations() reads the file eagerly and
+# The bundle is checked with -f AND -s, because -s alone is TRUE for a directory: load_verify_locations() reads the file eagerly and
 # abandons the path when that fails, so an empty or truncated bundle would take the whole
 # store down, while set_default_verify_paths() would have tolerated it.
 #
@@ -106,7 +106,7 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 # would have to be word-split to become separate env(1) operands, which breaks the moment
 # a location contains a space.
 _pkg() {
-    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
+    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] && [ -f "${PFB_SSL_CA_CERT_FILE}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
@@ -115,7 +115,7 @@ _pkg() {
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             "${PKG_BIN}" "$@" </dev/null
-    elif [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
+    elif [ -f "${PFB_SSL_CA_CERT_FILE}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
             "${PKG_BIN}" "$@" </dev/null
