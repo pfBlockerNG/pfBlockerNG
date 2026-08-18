@@ -788,6 +788,14 @@ jobs:
         # --no-rename plus an explicit mv, not --rename: dpkg-divert refuses to rename a
         # file out of an Essential package, and the diversion keeps a future tar upgrade
         # from overwriting the symlink.
+        #
+        # GNU tar moves to /usr/sbin/tar rather than going away, and the runner's PATH
+        # searches /usr/sbin before /usr/bin, so everything resolving `tar` by NAME still
+        # gets it — dpkg-deb passes the GNU-only --warning=no-timestamp, and actions/cache
+        # and the release tarball step read GNU archives. Hence the two checks: the
+        # absolute path the code under test hardcodes must be bsdtar, and the second is
+        # deliberately a BARE `tar`, because a name lookup is the only thing that proves
+        # what those callers get.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libarchive-tools

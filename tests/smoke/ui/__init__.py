@@ -7,7 +7,7 @@ ADR-04 smoke VM (``tests.smoke.conftest.smoke_vm``). Like the rest of
 only by the smoke/ui workflow, e.g.::
 
     uv sync --locked --group smoke
-    python -m pytest tests/smoke -m ui_render --override-ini="addopts="
+    uv run pytest tests/smoke -m ui_render --override-ini="addopts="
 
 Phase 1 (this commit) ships only the reusable authenticated session helper
 (:mod:`tests.smoke.ui.webui`) and a ``ui_render``-marked test that pins the

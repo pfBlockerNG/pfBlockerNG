@@ -135,48 +135,80 @@ def test_env_map_scanner_catches_a_planted_offence() -> None:
 # --------------------------------------------------------------------------- #
 
 
+# The arming match accepts ANY non-empty value because helpers.py arms on any non-empty
+# string (a workflow arming with "true" must not escape the gate), and the proof must be
+# an iptables INVOCATION rather than a substring — the gate's own diagnostic echo names
+# iptables in its error text. Both rules come from review mutations on PR #2262.
+_ARMING = re.compile(r"^\s*SMOKE_BLOCK_EGRESS:\s*['\"]?[^'\"\s#]")
+_IPTABLES_SETUP = (
+    ("installs iptables", re.compile(r"\bapt-get install\b.*\biptables\b")),
+    ("proves iptables usable", re.compile(r"\biptables\b.*-S\s+OUTPUT")),
+)
+_JOB_KEY = re.compile(r"^  ([A-Za-z0-9_.-]+):\s*$", re.MULTILINE)
+
+
+def _jobs(text: str) -> list[tuple[str, str]]:
+    """``(name, body)`` per job, sliced at the next job key. A file with no ``jobs:``
+    map is a composite action manifest, whose steps all run inside ONE caller job —
+    the whole file is that single unit."""
+    top = re.search(r"^jobs:\s*$", text, re.MULTILINE)
+    if top is None:
+        return [("<action steps>", text)]
+    body = text[top.end() :]
+    keys = list(_JOB_KEY.finditer(body))
+    return [
+        (key.group(1), body[key.end() : keys[i + 1].start() if i + 1 < len(keys) else len(body)])
+        for i, key in enumerate(keys)
+    ]
+
+
+def _egress_arming_jobs(text: str) -> list[tuple[str, list[str]]]:
+    """``(job, what that job never sets up)`` for every job arming the egress gate."""
+    return [
+        (name, [what for what, pattern in _IPTABLES_SETUP if not pattern.search(body)])
+        for name, body in _jobs(text)
+        if any(_ARMING.match(line) for line in body.splitlines())
+    ]
+
+
 def test_egress_gating_workflows_install_and_prove_iptables() -> None:
-    """Any workflow that arms the hermetic egress gate (sets SMOKE_BLOCK_EGRESS)
-    runs `sudo iptables` from tests/smoke/helpers.py, so the runner needs the
-    binary AND the privilege to use it (issue #2261). A runner missing either
-    fails every hermetic case halfway through the suite instead of at setup, so
-    the arming workflow must install iptables and prove it usable up front.
+    """Any job that arms the hermetic egress gate (sets SMOKE_BLOCK_EGRESS) runs
+    `sudo iptables` from tests/smoke/helpers.py, so the runner needs the binary AND
+    the privilege to use it (issue #2261). A runner missing either fails every
+    hermetic case halfway through the suite instead of at setup, so the arming job
+    must install iptables and prove it usable up front.
 
-    File-level association is enough: each arming workflow drives exactly one
-    smoke job today, and a false positive here is a loud test failure, not a
-    silent unprotected job.
-
-    Two scoping rules, both from review mutations on PR #2262: the arming match
-    accepts ANY non-empty value because helpers.py arms on any non-empty string
-    (a workflow arming with \"true\" must not escape the gate), and the proof must
-    be an iptables INVOCATION rather than a whole-file substring — the gate's own
-    diagnostic echo names iptables in its error text."""
-    arming = re.compile(r"^\s*SMOKE_BLOCK_EGRESS:\s*['\"]?[^'\"\s#]")
-    installs = re.compile(r"\bapt-get install\b.*\biptables\b")
-    proves = re.compile(r"\biptables\b.*-S\s+OUTPUT")
-    armed_files = 0
-    offenders: list[str] = []
+    Scoped per JOB, not per file: Actions jobs get their own runner and share no
+    state, so a sibling setup job installing iptables leaves the armed job exactly
+    as unprotected as no install at all."""
+    armed: list[tuple[str, list[str]]] = []
     for path in _workflow_files():
-        lines = path.read_text(encoding="utf-8").splitlines()
-        if not any(arming.match(line) for line in lines):
-            continue
-        armed_files += 1
-        missing = [
-            what
-            for what, pattern in (("installs iptables", installs), ("proves iptables usable", proves))
-            if not any(pattern.search(line) for line in lines)
+        armed += [
+            (f"{path.relative_to(ROOT)}:{job}", missing)
+            for job, missing in _egress_arming_jobs(path.read_text(encoding="utf-8"))
         ]
-        if missing:
-            offenders.append(f"{path.relative_to(ROOT)}: {', '.join(missing)}")
-    assert armed_files >= 1, (
-        "no workflow sets SMOKE_BLOCK_EGRESS any more — either the egress gate "
+    assert armed, (
+        "no workflow job sets SMOKE_BLOCK_EGRESS any more — either the egress gate "
         "moved (update this test) or it was silently dropped (that is a bug)"
     )
+    offenders = [f"{where}: {', '.join(missing)}" for where, missing in armed if missing]
     assert not offenders, (
-        "a workflow arming SMOKE_BLOCK_EGRESS must install iptables and prove it "
-        "usable before the suite runs, or block_egress fails every hermetic case "
-        "mid-run:\n  " + "\n  ".join(offenders)
+        "a job arming SMOKE_BLOCK_EGRESS must install iptables and prove it usable "
+        "in that same job, or block_egress fails every hermetic case mid-run:\n  " + "\n  ".join(offenders)
     )
+
+
+def test_the_egress_scan_reads_only_the_arming_job() -> None:
+    """Vacuity guard: the setup has to sit in the armed job itself. A two-job
+    workflow whose OTHER job installs and probes iptables is reported, and moving
+    the same two steps into the armed job clears it."""
+    setup = "      - run: sudo apt-get install -y iptables\n      - run: sudo iptables -w -S OUTPUT\n"
+    armed = '    steps:\n      - run: pytest\n        env:\n          SMOKE_BLOCK_EGRESS: "1"\n'
+    elsewhere = f"jobs:\n  setup:\n    steps:\n{setup}  smoke:\n{armed}"
+    assert _egress_arming_jobs(elsewhere) == [("smoke", ["installs iptables", "proves iptables usable"])]
+    assert _egress_arming_jobs(f"jobs:\n  setup:\n    steps:\n      - run: true\n  smoke:\n{armed}{setup}") == [
+        ("smoke", [])
+    ]
 
 
 # --------------------------------------------------------------------------- #
