@@ -34,6 +34,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_pkgconf_ca_state')]
 #[CoversFunction('pfb_pkgconf_ca_sync')]
 #[CoversFunction('pfb_pkgconf_ca_tick')]
+#[CoversFunction('pfb_pkgconf_ca_apply')]
+#[CoversFunction('pfb_pkgconf_dir_populated')]
 final class PkgConfCaPatchTest extends TestCase
 {
 	private const REAL_CA_DIR = '/etc/ssl/certs';
@@ -144,6 +146,38 @@ final class PkgConfCaPatchTest extends TestCase
 	}
 
 	// -------------------------------------------------------------------
+	// pfb_pkgconf_dir_populated()
+	// -------------------------------------------------------------------
+
+	/**
+	 * N-dotfile-guard: the docblock says the guard exists because an empty hash dir makes
+	 * the patch "a no-op that merely LOOKS fixed" -- but a directory holding only a dotfile
+	 * (e.g. '.DS_Store') is equally a no-op, and the old scandir()-based count (excluding
+	 * only '.'/'..') wrongly treated it as populated (issue #2518 fix round).
+	 */
+	public function testDirPopulatedFalseWhenOnlyDotfilesPresent(): void
+	{
+		$dir = $this->root . '/dotfiles_only';
+		mkdir($dir, 0o755, true);
+		file_put_contents($dir . '/.DS_Store', '');
+		$this->assertFalse(pfb_pkgconf_dir_populated($dir));
+	}
+
+	public function testDirPopulatedTrueWithNonDotEntryAmongDotfiles(): void
+	{
+		$dir = $this->root . '/mixed_dotfiles';
+		mkdir($dir, 0o755, true);
+		file_put_contents($dir . '/.DS_Store', '');
+		file_put_contents($dir . '/abcd1234.0', '');
+		$this->assertTrue(pfb_pkgconf_dir_populated($dir));
+	}
+
+	public function testDirPopulatedFalseOnEmptyDir(): void
+	{
+		$this->assertFalse(pfb_pkgconf_dir_populated($this->emptyDir()));
+	}
+
+	// -------------------------------------------------------------------
 	// pfb_pkgconf_ca_needed()
 	// -------------------------------------------------------------------
 
@@ -216,6 +250,95 @@ final class PkgConfCaPatchTest extends TestCase
 		$this->assertFalse(pfb_pkgconf_ca_needed($text));
 	}
 
+	/**
+	 * N-nested-brace: a nested column-0 '}' inside the block (e.g. a sub-object) must not
+	 * let the naive "first '}' after the opener" win as the close -- that would splice our
+	 * line into the WRONG (inner) object even though libucl treats the whole thing as one
+	 * PKG_ENV block. Refuse the shape outright rather than guess which brace is the real
+	 * close (issue #2518 fix round).
+	 */
+	public function testNeededFalseWithNestedColumnZeroBrace(): void
+	{
+		$text = "PKG_ENV {\n\tSSL_CA_CERT_FILE=/a\n\tOTHER = {\n}\n}\n";
+		$this->assertFalse(pfb_pkgconf_ca_needed($text));
+	}
+
+	// -------------------------------------------------------------------
+	// pfb_pkgconf_block_bounds() -- sibling top-level blocks (issue #2521)
+	//
+	// A previous round of this fix took PKG_ENV's close as the LAST '}' line after the
+	// opener, meaning to detect a nested sub-object's own close -- but that rule mistakes a
+	// DIFFERENT, later top-level braced object in the same file for PKG_ENV's own close, and
+	// disagreed with the shell hook (_pkgconf_ca_reapply() in
+	// scripts/rc.d/pfblockerng_repo_generate.sh), which correctly takes the FIRST '}' after
+	// the opener. These rows pin the two-implementations-agree shape directly: a sibling
+	// block elsewhere in the file must never stop PKG_ENV's own close from being recognised.
+	// -------------------------------------------------------------------
+
+	private function twoBlocksText(): string
+	{
+		return "ABI=FreeBSD:16:amd64\nPKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n}\nOTHER_BLOCK {\n\tFOO=bar\n}\n";
+	}
+
+	private function twoBlocksPatchedText(): string
+	{
+		return "ABI=FreeBSD:16:amd64\nPKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n\tSSL_CA_CERT_PATH="
+			. self::REAL_CA_DIR . "\n}\nOTHER_BLOCK {\n\tFOO=bar\n}\n";
+	}
+
+	public function testNeededTrueWithSiblingBlockAfterPkgEnv(): void
+	{
+		$this->assertTrue(pfb_pkgconf_ca_needed($this->twoBlocksText()));
+	}
+
+	public function testAddWithSiblingBlockAfterPkgEnvInsertsBeforeOwnCloseOtherBlockUnchanged(): void
+	{
+		$patched = pfb_pkgconf_ca_add($this->twoBlocksText(), self::REAL_CA_DIR);
+		$this->assertSame($this->twoBlocksPatchedText(), $patched);
+	}
+
+	public function testRemoveWithSiblingBlockAfterPkgEnvRoundTripsToOriginalBytes(): void
+	{
+		$original = $this->twoBlocksText();
+		$added = pfb_pkgconf_ca_add($original, self::REAL_CA_DIR);
+		$this->assertNotSame('', $added);
+		$removed = pfb_pkgconf_ca_remove($added, self::REAL_CA_DIR);
+		$this->assertSame($original, $removed);
+	}
+
+	public function testNeededTrueWithThreeTopLevelBlocksPkgEnvFirst(): void
+	{
+		$text = "ABI=FreeBSD:16:amd64\nPKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n}\n"
+			. "OTHER_BLOCK {\n\tFOO=bar\n}\nTHIRD_BLOCK {\n\tBAZ=qux\n}\n";
+		$this->assertTrue(pfb_pkgconf_ca_needed($text));
+	}
+
+	public function testAddWithThreeTopLevelBlocksPkgEnvFirstInsertsBeforeOwnCloseSiblingsUnchanged(): void
+	{
+		$text = "ABI=FreeBSD:16:amd64\nPKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n}\n"
+			. "OTHER_BLOCK {\n\tFOO=bar\n}\nTHIRD_BLOCK {\n\tBAZ=qux\n}\n";
+		$expected = "ABI=FreeBSD:16:amd64\nPKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n\tSSL_CA_CERT_PATH="
+			. self::REAL_CA_DIR . "\n}\nOTHER_BLOCK {\n\tFOO=bar\n}\nTHIRD_BLOCK {\n\tBAZ=qux\n}\n";
+		$this->assertSame($expected, pfb_pkgconf_ca_add($text, self::REAL_CA_DIR));
+	}
+
+	public function testNeededTrueWithThreeTopLevelBlocksPkgEnvMiddle(): void
+	{
+		$text = "ABI=FreeBSD:16:amd64\nFIRST_BLOCK {\n\tALPHA=1\n}\n"
+			. "PKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n}\nTHIRD_BLOCK {\n\tBAZ=qux\n}\n";
+		$this->assertTrue(pfb_pkgconf_ca_needed($text));
+	}
+
+	public function testAddWithThreeTopLevelBlocksPkgEnvMiddleInsertsBeforeOwnCloseSiblingsUnchanged(): void
+	{
+		$text = "ABI=FreeBSD:16:amd64\nFIRST_BLOCK {\n\tALPHA=1\n}\n"
+			. "PKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n}\nTHIRD_BLOCK {\n\tBAZ=qux\n}\n";
+		$expected = "ABI=FreeBSD:16:amd64\nFIRST_BLOCK {\n\tALPHA=1\n}\n"
+			. "PKG_ENV {\n\tSSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem\n\tSSL_CA_CERT_PATH=" . self::REAL_CA_DIR
+			. "\n}\nTHIRD_BLOCK {\n\tBAZ=qux\n}\n";
+		$this->assertSame($expected, pfb_pkgconf_ca_add($text, self::REAL_CA_DIR));
+	}
+
 	// -------------------------------------------------------------------
 	// pfb_pkgconf_ca_add()
 	// -------------------------------------------------------------------
@@ -242,6 +365,11 @@ final class PkgConfCaPatchTest extends TestCase
 			'brace'             => ['/etc/ssl/certs}'],
 			'hash comment'      => ['/etc/ssl/certs#c'],
 			'quote'             => ['/etc/ssl/"certs"'],
+			// N-regex-newline: the old '#^/[A-Za-z0-9._/+-]+$#' allowlist used '$', which in
+			// PHP matches immediately before a FINAL trailing newline, not only true string
+			// end -- so a path ending in "\n" was wrongly ACCEPTED despite the docblock
+			// promising no newline ever survives (issue #2518 fix round).
+			'trailing newline'  => ["/etc/ssl/certs\n"],
 		];
 	}
 
@@ -420,6 +548,26 @@ final class PkgConfCaPatchTest extends TestCase
 		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file));
 	}
 
+	/**
+	 * N-sync-false-on-noop: the old code checked the CA dir BEFORE discovering the patch was
+	 * a no-op, so an already-patched file with an empty CA dir wrongly returned FALSE -- the
+	 * admin would be told pfBlockerNG "could not update" a file that already exactly matched
+	 * what was requested. The dir guard must only gate an ACTUAL write (issue #2518 fix round).
+	 */
+	public function testSyncConsentTrueOnAlreadyPatchedFileWithEmptyCaDirStillOk(): void
+	{
+		$file = $this->tempFile($this->fixture('plus_patched.conf'));
+		$inodeBefore = fileinode($file);
+
+		$this->assertTrue(
+			pfb_pkgconf_ca_sync(TRUE, $file, $this->emptyDir()),
+			'nothing needs to change -- an empty/unusable CA dir must not matter when no write is required'
+		);
+		clearstatcache(true, $file);
+		$this->assertSame($inodeBefore, fileinode($file), 'no write means no rename, so the inode must be unchanged');
+		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file));
+	}
+
 	public function testSyncConsentFalseOnPatchedFileRestoresPlusPinned(): void
 	{
 		$file = $this->tempFile($this->fixture('plus_patched.conf'));
@@ -563,5 +711,130 @@ final class PkgConfCaPatchTest extends TestCase
 
 		$this->assertFileDoesNotExist($this->sentinelPath());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	/**
+	 * B2 (case B, the "worse" bug): consent ON but the re-apply cannot land (empty CA hash
+	 * dir -- the exact case the page's own error text names) must still notify. The old code
+	 * unconditionally cleared the sentinel and returned right after attempting the sync,
+	 * regardless of whether it actually succeeded, so this path stayed silent forever.
+	 */
+	public function testTickConsentOnSyncFailsStillNotifies(): void
+	{
+		config_set_path(self::CONSENT_PATH, 'on');
+		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
+
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->emptyDir());
+
+		$this->assertCount(
+			1,
+			$GLOBALS['pfb_test_file_notices'],
+			'consent is on but the sync could not land -- the box is still exactly as exposed as before'
+		);
+		$this->assertSame(
+			$this->fixture('plus_pinned.conf'),
+			file_get_contents($file),
+			'a failed sync must never write'
+		);
+		$this->assertFileExists($this->sentinelPath());
+	}
+
+	/**
+	 * B2 (case A / scope item 4 "the notice should reappear"): the sentinel must be keyed on
+	 * a signature of the FILE's own identity (inode+mtime+size), not mere presence. An
+	 * out-of-band rewrite (pfSense-repo-setup wiping and regenerating the file) that lands
+	 * back in the identical 'needed' shape is a genuinely NEW instance of the problem and
+	 * must re-notify, even though the raw state string ('needed') never changed across the
+	 * two ticks.
+	 */
+	public function testTickReNotifiesAfterFileRewrittenEvenThoughStateStaysNeeded(): void
+	{
+		config_set_path(self::CONSENT_PATH, '');
+		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
+
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 1: exactly one notice');
+
+		// Simulate pfSense-repo-setup wiping and rewriting the file between ticks: same
+		// recognised ('needed') shape, but a genuinely different file (different size, so
+		// the signature differs regardless of inode/mtime reuse quirks on any filesystem).
+		unlink($file);
+		file_put_contents($file, "# repo-setup rewrite\n" . $this->fixture('plus_pinned.conf'));
+
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		$this->assertCount(
+			2,
+			$GLOBALS['pfb_test_file_notices'],
+			'tick 2: the file was rewritten out from under us -- the sentinel must not dedupe a fresh problem instance'
+		);
+	}
+
+	// -------------------------------------------------------------------
+	// pfb_pkgconf_ca_apply() -- N-revoke-nag
+	// -------------------------------------------------------------------
+
+	/**
+	 * N-revoke-nag: after an admin explicitly unticks the box and Saves, the very next cron
+	 * tick must not immediately nag them to re-enable the thing they just turned off.
+	 * pfb_pkgconf_ca_apply() records the resulting file signature as already-notified on an
+	 * explicit revoke, so tick()'s dedupe absorbs it.
+	 */
+	public function testApplyOnExplicitRevokeSuppressesTheVeryNextTickNotice(): void
+	{
+		config_set_path(self::CONSENT_PATH, 'on');
+		$file = $this->tempFile($this->fixture('plus_patched.conf'));
+
+		$ok = pfb_pkgconf_ca_apply('', $file, self::REAL_CA_DIR);
+		$this->assertTrue($ok, 'an explicit revoke against a patched file must succeed');
+		$this->assertSame($this->fixture('plus_pinned.conf'), file_get_contents($file));
+
+		config_set_path(self::CONSENT_PATH, '');
+		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+
+		$this->assertSame(
+			[],
+			$GLOBALS['pfb_test_file_notices'],
+			'the admin just explicitly turned this off from the Software page -- the very next tick must stay quiet'
+		);
+	}
+
+	/**
+	 * The revoke-nag suppression must not be permanent: a LATER genuine change (the file
+	 * gets rewritten again) still produces a fresh signature and notifies normally.
+	 */
+	public function testApplyRevokeSuppressionDoesNotSurviveALaterFileRewrite(): void
+	{
+		config_set_path(self::CONSENT_PATH, 'on');
+		$file = $this->tempFile($this->fixture('plus_patched.conf'));
+
+		$ok = pfb_pkgconf_ca_apply('', $file, self::REAL_CA_DIR);
+		$this->assertTrue($ok);
+
+		config_set_path(self::CONSENT_PATH, '');
+		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'precondition: the revoke itself must stay quiet');
+
+		unlink($file);
+		file_put_contents($file, "# repo-setup rewrite\n" . $this->fixture('plus_pinned.conf'));
+		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+
+		$this->assertCount(
+			1,
+			$GLOBALS['pfb_test_file_notices'],
+			'a later out-of-band rewrite is a genuinely new problem instance and must notify'
+		);
+	}
+
+	public function testApplySkipsSyncOnUnrecognisedPkgConf(): void
+	{
+		$file = $this->tempFile($this->fixture('ce_unpinned.conf'));
+		$before = file_get_contents($file);
+
+		// A CA path that would make pfb_pkgconf_ca_sync() itself return FALSE if it ran --
+		// proves the early skip, not a coincidental success.
+		$ok = pfb_pkgconf_ca_apply('on', $file, $this->emptyDir());
+
+		$this->assertTrue($ok, 'a CE box (no recognised PKG_ENV block) must never fail here');
+		$this->assertSame($before, file_get_contents($file), 'an unrecognised pkg.conf must never be written');
 	}
 }

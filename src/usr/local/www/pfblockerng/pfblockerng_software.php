@@ -71,10 +71,6 @@ $pfb_sw_record	= ($pfb_sw_pkgname !== '')
 	: null;
 $pfb_sw_channel	= pfb_channel_for_install($pfb_sw_repo, $pfb_sw_pkgname, $pfb_sw_record);
 
-// The "Check for new versions" setting (default ENABLED — the registry default since
-// issue #1887). The accessor reads the gateway itself; no raw value handling here.
-$pfb_sw_check	= pfb_software_check_enabled();
-
 // Which (POST-guarded) action was requested. Only the cache-refreshing Check runs here now;
 // Update/Uninstall are links (or disabled CLI help), not POST actions.
 $pfb_sw_action = '';
@@ -92,20 +88,23 @@ $input_errors = array();
 if ($_POST && isset($_POST['save'])) {
 	PfbConfig::write('gen/pfb_software_check', pfb_filter($_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '');
 
-	// issue #2518: consent to the pkg.conf CA-path patch. pfb_pkgconf_ca_save() filters the
-	// posted token, persists it, and reacts to the new state -- the whole save-and-sync
-	// behaviour lives there (not here) so PHPUnit can drive it directly instead of replaying
-	// it (STEP C fix round finding 1).
-	$pfb_ca_save = pfb_pkgconf_ca_save($_POST);
+	// issue #2518 B1/N-write-order: pfb_pkgconf_ca_save() ONLY persists the posted consent
+	// token (into the in-memory config array) -- it never touches pkg.conf. The flush below
+	// (write_config()) must land BEFORE pkg.conf is ever mutated on the admin's behalf:
+	// consent is this feature's security boundary, and a crash between patching pkg.conf and
+	// flushing config.xml would otherwise leave the box patched with no recorded consent that
+	// survives a reboot. pfb_pkgconf_ca_apply() (the sync half) runs only after the flush.
+	$pfb_ca_token = pfb_pkgconf_ca_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');
 
-	// The consent flag itself is already persisted above, regardless of what happens next --
-	// it is the admin's decision, and pfb_pkgconf_ca_tick() retries the file patch on every
-	// boot and cron pass. So a sync failure here (e.g. the CA certificate hash directory is
-	// still missing or empty because `certctl rehash` has not run) is not fatal, but the
-	// admin needs to be told now instead of the page silently redirecting as if the file
-	// already matched the requested state.
-	if ($pfb_ca_save['ok']) {
+	// The consent flag itself is already persisted (and flushed) above, regardless of what
+	// happens next -- it is the admin's decision, and pfb_pkgconf_ca_tick() retries the file
+	// patch on every boot and cron pass. So a sync failure here (e.g. the CA certificate hash
+	// directory is still missing or empty because `certctl rehash` has not run) is not fatal,
+	// but the admin needs to be told now instead of the page silently redirecting as if the
+	// file already matched the requested state.
+	$pfb_ca_ok = pfb_pkgconf_ca_apply($pfb_ca_token);
+	if ($pfb_ca_ok) {
 		header('Location: /pfblockerng/pfblockerng_software.php');
 		exit;
 	}
@@ -114,6 +113,12 @@ if ($_POST && isset($_POST['save'])) {
 		. '`certctl rehash` from the shell). pfBlockerNG will retry automatically at the next '
 		. 'boot or scheduled run.';
 }
+
+// N-stale-checkbox (issue #2518 fix round): read AFTER the save block above, not before -- a
+// CA-sync failure re-renders this SAME request (no redirect), and the admin's just-posted
+// 'pfb_software_check' choice must be reflected on that re-render, not the value from before
+// this Save.
+$pfb_sw_check	= pfb_software_check_enabled();
 
 // "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
 // bypasses the "Check for new versions" enable-gate so a one-off check always works.
@@ -233,6 +238,18 @@ if ($pfb_ca_state !== '') {
 		$pfb_ca_help = 'The SSL_CA_CERT_PATH line is currently present in ' . PFB_PKG_CONF
 			. '\'s PKG_ENV block, so pkg can reach pfBlockerNG\'s repository (and other '
 			. 'third-party repositories) over TLS. ';
+	} elseif ($pfb_ca_state === 'needed' && $pfb_ca_consent) {
+		// N-help-contradiction (issue #2518 fix round): consent is ON but the line could not
+		// (yet) be applied -- most likely the CA certificate hash directory is still missing
+		// or empty, or this render landed in the short window after pfSense-repo-setup wiped
+		// the file and before the next boot/cron re-apply. Never show the "checking this box"
+		// copy below next to an already-checked box.
+		$pfb_ca_help = 'Consent is on, but pfBlockerNG has not been able to add the '
+			. 'SSL_CA_CERT_PATH line to ' . PFB_PKG_CONF . ' yet -- most likely its CA '
+			. 'certificate hash directory is still missing or empty (try running '
+			. '<code>certctl rehash</code> from the shell), or pfSense-repo-setup rewrote the '
+			. 'file since the last boot or scheduled pass. pfBlockerNG will keep retrying '
+			. 'automatically. ';
 	} else {
 		$pfb_ca_help = 'Right now, pkg on this firewall trusts only Netgate\'s own certificate '
 			. 'bundle, so it cannot install or update pfBlockerNG -- or any other third-party '
@@ -258,6 +275,14 @@ if ($pfb_ca_state !== '') {
 		'on'
 	))->setHelp($pfb_ca_help);
 	$form->add($section);
+
+	// B1 (issue #2518 fix round): a marker recording that this section was ACTUALLY
+	// rendered, so pfb_pkgconf_ca_save() can tell "the admin unticked the box" apart from
+	// "the section was never shown" -- an absent 'pfb_pkg_ca_consent' POST key is ambiguous
+	// between the two, and guessing Off for the latter would silently revoke a previously
+	// granted consent. Global (not inside the section) so it always posts alongside the
+	// checkbox regardless of any future markup change to the section itself.
+	$form->addGlobal(new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1'));
 }
 
 $section = new Form_Section('Actions');
@@ -300,6 +325,16 @@ if ($pfb_sw_pkgmgr) {
 	$pfb_sw_update_help = 'Package Manager cannot see this origin. To update, run <code>pkg install -y -r '
 		. htmlspecialchars($pfb_sw_cli_repo) . ' ' . htmlspecialchars($pfb_sw_cli_pkg)
 		. '</code> from the shell.';
+	if ($pfb_ca_state === 'needed') {
+		// N-pkg-install-help (issue #2518 fix round): on Plus with the CA pin still in
+		// place, that exact command dies with a TLS error -- point the admin at the
+		// consent control above instead of leaving them to discover that themselves. The
+		// 'pkg delete' help below is deliberately left untouched: it is a local operation
+		// the CA pin never affects (issue #2518's second comment ruling).
+		$pfb_sw_update_help .= ' pkg on this firewall currently trusts only Netgate\'s CA '
+			. 'bundle, so that command will fail with a TLS error until you enable "Allow '
+			. 'pfBlockerNG to manage the pkg.conf CA path" above.';
+	}
 }
 $section->addInput(new Form_StaticText(null, $btn_update))
 	->setHelp($pfb_sw_update_help);

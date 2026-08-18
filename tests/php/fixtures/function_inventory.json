@@ -9032,6 +9032,33 @@
             }
         ]
     },
+    "pfb_pkgconf_ca_apply": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "token",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "file",
+                "byRef": false,
+                "variadic": false,
+                "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "ca_path",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/etc/ssl/certs'"
+            }
+        ]
+    },
     "pfb_pkgconf_ca_clear_notice_sentinel": {
         "returnsRef": false,
         "returnType": "void",
@@ -9055,6 +9082,19 @@
         "returnType": "string",
         "params": []
     },
+    "pfb_pkgconf_ca_notice_signature": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "file",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_pkgconf_ca_remove": {
         "returnsRef": false,
         "returnType": "string",
@@ -9077,7 +9117,7 @@
     },
     "pfb_pkgconf_ca_save": {
         "returnsRef": false,
-        "returnType": "array",
+        "returnType": "string",
         "params": [
             {
                 "name": "post",
@@ -9085,20 +9125,6 @@
                 "variadic": false,
                 "type": "array",
                 "default": null
-            },
-            {
-                "name": "file",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            },
-            {
-                "name": "ca_path",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/etc/ssl/certs'"
             }
         ]
     },
