@@ -91,6 +91,7 @@ name="pfblockerng_repo_generate"
 : "${PFB_PKG_CONF:=/usr/local/etc/pkg.conf}"
 : "${PFB_CONFIG_XML:=/cf/conf/config.xml}"
 : "${PFB_SSL_CA_CERT_PATH:=/etc/ssl/certs}"
+: "${PFB_PKG_DIRTY:=/var/run/pkg.dirty}"
 
 # The catalog base. NOT defaulted into PFB_BASE_URL: an explicitly exported
 # PFB_BASE_URL (install.sh, the smoke guests, a fork bootstrap) must stay
@@ -269,6 +270,7 @@ _regen_one() {
 # PHP side, not by this hook running backwards.
 _pkgconf_ca_reapply() {
     grep -q 'Plus' "${PFB_PRODUCT_LABEL}" 2>/dev/null || return 0
+    [ -e "${PFB_PKG_DIRTY}" ] && return 0
     # Consent gate, fail-closed. pfb_pkg_ca_consent is a registered config field
     # read on the PHP side at installedpackages/pfblockerng/config/0 --
     # PfbConfig::read('gen/pfb_pkg_ca_consent') -- meaning the element must be a
@@ -456,6 +458,8 @@ _pkgconf_ca_reapply() {
     #     restores that exact newline-less state when the original had it
     #     (PHP round-trips the input bytes exactly; see
     #     testAddPatchesWhenFinalBraceHasNoTrailingNewline).
+    _pcr_original_sum="$(cksum < "${PFB_PKG_CONF}" 2>/dev/null)" \
+        || { unset _pcr_original_sum; return 0; }
     _pcr_tmp="${PFB_PKG_CONF}.tmp"
     _pcr_had_no_trailing_nl=0
     [ -n "$(tail -c1 "${PFB_PKG_CONF}" 2>/dev/null)" ] && _pcr_had_no_trailing_nl=1
@@ -468,6 +472,16 @@ _pkgconf_ca_reapply() {
         if [ "${_pcr_had_no_trailing_nl}" -eq 1 ]; then
             printf '%s' "$(cat "${_pcr_tmp}" 2>/dev/null)" > "${_pcr_tmp}" 2>/dev/null
         fi
+        if [ -e "${PFB_PKG_DIRTY}" ]; then
+            _pcr_live_sum=''
+        else
+            _pcr_live_sum="$(cksum < "${PFB_PKG_CONF}" 2>/dev/null)" || _pcr_live_sum=''
+        fi
+        if [ -z "${_pcr_live_sum}" ] || [ "${_pcr_live_sum}" != "${_pcr_original_sum}" ]; then
+            rm -f "${_pcr_tmp}" 2>/dev/null
+            unset _pcr_tmp _pcr_had_no_trailing_nl _pcr_original_sum _pcr_live_sum
+            return 0
+        fi
         if mv "${_pcr_tmp}" "${PFB_PKG_CONF}" 2>/dev/null; then
             printf '[%s] INFO: patched %s with the consented SSL_CA_CERT_PATH\n' "${name}" "${PFB_PKG_CONF}" >&2
         else
@@ -478,7 +492,7 @@ _pkgconf_ca_reapply() {
         rm -f "${_pcr_tmp}" 2>/dev/null
         printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_PKG_CONF}" >&2
     fi
-    unset _pcr_tmp _pcr_had_no_trailing_nl
+    unset _pcr_tmp _pcr_had_no_trailing_nl _pcr_original_sum _pcr_live_sum
     return 0
 }
 
