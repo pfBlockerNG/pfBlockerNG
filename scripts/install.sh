@@ -29,8 +29,8 @@
 #   PFB_BASE_URL      catalog base (default: https://pfblockerng.github.io/pkg)
 #   PFB_SSL_CA_CERT_PATH  CA hash dir exported to pkg (default: <root>/etc/ssl/certs)
 #   PFB_SSL_CA_CERT_FILE  CA bundle exported to pkg (default: <root>/etc/ssl/cert.pem)
-#                         Exported only if present (dir non-missing, bundle non-empty);
-#                         set either to "" to opt that half out.
+#                         Exported only when the path is a directory and the bundle is a
+#                         non-empty regular file; set either to "" to opt that half out.
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
@@ -92,9 +92,10 @@ die() {
 # path-only would turn a working stock box into this very failure. On Plus, PKG_ENV
 # overwrites this value with Netgate's bundle, which is what should happen there.
 #
-# The bundle is checked with -f AND -s, because -s alone is TRUE for a directory: load_verify_locations() reads the file eagerly and
-# abandons the path when that fails, so an empty or truncated bundle would take the whole
-# store down, while set_default_verify_paths() would have tolerated it.
+# The bundle is checked with -f AND -s. load_verify_locations() reads the file eagerly and
+# abandons the path when that read fails, so an empty or truncated bundle would take the
+# whole store down with it, a state set_default_verify_paths() would have tolerated. -s
+# alone is not enough because it is TRUE for a directory, whose size is nonzero.
 #
 # Setting either variable to the empty string opts that half out (hence `-`, not `:-`).
 # Opting the BUNDLE out on a box with no PKG_ENV pin leaves the path-only store this code
@@ -106,7 +107,8 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 # would have to be word-split to become separate env(1) operands, which breaks the moment
 # a location contains a space.
 _pkg() {
-    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] && [ -f "${PFB_SSL_CA_CERT_FILE}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
+    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] &&
+        [ -f "${PFB_SSL_CA_CERT_FILE}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
