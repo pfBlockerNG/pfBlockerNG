@@ -3002,11 +3002,12 @@ def test_software_page_hidden_when_override_forces_off(
 # pfb_pkgconf_ca_state() finds a recognised PKG_ENV pin in the guest's REAL
 # /usr/local/etc/pkg.conf (a CE box, or any shape the parser does not recognise,
 # must see nothing). The smoke VMs are CE, so their shipped pkg.conf carries no
-# PKG_ENV block by default (the negative/absent case below IS that default) —
-# the positive case seeds a real block via pkg_conf_ca_block_seeded().
+# PKG_ENV block by default (the negative/absent case below IS that default).
+# The positive context temporarily seeds both the Plus product label and its pin.
 # --------------------------------------------------------------------------- #
 
 _PKG_CONF_PATH = "/usr/local/etc/pkg.conf"
+_PRODUCT_LABEL_PATH = "/etc/product_label"
 # The GUEST's own real cert bundle -- never a Netgate path (that file does not
 # exist off-Plus, and pointing pkg at a missing bundle would break pkg's own TLS
 # on this guest for the rest of the test run). Matches PFB_SSL_CA_CERT_FILE's
@@ -3033,31 +3034,39 @@ def _overwrite_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float =
 
 @contextmanager
 def pkg_conf_ca_block_seeded(vm: SmokeVM) -> Iterator[None]:
-    """Append a well-formed, unpatched ``PKG_ENV { SSL_CA_CERT_FILE=... }`` block to the
-    guest's REAL ``/usr/local/etc/pkg.conf`` (shape mirrors
-    ``tests/fixtures/pkg_conf/plus_pinned.conf``, but pointed at the GUEST's own real CA
-    bundle so `pkg` keeps working on this guest throughout the test), then restore the file
-    BYTE-FOR-BYTE in a ``finally`` -- and fail loudly if that restore did not take, so a
-    broken seed/restore can never leak a mutated pkg.conf into a later test on the
-    session-scoped VM.
+    """Temporarily give the CE smoke guest the two facts this feature requires on Plus:
+    a Plus product label and a well-formed, unpatched ``PKG_ENV`` block in the guest's real
+    ``pkg.conf``. Both files are restored byte-for-byte in ``finally`` and verified, so the
+    simulated edition and pin cannot leak into later tests.
     """
     original = vm.ssh("cat", _PKG_CONF_PATH)
     assert original.returncode == 0, (
         f"failed to read {_PKG_CONF_PATH} before seeding (rc={original.returncode}): {original.stderr.strip()!r}"
     )
     original_content = original.stdout
+    original_label = vm.ssh("cat", _PRODUCT_LABEL_PATH)
+    assert original_label.returncode == 0, (
+        f"failed to read {_PRODUCT_LABEL_PATH} before seeding "
+        f"(rc={original_label.returncode}): {original_label.stderr.strip()!r}"
+    )
     seeded_content = (
         original_content.rstrip("\n") + "\nPKG_ENV {\n" + f"\tSSL_CA_CERT_FILE={_PKG_CONF_GUEST_CA_FILE}\n" + "}\n"
     )
+    _overwrite_vm_file(vm, _PRODUCT_LABEL_PATH, "pfSense Plus\n")
     _overwrite_vm_file(vm, _PKG_CONF_PATH, seeded_content)
     try:
         yield
     finally:
         _overwrite_vm_file(vm, _PKG_CONF_PATH, original_content)
+        _overwrite_vm_file(vm, _PRODUCT_LABEL_PATH, original_label.stdout)
         restored = vm.ssh("cat", _PKG_CONF_PATH)
+        restored_label = vm.ssh("cat", _PRODUCT_LABEL_PATH)
         assert restored.returncode == 0 and restored.stdout == original_content, (
             f"failed to restore {_PKG_CONF_PATH} to its original content after seeding -- "
             "guest pkg.conf may be left mutated for later tests"
+        )
+        assert restored_label.returncode == 0 and restored_label.stdout == original_label.stdout, (
+            f"failed to restore {_PRODUCT_LABEL_PATH} after Plus simulation"
         )
 
 

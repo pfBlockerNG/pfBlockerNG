@@ -268,6 +268,7 @@ _regen_one() {
 # previously-applied line anyway — revocation is handled synchronously by the
 # PHP side, not by this hook running backwards.
 _pkgconf_ca_reapply() {
+    grep -q 'Plus' "${PFB_PRODUCT_LABEL}" 2>/dev/null || return 0
     # Consent gate, fail-closed. pfb_pkg_ca_consent is a registered config field
     # read on the PHP side at installedpackages/pfblockerng/config/0 --
     # PfbConfig::read('gen/pfb_pkg_ca_consent') -- meaning the element must be a
@@ -331,10 +332,12 @@ _pkgconf_ca_reapply() {
                     print "on"; exit
                 }
                 _line = $0
-                _opens = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*>/, "&", _line)
+                _self_closing = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*([[:space:]][^<>]*)?\/>/, "&", _line)
                 _line = $0
-                _closes = gsub(/<\/[A-Za-z_][A-Za-z0-9_.:-]*>/, "&", _line)
-                cfg_depth += (_opens - _closes)
+                _opens = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*([[:space:]][^<>]*)?>/, "&", _line)
+                _line = $0
+                _closes = gsub(/<\/[A-Za-z_][A-Za-z0-9_.:-]*[[:space:]]*>/, "&", _line)
+                cfg_depth += (_opens - _closes - _self_closing)
                 if (cfg_depth < 0) { cfg_depth = 0 }
             }
         ' "${PFB_CONFIG_XML}" 2>/dev/null)"
@@ -404,7 +407,19 @@ _pkgconf_ca_reapply() {
     # `}` — the "later line equal to `}`" check that catches an unclosed block.
     _pcr_block="$(sed -n '/^PKG_ENV {$/,/^}$/p' "${PFB_PKG_CONF}" 2>/dev/null)"
     [ "$(printf '%s\n' "${_pcr_block}" | tail -n 1)" = '}' ] || { unset _pcr_block; return 0; }
-    printf '%s\n' "${_pcr_block}" | grep -q '^	SSL_CA_CERT_FILE=' || { unset _pcr_block; return 0; }
+    _pcr_ca_file="$(printf '%s\n' "${_pcr_block}" | sed -n 's/^	SSL_CA_CERT_FILE=//p')"
+    [ "$(printf '%s\n' "${_pcr_ca_file}" | wc -l | tr -d ' ')" -eq 1 ] \
+        || { unset _pcr_block _pcr_ca_file; return 0; }
+    case "${_pcr_ca_file}" in
+        /?*) ;;
+        *) unset _pcr_block _pcr_ca_file; return 0 ;;
+    esac
+    case "${_pcr_ca_file}" in
+        *[!A-Za-z0-9._/+-]*) unset _pcr_block _pcr_ca_file; return 0 ;;
+    esac
+    [ -f "${_pcr_ca_file}" ] && [ -r "${_pcr_ca_file}" ] && [ -s "${_pcr_ca_file}" ] \
+        || { unset _pcr_block _pcr_ca_file; return 0; }
+    unset _pcr_ca_file
     # Refuse a block whose "close" is really a NESTED sub-object's own `}`
     # (issue #2518 nitpick N-nested-brace): the sed range above stops at the
     # FIRST column-0 `}` after the opener, same as the insertion awk below --

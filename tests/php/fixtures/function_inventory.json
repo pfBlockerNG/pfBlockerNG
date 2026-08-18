@@ -9044,6 +9044,13 @@
                 "default": null
             },
             {
+                "name": "was_consented",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
                 "name": "file",
                 "byRef": false,
                 "variadic": false,
@@ -9056,6 +9063,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": "'/etc/ssl/certs'"
+            },
+            {
+                "name": "is_plus",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -9137,6 +9151,13 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "?string",
+                "default": "NULL"
+            },
+            {
+                "name": "is_plus",
+                "byRef": false,
+                "variadic": false,
+                "type": "?bool",
                 "default": "NULL"
             }
         ]
@@ -9221,6 +9242,13 @@
             },
             {
                 "name": "content",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "expected",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
