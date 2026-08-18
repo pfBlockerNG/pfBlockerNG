@@ -39,14 +39,57 @@ def test_boot_hook_does_not_replace_concurrent_pkgconf_rewrite(tmp_path: Path) -
     ca_file = tmp_path / "netgate-ca.pem"
     ca_file.write_text("test CA bundle\n")
     pkg_conf = tmp_path / "pkg.conf"
-    pkg_conf.write_bytes(f"PKG_ENV {{\n\tSSL_CA_CERT_FILE={ca_file}\n}}\n".encode() + b"# padding\n" * 5_000_000)
+    pkg_conf.write_text(f"PKG_ENV {{\n\tSSL_CA_CERT_FILE={ca_file}\n}}\n")
     newer = tmp_path / "pkg.conf.newer"
     newer_content = b"NEWER_REWRITE_SURVIVED\n"
-    pkg_dirty = tmp_path / "pkg.dirty"
     newer.write_bytes(newer_content)
+    upgrade_lock = tmp_path / "pfSense-upgrade.lock"
+    lockf = tmp_path / "lockf"
+    lockf.write_text(
+        "#!/bin/sh\n"
+        "shift 3\n"
+        'lockdir="$1.pfb-test-lock"\n'
+        "shift\n"
+        "i=0\n"
+        'while ! mkdir "$lockdir" 2>/dev/null; do\n'
+        '    [ "${PFB_TEST_LOCK_WAIT:-0}" -eq 1 ] || exit 75\n'
+        "    i=$((i + 1))\n"
+        '    [ "$i" -lt 1000 ] || exit 75\n'
+        "    sleep 0.01\n"
+        "done\n"
+        "trap 'rmdir \"$lockdir\"' 0 1 2 15\n"
+        '"$@"\n'
+    )
+    lockf.chmod(0o755)
+    count = tmp_path / "cksum-count"
+    count.write_text("0\n")
+    ready = tmp_path / "writer-ready"
+    release = tmp_path / "writer-release"
+    cksum = tmp_path / "cksum"
+    cksum.write_text(
+        "#!/bin/sh\n"
+        'n=$(cat "$RACE_COUNT")\n'
+        "n=$((n + 1))\n"
+        'printf "%s\\n" "$n" > "$RACE_COUNT"\n'
+        'input="$RACE_DIR/cksum-input"\n'
+        'cat > "$input"\n'
+        '/usr/bin/cksum < "$input"\n'
+        'rm -f "$input"\n'
+        'if [ "$n" -eq 2 ]; then\n'
+        '    : > "$RACE_READY"\n'
+        "    i=0\n"
+        '    while [ ! -e "$RACE_RELEASE" ]; do\n'
+        "        i=$((i + 1))\n"
+        '        [ "$i" -lt 1000 ] || exit 75\n'
+        "        sleep 0.01\n"
+        "    done\n"
+        "fi\n"
+    )
+    cksum.chmod(0o755)
 
     env = {
         **os.environ,
+        "PATH": f"{tmp_path}:/usr/bin:/bin",
         "PFB_STABLE_CONF": str(tmp_path / "missing-stable.conf"),
         "PFB_TESTING_CONF": str(tmp_path / "missing-testing.conf"),
         "PFB_EDGE_CONF": str(tmp_path / "missing-edge.conf"),
@@ -56,7 +99,13 @@ def test_boot_hook_does_not_replace_concurrent_pkgconf_rewrite(tmp_path: Path) -
         "PFB_CONFIG_XML": str(config),
         "PFB_PKG_CONF": str(pkg_conf),
         "PFB_SSL_CA_CERT_PATH": str(ca_dir),
-        "PFB_PKG_DIRTY": str(pkg_dirty),
+        "PFB_PKG_DIRTY": str(tmp_path / "pkg.dirty"),
+        "PFB_LOCKF": str(lockf),
+        "PFB_UPGRADE_LOCK": str(upgrade_lock),
+        "RACE_COUNT": str(count),
+        "RACE_DIR": str(tmp_path),
+        "RACE_READY": str(ready),
+        "RACE_RELEASE": str(release),
     }
     process = subprocess.Popen(
         ["sh", str(_HOOK), "onestart"],
@@ -65,26 +114,38 @@ def test_boot_hook_does_not_replace_concurrent_pkgconf_rewrite(tmp_path: Path) -
         stderr=subprocess.PIPE,
         text=True,
     )
-    staged = Path(f"{pkg_conf}.tmp")
-    writer_seen = False
+    writer: subprocess.Popen[str] | None = None
     try:
         deadline = time.monotonic() + 15
-        while time.monotonic() < deadline and process.poll() is None:
-            if staged.is_file():
-                with staged.open("rb") as handle:
-                    if b"SSL_CA_CERT_PATH=" in handle.read(4096):
-                        os.replace(newer, pkg_conf)
-                        writer_seen = True
-                        break
+        while time.monotonic() < deadline and process.poll() is None and not ready.exists():
             time.sleep(0.005)
+        assert ready.exists(), "the hook never reached the post-check/pre-mv window"
+        writer = subprocess.Popen(
+            [str(lockf), "-s", "-t", "0", str(upgrade_lock), "/bin/mv", str(newer), str(pkg_conf)],
+            env={**os.environ, "PFB_TEST_LOCK_WAIT": "1"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        writer_stdout = ""
+        writer_stderr = ""
+        if not Path(f"{upgrade_lock}.pfb-test-lock").is_dir():
+            writer_stdout, writer_stderr = writer.communicate(timeout=15)
+        release.touch()
         stdout, stderr = process.communicate(timeout=15)
+        if writer.poll() is None:
+            writer_stdout, writer_stderr = writer.communicate(timeout=15)
     finally:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
+        if writer is not None and writer.poll() is None:
+            writer.kill()
+            writer.wait(timeout=5)
 
-    assert writer_seen, "the competing writer never observed a completed transformed temp file"
+    assert count.read_text() == "2\n", "the competing writer never reached the post-check/pre-mv window"
     assert process.returncode == 0, f"hook failed: stdout={stdout!r} stderr={stderr!r}"
+    assert writer.returncode == 0, f"writer failed: stdout={writer_stdout!r} stderr={writer_stderr!r}"
     actual = pkg_conf.read_bytes()
     if actual != newer_content:
         pytest.fail(f"concurrent rewrite was lost: final_size={len(actual)} prefix={actual[:80]!r}")

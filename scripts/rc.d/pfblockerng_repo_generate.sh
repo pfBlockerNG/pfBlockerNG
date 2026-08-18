@@ -92,6 +92,8 @@ name="pfblockerng_repo_generate"
 : "${PFB_CONFIG_XML:=/cf/conf/config.xml}"
 : "${PFB_SSL_CA_CERT_PATH:=/etc/ssl/certs}"
 : "${PFB_PKG_DIRTY:=/var/run/pkg.dirty}"
+: "${PFB_LOCKF:=/usr/bin/lockf}"
+: "${PFB_UPGRADE_LOCK:=/tmp/pfSense-upgrade.lock}"
 
 # The catalog base. NOT defaulted into PFB_BASE_URL: an explicitly exported
 # PFB_BASE_URL (install.sh, the smoke guests, a fork bootstrap) must stay
@@ -508,6 +510,15 @@ pfblockerng_repo_generate_start() {
     _pkgconf_ca_reapply
     return 0
 }
+
+# pfSense-upgrade holds this same lock while pfSense-repo-setup rewrites pkg.conf.
+# Re-exec keeps verification and replacement inside one supported-writer critical section.
+if [ "${PFB_UPGRADE_LOCK_HELD:-}" != 1 ] && [ -x "${PFB_LOCKF}" ]; then
+    PFB_UPGRADE_LOCK_HELD=1
+    export PFB_UPGRADE_LOCK_HELD
+    "${PFB_LOCKF}" -s -t 0 "${PFB_UPGRADE_LOCK}" /bin/sh "$0" "$@"
+    exit 0
+fi
 
 # Run as an rc.d service when rc.subr is present (the pfSense box); otherwise run
 # the regeneration directly (off-box: install.sh's bootstrap + the shellspec
