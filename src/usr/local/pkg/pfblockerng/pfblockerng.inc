@@ -5706,9 +5706,11 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
-	// Both commands below open a socket, so both carry the CA locations (issue #2514). The
-	// prefix leads so the assignments cover timeout(1) and are inherited by pkg; the local
-	// `pkg query` reads elsewhere in this file never fetch and are deliberately untouched.
+	// `pkg update -f -r` fetches; `pkg rquery -r` reads the local catalog DB that update
+	// just wrote. Both carry the CA locations (issue #2514) — on the fetching half because
+	// it must, on rquery as a defensive default that costs nothing. The prefix leads so the
+	// assignments cover timeout(1) and are inherited by pkg; the local `pkg query` reads
+	// elsewhere in this file never fetch and are deliberately untouched.
 	$ca = pfb_pkg_ca_env_prefix();
 	// Forced catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
 	// -f is required: Pages/file:// catalogs can keep an unchanged mtime/etag (issue #2379).
