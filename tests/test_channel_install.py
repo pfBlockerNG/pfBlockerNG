@@ -34,6 +34,15 @@ _BASE_URL = "file:///pages-catalog-root"
 _DEFAULT_PAYLOAD_PATH = "/usr/local/pkg/pfblockerng.inc"
 _LEGACY_CONF = "pfblockerng.conf"
 
+# Ambient values for these would decide what the stub records instead of the script's own
+# behaviour, so _run_install drops them from the child environment.
+_CA_ENV_VARS = (
+    "SSL_CA_CERT_PATH",
+    "SSL_CA_CERT_FILE",
+    "PFB_SSL_CA_CERT_PATH",
+    "PFB_SSL_CA_CERT_FILE",
+)
+
 # The fake pkg(8): every call appends its argv (minus argv[0]) to pkg-invocations.log
 # and captures up to one byte of its own stdin (proving the caller redirected
 # </dev/null rather than leaving the piped script text on the fd). State lives under
@@ -222,7 +231,7 @@ def _write_pkg_stub(root: str) -> str:
     with open(stub_path, "w") as fh:
         fh.write(_PKG_STUB)
     os.chmod(stub_path, 0o755)
-    # Both files must pre-exist (possibly empty) so a run that makes zero pkg calls
+    # These capture files must pre-exist (possibly empty) so a run that makes zero pkg calls
     # (e.g. --help) still leaves assertable files for callers that check them. Only
     # CREATE, never truncate: _run_install re-seeds the stub on every call (including
     # repeated calls on the same root for idempotency/resume tests), and the log must
@@ -318,16 +327,19 @@ def _run_install(
         for p in info_paths:
             _seed_payload(root, p)
 
-    env = {
-        **os.environ,
-        "PFBLOCKERNG_ROOT": root,
-        "PKG_BIN": pkg_bin,
-        "PFB_BASE_URL": _BASE_URL,
-        "PFB_TEST_ROOT": root,
-        **(extra_env or {}),
-    }
-    env.pop("SSL_CA_CERT_PATH", None)
-    env.pop("SSL_CA_CERT_FILE", None)
+    # Strip every CA-related variable the developer's shell might carry BEFORE layering
+    # extra_env on top: popping afterwards would delete a test's own override, including
+    # the empty-string opt-out the tests below rely on.
+    env = {k: v for k, v in os.environ.items() if k not in _CA_ENV_VARS}
+    env.update(
+        {
+            "PFBLOCKERNG_ROOT": root,
+            "PKG_BIN": pkg_bin,
+            "PFB_BASE_URL": _BASE_URL,
+            "PFB_TEST_ROOT": root,
+            **(extra_env or {}),
+        }
+    )
     if update_fails:
         env["PFB_STUB_UPDATE_FAIL"] = "1"
     if version_t_broken:
@@ -1213,3 +1225,37 @@ def test_bundle_without_a_directory_exports_only_the_bundle() -> None:
         assert files, "no pkg calls were made — the run cannot prove the branch"
         assert set(paths) == {"<unset>"}, f"expected SSL_CA_CERT_PATH unset, saw {sorted(set(paths))}"
         assert set(files) == {str(bundle)}, f"expected the bundle exported, saw {sorted(set(files))}"
+
+
+def test_empty_path_override_opts_out_of_the_directory() -> None:
+    """PFB_SSL_CA_CERT_PATH="" exports no path — the documented opt-out (`-`, not `:-`)."""
+    with tempfile.TemporaryDirectory() as root:
+        _ca_dir(root).mkdir(parents=True)
+        bundle = _ca_bundle(root)
+        bundle.write_text("")
+
+        proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_PATH": ""})
+        assert proc.returncode == 0, proc.stderr
+
+        paths = _pkg_ca_path_capture(root).read_text().splitlines()
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert paths, "no pkg calls were made — the run cannot prove the opt-out"
+        assert set(paths) == {"<unset>"}, f"opt-out ignored, saw {sorted(set(paths))}"
+        assert set(files) == {str(bundle)}, f"the other half must still export, saw {sorted(set(files))}"
+
+
+def test_empty_bundle_override_opts_out_of_the_file() -> None:
+    """PFB_SSL_CA_CERT_FILE="" exports no bundle, and the path is unaffected."""
+    with tempfile.TemporaryDirectory() as root:
+        ca_dir = _ca_dir(root)
+        ca_dir.mkdir(parents=True)
+        _ca_bundle(root).write_text("")
+
+        proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_FILE": ""})
+        assert proc.returncode == 0, proc.stderr
+
+        paths = _pkg_ca_path_capture(root).read_text().splitlines()
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        assert files, "no pkg calls were made — the run cannot prove the opt-out"
+        assert set(files) == {"<unset>"}, f"opt-out ignored, saw {sorted(set(files))}"
+        assert set(paths) == {str(ca_dir)}, f"the other half must still export, saw {sorted(set(paths))}"
