@@ -357,7 +357,7 @@ _CSS = """
 .card{--channel:var(--line);min-width:0;padding:clamp(1.25rem,3vw,2rem);border:1px solid var(--line);
   border-top:4px solid var(--channel);border-radius:var(--radius);background:var(--bg-elevated);
   box-shadow:0 1px 0 rgb(255 255 255 / 70%) inset}
-.card h3{margin:0 0 .15rem;color:var(--channel);font-size:1.4rem;letter-spacing:-.025em}
+.card h3{margin:0 0 .15rem;color:var(--ink);font-size:1.4rem;letter-spacing:-.025em}
 .card .ver{margin:0 0 .75rem;color:var(--muted);font-size:.9rem}
 .card .blurb,.blurb{color:var(--muted);font-size:.94rem}
 .card .blurb{margin:.2rem 0 .9rem}
@@ -368,7 +368,7 @@ th,td{text-align:left;padding:.65rem .75rem;border-bottom:1px solid var(--line);
 th{background:var(--bg-elevated);color:var(--muted);font-weight:720}
 td.num{color:var(--muted);font-variant-numeric:tabular-nums}
 .badge{display:inline-block;font-size:.72rem;padding:.05rem .45rem;border-radius:20px;
-  border:1px solid currentColor;color:var(--channel)}
+  border:1px solid;border-color:var(--channel);color:var(--ink)}
 details summary{margin-top:.6rem;color:var(--muted);font-size:.87rem;cursor:pointer}
 a.browse{display:inline-flex;align-items:center;min-height:46px;padding:.65rem 1rem;border:1px solid var(--ink);
   border-radius:999px;font-weight:740;text-decoration:none}
@@ -385,7 +385,7 @@ table.autoindex td.num{white-space:nowrap}
 .card.testing{--channel:var(--testing)}
 .card.edge{--channel:var(--edge)}
 .card.nightly{--channel:var(--nightly)}
-.warn{color:var(--testing);font-weight:700}
+.warn{color:var(--ink);font-weight:700}
 .snip{position:relative}
 .snip>pre{padding-right:3.6rem}
 .copy{position:absolute;top:.45rem;right:.45rem;z-index:1;

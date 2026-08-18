@@ -1332,9 +1332,11 @@ def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp
     )
     docs = tmp_path / "docs"
     docs.mkdir()
+    _touch(docs / "stable" / "ce-2.8" / "package.pkg")
     listing = gl.render_browse_root(str(docs), {})
+    nested_listing = gl._render_catalogue_browse_page(str(docs), "stable")
 
-    for rendered in (page, listing):
+    for rendered in (page, listing, nested_listing):
         assert '<link rel="stylesheet" href="https://pfblockerng.com/assets/site.css">' in rendered
         assert '<link rel="icon" href="https://pfblockerng.com/assets/logo.svg" type="image/svg+xml">' in rendered
         assert '<a class="skip-link" href="#main-content">Skip to content</a>' in rendered
@@ -1356,6 +1358,11 @@ def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp
     assert ".card.testing{--channel:var(--testing)}" in page
     assert ".card.edge{--channel:var(--edge)}" in page
     assert ".card.nightly{--channel:var(--nightly)}" in page
+    assert ".card h3{margin:0 0 .15rem;color:var(--ink)" in page
+    assert "border-color:var(--channel);color:var(--ink)" in page
+    assert ".warn{color:var(--ink);font-weight:700}" in page
+    assert "@media(max-width:820px){.cards{grid-template-columns:1fr}" in page
+    assert "@media(prefers-color-scheme:dark){.card{" in page
 
 
 def test_render_page_shows_latest_and_empty_stable() -> None:
@@ -1432,7 +1439,7 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
     assert ".card.testing{--channel:var(--testing)}" in page
     assert ".card.edge{--channel:var(--edge)}" in page
     assert ".card.nightly{--channel:var(--nightly)}" in page
-    assert ".badge{display:inline-block" in page and "color:var(--channel)" in page
+    assert ".badge{display:inline-block" in page and "border-color:var(--channel);color:var(--ink)" in page
     # The catalog-trees list is replaced by a SINGLE link to the folder-navigable browse page.
     assert '<a class="browse" href="./browse.html">' in page
     assert "Browse the repository" in page
