@@ -27,6 +27,9 @@
 #   PKG_BIN           pkg(8) binary path (default: /usr/local/sbin/pkg)
 #   PFBLOCKERNG_ROOT  filesystem root prefix (default: /)
 #   PFB_BASE_URL      catalog base (default: https://pfblockerng.github.io/pkg)
+#   PFB_SSL_CA_CERT_PATH  CA hash dir exported to pkg (default: <root>/etc/ssl/certs)
+#   PFB_SSL_CA_CERT_FILE  CA bundle exported to pkg (default: <root>/etc/ssl/cert.pem)
+#                         Each is exported only if it exists; set either to "" to opt out.
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
@@ -70,23 +73,45 @@ die() {
 # Callers add -y themselves on verbs that take it (delete/install); read-only verbs
 # (query/rquery/version/info) ignore ASSUME_ALWAYS_YES harmlessly.
 #
-# SSL_CA_CERT_PATH (issue #2514): on pfSense Plus, pfSense-repo-setup writes a PKG_ENV
-# block into pkg.conf pinning SSL_CA_CERT_FILE to Netgate's private CA bundle, which
-# carries only Netgate CAs. libpkg applies that block with setenv(..., overwrite=1), so
-# a libfetch-based pkg (1.x) verifies against Netgate's CAs and nothing else, and every
+# CA locations (issue #2514): on pfSense Plus, pfSense-repo-setup writes a PKG_ENV block
+# into pkg.conf pinning SSL_CA_CERT_FILE to Netgate's private CA bundle, which carries
+# only Netgate CAs. libpkg applies that block with setenv(..., overwrite=1), so a
+# libfetch-based pkg (1.x) verifies against Netgate's CAs and nothing else, and every
 # fetch from a third-party catalog fails with "certificate verify failed". PKG_ENV never
-# sets SSL_CA_CERT_PATH, and libfetch loads file and path into the same store
-# (SSL_CTX_load_verify_locations(ctx, ca_cert_file, ca_cert_path)), so exporting the
-# path here survives the pin. This only mirrors what a libcurl-based pkg (2.x) already
-# does by default: peer verification stays fully enabled, the box's trust store is not
-# modified, and no vendor configuration is touched.
-PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH:-${ROOT}/etc/ssl/certs}"
+# sets SSL_CA_CERT_PATH, and libfetch loads file and path into one store
+# (SSL_CTX_load_verify_locations(ctx, ca_cert_file, ca_cert_path)), so exporting the path
+# survives the pin. That mirrors what a libcurl-based pkg (2.x) already does by default:
+# peer verification stays fully enabled, the trust store is not modified, and no vendor
+# configuration is touched.
+#
+# The bundle goes with it, because libfetch takes load_verify_locations() as soon as
+# EITHER variable is set and then never calls SSL_CTX_set_default_verify_paths(). On a box
+# with no pin (CE), exporting the path alone would therefore drop the default bundle from
+# the store, and FreeBSD ships /etc/ssl/certs EMPTY until certctl rehash populates it — so
+# path-only would turn a working stock box into this very failure. On Plus, PKG_ENV
+# overwrites this value with Netgate's bundle, which is what should happen there.
+#
+# Each is exported only when it exists, so pkg is never pointed at a missing location.
+# Setting either variable to the empty string opts that half out (hence `-`, not `:-`).
+PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH-${ROOT}/etc/ssl/certs}"
+PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 
+# Spelled out per combination so every path stays quoted: a single accumulated string
+# would have to be word-split to become separate env(1) operands, which breaks the moment
+# a location contains a space.
 _pkg() {
-    # A path that does not exist would be a no-op at best and could cost the pinned
-    # bundle its load, so it is only exported when the store is really there.
-    if [ -d "${PFB_SSL_CA_CERT_PATH}" ]; then
-        env ASSUME_ALWAYS_YES=yes SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
+    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] && [ -f "${PFB_SSL_CA_CERT_FILE}" ]; then
+        env ASSUME_ALWAYS_YES=yes \
+            SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
+            SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
+            "${PKG_BIN}" "$@" </dev/null
+    elif [ -d "${PFB_SSL_CA_CERT_PATH}" ]; then
+        env ASSUME_ALWAYS_YES=yes \
+            SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
+            "${PKG_BIN}" "$@" </dev/null
+    elif [ -f "${PFB_SSL_CA_CERT_FILE}" ]; then
+        env ASSUME_ALWAYS_YES=yes \
+            SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
             "${PKG_BIN}" "$@" </dev/null
     else
         env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" "$@" </dev/null
