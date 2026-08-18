@@ -23,10 +23,10 @@ use PHPUnit\Framework\TestCase;
  *   plus_patched.conf -- the same file with our line added (ca_path=/etc/ssl/certs).
  *   ce_unpinned.conf  -- a CE box's file: no PKG_ENV block at all.
  *
- * /etc/ssl/certs is used directly as the "real" populated CA directory in the tests that
- * must byte-match plus_patched.conf (its embedded value is literally that path and the
- * fixture is immutable) -- the CI image genuinely ships it non-empty (ca-certificates),
- * so this exercises the real is_dir()+populated gate rather than bypassing it.
+ * The immutable patched fixture carries the appliance default /etc/ssl/certs path. Tests
+ * that exercise the populated-directory write guard instead create an isolated populated
+ * directory and derive their expected bytes from that fixture, so host CA-store contents
+ * cannot change the result.
  */
 #[CoversFunction('pfb_pkgconf_ca_needed')]
 #[CoversFunction('pfb_pkgconf_ca_add')]
@@ -110,6 +110,11 @@ final class PkgConfCaPatchTest extends TestCase
 	private function fixture(string $name): string
 	{
 		return (string) file_get_contents(dirname(__DIR__, 2) . '/tests/fixtures/pkg_conf/' . $name);
+	}
+
+	private function patchedFixtureFor(string $caDir): string
+	{
+		return str_replace(self::REAL_CA_DIR, $caDir, $this->fixture('plus_patched.conf'));
 	}
 
 	private function tempFile(string $content, string $name = 'pkg.conf'): string
@@ -513,9 +518,10 @@ final class PkgConfCaPatchTest extends TestCase
 
 	public function testSyncConsentTrueOnPinnedWithPopulatedDirPatches(): void
 	{
-		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
-		$this->assertTrue(pfb_pkgconf_ca_sync(TRUE, $file, self::REAL_CA_DIR));
-		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file));
+		$caDir = $this->populatedDir();
+		$file  = $this->tempFile($this->fixture('plus_pinned.conf'));
+		$this->assertTrue(pfb_pkgconf_ca_sync(TRUE, $file, $caDir));
+		$this->assertSame($this->patchedFixtureFor($caDir), file_get_contents($file));
 	}
 
 	public function testSyncConsentTrueWithNonDirectoryCaPathFailsByteUnchanged(): void
@@ -611,7 +617,7 @@ final class PkgConfCaPatchTest extends TestCase
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
 		chmod($file, 0o600);
 
-		$this->assertTrue(pfb_pkgconf_ca_sync(TRUE, $file, self::REAL_CA_DIR));
+		$this->assertTrue(pfb_pkgconf_ca_sync(TRUE, $file, $this->populatedDir()));
 		clearstatcache(true, $file);
 		$this->assertSame(0o600, fileperms($file) & 0o777);
 	}
@@ -663,11 +669,12 @@ final class PkgConfCaPatchTest extends TestCase
 	public function testTickConsentOnNeededPatchesAndNoNotice(): void
 	{
 		config_set_path(self::CONSENT_PATH, 'on');
-		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
+		$caDir = $this->populatedDir();
+		$file  = $this->tempFile($this->fixture('plus_pinned.conf'));
 
-		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+		pfb_pkgconf_ca_tick(TRUE, $file, $caDir);
 
-		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file));
+		$this->assertSame($this->patchedFixtureFor($caDir), file_get_contents($file));
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
 		$this->assertFileDoesNotExist($this->sentinelPath());
 	}

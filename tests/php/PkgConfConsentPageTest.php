@@ -108,6 +108,11 @@ final class PkgConfConsentPageTest extends TestCase
 		return (string) file_get_contents(dirname(__DIR__, 2) . '/tests/fixtures/pkg_conf/' . $name);
 	}
 
+	private function patchedFixtureFor(string $caDir): string
+	{
+		return str_replace(self::REAL_CA_DIR, $caDir, $this->fixture('plus_patched.conf'));
+	}
+
 	private function tempFile(string $content, string $name = 'pkg.conf'): string
 	{
 		$path = $this->root . '/' . $name;
@@ -120,6 +125,16 @@ final class PkgConfConsentPageTest extends TestCase
 		$dir = $this->root . '/empty_capath';
 		if (!is_dir($dir)) {
 			mkdir($dir, 0o755, true);
+		}
+		return $dir;
+	}
+
+	private function populatedDir(): string
+	{
+		$dir = $this->root . '/capath';
+		if (!is_dir($dir)) {
+			mkdir($dir, 0o755, true);
+			file_put_contents($dir . '/x.0', '');
 		}
 		return $dir;
 	}
@@ -271,7 +286,8 @@ final class PkgConfConsentPageTest extends TestCase
 
 	public function testTickedSaveRoundTripsToOn(): void
 	{
-		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
+		$caDir = $this->populatedDir();
+		$file  = $this->tempFile($this->fixture('plus_pinned.conf'));
 
 		$token = pfb_pkgconf_ca_save([
 			'pfb_pkg_ca_consent_shown' => '1',
@@ -284,11 +300,11 @@ final class PkgConfConsentPageTest extends TestCase
 			'a Save with the box ticked must persist the On token'
 		);
 
-		$ok = pfb_pkgconf_ca_apply($token, $file, self::REAL_CA_DIR);
+		$ok = pfb_pkgconf_ca_apply($token, $file, $caDir);
 
 		$this->assertTrue($ok, 'a ticked Save against a patchable pkg.conf must report success');
 		$this->assertSame(
-			$this->fixture('plus_patched.conf'),
+			$this->patchedFixtureFor($caDir),
 			file_get_contents($file),
 			'a ticked Save must patch the live pkg.conf -- not just the config token -- with the CA path line'
 		);
