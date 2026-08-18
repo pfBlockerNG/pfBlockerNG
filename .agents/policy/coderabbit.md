@@ -41,6 +41,15 @@ Composes with [`landing.md`](landing.md) (triage, three-leg, merge gate),
   comment-only, lint, or mechanical APPLY-of-CodeRabbit's-own-diff round.
   Ask a second time only if product behaviour materially changed after
   the review, and only once.
+- **Never write the handle live when you are writing ABOUT it.** GitHub sends the
+  mention from inside inline code too — a ledger entry recording that we never
+  asked for a review, with the handle in backticks in a table cell, tagged the bot
+  and drew an auto-reply that also wrote the exchange into its learnings
+  (PR #2520, 2026-08-18). In ledgers, audit comments, issue bodies, commit
+  messages and policy text, break it (`@ coderabbitai`) or name it in prose. Write
+  it live ONLY when the ask itself is the intent. An accidental tag is not an ask:
+  it spends goodwill, muddies the audit trail about whether a review was requested,
+  and can read as a second ask inside a live quota window.
 - No `@coderabbitai pause` / `resume` dance. Auto-review is off, so
   pausing buys nothing; never broadcast pause comments.
 - No mute labels. `cr-hold` / `cr-go` do not exist; do not invent them.
