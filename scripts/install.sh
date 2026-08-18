@@ -29,8 +29,10 @@
 #   PFB_BASE_URL      catalog base (default: https://pfblockerng.github.io/pkg)
 #   PFB_SSL_CA_CERT_PATH  CA hash dir exported to pkg (default: <root>/etc/ssl/certs)
 #   PFB_SSL_CA_CERT_FILE  CA bundle exported to pkg (default: <root>/etc/ssl/cert.pem)
-#                         Exported only when the path is a directory and the bundle is a
-#                         non-empty regular file; set either to "" to opt that half out.
+#                         Each half is guarded independently and exported on its own: the
+#                         path when it is a directory, the bundle when it is a non-empty
+#                         regular file. A box failing one guard still gets the other. Set
+#                         either to "" to opt that half out.
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
