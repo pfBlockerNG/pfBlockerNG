@@ -1281,3 +1281,20 @@ def test_empty_bundle_file_is_not_exported() -> None:
         assert files, "no pkg calls were made — the run cannot prove the guard"
         assert set(files) == {"<unset>"}, f"empty bundle was exported, saw {sorted(set(files))}"
         assert set(paths) == {str(ca_dir)}, f"the path must still export, saw {sorted(set(paths))}"
+
+
+def test_directory_as_bundle_is_not_exported() -> None:
+    """A directory where the bundle should be is refused: `-s` alone is true for one."""
+    with tempfile.TemporaryDirectory() as root:
+        ca_dir = _ca_dir(root)
+        ca_dir.mkdir(parents=True)
+        _ca_bundle(root).mkdir(parents=True)  # a directory, not a bundle
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        files = _pkg_ca_file_capture(root).read_text().splitlines()
+        paths = _pkg_ca_path_capture(root).read_text().splitlines()
+        assert files, "no pkg calls were made — the run cannot prove the guard"
+        assert set(files) == {"<unset>"}, f"a directory was exported as the bundle, saw {sorted(set(files))}"
+        assert set(paths) == {str(ca_dir)}, f"the path must still export, saw {sorted(set(paths))}"
