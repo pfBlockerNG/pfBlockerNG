@@ -3921,6 +3921,7 @@ def test_structured_text_feed_imports(
     )
 
     with h.CaseContext(deployed_vm, spec):
+        # pf reports a /32 host route bare, so the expected set holds plain addresses.
         members = h.pfctl_table_members(deployed_vm, spec.alias)
         assert sorted(members) == sorted(expected_members), (
             f"{spec.alias} must hold exactly the {label} feed's addresses; "
@@ -3941,7 +3942,9 @@ def test_unsupported_mime_feed_rejected(deployed_vm: SmokeVM, mock_feeds: _MockF
     spec = h.IpCase(aliasname="smokemimexz", feed_url=feed_url, header="smokemimexz", family="v4")
     # Scoped to THIS feed and naming the detected type: the smoke VM is session-scoped, so a
     # bare `reason=mime_not_allowed` count would also be satisfied by another case's reject.
-    marker = f"REJECT feed={spec.header}_v4 stage=mime reason=mime_not_allowed detected=application/x-xz"
+    marker = (
+        f"pfb_validate: REJECT feed={spec.header}_v4 stage=mime reason=mime_not_allowed detected=application/x-xz rc=0"
+    )
 
     sniffed = _box_mime_type(deployed_vm, _fixture_bytes("ip_unsupported_xz.xz"))
     assert sniffed == "application/x-xz", (
