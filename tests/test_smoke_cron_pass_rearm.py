@@ -58,43 +58,54 @@ def _live_helpers() -> ModuleType:
 def _leaf_name(node: ast.AST) -> str:
     """Final segment of a call's dotted name: ``pkg.mod.h.reload(...)`` -> ``reload``.
 
-    The leaf alone is matched, and matched EXACTLY: ``endswith`` counted ``preload()`` as a
-    cron pass and ``spin_cron_due()`` as a re-arm, both wrong in opposite directions.
+    One level is enough: Python's AST puts the leaf attribute at the OUTERMOST node, so
+    ``a[0].reload(...)`` and ``f().reload(...)`` resolve too. The leaf is matched EXACTLY —
+    ``endswith`` counted ``preload()`` as a cron pass and ``spin_cron_due()`` as a re-arm,
+    wrong in opposite directions.
     """
     if not isinstance(node, ast.Call):
         return ""
     func: ast.expr = node.func
-    while isinstance(func, ast.Attribute):
+    if isinstance(func, ast.Attribute):
         return func.attr
     return func.id if isinstance(func, ast.Name) else ""
 
 
-def _verb_args(call: ast.Call) -> list[ast.expr]:
-    """Everything that could carry the verb: positional args after the VM, and any keyword.
+# helpers.reload(vm, scope, ...) — the verb rides the second positional or the `scope`
+# keyword. Other keywords (`timeout=`, ...) are NOT verb candidates: reading every keyword
+# by value made `reload(vm, "update", timeout=timeout)` undecidable, which would have
+# spuriously flagged an ordinary call the first time someone wrapped one in a loop.
+_VERB_KEYWORD = "scope"
 
-    ``helpers.reload(vm, scope)`` names the second parameter ``scope``; the keyword is read
-    by value rather than by name so a rename cannot quietly empty this.
-    """
-    return [*call.args[1:], *(kw.value for kw in call.keywords)]
+
+def _verb_args(call: ast.Call) -> list[ast.expr]:
+    """The expressions that can carry the verb, in the order the rule should weigh them."""
+    positional = [a for a in call.args[1:2]]
+    keyword = [kw.value for kw in call.keywords if kw.arg == _VERB_KEYWORD]
+    return positional + keyword
 
 
 def _cron_pass_kind(node: ast.AST) -> str:
     """``''`` (not a pass) · ``'cron'`` (a literal cron pass) · ``'unknown'`` (undecidable).
 
-    Undecidable counts as a pass. A verb the AST cannot read — a variable, an f-string, a
-    call — is exactly how a refactor would slip a repeated pass past a literal-only sweep,
-    so the rule fails CLOSED and asks for a re-arm (or a literal) rather than waving it
-    through.
+    Undecidable counts as a pass. A verb the AST cannot read — a variable, an f-string, an
+    unpacked ``*args`` — is exactly how a refactor would slip a repeated pass past a
+    literal-only sweep, so the rule fails CLOSED and asks for a re-arm (or a literal)
+    rather than waving it through. A verb that IS readable and is not ``cron`` settles the
+    question the other way, so ordinary calls with extra keywords stay out of it.
     """
     if _leaf_name(node) != "reload":
         return ""
     assert isinstance(node, ast.Call)
-    args = _verb_args(node)
-    if any(isinstance(a, ast.Constant) and a.value == "cron" for a in args):
-        return "cron"
-    if any(not isinstance(a, ast.Constant) for a in args):
+    # A starred positional hides both the VM and the verb: nothing can be sliced out of it.
+    if any(isinstance(a, ast.Starred) for a in node.args) or any(kw.arg is None for kw in node.keywords):
         return "unknown"
-    return ""
+    candidates = _verb_args(node)
+    if any(isinstance(a, ast.Constant) and a.value == "cron" for a in candidates):
+        return "cron"
+    if any(isinstance(a, ast.Constant) for a in candidates):
+        return ""
+    return "unknown" if candidates else ""
 
 
 def _runs_cron_pass(node: ast.AST) -> bool:
@@ -212,7 +223,12 @@ def _wrap(body: str) -> ast.AST:
         # Fail-closed: an unreadable verb is treated as a pass rather than waved through.
         ("variable-verb", "for _ in range(2):\n    h.reload(vm, verb)", True),
         ("fstring-verb", "for _ in range(2):\n    h.reload(vm, f'{v}')", True),
+        # A starred positional hides the verb slot itself, so it cannot be read at all.
+        ("star-args-only", "for _ in range(2):\n    h.reload(*allargs)", True),
+        ("kwargs-splat", "for _ in range(2):\n    h.reload(vm, **kw)", True),
         ("other-verb", "for _ in range(2):\n    h.reload(vm, 'updatednsbl')", False),
+        # A readable non-cron verb settles it, whatever unrelated keywords ride along.
+        ("other-verb-with-timeout", "for _ in range(2):\n    h.reload(vm, 'update', timeout=t)", False),
         ("single-pass", "h.reload(vm, 'cron')", False),
         # Exact leaf match, both directions: neither of these is the call we mean.
         ("preload-not-reload", "for _ in range(2):\n    h.preload(vm, 'cron')", False),
@@ -255,7 +271,6 @@ def test_detector_sees_every_repeat_shape(label: str, body: str, detected: bool)
             "for _ in range(2):\n    x.spin_cron_due(vm)\n    h.reload(vm, 'cron')",
             1,
         ),
-        ("async-scope-rejected", "async def t2(vm):\n    for _ in range(2):\n        h.reload(vm, 'cron')", 1),
     ],
 )
 def test_rule_rejects_what_it_must(label: str, body: str, violations: int) -> None:
@@ -266,6 +281,28 @@ def test_rule_rejects_what_it_must(label: str, body: str, violations: int) -> No
     the wrong reason. These rows fail if the rule stops rejecting.
     """
     assert len(_rule_violations_in(_wrap(body))) == violations, label
+
+
+@pytest.mark.parametrize(
+    ("label", "source", "violations"),
+    [
+        ("top-level-async-def", "async def t(vm):\n    for _ in range(2):\n        h.reload(vm, 'cron')\n", 1),
+        ("module-level-loop", "for _ in range(2):\n    h.reload(vm, 'cron')\n", 1),
+        (
+            "top-level-async-def-rearmed",
+            "async def t(vm):\n    for _ in range(2):\n        h.pin_cron_due(vm)\n        h.reload(vm, 'cron')\n",
+            0,
+        ),
+    ],
+)
+def test_rule_covers_scopes_outside_a_plain_def(label: str, source: str, violations: int) -> None:
+    """Parsed RAW, not through ``_wrap()``.
+
+    Wrapping every crafted body in ``def t(vm):`` made the ``async def`` and module-level
+    rows vacuous — the outer function's walk reached the loop either way, so dropping those
+    scopes from the sweep broke nothing. These rows fail if the scope handling is narrowed.
+    """
+    assert len(_rule_violations_in(ast.parse(source))) == violations, label
 
 
 def test_pin_cron_due_still_routes_through_the_reservation_api(monkeypatch: pytest.MonkeyPatch) -> None:
