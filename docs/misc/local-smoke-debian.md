@@ -14,11 +14,17 @@ GitHub Actions. These cost real time to relearn; CI workflow
 
 ### On each LXC box (pre-provisioned once)
 
+Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
+
 - `/dev/kvm` present + writable (hardware virtualisation). Everything need KVM.
 - `git`, `uv`, qemu (`qemu-system-x86`, `qemu-utils`), `oras`, `dig` (`dnsutils`),
   `iptables`, `openssh-client`, `zstd`. The leg runs against the box's own toolchain
   (issue #2513); `scripts/smoke-on-box.sh` refuses loudly when one is missing rather
   than falling back. Python dependencies come from `uv sync --locked --group smoke`.
+- Everything but `uv` and `oras` comes from apt. Those two are not packaged for Debian:
+  install them from their release tarballs, SHA-256 verified, into `/usr/local/bin`.
+  Boxes currently carry **uv 0.12.3** and **oras 1.3.3** — the same oras pin the
+  workflows use, so a box and a runner agree.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by `smoke-on-box.sh`).
 
@@ -32,13 +38,14 @@ GHCR and `SMOKE_GHCR_TOKEN` may authenticate the pull.
 Orchestrator leases box, runs EVERYTHING on it — images, build, pytest:
 
 `PFB_BOXES` is pool of ssh targets to lease from. **Current pool is `10.0.0.31`
-through `10.0.0.34` (four boxes, ssh as `root`)** — copy line below verbatim. Do not infer
+through `10.0.0.38` (eight boxes, `pfb-box-1` … `pfb-box-8`, ssh as `root`)** — copy line
+below verbatim. Do not infer
 pool from anywhere else in tree: `tests/shell/select_box_spec.sh` uses `10.0.0.23` and
 `10.0.0.24` as *fake* boxes for lease-token assertions, and run pointed at those fails with
 `No route to host` and reads like harness broken.
 
 ```sh
-export PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34"
+export PFB_BOXES="root@10.0.0.31 root@10.0.0.32 root@10.0.0.33 root@10.0.0.34 root@10.0.0.35 root@10.0.0.36 root@10.0.0.37 root@10.0.0.38"
 
 # Full smoke (marker=smoke, current HEAD):
 scripts/local-smoke.sh
