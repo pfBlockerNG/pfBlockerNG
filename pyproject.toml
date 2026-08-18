@@ -59,7 +59,7 @@ testpaths = ["tests"]
 # --ignore=tests/smoke keeps the default `python -m pytest` byte-for-byte as it
 # was before ADR-04 Phase 3: the smoke package (VM fixture, mock feed server,
 # its third-party deps) is NEVER imported during default collection, so a
-# checkout without tests/smoke/requirements.txt installed still collects
+# checkout without the `smoke` dependency group installed still collects
 # cleanly and runs the exact same unit set. The smoke workflow re-enables it
 # with `pytest -m smoke --override-ini="addopts=" tests/smoke` (or
 # `-p no:cacheprovider tests/smoke -m smoke`); see tests/smoke/conftest.py.

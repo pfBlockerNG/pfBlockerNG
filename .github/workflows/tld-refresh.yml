@@ -85,7 +85,7 @@ jobs:
         uses: shivammathur/setup-php@v2 # v2.37.2
         with:
           php-version: ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
-          tools: composer
+          tools: composer:2.10.2
 
       - name: Resolve the Composer cache directory
         # Composer's cache lives wherever COMPOSER_HOME/XDG put it, not at a fixed

@@ -12,7 +12,9 @@
 # Each check also runs only when its tool is available: a contributor missing a
 # tool is warned and that check is skipped, never blocked (CI is the hard gate),
 # except the mandatory Composer vendor guard for staged PHP and the two PHP style
-# gates, which run against the host toolchain and skip when it is absent.
+# gates, which run against the host toolchain and skip when php is absent. The Composer
+# vendor guard is the exception: it is fail-closed, because a stale vendor tree makes the
+# gates behind it grade against the wrong tool versions.
 # All applicable checks run even after one fails, so every problem is reported in
 # a single pass. Bypass in an emergency with `git commit --no-verify`.
 #
@@ -44,7 +46,7 @@ skipped=''
 have() { command -v "$1" >/dev/null 2>&1; }
 step() { printf '[pre-commit] %s\n' "$1"; }
 failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
-skip() { skipped="${skipped} $1"; }
+skip() { skipped="${skipped}${skipped:+,} $1"; }
 
 # --- Stage classification: run a language's gates ONLY when this commit stages a
 #     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
@@ -282,7 +284,7 @@ if [ "$staged_php" = 1 ]; then
 
 	# PHPCS sniffs (only when the vendor tree is installed). Config auto-discovered
 	# from phpcs.xml.dist.
-	if [ -x vendor/bin/phpcs ]; then
+	if command -v php >/dev/null 2>&1 && [ -x vendor/bin/phpcs ]; then
 		step 'phpcs'
 		# issue #895: cap memory because phpcs tokenising a
 		# large file (pfblockerng.inc ~19.5k lines) exhausts PHP's default 128M and

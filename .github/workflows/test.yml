@@ -675,7 +675,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          tools: composer
+          tools: composer:2.10.2
 
       - name: Resolve the Composer cache directory
         # actions/cache takes a literal path, and composer's own cache-dir setting is
@@ -723,7 +723,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php-version }}
-          tools: composer
+          tools: composer:2.10.2
 
       - name: Resolve the Composer cache directory
         # actions/cache takes a literal path, and composer's own cache-dir setting is
@@ -804,7 +804,7 @@ jobs:
           php-version: ${{ matrix.php-version }}
           extensions: curl, intl, mbstring, ctype, filter
           coverage: pcov
-          tools: composer
+          tools: composer:2.10.2
 
       - name: Resolve the Composer cache directory
         # actions/cache takes a literal path, and composer's own cache-dir setting is
@@ -864,11 +864,13 @@ jobs:
         continue-on-error: true
         uses: actions/setup-node@v7
         with:
-          node-version: 'lts/*'
+          node-version: '24.19.0'
 
       - name: Run markdownlint-cli2
         # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
-        run: npx --yes markdownlint-cli2
+        env:
+          MARKDOWNLINT_CLI2_VERSION: 0.23.2
+        run: npx --yes "markdownlint-cli2@${MARKDOWNLINT_CLI2_VERSION}"
 
   widget-js-tests:
     name: Widget JS unit tests (node --test)
@@ -887,7 +889,7 @@ jobs:
         continue-on-error: true
         uses: actions/setup-node@v7
         with:
-          node-version: 'lts/*'
+          node-version: '24.19.0'
 
       - name: Run the Dashboard widget JS tests
         # Offline unit coverage for the widget render helpers (pfBlockerNG_escapeHtml /
@@ -913,7 +915,7 @@ jobs:
         continue-on-error: true
         uses: actions/setup-node@v7
         with:
-          node-version: 'lts/*'
+          node-version: '24.19.0'
 
       - name: Rebuild the vendor tree and diff against what's committed
         # Node/npm are dev+CI-only (never shipped to the appliance): this

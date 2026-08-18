@@ -17,10 +17,15 @@ GitHub Actions. These cost real time to relearn; CI workflow
 Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
 
 - `/dev/kvm` present + writable (hardware virtualisation). Everything need KVM.
-- `git`, `uv`, qemu (`qemu-system-x86`, `qemu-utils`), `oras`, `dig` (`dnsutils`),
-  `iptables`, `openssh-client`, `zstd`. The leg runs against the box's own toolchain
-  (issue #2513); `scripts/smoke-on-box.sh` refuses loudly when one is missing rather
-  than falling back. Python dependencies come from `uv sync --locked --group smoke`.
+- Every tool `scripts/smoke-on-box.sh` preflights, in full: `git`, `jq`, `curl`, `uv`,
+  `oras`, `python3`, `ssh`, `qemu-system-x86_64`, `qemu-img`, `dig`, `iptables`, `zstd`,
+  `tar`, `unzip`. On Debian those come from `git`, `jq`, `curl`, `qemu-system-x86` +
+  `qemu-utils`, `dnsutils` (`dig`), `iptables`, `openssh-client`, `zstd`, `tar`, `unzip`,
+  and `python3` + `python3-venv` + `python3-pip` (`build-dep-pkg-portable.py` falls back
+  to `python -m venv`, and Debian ships `ensurepip` in a separate package). The leg runs
+  against the box's own toolchain (issue #2513); `smoke-on-box.sh` refuses loudly when one
+  is missing rather than falling back. Python dependencies come from
+  `uv sync --locked --group smoke`.
 - Everything but `uv` and `oras` comes from apt. Those two are not packaged for Debian:
   install them from their release tarballs, SHA-256 verified, into `/usr/local/bin`.
   Boxes currently carry **uv 0.12.3** and **oras 1.3.3** — the same oras pin the
@@ -131,9 +136,11 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
      `oras` pulls pfSense and civm images into `/root/images/{pfsense,civm}`.
      The LAN zot registry remains the durable fleet cache when `PFB_LAN_REGISTRY` is set;
      no qcow2 store is shared between boxes.
-   - `pkill -9 -f qemu-system-x86_64`. Port floor set by caller's `--sysctl`
-     flag, not in-script: `smoke-on-box.sh` now treats it as precondition and refuses
-     to run when above 53, naming missing flag.
+   - `pkill -9 -f qemu-system-x86_64`. Port floor lowered by the caller, not in-script:
+     the bootstrap `local-smoke.sh` sends runs
+     `sysctl -w net.ipv4.ip_unprivileged_port_start=53` before the handoff, and `smoke-on-box.sh`
+     treats the floor as a precondition, refusing to run when above 53 and naming the
+     command the caller has to run.
    - `build-leg.sh` → `SMOKE_PKG`.
    - `run-smoke.sh --paths <P> --marker <M> --timeout <T> [--filter <K>]` — `<P>`/`<T>` derive
      from marker (`scripts/lib/smoke-tier.sh`): UI tier → `tests/smoke/ui` + 300s, else
