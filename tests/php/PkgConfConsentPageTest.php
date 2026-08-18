@@ -39,7 +39,8 @@ use PHPUnit\Framework\TestCase;
  * marker means the consent section was never shown this request, so an absent
  * 'pfb_pkg_ca_consent' key is ambiguous between "unticked" and "not rendered" -- B1). The
  * caller MUST run write_config() next to flush that persist to disk BEFORE calling
- * pfb_pkgconf_ca_apply(string $token, bool $was_consented, ?string $file, string $ca_path): bool,
+ * pfb_pkgconf_ca_apply(string $token, bool $was_consented, ?string $file, string $ca_path,
+ *     ?bool $is_plus): bool,
  * which is the half that actually syncs pkg.conf and is what the page's $input_errors branch reacts to.
  * Consent is this feature's security boundary, so it has to survive a reboot before pkg.conf
  * is ever mutated on its behalf -- deleting either the PfbConfig::write() inside
@@ -327,7 +328,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'a Save with the box ticked must persist the On token'
 		);
 
-		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $caDir);
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $caDir, TRUE);
 
 		$this->assertTrue($ok, 'a ticked Save against a patchable pkg.conf must report success');
 		$this->assertSame(
@@ -346,7 +347,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'pfb_pkg_ca_consent_shown' => '1',
 			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
 		]);
-		$seedOk = pfb_pkgconf_ca_apply($seedToken, FALSE, $file, self::REAL_CA_DIR);
+		$seedOk = pfb_pkgconf_ca_apply($seedToken, FALSE, $file, self::REAL_CA_DIR, TRUE);
 		$this->assertTrue($seedOk, 'precondition seed save must succeed');
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'), 'precondition: consent starts On');
 		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file), 'precondition: pkg.conf starts patched');
@@ -367,7 +368,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'the canonical Off token stored on disk is the empty string'
 		);
 
-		$ok = pfb_pkgconf_ca_apply($token, TRUE, $file, self::REAL_CA_DIR);
+		$ok = pfb_pkgconf_ca_apply($token, TRUE, $file, self::REAL_CA_DIR, TRUE);
 
 		$this->assertTrue($ok);
 		$this->assertSame(
@@ -383,7 +384,7 @@ final class PkgConfConsentPageTest extends TestCase
 		$before = file_get_contents($file);
 
 		$token = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent_shown' => '1']);
-		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, self::REAL_CA_DIR);
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, self::REAL_CA_DIR, TRUE);
 
 		$this->assertTrue($ok);
 		$this->assertSame($before, file_get_contents($file), 'pfBlockerNG must not remove a line it never added');
@@ -453,7 +454,7 @@ final class PkgConfConsentPageTest extends TestCase
 		$this->assertSame('on', $token);
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'));
 
-		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $this->emptyDir());
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $this->emptyDir(), TRUE);
 
 		$this->assertFalse($ok, 'B3: apply must report failure when the CA hash dir is empty');
 		$this->assertSame(
@@ -491,7 +492,7 @@ final class PkgConfConsentPageTest extends TestCase
 		// A CA path that would make pfb_pkgconf_ca_sync() itself return FALSE if it ran
 		// (missing/empty directory) -- proves the early return skips the call rather than
 		// merely happening to succeed.
-		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $this->emptyDir());
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $this->emptyDir(), TRUE);
 
 		$this->assertTrue(
 			$ok,

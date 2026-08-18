@@ -5558,15 +5558,10 @@ function pfb_pkgconf_write_atomic(string $file, string $content, string $expecte
  * rename() would replace the link itself, silently detaching whatever it used to point at.
  */
 function pfb_pkgconf_ca_state(?string $file = NULL, ?bool $is_plus = NULL): string {
-	$injected_file = $file !== NULL;
 	$file = $file ?? PFB_PKG_CONF;
 	if ($is_plus === NULL) {
-		if ($injected_file) {
-			$is_plus = TRUE;
-		} else {
-			$product_label = @file_get_contents('/etc/product_label');
-			$is_plus = $product_label !== FALSE && strpos($product_label, 'Plus') !== FALSE;
-		}
+		$product_label = @file_get_contents('/etc/product_label');
+		$is_plus = $product_label !== FALSE && strpos($product_label, 'Plus') !== FALSE;
 	}
 	if (!$is_plus || is_link($file) || !is_file($file) || !is_readable($file)) {
 		return '';
@@ -5711,9 +5706,15 @@ function pfb_pkgconf_ca_notice_signature(string $file): string {
  * accepts 'provenance_ok' through its own $io array. $file/$ca_path thread straight through
  * to pfb_pkgconf_ca_state()/pfb_pkgconf_ca_sync() (both already take them); NULL/the
  * constant defaults reach the real /usr/local/etc/pkg.conf in production, and tests point
- * them at a fixture the same way they already do for those two functions directly.
+ * them at a fixture the same way they already do for those two functions directly;
+ * $is_plus is the matching edition seam for those off-appliance fixtures.
  */
-function pfb_pkgconf_ca_tick(?bool $provenance_ok = NULL, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): void {
+function pfb_pkgconf_ca_tick(
+	?bool $provenance_ok = NULL,
+	?string $file = NULL,
+	string $ca_path = PFB_SSL_CA_CERT_PATH,
+	?bool $is_plus = NULL
+): void {
 	try {
 		$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
 		if (!$provenance_ok) {
@@ -5721,14 +5722,14 @@ function pfb_pkgconf_ca_tick(?bool $provenance_ok = NULL, ?string $file = NULL, 
 		}
 		$file = $file ?? PFB_PKG_CONF;
 		$consent = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
-		$state = pfb_pkgconf_ca_state($file);
+		$state = pfb_pkgconf_ca_state($file, $is_plus);
 		if ($state === '') {
 			pfb_pkgconf_ca_clear_notice_sentinel();
 			return;
 		}
 		if ($consent) {
 			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path);
-			$state = pfb_pkgconf_ca_state($file);
+			$state = pfb_pkgconf_ca_state($file, $is_plus);
 			if ($state !== 'needed') {
 				// The re-apply landed (or the file was already patched): resolved.
 				pfb_pkgconf_ca_clear_notice_sentinel();

@@ -51,6 +51,7 @@ _pc_box() {
     printf '2.8.1\n' > "${PFB_VERSION_FILE}"
     PFB_PKG_CONF="${_pcb_dir}/pkg.conf"
     PFB_CONFIG_XML="${_pcb_dir}/config.xml"
+    PFB_PKG_DIRTY="${_pcb_dir}/pkg.dirty"
     PFB_SSL_CA_CERT_PATH="${_pcb_dir}/ca-certs"
     _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
     PFB_SSL_CA_CERT_FILE="${_pcb_dir}/netgate-ca.pem"
@@ -63,14 +64,14 @@ _pc_box() {
         "${FIX}/plus_patched.conf" > "${PFB_EXPECTED_PATCHED}"
     export PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
            PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-           PFB_SSL_CA_CERT_PATH
+           PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY
     unset _pcb_dir
 }
 
 _pc_unset_box() {
     unset PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-          PFB_SSL_CA_CERT_PATH PFB_SSL_CA_CERT_FILE PFB_PINNED PFB_EXPECTED_PATCHED
+          PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_SSL_CA_CERT_FILE PFB_PINNED PFB_EXPECTED_PATCHED
 }
 
 # Write a config.xml carrying the consent element with body $1 ("on" / "off" /
@@ -146,6 +147,25 @@ Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches 
       The status should be success
       The stderr should include "INFO"
       The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — pkg subsystem dirty: byte-unchanged'
+    setup() {
+        _c1_dirty_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_pkg_dirty.XXXXXX")"
+        _pc_box "${_c1_dirty_dir}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+        _pc_config_xml on
+        printf 'DIRTY\n' > "${PFB_PKG_DIRTY}"
+    }
+    cleanup() { rm -rf "${_c1_dirty_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'defers while pfSense package management owns the pkg subsystem'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 End
 

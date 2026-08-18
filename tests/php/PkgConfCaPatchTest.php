@@ -488,37 +488,37 @@ final class PkgConfCaPatchTest extends TestCase
 	public function testStatePinnedFileIsNeeded(): void
 	{
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
-		$this->assertSame('needed', pfb_pkgconf_ca_state($file));
+		$this->assertSame('needed', pfb_pkgconf_ca_state($file, TRUE));
 	}
 
-	public function testStateRejectsPinnedShapeWhenEditionIsCe(): void
+	public function testStateRejectsPinnedShapeWhenProductLabelIsNotPlus(): void
 	{
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
-		$this->assertSame('', pfb_pkgconf_ca_state($file, FALSE));
+		$this->assertSame('', pfb_pkgconf_ca_state($file));
 	}
 
 	public function testStatePatchedFileIsPatched(): void
 	{
 		$file = $this->tempFile($this->fixture('plus_patched.conf'));
-		$this->assertSame('patched', pfb_pkgconf_ca_state($file));
+		$this->assertSame('patched', pfb_pkgconf_ca_state($file, TRUE));
 	}
 
 	public function testStateCeFileIsEmpty(): void
 	{
 		$file = $this->tempFile($this->fixture('ce_unpinned.conf'));
-		$this->assertSame('', pfb_pkgconf_ca_state($file));
+		$this->assertSame('', pfb_pkgconf_ca_state($file, TRUE));
 	}
 
 	public function testStateAbsentPathIsEmpty(): void
 	{
-		$this->assertSame('', pfb_pkgconf_ca_state($this->root . '/does-not-exist.conf'));
+		$this->assertSame('', pfb_pkgconf_ca_state($this->root . '/does-not-exist.conf', TRUE));
 	}
 
 	public function testStateDirectoryIsEmpty(): void
 	{
 		$dir = $this->root . '/adir';
 		mkdir($dir, 0o755, true);
-		$this->assertSame('', pfb_pkgconf_ca_state($dir));
+		$this->assertSame('', pfb_pkgconf_ca_state($dir, TRUE));
 	}
 
 	public function testStateSymlinkIsEmpty(): void
@@ -526,7 +526,7 @@ final class PkgConfCaPatchTest extends TestCase
 		$target = $this->tempFile($this->fixture('plus_pinned.conf'), 'target.conf');
 		$link = $this->root . '/link.conf';
 		symlink($target, $link);
-		$this->assertSame('', pfb_pkgconf_ca_state($link));
+		$this->assertSame('', pfb_pkgconf_ca_state($link, TRUE));
 	}
 
 	public function testStateUnreadableFileIsEmpty(): void
@@ -534,7 +534,7 @@ final class PkgConfCaPatchTest extends TestCase
 		$this->skipUnderRoot();
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'), 'unreadable.conf');
 		chmod($file, 0o000);
-		$this->assertSame('', pfb_pkgconf_ca_state($file));
+		$this->assertSame('', pfb_pkgconf_ca_state($file, TRUE));
 	}
 
 	// -------------------------------------------------------------------
@@ -729,7 +729,19 @@ final class PkgConfCaPatchTest extends TestCase
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
 		$before = file_get_contents($file);
 
-		pfb_pkgconf_ca_tick(FALSE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(FALSE, $file, $this->populatedDir(), TRUE);
+
+		$this->assertSame($before, file_get_contents($file));
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
+	}
+
+	public function testTickDefaultsToNoOpWhenProductLabelIsNotPlus(): void
+	{
+		config_set_path(self::CONSENT_PATH, 'on');
+		$file = $this->tempFile($this->pinnedFixture());
+		$before = file_get_contents($file);
+
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
 
 		$this->assertSame($before, file_get_contents($file));
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
@@ -741,7 +753,7 @@ final class PkgConfCaPatchTest extends TestCase
 		$caDir = $this->populatedDir();
 		$file  = $this->tempFile($this->pinnedFixture());
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $caDir);
+		pfb_pkgconf_ca_tick(TRUE, $file, $caDir, TRUE);
 
 		$this->assertSame($this->patchedFixtureFor($caDir), file_get_contents($file));
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
@@ -753,7 +765,7 @@ final class PkgConfCaPatchTest extends TestCase
 		config_set_path(self::CONSENT_PATH, '');
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir(), TRUE);
 
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices']);
 		$notice = $GLOBALS['pfb_test_file_notices'][0];
@@ -770,10 +782,10 @@ final class PkgConfCaPatchTest extends TestCase
 		config_set_path(self::CONSENT_PATH, '');
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir(), TRUE);
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 1: exactly one notice');
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir(), TRUE);
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 2: de-duped, still one notice');
 	}
 
@@ -783,7 +795,7 @@ final class PkgConfCaPatchTest extends TestCase
 		$this->assertFileExists($this->sentinelPath(), 'precondition: a stale sentinel exists');
 
 		$file = $this->tempFile($this->fixture('ce_unpinned.conf'));
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir(), TRUE);
 
 		$this->assertFileDoesNotExist($this->sentinelPath());
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices']);
@@ -800,7 +812,7 @@ final class PkgConfCaPatchTest extends TestCase
 		config_set_path(self::CONSENT_PATH, 'on');
 		$file = $this->tempFile($this->pinnedFixture());
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->emptyDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->emptyDir(), TRUE);
 
 		$this->assertCount(
 			1,
@@ -829,7 +841,7 @@ final class PkgConfCaPatchTest extends TestCase
 		$content = $this->fixture('plus_pinned.conf');
 		$file = $this->tempFile($content);
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir(), TRUE);
 		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 1: exactly one notice');
 		$size = filesize($file);
 		$mtime = filemtime($file);
@@ -840,7 +852,7 @@ final class PkgConfCaPatchTest extends TestCase
 		clearstatcache(TRUE, $file);
 		$this->assertSame($size, filesize($file), 'the rewrite must keep size unchanged so size-only signatures cannot pass');
 
-		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir());
+		pfb_pkgconf_ca_tick(TRUE, $file, $this->populatedDir(), TRUE);
 		$this->assertCount(
 			2,
 			$GLOBALS['pfb_test_file_notices'],
@@ -863,12 +875,12 @@ final class PkgConfCaPatchTest extends TestCase
 		config_set_path(self::CONSENT_PATH, 'on');
 		$file = $this->tempFile($this->fixture('plus_patched.conf'));
 
-		$ok = pfb_pkgconf_ca_apply('', TRUE, $file, self::REAL_CA_DIR);
+		$ok = pfb_pkgconf_ca_apply('', TRUE, $file, self::REAL_CA_DIR, TRUE);
 		$this->assertTrue($ok, 'an explicit revoke against a patched file must succeed');
 		$this->assertSame($this->fixture('plus_pinned.conf'), file_get_contents($file));
 
 		config_set_path(self::CONSENT_PATH, '');
-		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR, TRUE);
 
 		$this->assertSame(
 			[],
@@ -886,11 +898,11 @@ final class PkgConfCaPatchTest extends TestCase
 		config_set_path(self::CONSENT_PATH, 'on');
 		$file = $this->tempFile($this->fixture('plus_patched.conf'));
 
-		$ok = pfb_pkgconf_ca_apply('', TRUE, $file, self::REAL_CA_DIR);
+		$ok = pfb_pkgconf_ca_apply('', TRUE, $file, self::REAL_CA_DIR, TRUE);
 		$this->assertTrue($ok);
 
 		config_set_path(self::CONSENT_PATH, '');
-		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR, TRUE);
 		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'precondition: the revoke itself must stay quiet');
 
 		$content = $this->fixture('plus_pinned.conf');
@@ -901,7 +913,7 @@ final class PkgConfCaPatchTest extends TestCase
 		touch($file, $mtime + 2);
 		clearstatcache(TRUE, $file);
 		$this->assertSame($size, filesize($file), 'the rewrite must keep size unchanged');
-		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR);
+		pfb_pkgconf_ca_tick(TRUE, $file, self::REAL_CA_DIR, TRUE);
 
 		$this->assertCount(
 			1,
@@ -917,9 +929,20 @@ final class PkgConfCaPatchTest extends TestCase
 
 		// A CA path that would make pfb_pkgconf_ca_sync() itself return FALSE if it ran --
 		// proves the early skip, not a coincidental success.
-		$ok = pfb_pkgconf_ca_apply('on', FALSE, $file, $this->emptyDir());
+		$ok = pfb_pkgconf_ca_apply('on', FALSE, $file, $this->emptyDir(), TRUE);
 
 		$this->assertTrue($ok, 'a CE box (no recognised PKG_ENV block) must never fail here');
 		$this->assertSame($before, file_get_contents($file), 'an unrecognised pkg.conf must never be written');
+	}
+
+	public function testApplyDefaultsToNoOpWhenProductLabelIsNotPlus(): void
+	{
+		$file = $this->tempFile($this->pinnedFixture());
+		$before = file_get_contents($file);
+
+		$ok = pfb_pkgconf_ca_apply('on', FALSE, $file, $this->populatedDir());
+
+		$this->assertTrue($ok);
+		$this->assertSame($before, file_get_contents($file));
 	}
 }

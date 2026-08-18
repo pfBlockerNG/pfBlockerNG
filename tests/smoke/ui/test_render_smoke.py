@@ -32,7 +32,7 @@ import os
 import re
 import subprocess
 import uuid
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -3036,38 +3036,33 @@ def _overwrite_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float =
 def pkg_conf_ca_block_seeded(vm: SmokeVM) -> Iterator[None]:
     """Temporarily give the CE smoke guest the two facts this feature requires on Plus:
     a Plus product label and a well-formed, unpatched ``PKG_ENV`` block in the guest's real
-    ``pkg.conf``. Both files are restored byte-for-byte in ``finally`` and verified, so the
-    simulated edition and pin cannot leak into later tests.
+    ``pkg.conf``. Both files are restored byte-for-byte even when another seed or restore
+    fails, so the simulated edition and pin cannot leak into later tests.
     """
     original = vm.ssh("cat", _PKG_CONF_PATH)
     assert original.returncode == 0, (
         f"failed to read {_PKG_CONF_PATH} before seeding (rc={original.returncode}): {original.stderr.strip()!r}"
     )
-    original_content = original.stdout
     original_label = vm.ssh("cat", _PRODUCT_LABEL_PATH)
     assert original_label.returncode == 0, (
         f"failed to read {_PRODUCT_LABEL_PATH} before seeding "
         f"(rc={original_label.returncode}): {original_label.stderr.strip()!r}"
     )
     seeded_content = (
-        original_content.rstrip("\n") + "\nPKG_ENV {\n" + f"\tSSL_CA_CERT_FILE={_PKG_CONF_GUEST_CA_FILE}\n" + "}\n"
+        original.stdout.rstrip("\n") + "\nPKG_ENV {\n" + f"\tSSL_CA_CERT_FILE={_PKG_CONF_GUEST_CA_FILE}\n" + "}\n"
     )
-    _overwrite_vm_file(vm, _PRODUCT_LABEL_PATH, "pfSense Plus\n")
-    _overwrite_vm_file(vm, _PKG_CONF_PATH, seeded_content)
-    try:
+
+    def restore(path: str, content: str) -> None:
+        _overwrite_vm_file(vm, path, content)
+        restored = vm.ssh("cat", path)
+        assert restored.returncode == 0 and restored.stdout == content, f"failed to restore {path}"
+
+    with ExitStack() as cleanup:
+        cleanup.callback(restore, _PRODUCT_LABEL_PATH, original_label.stdout)
+        _overwrite_vm_file(vm, _PRODUCT_LABEL_PATH, "pfSense Plus\n")
+        cleanup.callback(restore, _PKG_CONF_PATH, original.stdout)
+        _overwrite_vm_file(vm, _PKG_CONF_PATH, seeded_content)
         yield
-    finally:
-        _overwrite_vm_file(vm, _PKG_CONF_PATH, original_content)
-        _overwrite_vm_file(vm, _PRODUCT_LABEL_PATH, original_label.stdout)
-        restored = vm.ssh("cat", _PKG_CONF_PATH)
-        restored_label = vm.ssh("cat", _PRODUCT_LABEL_PATH)
-        assert restored.returncode == 0 and restored.stdout == original_content, (
-            f"failed to restore {_PKG_CONF_PATH} to its original content after seeding -- "
-            "guest pkg.conf may be left mutated for later tests"
-        )
-        assert restored_label.returncode == 0 and restored_label.stdout == original_label.stdout, (
-            f"failed to restore {_PRODUCT_LABEL_PATH} after Plus simulation"
-        )
 
 
 def test_software_page_pkgconf_ca_consent_section_present_when_pinned(
