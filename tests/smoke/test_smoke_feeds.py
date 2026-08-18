@@ -3872,18 +3872,18 @@ def test_adr46_hostile_member_blacklist_rejected(deployed_vm: SmokeVM, mock_feed
 # --------------------------------------------------------------------------- #
 
 _STRUCTURED_SHAPES = [
-    # (label, fixture, member imported, sibling that must NOT be imported)
-    ("json", "ip_json.json", "192.0.2.71", "192.0.2.171"),
-    ("csv", "ip_csv.csv", "192.0.2.72", "192.0.2.172"),
-    ("xml", "ip_xml.xml", "192.0.2.73", "192.0.2.173"),
-    ("ndjson", "ip_ndjson.ndjson", "192.0.2.74", "192.0.2.174"),
+    # (label, fixture, the type file(1) must report on the box, the addresses the feed holds)
+    ("json", "ip_json.json", "application/json", ("192.0.2.71", "198.51.100.71")),
+    ("csv", "ip_csv.csv", "text/csv", ("192.0.2.72", "198.51.100.72", "203.0.113.72")),
+    ("xml", "ip_xml.xml", "text/xml", ("192.0.2.73", "198.51.100.73")),
+    ("ndjson", "ip_ndjson.ndjson", "application/x-ndjson", ("192.0.2.74", "198.51.100.74")),
 ]
 
 
 @pytest.mark.smoke
 @pytest.mark.timeout(120)  # a full update + targeted reload exceeds the tier's 30s default
 @pytest.mark.parametrize(
-    ("label", "fixture", "member", "non_member"),
+    ("label", "fixture", "expected_mime", "expected_members"),
     _STRUCTURED_SHAPES,
     ids=[row[0] for row in _STRUCTURED_SHAPES],
 )
@@ -3892,17 +3892,29 @@ def test_structured_text_feed_imports(
     mock_feeds: _MockFeedServer,
     label: str,
     fixture: str,
-    member: str,
-    non_member: str,
+    expected_mime: str,
+    expected_members: tuple[str, ...],
 ) -> None:
     """An allow-listed structured-text body loads its addresses into the pf table.
 
     The MIME gate sniffs the DOWNLOADED FILE (``file -b --mime-type``), not the HTTP
-    header, so each fixture's own bytes decide the branch taken. The non-member assertion
-    is what stops a row passing by importing everything in sight.
+    header, so the fixture's own bytes decide which allow-list entry admits it. The row
+    asserts that verdict FIRST, on the exact served bytes: without it a fixture that
+    libmagic reports as ``text/plain`` would pass this row while covering nothing but the
+    plain-text entry every other case already exercises.
+
+    The table is then compared as a SET. A member-only assertion cannot fail when a feed
+    imports more than it should, and the addresses here are the whole feed.
     """
     feed_url = mock_feeds.feed_url(fixture)
     spec = h.IpCase(aliasname=f"smokemime{label}", feed_url=feed_url, header=f"smokemime{label}", family="v4")
+
+    # The branch this row exists to cover, proven on the bytes the guest actually fetches.
+    sniffed = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
+    assert sniffed == expected_mime, (
+        f"{fixture} must reach the {expected_mime!r} allow-list entry, but file(1) on the box "
+        f"reports {sniffed!r} — this row would cover that entry instead"
+    )
 
     assert spec.alias not in h.pfctl_tables(deployed_vm), (
         f"{spec.alias} present before the {label} feed was ever loaded"
@@ -3910,11 +3922,9 @@ def test_structured_text_feed_imports(
 
     with h.CaseContext(deployed_vm, spec):
         members = h.pfctl_table_members(deployed_vm, spec.alias)
-        assert h.member_present(members, member), (
-            f"{member} not in {spec.alias} after loading the {label} feed: {members}"
-        )
-        assert not h.member_present(members, non_member), (
-            f"{non_member} was never in the {label} feed yet appears in {spec.alias}: {members}"
+        assert sorted(members) == sorted(expected_members), (
+            f"{spec.alias} must hold exactly the {label} feed's addresses; "
+            f"expected {sorted(expected_members)}, got {sorted(members)}"
         )
 
 
@@ -3929,7 +3939,15 @@ def test_unsupported_mime_feed_rejected(deployed_vm: SmokeVM, mock_feeds: _MockF
     """
     feed_url = mock_feeds.feed_url("ip_unsupported_xz.xz")
     spec = h.IpCase(aliasname="smokemimexz", feed_url=feed_url, header="smokemimexz", family="v4")
-    marker = "reason=mime_not_allowed"
+    # Scoped to THIS feed and naming the detected type: the smoke VM is session-scoped, so a
+    # bare `reason=mime_not_allowed` count would also be satisfied by another case's reject.
+    marker = f"REJECT feed={spec.header}_v4 stage=mime reason=mime_not_allowed detected=application/x-xz"
+
+    sniffed = _box_mime_type(deployed_vm, _fixture_bytes("ip_unsupported_xz.xz"))
+    assert sniffed == "application/x-xz", (
+        f"the reject fixture must be sniffed as application/x-xz (a type the allow-list omits); "
+        f"file(1) on the box reports {sniffed!r}"
+    )
 
     assert spec.alias not in h.pfctl_tables(deployed_vm), (
         f"{spec.alias} present before the unsupported feed was ever loaded"
