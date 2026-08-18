@@ -69,8 +69,28 @@ die() {
 # header) + ASSUME_ALWAYS_YES so a stray prompt cannot wedge a non-interactive run.
 # Callers add -y themselves on verbs that take it (delete/install); read-only verbs
 # (query/rquery/version/info) ignore ASSUME_ALWAYS_YES harmlessly.
+#
+# SSL_CA_CERT_PATH (issue #2514): on pfSense Plus, pfSense-repo-setup writes a PKG_ENV
+# block into pkg.conf pinning SSL_CA_CERT_FILE to Netgate's private CA bundle, which
+# carries only Netgate CAs. libpkg applies that block with setenv(..., overwrite=1), so
+# a libfetch-based pkg (1.x) verifies against Netgate's CAs and nothing else, and every
+# fetch from a third-party catalog fails with "certificate verify failed". PKG_ENV never
+# sets SSL_CA_CERT_PATH, and libfetch loads file and path into the same store
+# (SSL_CTX_load_verify_locations(ctx, ca_cert_file, ca_cert_path)), so exporting the
+# path here survives the pin. This only mirrors what a libcurl-based pkg (2.x) already
+# does by default: peer verification stays fully enabled, the box's trust store is not
+# modified, and no vendor configuration is touched.
+PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH:-${ROOT}/etc/ssl/certs}"
+
 _pkg() {
-    env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" "$@" </dev/null
+    # A path that does not exist would be a no-op at best and could cost the pinned
+    # bundle its load, so it is only exported when the store is really there.
+    if [ -d "${PFB_SSL_CA_CERT_PATH}" ]; then
+        env ASSUME_ALWAYS_YES=yes SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
+            "${PKG_BIN}" "$@" </dev/null
+    else
+        env ASSUME_ALWAYS_YES=yes "${PKG_BIN}" "$@" </dev/null
+    fi
 }
 
 usage() {

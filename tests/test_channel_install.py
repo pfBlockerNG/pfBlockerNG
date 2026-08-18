@@ -44,6 +44,7 @@ _PKG_STUB = r"""#!/bin/sh
 ROOT="${PFB_TEST_ROOT}"
 LOG="${ROOT}/pkg-invocations.log"
 printf '%s\n' "$*" >> "${LOG}"
+printf '%s\n' "${SSL_CA_CERT_PATH-<unset>}" >> "${ROOT}/pkg-ca-path.log"
 _stub_byte="$(head -c 1 2>/dev/null)"
 printf '%s' "${_stub_byte}" >> "${ROOT}/pkg-stdin"
 
@@ -202,6 +203,11 @@ def _pkg_stdin_capture(root: str) -> Path:
     return Path(root) / "pkg-stdin"
 
 
+def _pkg_ca_path_capture(root: str) -> Path:
+    """One line per pkg call: the SSL_CA_CERT_PATH it saw, or <unset>."""
+    return Path(root) / "pkg-ca-path.log"
+
+
 def _write_pkg_stub(root: str) -> str:
     """Install the fake pkg(8) binary under root/bin/pkg; return its path."""
     bin_dir = os.path.join(root, "bin")
@@ -215,7 +221,7 @@ def _write_pkg_stub(root: str) -> str:
     # CREATE, never truncate: _run_install re-seeds the stub on every call (including
     # repeated calls on the same root for idempotency/resume tests), and the log must
     # accumulate across those calls for callers that diff before/after content.
-    for p in (_pkg_stdin_capture(root), _pkg_log(root)):
+    for p in (_pkg_stdin_capture(root), _pkg_log(root), _pkg_ca_path_capture(root)):
         if not p.exists():
             p.write_text("")
     return stub_path
@@ -1047,3 +1053,64 @@ def test_install_script_parses_and_carries_required_hook_markers() -> None:
     assert "# PFB_EMBED_HOOK_END" in text
     assert text.startswith("#!/bin/sh\n")
     assert os.access(str(_SCRIPT), os.X_OK), "the repository copy must be executable"
+
+
+# --- SSL_CA_CERT_PATH export (issue #2514) ---------------------------------
+#
+# pfSense Plus pins pkg's CA bundle to Netgate's private CA via the PKG_ENV block
+# pfSense-repo-setup writes into pkg.conf. That bundle carries only Netgate CAs, and
+# libpkg applies it with setenv(..., overwrite=1), so libfetch-based pkg (1.x) ends up
+# with NO public roots and every fetch from our Pages catalog dies with
+# "Certificate verification failed for /C=US/O=ISRG/CN=Root YR".
+#
+# PKG_ENV never sets SSL_CA_CERT_PATH, and libfetch loads both file and path into one
+# store (SSL_CTX_load_verify_locations(ctx, ca_cert_file, ca_cert_path)), so exporting
+# the path survives the pin -- which is exactly what libcurl-based pkg (2.x) already
+# does by default. Verified red->green live on a Plus box with fetch(1).
+
+
+def _ca_dir(root: str) -> Path:
+    return Path(root) / "etc" / "ssl" / "certs"
+
+
+def test_every_pkg_call_exports_the_system_ca_path() -> None:
+    """Every pkg(8) invocation carries SSL_CA_CERT_PATH pointing at the box's store."""
+    with tempfile.TemporaryDirectory() as root:
+        ca_dir = _ca_dir(root)
+        ca_dir.mkdir(parents=True)
+        (ca_dir / "4042bcee.0").write_text("")  # a hashed store is never empty
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_path_capture(root).read_text().split()
+        assert seen, "no pkg calls were made — the run cannot prove the export"
+        assert set(seen) == {str(ca_dir)}, (
+            f"expected every pkg call to export SSL_CA_CERT_PATH={ca_dir}, saw {sorted(set(seen))}"
+        )
+
+
+def test_absent_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
+    """No CA directory on the box -> nothing is exported (never point pkg at a missing path)."""
+    with tempfile.TemporaryDirectory() as root:
+        assert not _ca_dir(root).exists()
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_path_capture(root).read_text().split()
+        assert seen, "no pkg calls were made — the run cannot prove the guard"
+        assert set(seen) == {"<unset>"}, f"expected SSL_CA_CERT_PATH unset, saw {sorted(set(seen))}"
+
+
+def test_ca_path_is_overridable() -> None:
+    """PFB_SSL_CA_CERT_PATH overrides the default location."""
+    with tempfile.TemporaryDirectory() as root:
+        override = Path(root) / "custom-store"
+        override.mkdir()
+
+        proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_PATH": str(override)})
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_path_capture(root).read_text().split()
+        assert set(seen) == {str(override)}, f"override ignored, saw {sorted(set(seen))}"
