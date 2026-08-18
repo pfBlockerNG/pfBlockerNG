@@ -968,6 +968,19 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-19 Software page capability; #1887 relocated the pre-existing ON default into the registry, absent unchanged',
 		],
 
+		// issue #2518: consent to add a single SSL_CA_CERT_PATH line to pkg.conf's PKG_ENV
+		// block (Plus's Netgate-only CA pin otherwise blocks third-party repos). Default ''
+		// (off) -- the patch is opt-in, never applied without this flag.
+		'gen/pfb_pkg_ca_consent' => [
+			'default'       => '',
+			'read_adapter'  => 'pfb_cfg_toggle_read',
+			'write_adapter' => 'pfb_cfg_toggle_write',
+			// The consent control lives on the Software page (same as pfb_software_check
+			// above), so it shares that page's secondary privilege gate (issue #1895).
+			'write_priv'    => 'pkg_mgr_installed.php',
+			'no_grandfather' => 'new 4.0 field (issue #2518); \'\' = consent withheld = pre-existing behaviour (pkg.conf untouched)',
+		],
+
 		// Internal-address feed-host filter toggle: 'on'|''. Default 'on'.
 		// A present empty token is explicit Off; absent uses the registered default.
 		'gen/pfb_feed_internal_filter' => [

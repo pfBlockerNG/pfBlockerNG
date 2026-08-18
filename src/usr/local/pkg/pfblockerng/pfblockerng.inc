@@ -5155,6 +5155,10 @@ define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 define('PFB_SSL_CA_CERT_PATH', '/etc/ssl/certs');
 define('PFB_SSL_CA_CERT_FILE', '/etc/ssl/cert.pem');
 
+// issue #2518: the file pfSense-repo-setup (Plus) rewrites the PKG_ENV pin into. The
+// consented patch below adds a single SSL_CA_CERT_PATH line to it -- never any other edit.
+define('PFB_PKG_CONF', '/usr/local/etc/pkg.conf');
+
 if (!defined('PFB_PYTHON_WRAPPER')) {
 	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
 }
@@ -5325,6 +5329,355 @@ function pfb_pkg_ca_env_prefix(string $ca_path = PFB_SSL_CA_CERT_PATH, string $c
 		return '';
 	}
 	return implode(' ', $parts) . ' ';
+}
+
+/*
+ * issue #2518 — the consented pkg.conf patch: PFB_SSL_CA_CERT_PATH survives the Plus
+ * PKG_ENV pin (see the constant's docblock above); this is the code that ADDS that one
+ * line to /usr/local/etc/pkg.conf itself, gated on operator consent (never automatic).
+ *
+ * The pure text functions below never touch a filesystem -- pfb_pkgconf_ca_state() and
+ * pfb_pkgconf_ca_sync() are the only IO, so the parsing/patching logic is exercised
+ * entirely with in-memory fixtures.
+ */
+
+/*
+ * [open_idx, close_idx] line indices of the text's PKG_ENV block, or NULL when $lines does
+ * not contain EXACTLY ONE 'PKG_ENV {' line (column 0, no trailing content) followed later
+ * by a '}' line (column 0). More than one open, or an open with no matching close, is an
+ * unfamiliar shape every caller below refuses rather than guesses at.
+ */
+function pfb_pkgconf_block_bounds(array $lines): ?array {
+	$open_idx = NULL;
+	$open_count = 0;
+	foreach ($lines as $i => $line) {
+		if ($line === 'PKG_ENV {') {
+			$open_count++;
+			$open_idx = $i;
+		}
+	}
+	if ($open_count !== 1) {
+		return NULL;
+	}
+	for ($i = $open_idx + 1; $i < count($lines); $i++) {
+		if ($lines[$i] === '}') {
+			return array($open_idx, $i);
+		}
+	}
+	return NULL;
+}
+
+/*
+ * TRUE iff $text is EXACTLY the shape pfSense-repo-setup writes and is not yet patched:
+ * one well-formed PKG_ENV block (pfb_pkgconf_block_bounds()) carrying a SSL_CA_CERT_FILE=
+ * line, and SSL_CA_CERT_PATH appearing nowhere in the text. Refusing on anything else --
+ * a hand-edited block, a CE box with no block at all, a future pfSense-repo-setup that
+ * changes the shape -- means pfb_pkgconf_ca_add() only ever edits a block it fully
+ * recognises, never a best-effort guess that could corrupt an operator's own pkg.conf.
+ */
+function pfb_pkgconf_ca_needed(string $text): bool {
+	if (strpos($text, 'SSL_CA_CERT_PATH') !== FALSE) {
+		return FALSE;
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return FALSE;
+	}
+	[$open_idx, $close_idx] = $bounds;
+	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
+		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/*
+ * The patched text (the single line "\tSSL_CA_CERT_PATH={$ca_path}" inserted immediately
+ * before the block's closing '}' line, nothing else touched), or '' when the patch is
+ * refused: the shape is not pfb_pkgconf_ca_needed(), or $ca_path is not a bare absolute
+ * path. The path allowlist (no whitespace/newline/'}'/'#'/quote) is UCL-block safety, not
+ * filesystem validation -- any of those characters landing inside the PKG_ENV block would
+ * either terminate it early ('}'), start a comment libucl then ignores the rest of the
+ * line for ('#'), or otherwise corrupt a file every subsequent `pkg` invocation parses.
+ */
+function pfb_pkgconf_ca_add(string $text, string $ca_path): string {
+	if (!pfb_pkgconf_ca_needed($text)) {
+		return '';
+	}
+	if (preg_match('#^/[A-Za-z0-9._/+-]+$#', $ca_path) !== 1) {
+		return '';
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	// pfb_pkgconf_ca_needed() above already proved exactly one well-formed block exists.
+	[, $close_idx] = $bounds;
+	array_splice($lines, $close_idx, 0, array("\tSSL_CA_CERT_PATH={$ca_path}"));
+	return implode("\n", $lines);
+}
+
+/*
+ * The text with our exact line "\tSSL_CA_CERT_PATH={$ca_path}" removed from inside the
+ * PKG_ENV block, or '' when that exact line is not present there (including: no block at
+ * all, or a line present for a DIFFERENT path -- a hand-added override must survive an
+ * unpatch). Everything else stays byte-identical, so an add()-then-remove() round trip
+ * reproduces the original bytes exactly.
+ */
+function pfb_pkgconf_ca_remove(string $text, string $ca_path): string {
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return '';
+	}
+	[$open_idx, $close_idx] = $bounds;
+	$target = "\tSSL_CA_CERT_PATH={$ca_path}";
+	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
+		if ($lines[$i] === $target) {
+			array_splice($lines, $i, 1);
+			return implode("\n", $lines);
+		}
+	}
+	return '';
+}
+
+/*
+ * TRUE iff $dir (already known to exist) holds at least one directory entry besides
+ * '.'/'..'. FreeBSD ships /etc/ssl/certs empty until certctl rehash populates it, and an
+ * empty hash directory would make the patch below a no-op that merely LOOKS fixed: libfetch
+ * would load zero roots from the path, same as never pointing at it.
+ */
+function pfb_pkgconf_dir_populated(string $dir): bool {
+	$entries = @scandir($dir);
+	if ($entries === FALSE) {
+		return FALSE;
+	}
+	foreach ($entries as $entry) {
+		if ($entry !== '.' && $entry !== '..') {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/*
+ * Atomically replace $file's contents with $content: a temp file in the SAME directory
+ * (never a cross-filesystem tempnam() fallback -- the is_writable() guard below refuses
+ * before ever calling tempnam(), so a leftover temp file can never land anywhere but here),
+ * written and chmod'd to the original file's permission bits, then rename()d into place.
+ * The temp file is unlinked on every failure path; rename() itself is what makes a
+ * concurrent `pkg` reader see either the whole old file or the whole new one, never a
+ * partial write.
+ */
+function pfb_pkgconf_write_atomic(string $file, string $content): bool {
+	$dir = dirname($file);
+	if (!is_writable($dir)) {
+		return FALSE;
+	}
+	$perms = @fileperms($file);
+	$tmp = @tempnam($dir, '.pfbpkgconf_');
+	if ($tmp === FALSE) {
+		return FALSE;
+	}
+	if (@file_put_contents($tmp, $content, LOCK_EX) === FALSE) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	if ($perms !== FALSE) {
+		@chmod($tmp, $perms & 0o777);
+	}
+	if (!@rename($tmp, $file)) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+/*
+ * The live pkg.conf's CA-patch state: 'needed' (pfb_pkgconf_ca_needed() shape, unpatched),
+ * 'patched' (the same well-formed block, already carrying a SSL_CA_CERT_PATH line), or ''
+ * for every other case -- absent/unreadable/a directory/a symlink/no PKG_ENV block/an
+ * unrecognised block shape. '' always means "nothing for pfb_pkgconf_ca_sync() to do here".
+ *
+ * Refuses a symlink outright (rather than following it): pfb_pkgconf_ca_sync()'s atomic
+ * rename() would replace the link itself, silently detaching whatever it used to point at.
+ */
+function pfb_pkgconf_ca_state(?string $file = NULL): string {
+	$file = $file ?? PFB_PKG_CONF;
+	if (is_link($file) || !is_file($file) || !is_readable($file)) {
+		return '';
+	}
+	$text = @file_get_contents($file);
+	if ($text === FALSE) {
+		return '';
+	}
+	if (pfb_pkgconf_ca_needed($text)) {
+		return 'needed';
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return '';
+	}
+	[$open_idx, $close_idx] = $bounds;
+	$has_file = FALSE;
+	$has_path = FALSE;
+	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
+		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
+			$has_file = TRUE;
+		}
+		if (strpos($lines[$i], "\tSSL_CA_CERT_PATH=") === 0) {
+			$has_path = TRUE;
+		}
+	}
+	return ($has_file && $has_path) ? 'patched' : '';
+}
+
+/*
+ * Make $file match $consent: patched (add) when TRUE, unpatched (remove) when FALSE. TRUE
+ * when the file ends up in the intended state -- INCLUDING when it already was and nothing
+ * was written -- FALSE when it could not be made to match (refused patch, refused write).
+ *
+ * $consent === TRUE additionally requires $ca_path to be a populated directory (see
+ * pfb_pkgconf_dir_populated()'s docblock): patching onto an empty/missing directory would
+ * silently regress pkg's TLS verification rather than fix it, so that case refuses without
+ * writing.
+ */
+function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
+	$file = $file ?? PFB_PKG_CONF;
+	if (is_link($file) || !is_file($file) || !is_readable($file)) {
+		return FALSE;
+	}
+	$text = @file_get_contents($file);
+	if ($text === FALSE) {
+		return FALSE;
+	}
+
+	if ($consent) {
+		if (!is_dir($ca_path) || !pfb_pkgconf_dir_populated($ca_path)) {
+			return FALSE;
+		}
+		$patched = pfb_pkgconf_ca_add($text, $ca_path);
+	} else {
+		$patched = pfb_pkgconf_ca_remove($text, $ca_path);
+	}
+
+	if ($patched === '') {
+		// Nothing to change: already matches the requested consent state (or the file's
+		// shape is not one we patch at all, e.g. a CE box with no PKG_ENV block).
+		return TRUE;
+	}
+	return pfb_pkgconf_write_atomic($file, $patched);
+}
+
+/*
+ * $pfb['dbdir']/.pkg_ca_notice -- the de-dupe sentinel for the consent-off notice below. Its
+ * PRESENCE is the only thing that matters (mirrors pfb_cron_disable_path()'s house pattern);
+ * content is never read.
+ */
+function pfb_pkgconf_ca_notice_sentinel(): string {
+	global $pfb;
+	$dbdir = $pfb['dbdir'] ?? '/var/db/pfblockerng';
+	return $dbdir . '/.pkg_ca_notice';
+}
+
+function pfb_pkgconf_ca_clear_notice_sentinel(): void {
+	@unlink(pfb_pkgconf_ca_notice_sentinel());
+}
+
+/*
+ * The re-apply + notify cron pass (wired in by a later step). Provenance-gated the same way
+ * pfb_software_update_check() is (the consent control lives on the same Software page), and
+ * fully guarded end to end -- it must never throw into the cron pass.
+ *
+ * Consent on: (re-)apply the patch every tick, since pfSense-repo-setup can re-run at any
+ * time and wipe a previously-patched file back to 'needed'. Consent off + 'needed': raise
+ * ONE de-duped file_notice() (the sentinel absorbs every tick after the first) naming the
+ * consequence and the fix; the sentinel clears whenever the 'needed' condition stops holding
+ * (consent flips on, or the file leaves 'needed' some other way) so a later
+ * pfSense-repo-setup re-run notifies again rather than staying silently suppressed forever.
+ *
+ * $provenance_ok mirrors pfb_software_add_tab()'s injectable seam: NULL (the production
+ * default) reads the real pfb_software_provenance_ok(), which is unreachable off-appliance
+ * (no `pkg` binary, no writable /var/db/pfblockerng to seed its hidden override), so
+ * off-box tests inject the bool directly -- the same reason pfb_software_update_check()
+ * accepts 'provenance_ok' through its own $io array. $file/$ca_path thread straight through
+ * to pfb_pkgconf_ca_state()/pfb_pkgconf_ca_sync() (both already take them); NULL/the
+ * constant defaults reach the real /usr/local/etc/pkg.conf in production, and tests point
+ * them at a fixture the same way they already do for those two functions directly.
+ */
+function pfb_pkgconf_ca_tick(?bool $provenance_ok = NULL, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): void {
+	try {
+		$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
+		if (!$provenance_ok) {
+			return;
+		}
+		$consent = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
+		$state = pfb_pkgconf_ca_state($file);
+		if ($state === '') {
+			pfb_pkgconf_ca_clear_notice_sentinel();
+			return;
+		}
+		if ($consent) {
+			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path);
+			pfb_pkgconf_ca_clear_notice_sentinel();
+			return;
+		}
+		if ($state !== 'needed') {
+			// 'patched' with consent off: our line is already there (a prior sync, or a
+			// hand-added one) -- nothing to notify about.
+			pfb_pkgconf_ca_clear_notice_sentinel();
+			return;
+		}
+		$sentinel = pfb_pkgconf_ca_notice_sentinel();
+		if (!is_file($sentinel)) {
+			file_notice(
+				'pfBlockerNG',
+				"pkg on this firewall trusts only Netgate's CA bundle, so pfBlockerNG and any "
+				. 'other third-party repository cannot be installed or upgraded. Enable the '
+				. 'pkg.conf CA path on the pfBlockerNG Software page to add one SSL_CA_CERT_PATH '
+				. 'line to ' . PFB_PKG_CONF . '.',
+				'pfBlockerNG',
+				'/pfblockerng/pfblockerng_software.php',
+				1
+			);
+			@touch($sentinel);
+		}
+	} catch (Throwable) {
+		// Best-effort background pass -- never break the cron tick that called us.
+		return;
+	}
+}
+
+/*
+ * The Software page's consent Save (issue #2518 finding 1): filters the posted checkbox
+ * token exactly the way the page used to inline, persists it through PfbConfig::write()
+ * (issue #2367: pfSense's Form_Checkbox default 'yes' is rejected by PFB_FILTER_ON_OFF, so
+ * an absent/rejected POST key canonicalises to the Off token), then reacts to the new
+ * consent state the same tick reacts to a stored one. Never calls write_config() -- the
+ * gateway contract (docs/misc/config-gateway.md) leaves flushing to the caller, which still
+ * needs its own write_config() for pfb_software_check saved beside this field.
+ *
+ * Mirrors pfb_pkgconf_ca_tick()'s own guard: pfb_pkgconf_ca_state($file) === '' means there
+ * is nothing here for pfb_pkgconf_ca_sync() to react to (no recognised PKG_ENV block, e.g. a
+ * CE box that never rendered the consent section at all) -- skip the sync call entirely so a
+ * transient pkg.conf read glitch can never surface the CA-specific error to an admin who
+ * only toggled an unrelated setting on the same Save.
+ *
+ * Returns ['ok' => bool, 'token' => string]: 'ok' is what the caller redirects on (TRUE) or
+ * shows $input_errors for (FALSE); 'token' is the canonical value that was persisted, for a
+ * caller that wants to render the just-saved state without a re-read.
+ */
+function pfb_pkgconf_ca_save(array $post, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): array {
+	$token = pfb_filter($post['pfb_pkg_ca_consent'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
+	PfbConfig::write('gen/pfb_pkg_ca_consent', $token);
+
+	if (pfb_pkgconf_ca_state($file) === '') {
+		return array('ok' => TRUE, 'token' => $token);
+	}
+
+	$ok = pfb_pkgconf_ca_sync($token === PfbToggle::On->value, $file, $ca_path);
+	return array('ok' => $ok, 'token' => $token);
 }
 
 /*
