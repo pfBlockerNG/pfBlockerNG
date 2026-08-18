@@ -66,6 +66,8 @@ _HOOK_EMBED_END = "# PFB_EMBED_HOOK_END"
 _HOOK_HEREDOC = "PFB_HOOK_HEREDOC"
 # The source repo a .pkg is built from — base for the per-artifact commit link.
 SOURCE_REPO_URL = "https://github.com/pfBlockerNG/pfBlockerNG"
+MAIN_SITE_URL = "https://pfblockerng.com"
+PKG_SITE_URL = "https://pkg.pfblockerng.com"
 
 # pkg(8) catalog files that live in a catalog dir but are NOT packages — excluded
 # from the human listing and the package table.
@@ -340,54 +342,98 @@ def _esc(s: object) -> str:
 
 
 _CSS = """
-:root{--bg:#0d1117;--card:#161b22;--bd:#30363d;--fg:#e6edf3;--mut:#8b949e;--acc:#2f81f7;--warn:#d29922;--edge:#a371f7;--red:#f85149;--code:#0b0f14}
-*{box-sizing:border-box}
-body{margin:0;background:var(--bg);color:var(--fg);
-  font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
-.wrap{max-width:980px;margin:0 auto;padding:2rem 1.25rem 4rem}
-header h1{margin:0 0 .25rem;font-size:2rem}
-header p{margin:0;color:var(--mut)}
-h2{margin:2.5rem 0 1rem;font-size:1.3rem;border-bottom:1px solid var(--bd);padding-bottom:.4rem}
-h3{margin:1.6rem 0 .5rem;font-size:1.05rem}
-h4{margin:1.2rem 0 .4rem;font-size:.95rem;color:var(--mut)}
-.cards{display:grid;gap:1rem;grid-template-columns:minmax(0,1fr)}
-.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:1rem 1.1rem}
-.card h3{margin:0 0 .15rem;font-size:1.1rem}
-.card .ver{color:var(--mut);font-size:.9rem;margin:0 0 .6rem}
-.card .blurb{color:var(--mut);font-size:.92rem;margin:.15rem 0 .8rem}
-pre{background:var(--code);border:1px solid var(--bd);border-radius:8px;padding:.7rem .8rem;overflow:auto;
-  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:var(--fg)}
-code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  background:#1f2630;padding:.1em .35em;border-radius:5px}
+:root{--stable:#2f81f7;--testing:#d29922;--edge:#a371f7;--nightly:#f85149}
+.header-nav a[aria-current="page"]{color:var(--accent)}
+.pkg-shell{max-width:1200px;margin:0 auto;padding:0 clamp(1rem,4vw,3rem) 6rem}
+.pkg-hero{padding:clamp(3.5rem,8vw,6.5rem) 0 clamp(2.5rem,5vw,4rem);border-bottom:1px solid var(--line)}
+.pkg-hero h1{max-width:900px;margin:0;font-size:clamp(2.8rem,7vw,6rem);font-weight:690;
+  letter-spacing:-.055em;line-height:1}
+.pkg-hero .hero-lede{max-width:720px;margin:1.35rem 0 0;color:var(--muted);font-size:clamp(1.05rem,1.5vw,1.25rem)}
+.pkg-section{padding-top:clamp(2.8rem,6vw,5rem)}
+.pkg-section>h2{margin:0 0 1.6rem;font-size:clamp(1.9rem,4vw,3.2rem);letter-spacing:-.04em;line-height:1.05}
+.pkg-section h3{margin:2rem 0 .6rem;font-size:1.25rem}
+.pkg-section h4{margin:1.4rem 0 .45rem;color:var(--muted);font-size:.82rem;letter-spacing:.1em;text-transform:uppercase}
+.cards{display:grid;gap:1rem;grid-template-columns:repeat(2,minmax(0,1fr))}
+.card{--channel:var(--line);min-width:0;padding:clamp(1.25rem,3vw,2rem);border:1px solid var(--line);
+  border-top:4px solid var(--channel);border-radius:var(--radius);background:var(--bg-elevated);
+  box-shadow:0 1px 0 rgb(255 255 255 / 70%) inset}
+.card h3{margin:0 0 .15rem;color:var(--channel);font-size:1.4rem;letter-spacing:-.025em}
+.card .ver{margin:0 0 .75rem;color:var(--muted);font-size:.9rem}
+.card .blurb,.blurb{color:var(--muted);font-size:.94rem}
+.card .blurb{margin:.2rem 0 .9rem}
+pre{border:1px solid var(--line);font-size:13px;line-height:1.5}
 table{width:100%;border-collapse:collapse;font-size:.92rem}
 .tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
-th,td{text-align:left;padding:.5rem .6rem;border-bottom:1px solid var(--bd);white-space:nowrap}
-th{color:var(--mut);font-weight:600}
-td.num{font-variant-numeric:tabular-nums;color:var(--mut)}
+th,td{text-align:left;padding:.65rem .75rem;border-bottom:1px solid var(--line);white-space:nowrap}
+th{background:var(--bg-elevated);color:var(--muted);font-weight:720}
+td.num{color:var(--muted);font-variant-numeric:tabular-nums}
 .badge{display:inline-block;font-size:.72rem;padding:.05rem .45rem;border-radius:20px;
-  border:1px solid var(--bd);color:var(--mut)}
-details summary{cursor:pointer;color:var(--mut);font-size:.85rem;margin-top:.5rem}
-a.browse{display:inline-block;padding:.5rem .9rem;border:1px solid var(--acc);border-radius:8px;font-weight:600}
+  border:1px solid currentColor;color:var(--channel)}
+details summary{margin-top:.6rem;color:var(--muted);font-size:.87rem;cursor:pointer}
+a.browse{display:inline-flex;align-items:center;min-height:46px;padding:.65rem 1rem;border:1px solid var(--ink);
+  border-radius:999px;font-weight:740;text-decoration:none}
+a.browse:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 table.autoindex td:first-child{white-space:normal;overflow-wrap:anywhere}
 table.autoindex td.num{white-space:nowrap}
-footer{margin-top:3rem;color:var(--mut);font-size:.85rem;border-top:1px solid var(--bd);padding-top:1rem}
-.empty{color:var(--mut);font-style:italic}
-.card.stable{border-color:var(--acc)}
-.card.testing{border-color:var(--warn)}
-.card.edge{border-color:var(--edge)}
-.card.nightly{border-color:var(--red)}
-.card.nightly .badge{border-color:var(--red);color:var(--red)}
-.warn{color:var(--warn)}
+.listing-page .pkg-shell{min-height:calc(100vh - 68px)}
+.listing-hero{padding-bottom:2rem}
+.listing-hero h1{font-size:clamp(2.4rem,6vw,4.8rem)}
+.listing-hero p,.listing-note{color:var(--muted)}
+.listing-note{margin-top:2rem;font-size:.88rem}
+.empty{color:var(--muted);font-style:italic}
+.card.stable{--channel:var(--stable)}
+.card.testing{--channel:var(--testing)}
+.card.edge{--channel:var(--edge)}
+.card.nightly{--channel:var(--nightly)}
+.warn{color:var(--testing);font-weight:700}
 .snip{position:relative}
 .snip>pre{padding-right:3.6rem}
 .copy{position:absolute;top:.45rem;right:.45rem;z-index:1;
   font:600 11px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  color:var(--mut);background:#1f2630;border:1px solid var(--bd);border-radius:6px;
+  color:#d2ccc7;background:#201f23;border:1px solid #575159;border-radius:6px;
   padding:.3rem .5rem;cursor:pointer}
-.copy:hover{color:var(--fg);border-color:var(--acc)}
-.copy.copied{color:#3fb950;border-color:#3fb950}
+.copy:hover{color:white;border-color:white}
+.copy.copied{color:#56d364;border-color:#56d364}
+@media(max-width:820px){.cards{grid-template-columns:1fr}.pkg-shell{padding-bottom:4rem}}
+@media(prefers-color-scheme:dark){.card{background:rgb(27 26 30 / 72%);box-shadow:none}}
 """
+
+_SITE_HEADER = (
+    '<a class="skip-link" href="#main-content">Skip to content</a>'
+    '<header class="site-header">'
+    f'<a class="brand" href="{MAIN_SITE_URL}/" aria-label="pfBlockerNG home">'
+    f'<img src="{MAIN_SITE_URL}/assets/logo.svg" alt="" width="34" height="34"><span>pfBlockerNG</span></a>'
+    '<nav class="header-nav" aria-label="Primary">'
+    f'<a href="{MAIN_SITE_URL}/guide/introduction/">Documentation</a>'
+    f'<a href="{PKG_SITE_URL}/" aria-current="page">Packages</a>'
+    '<a href="https://github.com/pfBlockerNG/pfBlockerNG">GitHub</a>'
+    '<a href="https://github.com/pfBlockerNG">Organization</a></nav>'
+    '<details class="mobile-nav"><summary aria-label="Open navigation">Menu</summary>'
+    f'<nav aria-label="Mobile"><a href="{MAIN_SITE_URL}/guide/introduction/">Documentation</a>'
+    f'<a href="{PKG_SITE_URL}/" aria-current="page">Packages</a>'
+    '<a href="https://github.com/pfBlockerNG/pfBlockerNG">GitHub</a>'
+    '<a href="https://github.com/pfBlockerNG">Organization</a></nav></details></header>'
+)
+
+_SITE_FOOTER = (
+    '<footer class="site-footer"><div><strong>pfBlockerNG</strong>'
+    '<span>IP and DNS blocking for pfSense</span></div><nav aria-label="Footer">'
+    '<a href="https://www.reddit.com/r/pfBlockerNG/">Community</a>'
+    '<a href="https://github.com/pfBlockerNG/pfBlockerNG">Repository</a>'
+    '<a href="https://github.com/pfBlockerNG/pfBlockerNG/releases">Releases</a>'
+    '<a href="https://github.com/pfBlockerNG/pfBlockerNG/blob/devel/LICENSE">Apache 2.0</a>'
+    "</nav></footer>"
+)
+
+
+def _head(title: str) -> str:
+    return (
+        '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">'
+        '<meta name="color-scheme" content="light dark"><meta name="theme-color" content="#151518">'
+        f'<title>{_esc(title)}</title><link rel="icon" href="{MAIN_SITE_URL}/assets/logo.svg" type="image/svg+xml">'
+        f'<link rel="stylesheet" href="{MAIN_SITE_URL}/assets/site.css"><style>{_CSS}</style></head>'
+    )
+
 
 # Minimal, dependency-free clipboard handler for the snippet copy buttons. Delegated
 # (one listener), reads the adjacent <pre> textContent (entities decoded), and falls
@@ -972,28 +1018,22 @@ def render_page(
     latest = latest_versions(pkgs)
     cards = "".join(_channel_card(ch, latest, conf_fn, site_tree) for ch in CH_ORDER)
     eol_block = _eol_versions_html(pkgs, matrix)
+    eol_section = f'<section class="pkg-section">{eol_block}</section>' if eol_block else ""
     return (
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        "<title>pfBlockerNG — self-hosted pkg repository</title>"
-        f'<style>{_CSS}</style></head><body><div class="wrap">'
-        "<header><h1>pfBlockerNG</h1>"
-        "<p>Self-hosted FreeBSD <code>pkg</code> repository for pfSense&nbsp;CE &amp; pfSense&nbsp;Plus.</p></header>"
-        "<p>Install pfBlockerNG straight from this repository: pick a channel below and run its "
-        "commands on your firewall (as <code>root</code>).</p>"
-        f'<h2>Channels</h2><div class="cards">{cards}</div>'
-        f"<h2>Published packages</h2>{_packages_html(pkgs, matrix)}"
-        f"{eol_block}"
-        "<h2>Repository files</h2>"
+        f'<!doctype html><html lang="en">{_head("pfBlockerNG — self-hosted pkg repository")}<body>'
+        f'{_SITE_HEADER}<main id="main-content" class="pkg-shell">'
+        '<section class="pkg-hero"><p class="eyebrow">Official package repository</p>'
+        '<h1>Install pfBlockerNG.</h1><p class="hero-lede">Self-hosted FreeBSD <code>pkg</code> '
+        "repository for pfSense&nbsp;CE &amp; pfSense&nbsp;Plus. Pick a channel and run its command "
+        "on your firewall as <code>root</code>.</p></section>"
+        f'<section class="pkg-section"><h2>Channels</h2><div class="cards">{cards}</div></section>'
+        f'<section class="pkg-section"><h2>Published packages</h2>{_packages_html(pkgs, matrix)}</section>'
+        f"{eol_section}"
+        '<section class="pkg-section"><h2>Repository files</h2>'
         '<p class="blurb">Browse every channel, version and ABI &mdash; and the raw pkg(8) catalogs your '
         "firewall fetches &mdash; in a directory-style listing.</p>"
-        '<p><a class="browse" href="./browse.html">&#128193; Browse the repository &rarr;</a></p>'
-        '<footer><a href="https://github.com/pfBlockerNG/pfBlockerNG">Source</a> &middot; '
-        '<a href="https://github.com/pfBlockerNG/pfBlockerNG/releases">Releases</a> &middot; '
-        '<a href="https://github.com/pfBlockerNG/pkg">This repository</a></footer>'
-        "</div>"
-        f"<script>{_COPY_JS}</script>"
-        "</body></html>\n"
+        '<p><a class="browse" href="./browse.html">&#128193; Browse the repository &rarr;</a></p></section>'
+        f"</main>{_SITE_FOOTER}<script>{_COPY_JS}</script></body></html>\n"
     )
 
 
@@ -1008,17 +1048,17 @@ def _render_listing_html(title: str, home_href: str, rows: list[str]) -> str:
     Name | Last modified | Size table, used by both browse.html and every
     browse/<ch>/… page."""
     return (
-        '<!doctype html><html lang="en"><head><meta charset="utf-8">'
-        '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>pfBlockerNG pkg — Index of {_esc(title)}</title><style>{_CSS}</style></head>"
-        f'<body><div class="wrap"><header><h1>Index of {_esc(title)}</h1>'
-        f'<p><a href="{_esc(home_href)}">&larr; pfBlockerNG repository home</a></p></header>'
-        '<div class="tablewrap"><table class="autoindex"><thead><tr>'
+        f'<!doctype html><html lang="en">{_head(f"pfBlockerNG pkg — Index of {title}")}<body class="listing-page">'
+        f'{_SITE_HEADER}<main id="main-content" class="pkg-shell">'
+        f'<section class="pkg-hero listing-hero"><p class="eyebrow">Repository files</p>'
+        f'<h1>Index of {_esc(title)}</h1><p><a href="{_esc(home_href)}">'
+        "&larr; pfBlockerNG repository home</a></p></section>"
+        '<section class="pkg-section"><div class="tablewrap"><table class="autoindex"><thead><tr>'
         "<th>Name</th><th>Last modified</th><th>Size</th></tr></thead>"
         f"<tbody>{''.join(rows)}</tbody></table></div>"
-        "<footer>Directory listing of the self-hosted pfBlockerNG pkg repository. "
-        "pkg(8) fetches the catalog files (<code>meta.conf</code>, <code>packagesite.pkg</code>, …) directly.</footer>"
-        "</div></body></html>\n"
+        '<p class="listing-note">Directory listing of the self-hosted pfBlockerNG pkg repository. '
+        "pkg(8) fetches the catalog files (<code>meta.conf</code>, <code>packagesite.pkg</code>, …) directly.</p>"
+        f"</section></main>{_SITE_FOOTER}</body></html>\n"
     )
 
 
@@ -1031,7 +1071,7 @@ def _root_files(built: dict[str, tuple[bytes, int]]) -> list[str]:
     an ordering hazard that broke determinism (a rendered page must reflect the
     tree being written THIS run, not whatever a previous run left behind).
     """
-    hidden = {"index.html", "browse.html", ".nojekyll"}
+    hidden = {"index.html", "browse.html", ".nojekyll", "CNAME"}
     return sorted(name for name in built if "/" not in name and name not in hidden)
 
 
