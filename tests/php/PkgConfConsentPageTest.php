@@ -28,15 +28,28 @@ use PHPUnit\Framework\TestCase;
  *
  * Row 3 no longer replays the save filter from scraped source: pfb_pkgconf_ca_save()
  * (pfblockerng.inc) IS the save handler now -- the page's top-level 'save' branch calls it
- * (pinned below by testSaveHandlerCallsPfbPkgconfCaSave(), a wiring assertion only) and does
- * nothing else with the field. Driving pfb_pkgconf_ca_save() directly exercises the exact
- * code that runs in production, including its pfb_pkgconf_ca_sync() call against a real
- * pkg.conf fixture -- deleting either the PfbConfig::write() or the pfb_pkgconf_ca_sync()
- * call from the production function turns testTickedSaveRoundTripsToOn... RED (see the STEP C
- * fix-round handoff's mutation proof).
+ * (pinned below by testSaveHandlerCallsPfbPkgconfCaSaveThenApplyAfterWriteConfig(), a wiring
+ * assertion only) and does nothing else with the field. Driving pfb_pkgconf_ca_save() and
+ * pfb_pkgconf_ca_apply() directly exercises the exact code that runs in production.
+ *
+ * issue #2518 fix round (B1 / N-write-order): the combined save-and-sync was split in two.
+ * pfb_pkgconf_ca_save(array $post): string ONLY persists the posted token -- it never
+ * touches pkg.conf, and it writes NOTHING at all unless $post carries the hidden
+ * 'pfb_pkg_ca_consent_shown' marker the page renders alongside the checkbox (an absent
+ * marker means the consent section was never shown this request, so an absent
+ * 'pfb_pkg_ca_consent' key is ambiguous between "unticked" and "not rendered" -- B1). The
+ * caller MUST run write_config() next to flush that persist to disk BEFORE calling
+ * pfb_pkgconf_ca_apply(string $token, ?string $file, string $ca_path): bool, which is the
+ * half that actually syncs pkg.conf and is what the page's $input_errors branch reacts to.
+ * Consent is this feature's security boundary, so it has to survive a reboot before pkg.conf
+ * is ever mutated on its behalf -- deleting either the PfbConfig::write() inside
+ * pfb_pkgconf_ca_save(), or the pfb_pkgconf_ca_sync() call inside pfb_pkgconf_ca_apply(),
+ * turns testTickedSaveRoundTripsToOn() RED (see the STEP C fix-round handoff's mutation
+ * proof, and the B1/B2/B3 mutation proof in the issue #2518 fix-round handoff).
  */
 #[CoversFunction('pfb_pkgconf_ca_tick')]
 #[CoversFunction('pfb_pkgconf_ca_save')]
+#[CoversFunction('pfb_pkgconf_ca_apply')]
 final class PkgConfConsentPageTest extends TestCase
 {
 	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_software.php';
@@ -212,16 +225,16 @@ final class PkgConfConsentPageTest extends TestCase
 	// call or the pfb_pkgconf_ca_sync() call inside pfb_pkgconf_ca_save() fails one of them.
 	// -----------------------------------------------------------------------
 
-	public function testSaveHandlerCallsPfbPkgconfCaSave(): void
+	public function testSaveHandlerCallsPfbPkgconfCaSaveThenApplyAfterWriteConfig(): void
 	{
 		$source = php_strip_whitespace(self::PAGE);
 
 		$this->assertStringContainsString(
 			'pfb_pkgconf_ca_save($_POST)',
 			$source,
-			'the Software page must delegate the consent save-and-sync to pfb_pkgconf_ca_save() '
+			'the Software page must delegate the consent persist to pfb_pkgconf_ca_save() '
 			. '(issue #2518 fix-round finding 1) -- the page keeps only the redirect/$input_errors '
-			. 'presentation decision built on its return value'
+			. 'presentation decision built on pfb_pkgconf_ca_apply()\'s return value'
 		);
 		$this->assertStringNotContainsString(
 			"PfbConfig::write('gen/pfb_pkg_ca_consent'",
@@ -230,21 +243,50 @@ final class PkgConfConsentPageTest extends TestCase
 			. 'pfb_pkgconf_ca_save() alone, or this wiring test and the round-trip tests below '
 			. 'would both be blind to the same regression'
 		);
+		$this->assertStringContainsString(
+			'pfb_pkgconf_ca_apply(',
+			$source,
+			'the page must call pfb_pkgconf_ca_apply() to sync pkg.conf (issue #2518 N-write-order)'
+		);
+
+		$save_pos   = strpos($source, 'pfb_pkgconf_ca_save($_POST)');
+		$config_pos = strpos($source, 'write_config(');
+		$apply_pos  = strpos($source, 'pfb_pkgconf_ca_apply(');
+		$this->assertNotFalse($save_pos);
+		$this->assertNotFalse($config_pos);
+		$this->assertNotFalse($apply_pos);
+		$this->assertLessThan(
+			$config_pos,
+			$save_pos,
+			'N-write-order: the consent token must be persisted into the in-memory config array '
+			. 'before write_config() flushes it'
+		);
+		$this->assertLessThan(
+			$apply_pos,
+			$config_pos,
+			'N-write-order: write_config() must flush consent to disk BEFORE pkg.conf is ever '
+			. 'touched on the admin\'s behalf -- consent is this feature\'s security boundary'
+		);
 	}
 
 	public function testTickedSaveRoundTripsToOn(): void
 	{
 		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
 
-		$result = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent' => $this->postedWhenChecked()], $file, self::REAL_CA_DIR);
-
-		$this->assertTrue($result['ok'], 'a ticked Save against a patchable pkg.conf must report success');
-		$this->assertSame('on', $result['token']);
+		$token = pfb_pkgconf_ca_save([
+			'pfb_pkg_ca_consent_shown' => '1',
+			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
+		]);
+		$this->assertSame('on', $token);
 		$this->assertSame(
 			PfbToggle::On,
 			PfbConfig::read('gen/pfb_pkg_ca_consent'),
 			'a Save with the box ticked must persist the On token'
 		);
+
+		$ok = pfb_pkgconf_ca_apply($token, $file, self::REAL_CA_DIR);
+
+		$this->assertTrue($ok, 'a ticked Save against a patchable pkg.conf must report success');
 		$this->assertSame(
 			$this->fixture('plus_patched.conf'),
 			file_get_contents($file),
@@ -257,17 +299,20 @@ final class PkgConfConsentPageTest extends TestCase
 		// Start On + patched (config AND file) so a green result below is this save's doing,
 		// not the registry default or an untouched fixture.
 		$file = $this->tempFile($this->fixture('plus_patched.conf'));
-		$seed = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent' => $this->postedWhenChecked()], $file, self::REAL_CA_DIR);
-		$this->assertTrue($seed['ok'], 'precondition seed save must succeed');
+		$seedToken = pfb_pkgconf_ca_save([
+			'pfb_pkg_ca_consent_shown' => '1',
+			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
+		]);
+		$seedOk = pfb_pkgconf_ca_apply($seedToken, $file, self::REAL_CA_DIR);
+		$this->assertTrue($seedOk, 'precondition seed save must succeed');
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'), 'precondition: consent starts On');
 		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file), 'precondition: pkg.conf starts patched');
 
-		// A browser omits an unticked checkbox entirely; the page reaches pfb_pkgconf_ca_save()
-		// with the POST key absent.
-		$result = pfb_pkgconf_ca_save([], $file, self::REAL_CA_DIR);
+		// A browser omits an unticked checkbox but the hidden marker still posts -- the
+		// section WAS rendered, this is an EXPLICIT off, not an absent marker (B1).
+		$token = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent_shown' => '1']);
 
-		$this->assertTrue($result['ok']);
-		$this->assertSame('', $result['token']);
+		$this->assertSame('', $token);
 		$this->assertSame(
 			PfbToggle::Off,
 			PfbConfig::read('gen/pfb_pkg_ca_consent'),
@@ -278,6 +323,10 @@ final class PkgConfConsentPageTest extends TestCase
 			config_get_path(self::GEN . '/pfb_pkg_ca_consent'),
 			'the canonical Off token stored on disk is the empty string'
 		);
+
+		$ok = pfb_pkgconf_ca_apply($token, $file, self::REAL_CA_DIR);
+
+		$this->assertTrue($ok);
 		$this->assertSame(
 			$this->fixture('plus_pinned.conf'),
 			file_get_contents($file),
@@ -298,29 +347,102 @@ final class PkgConfConsentPageTest extends TestCase
 	}
 
 	// -----------------------------------------------------------------------
-	// Finding 2 — pfb_pkgconf_ca_save() must not run pfb_pkgconf_ca_sync() at all when
-	// pfb_pkgconf_ca_state() is '' (a CE box, or any other file the two never recognise):
-	// mirrors pfb_pkgconf_ca_tick()'s own guard, so a transient pkg.conf read glitch on a
-	// box that never even rendered the consent section cannot surface the CA-specific error
-	// to an admin who only toggled the unrelated "check for new versions" setting.
+	// B1 — an absent 'pfb_pkg_ca_consent_shown' marker means the consent section was never
+	// rendered this request (e.g. pkg.conf's shape stopped being recognised mid
+	// pfSense-repo-setup rewrite). pfb_pkgconf_ca_save() must then make NO write at all and
+	// report the currently persisted token, regardless of anything else present in $post --
+	// guessing Off from an absent checkbox key in that situation would silently REVOKE a
+	// previously granted consent.
 	// -----------------------------------------------------------------------
 
-	public function testSaveOnUnrecognisedPkgConfNeverFailsRegardlessOfCaPath(): void
+	public function testSaveWithoutShownMarkerNeverRevokesPersistedConsent(): void
+	{
+		config_set_path(self::GEN . '/pfb_pkg_ca_consent', 'on');
+
+		// No 'pfb_pkg_ca_consent_shown' key -- as if a foreign/stale 'pfb_pkg_ca_consent' key
+		// happened to be present in $_POST too, from some unrelated source.
+		$token = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent' => '']);
+
+		$this->assertSame('on', $token, 'an absent marker must return the currently persisted token unchanged');
+		$this->assertSame(
+			PfbToggle::On,
+			PfbConfig::read('gen/pfb_pkg_ca_consent'),
+			'B1: a previously granted consent must survive a Save where the consent section was never shown'
+		);
+	}
+
+	public function testSaveWithoutShownMarkerReturnsPersistedOffWhenNeverGranted(): void
+	{
+		// No prior consent at all -- the marker-absent path must still report the correct
+		// (Off) persisted token, not merely "never write".
+		$token = pfb_pkgconf_ca_save([]);
+
+		$this->assertSame('', $token);
+		$this->assertSame(PfbToggle::Off, PfbConfig::read('gen/pfb_pkg_ca_consent'));
+	}
+
+	// -----------------------------------------------------------------------
+	// B3 — the page's ok===FALSE branch (the $input_errors render) had zero executed proof
+	// at any tier. Drive pfb_pkgconf_ca_apply() to FALSE against a plus_pinned fixture with
+	// an EMPTY CA dir, and assert the consent token was still persisted regardless.
+	// -----------------------------------------------------------------------
+
+	public function testExplicitOnSaveWithEmptyCaDirFailsButTokenPersists(): void
+	{
+		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
+
+		$token = pfb_pkgconf_ca_save([
+			'pfb_pkg_ca_consent_shown' => '1',
+			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
+		]);
+		$this->assertSame('on', $token);
+		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'));
+
+		$ok = pfb_pkgconf_ca_apply($token, $file, $this->emptyDir());
+
+		$this->assertFalse($ok, 'B3: apply must report failure when the CA hash dir is empty');
+		$this->assertSame(
+			PfbToggle::On,
+			PfbConfig::read('gen/pfb_pkg_ca_consent'),
+			'B3: the consent token must still be persisted even though pkg.conf could not be patched'
+		);
+		$this->assertSame(
+			$this->fixture('plus_pinned.conf'),
+			file_get_contents($file),
+			'a failed apply must never write'
+		);
+	}
+
+	// -----------------------------------------------------------------------
+	// Finding 2 (retained) — pfb_pkgconf_ca_apply() must not run pfb_pkgconf_ca_sync() at
+	// all when pfb_pkgconf_ca_state() is '' (a CE box, or any other file the two never
+	// recognise): mirrors pfb_pkgconf_ca_tick()'s own guard, so a transient pkg.conf read
+	// glitch on a box that never even rendered the consent section cannot surface the
+	// CA-specific error to an admin who only toggled the unrelated "check for new versions"
+	// setting.
+	// -----------------------------------------------------------------------
+
+	public function testApplyOnUnrecognisedPkgConfNeverFailsRegardlessOfCaPath(): void
 	{
 		$file = $this->tempFile($this->fixture('ce_unpinned.conf'));
 		$before = file_get_contents($file);
 
+		$token = pfb_pkgconf_ca_save([
+			'pfb_pkg_ca_consent_shown' => '1',
+			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
+		]);
+		$this->assertSame('on', $token, 'the consent token itself must still persist');
+
 		// A CA path that would make pfb_pkgconf_ca_sync() itself return FALSE if it ran
 		// (missing/empty directory) -- proves the early return skips the call rather than
 		// merely happening to succeed.
-		$result = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent' => 'on'], $file, $this->emptyDir());
+		$ok = pfb_pkgconf_ca_apply($token, $file, $this->emptyDir());
 
 		$this->assertTrue(
-			$result['ok'],
+			$ok,
 			'a CE box (no recognised PKG_ENV block) must never surface the CA-sync error, even '
 			. 'with a CA path that would make pfb_pkgconf_ca_sync() itself fail'
 		);
-		$this->assertSame('on', $result['token'], 'the consent token itself must still persist');
 		$this->assertSame($before, file_get_contents($file), 'an unrecognised pkg.conf must never be written');
 	}
 
