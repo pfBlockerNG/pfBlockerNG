@@ -5300,17 +5300,6 @@ function pfb_pkg_newest_version(array $versions): string {
 }
 
 /*
- * The pfBlockerNG repo's latest version of $pkgname: `pkg update -f -r <repo>` (forced
- * refresh of just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`.
- * Reads ONLY that repo ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read
- * latest"). Picks the newest rquery line with pkg_version_compare(); $out[0] is catalog
- * order, not newest (issue #2379). Returns '' (the caller then serves cache) when:
- *   - $pkgname/$reponame is empty;
- *   - the pkg subsystem is locked (is_subsystem_dirty('pkg')) — never fight a base update;
- *   - DNS is unavailable (get_dnsavailable()) — never stall on a network read;
- *   - the rquery yields nothing (repo/conf absent).
- */
-/*
  * Shell-ready `VAR=value ` assignments placing the box's CA locations in front of a pkg
  * command, or '' when there is nothing safe to point at. Splice it BEFORE any wrapper so
  * the assignments apply to the whole pipeline and are inherited by pkg itself.
@@ -5338,6 +5327,17 @@ function pfb_pkg_ca_env_prefix(string $ca_path = PFB_SSL_CA_CERT_PATH, string $c
 	return implode(' ', $parts) . ' ';
 }
 
+/*
+ * The pfBlockerNG repo's latest version of $pkgname: `pkg update -f -r <repo>` (forced
+ * refresh of just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`.
+ * Reads ONLY that repo ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read
+ * latest"). Picks the newest rquery line with pkg_version_compare(); $out[0] is catalog
+ * order, not newest (issue #2379). Returns '' (the caller then serves cache) when:
+ *   - $pkgname/$reponame is empty;
+ *   - the pkg subsystem is locked (is_subsystem_dirty('pkg')) — never fight a base update;
+ *   - DNS is unavailable (get_dnsavailable()) — never stall on a network read;
+ *   - the rquery yields nothing (repo/conf absent).
+ */
 function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	if ($pkgname === '' || $reponame === '') {
 		return '';
