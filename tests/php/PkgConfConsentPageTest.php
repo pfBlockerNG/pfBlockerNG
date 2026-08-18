@@ -39,8 +39,8 @@ use PHPUnit\Framework\TestCase;
  * marker means the consent section was never shown this request, so an absent
  * 'pfb_pkg_ca_consent' key is ambiguous between "unticked" and "not rendered" -- B1). The
  * caller MUST run write_config() next to flush that persist to disk BEFORE calling
- * pfb_pkgconf_ca_apply(string $token, ?string $file, string $ca_path): bool, which is the
- * half that actually syncs pkg.conf and is what the page's $input_errors branch reacts to.
+ * pfb_pkgconf_ca_apply(string $token, bool $was_consented, ?string $file, string $ca_path): bool,
+ * which is the half that actually syncs pkg.conf and is what the page's $input_errors branch reacts to.
  * Consent is this feature's security boundary, so it has to survive a reboot before pkg.conf
  * is ever mutated on its behalf -- deleting either the PfbConfig::write() inside
  * pfb_pkgconf_ca_save(), or the pfb_pkgconf_ca_sync() call inside pfb_pkgconf_ca_apply(),
@@ -56,6 +56,7 @@ final class PkgConfConsentPageTest extends TestCase
 	private const CRON = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc';
 	private const GEN  = 'installedpackages/pfblockerng/config/0';
 	private const REAL_CA_DIR = '/etc/ssl/certs';
+	private const REAL_CA_FILE = '/etc/ssl/netgate-ca.pem';
 
 	private bool $hadConfig = FALSE;
 	private mixed $originalConfig = NULL;
@@ -108,9 +109,27 @@ final class PkgConfConsentPageTest extends TestCase
 		return (string) file_get_contents(dirname(__DIR__, 2) . '/tests/fixtures/pkg_conf/' . $name);
 	}
 
+	private function bundleFile(): string
+	{
+		$file = $this->root . '/netgate-ca.pem';
+		if (!is_file($file)) {
+			file_put_contents($file, 'test CA bundle');
+		}
+		return $file;
+	}
+
+	private function pinnedFixture(): string
+	{
+		return str_replace(self::REAL_CA_FILE, $this->bundleFile(), $this->fixture('plus_pinned.conf'));
+	}
+
 	private function patchedFixtureFor(string $caDir): string
 	{
-		return str_replace(self::REAL_CA_DIR, $caDir, $this->fixture('plus_patched.conf'));
+		return str_replace(
+			[self::REAL_CA_FILE, self::REAL_CA_DIR],
+			[$this->bundleFile(), $caDir],
+			$this->fixture('plus_patched.conf')
+		);
 	}
 
 	private function tempFile(string $content, string $name = 'pkg.conf'): string
@@ -263,13 +282,21 @@ final class PkgConfConsentPageTest extends TestCase
 			$source,
 			'the page must call pfb_pkgconf_ca_apply() to sync pkg.conf (issue #2518 N-write-order)'
 		);
+		$this->assertStringContainsString(
+			'pfb_pkgconf_ca_apply($pfb_ca_token, $pfb_ca_was_consented',
+			$source,
+			'the page must pass the pre-save consent state so an already-Off Save cannot remove an unowned line'
+		);
 
+		$prior_pos  = strpos($source, '$pfb_ca_was_consented = PfbConfig::read(');
 		$save_pos   = strpos($source, 'pfb_pkgconf_ca_save($_POST)');
 		$config_pos = strpos($source, 'write_config(');
 		$apply_pos  = strpos($source, 'pfb_pkgconf_ca_apply(');
 		$this->assertNotFalse($save_pos);
 		$this->assertNotFalse($config_pos);
 		$this->assertNotFalse($apply_pos);
+		$this->assertNotFalse($prior_pos);
+		$this->assertLessThan($save_pos, $prior_pos, 'the page must capture consent ownership before Save changes it');
 		$this->assertLessThan(
 			$config_pos,
 			$save_pos,
@@ -287,7 +314,7 @@ final class PkgConfConsentPageTest extends TestCase
 	public function testTickedSaveRoundTripsToOn(): void
 	{
 		$caDir = $this->populatedDir();
-		$file  = $this->tempFile($this->fixture('plus_pinned.conf'));
+		$file  = $this->tempFile($this->pinnedFixture());
 
 		$token = pfb_pkgconf_ca_save([
 			'pfb_pkg_ca_consent_shown' => '1',
@@ -300,7 +327,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'a Save with the box ticked must persist the On token'
 		);
 
-		$ok = pfb_pkgconf_ca_apply($token, $file, $caDir);
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $caDir);
 
 		$this->assertTrue($ok, 'a ticked Save against a patchable pkg.conf must report success');
 		$this->assertSame(
@@ -319,7 +346,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'pfb_pkg_ca_consent_shown' => '1',
 			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
 		]);
-		$seedOk = pfb_pkgconf_ca_apply($seedToken, $file, self::REAL_CA_DIR);
+		$seedOk = pfb_pkgconf_ca_apply($seedToken, FALSE, $file, self::REAL_CA_DIR);
 		$this->assertTrue($seedOk, 'precondition seed save must succeed');
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'), 'precondition: consent starts On');
 		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file), 'precondition: pkg.conf starts patched');
@@ -340,7 +367,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'the canonical Off token stored on disk is the empty string'
 		);
 
-		$ok = pfb_pkgconf_ca_apply($token, $file, self::REAL_CA_DIR);
+		$ok = pfb_pkgconf_ca_apply($token, TRUE, $file, self::REAL_CA_DIR);
 
 		$this->assertTrue($ok);
 		$this->assertSame(
@@ -348,6 +375,18 @@ final class PkgConfConsentPageTest extends TestCase
 			file_get_contents($file),
 			'an unticked Save must remove the CA path line from the live pkg.conf'
 		);
+	}
+
+	public function testUntickedSaveDoesNotRemoveAnIdenticalLineWithoutPriorConsent(): void
+	{
+		$file = $this->tempFile($this->fixture('plus_patched.conf'));
+		$before = file_get_contents($file);
+
+		$token = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent_shown' => '1']);
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, self::REAL_CA_DIR);
+
+		$this->assertTrue($ok);
+		$this->assertSame($before, file_get_contents($file), 'pfBlockerNG must not remove a line it never added');
 	}
 
 	public function testAbsentKeyDefaultsToOff(): void
@@ -405,7 +444,7 @@ final class PkgConfConsentPageTest extends TestCase
 
 	public function testExplicitOnSaveWithEmptyCaDirFailsButTokenPersists(): void
 	{
-		$file = $this->tempFile($this->fixture('plus_pinned.conf'));
+		$file = $this->tempFile($this->pinnedFixture());
 
 		$token = pfb_pkgconf_ca_save([
 			'pfb_pkg_ca_consent_shown' => '1',
@@ -414,7 +453,7 @@ final class PkgConfConsentPageTest extends TestCase
 		$this->assertSame('on', $token);
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'));
 
-		$ok = pfb_pkgconf_ca_apply($token, $file, $this->emptyDir());
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $this->emptyDir());
 
 		$this->assertFalse($ok, 'B3: apply must report failure when the CA hash dir is empty');
 		$this->assertSame(
@@ -423,7 +462,7 @@ final class PkgConfConsentPageTest extends TestCase
 			'B3: the consent token must still be persisted even though pkg.conf could not be patched'
 		);
 		$this->assertSame(
-			$this->fixture('plus_pinned.conf'),
+			$this->pinnedFixture(),
 			file_get_contents($file),
 			'a failed apply must never write'
 		);
@@ -452,7 +491,7 @@ final class PkgConfConsentPageTest extends TestCase
 		// A CA path that would make pfb_pkgconf_ca_sync() itself return FALSE if it ran
 		// (missing/empty directory) -- proves the early return skips the call rather than
 		// merely happening to succeed.
-		$ok = pfb_pkgconf_ca_apply($token, $file, $this->emptyDir());
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $this->emptyDir());
 
 		$this->assertTrue(
 			$ok,

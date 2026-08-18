@@ -5419,12 +5419,18 @@ function pfb_pkgconf_ca_needed(string $text): bool {
 		return FALSE;
 	}
 	[$open_idx, $close_idx] = $bounds;
+	$ca_file_count = 0;
 	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
-		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
-			return TRUE;
+		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") !== 0) {
+			continue;
 		}
+		$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
+		if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
+			return FALSE;
+		}
+		$ca_file_count++;
 	}
-	return FALSE;
+	return $ca_file_count === 1;
 }
 
 /*
@@ -5505,15 +5511,13 @@ function pfb_pkgconf_dir_populated(string $dir): bool {
 }
 
 /*
- * Atomically replace $file's contents with $content: a temp file in the SAME directory
- * (never a cross-filesystem tempnam() fallback -- the is_writable() guard below refuses
- * before ever calling tempnam(), so a leftover temp file can never land anywhere but here),
- * written and chmod'd to the original file's permission bits, then rename()d into place.
- * The temp file is unlinked on every failure path; rename() itself is what makes a
- * concurrent `pkg` reader see either the whole old file or the whole new one, never a
- * partial write.
+ * Atomically replace $file's contents with $content only while it still equals $expected:
+ * a temp file in the same directory is written and chmod'd to the original permission bits,
+ * then renamed into place. A pkg-subsystem lock or changed live bytes rejects the stale
+ * replacement, so pfSense-repo-setup's concurrent regeneration always wins. The temp file
+ * is unlinked on every failure path.
  */
-function pfb_pkgconf_write_atomic(string $file, string $content): bool {
+function pfb_pkgconf_write_atomic(string $file, string $content, string $expected): bool {
 	$dir = dirname($file);
 	if (!is_writable($dir)) {
 		return FALSE;
@@ -5530,6 +5534,13 @@ function pfb_pkgconf_write_atomic(string $file, string $content): bool {
 	if ($perms !== FALSE) {
 		@chmod($tmp, $perms & 0o777);
 	}
+	if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
+		|| is_link($file)
+		|| @file_get_contents($file) !== $expected
+	) {
+		@unlink($tmp);
+		return FALSE;
+	}
 	if (!@rename($tmp, $file)) {
 		@unlink($tmp);
 		return FALSE;
@@ -5538,17 +5549,26 @@ function pfb_pkgconf_write_atomic(string $file, string $content): bool {
 }
 
 /*
- * The live pkg.conf's CA-patch state: 'needed' (pfb_pkgconf_ca_needed() shape, unpatched),
- * 'patched' (the same well-formed block, already carrying a SSL_CA_CERT_PATH line), or ''
- * for every other case -- absent/unreadable/a directory/a symlink/no PKG_ENV block/an
- * unrecognised block shape. '' always means "nothing for pfb_pkgconf_ca_sync() to do here".
+ * The live pkg.conf's CA-patch state on Plus: 'needed'
+ * (pfb_pkgconf_ca_needed() shape, unpatched), 'patched' (the same well-formed block,
+ * already carrying a SSL_CA_CERT_PATH line), or '' for CE and every other case --
+ * absent/unreadable/a directory/a symlink/no PKG_ENV block/an unrecognised block shape.
  *
  * Refuses a symlink outright (rather than following it): pfb_pkgconf_ca_sync()'s atomic
  * rename() would replace the link itself, silently detaching whatever it used to point at.
  */
-function pfb_pkgconf_ca_state(?string $file = NULL): string {
+function pfb_pkgconf_ca_state(?string $file = NULL, ?bool $is_plus = NULL): string {
+	$injected_file = $file !== NULL;
 	$file = $file ?? PFB_PKG_CONF;
-	if (is_link($file) || !is_file($file) || !is_readable($file)) {
+	if ($is_plus === NULL) {
+		if ($injected_file) {
+			$is_plus = TRUE;
+		} else {
+			$product_label = @file_get_contents('/etc/product_label');
+			$is_plus = $product_label !== FALSE && strpos($product_label, 'Plus') !== FALSE;
+		}
+	}
+	if (!$is_plus || is_link($file) || !is_file($file) || !is_readable($file)) {
 		return '';
 	}
 	$text = @file_get_contents($file);
@@ -5564,35 +5584,37 @@ function pfb_pkgconf_ca_state(?string $file = NULL): string {
 		return '';
 	}
 	[$open_idx, $close_idx] = $bounds;
-	$has_file = FALSE;
+	$ca_file_count = 0;
 	$has_path = FALSE;
 	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
 		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
-			$has_file = TRUE;
+			$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
+			if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
+				return '';
+			}
+			$ca_file_count++;
 		}
 		if (strpos($lines[$i], "\tSSL_CA_CERT_PATH=") === 0) {
 			$has_path = TRUE;
 		}
 	}
-	return ($has_file && $has_path) ? 'patched' : '';
+	return ($ca_file_count === 1 && $has_path) ? 'patched' : '';
 }
 
 /*
- * Make $file match $consent: patched (add) when TRUE, unpatched (remove) when FALSE. TRUE
- * when the file ends up in the intended state -- INCLUDING when it already was and nothing
- * was written -- FALSE when it could not be made to match (refused patch, refused write).
- *
- * $consent === TRUE additionally requires $ca_path to be a populated directory (see
- * pfb_pkgconf_dir_populated()'s docblock) -- BUT ONLY WHEN A WRITE IS ACTUALLY NEEDED
- * (issue #2518 N-sync-false-on-noop). The dir check runs AFTER computing the patched text,
- * not before: an already-patched file (pfb_pkgconf_ca_add() returns '') is already in the
- * intended state regardless of the CA dir's condition, so checking the dir first wrongly
- * returned FALSE for a file that needed no change at all -- telling the admin pfBlockerNG
- * "could not update" a file that already exactly matched what was requested.
+ * Make $file match $consent. A real write requires an unlocked pkg subsystem, a readable
+ * non-empty SSL_CA_CERT_FILE named by the recognised block, and a populated $ca_path.
+ * Immediately before rename, the live file must still equal the snapshot this function
+ * transformed; a concurrent pfSense-repo-setup rewrite makes the operation fail rather
+ * than lose the newer file. No-op states return TRUE without requiring either CA location.
  */
 function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
 	$file = $file ?? PFB_PKG_CONF;
-	if (is_link($file) || !is_file($file) || !is_readable($file)) {
+	if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
+		|| is_link($file)
+		|| !is_file($file)
+		|| !is_readable($file)
+	) {
 		return FALSE;
 	}
 	$text = @file_get_contents($file);
@@ -5602,21 +5624,28 @@ function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_pat
 
 	if ($consent) {
 		$patched = pfb_pkgconf_ca_add($text, $ca_path);
-		if ($patched !== '' && (!is_dir($ca_path) || !pfb_pkgconf_dir_populated($ca_path))) {
-			// A write IS needed (the file is not yet patched) but the CA hash directory
-			// cannot support it -- refuse rather than patch onto a still-broken cert store.
-			return FALSE;
+		if ($patched !== '') {
+			$ca_file = '';
+			foreach (explode("\n", $text) as $line) {
+				if (strpos($line, "\tSSL_CA_CERT_FILE=") === 0) {
+					$ca_file = substr($line, strlen("\tSSL_CA_CERT_FILE="));
+					break;
+				}
+			}
+			if (!is_file($ca_file) || !is_readable($ca_file) || @filesize($ca_file) <= 0
+				|| !is_dir($ca_path) || !pfb_pkgconf_dir_populated($ca_path)
+			) {
+				return FALSE;
+			}
 		}
 	} else {
 		$patched = pfb_pkgconf_ca_remove($text, $ca_path);
 	}
 
 	if ($patched === '') {
-		// Nothing to change: already matches the requested consent state (or the file's
-		// shape is not one we patch at all, e.g. a CE box with no PKG_ENV block).
 		return TRUE;
 	}
-	return pfb_pkgconf_write_atomic($file, $patched);
+	return pfb_pkgconf_write_atomic($file, $patched, $text);
 }
 
 /*
@@ -5648,6 +5677,7 @@ function pfb_pkgconf_ca_clear_notice_sentinel(): void {
  * equal a previously-recorded one is the safe fallback (treat as changed).
  */
 function pfb_pkgconf_ca_notice_signature(string $file): string {
+	clearstatcache(TRUE, $file);
 	$stat = @stat($file);
 	if ($stat === FALSE) {
 		return '';
@@ -5770,37 +5800,37 @@ function pfb_pkgconf_ca_save(array $post): string {
 }
 
 /*
- * The sync half of the Software page's consent Save: make pkg.conf match $token, the value
- * pfb_pkgconf_ca_save() just persisted. Callers MUST run write_config() between the two
- * calls (issue #2518 N-write-order; see pfb_pkgconf_ca_save()'s docblock).
+ * The sync half of the Software page's consent Save. $was_consented is the state captured
+ * before pfb_pkgconf_ca_save() changes it: an Off-to-Off Save must not remove an identical
+ * line that pfBlockerNG never owned, while a real On-to-Off transition revokes our line.
+ * Callers MUST run write_config() between save and apply.
  *
- * Mirrors pfb_pkgconf_ca_tick()'s own guard: pfb_pkgconf_ca_state($file) === '' means there
- * is nothing here for pfb_pkgconf_ca_sync() to react to (no recognised PKG_ENV block, e.g. a
- * CE box that never rendered the consent section at all) -- skip the sync call entirely so a
- * transient pkg.conf read glitch can never surface the CA-specific error to an admin who
- * only toggled an unrelated setting on the same Save.
+ * pfb_pkgconf_ca_state($file) === '' means there is nothing here to react to. An explicit
+ * revoke records the resulting file signature as notified so the next cron tick does not
+ * immediately nag the admin; a later rewrite gets a new signature and notifies normally.
  *
- * N-revoke-nag (issue #2518 fix round): when $token is the explicit Off token and the file
- * is (still, or again) 'needed' afterwards, this IS the admin's own explicit choice, made
- * from this very page -- pre-emptively record the file's current signature as already
- * notified (pfb_pkgconf_ca_notice_signature()) so the very next cron tick does not
- * immediately nag them to re-enable the thing they just turned off. A later genuine change
- * (pfSense-repo-setup rewrites the file again) still produces a fresh signature and notifies
- * normally.
- *
- * Returns TRUE when $file ends up in the intended state (including the no-op skips above),
- * FALSE when a sync was attempted and refused/failed -- what the caller redirects on (TRUE)
- * or shows $input_errors for (FALSE).
+ * Returns TRUE when $file ends in the intended owned state, including no-op skips, and
+ * FALSE when a required sync was attempted and refused or failed.
  */
-function pfb_pkgconf_ca_apply(string $token, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
+function pfb_pkgconf_ca_apply(
+	string $token,
+	bool $was_consented,
+	?string $file = NULL,
+	string $ca_path = PFB_SSL_CA_CERT_PATH,
+	?bool $is_plus = NULL
+): bool {
 	$file = $file ?? PFB_PKG_CONF;
-	if (pfb_pkgconf_ca_state($file) === '') {
+	if (pfb_pkgconf_ca_state($file, $is_plus) === '') {
+		return TRUE;
+	}
+	$consent = $token === PfbToggle::On->value;
+	if (!$consent && !$was_consented) {
 		return TRUE;
 	}
 
-	$ok = pfb_pkgconf_ca_sync($token === PfbToggle::On->value, $file, $ca_path);
+	$ok = pfb_pkgconf_ca_sync($consent, $file, $ca_path);
 
-	if ($token !== PfbToggle::On->value && pfb_pkgconf_ca_state($file) === 'needed') {
+	if (!$consent && pfb_pkgconf_ca_state($file, $is_plus) === 'needed') {
 		@file_put_contents(pfb_pkgconf_ca_notice_sentinel(), pfb_pkgconf_ca_notice_signature($file));
 	}
 

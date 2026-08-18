@@ -94,6 +94,7 @@ if ($_POST && isset($_POST['save'])) {
 	// consent is this feature's security boundary, and a crash between patching pkg.conf and
 	// flushing config.xml would otherwise leave the box patched with no recorded consent that
 	// survives a reboot. pfb_pkgconf_ca_apply() (the sync half) runs only after the flush.
+	$pfb_ca_was_consented = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
 	$pfb_ca_token = pfb_pkgconf_ca_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');
 
@@ -103,7 +104,7 @@ if ($_POST && isset($_POST['save'])) {
 	// directory is still missing or empty because `certctl rehash` has not run) is not fatal,
 	// but the admin needs to be told now instead of the page silently redirecting as if the
 	// file already matched the requested state.
-	$pfb_ca_ok = pfb_pkgconf_ca_apply($pfb_ca_token);
+	$pfb_ca_ok = pfb_pkgconf_ca_apply($pfb_ca_token, $pfb_ca_was_consented);
 	if ($pfb_ca_ok) {
 		header('Location: /pfblockerng/pfblockerng_software.php');
 		exit;

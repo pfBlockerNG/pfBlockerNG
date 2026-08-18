@@ -47,14 +47,20 @@ _pc_box() {
     PFB_NIGHTLY_CONF="${_pcb_dir}/pfblockerng-nightly.conf"
     PFB_PRODUCT_LABEL="${_pcb_dir}/product_label"
     PFB_VERSION_FILE="${_pcb_dir}/version"
-    printf 'pfSense\n' > "${PFB_PRODUCT_LABEL}"
+    printf 'pfSense Plus\n' > "${PFB_PRODUCT_LABEL}"
     printf '2.8.1\n' > "${PFB_VERSION_FILE}"
     PFB_PKG_CONF="${_pcb_dir}/pkg.conf"
     PFB_CONFIG_XML="${_pcb_dir}/config.xml"
     PFB_SSL_CA_CERT_PATH="${_pcb_dir}/ca-certs"
     _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
+    PFB_SSL_CA_CERT_FILE="${_pcb_dir}/netgate-ca.pem"
+    printf 'test CA bundle\n' > "${PFB_SSL_CA_CERT_FILE}"
+    PFB_PINNED="${_pcb_dir}/fixture-pinned-with-bundle.conf"
+    sed "s#/etc/ssl/netgate-ca.pem#${PFB_SSL_CA_CERT_FILE}#" "${FIX}/plus_pinned.conf" > "${PFB_PINNED}"
     PFB_EXPECTED_PATCHED="${_pcb_dir}/fixture-patched-with-ca.conf"
-    sed "s#/etc/ssl/certs#${PFB_SSL_CA_CERT_PATH}#" "${FIX}/plus_patched.conf" > "${PFB_EXPECTED_PATCHED}"
+    sed -e "s#/etc/ssl/netgate-ca.pem#${PFB_SSL_CA_CERT_FILE}#" \
+        -e "s#/etc/ssl/certs#${PFB_SSL_CA_CERT_PATH}#" \
+        "${FIX}/plus_patched.conf" > "${PFB_EXPECTED_PATCHED}"
     export PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
            PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
            PFB_SSL_CA_CERT_PATH
@@ -64,7 +70,7 @@ _pc_box() {
 _pc_unset_box() {
     unset PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-          PFB_SSL_CA_CERT_PATH PFB_EXPECTED_PATCHED
+          PFB_SSL_CA_CERT_PATH PFB_SSL_CA_CERT_FILE PFB_PINNED PFB_EXPECTED_PATCHED
 }
 
 # Write a config.xml carrying the consent element with body $1 ("on" / "off" /
@@ -123,7 +129,7 @@ Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches 
     setup() {
         _c1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_consent_on.XXXXXX")"
         _pc_box "${_c1_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml on
     }
     cleanup() { rm -rf "${_c1_dir}"; _pc_unset_box; }
@@ -132,7 +138,7 @@ Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches 
 
     It 'before-state: pkg.conf is the pinned fixture, no SSL_CA_CERT_PATH yet'
       The contents of file "${PFB_PKG_CONF}" should not include "SSL_CA_CERT_PATH"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 
     It 'patches pkg.conf to be byte-identical to plus_patched.conf, exit 0'
@@ -140,6 +146,25 @@ Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches 
       The status should be success
       The stderr should include "INFO"
       The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — CE edition with a Plus-shaped pin: unchanged'
+    setup() {
+        _ce1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_edition_ce.XXXXXX")"
+        _pc_box "${_ce1_dir}"
+        printf 'pfSense Community Edition\n' > "${PFB_PRODUCT_LABEL}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+        _pc_config_xml on
+    }
+    cleanup() { rm -rf "${_ce1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'does not patch a CE box even when pkg.conf happens to contain the same block shape'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -343,7 +368,7 @@ Describe 'pkgconf re-apply — config/0 says on, a second <config> block (config
     setup() {
         _f3_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_f1_second_off.XXXXXX")"
         _pc_box "${_f3_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         cat > "${PFB_CONFIG_XML}" <<'EOF'
 <?xml version="1.0"?>
 <pfsense>
@@ -365,7 +390,7 @@ EOF
     After  'cleanup'
 
     It 'before-state: pkg.conf is the pinned fixture'
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 
     It 'patches pkg.conf to be byte-identical to plus_patched.conf, exit 0'
@@ -384,7 +409,7 @@ End
 # somehow got the element wrapped one level deeper would have its "no" silently
 # read as "yes" by the shell hook while PfbConfig kept reading NULL/off.
 
-Describe 'pkgconf re-apply — A_row: consent nested one level under <row> inside config/0: no patch'
+Describe 'pkgconf re-apply — A_row: consent nested under an attribute-bearing <row> inside config/0: no patch'
     setup() {
         _dep1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_depth_row.XXXXXX")"
         _pc_box "${_dep1_dir}"
@@ -395,7 +420,7 @@ Describe 'pkgconf re-apply — A_row: consent nested one level under <row> insid
 	<installedpackages>
 		<pfblockerng>
 			<config>
-				<row>
+				<row kind="nested">
 					<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
 				</row>
 			</config>
@@ -412,7 +437,7 @@ EOF
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
     End
 
-    It 'leaves pkg.conf byte-unchanged, exit 0 (PfbConfig reads config/0 as a DIRECT child -- <row> is not that path, so raw is NULL/off)'
+    It 'leaves pkg.conf byte-unchanged, exit 0 (PfbConfig reads config/0 as a DIRECT child -- the attribute-bearing <row> is not that path)'
       When run sh "${HOOK}" onestart
       The status should be success
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
@@ -614,7 +639,7 @@ Describe 'pkgconf re-apply — consent value "On" (mixed case): patches'
     setup() {
         _ci1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_case_mixed.XXXXXX")"
         _pc_box "${_ci1_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml On
     }
     cleanup() { rm -rf "${_ci1_dir}"; _pc_unset_box; }
@@ -622,7 +647,7 @@ Describe 'pkgconf re-apply — consent value "On" (mixed case): patches'
     After  'cleanup'
 
     It 'before-state: pkg.conf is the pinned fixture'
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 
     It 'patches pkg.conf to be byte-identical to plus_patched.conf, exit 0'
@@ -637,7 +662,7 @@ Describe 'pkgconf re-apply — consent value "ON" (upper case): patches'
     setup() {
         _ci2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_case_upper.XXXXXX")"
         _pc_box "${_ci2_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml ON
     }
     cleanup() { rm -rf "${_ci2_dir}"; _pc_unset_box; }
@@ -645,7 +670,7 @@ Describe 'pkgconf re-apply — consent value "ON" (upper case): patches'
     After  'cleanup'
 
     It 'before-state: pkg.conf is the pinned fixture'
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 
     It 'patches pkg.conf to be byte-identical to plus_patched.conf, exit 0'
@@ -892,7 +917,7 @@ Describe 'pkgconf re-apply — running the hook twice is idempotent end to end'
     setup() {
         _t6_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_target_twice.XXXXXX")"
         _pc_box "${_t6_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml on
     }
     cleanup() { rm -rf "${_t6_dir}"; _pc_unset_box; }
@@ -900,7 +925,7 @@ Describe 'pkgconf re-apply — running the hook twice is idempotent end to end'
     After  'cleanup'
 
     It 'before-state: pkg.conf is the pinned fixture'
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 
     It 'the second run is identical to the first, both match plus_patched.conf'
@@ -988,6 +1013,25 @@ EOF
       When run sh "${HOOK}" onestart
       The status should be success
       The value "$(cksum < "${PFB_PKG_CONF}")" should equal "${_s3_sum}"
+    End
+End
+
+Describe 'pkgconf re-apply — SSL_CA_CERT_FILE names an empty bundle: unchanged'
+    setup() {
+        _s3b_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_shape_empty_bundle.XXXXXX")"
+        _pc_box "${_s3b_dir}"
+        true > "${PFB_SSL_CA_CERT_FILE}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+        _pc_config_xml on
+    }
+    cleanup() { rm -rf "${_s3b_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'refuses to add a CA path that libfetch would abandon with an empty CA file'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -1181,10 +1225,13 @@ Describe 'pkgconf re-apply — pkg.conf itself is unreadable: no shell error tex
     After  'cleanup'
 
     It 'before-state: pkg.conf exists but is unreadable'
+      Skip if 'root bypasses file permissions' [ "$(id -u)" -eq 0 ]
       The path "${PFB_PKG_CONF}" should be exist
+      The value "$([ ! -r "${PFB_PKG_CONF}" ] && echo unreadable || echo readable)" should equal unreadable
     End
 
     It 'prints no "Illegal number" shell error, exit 0'
+      Skip if 'root bypasses file permissions' [ "$(id -u)" -eq 0 ]
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should not include "Illegal number"
@@ -1200,7 +1247,7 @@ Describe 'pkgconf re-apply — pkg.conf permission bits: preserved across the pa
     setup() {
         _m1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_mode.XXXXXX")"
         _pc_box "${_m1_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         chmod 0600 "${PFB_PKG_CONF}"
         _pc_config_xml on
     }
@@ -1229,7 +1276,7 @@ Describe 'pkgconf re-apply — pkg.conf whose final brace carries no trailing ne
     setup() {
         _nl1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_no_trailing_nl.XXXXXX")"
         _pc_box "${_nl1_dir}"
-        printf '%s' "$(cat "${FIX}/plus_pinned.conf")" > "${PFB_PKG_CONF}"
+        printf '%s' "$(cat "${PFB_PINNED}")" > "${PFB_PKG_CONF}"
         _pc_config_xml on
         _nl1_expected="${_nl1_dir}/expected-patched.conf"
         printf '%s' "$(cat "${PFB_EXPECTED_PATCHED}")" > "${_nl1_expected}"
@@ -1331,7 +1378,7 @@ Describe 'pkgconf re-apply — PFB_SSL_CA_CERT_PATH contains one entry: patched'
     setup() {
         _p4_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_ca_oneentry.XXXXXX")"
         _pc_box "${_p4_dir}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml on
         PFB_SSL_CA_CERT_PATH="${_p4_dir}/custom-certs"
         _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
@@ -1340,7 +1387,7 @@ Describe 'pkgconf re-apply — PFB_SSL_CA_CERT_PATH contains one entry: patched'
         # /etc/ssl/certs value swapped for this example's custom CA dir — still
         # asserting against the fixture bytes, not a hand-retyped heredoc.
         _p4_expected="${_p4_dir}/expected-patched.conf"
-        sed "s#/etc/ssl/certs#${PFB_SSL_CA_CERT_PATH}#" "${FIX}/plus_patched.conf" > "${_p4_expected}"
+        sed "s#${PFB_SSL_CA_CERT_PATH%/*}/ca-certs#${PFB_SSL_CA_CERT_PATH}#" "${PFB_EXPECTED_PATCHED}" > "${_p4_expected}"
     }
     cleanup() { rm -rf "${_p4_dir}"; _pc_unset_box; unset _p4_expected; }
     Before 'setup'
@@ -1519,7 +1566,7 @@ Describe 'pkgconf re-apply — hostile unrelated line survives byte-for-byte'
         {
             printf '%s\n' 'ABI=FreeBSD:16:amd64'
             printf '%s\n' 'HOSTILE="a $(rm -rf /) value" # comment; `backtick` & $VAR | pipe'
-            cat "${FIX}/plus_pinned.conf" | tail -n +3
+            cat "${PFB_PINNED}" | tail -n +3
         } > "${PFB_PKG_CONF}"
         _pc_config_xml on
         _h1_expected="${_h1_dir}/expected-patched.conf"
@@ -1563,7 +1610,7 @@ Describe 'pkgconf re-apply — a 5 MB pkg.conf still patches correctly'
             done
         } > "${_h2_padding}"
         cat "${_h2_padding}" > "${PFB_PKG_CONF}"
-        cat "${FIX}/plus_pinned.conf" | tail -n +3 >> "${PFB_PKG_CONF}"
+        cat "${PFB_PINNED}" | tail -n +3 >> "${PFB_PKG_CONF}"
         _pc_config_xml on
         _h2_expected="${_h2_dir}/expected-patched.conf"
         cat "${_h2_padding}" > "${_h2_expected}"
@@ -1594,7 +1641,7 @@ Describe 'pkgconf re-apply — a pkg.conf path containing a space is handled'
         _pc_box "${_h3_dir}"
         PFB_PKG_CONF="${_h3_dir}/pkg conf with spaces.conf"
         export PFB_PKG_CONF
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml on
     }
     cleanup() { rm -rf "${_h3_dir}"; _pc_unset_box; }
@@ -1620,7 +1667,7 @@ Describe 'pkgconf re-apply — a channel conf regenerates AND pkg.conf gets patc
         _n1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_nonreg_both.XXXXXX")"
         _pc_box "${_n1_dir}"
         printf '# stub pending\n' > "${PFB_STABLE_CONF}"
-        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
         _pc_config_xml on
     }
     cleanup() { rm -rf "${_n1_dir}"; _pc_unset_box; }
@@ -1629,7 +1676,7 @@ Describe 'pkgconf re-apply — a channel conf regenerates AND pkg.conf gets patc
 
     It 'before-state: the stable conf is the stub, pkg.conf is the pinned fixture'
       The contents of file "${PFB_STABLE_CONF}" should include "pending"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 
     It 'both the repo conf and pkg.conf are updated, exit 0'
