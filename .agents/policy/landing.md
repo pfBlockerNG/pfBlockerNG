@@ -4,14 +4,14 @@ Scope: PR landing — review sources, adversarial reviewer contract, finding int
 
 - **Owner:** repo owner. **Last-verified:** 2026-08-15.
 
-Composes with [`workflow.md`](workflow.md) — its "Review" section define independent adversarial review principle, "Retry and fix-loop limits" bound every loop here. Every wait armed here follow [`waits.md`](waits.md) (no orphaned waits + bounded-wait ladder). CodeRabbit Fair Usage, wait-then-nudge, and spend tightening live in [`coderabbit.md`](coderabbit.md) — this file only names the landing hook.
+Composes with [`workflow.md`](workflow.md) — its "Review" section define independent adversarial review principle, "Retry and fix-loop limits" bound every loop here. Every wait armed here follow [`waits.md`](waits.md) (no orphaned waits + bounded-wait ladder). CodeRabbit Fair Usage and spend rules live in [`coderabbit.md`](coderabbit.md); it is asked for only once the PR is merge-ready, never earlier — this file only names the landing hook.
 
 ## Fixed floors (never weaken)
 
 - **Landing means merged.** Commit, push, non-draft PR, reviews resolved, rebase-merge (dev-only: push to `devel`). Commit alone not landing.
 - **Review before merge.** Merge step never start until review step complete cleanly.
 - **Rebase-only merges.** Never merge commit, never squash; history across `main` ← `devel` stay strictly linear.
-- **Advisory bots never gate.** CodeRabbit state and Snyk quota/infra `error` never block CI wait or merge. One exception: terminal Snyk `failure` carrying **real finding** is security finding, resolve through review gate before merge.
+- **Advisory bots never gate.** No bot's state ever blocks the CI wait or the merge; `wait-checks.sh` excludes advisory contexts by default. A bot that posts a real finding is triaged on merit like any unsolicited review — a security finding is still a security finding — but it is never a gate.
 - **Never request Copilot code review** (owner, 2026-08-01); never enable `copilot_code_review` rule/auto-request setting (ruleset may bundle it with branch protection — strip only the rule). One arriving anyway: triage on merit like any unsolicited review, but never gate-counted; never restate as ban publicly.
 - **Review effort:** `medium` — every leg, every round. The ceiling lives in one place, [`delegation.md`](delegation.md) "Effort per role"; never raise a leg past what that bullet allows.
 - **Three leg reviewers, whole-PR diff, incremental focus.** Adversarial review is three parallel read-only reviewers, one per lens (contract conformance · correctness + hostile inputs · test honesty). Round 1 review diff of entire PR. Each leg post own audit comment recording head SHA it reviewed; later round's leg reviewer find latest audit comment **of own leg** and focus on changes since that SHA, validated in context of full PR diff — skip cleanly-reviewed ground, follow up every recorded defect. Re-review rounds run on small tier, only legs the fix could affect.
@@ -34,7 +34,7 @@ Composes with [`workflow.md`](workflow.md) — its "Review" section define indep
 Three things start together at top of review step:
 
 1. **The CI wait — arm it NOW.** CI run on pushed head regardless of review state: start check-poll (`scripts/agent/wait-checks.sh --repo OWNER/REPO --pr N`, self-exiting, result file's LAST line is verdict) so clean PR's checks already green when review gate close. Fix push re-trigger CI — stop stale wait, re-arm after LAST fix push. Early verdict valid only for head SHA it watched. Flow abort anywhere → stop this wait as part of trigger sweep.
-2. **The adversarial review — ALWAYS, spawned first.** Every PR get three independent leg reviewers, each in fresh read-only context via client's native reviewer surface (per-client mapping below). Client-tracked: never arm wait for them; act on completions. Review additive to CodeRabbit, never fallback: run regardless, stand alone when CodeRabbit never review. **Self-review exemption** (owner, 2026-08-08): for small, relatively contained change, session at ≤ 50% context usage may run three lenses itself instead of spawning legs — past 50% context it MUST spawn. Self-review stay adversarial, cover same three-lens criteria and evidence bar as spawned legs — only spawn waived. Audit comments still record model, head SHA, self-review. Vendored `mattpocock-skills:code-review` skill (Spec + Standards axes) may drive contract lens and add standards/smell pass; never replace executed-probe or mutation mandates.
+2. **The adversarial review — ALWAYS, spawned first.** Every PR get three independent leg reviewers, each in fresh read-only context via client's native reviewer surface (per-client mapping below). Client-tracked: never arm wait for them; act on completions. The legs ARE the review step: they run regardless of any bot and stand alone. **Self-review exemption** (owner, 2026-08-08): for small, relatively contained change, session at ≤ 50% context usage may run three lenses itself instead of spawning legs — past 50% context it MUST spawn. Self-review stay adversarial, cover same three-lens criteria and evidence bar as spawned legs — only spawn waived. Audit comments still record model, head SHA, self-review. Vendored `mattpocock-skills:code-review` skill (Spec + Standards axes) may drive contract lens and add standards/smell pass; never replace executed-probe or mutation mandates.
 CodeRabbit is **not** armed here. Automatic review is off; it is asked for once at the end of the flow, and only if the PR reach that end (next section).
 
 Whichever reviews arrive, **every comment of every review received is handled**; triage below never change with source.
@@ -59,7 +59,8 @@ Mechanics that hold for every pass:
 
 Automatic review is **off** (`.coderabbit.yaml`). Opening or pushing a PR triggers nothing, so there is no acknowledgement window to wait on and no auto-review to poll. Full path: [`coderabbit.md`](coderabbit.md). Short hook for landing:
 
-- **Ask once, when the PR is actually ready** — adversarial review complete and its findings resolved, CI green on the head SHA, and you judge the code mergeable. Then post exactly one top-level `@coderabbitai review`. Not before: an earlier ask spends the slot on code that is going to change.
+- **Ask once, when the PR is actually ready.** Ready means all three, together: the reviewer legs have FULLY reviewed the PR; the agent driving the change has FIXED everything they found (convergence reached, nothing left needing a decision); and **CI is green on the head SHA**. Then post exactly one top-level `@coderabbitai review`. Not before — an earlier ask spends the slot on code that is going to change, and nothing acknowledges a PR on its own now that automatic review is off.
+- **Then wait for it and address it.** The ask is not the end of the step: wait the review out, then triage and answer every finding it returns exactly like a leg's, before merging.
 - **Then** arm `scripts/agent/wait-reviewer.sh --handle coderabbitai --until finished --since <now>` (self-exiting; result file's LAST line is the verdict; handle matching is case-insensitive and anchored — never append `[bot]` yourself).
 - **FINISHED** — terminal result posted, including a clean pass. Content beat quota phrase: real review content beside a notice is FINISHED. Triage per below.
 - **QUOTA `<mins>`** — not a review. Wait the stated window, then one more ask; a second quota notice ends it with a recorded miss (coderabbit.md). Never nudge inside a live countdown. Always surface a miss; a skipped bot is never "PR clean".
@@ -67,19 +68,17 @@ Automatic review is **off** (`.coderabbit.yaml`). Opening or pushing a PR trigge
 - **DECLINE** (base isn't default branch) — post one comment asking for a full review (`@coderabbitai trigger full review and tell me when you are finished`), re-arm finished-only with `--since` now (never re-trigger on repeat decline).
 - **Spend:** after a finished review, do not ask again for format-only, comment-only, lint, or mechanical APPLY rounds. Only a material behaviour change earns a second ask, and only one.
 - Bot's wording drifts — diagnostics show a finished review the matcher missed: read the comment body and adjust patterns instead of waiting out the timeout.
-- Multiple handles (e.g. adding Snyk explicitly): run the wait once per handle, continue when all **engaged** reviewers finish; tolerate absent ones. The DECLINE/re-ask machinery is CodeRabbit-specific; other handles use only FINISHED / QUOTA / NOTPRESENT / TIMEOUT. For a human handle, the first new review or comment since the wait started is FINISHED.
+- Multiple handles: run the wait once per handle, continue when all **engaged** reviewers finish; tolerate absent ones. The DECLINE/re-ask machinery is CodeRabbit-specific; other handles use only FINISHED / QUOTA / NOTPRESENT / TIMEOUT. For a human handle, the first new review or comment since the wait started is FINISHED.
 
 ### Finding intake — enumerate everything
 
 Reconcile branch first: fetch and **fast-forward** local head to remote head before editing; if tests were added, run suite once for baseline.
 
-CodeRabbit spread findings across three places — pull all three, save large bodies to files, enumerate every finding before fixing anything:
+A review spreads findings across three places — pull all three, save large bodies to files, enumerate every finding before fixing anything:
 
 1. **Inline review comments** (the "actionable" ones) — `pulls/N/comments`.
 2. **Review summary bodies** (`pulls/N/reviews`) — where "🧹 Nitpick comments" and "⚠️ Outside diff range comments" live, collapsed with no inline thread; easy to miss.
 3. **Top-level issue comments** — `issues/N/comments`. All three paginated.
-
-**Snyk** surface as commit **status/check** on head SHA, never review comments: read detail from status description + target URL. Only terminal `failure` verdict carry findings; `error` ("Code test limit reached") is skipped scan — never clean security pass.
 
 **Every enumerated finding is mandatory to handle** — inline, nitpick, outside-diff-range alike: each get explicit verdict and reply. "Outside diff range" is bot's *category label*, not scope verdict — outside-diff-range finding often concern code the PR did change; judge scope per finding via `git blame`, never by bucket.
 
@@ -119,10 +118,9 @@ First **dedupe across reviewers** (by file:line + substance — reviewers routin
 
 Proceed to merge ONLY when review step finished cleanly:
 
-- Every finding from **every review received** — always-on adversarial review, CodeRabbit when it reviewed, any unsolicited review, any terminal Snyk `failure` finding — triaged, accepted fixes committed and pushed, nothing left needing human decision. Adversarial review mandatory — never merge without its findings triaged, even when every bot came back clean.
-- **Snyk post-hoc read (advisory, never waited on):** immediately before gate, read its state once from head SHA. Absent / `pending` / `error` (quota) → ignore and note skipped scan; `failure` with real finding → triage like any blocking review finding; `success` → note it, still not gate requirement.
+- Every finding from **every review received** — the adversarial legs, CodeRabbit's review once asked for, any unsolicited review — triaged, accepted fixes committed and pushed, nothing left needing human decision. Adversarial review mandatory — never merge without its findings triaged, even when every bot came back clean.
 - **Findings ledger:** numbered list of every finding with its outcome — `fixed@<commit>` / `skipped: <evidence>` / `deferred: <issue link>` — folded into audit comment; refuse to merge while any item lack outcome.
-- **No external reviewer** (CodeRabbit dropped, nobody else reviewed): note skip in audit trail; three legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
+- **No external reviewer** (CodeRabbit unavailable after the ask, nobody else reviewed): note skip in audit trail; three legs carry review (rule retired 2026-08-08 — 1 real catch in 6 escalations, absorbed by per-leg top-tier correctness review).
 - **Catch-all sweep, last thing before merging:** list ALL reviews and inline comments on PR (paginated, no login filter) — reviewers you never armed wait for can post seconds before merge — and triage anything not yet handled. Summary-only review with no findings noted in audit trail.
 - **CodeRabbit at merge:** the gate is where the ask happens — with every other condition met, post the one `@coderabbitai review` and wait it out per [`coderabbit.md`](coderabbit.md). Head SHA still without a finished review after that path → record a miss in [`.agents/policy/coderabbit-misses.md`](coderabbit-misses.md). There is no mute label. Owner may, in conversation, spend a slot anyway or name a substitute reviewer; agents never invent either.
 - Unresolved, contested, or user-decision findings → stop and report; do not merge.
@@ -139,10 +137,10 @@ Base advances out of band (parallel agents). In dedicated worktree:
 
 ### CI wait (excluding advisory bots)
 
-Poll until every **required** check complete, excluding only four advisory contexts — `CodeRabbit`, `snyk`, `code/snyk`, `code/snyk (pfBlockerNG)` — matched case-insensitively on WHOLE name, never substring: required check merely containing one of them still gate. `--exclude REGEX` override it, unanchored. Via `scripts/agent/wait-checks.sh`, single implementation (self-exiting background task, ~40-minute cap, result file's LAST line is verdict). CLI transport unavailable → client's GitHub MCP tools with wakeup-paced bounded checks.
+Poll until every **required** check complete, excluding only the advisory contexts `wait-checks.sh` already knows (its built-in list, matched case-insensitively on WHOLE name, never substring: a required check merely CONTAINING an advisory name still gates). `--exclude REGEX` override it, unanchored. Via `scripts/agent/wait-checks.sh`, single implementation (self-exiting background task, ~40-minute cap, result file's LAST line is verdict). CLI transport unavailable → client's GitHub MCP tools with wakeup-paced bounded checks.
 
 - **Early-verdict reuse:** CI wait armed at review start that already returned `PASS` may replace this wait IFF SHA it watched still equal PR head AND rebase was no-op.
-- **PASS** → still do Snyk post-hoc read (merge gate) before merging.
+- **PASS** → proceed to the merge gate.
 - **FAIL** → real check failed: do not merge; report failing checks and run URLs and stop.
 - **TIMEOUT** → report and ask whether to keep waiting; never merge on timeout.
 - **STALE** → head moved after arming: re-arm and retry; never merge.
