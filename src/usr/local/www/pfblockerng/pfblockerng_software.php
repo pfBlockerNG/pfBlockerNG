@@ -82,13 +82,37 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 	$pfb_sw_action = (string) $_POST['pfb_sw_action'];
 }
 
+// $input_errors is read unconditionally in the render section below (the house pattern; see
+// pfblockerng_general.php), so it must be defined on every request path, including a POST
+// without 'save'.
+$input_errors = array();
+
 // "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
 // unticked, so persist the owner-ruled empty Off token; an absent config key defaults On.
 if ($_POST && isset($_POST['save'])) {
 	PfbConfig::write('gen/pfb_software_check', pfb_filter($_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '');
+
+	// issue #2518: consent to the pkg.conf CA-path patch. pfb_pkgconf_ca_save() filters the
+	// posted token, persists it, and reacts to the new state -- the whole save-and-sync
+	// behaviour lives there (not here) so PHPUnit can drive it directly instead of replaying
+	// it (STEP C fix round finding 1).
+	$pfb_ca_save = pfb_pkgconf_ca_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');
-	header('Location: /pfblockerng/pfblockerng_software.php');
-	exit;
+
+	// The consent flag itself is already persisted above, regardless of what happens next --
+	// it is the admin's decision, and pfb_pkgconf_ca_tick() retries the file patch on every
+	// boot and cron pass. So a sync failure here (e.g. the CA certificate hash directory is
+	// still missing or empty because `certctl rehash` has not run) is not fatal, but the
+	// admin needs to be told now instead of the page silently redirecting as if the file
+	// already matched the requested state.
+	if ($pfb_ca_save['ok']) {
+		header('Location: /pfblockerng/pfblockerng_software.php');
+		exit;
+	}
+	$input_errors[] = 'The setting was saved, but pfBlockerNG could not update ' . PFB_PKG_CONF
+		. ' right now (its CA certificate directory may be missing or empty -- try running '
+		. '`certctl rehash` from the shell). pfBlockerNG will retry automatically at the next '
+		. 'boot or scheduled run.';
 }
 
 // "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
@@ -104,6 +128,10 @@ $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 
 $shortcut_section = 'pfblockerng';
 include_once('head.inc');
+
+if ($input_errors) {
+	print_input_errors($input_errors);
+}
 
 // Tab bar (the Software tab is the active one here; gated like every page).
 $get_req = pfb_alerts_default_page();
@@ -192,6 +220,45 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
+
+// issue #2518: consent to a single SSL_CA_CERT_PATH line inside pkg.conf's PKG_ENV block.
+// Rendered ONLY when there is a recognised pin to react to -- pfb_pkgconf_ca_state()
+// returns '' for a CE box, or any pkg.conf shape it does not recognise, and this section
+// must show nothing at all in that case.
+$pfb_ca_state = pfb_pkgconf_ca_state();
+if ($pfb_ca_state !== '') {
+	$pfb_ca_consent = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
+
+	if ($pfb_ca_state === 'patched') {
+		$pfb_ca_help = 'The SSL_CA_CERT_PATH line is currently present in ' . PFB_PKG_CONF
+			. '\'s PKG_ENV block, so pkg can reach pfBlockerNG\'s repository (and other '
+			. 'third-party repositories) over TLS. ';
+	} else {
+		$pfb_ca_help = 'Right now, pkg on this firewall trusts only Netgate\'s own certificate '
+			. 'bundle, so it cannot install or update pfBlockerNG -- or any other third-party '
+			. 'package -- through System > Package Manager or a plain <code>pkg install</code> '
+			. 'in the shell. Checking this box adds one SSL_CA_CERT_PATH line inside the '
+			. 'existing PKG_ENV block in ' . PFB_PKG_CONF . ', restoring the public root '
+			. 'certificate store pkg needs to reach that repository. ';
+	}
+	$pfb_ca_help .= PFB_PKG_CONF . ' is not a file pfBlockerNG owns -- pfSense rewrites it on '
+		. 'package-repository changes and branch switches -- so while this stays checked, '
+		. 'pfBlockerNG re-applies the line at boot and on every scheduled (cron) pass. '
+		. 'Unchecking this removes only that one line; the rest of the file is left as pfSense '
+		. 'wrote it.';
+
+	$section = new Form_Section('Package manager CA trust');
+	// The 5th argument is the token this box POSTS, and it is load-bearing the same way
+	// pfb_software_check's is above (issue #2367).
+	$section->addInput(new Form_Checkbox(
+		'pfb_pkg_ca_consent',
+		'Allow pfBlockerNG to manage the pkg.conf CA path',
+		'Enabled',
+		$pfb_ca_consent,
+		'on'
+	))->setHelp($pfb_ca_help);
+	$form->add($section);
+}
 
 $section = new Form_Section('Actions');
 

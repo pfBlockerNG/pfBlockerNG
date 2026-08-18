@@ -2997,6 +2997,120 @@ def test_software_page_hidden_when_override_forces_off(
         assert _SOFTWARE_PANEL_MARKER not in resp.text, "forced-off must NOT render the Software panel"
 
 
+# --------------------------------------------------------------------------- #
+# issue #2518 STEP C — the pkg.conf CA-path consent section. Rendered ONLY when
+# pfb_pkgconf_ca_state() finds a recognised PKG_ENV pin in the guest's REAL
+# /usr/local/etc/pkg.conf (a CE box, or any shape the parser does not recognise,
+# must see nothing). The smoke VMs are CE, so their shipped pkg.conf carries no
+# PKG_ENV block by default (the negative/absent case below IS that default) —
+# the positive case seeds a real block via pkg_conf_ca_block_seeded().
+# --------------------------------------------------------------------------- #
+
+_PKG_CONF_PATH = "/usr/local/etc/pkg.conf"
+# The GUEST's own real cert bundle -- never a Netgate path (that file does not
+# exist off-Plus, and pointing pkg at a missing bundle would break pkg's own TLS
+# on this guest for the rest of the test run). Matches PFB_SSL_CA_CERT_FILE's
+# production default (pfblockerng.inc), which IS this guest's real file.
+_PKG_CONF_GUEST_CA_FILE = "/etc/ssl/cert.pem"
+_CONSENT_FIELD_MARKER = "pfb_pkg_ca_consent"
+
+
+def _overwrite_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0) -> None:
+    """Replace *path*'s entire contents on the guest via plain ``tee`` (NOT ``-a``: a full
+    overwrite, unlike :func:`_seed_vm_file`'s append), so the caller controls the file's
+    exact bytes rather than adding to whatever is already there."""
+    result = subprocess.run(
+        vm.ssh_argv("tee", path),
+        input=content,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"_overwrite_vm_file({path!r}) failed: rc={result.returncode} {result.stderr!r}")
+
+
+@contextmanager
+def pkg_conf_ca_block_seeded(vm: SmokeVM) -> Iterator[None]:
+    """Append a well-formed, unpatched ``PKG_ENV { SSL_CA_CERT_FILE=... }`` block to the
+    guest's REAL ``/usr/local/etc/pkg.conf`` (shape mirrors
+    ``tests/fixtures/pkg_conf/plus_pinned.conf``, but pointed at the GUEST's own real CA
+    bundle so `pkg` keeps working on this guest throughout the test), then restore the file
+    BYTE-FOR-BYTE in a ``finally`` -- and fail loudly if that restore did not take, so a
+    broken seed/restore can never leak a mutated pkg.conf into a later test on the
+    session-scoped VM.
+    """
+    original = vm.ssh("cat", _PKG_CONF_PATH)
+    assert original.returncode == 0, (
+        f"failed to read {_PKG_CONF_PATH} before seeding (rc={original.returncode}): {original.stderr.strip()!r}"
+    )
+    original_content = original.stdout
+    seeded_content = (
+        original_content.rstrip("\n") + "\nPKG_ENV {\n" + f"\tSSL_CA_CERT_FILE={_PKG_CONF_GUEST_CA_FILE}\n" + "}\n"
+    )
+    _overwrite_vm_file(vm, _PKG_CONF_PATH, seeded_content)
+    try:
+        yield
+    finally:
+        _overwrite_vm_file(vm, _PKG_CONF_PATH, original_content)
+        restored = vm.ssh("cat", _PKG_CONF_PATH)
+        assert restored.returncode == 0 and restored.stdout == original_content, (
+            f"failed to restore {_PKG_CONF_PATH} to its original content after seeding -- "
+            "guest pkg.conf may be left mutated for later tests"
+        )
+
+
+def test_software_page_pkgconf_ca_consent_section_present_when_pinned(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The pkg.conf CA-consent section renders when a recognised PKG_ENV pin is present (#2518).
+
+    Scenario:
+      Given the override sentinel set to 'on' (so the provenance gate passes),
+      And the guest's REAL pkg.conf seeded with a well-formed, unpatched PKG_ENV block
+          (pkg_conf_ca_block_seeded — the branch every genuine Plus box with the Netgate
+          CA pin takes),
+      When the Software page is GET,
+      Then it renders clean (200, no Fatal/Warning/Notice/Uncaught — the render oracle) AND
+          the pfb_pkg_ca_consent control is present in the body.
+    """
+    with software_panel_forced(smoke_vm, "on"), pkg_conf_ca_block_seeded(smoke_vm):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"Software page render oracle failed with the CA pin seeded: {result.detail}"
+        assert _CONSENT_FIELD_MARKER in resp.text, (
+            "the pkg.conf CA-consent section must render when pkg.conf carries a recognised unpatched PKG_ENV block"
+        )
+
+
+def test_software_page_pkgconf_ca_consent_section_absent_on_unpinned_pkgconf(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """The pkg.conf CA-consent section stays ABSENT on a CE box's real, unpinned pkg.conf.
+
+    This is the branch every real CE box takes (the Tier-A guests ship exactly this: no
+    PKG_ENV block at all) -- no seeding here, deliberately, so this proves the section's
+    DEFAULT off-state against the guest's actual shipped file, not a fixture standing in
+    for it.
+
+    Scenario:
+      Given the override sentinel set to 'on' (so the provenance gate passes),
+      And the guest's pkg.conf is left exactly as pfSense shipped it (no PKG_ENV block),
+      When the Software page is GET,
+      Then it renders clean AND the pfb_pkg_ca_consent control is ABSENT from the body.
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        resp = webui.get(_SOFTWARE_PAGE)
+        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+        assert result.ok, f"Software page render oracle failed on unpinned pkg.conf: {result.detail}"
+        assert _CONSENT_FIELD_MARKER not in resp.text, (
+            "the pkg.conf CA-consent section must stay ABSENT when pkg.conf carries no "
+            "recognised PKG_ENV block (a CE box, or any shape pfb_pkgconf_ca_state() does "
+            "not recognise, must see nothing here)"
+        )
+
+
 def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
     """The Log Settings section was regrouped into aligned per-log rows with a single 2-item
     column-help intro and category header rows (issue #489), and the ADR-30 scheduled-reset
