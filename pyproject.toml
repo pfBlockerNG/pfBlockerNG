@@ -1,3 +1,58 @@
+# Dev/CI Python environment (issue #2513). NOT a shipped package: releases contain
+# only src/, and `package = false` keeps uv from trying to build this tree.
+#
+# requires-python tracks the appliance, which carries python3.11 and no python3
+# symlink, so a dev environment on any other minor could accept code the box cannot
+# run. `.python-version` pins the same value for `uv python install`.
+[project]
+name = "pfblockerng-dev"
+version = "0"
+requires-python = "==3.11.*"
+
+[tool.uv]
+package = false
+
+# PEP 735 groups. `uv sync --locked` resolves against uv.lock, which pins the
+# TRANSITIVE graph as well -- the gap a requirements file of direct `==` pins leaves
+# open, and the one that let a gate move with no diff.
+[dependency-groups]
+# Lint, type and unit gates: what every non-VM job needs.
+dev = [
+    "ruff==0.16.0",
+    "mypy==2.3.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    # Import-time deps that decide whether tests RUN or importorskip-skip:
+    # dnspython gates the shard-splitter oracle (#861), charset-normalizer the
+    # feed-encoding converter test (#1797), PyYAML the workflow-structure specs.
+    "dnspython==2.8.0",
+    "charset-normalizer==3.4.9",
+    "PyYAML==6.0.3",
+]
+
+# ADR-04 live-VM harness. Formerly tests/smoke/requirements.txt.
+smoke = [
+    "dnspython==2.8.0",
+    # Per-test wall-clock ceiling so a wedged VM op fails fast instead of hanging.
+    "pytest-timeout==2.4.0",
+    # >=2.33.0 fixes CVE-2026-25645 (predictable tmp filenames in extract_zipped_paths).
+    "requests==2.34.2",
+    # Transitive pin (via requests): >=3.15 fixes CVE-2026-45409.
+    "idna==3.18",
+    # Transitive pin (via pytest): >=2.20.0 fixes CVE-2026-4539 (ReDoS).
+    "pygments==2.20.0",
+    # ADR-14 Tier-B browser tier. The wheel is the bindings only -- the Chromium
+    # BINARY is a separate `playwright install chromium` step.
+    "playwright==1.61.0",
+]
+
+# The manual-only benchmarks job (ADR-01). Formerly legacy/benchmarks/requirements.txt.
+bench = [
+    "pytest-benchmark==5.2.3",
+    "pympler==1.1",
+    "pygments==2.20.0",
+]
+
 [tool.pytest.ini_options]
 # Run pytest from the repo root; no 'cd' needed in CI or locally.
 testpaths = ["tests"]
