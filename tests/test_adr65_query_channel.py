@@ -678,11 +678,30 @@ class TestQueryWatcherLoop:
         assert h.wait_reply("req3") is not None
         assert not os.path.exists(h.reply_path + ".tmp")
 
-    def test_failed_reply_write_is_not_reported_as_published(self, query_harness: _QueryHarness) -> None:
+    def test_failed_reply_write_is_not_reported_as_published(
+        self, query_harness: _QueryHarness, monkeypatch: Any
+    ) -> None:
         h = query_harness
+        # Synchronise on the WRITE, not on the read. The watcher answers after
+        # _control_read_record returns, so "consumed" leaves a window in which the answer
+        # has not been attempted yet -- and restoring the path inside that window lets the
+        # failing reply land on the good path and read as published.
+        attempted = threading.Event()
+        real_write = P._pfb_write_query_reply
+
+        def record_attempt(reply: dict[str, Any]) -> None:
+            try:
+                real_write(reply)
+            finally:
+                if reply.get("id") == "write-fail":
+                    attempted.set()
+
+        monkeypatch.setattr(P, "_pfb_write_query_reply", record_attempt)
+
         P.pfb["pfb_py_query_reply"] = h.reply_path + ".missing/reply"
         h.start()
         h.publish_and_wait_consumed({"id": "write-fail", "domain": "clean.uuidquery2003.com", "qtype": "A"})
+        assert attempted.wait(3.0), "the watcher never attempted the failing reply write"
         with pytest.raises(RuntimeError, match="stuck/environment"):
             h.wait_reply("write-fail", timeout=0)
 
