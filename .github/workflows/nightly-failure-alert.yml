@@ -44,17 +44,10 @@ jobs:
       (github.event.workflow_run.event == 'schedule' &&
        github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
     permissions:
       packages: read
       issues: write
     env:
-      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       WF_NAME: ${{ github.event.workflow_run.name }}
@@ -128,17 +121,10 @@ jobs:
       (github.event.workflow_run.event == 'schedule' &&
        github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
     permissions:
       packages: read
       issues: write
     env:
-      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       REPO: ${{ github.repository }}
       # Dispatch drill: the run link points at THIS run, clearly labeled below.

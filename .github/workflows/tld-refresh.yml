@@ -51,19 +51,12 @@ jobs:
   refresh:
     name: Refresh TLD lists and open PR on change
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
     permissions:
       packages: read
       contents: write        # push the automation branch (NOT devel)
       pull-requests: write    # open/label the PR
       actions: write          # dispatch the CI gates onto the branch head (#902)
     env:
-      HOME: /tmp
       GH_TOKEN: ${{ github.token }}
       BRANCH: tld-refresh/auto
       DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
@@ -88,8 +81,29 @@ jobs:
       # The refresh stages a .php file, so pre-commit enters its PHP block: php -l,
       # PHPStan and PHPCS out of vendor/bin (issue #1793). They run on the OLDEST
       # supported PHP — the floor a diagnostic has to clear — never the runner default.
-      - name: Materialise the baked Composer vendor tree for the pre-commit PHP gates
-        run: scripts/ci-vendor.sh
+      - name: Set up PHP ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+        uses: shivammathur/setup-php@v2 # v2.37.2
+        with:
+          php-version: ${{ fromJSON(steps.matrix.outputs.php_versions)[0] }}
+          tools: composer
+
+      - name: Resolve the Composer cache directory
+        # Composer's cache lives wherever COMPOSER_HOME/XDG put it, not at a fixed
+        # path — ask composer for it, or actions/cache below would store nothing.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-files-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Composer packages
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      # Ungated so every run exercises the install: a lock or platform break then
+      # surfaces weekly instead of only on a drift week.
+      - name: Install Composer dependencies for the pre-commit PHP gates
+        run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Refresh arrays from IANA
         id: refresh

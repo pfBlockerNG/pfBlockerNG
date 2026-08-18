@@ -108,14 +108,6 @@ jobs:
   prepare-release:
     name: Pin the release commit
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     # Only 'false' takes the real-publish path. NOT the whole guard: GitHub compares
     # strings case-insensitively, so 'FALSE' satisfies this too and the first step below
     # re-checks case-sensitively before anything is pushed.
@@ -480,14 +472,6 @@ jobs:
   read-matrix:
     name: Read version matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release]
     # Run in both modes: dry-run (prepare-release skipped) AND real (prepare-release succeeded).
     # If prepare-release failed for any reason, do NOT build or publish.
@@ -596,14 +580,6 @@ jobs:
   resolve-stamp:
     name: Resolve build stamp (created + commit)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release, read-matrix]
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' }}
     outputs:
@@ -656,14 +632,6 @@ jobs:
   tag-release:
     name: Create + push the release tag (verified build only)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release, read-matrix, build-pkgs-portable, ui-suite, smoke-suite]
     if: ${{ !cancelled() && github.event.inputs.dry_run == 'false' && needs.prepare-release.result == 'success' && needs.read-matrix.result == 'success' && needs.build-pkgs-portable.result == 'success' && (needs.read-matrix.outputs.run_suites == 'false' || (needs.ui-suite.result == 'success' && needs.smoke-suite.result == 'success')) }}
     permissions:
@@ -733,14 +701,6 @@ jobs:
   release:
     name: Create draft GitHub Release
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     # The draft is created only AFTER the tag exists on the verified commit —
     # softprops/action-gh-release CREATES a missing tag itself, which is exactly how a
     # failed run used to strand one, so a skipped tag-release must never reach it.
@@ -1069,14 +1029,6 @@ jobs:
   build-pkgs-portable:
     name: "build .pkg — ${{ matrix.variant }} ${{ matrix.pfsense_version }}"
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release, read-matrix, resolve-stamp]
     # Same gate as release: run in both dry-run (skipped) and real (succeeded) modes.
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') && needs.read-matrix.result == 'success' && needs.resolve-stamp.result == 'success' }}
@@ -1313,14 +1265,6 @@ jobs:
   attach-pkgs:
     name: Attach .pkg artifacts to Release
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release, release, build-pkgs-portable, read-matrix]
     # Run whenever release succeeded AND it was a real publish (not a dry-run),
     # regardless of the build outcome. Empty or failed artifact download fails
@@ -1394,14 +1338,6 @@ jobs:
   draft-healthcheck:
     name: Health-check the drafted Release
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release, release, attach-pkgs, read-matrix]
     if: ${{ !cancelled() && needs.release.result == 'success' && needs.attach-pkgs.result == 'success' && needs.read-matrix.result == 'success' && needs.release.outputs.dry_run == 'false' }}
     outputs:
@@ -1537,14 +1473,6 @@ jobs:
   sync-ports-fork:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare-release, release, attach-pkgs, draft-healthcheck]
     if: ${{ !cancelled() && needs.draft-healthcheck.result == 'success' && needs.release.outputs.dry_run == 'false' }}
     permissions:

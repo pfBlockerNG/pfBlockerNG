@@ -45,14 +45,6 @@ jobs:
   resolve:
     name: Resolve the published tag
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     outputs:
       release_id: ${{ steps.classify.outputs.release_id }}
       release_tag: ${{ steps.classify.outputs.tag }}
@@ -161,14 +153,6 @@ jobs:
   publish-pkg-repo:
     name: Stage the pkg catalogue
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [resolve]
     permissions:
       packages: read
@@ -301,14 +285,6 @@ jobs:
   prepare-live-gate:
     name: Prepare the live-install gate matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [resolve, publish-pkg-repo]
     if: needs.publish-pkg-repo.outputs.noop != 'true'
     permissions:
@@ -417,14 +393,6 @@ jobs:
   promote-pkg-repo:
     name: Promote the pkg catalogue
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [resolve, publish-pkg-repo, prepare-live-gate, validate-live-pages-install]
     if: always() && needs.publish-pkg-repo.result == 'success' && needs.publish-pkg-repo.outputs.noop != 'true'
     permissions:

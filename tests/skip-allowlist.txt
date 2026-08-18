@@ -9,10 +9,10 @@
 #
 # An allowlisted id this run did NOT observe is informational only (exit 0 unaffected) --
 # the skip set legitimately differs per matrix leg (a PHP-build-gated case skips on PHP 8.3
-# and not 8.5) and per invoking uid: CI's pytest/shellspec jobs run as uid 1001, while a
-# local `scripts/run-in-docker.sh` run uses your own uid, so a local run may observe MORE
-# skips than CI (any chmod/permission-guarded case that denies only under a non-root,
-# non-1001 uid). Only an id observed in a report but absent from this file fails the gate.
+# and not 8.5), per host OS (a macOS-only case skips on CI's Linux runner) and per invoking
+# uid, so a local run may observe MORE skips than CI (any chmod/permission-guarded case that
+# denies only under a non-root uid). Only an id observed in a report but absent from this
+# file fails the gate.
 #
 # An entry is "<id>  # <reason>" with TWO OR MORE spaces before the '#', and the split takes
 # the RIGHTMOST one, so ids keep every '#' they carry -- a pytest parametrised id renders
@@ -32,10 +32,10 @@ phpunit:PfbFeedNormalizeTest::testBomAndZwjAreStrippedAsNonPrintable  # platform
 phpunit:PfbFeedNormalizeTest::testInteriorNbspIsDataWhileTrailingNbspIsTrimmed  # platform locale data (PHP 8.3 and 8.5)
 phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse  # PHP 8.3's php://memory can fail flock(); absent from the PHP 8.5 report (informational there)
 
-# pytest -- 4 observed via scripts/run-in-docker.sh (own uid, not CI's uid 1001).
-pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present in the image
-pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present in the image
-pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the image is Linux
-pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the image is Linux
+# pytest -- 4 observed on the Linux CI runner.
+pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present on the runner
+pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_build  # FreeBSD-ports checkout not present on the runner
+pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the runner is Linux
+pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the runner is Linux
 
-# shellspec -- 0 observed in the image today (no entries needed).
+# shellspec -- 0 observed today (no entries needed).

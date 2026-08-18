@@ -5,7 +5,7 @@ This package is DESELECTED from the default ``python -m pytest`` run
 is imported during default collection. It is collected only by the smoke
 workflow, which runs e.g.::
 
-    python -m pip install -r tests/smoke/requirements.txt
+    uv sync --locked --group smoke
     python -m pytest tests/smoke -m smoke --override-ini="addopts="
 
 What this module provides:

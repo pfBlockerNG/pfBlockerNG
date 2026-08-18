@@ -22,7 +22,6 @@ def _job_block(text: str, job: str) -> str:
 
 
 def test_vm_test_jobs_use_github_hosted_runners_and_cache() -> None:
-    version = (ROOT / ".github/docker/VERSION").read_text(encoding="utf-8").strip()
     for workflow, jobs in _TARGETS.items():
         text = (ROOT / ".github/workflows" / workflow).read_text(encoding="utf-8")
         for job, expected_cache_steps in jobs:
@@ -30,6 +29,5 @@ def test_vm_test_jobs_use_github_hosted_runners_and_cache() -> None:
 
             assert "runs-on: ubuntu-latest" in block
             assert "runs-on: [self-hosted" not in block
-            assert f"image: ghcr.io/pfblockerng/ci-runner-vm:{version}" in block
             assert "PFB_LAN_REGISTRY" not in block
             assert block.count("uses: actions/cache/") == expected_cache_steps

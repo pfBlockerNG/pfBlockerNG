@@ -5,9 +5,9 @@ Issue #1793: tld-refresh.yml activates the repository git hooks on purpose
 stages src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php and commits. Staging
 a PHP-family file sets `staged_php=1` in .githooks/pre-commit, which runs the
 fail-closed `composer vendor` gate and, behind it, PHPStan and PHPCS out of
-vendor/bin. With neither `composer install` nor scripts/ci-vendor.sh on the
-runner there is no vendor tree, the gate fails closed, and the whole refresh --
-commit, push, PR, CI dispatch -- is aborted. The gate is right to fail; the workflow was missing its half of the
+vendor/bin. Without `composer install` on the runner there is no vendor tree,
+the gate fails closed, and the whole refresh -- commit, push, PR, CI dispatch --
+is aborted. The gate is right to fail; the workflow was missing its half of the
 contract.
 
 The invariant is stated over every workflow rather than over tld-refresh alone:
@@ -44,10 +44,8 @@ _HOOKS_RE = re.compile(r"scripts/setup-hooks\.sh|core\.hooksPath")
 # chained `git commit` is not a staged path.
 _GIT_ADD_RE = re.compile(r"\bgit add\b(?P<paths>[^\n#;|&]*)")
 _GIT_COMMIT_RE = re.compile(r"\bgit commit\b")
-# Either way a job can end up with a vendor tree: the baked one materialised by
-# scripts/ci-vendor.sh (issue #2502, the only shape workflows use now), or a plain
-# `composer install` — still recognised so this guard keeps meaning outside CI's image.
-_VENDOR_TREE_RE = re.compile(r"\bcomposer install\b|\bci-vendor\.sh\b")
+# The one way a job ends up with a vendor tree: Composer resolving it in that job.
+_VENDOR_TREE_RE = re.compile(r"\bcomposer install\b")
 
 # The hook's php -l / PHPStan / PHPCS gates must run on a supported PHP, which
 # means setup-php fed from read-version-matrix rather than the runner default.
@@ -213,13 +211,7 @@ def test_php_staging_jobs_pin_php_from_the_version_matrix() -> None:
     for path in _workflow_files():
         text = path.read_text(encoding="utf-8")
         for job, _, job_lines in _hook_php_jobs(text):
-            # Either mechanism satisfies the property. setup-php pins the version directly.
-            # The runner image pins it too, one level up: it bakes exactly the matrix PHPs
-            # (tests/test_ci_runner_images.py asserts that against supported-versions.json)
-            # and defaults `php` to the lowest of them, so a job inside the image cannot
-            # reach an unsupported PHP either.
-            in_image = any("ghcr.io/pfblockerng/ci-runner" in line for line in job_lines)
-            if _first_line_matching(job_lines, _SETUP_PHP_RE) is None and not in_image:
+            if _first_line_matching(job_lines, _SETUP_PHP_RE) is None:
                 offenders.append(f"{path.name}: job `{job}` runs the hook PHP gates on the runner's ambient PHP")
                 continue
             pinned = [

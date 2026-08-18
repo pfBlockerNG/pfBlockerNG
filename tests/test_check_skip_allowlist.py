@@ -69,15 +69,15 @@ def _report(tmp_path: Path, name: str, testcases_xml: str, *, nested: bool = Fal
 
 def test_pytest_id_is_suite_colon_dotted_classname_double_colon_name(tmp_path: Path) -> None:
     tc = (
-        '<testcase classname="tests.test_ci_runner_images" '
-        'name="test_base_image_is_a_digest_pinned_numbered_debian_13_slim" time="0.01">'
+        '<testcase classname="tests.test_build_pkg_portable" '
+        'name="test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]" time="0.01">'
         "<skipped/></testcase>"
     )
     report = _report(tmp_path, "r.xml", tc)
     skips = csa.parse_report(report, "pytest")
     assert skips == [
         (
-            "pytest:tests.test_ci_runner_images::test_base_image_is_a_digest_pinned_numbered_debian_13_slim",
+            "pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]",
             None,
         )
     ]
@@ -97,16 +97,16 @@ def test_phpunit_id_uses_classname_not_class(tmp_path: Path) -> None:
 def test_shellspec_id_keeps_the_spaced_spec_description_as_name(tmp_path: Path) -> None:
     # <skip/>, not <skipped/>: that is the element shellspec's own JUnit generator writes.
     tc = (
-        '<testcase time="0" classname="tests/shell/run_in_docker_spec.sh" '
-        'name="run-in-docker.sh refuses, saying so, when docker is not installed">'
+        '<testcase time="0" classname="tests/shell/pfblockerng_adr26_locale_spec.sh" '
+        'name="sorts z before a-umlaut under C, and the other way round under de_DE.UTF-8">'
         "<skip/></testcase>"
     )
     report = _report(tmp_path, "r.xml", tc)
     skips = csa.parse_report(report, "shellspec")
     assert skips == [
         (
-            "shellspec:tests/shell/run_in_docker_spec.sh::run-in-docker.sh refuses, "
-            "saying so, when docker is not installed",
+            "shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::sorts z before a-umlaut "
+            "under C, and the other way round under de_DE.UTF-8",
             None,
         )
     ]

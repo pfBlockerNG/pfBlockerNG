@@ -172,14 +172,6 @@ jobs:
   prepare:
     name: Read CI matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     outputs:
       ci_matrix: ${{ steps.filter.outputs.ci_matrix }}
       leg_matrix: ${{ steps.filter.outputs.leg_matrix }}
@@ -408,14 +400,6 @@ jobs:
   all-smoke-passed:
     name: All smoke legs passed (AND gate)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     needs: [prepare, smoke]
     if: always()   # run even if smoke failed/skipped/cancelled
     steps:

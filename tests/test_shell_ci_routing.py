@@ -44,20 +44,24 @@ def test_kcov_coverage_selectors_are_focused() -> None:
     assert not re.search(r"shellspec --kcov --shell bash\s*$", body, re.MULTILINE)
 
 
-def test_locale_is_baked_and_proved_in_both_images() -> None:
-    base = _read(".github/docker/ci-runner.Dockerfile")
-    vm = _read(".github/docker/ci-runner-vm.Dockerfile")
-    workflow = _read(".github/workflows/ci-images.yml")
-    assert "locales" in base and "locale-gen de_DE.UTF-8" in base
-    assert "LANG=C.UTF-8" in base
-    assert "locale charmap" in base
-    assert "LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC" in base
-    assert "ci-runner:${TAG}-${ARCH}" in workflow
-    assert "ci-runner-vm:${TAG}-${ARCH}" in workflow
-    assert "de_DE.UTF-8" in workflow
-    assert "locale charmap" in workflow
-    assert "LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC" in workflow
-    assert "ci-runner" in vm and "BASE_IMAGE" in vm
+def test_the_shellspec_job_provides_the_locale_the_adr26_contract_needs() -> None:
+    """`pfblockerng_adr26_locale_spec.sh` skips itself when de_DE.UTF-8 is absent, so
+    a CI runner without that locale turns the ADR-26 collation contract off in silence
+    rather than failing. The job must therefore generate the locale AND prove it
+    resolves, in the job itself: `locale -a` listing it is the only evidence that the
+    generation actually took, and LC_NUMERIC is the half the shard/module specs read."""
+    rest = _read(".github/workflows/test.yml").split("\n  shell-tests:\n", 1)[1]
+    end = re.search(r"^  [A-Za-z0-9_.-]+:\s*$", rest, re.MULTILINE)
+    job = rest[: end.start()] if end else rest
+    assert "locale-gen de_DE.UTF-8" in job, (
+        "the shellspec job must generate de_DE.UTF-8 (`sudo locale-gen de_DE.UTF-8`); "
+        "ubuntu-latest ships none, so the ADR-26 locale contract silently skips"
+    )
+    assert "locale -a" in job, "the shellspec job must prove the generated locale resolves, not just run locale-gen"
+    assert "LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC" in job, (
+        "the proof must read LC_NUMERIC under de_DE.UTF-8 — the decimal comma is what the "
+        "shard and module-duration specs contrast against C"
+    )
 
 
 def test_adr26_locale_contract_uses_sorting_contrast() -> None:
@@ -65,22 +69,3 @@ def test_adr26_locale_contract_uses_sorting_contrast() -> None:
     assert "soft hyphen" not in spec
     assert "z\\nä" in spec
     assert "de_DE.UTF-8" in spec
-
-
-def test_ci_runner_series_bumped_and_all_consumers_follow_it() -> None:
-    """No consumer may be left on the PREVIOUS series: a half-repointed bump leaves some
-    jobs grading under the old toolchain, which is exactly the silent verdict change the
-    immutable tags exist to prevent. Derived from VERSION rather than a literal, so the
-    guard keeps working after the next bump instead of failing as its own reminder.
-
-    Matched against the image reference, not a bare ``:N`` substring: the workflows are
-    full of colon-digit pairs that have nothing to do with the series — a QEMU MAC
-    (``BC:24:11:37:9C:AC`` carries ``:9``), ``--user 1001:1001`` (carries ``:10``) — and a
-    substring test would turn every future bump into a false red."""
-    version = int(_read(".github/docker/VERSION").strip())
-    stale = re.compile(rf"ci-runner(?:-vm)?:{version - 1}(?!\d)")
-    for path in (ROOT / ".github/workflows").glob("*.yml"):
-        text = path.read_text(encoding="utf-8")
-        assert not stale.search(text), f"stale ci-runner series {version - 1} in {path}"
-    smoke = _read("scripts/local-smoke.sh")
-    assert not stale.search(smoke), f"stale ci-runner series {version - 1} in scripts/local-smoke.sh"

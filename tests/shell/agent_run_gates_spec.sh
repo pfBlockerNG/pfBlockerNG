@@ -11,10 +11,10 @@ Describe 'run-gates.sh gates_for()'
   It 'maps a Python file to the four Python gates'
     Data "tests/test_x.py"
     When call gates_for
-    The line 1 of output should equal 'python3 -m pytest'
-    The line 2 of output should equal 'ruff check .'
-    The line 3 of output should equal 'ruff format --check .'
-    The line 4 of output should equal 'mypy tests/'
+    The line 1 of output should equal 'uv run pytest'
+    The line 2 of output should equal 'uv run ruff check .'
+    The line 3 of output should equal 'uv run ruff format --check .'
+    The line 4 of output should equal 'uv run mypy tests/'
     The lines of output should equal 4
   End
 
@@ -24,7 +24,7 @@ Describe 'run-gates.sh gates_for()'
       #|src/b.php
     End
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_composer_vendor.py'
+    The line 1 of output should equal 'uv run python scripts/check_composer_vendor.py'
     The line 2 of output should equal 'php -l src/a.inc'
     The line 3 of output should equal 'php -l src/b.php'
     The line 4 of output should equal 'vendor/bin/phpunit'
@@ -98,7 +98,7 @@ Describe 'run-gates.sh gates_for()'
       #|scripts/b.sh
     End
     When call gates_for
-    The output should include 'python3 -m pytest'
+    The output should include 'uv run pytest'
     The output should include 'shellcheck scripts/b.sh'
   End
 
@@ -111,7 +111,7 @@ Describe 'run-gates.sh gates_for()'
   It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
     Data "my file.py"
     When call gates_for
-    The line 1 of output should equal 'python3 -m pytest'
+    The line 1 of output should equal 'uv run pytest'
     The lines of output should equal 4
   End
 
@@ -121,7 +121,7 @@ Describe 'run-gates.sh gates_for()'
       #|scripts/ok.py
     End
     When call gates_for
-    The line 1 of output should equal 'python3 -m pytest'
+    The line 1 of output should equal 'uv run pytest'
     The output should not include 'unsafe filename'
   End
 
@@ -141,12 +141,6 @@ Describe 'run-gates.sh Composer vendor guard'
     gitc config commit.gpgsign false
     mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts"
     printf 'base\n' > "$repo/README"
-    # Every gate is routed through the CI runner image (issue #2350). A passthrough
-    # wrapper keeps these examples about the RUNNER's own ordering and reporting logic
-    # rather than about whether docker is reachable from the test host. It lands in the
-    # BASE commit so it never appears in the diff and never plans shell gates of its own.
-    printf '#!/bin/sh\nexec "$@"\n' > "$repo/scripts/run-in-docker.sh"
-    chmod +x "$repo/scripts/run-in-docker.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     printf '<?php echo 1;\n' > "$repo/src/a.php"
@@ -157,11 +151,13 @@ Describe 'run-gates.sh Composer vendor guard'
     php_marker="$stubdir/php-ran"
     composer_marker="$stubdir/composer-ran"
     phpunit_marker="$stubdir/phpunit-ran"
-    printf '#!/bin/sh\ntouch "%s"\nprintf "version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)\\nremediation: composer install --no-interaction\\n"\nexit 1\n' "$checker_marker" > "$stubdir/python3"
+    # The vendor checker runs through the locked uv environment, so `uv` is the tool
+    # run_gate resolves for that gate; the stub stands in for the whole invocation.
+    printf '#!/bin/sh\ntouch "%s"\nprintf "version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)\\nremediation: composer install --no-interaction\\n"\nexit 1\n' "$checker_marker" > "$stubdir/uv"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$composer_marker" > "$stubdir/composer"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
-    chmod +x "$stubdir/python3" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
+    chmod +x "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
     # The minimal-PATH contract for the script's own machinery: POSIX utilities only,
     # never an optional toolchain. `tr` and `rm` joined it with the NUL-separated path
@@ -182,7 +178,7 @@ Describe 'run-gates.sh Composer vendor guard'
     The status should equal 1
     The line 1 of output should equal 'version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)'
     The line 2 of output should equal 'remediation: composer install --no-interaction'
-    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py'
+    The output should include 'GATE FAIL: uv run python scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
     The output should not include 'GATE PASS: composer phpstan'
@@ -195,26 +191,24 @@ Describe 'run-gates.sh Composer vendor guard'
   End
 
   It 'keeps a checker OVERALL=0 diagnostic from passing the final verdict'
-    printf '#!/bin/sh\nprintf "checker diagnostic OVERALL=0\\n"\nexit 1\n' > "$stubdir/python3"
-    chmod +x "$stubdir/python3"
+    printf '#!/bin/sh\nprintf "checker diagnostic OVERALL=0\\n"\nexit 1\n' > "$stubdir/uv"
+    chmod +x "$stubdir/uv"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The output should include 'checker diagnostic OVERALL=0'
-    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py'
+    The output should include 'GATE FAIL: uv run python scripts/check_composer_vendor.py'
     The output should include 'GATES: FAIL'
     The output should not include 'GATES: PASS'
   End
 
-  It 'fails closed under --allow-missing when the CI runner wrapper is unavailable'
+  It 'fails closed under --allow-missing when the checker interpreter is unavailable'
     # The vendor guard is the one gate a missing tool may never soften into a SKIP: every
     # Composer-backed gate downstream of it is unsafe against an unverified vendor tree.
-    # With the run routed through the CI image (issue #2350) the tool that can go missing
-    # is the wrapper itself -- the interpreter now lives in the image, not on the host.
-    rm -f "$repo/scripts/run-in-docker.sh"
+    rm -f "$stubdir/uv"
     When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha' --allow-missing"
     The status should equal 1
-    The output should include 'GATE FAIL: python3 scripts/check_composer_vendor.py (TOOL-MISSING: scripts/run-in-docker.sh)'
-    The output should not include 'GATE SKIP: python3 scripts/check_composer_vendor.py'
+    The output should include 'GATE FAIL: uv run python scripts/check_composer_vendor.py (TOOL-MISSING: uv)'
+    The output should not include 'GATE SKIP: uv run python scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
     The output should not include 'GATE PASS: composer phpstan'
@@ -225,14 +219,14 @@ Describe 'run-gates.sh Composer vendor guard'
   End
 
   It 'suppresses successful Composer checker diagnostics while running PHP gates'
-    printf '#!/bin/sh\ntouch "%s"\nprintf "checker stdout\\n"\nprintf "checker stderr\\n" >&2\nexit 0\n' "$checker_marker" > "$stubdir/python3"
-    chmod +x "$stubdir/python3"
+    printf '#!/bin/sh\ntouch "%s"\nprintf "checker stdout\\n"\nprintf "checker stderr\\n" >&2\nexit 0\n' "$checker_marker" > "$stubdir/uv"
+    chmod +x "$stubdir/uv"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 0
     The output should not include 'checker stdout'
     The output should not include 'checker stderr'
     The stderr should equal ''
-    The output should include 'GATE PASS: python3 scripts/check_composer_vendor.py'
+    The output should include 'GATE PASS: uv run python scripts/check_composer_vendor.py'
     The output should include 'GATE PASS: php -l src/a.php'
     The output should include 'GATE PASS: vendor/bin/phpunit'
     The output should include 'GATE PASS: composer phpstan'
@@ -254,11 +248,6 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     # Under scripts/ so the files are in shellcheck's scope (src, scripts, .claude/hooks).
     mkdir -p "$repo/scripts"
     printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/scripts/gone.sh"
-    # Passthrough CI-image wrapper (issue #2350): these examples pin the runner's own
-    # ordering, capture and verdict logic, not docker reachability. It lands in the BASE
-    # commit so it stays out of the diff and plans no shell gates of its own.
-    printf '#!/bin/sh\nexec "$@"\n' > "$repo/scripts/run-in-docker.sh"
-    chmod +x "$repo/scripts/run-in-docker.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     gitc rm -q scripts/gone.sh   # also prunes the now-empty scripts/ dir

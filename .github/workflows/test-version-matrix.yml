@@ -16,14 +16,6 @@ jobs:
   test-reader:
     name: Read + print supported-version matrices
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     timeout-minutes: 5
     steps:
       - name: Checkout (for scripts/read-version-matrix.sh)

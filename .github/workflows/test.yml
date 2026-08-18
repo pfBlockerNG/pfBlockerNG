@@ -71,17 +71,6 @@ jobs:
   read-matrix:
     name: Read supported-version matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     timeout-minutes: 5
     outputs:
       python_versions: ${{ steps.matrix.outputs.python_versions }}
@@ -104,17 +93,6 @@ jobs:
     name: pytest / Python ${{ matrix.python-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     strategy:
       fail-fast: false
@@ -130,17 +108,38 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select Python ${{ matrix.python-version }}
-        # The image bakes one directory per matrix Python. Without this the leg runs
-        # whatever `python3` defaults to, so a second matrix entry would silently test the
-        # same interpreter twice and report two green legs for one version.
-        run: echo "/opt/python/${{ matrix.python-version }}/bin" >> "$GITHUB_PATH"
+      - name: Set up PHP (lowest supported)
+        # Not a PHP job, but part of the unit suite shells out to `php` — the ADR-45
+        # archive cases, the DNSBL CSV quoting oracle, the landing generator and the
+        # portable builders all cross-check real PHP behaviour, and they FAIL rather
+        # than skip when the binary is absent. The lowest supported version is the
+        # floor a diagnostic has to clear; the PHP-version matrix that catches
+        # divergence between 8.3 and 8.5 lives in the php-* jobs, so paying for a
+        # second full 5500-test leg here would buy nothing those already cover.
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ fromJSON(needs.read-matrix.outputs.php_versions)[0] }}
+          tools: none
+
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the test environment (Python ${{ matrix.python-version }})
+        # --locked resolves against the committed uv.lock, so a transitive package cannot
+        # move a gate with no diff. --python carries the matrix version: without it the
+        # leg runs whatever interpreter uv defaults to, so a second matrix entry would
+        # silently test the same one twice and report two green legs for one version.
+        run: uv sync --locked --group dev --python "${{ matrix.python-version }}"
 
       - name: Run tests
         # testpaths and addopts are configured in pyproject.toml. --junitxml feeds
         # the skip-allowlist gate below (issue #2359) -- additive only, never
         # changes what runs or this step's own pass/fail verdict.
-        run: python -m pytest --junitxml=/tmp/pytest-junit.xml
+        run: uv run pytest --junitxml=/tmp/pytest-junit.xml
 
       - name: Skip allowlist
         # Issue #2359: nothing failed when the SET of skipped tests grew (#2356
@@ -157,57 +156,47 @@ jobs:
         # Issue #38: measure BRANCH coverage of pfb_unbound.py (line coverage hides
         # one-sided decision branches). Informational only -- no enforced floor yet
         # (mirrors the shell kcov / PHP pcov steps). continue-on-error so a coverage
-        # hiccup never blocks the gate; the canonical `python -m pytest` above is the
+        # hiccup never blocks the gate; the canonical `uv run pytest` above is the
         # authority. coverage knobs (branch=true, TYPE_CHECKING exclude) live in
         # pyproject.toml [tool.coverage.*].
         continue-on-error: true
         # Swallow a non-zero exit (e.g. a timing-sensitive test that flakes only under
         # the slower coverage instrumentation): this run is informational and the
-        # canonical `python -m pytest` step above is the authority + gate. Keeping the
+        # canonical `uv run pytest` step above is the authority + gate. Keeping the
         # step at exit 0 avoids a spurious error annotation on a green job.
-        run: python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
+        run: uv run pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing || echo "branch-coverage run is informational; non-zero exit ignored (canonical 'Run tests' step gates)"
 
   test-typing:
     name: Test type checking (mypy)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the dev environment
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this gate with no diff.
+        run: uv sync --locked --group dev
 
       - name: mypy tests/
         # Config in pyproject.toml: the tests.* override requires
         # disallow_untyped_defs/disallow_incomplete_defs, including tests/smoke;
         # follow_imports=silent keeps production (incremental) typing out of scope.
-        run: mypy tests/
+        run: uv run mypy tests/
 
   ruff:
     name: Ruff (lint + format)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     steps:
       - name: Checkout
@@ -215,33 +204,55 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the dev environment
+        # --locked resolves against the committed uv.lock, so a transitive package
+        # cannot move this gate with no diff.
+        run: uv sync --locked --group dev
+
       - name: Ruff lint
         # Config in pyproject.toml.
-        run: ruff check .
+        run: uv run ruff check .
 
       - name: Ruff format check
-        run: ruff format --check .
+        run: uv run ruff format --check .
 
   shellcheck:
     name: ShellCheck
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Install ShellCheck
+        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
+        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
+        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
+        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
+        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
+        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
+          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
+            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
 
       - name: Forbid bash shebangs
         # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
@@ -326,17 +337,6 @@ jobs:
   actionlint:
     name: actionlint (workflow files)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     steps:
       - name: Checkout
@@ -344,12 +344,52 @@ jobs:
         with:
           persist-credentials: false # lint-only job; no git writes
 
+      - name: Install ShellCheck
+        # Pinned upstream release, verified by SHA-256. Installing it from apt was a silent
+        # no-op: ubuntu-24.04 preinstalls 0.9.0, so the lint verdict tracked whatever the
+        # runner image happened to carry and moved whenever GitHub rolled it (#2185).
+        # The pin matches the version CONTRIBUTING.md tells contributors to install, so a
+        # clean local run and CI agree — 0.9.0 rejects `A && B || C` (SC2015) where 0.11.0
+        # accepts it. Same shape as the shellspec and kcov pins already in this workflow.
+        env:
+          SHELLCHECK_VERSION: v0.11.0
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+        run: |
+          curl -fsSLo shellcheck.tar.xz \
+            "https://github.com/koalaman/shellcheck/releases/download/${SHELLCHECK_VERSION}/shellcheck-${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          echo "${SHELLCHECK_SHA256}  shellcheck.tar.xz" | sha256sum -c -
+          tar -xJf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          rm -rf shellcheck.tar.xz "shellcheck-${SHELLCHECK_VERSION}"
+          installed="$(shellcheck --version | awk '/^version:/ { print $2 }')"
+          [ "$installed" = "${SHELLCHECK_VERSION#v}" ] || {
+            echo "shellcheck on PATH is $installed, expected ${SHELLCHECK_VERSION#v}"; exit 1; }
+
+      - name: Install actionlint
+        # Pinned upstream release asset, verified by SHA-256 before extraction — same
+        # shape as the ShellCheck pin above (#2185): a lint verdict is only as
+        # trustworthy as the tool that decides it, and an unpinned actionlint would
+        # move this gate on its own schedule.
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          curl -fsSLo actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          echo "${ACTIONLINT_SHA256}  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          sudo install -m 0755 actionlint /usr/local/bin/actionlint
+          rm -f actionlint.tar.gz actionlint
+          installed="$(actionlint -version | head -n1)"
+          [ "$installed" = "${ACTIONLINT_VERSION}" ] || {
+            echo "actionlint on PATH is $installed, expected ${ACTIONLINT_VERSION}"; exit 1; }
+
       - name: Lint the workflow files
         # GitHub silently disables a workflow whose YAML its parser rejects (a
         # duplicate mapping key disabled five scheduled workflows — issue #2231);
         # PyYAML-based checks could never see that class. actionlint's own parser
-        # rejects what GitHub rejects, plus expression/schema errors. The binary
-        # is baked into ci-runner (pinned + checksum-verified there, #2232).
+        # rejects what GitHub rejects, plus expression/schema errors. The binary is
+        # pinned and checksum-verified in the step above (#2232).
         # The embedded shellcheck pass over `run:` bodies is ON (#2241). It reads no
         # .shellcheckrc (actionlint runs shellcheck --norc), and a body-level directive is
         # ignored: suppress per statement with `# shellcheck disable=` inside the body.
@@ -369,12 +409,12 @@ jobs:
           fi
           # Second canary: actionlint SKIPS its embedded shellcheck pass in silence
           # when the binary is unresolvable (exit 0, no diagnostic), so run-body
-          # coverage would go quiet if the image ever stopped shipping shellcheck.
+          # coverage would go quiet if the install step above ever stopped landing it.
           # shellcheck disable=SC2016  # $CANARY is fixture text for actionlint to flag
           printf 'on: push\njobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo $CANARY\n' \
             > "$RUNNER_TEMP/canary-sc.yml"
           if "$AL" "$RUNNER_TEMP/canary-sc.yml" >/dev/null 2>&1; then
-            echo "::error::actionlint's embedded shellcheck pass is not running (shellcheck missing from the image?)"
+            echo "::error::actionlint's embedded shellcheck pass is not running (shellcheck missing from PATH?)"
             exit 1
           fi
           # find, not a bare *.yml glob: covers a future .yaml spelling too, and
@@ -385,24 +425,73 @@ jobs:
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
+    # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
+    # cache keys below can carry it: a tag is a moving reference, so re-pinning kcov has
+    # to roll the cache over too, or a stale build would answer the new key (#2198).
+    env:
+      KCOV_COMMIT: a39874f938ce13f7a65f253120d1ec946b349ffe
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Require jq and dash
+        # jq drives the ip_pre_AWS_*.sh region filters; dash is the test shell the
+        # shellspec run below pins. ubuntu-24.04 ships both, and neither changes a gate
+        # verdict by version, so installing them over the image bought nothing. Assert
+        # them instead: a runner image that drops one must fail this job loudly rather
+        # than let the suite fall back to whatever /bin/sh is (#2185).
+        run: |
+          command -v jq >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: jq'; exit 1; }
+          command -v dash >/dev/null 2>&1 || {
+            echo 'required tool missing from the runner image: dash'; exit 1; }
+          jq --version
+          # shellcheck disable=SC2016  # the substitution runs in the dash child, not here
+          dash -c 'echo "dash: $(command -v dash)"'
+
+      - name: Install iprange
+        # Real `iprange --except` set-subtraction (ADR-53 P3): the same
+        # FireHOL iprange tool pfblockerng.sh's pathaggregate assumes at
+        # /usr/local/bin/iprange on the appliance. Locally the shellspec
+        # cases needing it skip when absent (house pattern); here it must be
+        # present so they actually run.
+        run: sudo apt-get update && sudo apt-get install -y iprange
+
+      - name: Install the de_DE.UTF-8 locale
+        # ADR-26's collation contract is asserted against a real non-C locale:
+        # tests/shell/pfblockerng_adr26_locale_spec.sh SELF-SKIPS when it is absent, so
+        # without this the contract goes untested while the suite still reads green
+        # (issue #2318). ubuntu-latest ships C/C.UTF-8 only.
+        run: |
+          sudo locale-gen de_DE.UTF-8
+          locale -a | grep -Eqi '^de_DE\.utf-?8$'
+          LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq 'decimal_point=","'
+
+      - name: Install shellspec
+        # Pinned upstream release ASSET, verified by SHA-256 before anything is extracted;
+        # the executable then runs from that tree. This replaced a source-archive tarball
+        # piped straight into tar: GitHub generates that archive on demand from the tag,
+        # so its bytes are not a stable artifact — a re-tag upstream would swap what runs
+        # the POSIX gate and the workflow would not notice (#2194). An uploaded release
+        # asset is immutable. Extracted outside the checkout so the repo tree stays clean.
+        # Same shape as the ShellCheck pin above.
+        env:
+          SHELLSPEC_VERSION: 0.28.1
+          SHELLSPEC_SHA256: 350d3de04ba61505c54eda31a3c2ee912700f1758b1a80a284bc08fd8b6c5992
+        run: |
+          curl -fsSLo shellspec-dist.tar.gz \
+            "https://github.com/shellspec/shellspec/releases/download/${SHELLSPEC_VERSION}/shellspec-dist.tar.gz"
+          echo "${SHELLSPEC_SHA256}  shellspec-dist.tar.gz" | sha256sum -c -
+          tar -xzf shellspec-dist.tar.gz -C "$HOME"
+          rm -f shellspec-dist.tar.gz
+          echo "$HOME/shellspec" >> "$GITHUB_PATH"
+          installed="$("$HOME/shellspec/shellspec" --version)"
+          [ "$installed" = "$SHELLSPEC_VERSION" ] || {
+            echo "shellspec is $installed, expected $SHELLSPEC_VERSION"; exit 1; }
 
       - name: Run shellspec
         # Functional gate for the shell scripts, pinned to dash — the
@@ -440,6 +529,65 @@ jobs:
         # PG-1: gate that no workflow bypasses the shared build/smoke scripts.
         run: sh scripts/parity-guard.sh .github/workflows
 
+      - name: Resolve runner image id for the kcov cache key
+        # ImageOS/ImageVersion are runner machine env vars, NOT part of the GHA
+        # `env` context — `${{ env.ImageOS }}` renders empty, so a key built from it
+        # never rolls over with the runner image. Export them via a step output.
+        id: runner-image
+        run: echo "id=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore cached kcov binary
+        # kcov was removed from ubuntu-latest's apt repos; build from source and
+        # cache the install dir so subsequent runs skip the compile step.
+        id: cache-kcov
+        uses: actions/cache/restore@v5
+        with:
+          path: ~/.local/kcov
+          key: kcov-${{ env.KCOV_COMMIT }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
+
+      - name: Build kcov from source (cache miss)
+        # Only runs when the cache is cold. best-effort: a compile failure still
+        # leaves CI green (coverage is informational).
+        # KCOV_COMMIT (kcov v43) is fetched by commit id, so a re-tag upstream cannot
+        # change what gets built: the moving reference is never consulted. `git clone
+        # --branch` takes a ref only, hence the init + fetch-by-SHA + checkout shape —
+        # GitHub serves any reachable commit over smart HTTP (#2202).
+        # kcov's CMakeLists derives its version from `git describe --tags` when a .git is
+        # present; a commit-only shallow fetch has no tags, so that aborts configure. The
+        # checkout is dropped to its working tree, which takes the ChangeLog path instead.
+        id: build-kcov
+        if: steps.cache-kcov.outputs.cache-hit != 'true'
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            binutils-dev libssl-dev libcurl4-openssl-dev libelf-dev libdw-dev zlib1g-dev cmake g++
+          git init -q kcov
+          git -C kcov remote add origin https://github.com/SimonKagstrom/kcov
+          git -C kcov fetch --depth 1 origin "$KCOV_COMMIT"
+          git -C kcov checkout -q FETCH_HEAD
+          rm -rf kcov/.git
+          cmake -S kcov -B kcov/build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$HOME/.local/kcov"
+          cmake --build kcov/build --parallel "$(nproc)"
+          cmake --install kcov/build
+
+      - name: Save kcov binary to cache
+        # Persist the install dir so the next run restores instead of rebuilding.
+        # Gate on build success: a failed (swallowed) build would otherwise cache an
+        # empty/partial dir and poison the key until the runner image rolls over.
+        if: steps.cache-kcov.outputs.cache-hit != 'true' && steps.build-kcov.outcome == 'success'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.local/kcov
+          key: kcov-${{ env.KCOV_COMMIT }}-${{ runner.os }}-${{ runner.arch }}-${{ steps.runner-image.outputs.id }}
+
+      - name: Install kcov runtime deps and add to PATH
+        # Runtime shared libs (libcurl, libelf, libdw) needed on both cache hit
+        # and fresh build; also adds the install dir to PATH for the coverage step.
+        continue-on-error: true
+        run: |
+          sudo apt-get update && sudo apt-get install -y libcurl4 libelf1 libdw1
+          echo "$HOME/.local/kcov/bin" >> "$GITHUB_PATH"
+
       - name: Coverage (kcov) — informational
         # Informational only (no floor yet, mirroring #38); never gates CI. Guard on
         # kcov being present so a missing tool does not leave an error annotation.
@@ -472,17 +620,6 @@ jobs:
     name: PHP syntax check (php -l) / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     strategy:
       fail-fast: false
@@ -497,13 +634,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select PHP ${{ matrix.php-version }}
-        # The image bakes every matrix PHP side by side. `update-alternatives` needs root,
-        # so the leg picks its version by putting a symlink first on PATH instead.
-        run: |
-          mkdir -p /tmp/bin
-          ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
-          echo /tmp/bin >> "$GITHUB_PATH"
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: none
 
       - name: Syntax-check all PHP and .inc files
         run: find src -name '*.php' -o -name '*.inc' | sort | xargs -n1 php -l
@@ -512,17 +647,6 @@ jobs:
     name: PHPStan static analysis / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     strategy:
       fail-fast: false
@@ -536,19 +660,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select PHP ${{ matrix.php-version }}
-        # The image bakes every matrix PHP side by side. `update-alternatives` needs root,
-        # so the leg picks its version by putting a symlink first on PATH instead.
-        run: |
-          mkdir -p /tmp/bin
-          ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
-          echo /tmp/bin >> "$GITHUB_PATH"
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer
 
-      - name: Materialise the baked Composer vendor tree
-        # The image bakes vendor/ from composer.lock; this copies it into the checkout.
-        # It fails loud if the lock has moved past the baked tree — that is a stale image
-        # and wants a .github/docker/VERSION bump, not a per-job download (issue #2502).
-        run: scripts/ci-vendor.sh
+      - name: Resolve the Composer cache directory
+        # actions/cache takes a literal path, and composer's own cache-dir setting is
+        # the authority on where it writes.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Composer downloads
+        # A cold cache resolves every dependency over api.github.com — the download path
+        # that took the PHP gates down (issue #2502). Keyed on composer.lock, so a lock
+        # change gets a fresh entry and an unchanged lock never re-downloads.
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install PHPStan
+        run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Run PHPStan
         # phpstan.neon configures paths, level, stubs, and includes the
@@ -560,17 +695,6 @@ jobs:
     name: PHPCS custom sniffs / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     strategy:
       fail-fast: false
@@ -584,19 +708,30 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select PHP ${{ matrix.php-version }}
-        # The image bakes every matrix PHP side by side. `update-alternatives` needs root,
-        # so the leg picks its version by putting a symlink first on PATH instead.
-        run: |
-          mkdir -p /tmp/bin
-          ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
-          echo /tmp/bin >> "$GITHUB_PATH"
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php-version }}
+          tools: composer
 
-      - name: Materialise the baked Composer vendor tree
-        # The image bakes vendor/ from composer.lock; this copies it into the checkout.
-        # It fails loud if the lock has moved past the baked tree — that is a stale image
-        # and wants a .github/docker/VERSION bump, not a per-job download (issue #2502).
-        run: scripts/ci-vendor.sh
+      - name: Resolve the Composer cache directory
+        # actions/cache takes a literal path, and composer's own cache-dir setting is
+        # the authority on where it writes.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Composer downloads
+        # A cold cache resolves every dependency over api.github.com — the download path
+        # that took the PHP gates down (issue #2502). Keyed on composer.lock, so a lock
+        # change gets a fresh entry and an unchanged lock never re-downloads.
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Run PHPCS
         # Config auto-discovered from phpcs.xml.dist: the custom PfBlockerNG standard
@@ -607,17 +742,6 @@ jobs:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     strategy:
       fail-fast: false
@@ -632,19 +756,33 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select PHP ${{ matrix.php-version }}
-        # The image bakes every matrix PHP side by side. `update-alternatives` needs root,
-        # so the leg picks its version by putting a symlink first on PATH instead.
-        run: |
-          mkdir -p /tmp/bin
-          ln -sf /usr/bin/php${{ matrix.php-version }} /tmp/bin/php
-          echo /tmp/bin >> "$GITHUB_PATH"
+      - name: Set up PHP ${{ matrix.php-version }}
+        uses: shivammathur/setup-php@v2
+        with:
+          # pcov drives informational coverage.
+          php-version: ${{ matrix.php-version }}
+          extensions: curl, intl, mbstring, ctype, filter
+          coverage: pcov
+          tools: composer
 
-      - name: Materialise the baked Composer vendor tree
-        # The image bakes vendor/ from composer.lock; this copies it into the checkout.
-        # It fails loud if the lock has moved past the baked tree — that is a stale image
-        # and wants a .github/docker/VERSION bump, not a per-job download (issue #2502).
-        run: scripts/ci-vendor.sh
+      - name: Resolve the Composer cache directory
+        # actions/cache takes a literal path, and composer's own cache-dir setting is
+        # the authority on where it writes.
+        id: composer-cache
+        run: echo "dir=$(composer config --global cache-dir)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache the Composer downloads
+        # A cold cache resolves every dependency over api.github.com — the download path
+        # that took the PHP gates down (issue #2502). Keyed on composer.lock, so a lock
+        # change gets a fresh entry and an unchanged lock never re-downloads.
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: composer-${{ runner.os }}-${{ hashFiles('composer.lock') }}
+          restore-keys: composer-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
 
       - name: Run PHPUnit (with coverage)
         # Config in phpunit.xml. tests/php/bootstrap.php loads the real
@@ -671,23 +809,21 @@ jobs:
   markdownlint:
     name: markdownlint
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npx/node --test here.
+        continue-on-error: true
+        uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
 
       - name: Run markdownlint-cli2
         # Reads .markdownlint.jsonc (rules) + .markdownlint-cli2.jsonc (globs/ignores).
@@ -696,23 +832,21 @@ jobs:
   widget-js-tests:
     name: Widget JS unit tests (node --test)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npx/node --test here.
+        continue-on-error: true
+        uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
 
       - name: Run the Dashboard widget JS tests
         # Offline unit coverage for the widget render helpers (pfBlockerNG_escapeHtml /
@@ -723,17 +857,6 @@ jobs:
   webassets-vendor:
     name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     timeout-minutes: 15
 
     steps:
@@ -741,6 +864,15 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Set up Node.js
+        # Best-effort: the LTS-manifest fetch rides GitHub's API, which has served
+        # 503s for whole hours (2026-07-16). On failure the job proceeds on the
+        # runner image's preinstalled Node, which satisfies npm/esbuild here.
+        continue-on-error: true
+        uses: actions/setup-node@v7
+        with:
+          node-version: 'lts/*'
 
       - name: Rebuild the vendor tree and diff against what's committed
         # Node/npm are dev+CI-only (never shipped to the appliance): this
@@ -780,17 +912,6 @@ jobs:
     # ReDoS gate stays a useful offline check here. Never in `all-tests-passed.needs`.
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     # Job-specific timeout: the 1M-entry build spike is the slow step; bound it here
     # rather than touching any shared/default timeout.
     timeout-minutes: 15
@@ -801,15 +922,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install uv
+        # astral-sh/setup-uv publishes no floating major tag past v7 — later majors ship
+        # exact versions only. enable-cache persists uv's download cache between runs.
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Sync the benchmark environment
+        # pympler drives the retained-bytes/entry RAM gate in spike_adr06_build.py;
+        # without it that gate is skipped (treated as PASS). The `bench` dependency
+        # group in pyproject.toml pins that set and --locked resolves it against the
+        # committed uv.lock, so its pins govern resolution (#1337).
+        run: uv sync --locked --group bench
+
       - name: ReDoS / regex-latency kill-gate
         # Non-zero exit on NO-GO (reduction-floor / per-pattern-latency / worst
         # first-hit). No `|| true` — the exit code IS the gate.
-        run: python legacy/benchmarks/spike_adr07_regex.py
+        run: uv run --group bench python legacy/benchmarks/spike_adr07_regex.py
 
       - name: Build init-time / peak-RAM kill-gate
         # Non-zero exit on NO-GO (build seconds / retained B/entry) at the default
         # 1M-entry un-pruned corpus.
-        run: python legacy/benchmarks/spike_adr06_build.py
+        run: uv run --group bench python legacy/benchmarks/spike_adr06_build.py
 
   # ── ADR-14 UI suite (opt-in PR gate, label-gated) ────────────────────────
   # PURE-LABEL model: the live-VM UI suite (render + functional + browser) runs,
@@ -847,22 +982,10 @@ jobs:
     name: Coverage pairing (src/tests + www/ui)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     # Job-level override (replaces the workflow-level set entirely): the live
     # label/body reads need issues+pull-requests read, which the workflow-level
     # contents+packages grant forces to none (issue #969).
     permissions:
-      packages: read
       contents: read
       issues: read
       pull-requests: read
@@ -950,17 +1073,6 @@ jobs:
     name: Comment narration (no process narration in new comments)
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -991,17 +1103,6 @@ jobs:
     # blocks here — that is how the opt-in label gates a merge.
     needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
     runs-on: ubuntu-latest
-    container:
-      image: ghcr.io/pfblockerng/ci-runner:11
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      # uid 1001 matches the GitHub-hosted `runner` user, so workspace ownership lines up
-      # and the root-guarded tests RUN instead of skipping. HOME is set because uid 1001
-      # has no passwd entry in the image.
-      options: --init --user 1001:1001
-    env:
-      HOME: /tmp
     steps:
       - name: Check matrix results
         run: |

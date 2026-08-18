@@ -93,7 +93,6 @@ communication-mode capsules.
 | `www/` UI | architecture-notes "Web UI test tiers" + `lang-php.md`; Alerts/Reports pages → `docs/misc/alerts-reports-pipeline.md` |
 | PSL / TLD Allow / HSTS / TOP1M refresh | `docs/misc/<public-suffix-list\|tld-lists\|hsts-preload-list\|top1m-providers>.md` |
 | docs-only change; min-CE version bump | `git.md` dev-only classes; `docs/misc/version-bump-runbook.md` (stubs: `scripts/update-pfsense-stubs.py`) |
-| `.github/docker/**`, `composer.json`/`composer.lock`, CI image | `docs/misc/ci-image-bump-runbook.md` (publish the series from the branch BEFORE the PR) |
 
 Delegation shape: substantial coding work planned/gated by **top tier**, implemented
 by **small-tier** sub-agents, every step gated by independent small-tier verifier via
