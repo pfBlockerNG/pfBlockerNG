@@ -36,8 +36,11 @@ final class PkgCaEnvPrefixTest extends TestCase
 
 	protected function tearDown(): void
 	{
-		foreach (['/certs/x.0', '/certs', '/cert.pem', '/bundle dir'] as $leaf) {
+		foreach (['/certs/x.0', '/certs', '/cert.pem', '/bundle dir', "/cert's dir"] as $leaf) {
 			$p = $this->root . $leaf;
+			if (is_file($p)) {
+				@chmod($p, 0o644);
+			}
 			if (is_file($p)) {
 				unlink($p);
 			} elseif (is_dir($p)) {
@@ -111,6 +114,22 @@ final class PkgCaEnvPrefixTest extends TestCase
 		);
 	}
 
+	public function testUnreadableBundleIsRefusedButTheDirectoryStillExports(): void
+	{
+		if (posix_getuid() === 0) {
+			$this->markTestSkipped('root reads mode-0000 files, so the guard cannot be observed as root');
+		}
+		$dir = $this->seedDir();
+		$file = $this->seedBundle();
+		chmod($file, 0o000);
+
+		$this->assertSame(
+			'SSL_CA_CERT_PATH=' . escapeshellarg($dir) . ' ',
+			pfb_pkg_ca_env_prefix($dir, $file),
+			'a bundle pkg cannot read would fail the eager load and cost the directory with it'
+		);
+	}
+
 	public function testDirectoryAtTheBundlePathIsRefused(): void
 	{
 		$dir = $this->seedDir();
@@ -164,15 +183,19 @@ final class PkgCaEnvPrefixTest extends TestCase
 
 	public function testLocationsWithShellMetacharactersAreQuoted(): void
 	{
-		$dir = $this->root . '/certs';
+		$dir = $this->root . "/cert's dir";
 		mkdir($dir, 0o755, true);
 		$file = $this->root . '/cert.pem';
 		file_put_contents($file, "x\n");
 
 		$prefix = pfb_pkg_ca_env_prefix($dir, $file);
 
-		$this->assertStringContainsString(escapeshellarg($dir), $prefix, 'the path must be quoted');
-		$this->assertStringContainsString(escapeshellarg($file), $prefix, 'the bundle must be quoted');
+		// Expectation written out by hand rather than through escapeshellarg(), which would
+		// pass for naive quoting too: a single quote must close, escape, and reopen.
+		$expected = "SSL_CA_CERT_PATH='" . $this->root . "/cert'\\''s dir' "
+			. "SSL_CA_CERT_FILE='" . $this->root . "/cert.pem' ";
+
+		$this->assertSame($expected, $prefix, 'a quote in a path must be shell-escaped, not passed through');
 		$this->assertStringEndsWith(' ', $prefix, 'the prefix must be splice-ready');
 	}
 
@@ -196,22 +219,20 @@ final class PkgCaEnvPrefixTest extends TestCase
 			$body,
 			'the catalog read must carry the CA locations'
 		);
-		// Asserting a COUNT would let a third, unprefixed exec() slip in unnoticed — which is
-		// the regression this test exists to catch. Assert the property instead: every command
-		// this function shells out must lead with the prefix.
-		$this->assertSame(
-			1,
-			preg_match_all('/exec\(/', $body) > 0 ? 1 : 0,
-			'pfb_pkg_latest() must still shell out at all'
-		);
-		preg_match_all('/exec\(\s*"([^"]*)"/', $body, $m);
-		$this->assertNotEmpty($m[1], 'no double-quoted exec() command found to inspect');
-		foreach ($m[1] as $cmd) {
+		// Inspect EVERY exec( site, not just the double-quoted ones: reading only string
+		// literals would let `$cmd = "..."; exec($cmd);` route around the prefix.
+		$offset = 0;
+		$sites = 0;
+		while (($at = strpos($body, 'exec(', $offset)) !== false) {
+			$sites++;
 			$this->assertStringStartsWith(
-				'{$ca}{$tmo}',
-				$cmd,
-				"every command pfb_pkg_latest() runs must carry the CA prefix before the timeout wrapper, found: {$cmd}"
+				'exec("{$ca}{$tmo}',
+				substr($body, $at, 40),
+				'every command pfb_pkg_latest() runs must be a literal leading with the CA prefix, found: '
+					. substr($body, $at, 40)
 			);
+			$offset = $at + 5;
 		}
+		$this->assertGreaterThan(0, $sites, 'pfb_pkg_latest() must still shell out at all');
 	}
 }
