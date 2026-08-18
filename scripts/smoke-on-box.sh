@@ -133,6 +133,18 @@ done
 # the caller's work and moved the choice of WHICH code runs away from the caller.
 [ -n "$_REF" ] || _REF="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 printf 'smoke-on-box: running at ref %s\n' "$_REF" >&2
+
+# One preflight for every tool the leg shells out to, before anything expensive. Reported
+# as a single list: a box missing three tools should say so once, not fail three runs.
+_missing=''
+for _tool in git jq curl uv oras python3 ssh qemu-system-x86_64 qemu-img dig iptables zstd tar unzip; do
+	command -v "$_tool" >/dev/null 2>&1 || _missing="${_missing} ${_tool}"
+done
+if [ -n "$_missing" ]; then
+	printf 'smoke-on-box: missing required tools on this box:%s\n' "$_missing" >&2
+	printf 'smoke-on-box: see docs/misc/local-smoke-debian.md for what a box carries\n' >&2
+	exit 2
+fi
 # Echo the whole resolved configuration, not just the ref: a flag that silently
 # failed to parse otherwise shows up only as a leg that quietly ran the default.
 # pfsense_ref/civm_ref are echoed AFTER their LAN-registry rewrite (issue #2247), so
@@ -359,11 +371,6 @@ _VENV_DIR="${REPO_ROOT}/.venv"
 # symlink and erase its target.
 if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; then
     printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
-    exit 2
-fi
-if ! command -v uv >/dev/null 2>&1; then
-    printf 'smoke-on-box: uv not found on this box; the smoke harness deps are pinned by\n' >&2
-    printf 'smoke-on-box:   uv sync --locked --group smoke\n' >&2
     exit 2
 fi
 uv sync --locked --group smoke  # cwd is REPO_ROOT; uv reads pyproject and uv.lock from it
