@@ -29,7 +29,8 @@
 #   PFB_BASE_URL      catalog base (default: https://pfblockerng.github.io/pkg)
 #   PFB_SSL_CA_CERT_PATH  CA hash dir exported to pkg (default: <root>/etc/ssl/certs)
 #   PFB_SSL_CA_CERT_FILE  CA bundle exported to pkg (default: <root>/etc/ssl/cert.pem)
-#                         Each is exported only if it exists; set either to "" to opt out.
+#                         Exported only if present (dir non-missing, bundle non-empty);
+#                         set either to "" to opt that half out.
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
@@ -91,8 +92,13 @@ die() {
 # path-only would turn a working stock box into this very failure. On Plus, PKG_ENV
 # overwrites this value with Netgate's bundle, which is what should happen there.
 #
-# Each is exported only when it exists, so pkg is never pointed at a missing location.
+# The bundle is checked with -s, not -f: load_verify_locations() reads the file eagerly and
+# abandons the path when that fails, so an empty or truncated bundle would take the whole
+# store down, while set_default_verify_paths() would have tolerated it.
+#
 # Setting either variable to the empty string opts that half out (hence `-`, not `:-`).
+# Opting the BUNDLE out on a box with no PKG_ENV pin leaves the path-only store this code
+# exists to avoid, so that half is for boxes whose bundle is known bad.
 PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH-${ROOT}/etc/ssl/certs}"
 PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 
@@ -100,7 +106,7 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 # would have to be word-split to become separate env(1) operands, which breaks the moment
 # a location contains a space.
 _pkg() {
-    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] && [ -f "${PFB_SSL_CA_CERT_FILE}" ]; then
+    if [ -d "${PFB_SSL_CA_CERT_PATH}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
@@ -109,7 +115,7 @@ _pkg() {
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             "${PKG_BIN}" "$@" </dev/null
-    elif [ -f "${PFB_SSL_CA_CERT_FILE}" ]; then
+    elif [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
             "${PKG_BIN}" "$@" </dev/null
