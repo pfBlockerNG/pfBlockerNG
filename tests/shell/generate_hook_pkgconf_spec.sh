@@ -14,13 +14,19 @@
 #
 # Consent lives in config.xml as the registered field pfb_pkg_ca_consent under
 # installedpackages/pfblockerng/config/0 (what PfbConfig::read('gen/pfb_pkg_ca_consent')
-# reads), granted as the literal token `on`. `<config>` is NOT unique tree-wide
-# (every installed package gets one) so `_pkgconf_ca_reapply()` scopes its read
-# to the FIRST <config> block inside the single <pfblockerng> element — exactly
-# config/0 — and requires the element on a line BY ITSELF (whole-line match),
-# so a single-line XML comment wrapping it does not count as consent (issue
-# #2518 F1). The rows below cover every other value, a same-value-but-wrong-block
-# case, an XML comment, and every other value as "no consent".
+# reads) as a DIRECT CHILD of the FIRST <config> block under <pfblockerng> --
+# never nested under a <row> or any other wrapper, and never a later <config>
+# row -- granted as the literal token `on` (case-insensitive: PfbToggle::
+# fromLegacy() also accepts On/ON). `_pc_config_xml()` below builds exactly that
+# production shape; a dedicated block of rows further down (issue #2518 B2)
+# deliberately builds every WRONG shape a naive scan could be fooled by: nested
+# one level deeper (A_row -- literally the shape this suite used to test before
+# B2, which is why those old assertions were re-pointed), a same-named sibling
+# field or later/second <config> row racing the scope search, and the three
+# shapes PfbConfig reads as consent that this hook deliberately does NOT match
+# (an attribute-carrying open tag, a CDATA value, the whole element collapsed
+# onto one line) -- each pinned as a documented, bounded limitation rather than
+# left silently untested.
 #
 # Tip: run with `shellspec tests/shell/generate_hook_pkgconf_spec.sh`.
 
@@ -57,7 +63,10 @@ _pc_unset_box() {
 }
 
 # Write a config.xml carrying the consent element with body $1 ("on" / "off" /
-# "" / omitted entirely when $1 is "absent").
+# "" / omitted entirely when $1 is "absent"), as a DIRECT CHILD of config/0 --
+# the exact production shape (issue #2518 B2's "C_ok"; PfbConfig::read() never
+# sees a <row> wrapper, so this helper stopped emitting one). The A_row/F/G/J/
+# L/M/E/H/I rows further down build every OTHER shape by hand, on purpose.
 _pc_config_xml() {
     _pcx_body="$1"
     case "${_pcx_body}" in
@@ -68,9 +77,7 @@ _pc_config_xml() {
 	<installedpackages>
 		<pfblockerng>
 			<config>
-				<row>
-					<other>1</other>
-				</row>
+				<other>1</other>
 			</config>
 		</pfblockerng>
 	</installedpackages>
@@ -84,9 +91,7 @@ EOF
 	<installedpackages>
 		<pfblockerng>
 			<config>
-				<row>
-					<pfb_pkg_ca_consent>${_pcx_body}</pfb_pkg_ca_consent>
-				</row>
+				<pfb_pkg_ca_consent>${_pcx_body}</pfb_pkg_ca_consent>
 			</config>
 		</pfblockerng>
 	</installedpackages>
@@ -105,7 +110,7 @@ _pc_ca_dir_with_entry() {
 
 # ── CONSENT AXIS ────────────────────────────────────────────────────────────
 
-Describe 'pkgconf re-apply — consent on: patches plus_pinned.conf to plus_patched.conf'
+Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches plus_pinned.conf to plus_patched.conf'
     setup() {
         _c1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_consent_on.XXXXXX")"
         _pc_box "${_c1_dir}"
@@ -246,6 +251,15 @@ End
 # and matches the element as a WHOLE LINE. These rows pin the two ways an
 # unscoped/substring gate would false-positive: an XML comment, and a second
 # <config> row disagreeing with config/0.
+#
+# REPOINTED (issue #2518 B2): these three rows used to wrap the consent element
+# in a <row>, same as the rest of this file before B2. That shape is ALSO
+# rejected by the depth-1 fix below (it is exactly the A_row case), which would
+# have made the "second <config> row" row below stop proving what its name
+# says -- a row-wrapped element never matches regardless of which <config> it
+# sits in, so "patches (scoped to config/0)" would have started failing for a
+# reason unrelated to scoping. Rebuilt as direct children (the production
+# shape) so each row again isolates exactly one axis.
 
 Describe 'pkgconf re-apply — consent element inside a single-line XML comment: no patch'
     setup() {
@@ -258,9 +272,7 @@ Describe 'pkgconf re-apply — consent element inside a single-line XML comment:
 	<installedpackages>
 		<pfblockerng>
 			<config>
-				<row>
-					<!-- <pfb_pkg_ca_consent>on</pfb_pkg_ca_consent> -->
-				</row>
+				<!-- <pfb_pkg_ca_consent>on</pfb_pkg_ca_consent> -->
 			</config>
 		</pfblockerng>
 	</installedpackages>
@@ -282,7 +294,7 @@ EOF
     End
 End
 
-Describe 'pkgconf re-apply — config/0 says off, a second <config> block says on: no patch (scoped to config/0)'
+Describe 'pkgconf re-apply — config/0 says off, a second <config> block (config/1) says on: no patch (scoped to config/0)'
     setup() {
         _f2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_f1_second_on.XXXXXX")"
         _pc_box "${_f2_dir}"
@@ -293,14 +305,10 @@ Describe 'pkgconf re-apply — config/0 says off, a second <config> block says o
 	<installedpackages>
 		<pfblockerng>
 			<config>
-				<row>
-					<pfb_pkg_ca_consent>off</pfb_pkg_ca_consent>
-				</row>
+				<pfb_pkg_ca_consent>off</pfb_pkg_ca_consent>
 			</config>
 			<config>
-				<row>
-					<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
-				</row>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
 			</config>
 		</pfblockerng>
 	</installedpackages>
@@ -322,7 +330,7 @@ EOF
     End
 End
 
-Describe 'pkgconf re-apply — config/0 says on, a second <config> block says off: patches (scoped to config/0)'
+Describe 'pkgconf re-apply — config/0 says on, a second <config> block (config/1) says off: patches (scoped to config/0)'
     setup() {
         _f3_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_f1_second_off.XXXXXX")"
         _pc_box "${_f3_dir}"
@@ -333,14 +341,10 @@ Describe 'pkgconf re-apply — config/0 says on, a second <config> block says of
 	<installedpackages>
 		<pfblockerng>
 			<config>
-				<row>
-					<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
-				</row>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
 			</config>
 			<config>
-				<row>
-					<pfb_pkg_ca_consent>off</pfb_pkg_ca_consent>
-				</row>
+				<pfb_pkg_ca_consent>off</pfb_pkg_ca_consent>
 			</config>
 		</pfblockerng>
 	</installedpackages>
@@ -360,6 +364,392 @@ EOF
       The status should be success
       The stderr should include "INFO"
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+# ── DEPTH AXIS (issue #2518 B2, "A_row") ─────────────────────────────────────
+# PfbConfig::read() sees pfb_pkg_ca_consent ONLY as a direct child of config/0.
+# The gate used to be depth-blind (it matched the element at ANY nesting depth
+# inside the scoped <config> block) -- this is literally the shape every row
+# above used to test before B2 (see the REPOINTED note above): a real box that
+# somehow got the element wrapped one level deeper would have its "no" silently
+# read as "yes" by the shell hook while PfbConfig kept reading NULL/off.
+
+Describe 'pkgconf re-apply — A_row: consent nested one level under <row> inside config/0: no patch'
+    setup() {
+        _dep1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_depth_row.XXXXXX")"
+        _pc_box "${_dep1_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng>
+			<config>
+				<row>
+					<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+				</row>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_dep1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 (PfbConfig reads config/0 as a DIRECT child -- <row> is not that path, so raw is NULL/off)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+# ── LATCH AXIS (issue #2518 B2, "F/G/J/L/M") ─────────────────────────────────
+# The gate used to `next` past a line opening <pfblockerng>/<config> WITHOUT
+# checking whether that same line also closes it -- so in_pb/in_cfg latched
+# open to EOF whenever the open and close landed on one line (a self-closed
+# <pfblockerng></pfblockerng> or <config></config>, or the whole element
+# collapsed onto one line). Every row below is a shape where that latch let a
+# LATER, unrelated <config> block's own field read as config/0's consent, even
+# though config/0 itself carries no consent (or an empty one). Each one is
+# reproduced against a distinct way the open+close can land on one line.
+
+Describe 'pkgconf re-apply — F_emptycfg: config/0 is <config></config>, consent lives only in config/1: no patch'
+    setup() {
+        _lat1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_latch_emptycfg.XXXXXX")"
+        _pc_box "${_lat1_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng>
+			<config></config>
+			<config>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lat1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 (config/0 is the empty FIRST <config>; the 2nd is config/1, never read)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — G_sibling: another packages field literally named <pfblockerng> precedes the real block: no patch'
+    setup() {
+        _lat2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_latch_sibling.XXXXXX")"
+        _pc_box "${_lat2_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<someotherpkg>
+			<pfblockerng>yes</pfblockerng>
+			<config>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+			</config>
+		</someotherpkg>
+		<pfblockerng>
+			<config>
+				<other>1</other>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lat2_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 (the real pfblockerng config/0 carries no consent element at all)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — J_emptypb: <pfblockerng></pfblockerng> self-closed, consent only in an unrelated package: no patch'
+    setup() {
+        _lat3_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_latch_emptypb.XXXXXX")"
+        _pc_box "${_lat3_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng></pfblockerng>
+		<someotherpkg>
+			<config>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+			</config>
+		</someotherpkg>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lat3_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 (pfblockerng carries no <config> at all)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — L_inline: <pfblockerng><enable_cb>on</enable_cb></pfblockerng> on one line, consent only in an unrelated package: no patch'
+    setup() {
+        _lat4_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_latch_inline.XXXXXX")"
+        _pc_box "${_lat4_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng><enable_cb>on</enable_cb></pfblockerng>
+		<someotherpkg>
+			<config>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+			</config>
+		</someotherpkg>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lat4_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 (the whole pfblockerng element opens and closes on its own line)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — M_emptycfg_other: pfblockerng config/0 is <config></config>, consent in a sibling packages config: no patch'
+    setup() {
+        _lat5_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_latch_emptycfg_other.XXXXXX")"
+        _pc_box "${_lat5_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng>
+			<config></config>
+		</pfblockerng>
+		<someotherpkg>
+			<config>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+			</config>
+		</someotherpkg>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lat5_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 (pfblockerng config/0 is empty; the sibling package is a different subtree)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+# ── CASE-INSENSITIVE CONSENT AXIS (issue #2518 nitpick N-case-token) ────────
+# PfbToggle::fromLegacy() accepts On/ON in any case (HA sync, restored backups,
+# hand edits); the awk used to match only the lowercase literal "on".
+
+Describe 'pkgconf re-apply — consent value "On" (mixed case): patches'
+    setup() {
+        _ci1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_case_mixed.XXXXXX")"
+        _pc_box "${_ci1_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        _pc_config_xml On
+    }
+    cleanup() { rm -rf "${_ci1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'patches pkg.conf to be byte-identical to plus_patched.conf, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "INFO"
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — consent value "ON" (upper case): patches'
+    setup() {
+        _ci2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_case_upper.XXXXXX")"
+        _pc_box "${_ci2_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        _pc_config_xml ON
+    }
+    cleanup() { rm -rf "${_ci2_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'patches pkg.conf to be byte-identical to plus_patched.conf, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "INFO"
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+# ── DOCUMENTED LIMITATIONS AXIS (issue #2518 B2, "E/H/I") ────────────────────
+# PfbConfig reads all three of these shapes as consent (SimpleXML/config parsing
+# decodes attributes, CDATA, and whitespace collapsing uniformly); this hook
+# deliberately does NOT match any of them -- matching them in POSIX sh text
+# scanning is disproportionate to how pfSense's own config writer actually
+# serialises (verified against a live config.xml: none of these three shapes
+# occur there). Each is a BOUNDED miss: the boot re-apply is skipped, but the
+# cron tick (pfb_pkgconf_ca_tick(), synchronous with every PHP-side write) still
+# re-applies on that box. Pinned here so the gap stays a documented, deliberate
+# choice instead of silent, untested behaviour.
+
+Describe 'pkgconf re-apply — E_attr: <pfblockerng version="1.0"> carries an XML attribute: documented limitation, no patch'
+    setup() {
+        _lim1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_limit_attr.XXXXXX")"
+        _pc_box "${_lim1_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng version="1.0">
+			<config>
+				<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lim1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the boot hook does not, by design (cron still re-applies)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — H_cdata: CDATA-wrapped consent value: documented limitation, no patch'
+    setup() {
+        _lim2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_limit_cdata.XXXXXX")"
+        _pc_box "${_lim2_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng>
+			<config>
+				<pfb_pkg_ca_consent><![CDATA[on]]></pfb_pkg_ca_consent>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lim2_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the boot hook does not, by design (cron still re-applies)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — I_oneline: the whole pfblockerng/config/consent element collapsed onto one line: documented limitation, no patch'
+    setup() {
+        _lim3_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_limit_oneline.XXXXXX")"
+        _pc_box "${_lim3_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<?xml version="1.0"?>
+<pfsense>
+	<installedpackages>
+		<pfblockerng><config><pfb_pkg_ca_consent>on</pfb_pkg_ca_consent></config></pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_lim3_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf is the pinned fixture'
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the boot hook does not, by design (cron still re-applies)'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -724,6 +1114,133 @@ Describe 'pkgconf re-apply — CRLF line endings throughout: unchanged'
     End
 End
 
+Describe 'pkgconf re-apply — PKG_ENV block contains a nested column-0 "}" (sub-object): refused, no patch'
+    # A nested UCL sub-object's own closing brace can be mistaken for PKG_ENV's
+    # own close by naive first-`}`-after-open scanning (issue #2518 nitpick
+    # N-nested-brace) -- SUBOBJ closes on the FIRST column-0 "}" in this
+    # fixture, one line before PKG_ENV's real close. Un-refused, the insertion
+    # awk would land the new line inside SUBOBJ instead: it would look patched
+    # (grep for SSL_CA_CERT_PATH finds it) but verify nothing (libpkg would set
+    # the key on SUBOBJ, not PKG_ENV).
+    setup() {
+        _s9_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_shape_nested_brace.XXXXXX")"
+        _pc_box "${_s9_dir}"
+        cat > "${PFB_PKG_CONF}" <<'EOF'
+ABI=FreeBSD:16:amd64
+PKG_ENV {
+	SSL_CA_CERT_FILE=/etc/ssl/netgate-ca.pem
+	SUBOBJ {
+}
+}
+EOF
+        _pc_config_xml on
+        _s9_sum="$(cksum < "${PFB_PKG_CONF}")"
+    }
+    cleanup() { rm -rf "${_s9_dir}"; _pc_unset_box; unset _s9_sum; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: the block contains a nested sub-object with its own closing brace'
+      The value "$(grep -c '^}$' "${PFB_PKG_CONF}")" should equal 2
+    End
+
+    It 'leaves pkg.conf byte-unchanged, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cksum < "${PFB_PKG_CONF}")" should equal "${_s9_sum}"
+    End
+End
+
+Describe 'pkgconf re-apply — pkg.conf itself is unreadable: no shell error text, exit 0'
+    # grep -c on an unreadable file prints nothing to stdout and exits nonzero;
+    # an unguarded `[ "$_pcr_open_count" -eq 1 ]` then errors with a literal
+    # "Illegal number:" on stderr -- contradicting this hook's own "never print"
+    # intent (issue #2518 nitpick N-illegal-number). rc must still be 0 (boot
+    # safety), which it already was; only the stray stderr text is the bug.
+    setup() {
+        _u1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_pkgconf_unreadable.XXXXXX")"
+        _pc_box "${_u1_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        _pc_config_xml on
+        PFB_SSL_CA_CERT_PATH="${_u1_dir}/certs"
+        _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
+        export PFB_SSL_CA_CERT_PATH
+        chmod 000 "${PFB_PKG_CONF}"
+    }
+    cleanup() { chmod 600 "${PFB_PKG_CONF}" 2>/dev/null; rm -rf "${_u1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf exists but is unreadable'
+      The path "${PFB_PKG_CONF}" should be exist
+    End
+
+    It 'prints no "Illegal number" shell error, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should not include "Illegal number"
+    End
+End
+
+Describe 'pkgconf re-apply — pkg.conf permission bits: preserved across the patch'
+    # awk's `>` redirect creates the temp file at the process umask, not at
+    # pkg.conf's own mode (issue #2518 nitpick N-mode) -- proven in the CI
+    # image: mode 600 in, 644 out, before the fix. The PHP appender already
+    # preserves the original file's permission bits (fileperms()+chmod()); the
+    # shell side did not.
+    setup() {
+        _m1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_mode.XXXXXX")"
+        _pc_box "${_m1_dir}"
+        cp "${FIX}/plus_pinned.conf" "${PFB_PKG_CONF}"
+        chmod 0600 "${PFB_PKG_CONF}"
+        _pc_config_xml on
+    }
+    cleanup() { rm -rf "${_m1_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf mode is 0600'
+      The value "$(stat -c '%a' "${PFB_PKG_CONF}")" should equal 600
+    End
+
+    It 'preserves the original permission bits after patching, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "INFO"
+      The value "$(stat -c '%a' "${PFB_PKG_CONF}")" should equal 600
+    End
+End
+
+Describe 'pkgconf re-apply — pkg.conf whose final brace carries no trailing newline: newline-less state preserved'
+    # awk's `print` always terminates its last output record, so patching a
+    # pkg.conf whose last byte is "}" (no trailing newline) used to ADD one --
+    # a divergence from the PHP appender, which round-trips the exact bytes it
+    # was given (issue #2518 nitpick N-trailing-newline; PHP pins this with
+    # testAddPatchesWhenFinalBraceHasNoTrailingNewline).
+    setup() {
+        _nl1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_no_trailing_nl.XXXXXX")"
+        _pc_box "${_nl1_dir}"
+        printf '%s' "$(cat "${FIX}/plus_pinned.conf")" > "${PFB_PKG_CONF}"
+        _pc_config_xml on
+        _nl1_expected="${_nl1_dir}/expected-patched.conf"
+        printf '%s' "$(cat "${FIX}/plus_patched.conf")" > "${_nl1_expected}"
+    }
+    cleanup() { rm -rf "${_nl1_dir}"; _pc_unset_box; unset _nl1_expected; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: pkg.conf final brace carries no trailing newline'
+      The value "$(tail -c1 "${PFB_PKG_CONF}")" should equal '}'
+    End
+
+    It 'patches without adding a trailing newline, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "INFO"
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_nl1_expected}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
 # ── CA-PATH AXIS (consent on, plus_pinned.conf) ──────────────────────────────
 
 Describe 'pkgconf re-apply — PFB_SSL_CA_CERT_PATH does not exist: unchanged'
@@ -939,13 +1456,17 @@ Describe 'pkgconf re-apply — CA path is a bare "/": refused, no patch'
     End
 End
 
-# ── CA-PATH POPULATED AXIS (issue #2518 F4.2: dotfile-only directory) ───────
-# PHP's pfb_pkgconf_dir_populated() uses scandir(), which counts dotfiles as
-# entries (excluding only '.'/'..'); a POSIX `for dir/*` glob does not match
-# dotfiles, so the two implementations must agree here or a dir holding only
-# e.g. ".DS_Store" reads "populated" on one side and "empty" on the other.
+# ── CA-PATH POPULATED AXIS (issue #2518 F4.2 / nitpick N-dotfile-guard) ─────
+# REPOINTED (issue #2518 nitpick N-dotfile-guard): PHP's pfb_pkgconf_dir_populated()
+# used to count dotfiles via scandir() (excluding only '.'/'..'), and this glob
+# used two extra dotfile-matching words to agree with it. The rationale for
+# "populated" was always "an empty hash dir makes the patch a no-op" -- and a
+# directory holding only e.g. ".DS_Store" is equally a no-op, so the PHP side is
+# changing to count only NON-dot entries. A bare `*` glob already agrees with
+# that (POSIX globs never match a dotfile), so the two extra glob words are
+# gone; this row's expectation flips from "patched" to "unchanged" to match.
 
-Describe 'pkgconf re-apply — CA dir containing only a dotfile: populated (matches PHP scandir), patched'
+Describe 'pkgconf re-apply — CA dir containing only a dotfile: NOT populated (matches PHP scandir excluding dotfiles), unchanged'
     setup() {
         _d1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_ca_dotfiles.XXXXXX")"
         _pc_box "${_d1_dir}"
@@ -955,10 +1476,8 @@ Describe 'pkgconf re-apply — CA dir containing only a dotfile: populated (matc
         mkdir -p "${PFB_SSL_CA_CERT_PATH}"
         true > "${PFB_SSL_CA_CERT_PATH}/.hidden"
         export PFB_SSL_CA_CERT_PATH
-        _d1_expected="${_d1_dir}/expected-patched.conf"
-        sed "s#/etc/ssl/certs#${PFB_SSL_CA_CERT_PATH}#" "${FIX}/plus_patched.conf" > "${_d1_expected}"
     }
-    cleanup() { rm -rf "${_d1_dir}"; _pc_unset_box; unset _d1_expected; }
+    cleanup() { rm -rf "${_d1_dir}"; _pc_unset_box; }
     Before 'setup'
     After  'cleanup'
 
@@ -967,11 +1486,10 @@ Describe 'pkgconf re-apply — CA dir containing only a dotfile: populated (matc
       The value "$(ls -A "${PFB_SSL_CA_CERT_PATH}" | wc -l | tr -d ' ')" should equal 1
     End
 
-    It 'patches pkg.conf with the custom CA path, exit 0'
+    It 'leaves pkg.conf byte-unchanged, exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
-      The stderr should include "INFO"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${_d1_expected}" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
     End
 End
 

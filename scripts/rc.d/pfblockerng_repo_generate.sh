@@ -270,27 +270,73 @@ _regen_one() {
 _pkgconf_ca_reapply() {
     # Consent gate, fail-closed. pfb_pkg_ca_consent is a registered config field
     # read on the PHP side at installedpackages/pfblockerng/config/0 --
-    # PfbConfig::read('gen/pfb_pkg_ca_consent'). <config> is NOT unique
-    # tree-wide (every installed package gets one under <installedpackages>),
-    # so a whole-file grep for the element can key on the WRONG <config> block
-    # and disagree with the PHP side about whether the admin consented. Scoped
-    # instead: take the FIRST <pfblockerng>...</pfblockerng> range, then within
-    # it the FIRST <config>...</config> block -- that is exactly config/0 --
-    # and require the element on a line BY ITSELF inside that block (full-line
-    # match, so a single-line XML comment wrapping it does not count as
-    # consent). This is sound against a same-named sibling in another
-    # package's config and against a later <config> row under pfblockerng
-    # disagreeing with config/0. It is NOT sound against a
-    # MULTI-LINE XML comment that happens to wrap the element inside config/0
-    # -- tracking multi-line comment state in POSIX sh is disproportionate to
-    # that risk, and pfSense's own config writer emits no XML comments at all
-    # (verified against a live config.xml).
+    # PfbConfig::read('gen/pfb_pkg_ca_consent') -- meaning the element must be a
+    # DIRECT CHILD of the FIRST <config> block under the single <pfblockerng>
+    # section (config/0): never nested under a <row> or any other wrapper, and
+    # never a later <config> row. <config> is NOT unique tree-wide (every
+    # installed package gets one under <installedpackages>), so a whole-file
+    # grep for the element can key on the WRONG <config> block and disagree
+    # with the PHP side about whether the admin consented.
+    #
+    # Scoped instead: take the FIRST <pfblockerng>...</pfblockerng> range, then
+    # within it the FIRST <config>...</config> block -- that is exactly
+    # config/0 -- then require the element AT DEPTH 1 of that block (a running
+    # open/close-tag count, not just "present somewhere inside"), on a line BY
+    # ITSELF (full-line match; the value compares case-insensitively --
+    # PfbToggle::fromLegacy() also accepts On/ON). Every opening line ALSO
+    # checks for its OWN closing tag before advancing the scope -- a self-closed
+    # `<pfblockerng></pfblockerng>` / `<config></config>`, or a whole element on
+    # one line, closes on the SAME line it opens. Earlier revisions of this awk
+    # used `next` before that same-line check and LATCHED the scope open to
+    # EOF, which is what let a same-named sibling field, a second <config> row,
+    # or a nested <row> wrapper read as consent when PfbConfig disagreed
+    # (issue #2518 B2).
+    #
+    # What this guarantees: config/0's own direct-child element, and only that
+    # element, ever supplies "on" -- a sibling package's field, a later
+    # <config> row, and a <row>-nested (or any deeper-nested) copy are all
+    # refused. What it does NOT guarantee: a literal "<pfblockerng>" (or
+    # "<config>") substring belonging to a DIFFERENT, EARLIER package in the
+    # document exhausts the "first occurrence" search this hook does
+    # (seen_pb/seen_cfg never re-arm), so a decoy ahead of the real block can
+    # cause a FALSE NEGATIVE -- never a false positive -- and the cron tick
+    # still re-applies on that box; pfSense's own config writer never emits
+    # such a decoy or reorders sections, so this is a defensive bound, not an
+    # expected case. Nor is it sound against an XML attribute on the
+    # <pfblockerng> open tag, a CDATA-wrapped value, or the whole element
+    # collapsed onto one line (PfbConfig reads all three as consent, this hook
+    # matches none of them) -- tracking any of those in POSIX sh is
+    # disproportionate to the risk, and pfSense's own config writer emits none
+    # of them (verified against a live config.xml); each is a bounded,
+    # documented miss (boot skip only -- the cron tick still re-applies),
+    # pinned by its own spec row. Also NOT sound against a MULTI-LINE XML
+    # comment that happens to wrap the element inside config/0 -- tracking
+    # multi-line comment state in POSIX sh is disproportionate to that risk
+    # too, and pfSense's own config writer emits no XML comments at all.
     _pcr_consent="$(awk '
-            /<pfblockerng>/ && !seen_pb { in_pb = 1; seen_pb = 1; next }
-            in_pb && /<\/pfblockerng>/ { in_pb = 0 }
-            in_pb && !seen_cfg && /<config>/ { in_cfg = 1; seen_cfg = 1; next }
-            in_cfg && /<\/config>/ { in_cfg = 0 }
-            in_cfg && /^[[:space:]]*<pfb_pkg_ca_consent>on<\/pfb_pkg_ca_consent>[[:space:]]*$/ { print "on"; exit }
+            !seen_pb && /<pfblockerng>/ {
+                in_pb = 1; seen_pb = 1
+                if ($0 ~ /<\/pfblockerng>/) { in_pb = 0 }
+                next
+            }
+            in_pb && /<\/pfblockerng>/ { in_pb = 0; next }
+            in_pb && !seen_cfg && /<config>/ {
+                in_cfg = 1; seen_cfg = 1; cfg_depth = 0
+                if ($0 ~ /<\/config>/) { in_cfg = 0 }
+                next
+            }
+            in_cfg && /<\/config>/ { in_cfg = 0; next }
+            in_cfg {
+                if (cfg_depth == 0 && /^[[:space:]]*<pfb_pkg_ca_consent>[Oo][Nn]<\/pfb_pkg_ca_consent>[[:space:]]*$/) {
+                    print "on"; exit
+                }
+                _line = $0
+                _opens = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*>/, "&", _line)
+                _line = $0
+                _closes = gsub(/<\/[A-Za-z_][A-Za-z0-9_.:-]*>/, "&", _line)
+                cfg_depth += (_opens - _closes)
+                if (cfg_depth < 0) { cfg_depth = 0 }
+            }
         ' "${PFB_CONFIG_XML}" 2>/dev/null)"
     [ "${_pcr_consent}" = 'on' ] || { unset _pcr_consent; return 0; }
     unset _pcr_consent
@@ -304,16 +350,15 @@ _pkgconf_ca_reapply() {
     # exporting an empty hash dir to pkg LOOKS fixed but verifies nothing, so
     # refuse rather than patch a file that only appears to work. Glob-based
     # (no `ls | wc -l`): with no match dash leaves the pattern word literal, so
-    # -e/-L on it is false and the loop body never sets the flag. Three glob
-    # words, not one: a bare `*` never matches a dotfile under POSIX, but PHP's
-    # pfb_pkgconf_dir_populated() uses scandir(), which counts a dotfile as an
-    # entry (excluding only '.'/'..') -- `.[!.]*` and `..?*` are the two dotfile
-    # shapes `*` misses, together covering every entry name except '.' and '..'
-    # themselves, so a dir holding only e.g. ".DS_Store" reads "populated" here
-    # exactly as it does on the PHP side.
+    # -e/-L on it is false and the loop body never sets the flag. A bare `*`
+    # glob under POSIX never matches a dotfile, which matches the PHP side
+    # exactly: pfb_pkgconf_dir_populated() counts only non-dot scandir()
+    # entries (issue #2518 nitpick N-dotfile-guard), so a directory holding
+    # e.g. only ".DS_Store" is NOT populated on either side -- no patch,
+    # matching the PHP read.
     [ -d "${PFB_SSL_CA_CERT_PATH}" ] || return 0
     _pcr_has_entry=0
-    for _pcr_entry in "${PFB_SSL_CA_CERT_PATH}"/* "${PFB_SSL_CA_CERT_PATH}"/.[!.]* "${PFB_SSL_CA_CERT_PATH}"/..?*; do
+    for _pcr_entry in "${PFB_SSL_CA_CERT_PATH}"/*; do
         if [ -e "${_pcr_entry}" ] || [ -L "${_pcr_entry}" ]; then
             _pcr_has_entry=1
             break
@@ -345,8 +390,14 @@ _pkgconf_ca_reapply() {
     # hand-edited into an unrecognised shape — each check below is one clause
     # of that shape, checked independently so a near-miss is still refused.
     grep -q 'SSL_CA_CERT_PATH' "${PFB_PKG_CONF}" 2>/dev/null && return 0
-    _pcr_open_count="$(grep -c '^PKG_ENV {$' "${PFB_PKG_CONF}" 2>/dev/null)"
-    [ "${_pcr_open_count}" -eq 1 ] || { unset _pcr_open_count; return 0; }
+    # grep -c on an unreadable file prints nothing to stdout and exits nonzero;
+    # an unguarded `[ "$_pcr_open_count" -eq 1 ]` then errors with a literal
+    # "Illegal number:" on stderr, contradicting this file's own "never print"
+    # intent (issue #2518 nitpick N-illegal-number) -- `|| _pcr_open_count=0`
+    # defaults it on ANY grep failure (unreadable file or a genuine zero
+    # matches; either way the -eq 1 check below correctly refuses).
+    _pcr_open_count="$(grep -c '^PKG_ENV {$' "${PFB_PKG_CONF}" 2>/dev/null)" || _pcr_open_count=0
+    [ "${_pcr_open_count:-0}" -eq 1 ] || { unset _pcr_open_count; return 0; }
     unset _pcr_open_count
     # The block: from the (unique) opener to the first column-0 `}` after it.
     # If no such `}` exists this range runs to EOF and its last line is not
@@ -354,23 +405,65 @@ _pkgconf_ca_reapply() {
     _pcr_block="$(sed -n '/^PKG_ENV {$/,/^}$/p' "${PFB_PKG_CONF}" 2>/dev/null)"
     [ "$(printf '%s\n' "${_pcr_block}" | tail -n 1)" = '}' ] || { unset _pcr_block; return 0; }
     printf '%s\n' "${_pcr_block}" | grep -q '^	SSL_CA_CERT_FILE=' || { unset _pcr_block; return 0; }
-    unset _pcr_block
+    # Refuse a block whose "close" is really a NESTED sub-object's own `}`
+    # (issue #2518 nitpick N-nested-brace): the sed range above stops at the
+    # FIRST column-0 `}` after the opener, same as the insertion awk below --
+    # so a `SOMETHING {` sub-block occurring before the true close makes that
+    # `}` look like PKG_ENV's own, and the line below would be inserted INSIDE
+    # the sub-object instead (looks patched, verifies nothing: libpkg would set
+    # the key on the sub-object, not PKG_ENV). Rule: strip the block's own
+    # opening and closing lines; the remaining lines must be brace-BALANCED (as
+    # many "...{"-opening lines as bare "}" lines) -- a nested open with no
+    # matching nested close inside that middle means the "close" found above is
+    # not PKG_ENV's own.
+    _pcr_mid="$(printf '%s\n' "${_pcr_block}" | sed '1d;$d')"
+    _pcr_mid_opens="$(printf '%s\n' "${_pcr_mid}" | grep -c '{$' 2>/dev/null)" || _pcr_mid_opens=0
+    _pcr_mid_closes="$(printf '%s\n' "${_pcr_mid}" | grep -cx '}' 2>/dev/null)" || _pcr_mid_closes=0
+    if [ "${_pcr_mid_opens:-0}" -ne "${_pcr_mid_closes:-0}" ]; then
+        unset _pcr_block _pcr_mid _pcr_mid_opens _pcr_mid_closes
+        return 0
+    fi
+    unset _pcr_block _pcr_mid _pcr_mid_opens _pcr_mid_closes
 
     # Patch: insert the one line immediately before the block's closing `}`,
-    # nothing else touched. tmp+mv mirrors _regen_one()'s idiom.
+    # nothing else touched. tmp+mv mirrors _regen_one()'s idiom, with two extra
+    # steps the PHP appender already gets for free (issue #2518 nitpicks
+    # N-mode / N-trailing-newline):
+    #   - `cp -p` seeds the temp with the ORIGINAL file's permission bits
+    #     before the `>` redirect below truncates it -- truncation keeps the
+    #     inode (and its mode); a fresh `>` on a name that did not exist would
+    #     not, which is why the patched file used to land at the process
+    #     umask instead of pkg.conf's own mode (PHP's fileperms()+chmod()
+    #     already preserves this).
+    #   - awk's `print` always terminates its last output line, which would
+    #     otherwise turn a pkg.conf whose last byte is `}` (no trailing
+    #     newline) into one that has one; the tail-c1 check + reprint below
+    #     restores that exact newline-less state when the original had it
+    #     (PHP round-trips the input bytes exactly; see
+    #     testAddPatchesWhenFinalBraceHasNoTrailingNewline).
     _pcr_tmp="${PFB_PKG_CONF}.tmp"
-    if awk -v ins="	SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" '
+    _pcr_had_no_trailing_nl=0
+    [ -n "$(tail -c1 "${PFB_PKG_CONF}" 2>/dev/null)" ] && _pcr_had_no_trailing_nl=1
+    if cp -p "${PFB_PKG_CONF}" "${_pcr_tmp}" 2>/dev/null \
+        && awk -v ins="	SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" '
             $0 == "PKG_ENV {" { seen_open = 1 }
             seen_open && !done && $0 == "}" { print ins; done = 1 }
             { print }
-        ' "${PFB_PKG_CONF}" > "${_pcr_tmp}" 2>/dev/null \
-        && mv "${_pcr_tmp}" "${PFB_PKG_CONF}" 2>/dev/null; then
-        printf '[%s] INFO: patched %s with the consented SSL_CA_CERT_PATH\n' "${name}" "${PFB_PKG_CONF}" >&2
+        ' "${PFB_PKG_CONF}" > "${_pcr_tmp}" 2>/dev/null; then
+        if [ "${_pcr_had_no_trailing_nl}" -eq 1 ]; then
+            printf '%s' "$(cat "${_pcr_tmp}" 2>/dev/null)" > "${_pcr_tmp}" 2>/dev/null
+        fi
+        if mv "${_pcr_tmp}" "${PFB_PKG_CONF}" 2>/dev/null; then
+            printf '[%s] INFO: patched %s with the consented SSL_CA_CERT_PATH\n' "${name}" "${PFB_PKG_CONF}" >&2
+        else
+            rm -f "${_pcr_tmp}" 2>/dev/null
+            printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_PKG_CONF}" >&2
+        fi
     else
         rm -f "${_pcr_tmp}" 2>/dev/null
         printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_PKG_CONF}" >&2
     fi
-    unset _pcr_tmp
+    unset _pcr_tmp _pcr_had_no_trailing_nl
     return 0
 }
 
