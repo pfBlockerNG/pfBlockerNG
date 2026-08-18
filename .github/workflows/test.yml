@@ -470,6 +470,10 @@ jobs:
           sudo locale-gen de_DE.UTF-8
           locale -a | grep -Eqi '^de_DE\.utf-?8$'
           LC_ALL=de_DE.UTF-8 locale -k LC_NUMERIC | grep -Fq 'decimal_point=","'
+          # The specs probe the locale through awk, not through locale(1): assert the
+          # same thing they do, so a libc that generates the locale but leaves awk
+          # dotted fails HERE with a reason instead of silently skipping them.
+          LC_ALL=de_DE.UTF-8 awk 'BEGIN { printf "%.2f", 1.5 }' | grep -q ','
 
       - name: Install shellspec
         # Pinned upstream release ASSET, verified by SHA-256 before anything is extracted;
@@ -755,6 +759,23 @@ jobs:
         uses: actions/checkout@v6
         with:
           persist-credentials: false
+
+      - name: Put bsdtar at /usr/bin/tar
+        # The appliance's /usr/bin/tar is bsdtar, which reads ZIP; Debian's is GNU tar,
+        # which does not. The ADR-45 archive cases and the TOP1M/GeoIP zip publication
+        # cases probe that exact path and SKIP when it cannot read a zip, so without this
+        # they vanish from the run while the suite still reads green (issue #2356).
+        # --no-rename plus an explicit mv, not --rename: dpkg-divert refuses to rename a
+        # file out of an Essential package, and the diversion keeps a future tar upgrade
+        # from overwriting the symlink.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libarchive-tools
+          sudo dpkg-divert --no-rename --divert /usr/sbin/tar --add /usr/bin/tar
+          sudo mv /usr/bin/tar /usr/sbin/tar
+          sudo ln -s bsdtar /usr/bin/tar
+          /usr/bin/tar --version | grep -q '^bsdtar'
+          tar --version | grep -q 'GNU tar'
 
       - name: Set up PHP ${{ matrix.php-version }}
         uses: shivammathur/setup-php@v2

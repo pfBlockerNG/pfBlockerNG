@@ -70,6 +70,16 @@ printf '%s|%s\n' "$PWD" "$*" >> "${FAKE_UV_LOG:-/dev/null}"
 exit "${FAKE_UV_EXIT:-0}"
 STUBEOF
     chmod +x "${WORK}/bin/uv"
+
+    # The leg preflights every tool it shells out to, and several are box-only (no
+    # qemu or iptables on a dev laptop, none of them in a CI container). Stub the
+    # presence of exactly those so these examples assert the SCRIPT's behaviour rather
+    # than the host's package list; the tools these examples actually invoke (git, jq,
+    # python3) stay real.
+    for _absent in qemu-system-x86_64 qemu-img iptables dig ssh; do
+        printf '#!/bin/sh\nexit 0\n' > "${WORK}/bin/${_absent}"
+        chmod +x "${WORK}/bin/${_absent}"
+    done
     PATH="${WORK}/bin:${PATH}"
     ORAS_ARGV_LOG="${WORK}/oras-argv"
     FAKE_UV_LOG="${WORK}/uv-argv"
@@ -432,8 +442,8 @@ STUBEOF
 
     When run sh -c "PATH='$NOUV_PATH' sh '$SCRIPT' --ref HEAD --no-two-vm"
     The status should equal 2
-    The stderr should include 'uv not found on this box'
-    The stderr should include 'uv sync --locked --group smoke'
+    The stderr should include 'missing required tools on this box'
+    The stderr should include 'uv'
   End
 
   It 'refuses a symlinked venv root without clearing its target'
