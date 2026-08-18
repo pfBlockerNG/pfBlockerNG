@@ -412,10 +412,13 @@ STUBEOF
   # binary (iptables), the venv driver (uv), and the process reaper the teardown calls
   # (pkill). A single-tool example proves the mechanism but not the LIST, so dropping an
   # entry from it would otherwise go unnoticed.
+  # Parametrised over a tool the box always had and one this migration added. Not over a
+  # tool that lives in /usr/bin: this example hides the tool by dropping every PATH entry
+  # carrying it, and on Linux /bin symlinks to /usr/bin, so that would take `sh` with it
+  # and the run would fail on a missing shell instead of on the preflight.
   Parameters
     uv
     iptables
-    pkill
   End
 
   It 'refuses to run at all when a required tool is missing from the box'
