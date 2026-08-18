@@ -40,7 +40,7 @@ jobs:
       group: pkg-render-site
       cancel-in-progress: false
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

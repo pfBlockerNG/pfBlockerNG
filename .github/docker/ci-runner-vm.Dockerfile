@@ -25,7 +25,7 @@
 # arm64, and pretending otherwise would trade a clear "no runner" error for a 40-minute
 # TCG timeout.
 
-ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:10
+ARG BASE_IMAGE=ghcr.io/pfblockerng/ci-runner:11
 FROM ${BASE_IMAGE}
 
 # Same role as in the base image: only the prebuilt-binary download below needs it.

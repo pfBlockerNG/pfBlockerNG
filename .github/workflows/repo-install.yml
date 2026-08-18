@@ -44,7 +44,7 @@ jobs:
     name: Gate (skip nightly if devel unchanged)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -90,7 +90,7 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -161,7 +161,7 @@ jobs:
     name: All repo-install legs passed (AND gate)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}

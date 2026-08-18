@@ -72,7 +72,7 @@ jobs:
     name: Read supported-version matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -105,7 +105,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -171,7 +171,7 @@ jobs:
     name: Test type checking (mypy)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -198,7 +198,7 @@ jobs:
     name: Ruff (lint + format)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -226,7 +226,7 @@ jobs:
     name: ShellCheck
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -327,7 +327,7 @@ jobs:
     name: actionlint (workflow files)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -386,7 +386,7 @@ jobs:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -473,7 +473,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -513,7 +513,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -561,7 +561,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -608,7 +608,7 @@ jobs:
     needs: read-matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -672,7 +672,7 @@ jobs:
     name: markdownlint
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -697,7 +697,7 @@ jobs:
     name: Widget JS unit tests (node --test)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -724,7 +724,7 @@ jobs:
     name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -781,7 +781,7 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_benchmarks }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -848,7 +848,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -951,7 +951,7 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -992,7 +992,7 @@ jobs:
     needs: [read-matrix, test, test-typing, ruff, shellcheck, actionlint, shell-tests, php-syntax, php-static-analysis, php-codesniffer, php-unit, markdownlint, widget-js-tests, webassets-vendor, ui-suite, coverage-pairing, comment-narration]
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
