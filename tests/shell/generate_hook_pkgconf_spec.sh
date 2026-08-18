@@ -51,15 +51,20 @@ _pc_box() {
     printf '2.8.1\n' > "${PFB_VERSION_FILE}"
     PFB_PKG_CONF="${_pcb_dir}/pkg.conf"
     PFB_CONFIG_XML="${_pcb_dir}/config.xml"
+    PFB_SSL_CA_CERT_PATH="${_pcb_dir}/ca-certs"
+    _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
+    PFB_EXPECTED_PATCHED="${_pcb_dir}/fixture-patched-with-ca.conf"
+    sed "s#/etc/ssl/certs#${PFB_SSL_CA_CERT_PATH}#" "${FIX}/plus_patched.conf" > "${PFB_EXPECTED_PATCHED}"
     export PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
-           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML
+           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
+           PFB_SSL_CA_CERT_PATH
     unset _pcb_dir
 }
 
 _pc_unset_box() {
     unset PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-          PFB_SSL_CA_CERT_PATH
+          PFB_SSL_CA_CERT_PATH PFB_EXPECTED_PATCHED
 }
 
 # Write a config.xml carrying the consent element with body $1 ("on" / "off" /
@@ -108,6 +113,10 @@ _pc_ca_dir_with_entry() {
     true > "$1/dummy.0"
 }
 
+_pc_mode() {
+    stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
 # ── CONSENT AXIS ────────────────────────────────────────────────────────────
 
 Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches plus_pinned.conf to plus_patched.conf'
@@ -130,7 +139,7 @@ Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches 
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "INFO"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -363,7 +372,7 @@ EOF
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "INFO"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -620,7 +629,7 @@ Describe 'pkgconf re-apply — consent value "On" (mixed case): patches'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "INFO"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -643,7 +652,7 @@ Describe 'pkgconf re-apply — consent value "ON" (upper case): patches'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "INFO"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -897,7 +906,7 @@ Describe 'pkgconf re-apply — running the hook twice is idempotent end to end'
     It 'the second run is identical to the first, both match plus_patched.conf'
       When run sh -c 'sh "${1}" onestart >/dev/null 2>&1; sh "${1}" onestart' -- "${HOOK}"
       The status should be success
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -1200,14 +1209,14 @@ Describe 'pkgconf re-apply — pkg.conf permission bits: preserved across the pa
     After  'cleanup'
 
     It 'before-state: pkg.conf mode is 0600'
-      The value "$(stat -c '%a' "${PFB_PKG_CONF}")" should equal 600
+      The value "$(_pc_mode "${PFB_PKG_CONF}")" should equal 600
     End
 
     It 'preserves the original permission bits after patching, exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "INFO"
-      The value "$(stat -c '%a' "${PFB_PKG_CONF}")" should equal 600
+      The value "$(_pc_mode "${PFB_PKG_CONF}")" should equal 600
     End
 End
 
@@ -1223,7 +1232,7 @@ Describe 'pkgconf re-apply — pkg.conf whose final brace carries no trailing ne
         printf '%s' "$(cat "${FIX}/plus_pinned.conf")" > "${PFB_PKG_CONF}"
         _pc_config_xml on
         _nl1_expected="${_nl1_dir}/expected-patched.conf"
-        printf '%s' "$(cat "${FIX}/plus_patched.conf")" > "${_nl1_expected}"
+        printf '%s' "$(cat "${PFB_EXPECTED_PATCHED}")" > "${_nl1_expected}"
     }
     cleanup() { rm -rf "${_nl1_dir}"; _pc_unset_box; unset _nl1_expected; }
     Before 'setup'
@@ -1517,7 +1526,7 @@ Describe 'pkgconf re-apply — hostile unrelated line survives byte-for-byte'
         {
             printf '%s\n' 'ABI=FreeBSD:16:amd64'
             printf '%s\n' 'HOSTILE="a $(rm -rf /) value" # comment; `backtick` & $VAR | pipe'
-            cat "${FIX}/plus_patched.conf" | tail -n +3
+            cat "${PFB_EXPECTED_PATCHED}" | tail -n +3
         } > "${_h1_expected}"
     }
     cleanup() { rm -rf "${_h1_dir}"; _pc_unset_box; unset _h1_expected; }
@@ -1558,7 +1567,7 @@ Describe 'pkgconf re-apply — a 5 MB pkg.conf still patches correctly'
         _pc_config_xml on
         _h2_expected="${_h2_dir}/expected-patched.conf"
         cat "${_h2_padding}" > "${_h2_expected}"
-        cat "${FIX}/plus_patched.conf" | tail -n +3 >> "${_h2_expected}"
+        cat "${PFB_EXPECTED_PATCHED}" | tail -n +3 >> "${_h2_expected}"
     }
     cleanup() { rm -rf "${_h2_dir}"; _pc_unset_box; unset _h2_padding _h2_expected; }
     Before 'setup'
@@ -1600,7 +1609,7 @@ Describe 'pkgconf re-apply — a pkg.conf path containing a space is handled'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "INFO"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
 
@@ -1630,6 +1639,6 @@ Describe 'pkgconf re-apply — a channel conf regenerates AND pkg.conf gets patc
       The stderr should include "INFO"
       The contents of file "${PFB_STABLE_CONF}" should include "pfblockerng-stable: {"
       The contents of file "${PFB_STABLE_CONF}" should not include "pending"
-      The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_patched.conf" && echo 0 || echo 1)" should equal 0
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
     End
 End
