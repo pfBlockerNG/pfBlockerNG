@@ -11,10 +11,10 @@ Describe 'run-gates.sh gates_for()'
   It 'maps a Python file to the four Python gates'
     Data "tests/test_x.py"
     When call gates_for
-    The line 1 of output should equal 'uv run pytest'
-    The line 2 of output should equal 'uv run ruff check .'
-    The line 3 of output should equal 'uv run ruff format --check .'
-    The line 4 of output should equal 'uv run mypy tests/'
+    The line 1 of output should equal 'uv run --locked pytest'
+    The line 2 of output should equal 'uv run --locked ruff check .'
+    The line 3 of output should equal 'uv run --locked ruff format --check .'
+    The line 4 of output should equal 'uv run --locked mypy tests/'
     The lines of output should equal 4
   End
 
@@ -24,7 +24,7 @@ Describe 'run-gates.sh gates_for()'
       #|src/b.php
     End
     When call gates_for
-    The line 1 of output should equal 'uv run python scripts/check_composer_vendor.py'
+    The line 1 of output should equal 'uv run --locked python scripts/check_composer_vendor.py'
     The line 2 of output should equal 'php -l src/a.inc'
     The line 3 of output should equal 'php -l src/b.php'
     The line 4 of output should equal 'vendor/bin/phpunit'
@@ -98,7 +98,7 @@ Describe 'run-gates.sh gates_for()'
       #|scripts/b.sh
     End
     When call gates_for
-    The output should include 'uv run pytest'
+    The output should include 'uv run --locked pytest'
     The output should include 'shellcheck scripts/b.sh'
   End
 
@@ -111,7 +111,7 @@ Describe 'run-gates.sh gates_for()'
   It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
     Data "my file.py"
     When call gates_for
-    The line 1 of output should equal 'uv run pytest'
+    The line 1 of output should equal 'uv run --locked pytest'
     The lines of output should equal 4
   End
 
@@ -121,7 +121,7 @@ Describe 'run-gates.sh gates_for()'
       #|scripts/ok.py
     End
     When call gates_for
-    The line 1 of output should equal 'uv run pytest'
+    The line 1 of output should equal 'uv run --locked pytest'
     The output should not include 'unsafe filename'
   End
 
@@ -178,7 +178,7 @@ Describe 'run-gates.sh Composer vendor guard'
     The status should equal 1
     The line 1 of output should equal 'version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)'
     The line 2 of output should equal 'remediation: composer install --no-interaction'
-    The output should include 'GATE FAIL: uv run python scripts/check_composer_vendor.py'
+    The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
     The output should not include 'GATE PASS: composer phpstan'
@@ -196,7 +196,7 @@ Describe 'run-gates.sh Composer vendor guard'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
     The output should include 'checker diagnostic OVERALL=0'
-    The output should include 'GATE FAIL: uv run python scripts/check_composer_vendor.py'
+    The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py'
     The output should include 'GATES: FAIL'
     The output should not include 'GATES: PASS'
   End
@@ -207,8 +207,8 @@ Describe 'run-gates.sh Composer vendor guard'
     rm -f "$stubdir/uv"
     When run sh -c "PATH='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha' --allow-missing"
     The status should equal 1
-    The output should include 'GATE FAIL: uv run python scripts/check_composer_vendor.py (TOOL-MISSING: uv)'
-    The output should not include 'GATE SKIP: uv run python scripts/check_composer_vendor.py'
+    The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py (TOOL-MISSING: uv)'
+    The output should not include 'GATE SKIP: uv run --locked python scripts/check_composer_vendor.py'
     The output should not include 'GATE PASS: php -l src/a.php'
     The output should not include 'GATE PASS: vendor/bin/phpunit'
     The output should not include 'GATE PASS: composer phpstan'
@@ -226,7 +226,7 @@ Describe 'run-gates.sh Composer vendor guard'
     The output should not include 'checker stdout'
     The output should not include 'checker stderr'
     The stderr should equal ''
-    The output should include 'GATE PASS: uv run python scripts/check_composer_vendor.py'
+    The output should include 'GATE PASS: uv run --locked python scripts/check_composer_vendor.py'
     The output should include 'GATE PASS: php -l src/a.php'
     The output should include 'GATE PASS: vendor/bin/phpunit'
     The output should include 'GATE PASS: composer phpstan'

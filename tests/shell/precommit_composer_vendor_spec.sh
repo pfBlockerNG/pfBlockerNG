@@ -48,4 +48,30 @@ Describe '.githooks/pre-commit Composer vendor guard'
     Assert [ -e "$php_marker" ]
     Assert [ -e "$phpcs_marker" ]
   End
+
+  It 'reports php -l as SKIPPED, not passed, when php is absent'
+    # The host gate is only honest if an absent tool reads as a skip. Reporting it as a
+    # pass would make a workstation without php look like one that linted cleanly.
+    for interpreter in python python3; do
+      printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$checker_marker" > "$stubdir/$interpreter"
+    done
+    chmod +x "$stubdir/python" "$stubdir/python3"
+    rm -f "$stubdir/php"
+    NOPHP_PATH=''
+    _oldifs="$IFS"; IFS=':'
+    for _d in $PATH; do
+      [ -x "${_d}/php" ] && continue
+      NOPHP_PATH="${NOPHP_PATH:+${NOPHP_PATH}:}${_d}"
+    done
+    IFS="$_oldifs"
+
+    When run sh -c "cd '$repo' && PATH='$NOPHP_PATH' sh .githooks/pre-commit"
+    The status should equal 0
+    # The hook runs to completion (its later gates still report) and exits 0, while the
+    # interpreter is never invoked: an absent tool is a skip, not a failure and not a
+    # silent pass. The sibling example above proves php -l DOES run when php is present,
+    # so this cannot pass by the PHP block never being reached.
+    The output should include '[pre-commit] comment-narration'
+    Assert [ ! -e "$php_marker" ]
+  End
 End

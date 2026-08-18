@@ -46,8 +46,8 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m hostile
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      The output should include 'uv run pytest'
-      The output should include 'uv run ruff check .'
+      The output should include 'uv run --locked pytest'
+      The output should include 'uv run --locked ruff check .'
       The stderr should equal ''
     End
   End
@@ -117,8 +117,8 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m python
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      The line 1 of output should equal 'uv run pytest'
-      The line 2 of output should equal 'uv run ruff check .'
+      The line 1 of output should equal 'uv run --locked pytest'
+      The line 2 of output should equal 'uv run --locked ruff check .'
     End
 
     It 'leaves the shellspec command substitution unexpanded for the gate shell to resolve'
@@ -147,8 +147,8 @@ Describe 'run-gates.sh over a C-quoted path'
       The status should equal 0
       The output should include 'GATES: PASS'
       The output should not include 'TOOL-MISSING'
-      The contents of file "$repo/uv.log" should include 'UV run pytest'
-      The contents of file "$repo/uv.log" should include 'UV run mypy tests/'
+      The contents of file "$repo/uv.log" should include 'UV run --locked pytest'
+      The contents of file "$repo/uv.log" should include 'UV run --locked mypy tests/'
       rm -rf "$stub"
     End
   End

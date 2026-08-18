@@ -218,6 +218,13 @@ _oras_pull() {
     _op_ref="$1"
     _op_dir="$2"
     _op_tag="$3"
+    # Empty the target first. tests/smoke/conftest.py requires EXACTLY ONE *.qcow2 per
+    # image dir, and the names carry the variant and version (pfSense-CE_2.8.qcow2,
+    # pfSense-Plus_26.03.qcow2, civm_v1.qcow2), so a run against a different variant or
+    # version would leave two behind and strand the box for every later run -- including
+    # ones that would otherwise pass. Re-pulling the same tag overwrites in place, which
+    # is why only a switch exposes it.
+    rm -rf "$_op_dir"
     mkdir -p "$_op_dir"
     if ! pfb_lan_registry_active; then
         case "$_op_ref" in

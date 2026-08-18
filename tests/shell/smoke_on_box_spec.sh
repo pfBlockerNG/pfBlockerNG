@@ -260,6 +260,14 @@ STUBEOF
     PFB_ONBOX_IMAGES_DIR="${FAKE_ROOT}/out/smoke-images"
     export SMOKE_SSH_KEY PFB_LAN_REGISTRY SMOKE_GHCR_TOKEN PFB_ONBOX_IMAGES_DIR
 
+    # A qcow2 left by an earlier run of a DIFFERENT variant or version. The names carry
+    # both, so it would not be overwritten -- and tests/smoke/conftest.py refuses a
+    # directory holding more than one, which strands the box for every later run. The
+    # count=1 assertions below are what pin the emptying.
+    mkdir -p "${FAKE_ROOT}/out/smoke-images/pfsense" "${FAKE_ROOT}/out/smoke-images/civm"
+    true > "${FAKE_ROOT}/out/smoke-images/pfsense/pfSense-Plus_26.03.qcow2"
+    true > "${FAKE_ROOT}/out/smoke-images/civm/civm_v0.qcow2"
+
     cat > "${WORK}/bin/pkill" <<'STUBEOF'
 #!/bin/sh
 exit 0
@@ -400,9 +408,17 @@ STUBEOF
     The contents of file "$FAKE_UV_LOG" should equal "${FAKE_ROOT}|sync --locked --group smoke"
   End
 
-  It 'refuses to run at all when uv is not on the box'
-    # Without uv the pinned harness cannot be materialised; a run that continued would
-    # grade against whatever python the box happens to carry.
+  # Parametrised over one tool the box always had (iptables) and one this migration
+  # added (uv): a single-tool example proves the mechanism but not the LIST, so dropping
+  # an entry from it would otherwise go unnoticed.
+  Parameters
+    uv
+    iptables
+  End
+
+  It 'refuses to run at all when a required tool is missing from the box'
+    # Without the tool a run that continued would grade against whatever the box happens
+    # to carry, or fail far later with a worse message.
     printf '0\n' > "${WORK}/port-floor"
 
     cat > "${FAKE_ROOT}/scripts/lib/lan-registry.sh" <<'STUBEOF'
@@ -429,13 +445,13 @@ exit 0
 STUBEOF
     chmod +x "${WORK}/bin/pkill"
 
-    # Drop every PATH entry that carries a uv, the stub's included: a bare
+    # Drop every PATH entry that carries the tool, the stub's included: a bare
     # "$WORK/bin only" PATH would fail on a missing `sh` instead, which proves nothing.
-    rm -f "${WORK}/bin/uv"
+    rm -f "${WORK}/bin/$1"
     NOUV_PATH=''
     _oldifs="$IFS"; IFS=':'
     for _d in $PATH; do
-      [ -x "${_d}/uv" ] && continue
+      [ -x "${_d}/$1" ] && continue
       NOUV_PATH="${NOUV_PATH:+${NOUV_PATH}:}${_d}"
     done
     IFS="$_oldifs"
@@ -443,7 +459,7 @@ STUBEOF
     When run sh -c "PATH='$NOUV_PATH' sh '$SCRIPT' --ref HEAD --no-two-vm"
     The status should equal 2
     The stderr should include 'missing required tools on this box'
-    The stderr should include 'uv'
+    The stderr should include "$1"
   End
 
   It 'refuses a symlinked venv root without clearing its target'

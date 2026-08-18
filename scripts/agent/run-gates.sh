@@ -80,10 +80,10 @@ gates_for() {
 		out="${out}printf 'unsafe filename in diff\\n' >&2; false${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -q '\.py$'; then
-		out="${out}uv run pytest${nl}uv run ruff check .${nl}uv run ruff format --check .${nl}uv run mypy tests/${nl}"
+		out="${out}uv run --locked pytest${nl}uv run --locked ruff check .${nl}uv run --locked ruff format --check .${nl}uv run --locked mypy tests/${nl}"
 	fi
 	if printf '%s\n' "$files" | grep -Eq '\.(php|inc)$'; then
-		out="${out}uv run python scripts/check_composer_vendor.py${nl}"
+		out="${out}uv run --locked python scripts/check_composer_vendor.py${nl}"
 		for f in $(printf '%s\n' "$files" | grep -E '\.(php|inc)$'); do
 			out="${out}php -l $f${nl}"
 		done

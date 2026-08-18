@@ -196,6 +196,62 @@ FAKEEOF
       The output should include 'sh scripts/smoke-on-box.sh'
       The output should not include 'docker run'
     End
+
+    It 'checks out only the paths a smoke leg reads'
+      # src/ (the .pkg build), scripts/ (the harness), stubs/python/ (root conftest's
+      # unboundmodule import), tests/smoke/ (the suite) and pkg-site/ (the channel-installer
+      # cases render it through gen_landing.py --site-tree, issue #2450). Widening this to a
+      # full checkout costs 34 MB against 13 MB; narrowing it silently starves a leg.
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke pkg-site'
+    End
+
+    It 'keeps a space-bearing filter as ONE argument through the exec env handoff'
+      # --channel cannot carry metacharacters: local-smoke.sh whitelists it to
+      # stable|testing|edge|nightly and rejects anything else, which is stronger than
+      # quoting. --filter is the free-form value (a pytest -k expression), so it is the one
+      # that must survive the remote shell's word-splitting unsplit -- the bootstrap is
+      # re-parsed by ssh, so the _sq single-quoting is what holds it together.
+      When call run_and_diag --ref dummy --filter 'a and not b'
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include "--filter 'a and not b'"
+    End
+
+    It 'passes caller smoke values across SSH into the exec env prefix'
+      # These reach the leg ONLY through the bootstrap's `exec env VAR='...'` prefix: ssh
+      # carries no environment of its own, so a dropped assignment does not fail, it makes
+      # the leg silently grade against its own defaults.
+      smoke_values() {
+        SMOKE_REPO_LIVE_URL='https://example.test/pkg/docs/edge'
+        SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'
+        SMOKE_REPO_EXPECTED_SOURCE_SHA='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        SMOKE_REPO_EXPECTED_VERSION='4.0.0.a21'
+        SMOKE_REPO_EXPECTED_CHANNEL='edge'
+        SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+        SMOKE_NIGHTLY_EXPECTED_VERSION='20260810_2'
+        SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'
+        CIVM_REF='ghcr.io/example/civm:v2'
+        export SMOKE_REPO_LIVE_URL SMOKE_NIGHTLY_LIVE_URL
+        export SMOKE_REPO_EXPECTED_SOURCE_SHA SMOKE_REPO_EXPECTED_VERSION SMOKE_REPO_EXPECTED_CHANNEL
+        export SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA SMOKE_NIGHTLY_EXPECTED_VERSION
+        export SMOKE_PFSENSE_REF CIVM_REF
+      }
+      BeforeCall 'smoke_values'
+      When call run_and_diag --ref dummy
+      The line 1 of output should equal 'exit=0'
+      The output should include 'exec env'
+      The output should include "SMOKE_PFSENSE_REF='ghcr.io/example/pfsense-plus:26.03'"
+      The output should include "CIVM_REF='ghcr.io/example/civm:v2'"
+      The output should include "SMOKE_REPO_LIVE_URL='https://example.test/pkg/docs/edge'"
+      The output should include "SMOKE_NIGHTLY_LIVE_URL='https://example.test/pkg/docs/nightly'"
+      The output should include "SMOKE_REPO_EXPECTED_SOURCE_SHA='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'"
+      The output should include "SMOKE_REPO_EXPECTED_VERSION='4.0.0.a21'"
+      The output should include "SMOKE_REPO_EXPECTED_CHANNEL='edge'"
+      The output should include "SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'"
+      The output should include "SMOKE_NIGHTLY_EXPECTED_VERSION='20260810_2'"
+    End
   End
 
   # ── --git-remote (issue #2497): per-run git source, default origin ────────── #
