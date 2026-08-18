@@ -5,18 +5,10 @@
 every later pass in the same loop returns at "No Updates required." without reaching
 ``pfb_update_check()``, so nothing the first pass persisted is ever read back.
 
-That is what made the two ADR-42 Phase-3 conditional-GET cases fail: measured on a live
-guest, every request the mock feed server saw was a BARE GET, and the feed was evaluated
-exactly once::
-
-    23:06:03 [ smokep3lm304 ]  Downloading update .. 200 OK.          <- Force ingest
-    23:06:05 [ smokep3lm304 ] ( content unchanged ) Update not required   <- cron pass 1
-    23:06:05 / :05 / :06 / :07   No Updates required.                 <- passes 2-4, no probe
-
-The validator itself was written correctly (``dnsblorig/<header>.orig.lastmod`` held the
-mock's fixed epoch), and re-arming the reservation each pass turned both cases green with
-``src/`` untouched — ``If-None-Match`` earned ``304 via=etag`` and ``If-Modified-Since``
-earned ``304 via=ims``. The defect was in the test loop, not in the product.
+A loop that repeats a pass without re-arming therefore exercises ONE pass however high its
+cap reads. The ADR-42 Phase-3 conditional-GET cases depend on the span: the detector
+persists a validator on a 200 and can only send it on a later probe, so an unre-armed loop
+leaves the conditional request unsent and the 304 unreachable.
 
 Hermetic coverage, because the live tier cannot be relied on to catch a re-introduction
 (smoke dispatch defaults to ``scope=impacted``), in three groups:
@@ -26,9 +18,8 @@ Hermetic coverage, because the live tier cannot be relied on to catch a re-intro
 * **What the rule can see** — crafted rows for ``for``/``while``, positional and keyword
   verbs, dotted call chains, and a verb the AST cannot read (which counts as a pass, so the
   rule fails closed rather than waving a refactor through).
-* **What the rule rejects** — crafted rows that must be flagged. Without these the rule is
-  proven only by today's file contents, and disarming its re-arm detection leaves every row
-  green, which is the tripwire passing for the wrong reason.
+* **What the rule rejects** — crafted rows that must be flagged, so the rule is not proven
+  merely by what the tree happens to contain.
 """
 
 from __future__ import annotations
@@ -72,15 +63,14 @@ def _leaf_name(node: ast.AST) -> str:
 
 
 # helpers.reload(vm, scope, ...) — the verb rides the second positional or the `scope`
-# keyword. Other keywords (`timeout=`, ...) are NOT verb candidates: reading every keyword
-# by value made `reload(vm, "update", timeout=timeout)` undecidable, which would have
-# spuriously flagged an ordinary call the first time someone wrapped one in a loop.
+# keyword. Other keywords (`timeout=`, ...) are NOT verb candidates: treating them as such
+# makes `reload(vm, "update", timeout=timeout)` undecidable and flags an ordinary call.
 _VERB_KEYWORD = "scope"
 
 
 def _verb_args(call: ast.Call) -> list[ast.expr]:
     """The expressions that can carry the verb, in the order the rule should weigh them."""
-    positional = [a for a in call.args[1:2]]
+    positional = list(call.args[1:2])
     keyword = [kw.value for kw in call.keywords if kw.arg == _VERB_KEYWORD]
     return positional + keyword
 
@@ -276,9 +266,8 @@ def test_detector_sees_every_repeat_shape(label: str, body: str, detected: bool)
 def test_rule_rejects_what_it_must(label: str, body: str, violations: int) -> None:
     """The rule's REJECTION half, pinned.
 
-    Review found that disarming ``_rearms()`` to return ``True`` left every row green: the
-    rule was proven only by today's real-file content, which is the tripwire being green for
-    the wrong reason. These rows fail if the rule stops rejecting.
+    Without these rows the rule is proven only by what the tree happens to contain: a
+    re-arm detector that never says no still reports every file clean.
     """
     assert len(_rule_violations_in(_wrap(body))) == violations, label
 
@@ -298,9 +287,8 @@ def test_rule_rejects_what_it_must(label: str, body: str, violations: int) -> No
 def test_rule_covers_scopes_outside_a_plain_def(label: str, source: str, violations: int) -> None:
     """Parsed RAW, not through ``_wrap()``.
 
-    Wrapping every crafted body in ``def t(vm):`` made the ``async def`` and module-level
-    rows vacuous — the outer function's walk reached the loop either way, so dropping those
-    scopes from the sweep broke nothing. These rows fail if the scope handling is narrowed.
+    ``_wrap()`` nests its body in a ``def``, whose walk reaches the loop whatever scope
+    holds it — so only raw sources exercise the ``async def`` and module-level handling.
     """
     assert len(_rule_violations_in(ast.parse(source))) == violations, label
 
