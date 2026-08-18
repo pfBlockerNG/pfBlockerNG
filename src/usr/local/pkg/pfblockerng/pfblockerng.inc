@@ -5144,6 +5144,17 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
+/*
+ * The box's own CA locations, handed to every networked pkg call we make (issue #2514).
+ * On Plus, pfSense-repo-setup pins SSL_CA_CERT_FILE to a Netgate-only bundle through the
+ * PKG_ENV block in pkg.conf, which libpkg applies with setenv(key, value, 1) — so a value
+ * we pass for THAT variable is overwritten and lost. PKG_ENV never sets SSL_CA_CERT_PATH,
+ * and libfetch loads both into one store via
+ * SSL_CTX_load_verify_locations(ctx, ca_cert_file, ca_cert_path), so the path survives.
+ */
+define('PFB_SSL_CA_CERT_PATH', '/etc/ssl/certs');
+define('PFB_SSL_CA_CERT_FILE', '/etc/ssl/cert.pem');
+
 if (!defined('PFB_PYTHON_WRAPPER')) {
 	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
 }
@@ -5299,6 +5310,34 @@ function pfb_pkg_newest_version(array $versions): string {
  *   - DNS is unavailable (get_dnsavailable()) — never stall on a network read;
  *   - the rquery yields nothing (repo/conf absent).
  */
+/*
+ * Shell-ready `VAR=value ` assignments placing the box's CA locations in front of a pkg
+ * command, or '' when there is nothing safe to point at. Splice it BEFORE any wrapper so
+ * the assignments apply to the whole pipeline and are inherited by pkg itself.
+ *
+ * The bundle rides along with the path because libfetch stops calling
+ * SSL_CTX_set_default_verify_paths() as soon as EITHER variable is set: on a box with no
+ * pin, a path-only export would shrink the store to a directory FreeBSD ships empty until
+ * certctl rehash populates it. The bundle is required to be a NON-EMPTY REGULAR FILE
+ * because X509_STORE_load_locations() reads it eagerly and abandons the path when that
+ * read fails, so an empty or non-file bundle would cost the directory too. An empty
+ * argument opts that half out, mirroring install.sh's PFB_SSL_CA_CERT_* knobs.
+ */
+function pfb_pkg_ca_env_prefix(string $ca_path = PFB_SSL_CA_CERT_PATH, string $ca_file = PFB_SSL_CA_CERT_FILE): string {
+
+	$parts = array();
+	if ($ca_path !== '' && is_dir($ca_path)) {
+		$parts[] = 'SSL_CA_CERT_PATH=' . escapeshellarg($ca_path);
+	}
+	if ($ca_file !== '' && is_file($ca_file) && is_readable($ca_file) && (int) @filesize($ca_file) > 0) {
+		$parts[] = 'SSL_CA_CERT_FILE=' . escapeshellarg($ca_file);
+	}
+	if ($parts === array()) {
+		return '';
+	}
+	return implode(' ', $parts) . ' ';
+}
+
 function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	if ($pkgname === '' || $reponame === '') {
 		return '';
@@ -5314,12 +5353,16 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
+	// Both commands below open a socket, so both carry the CA locations (issue #2514). The
+	// prefix leads so the assignments cover timeout(1) and are inherited by pkg; the local
+	// `pkg query` reads elsewhere in this file never fetch and are deliberately untouched.
+	$ca = pfb_pkg_ca_env_prefix();
 	// Forced catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
 	// -f is required: Pages/file:// catalogs can keep an unchanged mtime/etag (issue #2379).
-	exec("{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
+	exec("{$ca}{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
 	$out = array();
 	$ret = -1;
-	exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	exec("{$ca}{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	if ($ret !== 0 || $out === array()) {
 		return '';
 	}
