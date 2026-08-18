@@ -320,6 +320,7 @@ def _run_install(
         "PFB_TEST_ROOT": root,
         **(extra_env or {}),
     }
+    env.pop("SSL_CA_CERT_PATH", None)
     if update_fails:
         env["PFB_STUB_UPDATE_FAIL"] = "1"
     if version_t_broken:
@@ -1083,7 +1084,7 @@ def test_every_pkg_call_exports_the_system_ca_path() -> None:
         proc = _run_install(root, "stable")
         assert proc.returncode == 0, proc.stderr
 
-        seen = _pkg_ca_path_capture(root).read_text().split()
+        seen = _pkg_ca_path_capture(root).read_text().splitlines()
         assert seen, "no pkg calls were made — the run cannot prove the export"
         assert set(seen) == {str(ca_dir)}, (
             f"expected every pkg call to export SSL_CA_CERT_PATH={ca_dir}, saw {sorted(set(seen))}"
@@ -1098,7 +1099,7 @@ def test_absent_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
         proc = _run_install(root, "stable")
         assert proc.returncode == 0, proc.stderr
 
-        seen = _pkg_ca_path_capture(root).read_text().split()
+        seen = _pkg_ca_path_capture(root).read_text().splitlines()
         assert seen, "no pkg calls were made — the run cannot prove the guard"
         assert set(seen) == {"<unset>"}, f"expected SSL_CA_CERT_PATH unset, saw {sorted(set(seen))}"
 
@@ -1112,5 +1113,6 @@ def test_ca_path_is_overridable() -> None:
         proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_PATH": str(override)})
         assert proc.returncode == 0, proc.stderr
 
-        seen = _pkg_ca_path_capture(root).read_text().split()
+        seen = _pkg_ca_path_capture(root).read_text().splitlines()
+        assert seen, "no pkg calls were made — the run cannot prove the override"
         assert set(seen) == {str(override)}, f"override ignored, saw {sorted(set(seen))}"
