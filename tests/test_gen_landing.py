@@ -1321,6 +1321,43 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
     assert page.count("not yet published") == 4
 
 
+def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp_path: Path) -> None:
+    """Landing and browse pages use the main site's chrome while package channels
+    retain their existing blue, amber, purple, and red status cues."""
+    page = gl.render_page(
+        "https://pfblockerng.github.io/pkg",
+        [],
+        _stub_conf,
+        _fixture_site_tree("https://pfblockerng.github.io/pkg"),
+    )
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    listing = gl.render_browse_root(str(docs), {})
+
+    for rendered in (page, listing):
+        assert '<link rel="stylesheet" href="https://pfblockerng.com/assets/site.css">' in rendered
+        assert '<link rel="icon" href="https://pfblockerng.com/assets/logo.svg" type="image/svg+xml">' in rendered
+        assert '<a class="skip-link" href="#main-content">Skip to content</a>' in rendered
+        assert '<header class="site-header">' in rendered
+        assert '<a class="brand" href="https://pfblockerng.com/" aria-label="pfBlockerNG home">' in rendered
+        assert '<nav class="header-nav" aria-label="Primary">' in rendered
+        assert '<a href="https://pkg.pfblockerng.com/" aria-current="page">Packages</a>' in rendered
+        assert '<main id="main-content" class="pkg-shell">' in rendered
+        assert '<footer class="site-footer">' in rendered
+
+    assert '<section class="pkg-hero">' in page
+    assert '<p class="eyebrow">Official package repository</p>' in page
+    assert '<div class="card stable">' in page
+    assert "--stable:#2f81f7" in page
+    assert "--testing:#d29922" in page
+    assert "--edge:#a371f7" in page
+    assert "--nightly:#f85149" in page
+    assert ".card.stable{--channel:var(--stable)}" in page
+    assert ".card.testing{--channel:var(--testing)}" in page
+    assert ".card.edge{--channel:var(--edge)}" in page
+    assert ".card.nightly{--channel:var(--nightly)}" in page
+
+
 def test_render_page_shows_latest_and_empty_stable() -> None:
     """The page splits packages into per-edition tables; stable (absent here) is
     empty-stated in its card."""
@@ -1391,11 +1428,11 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
         < page.index('"card edge"')
         < page.index('"card nightly"')
     )
-    assert ".card.stable{border-color:var(--acc)}" in page
-    assert ".card.testing{border-color:var(--warn)}" in page
-    assert ".card.edge{border-color:var(--edge)}" in page
-    assert ".card.nightly{border-color:var(--red)}" in page
-    assert ".card.nightly .badge{border-color:var(--red);color:var(--red)}" in page
+    assert ".card.stable{--channel:var(--stable)}" in page
+    assert ".card.testing{--channel:var(--testing)}" in page
+    assert ".card.edge{--channel:var(--edge)}" in page
+    assert ".card.nightly{--channel:var(--nightly)}" in page
+    assert ".badge{display:inline-block" in page and "color:var(--channel)" in page
     # The catalog-trees list is replaced by a SINGLE link to the folder-navigable browse page.
     assert '<a class="browse" href="./browse.html">' in page
     assert "Browse the repository" in page
@@ -3011,8 +3048,10 @@ def test_main_production_shape_with_real_pkg_site_and_matrix(tmp_path: Path, mon
     assert rc == 0
     assert (site / "install.sh").is_file()
     assert (site / ".nojekyll").is_file()
+    assert (site / "CNAME").read_text() == "pkg.pfblockerng.com\n"
     assert (site / "index.html").is_file()
     assert (site / "browse.html").is_file()
+    assert 'href="./CNAME"' not in (site / "browse.html").read_text()
 
 
 # ── Determinism: two renders of the same input are byte-identical (issue #2450) ──
