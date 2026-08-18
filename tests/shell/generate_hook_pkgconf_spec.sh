@@ -52,6 +52,7 @@ _pc_box() {
     PFB_PKG_CONF="${_pcb_dir}/pkg.conf"
     PFB_CONFIG_XML="${_pcb_dir}/config.xml"
     PFB_PKG_DIRTY="${_pcb_dir}/pkg.dirty"
+    PFB_UPGRADE_LOCK="${_pcb_dir}/pfSense-upgrade.lock"
     PFB_SSL_CA_CERT_PATH="${_pcb_dir}/ca-certs"
     _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
     PFB_SSL_CA_CERT_FILE="${_pcb_dir}/netgate-ca.pem"
@@ -64,14 +65,15 @@ _pc_box() {
         "${FIX}/plus_patched.conf" > "${PFB_EXPECTED_PATCHED}"
     export PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
            PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-           PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY
+           PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_UPGRADE_LOCK
     unset _pcb_dir
 }
 
 _pc_unset_box() {
     unset PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-          PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_SSL_CA_CERT_FILE PFB_PINNED PFB_EXPECTED_PATCHED
+          PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_UPGRADE_LOCK \
+          PFB_SSL_CA_CERT_FILE PFB_PINNED PFB_EXPECTED_PATCHED
 }
 
 # Write a config.xml carrying the consent element with body $1 ("on" / "off" /
