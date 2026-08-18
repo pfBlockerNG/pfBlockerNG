@@ -46,7 +46,7 @@ jobs:
     name: Resolve the published tag
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -162,7 +162,7 @@ jobs:
     name: Stage the pkg catalogue
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -302,7 +302,7 @@ jobs:
     name: Prepare the live-install gate matrix
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -418,7 +418,7 @@ jobs:
     name: Promote the pkg catalogue
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/pfblockerng/ci-runner:10
+      image: ghcr.io/pfblockerng/ci-runner:11
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
