@@ -701,7 +701,7 @@ class TestQueryWatcherLoop:
         P.pfb["pfb_py_query_reply"] = h.reply_path + ".missing/reply"
         h.start()
         h.publish_and_wait_consumed({"id": "write-fail", "domain": "clean.uuidquery2003.com", "qtype": "A"})
-        assert attempted.wait(3.0), "the watcher never attempted the failing reply write"
+        assert attempted.wait(3.0), "stuck/environment: the watcher never attempted the failing reply write"
         with pytest.raises(RuntimeError, match="stuck/environment"):
             h.wait_reply("write-fail", timeout=0)
 
