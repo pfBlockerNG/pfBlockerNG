@@ -116,8 +116,8 @@ final class PkgCaEnvPrefixTest extends TestCase
 
 	public function testUnreadableBundleIsRefusedButTheDirectoryStillExports(): void
 	{
-		if (posix_getuid() === 0) {
-			$this->markTestSkipped('root reads mode-0000 files, so the guard cannot be observed as root');
+		if (!function_exists('posix_getuid') || posix_getuid() === 0) {
+			$this->markTestSkipped('root reads mode-0000 files, and without ext-posix the uid is unknown');
 		}
 		$dir = $this->seedDir();
 		$file = $this->seedBundle();
@@ -221,6 +221,12 @@ final class PkgCaEnvPrefixTest extends TestCase
 		);
 		// Inspect EVERY exec( site, not just the double-quoted ones: reading only string
 		// literals would let `$cmd = "..."; exec($cmd);` route around the prefix.
+		//
+		// This pins spelling, deliberately: renaming $ca, reformatting the call across lines, or
+		// writing the token exec( in a comment all turn it red. That is the price of a source
+		// check, and it is the cheaper half of the trade while pkg cannot be intercepted here.
+		// It covers exec( only — system(), passthru() and backticks would pass unseen, and no
+		// call site in this function uses them.
 		$offset = 0;
 		$sites = 0;
 		while (($at = strpos($body, 'exec(', $offset)) !== false) {
