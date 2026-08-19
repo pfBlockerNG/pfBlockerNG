@@ -157,6 +157,17 @@ row('foreign and duplicate CA paths never report owned success', static function
 	check(file_get_contents($pkgconf) === $duplicate, 'duplicate path bytes preserved');
 });
 
+row('notice signature detects same-metadata content rewrites', static function () use ($root): void {
+	$file = $root . '/signature.conf';
+	file_put_contents($file, 'AAAA');
+	touch($file, 1000000000);
+	$first = pfb_pkgconf_ca_notice_signature($file);
+	file_put_contents($file, 'BBBB');
+	touch($file, 1000000000);
+	$second = pfb_pkgconf_ca_notice_signature($file);
+	check($first !== $second, 'same inode, mtime, and size still changes signature');
+});
+
 function remove_tree(string $path): void
 {
 	if (!is_dir($path)) {
