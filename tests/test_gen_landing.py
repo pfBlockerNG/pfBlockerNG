@@ -1346,6 +1346,8 @@ def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp
         assert '<a href="https://pkg.pfblockerng.com/" aria-current="page">Packages</a>' in rendered
         assert '<main id="main-content" class="pkg-shell">' in rendered
         assert '<footer class="site-footer">' in rendered
+        assert "@media(max-width:820px){.cards{grid-template-columns:1fr}" in rendered
+        assert "@media(prefers-color-scheme:dark){.card{" in rendered
 
     assert '<section class="pkg-hero">' in page
     assert '<p class="eyebrow">Official package repository</p>' in page
@@ -1361,8 +1363,6 @@ def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp
     assert ".card h3{margin:0 0 .15rem;color:var(--ink)" in page
     assert "border-color:var(--channel);color:var(--ink)" in page
     assert ".warn{color:var(--ink);font-weight:700}" in page
-    assert "@media(max-width:820px){.cards{grid-template-columns:1fr}" in page
-    assert "@media(prefers-color-scheme:dark){.card{" in page
 
 
 def test_render_page_shows_latest_and_empty_stable() -> None:
