@@ -10802,6 +10802,7 @@ function pfb_pkg_argv_subcommand(array $argv): string {
 		case 'upgrade':
 			return 'upgrade';
 		case 'install':
+		case 'add':
 			// -f/--force among the COMMAND flags => a forced reinstall.
 			for ($j = $i + 1; $j < $n; $j++) {
 				$f = (string) $argv[$j];
@@ -10847,8 +10848,15 @@ function pfb_parse_pkg_operation(array $ps_lines, int $start_pid): string {
 		list($ppid, $argv) = $procs[$pid];
 
 		// $argv always has >= 1 element (the count()<3 guard above skips shorter rows).
-		$bin = basename((string) $argv[0]);
-		if ($bin === 'pkg' || $bin === 'pkg-static') {
+		$bin = (string) $argv[0];
+		if (in_array($bin, array(
+			'pkg',
+			'pkg-static',
+			'/usr/local/sbin/pkg',
+			'/usr/local/sbin/pkg-static',
+			'/usr/sbin/pkg',
+			'/usr/sbin/pkg-static',
+		), TRUE)) {
 			$op = pfb_pkg_argv_subcommand($argv);
 			if ($op !== '') {
 				return $op;
@@ -10890,23 +10898,27 @@ function pfb_pkg_operation(): string {
  * reinstall/upgrade, but with a DIFFERENT pkg operation: a real uninstall is `pkg delete` ->
  * 'delete'; the GUI Update / `pkg upgrade` / a forced reinstall is `pkg install -f` / `pkg upgrade`
  * -> 'install'|'reinstall'|'upgrade'. So tear down ONLY on a delete; keep pfBlockerNG live across a
- * package upgrade/reinstall (its resync re-applies). An unrecognised/undetectable op ('') FAILS SAFE
- * to teardown.
+ * package upgrade/reinstall (its resync re-applies). An unrecognised operation preserves state:
+ * destructive teardown requires positive evidence of `pkg delete`.
  */
 function pfb_pkg_op_tears_down(string $op): bool {
-	return $op === 'delete' || $op === '';
+	return $op === 'delete';
 }
 
 
 // Function to De-Install pfBlockerNG
-function pfblockerng_php_pre_deinstall_command() {
+function pfblockerng_php_pre_deinstall_command(?callable $operation = NULL) {
 	require_once('config.inc');
 	global $g, $pfb;
 
 	// #697: tear down ONLY on a genuine removal; keep pfBlockerNG live across a package upgrade.
 	// A non-delete operation skips all disable/teardown mutation; the package's post-install
 	// resync re-applies the package and the existing configuration remains live.
-	$pfb_pkg_op = pfb_pkg_operation();
+	if ($operation === NULL) {
+		$pfb_pkg_op = pfb_pkg_operation();
+	} else {
+		$pfb_pkg_op = $operation();
+	}
 	if (!pfb_pkg_op_tears_down($pfb_pkg_op)) {
 		update_status("Keeping pfBlockerNG active across the package {$pfb_pkg_op} (not a removal).\n");
 		return;

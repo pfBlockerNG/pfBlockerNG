@@ -10,6 +10,12 @@ if (!is_string($source)) {
 }
 
 $failures = 0;
+$status_messages = [];
+
+function update_status(string $message): void
+{
+	$GLOBALS['status_messages'][] = $message;
+}
 
 function row(string $name, callable $test): void
 {
@@ -83,6 +89,8 @@ row('argv grammar classifies package operations', static function (): void {
 		[['pkg', 'install', '-f'], 'reinstall'],
 		[['pkg', 'install', '--force'], 'reinstall'],
 		[['pkg', 'install', '-fy'], 'reinstall'],
+		[['pkg', 'add'], 'install'],
+		[['pkg', 'add', '-f', '/tmp/pfSense-pkg-pfBlockerNG.pkg'], 'reinstall'],
 		[['pkg', 'upgrade'], 'upgrade'],
 		[['pkg', 'delete'], 'delete'],
 		[['pkg', 'remove'], 'delete'],
@@ -132,21 +140,54 @@ row('process ancestry is fail-safe and bounded', static function (): void {
 		'90 100 /bin/sh',
 		'80 1 pkg delete',
 	], 100), 'cycle');
-	$long = [];
-	for ($pid = 100; $pid < 166; $pid++) {
-		$long[] = "{$pid} " . ($pid === 100 ? 99 : $pid - 1) . ' /bin/sh';
+	$inside = [];
+	for ($pid = 100; $pid < 163; $pid++) {
+		$inside[] = "{$pid} " . ($pid + 1) . ' /bin/sh';
 	}
-	$long[] = '166 1 pkg delete';
-	same('', pfb_parse_pkg_operation($long, 100), '>64 hop bound');
+	$inside[] = '163 1 pkg delete';
+	same('delete', pfb_parse_pkg_operation($inside, 100), '63rd ancestor is examined');
+	$outside = [];
+	for ($pid = 100; $pid < 164; $pid++) {
+		$outside[] = "{$pid} " . ($pid + 1) . ' /bin/sh';
+	}
+	$outside[] = '164 1 pkg delete';
+	same('', pfb_parse_pkg_operation($outside, 100), '64-hop bound excludes next ancestor');
 	same('', pfb_parse_pkg_operation(process_chain('/usr/local/sbin/pkg-helper delete'), 100), 'fake pkg command');
+	same('delete', pfb_parse_pkg_operation([
+		'100 90 /usr/local/bin/php hook.php',
+		'90 80 /tmp/pkg install -f',
+		'80 1 /usr/local/sbin/pkg delete',
+	], 100), 'fake exact-basename child skipped for real pkg ancestor');
 	same('', pfb_parse_pkg_operation(process_chain('pkg unknown'), 100), 'unknown command');
 });
 
-row('teardown decision is delete or unknown only', static function (): void {
+row('teardown decision requires a positive delete', static function (): void {
 	check(pfb_pkg_op_tears_down('delete'), 'delete tears down');
-	check(pfb_pkg_op_tears_down(''), 'unknown fails safe');
-	foreach (['install', 'reinstall', 'upgrade'] as $op) {
+	foreach (['', 'install', 'reinstall', 'upgrade'] as $op) {
 		check(!pfb_pkg_op_tears_down($op), "{$op} stays live");
+	}
+});
+
+row('real pre-deinstall function returns before teardown on upgrade', static function () use ($source): void {
+	$fixture = sys_get_temp_dir() . '/pfb-predeinstall-' . bin2hex(random_bytes(5));
+	mkdir($fixture, 0700, true);
+	file_put_contents($fixture . '/config.inc', "<?php\n");
+	$old_include_path = get_include_path();
+	set_include_path($fixture . PATH_SEPARATOR . $old_include_path);
+	try {
+		eval(function_source($source, 'pfblockerng_php_pre_deinstall_command'));
+		$GLOBALS['pfb'] = [];
+		$GLOBALS['status_messages'] = [];
+		pfblockerng_php_pre_deinstall_command(static fn (): string => 'upgrade');
+		check(
+			count($GLOBALS['status_messages']) === 1
+				&& str_contains($GLOBALS['status_messages'][0], 'Keeping pfBlockerNG active'),
+			'upgrade returns through the live guard'
+		);
+	} finally {
+		set_include_path($old_include_path);
+		@unlink($fixture . '/config.inc');
+		@rmdir($fixture);
 	}
 });
 
