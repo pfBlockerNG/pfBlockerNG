@@ -138,6 +138,12 @@ def artifact_datetime(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+def _time_html(epoch: float) -> str:
+    """Semantic UTC instant with deterministic fallback text for browser localization."""
+    instant = datetime.fromtimestamp(epoch, tz=timezone.utc)
+    return f'<time datetime="{instant:%Y-%m-%dT%H:%M:%SZ}">{instant:%Y-%m-%d %H:%M UTC}</time>'
+
+
 def _build_record(manifest: dict) -> dict:
     """The embedded ``pfb_build_record`` annotation, parsed — ``{}`` when absent/bad.
 
@@ -296,6 +302,7 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
             if not is_pfblockerng_package(name):
                 continue  # a published dependency (issue #1806) — browsable, never a channel row
             deps = man.get("deps") or {}
+            published_epoch = artifact_epoch(man)
             pkgs.append(
                 {
                     "channel": channel,
@@ -303,7 +310,8 @@ def collect_packages(site: str, read_manifest: Callable[[str], dict] | None = No
                     "version": ver,
                     "abi": abi,
                     "size": os.path.getsize(path),
-                    "published": published_datetime(man),
+                    "published": artifact_datetime(published_epoch) if published_epoch is not None else "",
+                    "published_epoch": published_epoch,
                     "commit": commit_sha(man),
                     # PHP/Python the build targets, read from its RUN_DEPENDS — the fallback
                     # for an ABI the matrix doesn't cover (the matrix value wins when joined).
@@ -375,6 +383,7 @@ a.browse{display:inline-flex;align-items:center;min-height:46px;padding:.65rem 1
 a.browse:hover{border-color:var(--accent);background:var(--accent-soft);color:var(--accent)}
 table.autoindex td:first-child{white-space:normal;overflow-wrap:anywhere}
 table.autoindex td.num{white-space:nowrap}
+.entry-icon{display:inline-block;width:1.5em;margin-right:.25em;text-align:center}
 .listing-page .pkg-shell{min-height:calc(100vh - 68px)}
 .listing-hero{padding-bottom:2rem}
 .listing-hero h1{font-size:clamp(2.4rem,6vw,4.8rem)}
@@ -454,6 +463,14 @@ _COPY_JS = (
     "if(navigator.clipboard&&navigator.clipboard.writeText){"
     "navigator.clipboard.writeText(t).then(done).catch(function(){fb(t,done);});}"
     "else{fb(t,done);}});})();"
+)
+
+_LOCAL_TIME_JS = (
+    "(function(){function p(n){return String(n).padStart(2,'0');}"
+    "document.querySelectorAll('time[datetime]').forEach(function(t){"
+    "var d=new Date(t.dateTime);if(Number.isNaN(d.getTime()))return;"
+    "t.textContent=d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());"
+    "});})();"
 )
 
 
@@ -767,13 +784,15 @@ def _versions_table_html(rows: list[dict], *, with_channel: bool) -> str:
 
 def _row_html(r: dict, *, with_channel: bool) -> str:
     channel_td = f"<td>{_esc(r['channel'])}</td>" if with_channel else ""
+    published_epoch = r.get("published_epoch")
+    published = _time_html(published_epoch) if published_epoch is not None else _or_dash(r.get("published", ""))
     return (
         f"<tr><td>{_or_dash(r.get('pfsense_version', ''))}</td>{channel_td}"
         f'<td><a href="./{_esc(r["rel"])}">{_esc(r["version"])}</a></td>'
         f"<td><code>{_esc(r['abi'])}</code></td>"
         f'<td class="num">{_or_dash(r.get("php", ""))}</td>'
         f'<td class="num">{_or_dash(r.get("py", ""))}</td>'
-        f'<td class="num">{_or_dash(r.get("published", ""))}</td>'
+        f'<td class="num">{published}</td>'
         f"<td>{commit_cell(r.get('commit', ''))}</td>"
         f'<td class="num">{_esc(human_size(r["size"]))}</td></tr>'
     )
@@ -1033,14 +1052,14 @@ def render_page(
         '<p class="blurb">Browse every channel, version and ABI &mdash; and the raw pkg(8) catalogs your '
         "firewall fetches &mdash; in a directory-style listing.</p>"
         '<p><a class="browse" href="./browse.html">&#128193; Browse the repository &rarr;</a></p></section>'
-        f"</main>{_SITE_FOOTER}<script>{_COPY_JS}</script></body></html>\n"
+        f"</main>{_SITE_FOOTER}<script>{_LOCAL_TIME_JS}{_COPY_JS}</script></body></html>\n"
     )
 
 
 def _epoch_cell(epoch: float | None) -> str:
     """The Last-modified cell for an optional epoch — an em dash when absent (issue
     #2450: never a file mtime)."""
-    return _or_dash(artifact_datetime(epoch) if epoch is not None else "")
+    return _time_html(epoch) if epoch is not None else _or_dash("")
 
 
 def _render_listing_html(title: str, home_href: str, rows: list[str]) -> str:
@@ -1058,8 +1077,13 @@ def _render_listing_html(title: str, home_href: str, rows: list[str]) -> str:
         f"<tbody>{''.join(rows)}</tbody></table></div>"
         '<p class="listing-note">Directory listing of the self-hosted pfBlockerNG pkg repository. '
         "pkg(8) fetches the catalog files (<code>meta.conf</code>, <code>packagesite.pkg</code>, …) directly.</p>"
-        f"</section></main>{_SITE_FOOTER}</body></html>\n"
+        f"</section></main>{_SITE_FOOTER}<script>{_LOCAL_TIME_JS}</script></body></html>\n"
     )
+
+
+def _entry_link(href: str, label: str, *, directory: bool) -> str:
+    icon = "&#128193;" if directory else "&#128196;"
+    return f'<a href="{_esc(href)}"><span class="entry-icon" aria-hidden="true">{icon}</span>{_esc(label)}</a>'
 
 
 def _root_files(built: dict[str, tuple[bytes, int]]) -> list[str]:
@@ -1083,16 +1107,14 @@ def render_browse_root(docs: str, built: dict[str, tuple[bytes, int]]) -> str:
     rows: list[str] = []
     for ch in CH_ORDER:
         if os.path.isdir(os.path.join(docs, ch)):
-            esc = _esc(ch)
             rows.append(
-                f'<tr><td><a href="./browse/{esc}/">{esc}/</a></td>'
+                f"<tr><td>{_entry_link(f'./browse/{ch}/', f'{ch}/', directory=True)}</td>"
                 '<td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
             )
     for name in _root_files(built):
         data, _mode = built[name]
-        esc = _esc(name)
         rows.append(
-            f'<tr><td><a href="./{esc}">{esc}</a></td>'
+            f"<tr><td>{_entry_link(f'./{name}', name, directory=False)}</td>"
             f'<td class="num">{_epoch_cell(None)}</td>'
             f'<td class="num">{_esc(human_size(len(data)))}</td></tr>'
         )
@@ -1126,7 +1148,7 @@ def _render_catalogue_browse_page(docs: str, full_rel: str) -> str:
     rows: list[str] = []
     parent_href = f"{climb}browse.html" if is_channel_root else "../"
     rows.append(
-        f'<tr><td><a href="{_esc(parent_href)}">../</a></td>'
+        f"<tr><td>{_entry_link(parent_href, '../', directory=True)}</td>"
         '<td class="num">&mdash;</td><td class="num">Parent Directory</td></tr>'
     )
 
@@ -1138,16 +1160,15 @@ def _render_catalogue_browse_page(docs: str, full_rel: str) -> str:
         (subdirs if os.path.isdir(os.path.join(src_dir, name)) else files).append(name)
 
     for name in subdirs:
-        esc = _esc(name)
         rows.append(
-            f'<tr><td><a href="./{esc}/">{esc}/</a></td><td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
+            f"<tr><td>{_entry_link(f'./{name}/', f'{name}/', directory=True)}</td>"
+            '<td class="num">&mdash;</td><td class="num">&mdash;</td></tr>'
         )
     for name in files:
         path = os.path.join(src_dir, name)
-        esc = _esc(name)
         target = f"{climb}{full_rel}/{name}"
         rows.append(
-            f'<tr><td><a href="{_esc(target)}">{esc}</a></td>'
+            f"<tr><td>{_entry_link(target, name, directory=False)}</td>"
             f'<td class="num">{_epoch_cell(_display_epoch(path))}</td>'
             f'<td class="num">{_esc(human_size(os.path.getsize(path)))}</td></tr>'
         )

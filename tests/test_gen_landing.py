@@ -19,6 +19,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import tarfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -168,6 +169,47 @@ def test_artifact_datetime_is_utc_minute_precision() -> None:
     assert gl.artifact_datetime(morning) == "2026-06-14 03:05 UTC"
     assert gl.artifact_datetime(evening) == "2026-06-14 21:47 UTC"
     assert gl.artifact_datetime(morning) != gl.artifact_datetime(evening)  # same day, distinct
+
+
+def test_timestamp_html_keeps_utc_instant_and_localizes_in_the_browser(tmp_path: Path) -> None:
+    """Generated dates retain a truthful UTC fallback and ISO instant, while the
+    shipped script renders the visitor's local `YYYY-MM-DD HH:mm` without a suffix."""
+    epoch = datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp()
+    timestamp = '<time datetime="2026-08-14T19:32:00Z">2026-08-14 19:32 UTC</time>'
+    assert gl._time_html(epoch) == timestamp
+    assert gl._epoch_cell(epoch) == timestamp
+
+    base = "https://pkg.pfblockerng.com"
+    package = _pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/package.pkg")
+    package["published_epoch"] = epoch
+    page = gl.render_page(base, [package], _stub_conf, _fixture_site_tree(base))
+    assert timestamp in page
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    listing = gl.render_browse_root(str(docs), {})
+    for rendered in (page, listing):
+        assert gl._LOCAL_TIME_JS in rendered
+
+    runner = (
+        'var t={dateTime:"2026-08-14T19:32:00Z",textContent:"UTC fallback"};'
+        "global.document={querySelectorAll:function(){return [t];}};"
+        f"{gl._LOCAL_TIME_JS}"
+        "process.stdout.write(t.textContent);"
+    )
+    expected = {
+        "Europe/Amsterdam": "2026-08-14 21:32",
+        "America/New_York": "2026-08-14 15:32",
+        "Asia/Kolkata": "2026-08-15 01:02",
+        "Asia/Kathmandu": "2026-08-15 01:17",
+    }
+    for zone, local_time in expected.items():
+        env = dict(os.environ, TZ=zone)
+        result = subprocess.run(["node", "-e", runner], env=env, check=True, capture_output=True, text=True)
+        assert result.stdout == local_time
+
+    invalid_runner = runner.replace("2026-08-14T19:32:00Z", "invalid")
+    invalid = subprocess.run(["node", "-e", invalid_runner], check=True, capture_output=True, text=True)
+    assert invalid.stdout == "UTC fallback"
 
 
 def test_published_datetime_prefers_created_annotation() -> None:
@@ -1596,9 +1638,11 @@ def test_catalogue_browse_page_lists_dirs_files_and_parent(tmp_path: Path) -> No
     out = gl._render_catalogue_browse_page(str(docs), "stable/ce-2.8")
 
     assert "Index of /stable/ce-2.8" in out
-    assert '<a href="../">../</a>' in out  # Parent Directory row (not the channel root)
-    assert '<a href="./amd64/">amd64/</a>' in out  # subdir stays within the browse mirror
-    assert 'href="../../../stable/ce-2.8/notes.txt">notes.txt</a>' in out  # file climbs into the real tree
+    folder = '<span class="entry-icon" aria-hidden="true">&#128193;</span>'
+    file = '<span class="entry-icon" aria-hidden="true">&#128196;</span>'
+    assert f'<a href="../">{folder}../</a>' in out  # Parent Directory row (not the channel root)
+    assert f'<a href="./amd64/">{folder}amd64/</a>' in out  # subdir stays within the browse mirror
+    assert f'href="../../../stable/ce-2.8/notes.txt">{file}notes.txt</a>' in out
     assert "12 B" in out  # size column rendered
 
 
@@ -1613,10 +1657,14 @@ def test_browse_root_has_no_parent_and_channel_root_links_browse_html(tmp_path: 
     root = gl.render_browse_root(str(docs), built)
     assert "Index of /" in root
     assert "Parent Directory" not in root and 'href="../"' not in root
-    assert '<a href="./browse/stable/">stable/</a>' in root and '<a href="./browse/nightly/">nightly/</a>' in root
+    folder = '<span class="entry-icon" aria-hidden="true">&#128193;</span>'
+    file = '<span class="entry-icon" aria-hidden="true">&#128196;</span>'
+    assert f'<a href="./browse/stable/">{folder}stable/</a>' in root
+    assert f'<a href="./browse/nightly/">{folder}nightly/</a>' in root
+    assert f'<a href="./meta.json">{file}meta.json</a>' in root
 
     channel_page = gl._render_catalogue_browse_page(str(docs), "stable")
-    assert '<a href="../../browse.html">../</a>' in channel_page  # channel root's Parent -> browse.html
+    assert f'<a href="../../browse.html">{folder}../</a>' in channel_page  # channel root's Parent -> browse.html
 
     # A colon-ABI subdir links with the scheme-safe './' prefix, staying within the mirror.
     _touch(docs / "stable" / "FreeBSD:16:aarch64" / "x")
@@ -1704,7 +1752,9 @@ def test_write_site_emits_browse_pages_outside_the_catalogue_tree(tmp_path: Path
     assert (site / "index.html").is_file()
     assert '<a class="browse" href="./browse.html">' in (site / "index.html").read_text()
     browse = (site / "browse.html").read_text()
-    assert '<a href="./browse/stable/">stable/</a>' in browse
+    assert (
+        '<a href="./browse/stable/"><span class="entry-icon" aria-hidden="true">&#128193;</span>stable/</a>' in browse
+    )
     # A browse page exists at EVERY level under browse/ — intermediate dirs too.
     for rel in ("stable", "stable/ce-2.8", "stable/ce-2.8/FreeBSD:15:amd64"):
         assert (site / "browse" / rel / "index.html").is_file(), f"missing browse page at {rel}"
@@ -1712,7 +1762,10 @@ def test_write_site_emits_browse_pages_outside_the_catalogue_tree(tmp_path: Path
         assert not (site / rel / "index.html").is_file(), f"catalogue dir {rel} must carry no autoindex"
     # Intermediate dir lists its subdir; leaf lists the package + the catalog plumbing (a real
     # directory listing, unlike the old package-only view).
-    assert '<a href="./ce-2.8/">ce-2.8/</a>' in (site / "browse" / "stable" / "index.html").read_text()
+    assert (
+        '<a href="./ce-2.8/"><span class="entry-icon" aria-hidden="true">&#128193;</span>ce-2.8/</a>'
+        in (site / "browse" / "stable" / "index.html").read_text()
+    )
     leaf = (site / "browse" / "stable" / "ce-2.8" / "FreeBSD:15:amd64" / "index.html").read_text()
     assert f"{_CANON}-3.2.16.pkg" in leaf
     assert "packagesite.pkg" in leaf  # the catalog files ARE shown in a directory listing
@@ -1761,7 +1814,7 @@ def test_write_site_never_indexes_docs_staging(tmp_path: Path, monkeypatch: Any)
     assert "staging" not in browse
     # A real channel is unaffected — still gets its own browse page + browse link.
     assert (site / "browse" / "edge" / "ce-2.8" / "index.html").is_file()
-    assert '<a href="./browse/edge/">edge/</a>' in browse
+    assert '<a href="./browse/edge/"><span class="entry-icon" aria-hidden="true">&#128193;</span>edge/</a>' in browse
 
 
 def test_write_site_empty_site_root_renders_four_empty_cards_exit_zero(tmp_path: Path, monkeypatch: Any) -> None:
@@ -1819,8 +1872,10 @@ def test_browse_adapts_to_any_future_tree_shape(tmp_path: Path, monkeypatch: Any
     assert n == 2
     # browse.html lists the two catalogue channels.
     browse = (site / "browse.html").read_text()
-    assert '<a href="./browse/stable/">stable/</a>' in browse
-    assert '<a href="./browse/edge/">edge/</a>' in browse
+    assert (
+        '<a href="./browse/stable/"><span class="entry-icon" aria-hidden="true">&#128193;</span>stable/</a>' in browse
+    )
+    assert '<a href="./browse/edge/"><span class="entry-icon" aria-hidden="true">&#128193;</span>edge/</a>' in browse
     # A browse page exists at EVERY directory of the novel tree — arbitrary names + extra
     # depth — and NOTHING is written inside the real catalogue tree itself.
     for rel in (
