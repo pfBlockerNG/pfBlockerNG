@@ -454,7 +454,7 @@ def test_page_renders_clean(page: Page, webui: WebUI, php_error_log_guard: PhpEr
 # out-of-scope target="_blank" links, so a whole-body sweep would false-positive.
 # Each url is a stable href in the named page's source.
 _NOOPENER_RENDER_CASES: tuple[tuple[str, str], ...] = (
-    ("/pfblockerng/pfblockerng_general.php", "http://pfblockerng.com"),
+    ("/pfblockerng/pfblockerng_general.php", "https://pfblockerng.com"),
     ("/pfblockerng/pfblockerng_general.php", "https://forum.netgate.com/user/bbcan177"),
     # ?type=geoip: the MaxMind attribution callout only prints in the category page's
     # GeoIP view (source guards it with `$gtype == 'geoip'`).

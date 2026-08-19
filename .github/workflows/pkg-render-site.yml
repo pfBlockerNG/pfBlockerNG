@@ -88,7 +88,7 @@ jobs:
         env:
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
           ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
-          BASE_URL: https://pfblockerng.github.io/pkg
+          BASE_URL: https://pkg.pfblockerng.com
         # Path env vars are exported HERE, not in the env: map above — GitHub
         # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
         # there reaches the job as a literal dollar-string (issue #2231). The

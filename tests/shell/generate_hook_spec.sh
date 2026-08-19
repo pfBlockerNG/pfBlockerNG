@@ -152,7 +152,7 @@ Describe 'generate hook — regenerate the stable conf (CE)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/stable/ce-2.8"'
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pkg.pfblockerng.com/stable/ce-2.8"'
       The contents of file "${PFB_STABLE_CONF}" should include "pfblockerng-stable: {"
       The contents of file "${PFB_STABLE_CONF}" should include "stable channel"
       The contents of file "${PFB_STABLE_CONF}" should not include "pending"
@@ -179,7 +179,7 @@ Describe 'generate hook — regenerate the testing conf (Plus)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/testing/plus-26.03"'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://pkg.pfblockerng.com/testing/plus-26.03"'
       The contents of file "${PFB_TESTING_CONF}" should include "pfblockerng-testing: {"
       The value "$(_conf_count "${_te_dir}")" should equal 1
     End
@@ -195,7 +195,7 @@ Describe 'generate hook — regenerate the edge conf across a pfSense OS upgrade
         cat > "${PFB_EDGE_CONF}" <<'STALE'
 # Generated at boot by pfblockerng_repo_generate (ADR-39)
 pfblockerng-edge: {
-  url: "https://pfblockerng.github.io/pkg/edge/ce-2.7",
+  url: "https://pkg.pfblockerng.com/edge/ce-2.7",
   enabled: yes
 }
 STALE
@@ -213,7 +213,7 @@ STALE
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pkg.pfblockerng.com/edge/ce-2.8"'
       The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.7"
       The path "${PKG_STUB_LOG}" should not be exist
     End
@@ -306,7 +306,7 @@ Describe 'generate hook — regenerate nightly conf (Plus)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/nightly/plus-26.03"'
+      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "https://pkg.pfblockerng.com/nightly/plus-26.03"'
       The contents of file "${PFB_NIGHTLY_CONF}" should include "pfblockerng-nightly: {"
       The contents of file "${PFB_NIGHTLY_CONF}" should include "nightly channel"
       The path "${PFB_RELEASE_CONF}" should not be exist
@@ -334,7 +334,7 @@ Describe 'generate hook — pre-release suffix strip (Plus BETA)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/stable/plus-26.07"'
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pkg.pfblockerng.com/stable/plus-26.07"'
       The contents of file "${PFB_STABLE_CONF}" should not include "plus-26.07-BETA"
     End
 End
@@ -357,7 +357,7 @@ Describe 'generate hook — pre-release suffix strip (CE RC)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pfblockerng.github.io/pkg/edge/ce-2.9"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pkg.pfblockerng.com/edge/ce-2.9"'
       The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.9-RC"
     End
 End
@@ -372,7 +372,7 @@ Describe 'generate hook — unconditional rewrite of a stale-varver conf'
         cat > "${PFB_TESTING_CONF}" <<'EOF'
 # old generated body
 pfblockerng-testing: {
-  url: "https://pfblockerng.github.io/pkg/testing/ce-2.7",
+  url: "https://pkg.pfblockerng.com/testing/ce-2.7",
   enabled: yes
 }
 EOF
@@ -432,7 +432,7 @@ End
 # Issue #2459. `_regen_one` used to compose the url from PFB_BASE_URL alone,
 # defaulting to the primary Pages site. At boot there is no env, so a fork site,
 # a staging prefix and a `file://` guest catalogue were all silently rewritten to
-# `https://pfblockerng.github.io/pkg` — a redirect of where the box fetches
+# `https://pkg.pfblockerng.com` — a redirect of where the box fetches
 # packages from. The base now comes from the conf the hook is about to rewrite
 # (its url's `<base>/<channel>/<varver>` shape), so only the varver moves; an
 # explicit PFB_BASE_URL still wins, and a url the hook cannot parse as its own
@@ -463,7 +463,7 @@ FILEURL
       The status should be success
       The stderr should include "regenerated"
       The contents of file "${PFB_STABLE_CONF}" should include 'url: "file:///root/pfb_repo/stable/ce-2.8"'
-      The contents of file "${PFB_STABLE_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_STABLE_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
 
@@ -492,7 +492,7 @@ STAGEURL
       The status should be success
       The stderr should include "regenerated"
       The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/staging/pr-7/edge/ce-2.8"'
-      The contents of file "${PFB_EDGE_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_EDGE_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
 
@@ -527,7 +527,7 @@ FOREIGN
       The stderr should include "WARNING"
       The stderr should include "did not write"
       The value "$(cksum < "${PFB_NIGHTLY_CONF}")" should equal "${_fo_sum}"
-      The contents of file "${PFB_NIGHTLY_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_NIGHTLY_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
 
@@ -612,9 +612,9 @@ UNTERM
       The status should be success
       The stderr should include "did not write"
       The value "$(cat "${PFB_STABLE_CONF}" "${PFB_EDGE_CONF}" "${PFB_NIGHTLY_CONF}" | cksum)" should equal "${_up_sums}"
-      The contents of file "${PFB_STABLE_CONF}" should not include "pfblockerng.github.io"
-      The contents of file "${PFB_EDGE_CONF}" should not include "pfblockerng.github.io"
-      The contents of file "${PFB_NIGHTLY_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_STABLE_CONF}" should not include "pkg.pfblockerng.com"
+      The contents of file "${PFB_EDGE_CONF}" should not include "pkg.pfblockerng.com"
+      The contents of file "${PFB_NIGHTLY_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
 
@@ -748,7 +748,7 @@ CONFSLASH
       The status should be success
       The stderr should include "regenerated"
       The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://fork.example.org/pkg/testing/ce-2.8"'
-      The contents of file "${PFB_TESTING_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_TESTING_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
 
@@ -781,7 +781,7 @@ UPCASE
       The status should be success
       The stderr should include "did not write"
       The value "$(cksum < "${PFB_EDGE_CONF}")" should equal "${_uc_sum}"
-      The contents of file "${PFB_EDGE_CONF}" should not include "pfblockerng.github.io"
+      The contents of file "${PFB_EDGE_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
 
@@ -797,7 +797,7 @@ Describe 'generate hook — a pre-#1806 arch-leaf conf is frozen, not healed'
         cat > "${PFB_NIGHTLY_CONF}" <<'ARCHLEAF'
 # Generated at boot by pfblockerng_repo_generate (ADR-39)
 pfblockerng-nightly: {
-  url: "https://pfblockerng.github.io/pkg/nightly/ce-2.7/FreeBSD:15:amd64",
+  url: "https://pkg.pfblockerng.com/nightly/ce-2.7/FreeBSD:15:amd64",
   enabled: yes
 }
 ARCHLEAF

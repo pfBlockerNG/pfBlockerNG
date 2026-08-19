@@ -142,7 +142,7 @@ PY
     common_env() {
         PFB_SRC="${base}/fake-src"
         PKG_REPO="${base}/pkg-repo"
-        BASE_URL=https://pfblockerng.github.io/pkg
+        BASE_URL=https://pkg.pfblockerng.com
         SOURCE_RUN_ID=10:1
         ROUTE_MATRIX='[{"freebsd_major":"15","pfsense_version":"2.8","variant":"ce","php_version":"8.3","py_flavor":"py311","arch":"amd64"}]'
         export PFB_SRC PKG_REPO BASE_URL SOURCE_RUN_ID ROUTE_MATRIX

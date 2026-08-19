@@ -28,7 +28,7 @@ under the **Apache License 2.0**.
 
 > [!NOTE]
 > For day-to-day usage and configuration, start with the
-> [official pfBlockerNG documentation](https://pfblockerng.github.io/).
+> [official pfBlockerNG documentation](https://pfblockerng.com/).
 
 ## Features
 
@@ -61,14 +61,14 @@ under the **Apache License 2.0**.
 
 > [!TIP]
 > The package repository's landing page —
-> **[pfblockerng.github.io/pkg](https://pfblockerng.github.io/pkg)** — is the
+> **[pkg.pfblockerng.com](https://pkg.pfblockerng.com)** — is the
 > main installation page: current versions, ready-to-copy commands, and older
 > releases, per pfSense edition.
 
 Run this **on the firewall** over SSH (as root), picking the channel you want:
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel stable
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
 ```
 
 One command from **any** starting state: a fresh firewall, an existing Netgate
@@ -109,7 +109,7 @@ Run the same one-liner as [Installation](#installation), just with a
 different `--channel`:
 
 ```sh
-fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel edge
+fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel edge
 ```
 
 It moves the subscription, moves the installed package onto it, replaces a
@@ -149,7 +149,7 @@ pkg upgrade pfSense-pkg-pfBlockerNG
 
 ## Usage
 
-The [official documentation](https://pfblockerng.github.io/) is the
+The [official documentation](https://pfblockerng.com/) is the
 general configuration reference. Two additions are worth calling out.
 
 ### Update Hooks
@@ -228,7 +228,7 @@ channel you named, and verifies your configuration survived.
 Each channel catalog keeps several recent versions, and a faster channel also
 keeps everything its slower channels still carry — so an older build stays
 available in the catalog you are already subscribed to. The
-[repository landing page](https://pfblockerng.github.io/pkg) lists the retained
+[repository landing page](https://pkg.pfblockerng.com) lists the retained
 versions per pfSense edition, with their commit and date. Moving to one of them
 is a channel-style downgrade; see the caution under
 [Switching channels](#switching-channels).
@@ -243,9 +243,9 @@ channel recipe you want, e.g. `net/pfSense-pkg-pfBlockerNG-edge` (the line the
 ## Documentation
 
 - **Using pfBlockerNG:**
-  [official user documentation](https://pfblockerng.github.io/).
+  [official user documentation](https://pfblockerng.com/).
 - **Installing project builds:**
-  [package repository](https://pfblockerng.github.io/pkg).
+  [package repository](https://pkg.pfblockerng.com).
 - **Developing, testing, and releasing this package:**
   [CONTRIBUTING.md](CONTRIBUTING.md).
 

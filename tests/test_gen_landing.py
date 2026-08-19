@@ -462,7 +462,7 @@ def test_write_site_record_only_pkg_drives_browse_and_landing(tmp_path: Path, mo
     assert pfb_pkg.PFB_BUILD_RECORD_KEY in annotations
 
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
+    n = gl.write_site(str(site), "https://pkg.pfblockerng.com/", str(_PKG_SITE_DIR))
     assert n == 1
 
     listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
@@ -493,7 +493,7 @@ def test_write_site_out_of_range_created_on_project_pkg_renders_dash(tmp_path: P
     os.utime(pkg, (_FILE_MTIME, _FILE_MTIME))
 
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
+    n = gl.write_site(str(site), "https://pkg.pfblockerng.com/", str(_PKG_SITE_DIR))
     assert n == 1
     listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
     row = _autoindex_row(listing, pkg.name)
@@ -1345,7 +1345,7 @@ def test_render_page_renders_all_four_channel_cards_with_correct_content() -> No
     "not yet published" blurb and must not ship an install recipe, a bare pkg
     install, or a conf snippet.
     """
-    base = "https://pfblockerng.github.io/pkg"
+    base = "https://pkg.pfblockerng.com"
     page = gl.render_page(base, [], _stub_conf, _fixture_site_tree(base))
 
     titles = {"stable": "Stable", "testing": "Testing", "edge": "Edge", "nightly": "Nightly"}
@@ -1374,10 +1374,10 @@ def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp
     """Landing and browse pages use the main site's chrome while package channels
     retain their existing blue, amber, purple, and red status cues."""
     page = gl.render_page(
-        "https://pfblockerng.github.io/pkg",
+        "https://pkg.pfblockerng.com",
         [],
         _stub_conf,
-        _fixture_site_tree("https://pfblockerng.github.io/pkg"),
+        _fixture_site_tree("https://pkg.pfblockerng.com"),
     )
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -1432,7 +1432,7 @@ def test_render_page_shows_latest_and_empty_stable() -> None:
         _mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311"),
         _mx("FreeBSD:16:aarch64", "26.03", "Plus", "8.5", "py311"),
     ]
-    base = "https://pfblockerng.github.io/pkg"
+    base = "https://pkg.pfblockerng.com"
     page = gl.render_page(base, pkgs, _stub_conf, _fixture_site_tree(base), matrix)
 
     # Latest versions surfaced for the present channels.
@@ -1510,7 +1510,7 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     """
     pkgs = [_pkg("testing", _CANON, "3.2.16", "FreeBSD:15:amd64", "testing/ce-2.8/FreeBSD:15:amd64/d.pkg")]
     page = gl.render_page(
-        "https://pfblockerng.github.io/pkg", pkgs, _stub_conf, _fixture_site_tree("https://pfblockerng.github.io/pkg")
+        "https://pkg.pfblockerng.com", pkgs, _stub_conf, _fixture_site_tree("https://pkg.pfblockerng.com")
     )
 
     # The button + wrapper exist, and the <pre> payload is unchanged (button is a sibling).
@@ -1518,9 +1518,7 @@ def test_render_page_snippets_have_copy_buttons() -> None:
     btn = '<button class="copy" type="button" aria-label="Copy to clipboard">Copy</button>'
     assert btn in page
     # Only published channels (testing here) get a copyable recipe + manual conf.
-    assert (
-        f"{btn}<pre>fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel testing</pre>" in page
-    )
+    assert f"{btn}<pre>fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel testing</pre>" in page
     assert f"{btn}<pre>testing-conf-snippet</pre>" in page
     assert "stable-conf-snippet" not in page
 
@@ -1595,7 +1593,7 @@ def test_unpublished_nightly_card_has_no_install_recipe() -> None:
     """Issue #2382: unpublished Nightly keeps the badge/blurb and ships no recipe."""
     pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
     page = gl.render_page(
-        "https://pfblockerng.github.io/pkg", pkgs, _stub_conf, _fixture_site_tree("https://pfblockerng.github.io/pkg")
+        "https://pkg.pfblockerng.com", pkgs, _stub_conf, _fixture_site_tree("https://pkg.pfblockerng.com")
     )
     nightly = page[page.index('"card nightly"') :]
     # The nightly card ends at the next footer-ish boundary; search the nightly
@@ -1614,7 +1612,7 @@ def test_published_card_recipe_is_the_one_line_channel_installer() -> None:
     follow-up: the single install.sh is the SOLE client entry point on the landing
     cards)."""
     pkgs = [_pkg("stable", _CANON, "3.3.2", "FreeBSD:15:*", "stable/ce-2.8/x.pkg")]
-    base = "https://pfblockerng.github.io/pkg"
+    base = "https://pkg.pfblockerng.com"
     page = gl.render_page(base, pkgs, _stub_conf, _fixture_site_tree(base))
     # Anchored to the <pre> element boundary so a trailing `sh -s --` (or any other
     # tail) fails this assertion rather than slipping past a bare substring check.
@@ -1730,7 +1728,7 @@ def test_write_site_keeps_dependency_packages_browsable(tmp_path: Path, monkeypa
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifests[os.path.basename(p)])
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
+    n = gl.write_site(str(site), "https://pkg.pfblockerng.com/", str(_PKG_SITE_DIR))
 
     assert n == 1  # the count is pfBlockerNG packages, not everything published
     # No index.html is ever written INSIDE the catalogue tree any more (issue #2450).
@@ -1752,7 +1750,7 @@ def test_write_site_emits_browse_pages_outside_the_catalogue_tree(tmp_path: Path
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
+    n = gl.write_site(str(site), "https://pkg.pfblockerng.com/", str(_PKG_SITE_DIR))
 
     assert n == 1
     # Landing page (root) links to the browse entry; browse.html exists and lists the top dirs.
@@ -1802,7 +1800,7 @@ def test_write_site_never_indexes_docs_staging(tmp_path: Path, monkeypatch: Any)
     monkeypatch.setattr(gl, "read_compact_manifest", lambda p: manifest)
     monkeypatch.setattr(gl, "_conf_via_portable", lambda base, ch: f"{ch}-conf")
 
-    n = gl.write_site(str(site), "https://pfblockerng.github.io/pkg/", str(_PKG_SITE_DIR))
+    n = gl.write_site(str(site), "https://pkg.pfblockerng.com/", str(_PKG_SITE_DIR))
 
     # The staged package never counts toward a real channel (it sits under an
     # unrecognized top-level dir, exactly like any other stray future dir).
@@ -2204,10 +2202,10 @@ def test_eol_versions_section_absent_from_rendered_page_when_no_route_only() -> 
     matrix = [_mx("FreeBSD:15:amd64", "2.8", "CE", "8.3", "py311")]
 
     page = gl.render_page(
-        "https://pfblockerng.github.io/pkg",
+        "https://pkg.pfblockerng.com",
         pkgs,
         _stub_conf,
-        _fixture_site_tree("https://pfblockerng.github.io/pkg"),
+        _fixture_site_tree("https://pkg.pfblockerng.com"),
         matrix,
     )
 
@@ -2240,10 +2238,10 @@ def test_eol_versions_section_present_in_rendered_page_with_route_only() -> None
     ]
 
     page = gl.render_page(
-        "https://pfblockerng.github.io/pkg",
+        "https://pkg.pfblockerng.com",
         [live_pkg, eol_ce, eol_plus],
         _stub_conf,
-        _fixture_site_tree("https://pfblockerng.github.io/pkg"),
+        _fixture_site_tree("https://pkg.pfblockerng.com"),
         matrix,
     )
 
@@ -2279,7 +2277,7 @@ def test_conf_via_portable_matches_real_build_repo_portable_contract() -> None:
     live publish workflow. All four channels are exercised (branch coverage) — every
     one of them has its OWN repo/conf (issue #2147).
     """
-    base: str = "https://pfblockerng.github.io/pkg"
+    base: str = "https://pkg.pfblockerng.com"
 
     for channel in gl.CH_ORDER:
         conf: str = gl._conf_via_portable(base, channel)
@@ -3176,7 +3174,7 @@ def test_readme_install_snippets_match_the_pkg_site_recipes() -> None:
     channels = _README_FETCH_RE.findall(readme)
     assert channels, "README.md carries no fetch|sh --channel snippet to check"
 
-    base = "https://pfblockerng.github.io/pkg"
+    base = "https://pkg.pfblockerng.com"
     for line in readme.splitlines():
         m = _README_FETCH_RE.search(line)
         if not m:

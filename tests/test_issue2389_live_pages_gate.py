@@ -28,7 +28,7 @@ def test_nightly_post_publish_passes_live_identity() -> None:
     assert "uses: ./.github/workflows/smoke-single.yml" in job
     assert "pytest_marker: repo" in job
     assert "pytest_filter: test_install_from_live_nightly_url" in job
-    assert "smoke_nightly_live_url: https://pfblockerng.github.io/pkg/nightly" in job
+    assert "smoke_nightly_live_url: https://pkg.pfblockerng.com/nightly" in job
     assert "smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}" in job
     assert "smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}" in job
     # smoke_repo_* is the GENERIC channel input (smoke-single.yml declares it,
@@ -147,4 +147,4 @@ def test_release_published_prepare_live_gate_uses_shared_matrix_builder() -> Non
 def test_default_live_base_url_is_stable() -> None:
     from tests.smoke import test_repo_install as repo_install
 
-    assert repo_install.DEFAULT_LIVE_BASE_URL == "https://pfblockerng.github.io/pkg/stable"
+    assert repo_install.DEFAULT_LIVE_BASE_URL == "https://pkg.pfblockerng.com/stable"

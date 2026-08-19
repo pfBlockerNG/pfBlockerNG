@@ -157,11 +157,11 @@ LIVE_EXPECTED_VERSION_ENV = "SMOKE_REPO_EXPECTED_VERSION"
 LIVE_EXPECTED_CHANNEL_ENV = "SMOKE_REPO_EXPECTED_CHANNEL"
 NIGHTLY_EXPECTED_SOURCE_SHA_ENV = "SMOKE_NIGHTLY_EXPECTED_SOURCE_SHA"
 NIGHTLY_EXPECTED_VERSION_ENV = "SMOKE_NIGHTLY_EXPECTED_VERSION"
-DEFAULT_LIVE_BASE_URL = "https://pfblockerng.github.io/pkg/stable"
+DEFAULT_LIVE_BASE_URL = "https://pkg.pfblockerng.com/stable"
 # GitHub Pages' anycast IPs. The smoke harness sandboxes guest DNS to a mock that
-# only answers `uuid-*.com`, so `pfblockerng.github.io` does not resolve on the guest. Pinning
+# only answers `uuid-*.com`, so `pkg.pfblockerng.com` does not resolve on the guest. Pinning
 # the Pages IPs in the guest /etc/hosts lets `pkg`'s HTTPS fetch reach Pages by name
-# (TLS SNI still presents `pfblockerng.github.io`, validated by GitHub's *.github.io cert) without
+# (TLS SNI still presents `pkg.pfblockerng.com`, validated by the Pages custom-domain cert) without
 # touching the resolver. Egress is OPEN for this flow (_ensure_egress_open).
 PAGES_IPS = ("185.199.108.153", "185.199.109.153", "185.199.110.153", "185.199.111.153")
 
@@ -1224,7 +1224,7 @@ def _live_base_url() -> str | None:
     """The live Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_REPO_LIVE_URL``: set it to the deployed base (e.g.
-    ``https://pfblockerng.github.io/pkg/stable``, or a staged
+    ``https://pkg.pfblockerng.com/stable``, or a staged
     ``.../pkg/staging/<seg>/<channel>`` root pre-promote, issue #2389) to run the live
     check after a publish dispatch; leave it unset and the test SKIPS (the always-on
     proof is the file:// VM-acceptance above). A bare ``1``/``true`` selects the

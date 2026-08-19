@@ -21,12 +21,12 @@
 #   install.sh -h|--help                                  this text
 #
 # Published at ${PFB_BASE_URL}/install.sh; run ON the box:
-#   fetch -qo - https://pfblockerng.github.io/pkg/install.sh | sh -s -- --channel stable
+#   fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
 #
 # Env (all overridable; forks/staging/tests set these):
 #   PKG_BIN           pkg(8) binary path (default: /usr/local/sbin/pkg)
 #   PFBLOCKERNG_ROOT  filesystem root prefix (default: /)
-#   PFB_BASE_URL      catalog base (default: https://pfblockerng.github.io/pkg)
+#   PFB_BASE_URL      catalog base (default: https://pkg.pfblockerng.com)
 #   PFB_SSL_CA_CERT_PATH  CA hash dir exported to pkg (default: <root>/etc/ssl/certs)
 #   PFB_SSL_CA_CERT_FILE  CA bundle exported to pkg (default: <root>/etc/ssl/cert.pem)
 #                         Each half is guarded independently and exported on its own: the
@@ -47,7 +47,7 @@ HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
 PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
 ROOT="${PFBLOCKERNG_ROOT%/}"
-PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"
+PFB_BASE_URL="${PFB_BASE_URL:-https://pkg.pfblockerng.com}"
 
 CANONICAL_PKG="pfSense-pkg-pfBlockerNG"
 REPOS_DIR="${ROOT}/usr/local/etc/pkg/repos"

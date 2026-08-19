@@ -436,7 +436,7 @@ is installing a retained older version rather than re-deploying a site.
   moves the box to a different varver.
 - **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
   catalog is served at the project's GitHub Pages URL, e.g.
-  **`https://pfblockerng.github.io/pkg/stable/ce-2.8`**.
+  **`https://pkg.pfblockerng.com/stable/ce-2.8`**.
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and both share the exact `--print-conf` shape

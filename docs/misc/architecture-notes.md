@@ -1105,7 +1105,7 @@ points install.sh's own `PFB_BASE_URL` default at the site's own base first (iss
 B3/F3), then the hook body is spliced into THAT text's `PFB_EMBED_HOOK` block — a
 single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so
 none of the hook's dollar-signs or backticks are expanded. Published at
-`pfblockerng.github.io/pkg/install.sh`, what the README's one-liners
+`pkg.pfblockerng.com/install.sh`, what the README's one-liners
 (`fetch -qo - <base>/install.sh | sh -s -- --channel <ch>`) point to.
 
 Full design: ADR-39.
@@ -1136,7 +1136,7 @@ Full design: ADR-39.
   (`scripts/live_gate_matrix.py`) fans the CI legs
   whose varver was touched out per destination; `validate-live-pages-install` runs `smoke-single.yml`
   (`pytest_marker: repo`, `test_install_from_live_pages_url`) per leg against
-  `https://pfblockerng.github.io/pkg/staging/<seg>/<channel>` with expected version = portversion and
+  `https://pkg.pfblockerng.com/staging/<seg>/<channel>` with expected version = portversion and
   expected `pfb_build_record.source_sha` = the tag commit — the staged URL's last segment is the
   channel, so `build-repo-portable.py --print-conf` derives the real `pfblockerng-<channel>` repo
   name and the box's `%R` matches. `promote-pkg-repo` (`always()`, only when the stage succeeded and
@@ -1292,7 +1292,7 @@ Full design: ADR-39.
   (`scripts/install-from-repo.sh` likewise derives its `py3xx-*` deps from the matrix, matching the
   box's FreeBSD major.) Dispatch: `gh workflow run smoke-single.yml -f
   pytest_marker=repo` (or `repo-install.yml` once it lands on `devel`). The gated
-  `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pfblockerng.github.io`
+  `test_install_from_live_pages_url` (`SMOKE_REPO_LIVE_URL`) hits the real `pkg.pfblockerng.com`
   URL — post-merge (a new `workflow_dispatch` workflow is only dispatchable from the default
   branch).
 
