@@ -20,13 +20,11 @@ Codex translate canonical nouns mechanically:
 
 - Literal/file discovery: Codex-native `rg`, globbing, and file reads.
 - Exact symbols, definitions, references, implementations, call/type hierarchy,
-  diagnostics, blast radius, and diagnostic-aware refactoring: agent-lsp.
-- Conceptual or structural repository search, documentation/policy retrieval,
-  signatures/outlines, cross-file architecture, and repository graphs: Octocode.
-- For language-semantic code relationships, agent-lsp is authoritative over
-  structurally inferred graph edges. Octocode is retrieval/context, not a compiler.
-  Do not use Octocode LSP operations when agent-lsp offers the equivalent unless
-  agent-lsp fails or does not support the language.
+  diagnostics, and diagnostic-aware refactoring: Serena's LSP backend.
+- Cross-file architecture, call graphs, flows, structural exploration, and impact
+  analysis: CodeGraph.
+- For language-semantic code relationships, Serena is authoritative over
+  structurally inferred CodeGraph edges. CodeGraph is repository context, not a compiler.
 - Final behavioral truth: compiler, static analysis, tests, CI, and live smoke.
 
 Skills with `policy.allow_implicit_invocation: false` may be absent from startup metadata but stay explicitly invokable. Never report explicitly named `$name` unavailable from startup metadata alone; first resolve `.agents/skills/<name>/SKILL.md`.
