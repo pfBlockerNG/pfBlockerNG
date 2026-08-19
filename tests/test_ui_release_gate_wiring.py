@@ -1031,6 +1031,7 @@ def _run_healthcheck(
     assets_json: str,
     *,
     is_draft: bool = True,
+    source: str = "release/4.0",
 ) -> subprocess.CompletedProcess[str]:
     script = _healthcheck_script()
     bin_dir = tmp_path / "bin"
@@ -1045,6 +1046,7 @@ def _run_healthcheck(
         "TAG": "v0.0.0-test",
         "BUILD_MATRIX": build_matrix,
         "PORTVERSION": "4.0.0",
+        "SOURCE": source,
     }
     return subprocess.run(  # noqa: S603
         ["sh", "-c", script],
@@ -1121,5 +1123,22 @@ def test_healthcheck_counts_extra_pkgs_dep_assets_too(tmp_path: Path) -> None:
             '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-Plus-26.03.pkg"},'
             '{"name":"py311-charset-normalizer-3.4.4-CE-2.8.pkg"}]'
         ),
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_healthcheck_release_33_ignores_matrix_extra_packages(tmp_path: Path) -> None:
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix=(
+            '[{"variant":"CE","pfsense_version":"2.8","extra_pkgs":["textproc/py-charset-normalizer"]},'
+            '{"variant":"Plus","pfsense_version":"26.03","extra_pkgs":[]}]'
+        ),
+        assets_json=(
+            '[{"name":"pfBlockerNG-src.tar.gz"},'
+            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"},'
+            '{"name":"pfSense-pkg-pfBlockerNG-4.0.0-Plus-26.03.pkg"}]'
+        ),
+        source="release/3.3",
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr

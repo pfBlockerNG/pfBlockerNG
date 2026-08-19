@@ -36,6 +36,7 @@ the suite AND-gates fails here.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -872,7 +873,7 @@ def test_run_suites_per_channel(tmp_path: Path, tag: str, expected_run_suites: s
 
 @pytest.mark.parametrize("tag", ["v4.0.0.a1", "v4.0.0.b1"])
 def test_force_suites_turns_the_live_suites_back_on_for_an_alpha_or_beta(tmp_path: Path, tag: str) -> None:
-    """The manual escape hatch: default off for alpha/beta, forceable per dispatch."""
+    """The manual escape hatch for release lines that carry live suites."""
     assert _run_suites_decision(tmp_path, tag, "false")["run_suites"] == "false"
     assert _run_suites_decision(tmp_path, tag, "true")["run_suites"] == "true"
 
@@ -917,6 +918,44 @@ def test_release_33_suppresses_matrix_extra_packages(tmp_path: Path) -> None:
 def test_other_release_lines_keep_matrix_extra_packages(tmp_path: Path) -> None:
     extras = '["textproc/py-charset-normalizer"]'
     assert _run_extra_pkgs_decision(tmp_path, "release/4.0", extras) == extras
+
+
+def test_build_record_keeps_the_original_release_33_matrix_row(tmp_path: Path) -> None:
+    script = _step_run_script(_step(_jobs()["build-pkgs-portable"], "Write the destination-bound build record"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    git_stub = bin_dir / "git"
+    git_stub.write_text("#!/bin/sh\nprintf '%s\\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n")
+    git_stub.chmod(0o755)
+    row = {
+        "variant": "CE",
+        "pfsense_version": "2.8",
+        "freebsd_major": "15",
+        "extra_pkgs": ["textproc/py-charset-normalizer"],
+    }
+    github_env = tmp_path / "github_env"
+    github_env.write_text("")
+    completed = subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        cwd=ROOT,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin:/usr/local/bin",
+            "TAG": "v3.3.3.a1",
+            "CHANNEL": "testing",
+            "SOURCE": "release/3.3",
+            "PORTVERSION": "3.3.3.a1",
+            "CLASSIFICATION": "alpha",
+            "COMMIT": "b" * 40,
+            "CREATED": "1",
+            "MATRIX_ROW": json.dumps(row),
+            "RUNNER_TEMP": str(tmp_path),
+            "GITHUB_ENV": str(github_env),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert json.loads((tmp_path / "build-record.json").read_text())["matrix_row"] == row
 
 
 def test_force_suites_input_is_declared_boolean_and_defaults_off() -> None:
