@@ -821,7 +821,13 @@ def test_published_workflow_rejects_release_flag_mismatch(
 # --------------------------------------------------------------------------- #
 
 
-def _run_suites_decision(tmp_path: Path, tag: str, force_suites: str) -> dict[str, str]:
+def _run_suites_decision(
+    tmp_path: Path,
+    tag: str,
+    force_suites: str,
+    *,
+    source: str = "release/4.0",
+) -> dict[str, str]:
     """Execute read-matrix's REAL channel/run_suites step body under sh."""
     script = _step_run_script(_step(_jobs()["read-matrix"], "Detect pkg channel from tag"))
     output_file = tmp_path / f"github_output_{tag}_{force_suites or 'unset'}"
@@ -832,8 +838,10 @@ def _run_suites_decision(tmp_path: Path, tag: str, force_suites: str) -> dict[st
         env={
             "PATH": "/usr/bin:/bin:/usr/local/bin",
             "INPUT_TAG": tag,
-            "INPUT_CHANNEL": "stable" if tag == "v4.0.0" else "edge",
-            "INPUT_SOURCE": "release/4.0",
+            "INPUT_CHANNEL": "stable"
+            if tag in {"v4.0.0", "v3.3.3"}
+            else ("testing" if tag.startswith("v3.3.3.") else "edge"),
+            "INPUT_SOURCE": source,
             "FORCE_SUITES": force_suites,
             "GITHUB_OUTPUT": str(output_file),
         },
@@ -873,6 +881,42 @@ def test_force_suites_turns_the_live_suites_back_on_for_an_alpha_or_beta(tmp_pat
 def test_force_suites_cannot_turn_the_live_suites_off(tmp_path: Path, tag: str) -> None:
     """rc/stable always verify; the input only ever ADDS verification."""
     assert _run_suites_decision(tmp_path, tag, "false")["run_suites"] == "true"
+
+
+@pytest.mark.parametrize("tag", ["v3.3.3.a1", "v3.3.3"])
+@pytest.mark.parametrize("force_suites", ["false", "true"])
+def test_release_33_never_runs_live_suites(tmp_path: Path, tag: str, force_suites: str) -> None:
+    outputs = _run_suites_decision(tmp_path, tag, force_suites, source="release/3.3")
+    assert outputs["run_suites"] == "false", outputs
+
+
+def _run_extra_pkgs_decision(tmp_path: Path, source: str, extra_pkgs: str) -> str:
+    script = _step_run_script(_step(_jobs()["build-pkgs-portable"], "Resolve release-line extras"))
+    output_file = tmp_path / "extra_pkgs_output"
+    output_file.write_text("")
+    completed = subprocess.run(  # noqa: S603
+        ["sh", "-c", script],
+        cwd=ROOT,
+        env={
+            "PATH": "/usr/bin:/bin:/usr/local/bin",
+            "SOURCE": source,
+            "MATRIX_EXTRA_PKGS": extra_pkgs,
+            "GITHUB_OUTPUT": str(output_file),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    return output_file.read_text().removeprefix("extra_pkgs=").strip()
+
+
+def test_release_33_suppresses_matrix_extra_packages(tmp_path: Path) -> None:
+    assert _run_extra_pkgs_decision(tmp_path, "release/3.3", '["textproc/py-charset-normalizer"]') == "[]"
+
+
+def test_other_release_lines_keep_matrix_extra_packages(tmp_path: Path) -> None:
+    extras = '["textproc/py-charset-normalizer"]'
+    assert _run_extra_pkgs_decision(tmp_path, "release/4.0", extras) == extras
 
 
 def test_force_suites_input_is_declared_boolean_and_defaults_off() -> None:
