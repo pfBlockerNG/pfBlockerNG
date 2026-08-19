@@ -1452,7 +1452,7 @@ def write_site(site: str, base: str, site_tree: str, matrix: list[dict] | None =
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Render the pkg-site tree onto the pkg repo's docs/ and mirror it there.")
     ap.add_argument("site", help="the docs/ tree to render into (the built catalog trees already live there)")
-    ap.add_argument("base_url", help="the Pages base URL, e.g. https://pkg.pfblockerng.com")
+    ap.add_argument("base_url", help="the package repository base URL, e.g. https://pkg.pfblockerng.com")
     ap.add_argument("--site-tree", required=True, help="the pkg-site/ source tree to render (this repo's pkg-site/)")
     ap.add_argument(
         "--matrix",
