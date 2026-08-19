@@ -1,0 +1,139 @@
+<?php
+
+declare(strict_types=1);
+
+if (!function_exists('gettext')) {
+	function gettext(string $text): string
+	{
+		return $text;
+	}
+}
+
+function pkg_version_compare(string $left, string $right): string
+{
+	$result = version_compare($left, $right);
+	return $result < 0 ? '<' : ($result > 0 ? '>' : '=');
+}
+
+class Form
+{
+	public array $sections = [];
+	public array $globals = [];
+
+	public function add(object $section): void
+	{
+		$this->sections[] = $section;
+	}
+
+	public function addGlobal(object $input): void
+	{
+		$this->globals[] = $input;
+	}
+}
+
+class Form_Section
+{
+	public array $inputs = [];
+
+	public function __construct(public string $title)
+	{
+	}
+
+	public function addInput(object $input): object
+	{
+		$this->inputs[] = $input;
+		return $input;
+	}
+}
+
+class Form_Checkbox
+{
+	public string $help = '';
+
+	public function __construct(
+		public string $name,
+		public string $label,
+		public string $description,
+		public bool $checked,
+		public string $value
+	) {
+	}
+
+	public function setHelp(string $help): self
+	{
+		$this->help = $help;
+		return $this;
+	}
+}
+
+class Form_Input
+{
+	public function __construct(
+		public string $name,
+		public string $label,
+		public string $type,
+		public string $value
+	) {
+	}
+}
+
+$root_path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng';
+require_once $root_path . '/pfblockerng_extra.inc';
+require_once $root_path . '/pfblockerng_software.inc';
+
+$failures = 0;
+
+function row(string $name, callable $check): void
+{
+	global $failures;
+	try {
+		$check();
+		echo "PASS {$name}\n";
+	} catch (Throwable $error) {
+		$failures++;
+		echo "FAIL {$name}: {$error->getMessage()}\n";
+	}
+}
+
+function check(bool $condition, string $message): void
+{
+	if (!$condition) {
+		throw new RuntimeException($message);
+	}
+}
+
+row('consent controls execute through the shipped form helper', static function (): void {
+	$form = new Form();
+	pfb_pkgconf_ca_add_form_controls($form, 'needed', false);
+	check(count($form->sections) === 1, 'one consent section rendered');
+	$section = $form->sections[0];
+	check($section->title === 'Package manager CA trust', 'section title');
+	check(count($section->inputs) === 1 && $section->inputs[0] instanceof Form_Checkbox, 'checkbox rendered');
+	$checkbox = $section->inputs[0];
+	check($checkbox->name === 'pfb_pkg_ca_consent', 'checkbox name');
+	check($checkbox->value === 'on' && !$checkbox->checked, 'checkbox token and state');
+	check(str_contains($checkbox->help, 'SSL_CA_CERT_PATH=/etc/ssl/certs'), 'owned line help');
+	check(str_contains($checkbox->help, 're-applies the line at boot'), 'reapply help');
+	check(count($form->globals) === 1, 'hidden marker rendered');
+	check($form->globals[0]->name === 'pfb_pkg_ca_consent_shown', 'hidden marker name');
+
+	$invalid = new Form();
+	pfb_pkgconf_ca_add_form_controls($invalid, '', true);
+	check($invalid->sections === [] && $invalid->globals === [], 'unsupported state renders nothing');
+});
+
+row('upgrade lock is explicit test injection, never environment-controlled', static function (): void {
+	$writer = new ReflectionFunction('pfb_pkgconf_write_atomic');
+	$sync = new ReflectionFunction('pfb_pkgconf_ca_sync');
+	$apply = new ReflectionFunction('pfb_pkgconf_ca_apply');
+	$tick = new ReflectionFunction('pfb_pkgconf_ca_tick');
+	check($writer->getNumberOfParameters() === 4, 'writer accepts lock path');
+	check($sync->getNumberOfParameters() === 4, 'sync threads lock path');
+	check($apply->getNumberOfParameters() === 6, 'apply threads lock path');
+	check($tick->getNumberOfParameters() === 5, 'tick threads lock path');
+	$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_software.inc');
+	check(is_string($source) && !str_contains($source, "getenv('PFB_UPGRADE_LOCK')"), 'no environment lock override');
+});
+
+echo $failures === 0 ? "ALL PASS\n" : "{$failures} FAILURES\n";
+exit($failures === 0 ? 0 : 1);

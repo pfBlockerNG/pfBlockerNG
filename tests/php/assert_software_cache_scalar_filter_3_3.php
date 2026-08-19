@@ -29,7 +29,9 @@ $tmp = sys_get_temp_dir() . '/pfb-sw-cache-' . getmypid();
 @mkdir($tmp, 0755, true);
 $GLOBALS['pfb'] = ['dbdir' => $tmp];
 
-require_once dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_software.inc';
+$root_path = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng';
+require_once $root_path . '/pfblockerng_extra.inc';
+require_once $root_path . '/pfblockerng_software.inc';
 
 $cache = $tmp . '/software_update.json';
 file_put_contents($cache, json_encode([
