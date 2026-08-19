@@ -18,7 +18,7 @@ name: Release
 #      build every artifact FROM THE PINNED SHA as workflow artifacts, then verify
 #      them — against that same source tree (issue #1859).  Whether the live suites
 #      run at all is the `run_suites` decision (alpha/beta skip them; rc + stable
-#      always run them; `force_suites` forces them on) — one code path, the
+#      run them; `force_suites` forces them on except for the 3.3 bridge) — one code path, the
 #      verification phase is simply empty for an alpha/beta.  Which matrix rows may
 #      VETO is the released-status predicate (scripts/resolve-legs.sh, via
 #      `release_gate: true`).
@@ -524,7 +524,7 @@ jobs:
             *)          RUN_SUITES="true"  ;;
           esac
           # An API dispatch can send any casing for a boolean input; accept them all
-          # here because forcing the suites ON is always the safe direction.
+          # here because forcing the suites ON is the safe direction for lines that carry them.
           case "${FORCE_SUITES:-}" in
             [Tt][Rr][Uu][Ee]) RUN_SUITES="true" ;;
           esac
@@ -1392,13 +1392,14 @@ jobs:
       - name: Health-check the draft release is complete
         id: verify
         # Expected assets: the source archive + exactly one .pkg per release-matrix row
-        # PLUS one dep .pkg per extra_pkgs entry across every row. The
+        # PLUS one built dep .pkg per effective extra_pkgs entry. The
         # pfBlockerNG-relpkg-* sweep also picks up each row's dependency artifact.
         # A published release is stale for this draft handoff; never claim a
         # complete draft or allow notes mutation against it.
         env:
           GH_TOKEN:     ${{ github.token }}
           TAG:          ${{ needs.release.outputs.tag }}
+          SOURCE:       ${{ needs.release.outputs.source }}
           BUILD_MATRIX: ${{ needs.read-matrix.outputs.release_matrix }}
           PORTVERSION:  ${{ needs.read-matrix.outputs.portversion }}
         run: |
@@ -1412,10 +1413,15 @@ jobs:
             exit 1
           fi
 
+          ASSET_MATRIX="$BUILD_MATRIX"
+          if [ "$SOURCE" = "release/3.3" ]; then
+            ASSET_MATRIX=$(printf '%s' "$BUILD_MATRIX" | jq 'map(.extra_pkgs = [])')
+          fi
+
           # issue #1806 B1: the release-row count PLUS the total number of
-          # extra_pkgs entries across the release-matrix rows -- each
+          # built extra_pkgs entries across the effective asset rows -- each
           # dep .pkg is its own release asset (see attach-pkgs's comment).
-          EXPECTED_PKGS=$(printf '%s' "$BUILD_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
+          EXPECTED_PKGS=$(printf '%s' "$ASSET_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
           PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
           SRC_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
 
@@ -1446,7 +1452,7 @@ jobs:
               FAIL=1
             fi
           done <<EOF_ROWS
-          $(printf '%s' "$BUILD_MATRIX" | jq -c '.[]')
+          $(printf '%s' "$ASSET_MATRIX" | jq -c '.[]')
           EOF_ROWS
           printf '%s' "$META" | jq -e '(.name // "") != "" and ((.body // "") | length) > 0' >/dev/null \
             || { echo "::error::release name or body is empty"; FAIL=1; }
