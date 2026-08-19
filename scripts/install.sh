@@ -108,6 +108,23 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 # Spelled out per combination so every path stays quoted: a single accumulated string
 # would have to be word-split to become separate env(1) operands, which breaks the moment
 # a location contains a space.
+# TRUE when the hash directory holds at least one entry. FreeBSD ships /etc/ssl/certs
+# EMPTY until `certctl rehash` populates it, and libfetch abandons
+# SSL_CTX_set_default_verify_paths() as soon as EITHER variable is set -- so exporting an
+# empty hash dir with no bundle beside it leaves an EMPTY store, strictly worse than
+# exporting nothing (issue #2524). Mirrors pfb_pkgconf_dir_populated() (pfblockerng.inc)
+# and the boot hook's glob loop: any non-dot entry counts, including a dangling symlink,
+# which is what a hash dir is made of.
+_ca_path_populated() {
+    [ -d "$1" ] || return 1
+    for _cap_entry in "$1"/*; do
+        if [ -e "${_cap_entry}" ] || [ -L "${_cap_entry}" ]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
 _pkg() {
     if [ -d "${PFB_SSL_CA_CERT_PATH}" ] &&
         [ -f "${PFB_SSL_CA_CERT_FILE}" ] && [ -s "${PFB_SSL_CA_CERT_FILE}" ]; then
@@ -115,7 +132,7 @@ _pkg() {
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE}" \
             "${PKG_BIN}" "$@" </dev/null
-    elif [ -d "${PFB_SSL_CA_CERT_PATH}" ]; then
+    elif _ca_path_populated "${PFB_SSL_CA_CERT_PATH}"; then
         env ASSUME_ALWAYS_YES=yes \
             SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
             "${PKG_BIN}" "$@" </dev/null
