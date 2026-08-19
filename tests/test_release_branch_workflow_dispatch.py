@@ -2,15 +2,14 @@
 
 from pathlib import Path
 
+import yaml
+
 
 def test_tests_workflow_has_manual_dispatch() -> None:
-    workflow = (Path(__file__).parents[1] / ".github/workflows/test.yml").read_text()
-    lines = workflow.splitlines()
-    start = lines.index("on:") + 1
-    triggers = []
-    for line in lines[start:]:
-        if line and not line[0].isspace():
-            break
-        triggers.append(line)
+    source = (Path(__file__).parents[1] / ".github/workflows/test.yml").read_text()
+    workflow = yaml.load(source, Loader=yaml.BaseLoader)
+    assert isinstance(workflow, dict)
 
-    assert "  workflow_dispatch:" in triggers
+    triggers = workflow.get("on")
+    assert isinstance(triggers, dict)
+    assert "workflow_dispatch" in triggers
