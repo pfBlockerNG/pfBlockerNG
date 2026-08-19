@@ -528,6 +528,8 @@ jobs:
           case "${FORCE_SUITES:-}" in
             [Tt][Rr][Uu][Ee]) RUN_SUITES="true" ;;
           esac
+          # release/3.3 is an installer-only bridge with no live smoke/UI corpus.
+          [ "$SOURCE" = "release/3.3" ] && RUN_SUITES="false"
           case "$release_channel" in
             stable) PKG_CHANNEL=stable ;;
             testing|edge) PKG_CHANNEL="$release_channel" ;;
@@ -1082,6 +1084,19 @@ jobs:
             git tag "${TAG}" "$COMMIT"
           fi
 
+      - name: Resolve release-line extras
+        id: extras
+        env:
+          SOURCE: ${{ github.event.inputs.source }}
+          MATRIX_EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}
+        run: |
+          set -eu
+          case "$SOURCE" in
+            release/3.3) EXTRA_PKGS='[]' ;;
+            *) EXTRA_PKGS="$MATRIX_EXTRA_PKGS" ;;
+          esac
+          echo "extra_pkgs=${EXTRA_PKGS}" >> "$GITHUB_OUTPUT"
+
       - name: Write the destination-bound build record
         env:
           TAG:           ${{ github.event.inputs.tag }}
@@ -1151,7 +1166,7 @@ jobs:
           MAJOR:        ${{ matrix.freebsd_major }}
           VARIANT:      ${{ matrix.variant }}
           PFSENSE_VERSION: ${{ matrix.pfsense_version }}
-          EXTRA_PKGS:   ${{ toJson(matrix.extra_pkgs) }}
+          EXTRA_PKGS:   ${{ steps.extras.outputs.extra_pkgs }}
         run: |
           set -eu
           # Keep generated Ports and package trees outside the pinned source checkout.
