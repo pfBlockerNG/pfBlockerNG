@@ -117,12 +117,17 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 # which is what a hash dir is made of.
 _ca_path_populated() {
     [ -d "$1" ] || return 1
+    _cap_has_entry=0
     for _cap_entry in "$1"/*; do
         if [ -e "${_cap_entry}" ] || [ -L "${_cap_entry}" ]; then
-            return 0
+            _cap_has_entry=1
+            break
         fi
     done
-    return 1
+    unset _cap_entry
+    [ "${_cap_has_entry}" -eq 1 ] || { unset _cap_has_entry; return 1; }
+    unset _cap_has_entry
+    return 0
 }
 
 _pkg() {
