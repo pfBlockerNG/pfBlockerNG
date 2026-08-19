@@ -2234,11 +2234,22 @@ final class PfbConfig
 
 // Settings-family snapshots capture only pfBlockerNG-owned installedpackages sections. Foreign
 // config remains live while the registered marker records the exact schema family.
-const PFB_SETTINGS_FAMILY_RANK = ['3.2' => 0, '4.0' => 1, '4.1' => 2];
+const PFB_SETTINGS_FAMILY_RANK = ['3.2' => 0, '3.3' => 1, '4.0' => 2, '4.1' => 3];
+const PFB_NIGHTLY_SETTINGS_FAMILY = '4.1';
 
 function pfb_settings_family_from_version(string $version): ?string
 {
-	$version = ltrim(trim($version), 'vV');
+	$version = trim($version);
+	if (preg_match('/^(\d{14})\.[0-9a-f]{7}$/', $version, $match) === 1) {
+		$timestamp = $match[1];
+		return checkdate((int) substr($timestamp, 4, 2), (int) substr($timestamp, 6, 2), (int) substr($timestamp, 0, 4))
+			&& (int) substr($timestamp, 8, 2) < 24
+			&& (int) substr($timestamp, 10, 2) < 60
+			&& (int) substr($timestamp, 12, 2) < 60
+			? PFB_NIGHTLY_SETTINGS_FAMILY
+			: NULL;
+	}
+	$version = ltrim($version, 'vV');
 	if (preg_match('/^(\d+\.\d+)(?:\.\d+)?(?:[.-].*)?$/', $version, $match) !== 1
 		|| !isset(PFB_SETTINGS_FAMILY_RANK[$match[1]])) {
 		return NULL;

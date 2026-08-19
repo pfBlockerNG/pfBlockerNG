@@ -67,6 +67,33 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		$this->assertSame(['current', 'save'], $order);
 	}
 
+	public function testTargetResolutionAndRestoreFailuresRollBackToSource(): void
+	{
+		foreach ([NULL, '4.1'] as $target) {
+			$order = [];
+			try {
+				pfb_install_settings_family_capture_restore(
+					static function () use (&$order): string { $order[] = 'current'; return '3.3'; },
+					static function (string $family) use (&$order): bool { $order[] = "save:{$family}"; return TRUE; },
+					static function () use (&$order): string { $order[] = 'version'; return 'nightly'; },
+					static function () use (&$order, $target): ?string { $order[] = 'from-version'; return $target; },
+					static function (string $family) use (&$order): bool {
+						$order[] = "replace:{$family}";
+						return $family === '3.3';
+					}
+				);
+				$this->fail('target failure must restore the saved source and fail closed');
+			} catch (RuntimeException $error) {
+				$this->assertSame('pfBlockerNG: unable to restore settings family', $error->getMessage());
+			}
+			$targetRestore = $target === NULL ? [] : ['replace:4.1'];
+			$this->assertSame(
+				['current', 'save:3.3', 'version', 'from-version', ...$targetRestore, 'replace:3.3'],
+				$order
+			);
+		}
+	}
+
 	/**
 	 * The installer performs appliance-only migrations and service changes, so a direct include
 	 * is destructive/off-appliance. php_strip_whitespace keeps this pin executable-code-only.

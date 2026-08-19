@@ -63,9 +63,22 @@ final class PfbSettingsFamilyTest extends TestCase
 		PfbConfig::write('gen/settings_family', '9.0');
 		$this->assertNull(pfb_settings_family_current());
 		$this->assertSame('3.2', pfb_settings_family_from_version('3.2.0'));
+		$this->assertSame('3.3', pfb_settings_family_from_version('3.3.0'));
 		$this->assertSame('4.0', pfb_settings_family_from_version('4.0.0'));
 		$this->assertSame('4.1', pfb_settings_family_from_version('4.1.0'));
+		$this->assertSame('4.1', pfb_settings_family_from_version('20260819010101.abcdef1'));
 		$this->assertNull(pfb_settings_family_from_version('5.0.1'));
+		$this->assertNull(pfb_settings_family_from_version('20260230010101.abcdef1'));
+		$this->assertNull(pfb_settings_family_from_version('20260819010101.ABCDEF1'));
+		$this->assertNull(pfb_settings_family_from_version('20260819010101.abcdef'));
+	}
+
+	public function testThreeThreeMarkerCanBeSnapshottedBeforeUpgrade(): void
+	{
+		$this->assertTrue(pfb_settings_family_record('3.3'));
+		$this->assertSame('3.3', pfb_settings_family_current());
+		pfb_settings_family_pre_uninstall();
+		$this->assertFileExists($this->root . '/settings-3.3.xml');
 	}
 
 	public function testSaveAndReplacePreserveOwnedSubtreeAndUnrelatedConfig(): void
