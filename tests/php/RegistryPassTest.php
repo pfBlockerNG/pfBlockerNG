@@ -17,6 +17,7 @@ use PHPUnit\Framework\TestCase;
  * the caller (pfblockerng_install.inc) persists the result.
  */
 #[CoversFunction('pfb_registry_pass')]
+#[CoversFunction('pfb_registry_section_modes')]
 final class RegistryPassTest extends TestCase
 {
 	private const GEN_SECTION   = 'installedpackages/pfblockerng/config/0';
@@ -60,6 +61,45 @@ final class RegistryPassTest extends TestCase
 	// -----------------------------------------------------------------------
 	// 1 -- Mode / seed
 	// -----------------------------------------------------------------------
+
+	public function testSectionModesUseOperatorViewAcrossEveryRegisteredSection(): void
+	{
+		$modes = pfb_registry_section_modes([
+			self::GEN_SECTION   => [],
+			self::DNSBL_SECTION => ['settings_family' => '4.0'],
+			self::SS_SECTION    => ['safesearch' => 'on'],
+			self::IP_SECTION    => 'not-an-array',
+			self::REP_SECTION   => ['enable_rep' => 'on'],
+		]);
+
+		$this->assertSame([
+			self::GEN_SECTION   => 'NEWCFG',
+			self::DNSBL_SECTION => 'NEWCFG',
+			self::SS_SECTION    => 'OLDCFG',
+			self::IP_SECTION    => 'NEWCFG',
+			self::REP_SECTION   => 'OLDCFG',
+		], $modes);
+	}
+
+	public function testFreshMigrationUsesCapturedRegistryModes(): void
+	{
+		$sections = [];
+		foreach (PFB_SECTIONS as $section) {
+			$sections[$section] = PfbConfig::readSection($section);
+		}
+		$modes = pfb_registry_section_modes($sections);
+
+		pfb_run_migrations();
+		$this->assertSame('on', config_get_path(self::GEN_SECTION . '/pfb_scheduled_feed_updates'),
+			'the schedule migration must seed General before registry reconciliation');
+
+		foreach (PFB_SECTIONS as $section) {
+			$sections[$section] = PfbConfig::readSection($section);
+		}
+		$result = pfb_registry_pass($sections, NULL, $modes);
+
+		$this->assertSame('auto', $result[self::GEN_SECTION]['pfb_alias_delta_mode'] ?? NULL);
+	}
 
 	/** Row 1: every registered field seeded at default on a genuinely fresh install. */
 	public function testFreshEmptySectionsSeedEveryRegisteredFieldAtDefault(): void

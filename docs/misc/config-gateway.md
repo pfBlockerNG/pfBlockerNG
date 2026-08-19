@@ -336,8 +336,9 @@ fail-closed on conflicting pair with `file_notice()` naming keys and never value
 grandfather helpers, and #1898 seeding pass with **one registry-driven loop**, called at
 end of `pfblockerng_install.inc` after `pfb_run_migrations()` and after ADR-53
 `pfBlockerNGSuppress` alias conversion (which keys on literal absence of
-`ip/v4suppression` and must observe pre-pass state). The installer captures each section's
-mode before migrations via `pfb_registry_section_modes()` and supplies it to the pass:
+`ip/v4suppression` and must observe pre-pass state). After restoring the target settings
+family, the installer captures each section's mode before migrations via
+`pfb_registry_section_modes()` and supplies it to the pass:
 `OLDCFG` iff the pre-migration section was non-empty under `pfb_gconfig_operator_view()`
 (installer's `settings_family` marker never reads as operator data — #1770/#1771/#1775).
 Direct callers that omit the mode map retain the original behavior of computing it from
