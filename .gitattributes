@@ -1,8 +1,3 @@
-# Vendored third-party skills and plugin trees. linguist-vendored keeps them
-# out of language stats and collapses their diffs in GitHub review views.
-.agents/skills/cave*/** linguist-vendored
-plugins/** linguist-vendored
-
 # Historical records and dev-only docs dominate many commits (95%+ of the changed
 # lines). linguist-documentation keeps them out of the language stats while
 # leaving their diffs reviewable on GitHub (unlike linguist-generated, which

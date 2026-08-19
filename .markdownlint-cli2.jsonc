@@ -2,7 +2,7 @@
   // markdownlint-cli2 runner config (globs + ignores). Rule set lives in
   // `.markdownlint.jsonc`. Run from the repo root: `npx markdownlint-cli2`
   // (add `--fix` to auto-fix). Lints maintained Markdown and skips historical,
-  // dependency/virtualenv, and vendored plugin trees.
+  // dependency/virtualenv trees and duplicate adapter paths.
   "globs": ["**/*.md"],
   "ignores": [
     "node_modules",
@@ -19,15 +19,7 @@
     // documentation): its repeated "User"/"Assistant" headings and multiple
     // H1s are inherent to the format, so it is not linted.
     "**/TRANSCRIPT.md",
-    // Vendored loose skills remain available when their upstream plugins do
-    // not ship them: not ours to lint — fixing them here would drift upstream.
-    // .agents/skills/<name> is the canonical path;
-    // .claude/skills/<name> is a symlink onto it, but the glob walker
-    // FOLLOWS symlinked directories (confirmed empirically), so both paths
-    // need an entry or the same files get linted twice, once unignored.
-    ".agents/skills/{batch-grill-me,cavecrew,caveman,caveman-commit,caveman-compress,caveman-help,caveman-review,caveman-stats,claude-handoff,design-an-interface,edit-article,git-guardrails-claude-code,loop-me,migrate-to-shoehorn,obsidian-vault,qa,request-refactor-plan,scaffold-exercises,setup-pre-commit,setup-ts-deep-modules,ubiquitous-language,writing-beats,writing-fragments,writing-shape}/**",
-    ".claude/skills/{batch-grill-me,cavecrew,caveman,caveman-commit,caveman-compress,caveman-help,caveman-review,caveman-stats,claude-handoff,design-an-interface,edit-article,git-guardrails-claude-code,loop-me,migrate-to-shoehorn,obsidian-vault,qa,request-refactor-plan,scaffold-exercises,setup-pre-commit,setup-ts-deep-modules,ubiquitous-language,writing-beats,writing-fragments,writing-shape}/**",
-    // Vendored upstream plugin tree (Codex local marketplace source).
-    "plugins/**"
+    // Claude symlinks onto canonical repo-owned skills; lint each target once.
+    ".claude/skills/**"
   ]
 }

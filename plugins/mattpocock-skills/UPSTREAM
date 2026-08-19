@@ -1,8 +1,0 @@
-mattpocock/skills @ 8b36d4fb2635b3c21998dcd8144439c9e5ba7302 (tag v1.2.2, 2026-08-05)
-
-claude-skills/ is the promoted upstream plugin set plus pfBlockerNG's native
-issue-type policy in triage, setup-matt-pocock-skills, to-tickets, and wayfinder.
-codex/skills/ mirrors that tree and removes only Claude's
-disable-model-invocation frontmatter; agents/openai.yaml preserves the
-explicit-only policy in Codex. The nested Codex root prevents Claude from
-auto-discovering a second copy of every skill.

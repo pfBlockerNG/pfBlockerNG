@@ -121,11 +121,6 @@ if [ "$staged_sh" = 1 ]; then
 	# has no /bin/bash, and macOS /bin/bash is the ancient 3.2). Scans ALL tracked
 	# files, so it also covers tests/ (not lint-globbed below).
 	step 'shebang policy (no #!bash)'
-	# Vendored third-party skill trees are exempt (upstream MIT content from
-	# the mattpocock/skills catalog; never runs on the box). .agents/skills/<name>
-	# is canonical for a migrated skill, .claude/skills/<name> either the same
-	# content (pre-migration) or a symlink onto it — exempt both prefixes so
-	# this stays correct regardless of migration state.
 	# -z + xargs -0, never a newline listing: git C-quotes a path holding a
 	# quote, backslash, control byte or non-ASCII byte, and `head` on a quoted
 	# name reads nothing — that file's shebang would go unchecked (issue #2212).
@@ -134,10 +129,7 @@ if [ "$staged_sh" = 1 ]; then
 	git ls-files -z | xargs -0 sh -c '
 		for f; do
 			case $f in
-			.claude/skills/git-guardrails-claude-code/*) continue ;;
-			.agents/skills/git-guardrails-claude-code/*) continue ;;
 			legacy/*) continue ;;
-			plugins/*) continue ;;
 			esac
 			case $(head -n1 "$f" 2>/dev/null) in
 			"#!"*bash*)

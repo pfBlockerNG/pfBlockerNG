@@ -8,8 +8,7 @@
   },
   "enabledPlugins": {
     "ponytail@ponytail": true,
-    "caveman@caveman": true,
-    "mattpocock-skills@mattpocock": true
+    "caveman@caveman": true
   },
   "extraKnownMarketplaces": {
     "ponytail": {
@@ -22,12 +21,6 @@
       "source": {
         "source": "github",
         "repo": "JuliusBrussee/caveman"
-      }
-    },
-    "mattpocock": {
-      "source": {
-        "source": "directory",
-        "path": "./plugins/mattpocock-skills"
       }
     }
   },

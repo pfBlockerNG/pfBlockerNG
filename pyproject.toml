@@ -103,8 +103,8 @@ exclude_also = [
 # Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).
 target-version = "py311"
 line-length    = 120
-# Historical and vendored third-party trees are retained byte-for-byte.
-extend-exclude = [".agents/skills", ".claude/skills", "legacy", "plugins"]
+# Historical records are retained byte-for-byte.
+extend-exclude = ["legacy"]
 
 [tool.ruff.lint]
 # E/W = pycodestyle  F = pyflakes  I = isort

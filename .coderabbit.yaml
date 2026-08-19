@@ -17,10 +17,9 @@ reviews:
     - "!**/*.md"
     - "!docs/**"
     - "!legacy/**"
-    # Agent policy and vendored content.
+    # Agent policy and its Claude symlink adapters.
     - "!.agents/**"
     - "!.claude/skills/**"
-    - "!plugins/**"
     - "!src/usr/local/www/pfblockerng/vendor/**"
 
   path_instructions:

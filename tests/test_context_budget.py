@@ -123,13 +123,10 @@ def _tracked(root: Path) -> list[str]:
         # the stub branch must win over the policy/context prefix.
         (".agents/context/sub/AGENTS.md", 400),
         (".agents/policy/sub/CLAUDE.md", 400),
-        ("plugins/ponytail/AGENTS.md", None),
         ("src/usr/local/pkg/pfblockerng/pfblockerng.inc", None),
         ("docs/misc/architecture-notes.md", None),
         (".claude/rules/smoke.md", 400),
         (".claude/rules/sub/deep.md", 400),
-        # A `plugins/` segment ANYWHERE (not just root-anchored) is vendored.
-        (".claude/plugins/foo/CLAUDE.md", None),
     ],
 )
 def test_budget_for_surface_classes(rel: str, budget: int | None) -> None:
@@ -164,14 +161,6 @@ def test_rules_budget_over_fires_and_at_budget_passes(tmp_path: Path) -> None:
     _write(root, ".claude/rules/y.md", "x" * 400)
     violations = ccb.check_sizes(root, [".claude/rules/x.md", ".claude/rules/y.md"])
     assert violations == [".claude/rules/x.md: 401 bytes > budget 400"]
-
-
-def test_nested_plugins_segment_oversized_stub_has_no_budget(tmp_path: Path) -> None:
-    # A `plugins/` segment anywhere in the path is vendored content, not our dir
-    # stub — no budget applies, so an oversized file here is not a violation.
-    root = tmp_path
-    _write(root, ".claude/plugins/foo/CLAUDE.md", "x" * 500)
-    assert ccb.check_sizes(root, [".claude/plugins/foo/CLAUDE.md"]) == []
 
 
 # --- routing-table extraction and resolution -----------------------------------

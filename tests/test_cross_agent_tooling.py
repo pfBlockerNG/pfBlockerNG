@@ -1,13 +1,23 @@
-"""Cross-agent mode and skill-plugin wiring."""
+"""Cross-agent modes, repo-owned skills, and external plugin bridges."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MODES = ("PONYTAIL", "CAVEMAN")
+REPO_SKILLS = {
+    "coderabbit",
+    "debug",
+    "new-terminal",
+    "release",
+    "release-with-changelog",
+    "subsystem-sweep",
+}
 
 
 def _commands(path: str, event: str) -> str:
@@ -15,6 +25,104 @@ def _commands(path: str, event: str) -> str:
     return "\n".join(
         hook["command"] for group in config["hooks"][event] for hook in group["hooks"] if "command" in hook
     )
+
+
+def test_repo_contains_only_owned_skills_and_symlink_adapters() -> None:
+    assert not (ROOT / "plugins").exists(), "third-party plugin trees must not be vendored"
+    assert not (ROOT / "skills-lock.json").exists(), "third-party skill lock must not be vendored"
+    assert not (ROOT / ".agents/plugins").exists(), "local plugin marketplace must not be vendored"
+
+    canonical = {path.name for path in (ROOT / ".agents/skills").iterdir() if path.is_dir()}
+    adapters = {path.name for path in (ROOT / ".claude/skills").iterdir()}
+    assert canonical == adapters == REPO_SKILLS
+    for name in REPO_SKILLS:
+        adapter = ROOT / ".claude/skills" / name
+        assert adapter.is_symlink(), f"{adapter.relative_to(ROOT)} must stay a bridge"
+        assert adapter.resolve() == ROOT / ".agents/skills" / name
+
+
+def test_statusline_loads_ponytail_from_external_plugin_cache(tmp_path: Path) -> None:
+    hook_dir = tmp_path / "plugins/cache/ponytail/ponytail/1.0/hooks"
+    hook_dir.mkdir(parents=True)
+    (hook_dir / "ponytail-statusline.sh").write_text("#!/bin/sh\nprintf PONYTAIL", encoding="utf-8")
+    env = os.environ | {
+        "CLAUDE_CONFIG_DIR": str(tmp_path),
+        "CLAUDE_PROJECT_DIR": str(ROOT),
+        "HOME": str(tmp_path),
+    }
+
+    result = subprocess.run(
+        ["sh", ROOT / ".claude/hooks/statusline.sh"],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "PONYTAIL "
+
+
+def test_caveman_stats_loads_script_from_external_plugin_cache(tmp_path: Path) -> None:
+    plugin_script = tmp_path / "plugins/cache/caveman/caveman/1.0/src/hooks/caveman-stats.js"
+    plugin_script.parent.mkdir(parents=True)
+    plugin_script.touch()
+    node_log = tmp_path / "node.log"
+    fake_node = tmp_path / "bin/node"
+    fake_node.parent.mkdir()
+    fake_node.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >"$NODE_LOG"\n', encoding="utf-8")
+    fake_node.chmod(0o755)
+    env = os.environ | {
+        "CLAUDE_CONFIG_DIR": str(tmp_path),
+        "CLAUDE_PROJECT_DIR": str(ROOT),
+        "HOME": str(tmp_path),
+        "NODE_LOG": str(node_log),
+        "PATH": f"{fake_node.parent}:{os.environ['PATH']}",
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+    }
+
+    result = subprocess.run(
+        ["sh", ROOT / ".claude/hooks/caveman-stats-refresh.sh"],
+        input='{"transcript_path":"/tmp/session.jsonl"}',
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert node_log.read_text(encoding="utf-8") == f"{plugin_script} --session-file /tmp/session.jsonl\n"
+
+
+def test_caveman_stats_skips_when_plugin_is_not_cached(tmp_path: Path) -> None:
+    fake_node = tmp_path / "bin/node"
+    fake_node.parent.mkdir(parents=True)
+    fake_node.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    fake_node.chmod(0o755)
+    env = os.environ | {
+        "CLAUDE_CONFIG_DIR": str(tmp_path),
+        "HOME": str(tmp_path),
+        "PATH": f"{fake_node.parent}:{os.environ['PATH']}",
+        "XDG_CACHE_HOME": str(tmp_path / "cache"),
+    }
+
+    result = subprocess.run(
+        ["sh", ROOT / ".claude/hooks/caveman-stats-refresh.sh"],
+        input="{}",
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_project_plugin_bridges_use_external_sources_only() -> None:
+    config = json.loads((ROOT / ".claude/settings.json").read_text(encoding="utf-8"))
+    assert set(config["enabledPlugins"]) == {"ponytail@ponytail", "caveman@caveman"}
+    assert set(config["extraKnownMarketplaces"]) == {"ponytail", "caveman"}
+    assert all(marketplace["source"]["source"] == "github" for marketplace in config["extraKnownMarketplaces"].values())
 
 
 def test_modes_reach_every_agent_start() -> None:
@@ -126,33 +234,3 @@ def test_copilot_roles_are_pinned_and_defined() -> None:
     agents = {path.name for path in (ROOT / ".github/agents").glob("*.agent.md")}
     codex_agents = {path.stem for path in (ROOT / ".codex/agents").glob("*.toml")}
     assert {f"{name}.agent.md" for name in codex_agents} == agents, "Copilot role coverage diverges from Codex"
-
-
-def test_mattpocock_plugin_is_installable_by_copilot() -> None:
-    plugin_root = ROOT / "plugins/mattpocock-skills"
-    manifest = json.loads((plugin_root / ".github/plugin/plugin.json").read_text(encoding="utf-8"))
-    assert manifest["name"] == "mattpocock-skills"
-
-    claude = json.loads((plugin_root / ".claude-plugin/plugin.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == claude["version"], "the Copilot manifest drifted from the plugin version"
-
-    # Points at the existing vendor-neutral tree: no third copy of every skill.
-    skills = manifest["skills"]
-    assert skills == "codex/skills/"
-    assert (plugin_root / skills).is_dir()
-
-    marketplace = json.loads((plugin_root / ".github/plugin/marketplace.json").read_text(encoding="utf-8"))
-    assert [entry["name"] for entry in marketplace["plugins"]] == ["mattpocock-skills"]
-
-
-def test_mattpocock_skills_are_project_enabled_for_claude_and_listed_for_codex() -> None:
-    claude = json.loads((ROOT / ".claude/settings.json").read_text(encoding="utf-8"))
-    assert claude["enabledPlugins"]["mattpocock-skills@mattpocock"] is True
-    assert claude["extraKnownMarketplaces"]["mattpocock"]["source"] == {
-        "source": "directory",
-        "path": "./plugins/mattpocock-skills",
-    }
-
-    codex = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
-    entries = {plugin["name"] for plugin in codex["plugins"]}
-    assert {"mattpocock-skills", "ponytail"} <= entries

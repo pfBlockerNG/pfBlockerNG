@@ -45,14 +45,14 @@ Describe 'run-gates.sh gates_for()'
 
   It 'syntax-checks an out-of-scope shell file but does not shellcheck it'
     # The hook + CI shellcheck only src/, scripts/ and .claude/hooks/; tests/ specs and
-    # vendored skill scripts trip SC2034 false-positives, so the runner must skip them too.
+    # skill helpers are outside that production-tooling scope.
     Data
       #|tests/shell/agent_work_branch_spec.sh
-      #|.claude/skills/ponytail/hooks/ponytail-statusline.sh
+      #|.agents/skills/release/helper.sh
     End
     When call gates_for
     The line 1 of output should equal 'sh -n tests/shell/agent_work_branch_spec.sh'
-    The line 2 of output should equal 'sh -n .claude/skills/ponytail/hooks/ponytail-statusline.sh'
+    The line 2 of output should equal 'sh -n .agents/skills/release/helper.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
     The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
     The lines of output should equal 3
