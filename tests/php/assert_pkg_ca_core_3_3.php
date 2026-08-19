@@ -5,9 +5,10 @@ declare(strict_types=1);
 $GLOBALS['config'] = [];
 $GLOBALS['pfb'] = [];
 $GLOBALS['allowed'] = true;
-$GLOBALS['dirty'] = false;
-$GLOBALS['notices'] = [];
 define('PFB_FILTER_ON_OFF', 1);
+define('PFB_REPO_GENERATE_HOOK', sys_get_temp_dir() . '/pfb-ca-core-' . bin2hex(random_bytes(4)));
+$timeout = trim((string) shell_exec('command -v timeout'));
+define('PFB_PKG_TIMEOUT', escapeshellarg($timeout) . ' -s TERM -k 1 1');
 
 function config_get_path(string $path, mixed $default = null): mixed
 {
@@ -40,11 +41,6 @@ function isAllowedPage(string $page): bool
 	return $page === 'pkg_mgr_installed.php' && $GLOBALS['allowed'];
 }
 
-function is_subsystem_dirty(string $name): bool
-{
-	return $name === 'pkg' && $GLOBALS['dirty'];
-}
-
 function pkg_version_compare(string $left, string $right): string
 {
 	$result = version_compare($left, $right);
@@ -56,27 +52,18 @@ function pfb_filter(mixed $value, int $type, string $key): string
 	return $value === 'on' ? 'on' : '';
 }
 
-function file_notice(mixed ...$args): void
-{
-	$GLOBALS['notices'][] = $args;
-}
-
 $extra = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 $software = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_software.inc';
 require_once $extra;
 require_once $software;
 
 $failures = 0;
-$root = sys_get_temp_dir() . '/pfb_pkg_ca_3_3_' . bin2hex(random_bytes(5));
-mkdir($root . '/certs', 0700, true);
-$lockfile = $root . '/upgrade.lock';
-$hash = $root . '/certs/hash.0';
-file_put_contents($hash, 'x');
-$GLOBALS['pfb']['dbdir'] = $root;
-$bundle = $root . '/bundle.pem';
-file_put_contents($bundle, "CA\n");
-$pkgconf = $root . '/pkg.conf';
-$base = "PKG_ENV {\n\tSSL_CA_CERT_FILE=/tmp/bundle.pem\n\tOTHER=value\n}\nTAIL\n";
+$hook_log = PFB_REPO_GENERATE_HOOK . '.log';
+file_put_contents(
+	PFB_REPO_GENERATE_HOOK,
+	"#!/bin/sh\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($hook_log) . "\nexit \${PFB_HOOK_STATUS:-0}\n"
+);
+chmod(PFB_REPO_GENERATE_HOOK, 0700);
 
 function row(string $name, callable $check): void
 {
@@ -137,83 +124,59 @@ row('web write requires software privilege and canonical token', static function
 	$GLOBALS['allowed'] = true;
 });
 
-row('CA environment prefix validates each half and shell quotes', static function (): void {
-	$dir = $GLOBALS['pfb']['dbdir'] . "/ca dir's";
-	mkdir($dir, 0700, true);
-	$file = $GLOBALS['pfb']['dbdir'] . "/ca file's.pem";
-	file_put_contents($file, 'x');
-	same("SSL_CA_CERT_PATH='" . str_replace("'", "'\\''", $dir) . "' SSL_CA_CERT_FILE='" . str_replace("'", "'\\''", $file) . "' ", pfb_pkg_ca_env_prefix($dir, $file), 'quoted prefix');
-	same("SSL_CA_CERT_FILE='" . str_replace("'", "'\\''", $file) . "' ", pfb_pkg_ca_env_prefix('', $file), 'empty path keeps bundle');
-	file_put_contents($file, '');
-	same("SSL_CA_CERT_PATH='" . str_replace("'", "'\\''", $dir) . "' ", pfb_pkg_ca_env_prefix($dir, $file), 'empty bundle omitted');
-});
-
-row('parser add/remove is exact and byte preserving', static function () use (&$base): void {
-	$patched = pfb_pkgconf_ca_add($base, '/etc/ssl/certs');
-	check($patched !== '' && str_contains($patched, "\tSSL_CA_CERT_PATH=/etc/ssl/certs\n}"), 'add line');
-	same($base, pfb_pkgconf_ca_remove($patched, '/etc/ssl/certs'), 'round trip');
-	check(!pfb_pkgconf_ca_needed("PKG_ENV {\n\tSSL_CA_CERT_FILE=relative\n}\n"), 'unsafe file path');
-	check(!pfb_pkgconf_ca_needed("PKG_ENV {\n\tSSL_CA_CERT_FILE=/tmp/a\n\tSSL_CA_CERT_FILE=/tmp/b\n}\n"), 'duplicate file key');
-	check(!pfb_pkgconf_ca_needed("PKG_ENV {\n\tSSL_CA_CERT_FILE=/tmp/a\n\tSSL_CA_CERT_PATH=/tmp/foreign\n}\n"), 'foreign path');
-	check(!pfb_pkgconf_ca_needed("PKG_ENV {\n\tX={\n}\n\tSSL_CA_CERT_FILE=/tmp/a\n}\n"), 'nested block');
-});
-
-row('state and sync enforce Plus filesystem guards', static function () use (&$pkgconf, &$base, &$bundle, &$lockfile): void {
-	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
-	same('needed', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'needed state');
-	$GLOBALS['dirty'] = false;
-	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'sync add');
-	same('patched', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'patched state');
-	check(pfb_pkgconf_ca_sync(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'sync remove');
-	same('needed', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'removed state');
-	$GLOBALS['dirty'] = true;
-	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'dirty refused');
-	$GLOBALS['dirty'] = false;
-	@unlink($GLOBALS['pfb']['dbdir'] . '/certs/hash.0');
-	file_put_contents($pkgconf, "PKG_ENV {\n\tSSL_CA_CERT_FILE={$bundle}\n}\n");
-	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'empty cert dir refused');
-	file_put_contents($GLOBALS['pfb']['dbdir'] . '/certs/hash.0', 'x');
-	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'populated cert dir');
-});
-
-row('save apply and tick are best effort', static function () use (&$pkgconf, &$base, &$bundle, &$lockfile): void {
+row('save persists only the rendered consent token', static function (): void {
 	$GLOBALS['config'] = [];
 	PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', 'on');
 	same('on', pfb_pkgconf_ca_save([]), 'hidden section does not revoke');
 	same('', pfb_pkgconf_ca_save(['pfb_pkg_ca_consent_shown' => '1']), 'unchecked token');
-	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
-	PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', 'on');
-	check(pfb_pkgconf_ca_apply('on', false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile), 'apply');
-	$GLOBALS['notices'] = [];
-	pfb_pkgconf_ca_tick(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile);
-	check(count($GLOBALS['notices']) === 0, 'provenance denial is silent');
-	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
-	@unlink($GLOBALS['pfb']['dbdir'] . '/certs/hash.0');
-	pfb_pkgconf_ca_tick(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile);
-	check(count($GLOBALS['notices']) === 1, 'notice');
-	pfb_pkgconf_ca_tick(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile);
-	check(count($GLOBALS['notices']) === 1, 'notice dedupe');
 });
 
-row('both networked pkg commands carry the CA prefix before timeout', static function () use (&$software): void {
+row('apply maps consent transitions to the hook', static function () use (&$hook_log): void {
+	check(pfb_pkgconf_ca_apply('on', false), 'consent on syncs');
+	check(pfb_pkgconf_ca_apply('', true), 'on to off revokes');
+	check(pfb_pkgconf_ca_apply('', false), 'off to off is a no-op');
+	same("ca-sync\nca-revoke\n", file_get_contents($hook_log), 'transition calls');
+	putenv('PFB_HOOK_STATUS=1');
+	check(!pfb_pkgconf_ca_apply('on', false), 'hook failure propagates');
+	putenv('PFB_HOOK_STATUS');
+});
+
+row('pkg wrapper syncs before running and fails closed', static function () use (&$hook_log): void {
+	file_put_contents($hook_log, '');
+	$out = [];
+	$ret = -1;
+	pfb_pkg_exec('/usr/bin/printf ok', $out, $ret);
+	same(0, $ret, 'command status');
+	same(['ok'], $out, 'command output');
+	same("ca-sync\n", file_get_contents($hook_log), 'pre-command sync');
+	putenv('PFB_HOOK_STATUS=1');
+	pfb_pkg_exec('/usr/bin/printf should-not-run', $out, $ret);
+	same(-1, $ret, 'blocked status');
+	same([], $out, 'blocked output');
+	putenv('PFB_HOOK_STATUS');
+});
+
+row('both pkg commands delegate to the hook immediately before execution', static function () use (&$software): void {
 	$source = file_get_contents($software);
 	check(is_string($source), 'software source readable');
-	check(substr_count($source, 'exec("{$ca}{$tmo}{$bin}') === 2, 'both networked calls prefixed');
-	check(strpos($source, 'exec("{$tmo}{$bin} update') === false, 'no unprefixed update call');
-	check(strpos($source, 'exec("{$tmo}{$bin} rquery') === false, 'no unprefixed rquery call');
+	$wrapper_start = strpos($source, 'function pfb_pkg_exec');
+	$wrapper_end = strpos($source, 'function pfb_pkg_installed_name', $wrapper_start);
+	check($wrapper_start !== false && $wrapper_end !== false, 'pkg wrapper slice');
+	$wrapper = substr($source, $wrapper_start, $wrapper_end - $wrapper_start);
+	$sync_pos = strpos($wrapper, "pfb_pkgconf_ca_command('ca-sync')");
+	$exec_pos = strpos($wrapper, 'exec($command');
+	check($sync_pos !== false && $exec_pos !== false && $sync_pos < $exec_pos, 'hook before pkg exec');
+	$start = strpos($source, 'function pfb_pkg_latest');
+	$end = strpos($source, 'function pfb_pkgconf_ca_save', $start);
+	check($start !== false && $end !== false, 'latest slice');
+	$latest = substr($source, $start, $end - $start);
+	check(substr_count($latest, 'pfb_pkg_exec("{$tmo}{$bin}') === 2, 'both latest calls use wrapper');
+	check(substr_count($source, 'pfb_pkg_exec(') === 6, 'all five pkg calls use the wrapper');
+	check(!str_contains($latest, 'SSL_CA_CERT_PATH='), 'no PHP environment decoration');
 });
 
-function remove_tree(string $path): void
-{
-	if (!is_dir($path)) { return; }
-	foreach (scandir($path) ?: [] as $entry) {
-		if ($entry === '.' || $entry === '..') { continue; }
-		$child = $path . '/' . $entry;
-		is_dir($child) && !is_link($child) ? remove_tree($child) : @unlink($child);
-	}
-	@rmdir($path);
-}
+@unlink(PFB_REPO_GENERATE_HOOK);
+@unlink($hook_log);
 
-remove_tree($root);
 echo $failures === 0 ? "ALL PASS\n" : "{$failures} FAILURES\n";
 exit($failures === 0 ? 0 : 1);

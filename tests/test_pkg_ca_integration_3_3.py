@@ -41,7 +41,7 @@ def test_save_persists_consent_before_applying_pkg_conf() -> None:
 def test_ui_is_conditional_and_posts_an_explicit_consent_token() -> None:
     page = SOFTWARE_PAGE.read_text()
     source = SOFTWARE_CORE.read_text()
-    assert "pfb_pkgconf_ca_add_form_controls($form, $pfb_ca_state, pfb_pkg_ca_consent_enabled());" in page
+    assert "pfb_pkgconf_ca_add_form_controls($form, pfb_pkg_ca_consent_enabled());" in page
     for token in (
         "function pfb_pkgconf_ca_add_form_controls(",
         "new Form_Checkbox(\n\t\t'pfb_pkg_ca_consent'",
@@ -49,26 +49,23 @@ def test_ui_is_conditional_and_posts_an_explicit_consent_token() -> None:
         "new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1')",
         "SSL_CA_CERT_PATH=/etc/ssl/certs",
         "Unchecking this removes only that one line",
-        "re-applies the line at boot and on every scheduled (cron) pass",
+        "re-applies the line at boot and before package checks",
     ):
         assert token in source
-    assert "$pfb_ca_state = pfb_pkgconf_ca_state();" in page
-    assert "if ($pfb_ca_state !== '') {" in page
+    assert "if (pfb_pkg_ca_is_plus()) {" in page
     assert "config_get_path" not in page
     assert "gen/pfb_pkg_ca_consent" not in page
 
 
-def test_cron_keeps_feed_sync_and_adds_best_effort_ca_tick() -> None:
+def test_cron_keeps_feed_and_software_checks_without_a_duplicate_ca_writer() -> None:
     source = CRON_PAGE.read_text()
     case = _between(source, "case 'cron':", "\n\t\tcase 'updateip':")
     feed = case.index("pfblockerng_sync_cron();")
     update = case.index("pfb_software_update_check();")
-    tick = case.index("pfb_pkgconf_ca_tick();")
-    assert feed < update < tick
+    assert feed < update
     assert case.count("function_exists('pfb_software_update_check')") == 1
-    assert case.count("function_exists('pfb_pkgconf_ca_tick')") == 1
     assert case.count("try { pfb_software_update_check(); }") == 1
-    assert case.count("try { pfb_pkgconf_ca_tick(); }") == 1
+    assert "pfb_pkgconf_ca_tick" not in case
 
 
 def test_active_project_links_are_https_and_canonical() -> None:

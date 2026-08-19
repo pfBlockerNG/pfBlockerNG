@@ -102,7 +102,7 @@ if ($_POST && isset($_POST['save'])) {
 		gettext(
 			'The setting was saved, but pfBlockerNG could not update %s right now (its CA '
 			. 'certificate directory may be missing or empty -- try running `certctl rehash` '
-			. 'from the shell). pfBlockerNG will retry automatically at the next boot or scheduled run.'
+			. 'from the shell). pfBlockerNG will retry at the next boot or package check.'
 		),
 		PFB_PKG_CONF
 	);
@@ -210,10 +210,9 @@ $section->addInput(new Form_Checkbox(
 ))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
 
-// Render the consent control only for a recognised Plus pkg.conf shape.
-$pfb_ca_state = pfb_pkgconf_ca_state();
-if ($pfb_ca_state !== '') {
-	pfb_pkgconf_ca_add_form_controls($form, $pfb_ca_state, pfb_pkg_ca_consent_enabled());
+// The installed repository hook owns pkg.conf; Plus is the only edition with the vendor pin.
+if (pfb_pkg_ca_is_plus()) {
+	pfb_pkgconf_ca_add_form_controls($form, pfb_pkg_ca_consent_enabled());
 }
 
 $section = new Form_Section('Actions');
