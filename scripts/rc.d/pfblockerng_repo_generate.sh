@@ -271,9 +271,9 @@ _regen_one() {
 # previously-applied line anyway — revocation is handled synchronously by the
 # PHP side, not by this hook running backwards.
 _pkgconf_ca_reapply() {
+    PFB_CA_REAPPLY_CONSENT=off
     [ "${PFB_UPGRADE_LOCK_HELD:-1}" = 1 ] || return 0
     grep -q 'Plus' "${PFB_PRODUCT_LABEL}" 2>/dev/null || return 0
-    [ -e "${PFB_PKG_DIRTY}" ] && return 0
     # Consent gate, fail-closed. pfb_pkg_ca_consent is a registered config field
     # read on the PHP side at installedpackages/pfblockerng/config/0 --
     # PfbConfig::read('gen/pfb_pkg_ca_consent') -- meaning the element must be a
@@ -348,6 +348,8 @@ _pkgconf_ca_reapply() {
         ' "${PFB_CONFIG_XML}" 2>/dev/null)"
     [ "${_pcr_consent}" = 'on' ] || { unset _pcr_consent; return 0; }
     unset _pcr_consent
+    PFB_CA_REAPPLY_CONSENT=on
+    [ -e "${PFB_PKG_DIRTY}" ] && return 0
 
     # -h before -f: a symlink also passes -f, and the tmp+mv patch below would
     # replace the LINK's identity rather than editing through it to its target.
@@ -499,6 +501,73 @@ _pkgconf_ca_reapply() {
     return 0
 }
 
+_pkgconf_ca_sync_command() {
+    _pkgconf_ca_reapply
+    _pcr_owned_line="$(printf '\tSSL_CA_CERT_PATH=%s' "${PFB_SSL_CA_CERT_PATH}")"
+    if [ "${PFB_CA_REAPPLY_CONSENT:-off}" = on ] \
+        && ! grep -F -qx "${_pcr_owned_line}" "${PFB_PKG_CONF}" 2>/dev/null; then
+        return 1
+    fi
+    return 0
+}
+
+_pkgconf_ca_revoke() {
+    [ "${PFB_UPGRADE_LOCK_HELD:-}" = 1 ] || return 1
+    [ -e "${PFB_PKG_CONF}" ] && [ ! -h "${PFB_PKG_CONF}" ] \
+        && [ -f "${PFB_PKG_CONF}" ] && [ -r "${PFB_PKG_CONF}" ] || return 1
+    [ ! -e "${PFB_PKG_DIRTY}" ] || return 1
+    _pcr_original_sum="$(cksum < "${PFB_PKG_CONF}" 2>/dev/null)" || return 1
+    _pcr_open_count="$(grep -c '^PKG_ENV {$' "${PFB_PKG_CONF}" 2>/dev/null)" || _pcr_open_count=0
+    [ "${_pcr_open_count:-0}" -eq 1 ] || return 1
+    _pcr_block="$(sed -n '/^PKG_ENV {$/,/^}$/p' "${PFB_PKG_CONF}" 2>/dev/null)" || return 1
+    [ "$(printf '%s\n' "${_pcr_block}" | tail -n 1)" = '}' ] || return 1
+    _pcr_ca_file_count="$(grep -F -c 'SSL_CA_CERT_FILE' "${PFB_PKG_CONF}" 2>/dev/null)" || _pcr_ca_file_count=0
+    [ "${_pcr_ca_file_count:-0}" -eq 1 ] || return 1
+    _pcr_ca_file="$(printf '%s\n' "${_pcr_block}" | sed -n 's/^\tSSL_CA_CERT_FILE=//p')"
+    [ "$(printf '%s\n' "${_pcr_ca_file}" | grep -c .)" -eq 1 ] || return 1
+    case "${_pcr_ca_file}" in
+        /?*) ;;
+        *) return 1 ;;
+    esac
+    case "${_pcr_ca_file}" in
+        *[!A-Za-z0-9._/+-]*) return 1 ;;
+    esac
+    _pcr_target="$(printf '%s\n' "${_pcr_block}" | grep -F -x -c "	SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" 2>/dev/null)" || _pcr_target=0
+    _pcr_any_path="$(grep -F -c 'SSL_CA_CERT_PATH' "${PFB_PKG_CONF}" 2>/dev/null)" || _pcr_any_path=0
+    _pcr_mid="$(printf '%s\n' "${_pcr_block}" | sed '1d;$d')"
+    _pcr_mid_opens="$(printf '%s\n' "${_pcr_mid}" | grep -c '{$' 2>/dev/null)" || _pcr_mid_opens=0
+    _pcr_mid_closes="$(printf '%s\n' "${_pcr_mid}" | grep -cx '}' 2>/dev/null)" || _pcr_mid_closes=0
+    [ "${_pcr_mid_opens:-0}" -eq "${_pcr_mid_closes:-0}" ] || return 1
+    if [ "${_pcr_any_path}" -eq 0 ]; then
+        return 0
+    fi
+    [ "${_pcr_target}" -eq 1 ] && [ "${_pcr_any_path}" -eq 1 ] || return 1
+    _pcr_tmp="${PFB_PKG_CONF}.tmp"
+    _pcr_had_no_trailing_nl=0
+    [ -n "$(tail -c1 "${PFB_PKG_CONF}" 2>/dev/null)" ] && _pcr_had_no_trailing_nl=1
+    if ! cp -p "${PFB_PKG_CONF}" "${_pcr_tmp}" 2>/dev/null \
+        || ! awk -v target="	SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" '
+            !removed && $0 == target { removed = 1; next }
+            { print }
+        ' "${PFB_PKG_CONF}" > "${_pcr_tmp}" 2>/dev/null; then
+        rm -f "${_pcr_tmp}" 2>/dev/null
+        return 1
+    fi
+    if [ "${_pcr_had_no_trailing_nl}" -eq 1 ]; then
+        printf '%s' "$(cat "${_pcr_tmp}" 2>/dev/null)" > "${_pcr_tmp}" 2>/dev/null || {
+            rm -f "${_pcr_tmp}" 2>/dev/null
+            return 1
+        }
+    fi
+    _pcr_live_sum="$(cksum < "${PFB_PKG_CONF}" 2>/dev/null)" || _pcr_live_sum=''
+    if [ -z "${_pcr_live_sum}" ] || [ "${_pcr_live_sum}" != "${_pcr_original_sum}" ] \
+        || ! mv "${_pcr_tmp}" "${PFB_PKG_CONF}" 2>/dev/null; then
+        rm -f "${_pcr_tmp}" 2>/dev/null
+        return 1
+    fi
+    return 0
+}
+
 # Regenerate each channel's conf independently (channel keyed by conf path). Only
 # the channel(s) the box actually subscribed to are touched — _regen_one()'s
 # orphan guard skips every absent conf, so a box on one channel stays on that one
@@ -523,6 +592,17 @@ if [ "${PFB_UPGRADE_LOCK_HELD:-}" != 1 ] && [ -x "${PFB_LOCKF}" ]; then
     PFB_UPGRADE_LOCK_HELD=0
     export PFB_UPGRADE_LOCK_HELD
 fi
+
+case "${1:-}" in
+    ca-sync|ca-revoke)
+        [ "${PFB_UPGRADE_LOCK_HELD:-}" = 1 ] || exit 1
+        ;;
+esac
+
+case "${1:-}" in
+    ca-sync) _pkgconf_ca_sync_command; exit $? ;;
+    ca-revoke) _pkgconf_ca_revoke; exit $? ;;
+esac
 
 # Run as an rc.d service when rc.subr is present (the pfSense box); otherwise run
 # the regeneration directly (off-box: install.sh's bootstrap + the shellspec
