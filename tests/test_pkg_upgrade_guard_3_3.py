@@ -7,6 +7,14 @@ from pathlib import Path
 
 
 def test_php_assertion_runner() -> None:
+    source = Path(__file__).parents[1] / "src/usr/local/pkg/pfblockerng/pfblockerng.inc"
+    lint = subprocess.run(
+        ["php", "-l", str(source)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert lint.returncode == 0, lint.stdout + lint.stderr
     runner = Path(__file__).with_name("php") / "assert_pkg_upgrade_guard_3_3.php"
     result = subprocess.run(
         ["php", str(runner)],
