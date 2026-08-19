@@ -561,6 +561,7 @@ Describe 'pkgconf re-apply — upgrade lock unavailable: JOB 1 runs and JOB 2 de
     It 'regenerates the channel conf but leaves pkg.conf byte-unchanged, exit 0'
       When run sh "${HOOK}" onestart
       The status should be success
+      The stderr should include "regenerated"
       The contents of file "${PFB_STABLE_CONF}" should include "pfblockerng-stable: {"
       The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
