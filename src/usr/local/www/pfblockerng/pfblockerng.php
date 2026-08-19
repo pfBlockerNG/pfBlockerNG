@@ -186,6 +186,9 @@ if (in_array($argv[1], array('update', 'updateip', 'updatednsbl', 'dc', 'dcc', '
 			if (function_exists('pfb_software_update_check')) {
 				try { pfb_software_update_check(); } catch (Throwable $e) { /* best-effort */ }
 			}
+			if (function_exists('pfb_pkgconf_ca_tick')) {
+				try { pfb_pkgconf_ca_tick(); } catch (Throwable $e) { /* best-effort */ }
+			}
 			break;
 		case 'updateip':	// Sync 'Force Reload IP only'
 		case 'updatednsbl':	// Sync 'Force Reload DNSBL only'

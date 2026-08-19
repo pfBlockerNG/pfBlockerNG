@@ -298,7 +298,7 @@ $section->addInput(new Form_StaticText(
 	<a target="_blank" href="https://forum.netgate.com/user/bbcan177">BBcan177</a><br />
 
 	<ul class="list-inline" style="margin-top: 4px; margin-bottom: -2px; border-style: outset; border-bottom-color: #8B181B; border-right-color: #8B181B; border-width: 2px;">
-		<li class="list-inline-item"><a target="_blank" href="http://pfblockerng.com">
+		<li class="list-inline-item"><a target="_blank" href="https://pfblockerng.com">
 			<span style="color: #8B181B;" class="fa-solid fa-globe"></span> HomePage</a></li>
 		<li class="list-inline-item"><a target="_blank" href="https://twitter.com/intent/follow?screen_name=BBcan177">
 			<span style="color: #8B181B;" class="fa-brands fa-twitter"></span> Follow on X formerly Twitter</a></li>
@@ -315,7 +315,7 @@ $section->addInput(new Form_StaticText(
 </div>
 
 <div style="width: 25%; height: 170px; float: right;">
-	<a target="_blank" href="http://pfblockerng.com">
+	<a target="_blank" href="https://pfblockerng.com">
 
 <svg width="180.0pt" height="180.0pt" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" x="0px" y="0px"
 	 viewBox="30 225 560 470" style="enable-background:new 30 225 560 470;" xml:space="preserve">
