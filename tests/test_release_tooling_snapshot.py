@@ -21,6 +21,7 @@ EXPECTED = {
 
 
 def test_release_tooling_matches_pinned_devel_snapshot() -> None:
+    assert len(EXPECTED) == 9
     root = Path(__file__).parents[1]
     actual = {
         name: hashlib.sha256((root / name).read_bytes()).hexdigest()
