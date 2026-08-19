@@ -37,15 +37,19 @@ final class PslFeedPolicyPipelineOrderingTest extends TestCase
 	 */
 	private function runInstallSequence(): array
 	{
-		$fresh = pfb_psl_feed_policy_is_fresh_install(PfbConfig::readSection(self::DNSBL_SECTION));
-
-		pfb_run_migrations();
-
 		$sections = [];
 		foreach (PFB_SECTIONS as $section) {
 			$sections[$section] = PfbConfig::readSection($section);
 		}
-		foreach (pfb_registry_pass($sections) as $section => $blob) {
+		$fresh = pfb_psl_feed_policy_is_fresh_install($sections[self::DNSBL_SECTION]);
+		$modes = pfb_registry_section_modes($sections);
+
+		pfb_run_migrations();
+
+		foreach (PFB_SECTIONS as $section) {
+			$sections[$section] = PfbConfig::readSection($section);
+		}
+		foreach (pfb_registry_pass($sections, NULL, $modes) as $section => $blob) {
 			PfbConfig::writeSectionRawSystem($section, $blob);
 		}
 

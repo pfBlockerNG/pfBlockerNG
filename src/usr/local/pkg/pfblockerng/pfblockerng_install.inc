@@ -26,20 +26,22 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $g, $pfb;
 pfb_global();
 
-// issues #2371/#2372: capture section modes and DNSBL freshness before migrations mutate
-// their inputs; both values drive post-migration work below.
+// issue #2371: capture DNSBL freshness before settings-family restore or migrations mutate it.
+$pfb_psl_feed_policy_fresh_install = pfb_psl_feed_policy_is_fresh_install(
+	PfbConfig::readSection(PFB_SECTIONS['dnsbl'])
+);
+
+$pfb_installed_family = pfb_install_settings_family_capture_restore();
+pfb_global();
+
+// issue #2372: capture modes from the restored target family before migrations mutate it.
 $pfb_registry_sections = array();
 foreach (PFB_SECTIONS as $pfb_registry_section) {
 	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
 }
 $pfb_registry_modes = pfb_registry_section_modes($pfb_registry_sections);
-$pfb_psl_feed_policy_fresh_install = pfb_psl_feed_policy_is_fresh_install(
-	$pfb_registry_sections[PFB_SECTIONS['dnsbl']]
-);
 unset($pfb_registry_sections, $pfb_registry_section);
 
-$pfb_installed_family = pfb_install_settings_family_capture_restore();
-pfb_global();
 // Set 'Install flag' to skip sync process during installations.
 $g['pfblockerng_install'] = TRUE;
 $pfb['hook_lifecycle'] = 'install';
