@@ -47,7 +47,8 @@ function is_subsystem_dirty(string $name): bool
 
 function pkg_version_compare(string $left, string $right): string
 {
-	return version_compare($left, $right);
+	$result = version_compare($left, $right);
+	return $result < 0 ? '<' : ($result > 0 ? '>' : '=');
 }
 
 function pfb_filter(mixed $value, int $type, string $key): string
@@ -68,7 +69,7 @@ require_once $software;
 $failures = 0;
 $root = sys_get_temp_dir() . '/pfb_pkg_ca_3_3_' . bin2hex(random_bytes(5));
 mkdir($root . '/certs', 0700, true);
-putenv("PFB_UPGRADE_LOCK={$root}/upgrade.lock");
+$lockfile = $root . '/upgrade.lock';
 $hash = $root . '/certs/hash.0';
 file_put_contents($hash, 'x');
 $GLOBALS['pfb']['dbdir'] = $root;
@@ -157,40 +158,40 @@ row('parser add/remove is exact and byte preserving', static function () use (&$
 	check(!pfb_pkgconf_ca_needed("PKG_ENV {\n\tX={\n}\n\tSSL_CA_CERT_FILE=/tmp/a\n}\n"), 'nested block');
 });
 
-row('state and sync enforce Plus filesystem guards', static function () use (&$pkgconf, &$base, &$bundle): void {
+row('state and sync enforce Plus filesystem guards', static function () use (&$pkgconf, &$base, &$bundle, &$lockfile): void {
 	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
 	same('needed', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'needed state');
 	$GLOBALS['dirty'] = false;
-	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'sync add');
+	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'sync add');
 	same('patched', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'patched state');
-	check(pfb_pkgconf_ca_sync(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'sync remove');
+	check(pfb_pkgconf_ca_sync(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'sync remove');
 	same('needed', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'removed state');
 	$GLOBALS['dirty'] = true;
-	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'dirty refused');
+	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'dirty refused');
 	$GLOBALS['dirty'] = false;
 	@unlink($GLOBALS['pfb']['dbdir'] . '/certs/hash.0');
 	file_put_contents($pkgconf, "PKG_ENV {\n\tSSL_CA_CERT_FILE={$bundle}\n}\n");
-	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'empty cert dir refused');
+	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'empty cert dir refused');
 	file_put_contents($GLOBALS['pfb']['dbdir'] . '/certs/hash.0', 'x');
-	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'populated cert dir');
+	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'populated cert dir');
 });
 
-row('save apply and tick are best effort', static function () use (&$pkgconf, &$base, &$bundle): void {
+row('save apply and tick are best effort', static function () use (&$pkgconf, &$base, &$bundle, &$lockfile): void {
 	$GLOBALS['config'] = [];
 	PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', 'on');
 	same('on', pfb_pkgconf_ca_save([]), 'hidden section does not revoke');
 	same('', pfb_pkgconf_ca_save(['pfb_pkg_ca_consent_shown' => '1']), 'unchecked token');
 	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
 	PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', 'on');
-	check(pfb_pkgconf_ca_apply('on', false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true), 'apply');
+	check(pfb_pkgconf_ca_apply('on', false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile), 'apply');
 	$GLOBALS['notices'] = [];
-	pfb_pkgconf_ca_tick(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true);
+	pfb_pkgconf_ca_tick(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile);
 	check(count($GLOBALS['notices']) === 0, 'provenance denial is silent');
 	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
 	@unlink($GLOBALS['pfb']['dbdir'] . '/certs/hash.0');
-	pfb_pkgconf_ca_tick(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true);
+	pfb_pkgconf_ca_tick(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile);
 	check(count($GLOBALS['notices']) === 1, 'notice');
-	pfb_pkgconf_ca_tick(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true);
+	pfb_pkgconf_ca_tick(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', true, $lockfile);
 	check(count($GLOBALS['notices']) === 1, 'notice dedupe');
 });
 

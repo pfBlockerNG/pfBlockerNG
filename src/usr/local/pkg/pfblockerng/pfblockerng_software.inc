@@ -23,18 +23,13 @@
 /*
  * issue #2360 — ADR-19 channel-provenance + software-update-check backport, step 1.
  *
- * Self-contained ADR-19 backport: every function this file needs lives in this file (or
- * PHP/pfSense core) — nothing here requires pfblockerng_extra.inc. Deliberately NOT wired
- * into PfbConfig/PfbToggle on this branch (owner directive: zero touch to shared,
- * already-functional 3.3 code — pfblockerng_extra.inc stays byte-identical to its
- * pristine 3.3 state on this step). devel remains the canonical shape (PfbConfig registry
- * + PfbToggle enum); pfb_software_check_config_read()/_write() below are a narrow,
- * file-local stand-in for that one config field, matching devel's enabled/disabled
- * semantics exactly (see their docblock).
+ * The CA-consent extension uses the release-local PfbConfig in pfblockerng_extra.inc;
+ * production entry points and direct test consumers load extra.inc before this file.
+ * pfb_software_check_config_read()/_write() remain the narrow file-local stand-in for
+ * the older software-check field, matching devel's enabled/disabled semantics.
  *
  * Ported wholesale from devel's pfblockerng.inc (ADR-19 section). No tests ship on this
- * branch (owner ruling, issue #2360); a standalone off-repo assertion harness exercised
- * this file in isolation (never extra.inc) to prove the self-containment.
+ * branch (owner ruling, issue #2360); release/3.3 assertion runners exercise it directly.
  */
 
 /*
@@ -501,7 +496,12 @@ function pfb_pkgconf_dir_populated(string $dir): bool {
 	return FALSE;
 }
 
-function pfb_pkgconf_write_atomic(string $file, string $content, string $expected): bool {
+function pfb_pkgconf_write_atomic(
+	string $file,
+	string $content,
+	string $expected,
+	?string $lock_file = NULL
+): bool {
 	if (is_link($file) || !is_file($file) || !is_readable($file)) {
 		return FALSE;
 	}
@@ -520,7 +520,7 @@ function pfb_pkgconf_write_atomic(string $file, string $content, string $expecte
 		@unlink($tmp);
 		return FALSE;
 	}
-	$lock = @fopen(getenv('PFB_UPGRADE_LOCK') ?: PFB_UPGRADE_LOCK, 'c');
+	$lock = @fopen($lock_file ?? PFB_UPGRADE_LOCK, 'c');
 	if ($lock === FALSE || !@flock($lock, LOCK_EX | LOCK_NB)) {
 		if (is_resource($lock)) { @fclose($lock); }
 		@unlink($tmp);
@@ -592,7 +592,12 @@ function pfb_pkgconf_ca_state(
 	return pfb_pkgconf_ca_patched($text, $ca_path) ? 'patched' : '';
 }
 
-function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
+function pfb_pkgconf_ca_sync(
+	bool $consent,
+	?string $file = NULL,
+	string $ca_path = PFB_SSL_CA_CERT_PATH,
+	?string $lock_file = NULL
+): bool {
 	$file ??= PFB_PKG_CONF;
 	if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
 		|| is_link($file) || !is_file($file) || !is_readable($file)) {
@@ -621,7 +626,7 @@ function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_pat
 	} else {
 		$patched = pfb_pkgconf_ca_remove($text, $ca_path);
 	}
-	return $patched === '' ? TRUE : pfb_pkgconf_write_atomic($file, $patched, $text);
+	return $patched === '' ? TRUE : pfb_pkgconf_write_atomic($file, $patched, $text, $lock_file);
 }
 
 function pfb_pkgconf_ca_notice_sentinel(): string {
@@ -647,7 +652,8 @@ function pfb_pkgconf_ca_tick(
 	?bool $provenance_ok = NULL,
 	?string $file = NULL,
 	string $ca_path = PFB_SSL_CA_CERT_PATH,
-	?bool $is_plus = NULL
+	?bool $is_plus = NULL,
+	?string $lock_file = NULL
 ): void {
 	try {
 		$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
@@ -662,7 +668,7 @@ function pfb_pkgconf_ca_tick(
 			return;
 		}
 		if ($consent) {
-			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path);
+			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path, $lock_file);
 			$state = pfb_pkgconf_ca_state($file, $is_plus, $ca_path);
 			if ($state !== 'needed') {
 				pfb_pkgconf_ca_clear_notice_sentinel();
@@ -711,7 +717,8 @@ function pfb_pkgconf_ca_apply(
 	bool $was_consented,
 	?string $file = NULL,
 	string $ca_path = PFB_SSL_CA_CERT_PATH,
-	?bool $is_plus = NULL
+	?bool $is_plus = NULL,
+	?string $lock_file = NULL
 ): bool {
 	$file = $file ?? PFB_PKG_CONF;
 	$consent = $token === 'on';
@@ -721,11 +728,55 @@ function pfb_pkgconf_ca_apply(
 	if (!$consent && !$was_consented) {
 		return TRUE;
 	}
-	$ok = pfb_pkgconf_ca_sync($consent, $file, $ca_path);
+	$ok = pfb_pkgconf_ca_sync($consent, $file, $ca_path, $lock_file);
 	if (!$consent && pfb_pkgconf_ca_state($file, $is_plus, $ca_path) === 'needed') {
 		@file_put_contents(pfb_pkgconf_ca_notice_sentinel(), pfb_pkgconf_ca_notice_signature($file));
 	}
 	return $ok;
+}
+
+/* Add the conditional Software-page consent controls through the shipped Form API. */
+function pfb_pkgconf_ca_add_form_controls($form, string $state, bool $consent): void {
+	if (!in_array($state, array('needed', 'patched'), TRUE)) {
+		return;
+	}
+	$help = sprintf(
+		gettext('This control adds or removes exactly one SSL_CA_CERT_PATH=/etc/ssl/certs line in %s. '),
+		PFB_PKG_CONF
+	);
+	if ($state === 'patched') {
+		$help .= gettext(
+			'That line is currently present in the PKG_ENV block, so pkg can reach '
+			. 'pfBlockerNG\'s repository over TLS. '
+		);
+	} elseif ($consent) {
+		$help .= gettext(
+			'Consent is on, but pfBlockerNG has not been able to add the line yet; '
+			. 'it will keep retrying automatically. '
+		);
+	} else {
+		$help .= gettext(
+			'Right now, pkg trusts only Netgate\'s own certificate bundle, so it '
+			. 'cannot install or update pfBlockerNG through the Package Manager or a plain '
+			. '<code>pkg install</code> in the shell. Checking this box restores the public root '
+			. 'certificate store pkg needs to reach that repository. '
+		);
+	}
+	$help .= gettext(
+		'pfBlockerNG re-applies the line at boot and on every scheduled (cron) pass. '
+		. 'Unchecking this removes only that one line; the rest of the file is left as pfSense wrote it.'
+	);
+
+	$section = new Form_Section(gettext('Package manager CA trust'));
+	$section->addInput(new Form_Checkbox(
+		'pfb_pkg_ca_consent',
+		gettext('Allow pfBlockerNG to manage the pkg.conf CA path'),
+		gettext('Enabled'),
+		$consent,
+		'on'
+	))->setHelp($help);
+	$form->add($section);
+	$form->addGlobal(new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1'));
 }
 
 /*

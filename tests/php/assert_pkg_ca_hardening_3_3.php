@@ -60,7 +60,6 @@ $pkgconf = $root . '/pkg.conf';
 $base = "PKG_ENV {\n\tSSL_CA_CERT_FILE={$bundle}\n}\n";
 file_put_contents($pkgconf, $base);
 $lockfile = $root . '/upgrade.lock';
-putenv("PFB_UPGRADE_LOCK={$lockfile}");
 
 function row(string $name, callable $check): void
 {
@@ -115,12 +114,12 @@ row('parser refuses CRLF and preserves no-final-newline bytes', static function 
 });
 
 row('atomic writer refuses stale content and lock contention', static function () use ($pkgconf, $base, $lockfile): void {
-	check(!pfb_pkgconf_write_atomic($pkgconf, "new\n", "stale\n"), 'stale expected bytes refused');
+	check(!pfb_pkgconf_write_atomic($pkgconf, "new\n", "stale\n", $lockfile), 'stale expected bytes refused');
 	check(file_get_contents($pkgconf) === $base, 'stale refusal preserves file');
 	$lock = fopen($lockfile, 'c');
 	check(is_resource($lock) && flock($lock, LOCK_EX | LOCK_NB), 'fixture lock acquired');
 	try {
-		check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'contended upgrade lock refused');
+		check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs', $lockfile), 'contended upgrade lock refused');
 		check(file_get_contents($pkgconf) === $base, 'lock refusal preserves file');
 	} finally {
 		flock($lock, LOCK_UN);

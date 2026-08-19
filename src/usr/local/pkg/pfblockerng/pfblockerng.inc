@@ -32,7 +32,7 @@ if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc')) {
 	require_once('/usr/local/pkg/pfblockerng/pfblockerng_extra.inc');	// 'include functions' not yet merged into pfSense
 }
 if (file_exists('/usr/local/pkg/pfblockerng/pfblockerng_software.inc')) {
-	require_once('/usr/local/pkg/pfblockerng/pfblockerng_software.inc');	// issue #2360: ADR-19 Software tab + update-check backport (self-contained)
+	require_once('/usr/local/pkg/pfblockerng/pfblockerng_software.inc');	// issue #2360: ADR-19 Software tab + update-check backport
 }
 
 define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');

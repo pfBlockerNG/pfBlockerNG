@@ -98,10 +98,14 @@ if ($_POST && isset($_POST['save'])) {
 		header('Location: /pfblockerng/pfblockerng_software.php');
 		exit;
 	}
-	$input_errors[] = 'The setting was saved, but pfBlockerNG could not update ' . PFB_PKG_CONF
-		. ' right now (its CA certificate directory may be missing or empty -- try running '
-		. '`certctl rehash` from the shell). pfBlockerNG will retry automatically at the next '
-		. 'boot or scheduled run.';
+	$input_errors[] = sprintf(
+		gettext(
+			'The setting was saved, but pfBlockerNG could not update %s right now (its CA '
+			. 'certificate directory may be missing or empty -- try running `certctl rehash` '
+			. 'from the shell). pfBlockerNG will retry automatically at the next boot or scheduled run.'
+		),
+		PFB_PKG_CONF
+	);
 }
 
 // Read after the save block so a failed CA sync re-render shows the just-posted software choice.
@@ -209,34 +213,7 @@ $form->add($section);
 // Render the consent control only for a recognised Plus pkg.conf shape.
 $pfb_ca_state = pfb_pkgconf_ca_state();
 if ($pfb_ca_state !== '') {
-	$pfb_ca_consent = pfb_pkg_ca_consent_enabled();
-	$pfb_ca_help = 'This control adds or removes exactly one SSL_CA_CERT_PATH=/etc/ssl/certs line in '
-		. PFB_PKG_CONF . '. ';
-	if ($pfb_ca_state === 'patched') {
-		$pfb_ca_help .= 'That line is currently present in the PKG_ENV block, so pkg can reach '
-			. 'pfBlockerNG\'s repository over TLS. ';
-	} elseif ($pfb_ca_state === 'needed' && $pfb_ca_consent) {
-		$pfb_ca_help .= 'Consent is on, but pfBlockerNG has not been able to add the line yet; '
-			. 'it will keep retrying automatically. ';
-	} else {
-		$pfb_ca_help .= 'Right now, pkg trusts only Netgate\'s own certificate bundle, so it '
-			. 'cannot install or update pfBlockerNG through the Package Manager or a plain '
-			. '<code>pkg install</code> in the shell. Checking this box restores the public root '
-			. 'certificate store pkg needs to reach that repository. ';
-	}
-	$pfb_ca_help .= 'pfBlockerNG re-applies the line at boot and on every scheduled (cron) pass. '
-		. 'Unchecking this removes only that one line; the rest of the file is left as pfSense wrote it.';
-
-	$section = new Form_Section('Package manager CA trust');
-	$section->addInput(new Form_Checkbox(
-		'pfb_pkg_ca_consent',
-		'Allow pfBlockerNG to manage the pkg.conf CA path',
-		'Enabled',
-		$pfb_ca_consent,
-		'on'
-	))->setHelp($pfb_ca_help);
-	$form->add($section);
-	$form->addGlobal(new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1'));
+	pfb_pkgconf_ca_add_form_controls($form, $pfb_ca_state, pfb_pkg_ca_consent_enabled());
 }
 
 $section = new Form_Section('Actions');

@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
 SOFTWARE_PAGE = ROOT / "src/usr/local/www/pfblockerng/pfblockerng_software.php"
+SOFTWARE_CORE = ROOT / "src/usr/local/pkg/pfblockerng/pfblockerng_software.inc"
 CRON_PAGE = ROOT / "src/usr/local/www/pfblockerng/pfblockerng.php"
 URL_FILES = (
     ROOT / "src/usr/local/www/pfblockerng/pfblockerng_general.php",
@@ -15,11 +16,16 @@ URL_FILES = (
 )
 
 
+def _between(source: str, start: str, end: str) -> str:
+    assert start in source, f"anchor not found: {start!r}"
+    tail = source.split(start, 1)[1]
+    assert end in tail, f"anchor not found: {end!r}"
+    return tail.split(end, 1)[0]
+
+
 def test_save_persists_consent_before_applying_pkg_conf() -> None:
     source = SOFTWARE_PAGE.read_text()
-    save = source.split("if ($_POST && isset($_POST['save'])) {", 1)[1].split(
-        '// "Check now"', 1
-    )[0]
+    save = _between(source, "if ($_POST && isset($_POST['save'])) {", '// "Check now"')
     positions = [
         save.index("$pfb_ca_was_consented = pfb_pkg_ca_consent_enabled();"),
         save.index("$pfb_ca_token = pfb_pkgconf_ca_save($_POST);"),
@@ -33,26 +39,28 @@ def test_save_persists_consent_before_applying_pkg_conf() -> None:
 
 
 def test_ui_is_conditional_and_posts_an_explicit_consent_token() -> None:
-    source = SOFTWARE_PAGE.read_text()
+    page = SOFTWARE_PAGE.read_text()
+    source = SOFTWARE_CORE.read_text()
+    assert "pfb_pkgconf_ca_add_form_controls($form, $pfb_ca_state, pfb_pkg_ca_consent_enabled());" in page
     for token in (
-        "$pfb_ca_state = pfb_pkgconf_ca_state();",
-        "if ($pfb_ca_state !== '') {",
-        "$pfb_ca_consent = pfb_pkg_ca_consent_enabled();",
+        "function pfb_pkgconf_ca_add_form_controls(",
         "new Form_Checkbox(\n\t\t'pfb_pkg_ca_consent'",
-        "\n\t\t'on'\n\t))->setHelp($pfb_ca_help);",
+        "\n\t\t'on'\n\t))->setHelp($help);",
         "new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1')",
         "SSL_CA_CERT_PATH=/etc/ssl/certs",
         "Unchecking this removes only that one line",
         "re-applies the line at boot and on every scheduled (cron) pass",
     ):
         assert token in source
-    assert "config_get_path" not in source
-    assert "gen/pfb_pkg_ca_consent" not in source
+    assert "$pfb_ca_state = pfb_pkgconf_ca_state();" in page
+    assert "if ($pfb_ca_state !== '') {" in page
+    assert "config_get_path" not in page
+    assert "gen/pfb_pkg_ca_consent" not in page
 
 
 def test_cron_keeps_feed_sync_and_adds_best_effort_ca_tick() -> None:
     source = CRON_PAGE.read_text()
-    case = source.split("case 'cron':", 1)[1].split("\n\t\tcase 'updateip':", 1)[0]
+    case = _between(source, "case 'cron':", "\n\t\tcase 'updateip':")
     feed = case.index("pfblockerng_sync_cron();")
     update = case.index("pfb_software_update_check();")
     tick = case.index("pfb_pkgconf_ca_tick();")
