@@ -10,7 +10,7 @@ ADR-39 rework: the conf URL is now a DIRECT, fully-resolved GitHub Pages URL
 (NO_ARCH — all three pfSense-pkg-pfBlockerNG ports are NO_ARCH, so one varver
 serves every arch of its FreeBSD major):
 
-    https://pfblockerng.github.io/pkg/<channel>/<varver>
+    https://pkg.pfblockerng.com/<channel>/<varver>
 
 The ``<varver>`` segment is resolved by the boot-time ``rc.d`` generator hook
 (``pfblockerng_repo_generate.sh``), whose detection is folded in (ADR-39): edition =
@@ -50,7 +50,7 @@ _BUILD_REPO = _SCRIPTS / "build-repo.sh"
 _BUILD_REPO_PORTABLE = _SCRIPTS / "build-repo-portable.py"
 _HOOK = _SCRIPTS / "rc.d" / "pfblockerng_repo_generate.sh"
 
-_PAGES_BASE = "https://pfblockerng.github.io/pkg"
+_PAGES_BASE = "https://pkg.pfblockerng.com"
 
 # Representative catalog paths for byte-identity and URL-shape tests.
 _CE_28 = "ce-2.8"

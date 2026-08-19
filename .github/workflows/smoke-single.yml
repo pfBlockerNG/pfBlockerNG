@@ -85,7 +85,7 @@ on:
         required: false
         default: "1"
       smoke_nightly_live_url:
-        description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pfblockerng.github.io/pkg/nightly). Blank -> SKIP."
+        description: "Live nightly Pages base URL for test_install_from_live_nightly_url (e.g. https://pkg.pfblockerng.com/nightly). Blank -> SKIP."
         required: false
         default: ""
       smoke_nightly_expected_source_sha:
@@ -97,7 +97,7 @@ on:
         required: false
         default: ""
       smoke_repo_live_url:
-        description: "Live channel Pages base URL for test_install_from_live_pages_url (e.g. https://pfblockerng.github.io/pkg/stable). Blank -> SKIP."
+        description: "Live channel Pages base URL for test_install_from_live_pages_url (e.g. https://pkg.pfblockerng.com/stable). Blank -> SKIP."
         required: false
         default: ""
       smoke_repo_expected_source_sha:

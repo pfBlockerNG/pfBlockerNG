@@ -1179,7 +1179,7 @@ def _render_catalogue_browse_page(docs: str, full_rel: str) -> str:
 # carries — replaced with the SITE's own base at render time (issues #2416 /
 # B3/F3) so a fork or staged prefix ships an installer that resolves against
 # itself without requiring every user to override PFB_BASE_URL by hand.
-_BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-https://pfblockerng.github.io/pkg}"'
+_BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-https://pkg.pfblockerng.com}"'
 
 
 def _shell_single_quote(value: str) -> str:
@@ -1452,7 +1452,7 @@ def write_site(site: str, base: str, site_tree: str, matrix: list[dict] | None =
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Render the pkg-site tree onto the pkg repo's docs/ and mirror it there.")
     ap.add_argument("site", help="the docs/ tree to render into (the built catalog trees already live there)")
-    ap.add_argument("base_url", help="the Pages base URL, e.g. https://pfblockerng.github.io/pkg")
+    ap.add_argument("base_url", help="the Pages base URL, e.g. https://pkg.pfblockerng.com")
     ap.add_argument("--site-tree", required=True, help="the pkg-site/ source tree to render (this repo's pkg-site/)")
     ap.add_argument(
         "--matrix",

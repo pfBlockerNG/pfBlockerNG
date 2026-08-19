@@ -44,7 +44,7 @@ set -eu
 # an OS upgrade. priority sits above the base Netgate `pfSense` repo (ships 0)
 # because priority — not version — decides cross-repo resolution; that is the
 # lever that makes the pfBlockerNG build win. Override the base with --base-url for a fork.
-DEFAULT_BASE_URL="https://pfblockerng.github.io/pkg"
+DEFAULT_BASE_URL="https://pkg.pfblockerng.com"
 CONF_PRIORITY=100
 
 # Per-channel repo-conf stanza key (issue #2147 step B): the four channels

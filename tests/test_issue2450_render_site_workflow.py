@@ -59,7 +59,7 @@ def test_render_site_job_runs_the_renderer_with_full_env_contract() -> None:
     assert "sh scripts/render-pkg-site.sh" in step
     assert "SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}" in step
     assert "ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}" in step
-    assert "BASE_URL: https://pfblockerng.github.io/pkg" in step
+    assert "BASE_URL: https://pkg.pfblockerng.com" in step
     assert 'export PFB_SRC="$GITHUB_WORKSPACE"' in step
     assert 'export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"' in step
 

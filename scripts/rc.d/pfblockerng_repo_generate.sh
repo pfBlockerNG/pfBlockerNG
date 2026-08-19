@@ -105,7 +105,7 @@ name="pfblockerng_repo_generate"
 # of its own. Deliberately NOT named PFB_DEFAULT_BASE_URL: gen_landing.py injects
 # a variable of that name into install.sh, and the published installer carries
 # this hook embedded in it.
-PFB_FALLBACK_BASE_URL='https://pfblockerng.github.io/pkg'
+PFB_FALLBACK_BASE_URL='https://pkg.pfblockerng.com'
 
 CONF_PRIORITY=100
 
@@ -140,7 +140,7 @@ _detect_catalog() {
 # WHY (issue #2459): at boot there is no environment, so composing the url from
 # a hardcoded default rewrote every conf to the primary Pages site — a fork
 # site, a staging prefix and a `file://` guest catalogue all silently became
-# https://pfblockerng.github.io/pkg, redirecting where the box fetches packages
+# https://pkg.pfblockerng.com, redirecting where the box fetches packages
 # from. Reading the base back out of the conf keeps the OS-upgrade job the hook
 # exists for (move the <varver>) without moving anything else.
 #

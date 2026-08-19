@@ -160,7 +160,7 @@
 				</tbody>
 			</table>
 			<div>Powered by: <strong>pfBlockerNG DNSBL</strong>&emsp;
-				<a target="_blank" rel="noopener noreferrer" href="http://pfblockerng.com">pfBlockerNG.com</a>
+				<a target="_blank" rel="noopener noreferrer" href="https://pfblockerng.com">pfBlockerNG.com</a>
 			</div>
 		</div>
 	</div>

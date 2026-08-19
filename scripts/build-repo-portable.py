@@ -66,7 +66,7 @@ META_CONF = (
 # base Netgate `pfSense` repo (priority 0) because priority — not version —
 # decides cross-repo resolution. Base URL is this repo's GitHub Pages root
 # (ADR-39; the Cloudflare Worker has been retired).
-DEFAULT_BASE_URL = "https://pfblockerng.github.io/pkg"
+DEFAULT_BASE_URL = "https://pkg.pfblockerng.com"
 CONF_PRIORITY = 100
 
 # Per-channel repo-conf stanza key (issue #2147 step B): the four channels

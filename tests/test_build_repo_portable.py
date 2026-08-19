@@ -661,7 +661,7 @@ def test_print_conf_matches_template(capsys: pytest.CaptureFixture[str]) -> None
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng: {" in out  # the shared release repo (stable + testing)
-    assert 'url: "https://pfblockerng.github.io/pkg/release/ce-2.8/amd64"' in out
+    assert 'url: "https://pkg.pfblockerng.com/release/ce-2.8/amd64"' in out
     assert "${ABI}" not in out, "ADR-39: ${ABI} must not appear in the resolved conf"
     assert "signature_type: none," in out
     assert "priority: 100," in out
@@ -683,7 +683,7 @@ def test_print_conf_accepts_selected_channel_root(capsys: pytest.CaptureFixture[
         [
             "--print-conf",
             "--base-url",
-            "https://pfblockerng.github.io/pkg/docs/edge",
+            "https://pkg.pfblockerng.com/docs/edge",
             "--channel",
             "edge",
             "--catalog-path",
@@ -693,7 +693,7 @@ def test_print_conf_accepts_selected_channel_root(capsys: pytest.CaptureFixture[
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng-edge: {" in out
-    assert 'url: "https://pfblockerng.github.io/pkg/docs/edge/ce-2.8"' in out
+    assert 'url: "https://pkg.pfblockerng.com/docs/edge/ce-2.8"' in out
 
 
 def test_print_conf_infers_selected_channel_root(capsys: pytest.CaptureFixture[str]) -> None:
@@ -702,7 +702,7 @@ def test_print_conf_infers_selected_channel_root(capsys: pytest.CaptureFixture[s
         [
             "--print-conf",
             "--base-url",
-            "https://pfblockerng.github.io/pkg/docs/edge",
+            "https://pkg.pfblockerng.com/docs/edge",
             "--catalog-path",
             "ce-2.8",
         ]
@@ -710,7 +710,7 @@ def test_print_conf_infers_selected_channel_root(capsys: pytest.CaptureFixture[s
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng-edge: {" in out
-    assert 'url: "https://pfblockerng.github.io/pkg/docs/edge/ce-2.8"' in out
+    assert 'url: "https://pkg.pfblockerng.com/docs/edge/ce-2.8"' in out
 
 
 def test_print_conf_does_not_treat_host_as_channel(capsys: pytest.CaptureFixture[str]) -> None:

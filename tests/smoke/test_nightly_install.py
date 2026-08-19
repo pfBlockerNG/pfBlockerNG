@@ -80,7 +80,7 @@ CONF = "/usr/local/etc/pkg/repos/pfb_nightly_smoke.conf"
 # Phase-5d — live nightly Pages URL check (dispatch-only; gated on SMOKE_NIGHTLY_LIVE_URL).
 # Unset -> SKIP (the file:// VM-acceptance above is the always-on proof).
 LIVE_NIGHTLY_URL_ENV = "SMOKE_NIGHTLY_LIVE_URL"
-DEFAULT_LIVE_NIGHTLY_URL = "https://pfblockerng.github.io/pkg/nightly"
+DEFAULT_LIVE_NIGHTLY_URL = "https://pkg.pfblockerng.com/nightly"
 NIGHTLY_LIVE_CONF = "/usr/local/etc/pkg/repos/pfb_nightly_live_smoke.conf"
 
 # The rc.packages install hook aborts with one of these when the registration name
@@ -325,7 +325,7 @@ def _live_nightly_url() -> str | None:
     """The live nightly Pages base to test against, or None to SKIP.
 
     Gated on ``SMOKE_NIGHTLY_LIVE_URL``: set it to the deployed nightly base
-    (e.g. ``https://pfblockerng.github.io/pkg/nightly``) after a nightly publish
+    (e.g. ``https://pkg.pfblockerng.com/nightly``) after a nightly publish
     dispatch; leave it unset and the test SKIPS.  A bare ``1``/``true`` selects
     the default base.
     """
