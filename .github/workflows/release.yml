@@ -78,7 +78,7 @@ on:
         type: boolean
 
       force_suites:
-        description: "Run the live smoke/UI suites even for an alpha/beta tag (issue #1855). rc + stable always run them; alpha/beta default to CI-green-on-the-release-commit as the mandatory gate."
+        description: "Run live smoke/UI for a supported alpha/beta. The 3.3 bridge has no live corpus and never runs them; other rc/stable releases always do."
         required: false
         default: false
         type: boolean
@@ -506,8 +506,8 @@ jobs:
         #     pipeline — so the ordering below is unchanged.
         #   prekind rc, or stable -> YES, in full, gated per the released-status
         #     predicate, and the tag/publish happen only on green.
-        # `force_suites` is the manual escape hatch: it can only ever ADD
-        # verification (rc/stable already run the suites unconditionally).
+        # `force_suites` can only ADD verification on lines that carry a live corpus;
+        # the release/3.3 bridge has none and stays off in every stage.
         env:
           INPUT_TAG:     ${{ github.event.inputs.tag }}
           INPUT_CHANNEL: ${{ github.event.inputs.channel }}
@@ -1298,11 +1298,11 @@ jobs:
         # Each build-pkgs-portable leg uploads its OWN row artifact, named
         # pfBlockerNG-relpkg-<variant>-<pfsense_version>; merge every
         # leg's artifact into pkgs/. The pattern also sweeps
-        # up each row's dependency artifact
-        # (issue #1806 B1) -- INTENTIONAL: dep .pkgs (e.g. CE's
+        # up each row's built dependency artifact
+        # (issue #1806 B1) -- INTENTIONAL when effective extras exist: dep .pkgs (e.g. CE's
         # py311-charset-normalizer) are deliberate release assets, frozen
         # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
-        # story. The draft healthcheck counts them (EXPECTED_PKGS).
+        # story. The draft healthcheck counts only the effective asset matrix.
         uses: actions/download-artifact@v7
         with:
           pattern: pfBlockerNG-relpkg-*

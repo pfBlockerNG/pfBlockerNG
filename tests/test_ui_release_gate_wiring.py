@@ -1142,3 +1142,8 @@ def test_healthcheck_release_33_ignores_matrix_extra_packages(tmp_path: Path) ->
         source="release/3.3",
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_healthcheck_receives_the_release_source_binding() -> None:
+    step = "\n".join(_step(_jobs(RELEASE_WORKFLOW)["draft-healthcheck"], "Health-check the draft release"))
+    assert "SOURCE:       ${{ needs.release.outputs.source }}" in step
