@@ -436,7 +436,7 @@ if (isset($savemsg)) {
 					<?php
 						$aliasname_raw = $row['aliasname'];
 						$row['aliasname'] = htmlspecialchars($aliasname_raw);
-						if (strlen($row['aliasname']) >= 20) {
+						if (mb_strlen($aliasname_raw, 'UTF-8') >= 20) {
 							print ("<p title=\"{$row['aliasname']}\">" . htmlspecialchars(mb_substr($aliasname_raw, 0, 15, 'UTF-8')) . '...</p>');
 						} else {
 							print ($row['aliasname']);
@@ -448,7 +448,7 @@ if (isset($savemsg)) {
 					<?php
 						$description_raw = $row['description'];
 						$row['description'] = htmlspecialchars($description_raw);
-						if (strlen($row['description']) >= 20) {
+						if (mb_strlen($description_raw, 'UTF-8') >= 20) {
 							print ("<p title=\"{$row['description']}\">" . htmlspecialchars(mb_substr($description_raw, 0, 15, 'UTF-8')) . '...</p>');
 						} else {
 							print ($row['description']);

@@ -869,7 +869,7 @@ print ($section);
 								$title = '';
 								$aliasname_raw = $row['aliasname'];
 								$row['aliasname'] = htmlspecialchars($aliasname_raw);
-								if (strlen($row['aliasname']) >= 15) {
+								if (mb_strlen($aliasname_raw, 'UTF-8') > 15) {
 									$title 			= $row['aliasname'];
 									$row['aliasname']	= htmlspecialchars(mb_substr($aliasname_raw, 0, 15, 'UTF-8')) . '...';
 								}
