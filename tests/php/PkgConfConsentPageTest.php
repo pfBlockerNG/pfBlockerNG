@@ -342,15 +342,16 @@ final class PkgConfConsentPageTest extends TestCase
 	{
 		// Start On + patched (config AND file) so a green result below is this save's doing,
 		// not the registry default or an untouched fixture.
-		$file = $this->tempFile($this->fixture('plus_patched.conf'));
+		$caDir = $this->populatedDir();
+		$file = $this->tempFile($this->patchedFixtureFor($caDir));
 		$seedToken = pfb_pkgconf_ca_save([
 			'pfb_pkg_ca_consent_shown' => '1',
 			'pfb_pkg_ca_consent'       => $this->postedWhenChecked(),
 		]);
-		$seedOk = pfb_pkgconf_ca_apply($seedToken, FALSE, $file, self::REAL_CA_DIR, TRUE);
+		$seedOk = pfb_pkgconf_ca_apply($seedToken, FALSE, $file, $caDir, TRUE);
 		$this->assertTrue($seedOk, 'precondition seed save must succeed');
 		$this->assertSame(PfbToggle::On, PfbConfig::read('gen/pfb_pkg_ca_consent'), 'precondition: consent starts On');
-		$this->assertSame($this->fixture('plus_patched.conf'), file_get_contents($file), 'precondition: pkg.conf starts patched');
+		$this->assertSame($this->patchedFixtureFor($caDir), file_get_contents($file), 'precondition: pkg.conf starts patched');
 
 		// A browser omits an unticked checkbox but the hidden marker still posts -- the
 		// section WAS rendered, this is an EXPLICIT off, not an absent marker (B1).
@@ -368,11 +369,11 @@ final class PkgConfConsentPageTest extends TestCase
 			'the canonical Off token stored on disk is the empty string'
 		);
 
-		$ok = pfb_pkgconf_ca_apply($token, TRUE, $file, self::REAL_CA_DIR, TRUE);
+		$ok = pfb_pkgconf_ca_apply($token, TRUE, $file, $caDir, TRUE);
 
 		$this->assertTrue($ok);
 		$this->assertSame(
-			$this->fixture('plus_pinned.conf'),
+			$this->pinnedFixture(),
 			file_get_contents($file),
 			'an unticked Save must remove the CA path line from the live pkg.conf'
 		);
@@ -380,11 +381,12 @@ final class PkgConfConsentPageTest extends TestCase
 
 	public function testUntickedSaveDoesNotRemoveAnIdenticalLineWithoutPriorConsent(): void
 	{
-		$file = $this->tempFile($this->fixture('plus_patched.conf'));
+		$caDir = $this->populatedDir();
+		$file = $this->tempFile($this->patchedFixtureFor($caDir));
 		$before = file_get_contents($file);
 
 		$token = pfb_pkgconf_ca_save(['pfb_pkg_ca_consent_shown' => '1']);
-		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, self::REAL_CA_DIR, TRUE);
+		$ok = pfb_pkgconf_ca_apply($token, FALSE, $file, $caDir, TRUE);
 
 		$this->assertTrue($ok);
 		$this->assertSame($before, file_get_contents($file), 'pfBlockerNG must not remove a line it never added');

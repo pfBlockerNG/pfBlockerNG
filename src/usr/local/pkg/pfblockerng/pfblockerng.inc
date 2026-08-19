@@ -5158,6 +5158,7 @@ define('PFB_SSL_CA_CERT_FILE', '/etc/ssl/cert.pem');
 // issue #2518: the file pfSense-repo-setup (Plus) rewrites the PKG_ENV pin into. The
 // consented patch below adds a single SSL_CA_CERT_PATH line to it -- never any other edit.
 define('PFB_PKG_CONF', '/usr/local/etc/pkg.conf');
+define('PFB_UPGRADE_LOCK', '/tmp/pfSense-upgrade.lock');
 
 if (!defined('PFB_PYTHON_WRAPPER')) {
 	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
@@ -5513,9 +5514,9 @@ function pfb_pkgconf_dir_populated(string $dir): bool {
 /*
  * Atomically replace $file's contents with $content only while it still equals $expected:
  * a temp file in the same directory is written and chmod'd to the original permission bits,
- * then renamed into place. A pkg-subsystem lock or changed live bytes rejects the stale
- * replacement, so pfSense-repo-setup's concurrent regeneration always wins. The temp file
- * is unlinked on every failure path.
+ * then renamed into place. The pfSense-upgrade lock covers the final live check and rename;
+ * a pkg-subsystem marker or changed live bytes also rejects stale replacement, so a supported
+ * pfSense-repo-setup regeneration always wins. The temp file is unlinked on every failure path.
  */
 function pfb_pkgconf_write_atomic(string $file, string $content, string $expected): bool {
 	$dir = dirname($file);
@@ -5534,18 +5535,31 @@ function pfb_pkgconf_write_atomic(string $file, string $content, string $expecte
 	if ($perms !== FALSE) {
 		@chmod($tmp, $perms & 0o777);
 	}
-	if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
-		|| is_link($file)
-		|| @file_get_contents($file) !== $expected
-	) {
+	$upgrade_lock = @fopen(getenv('PFB_UPGRADE_LOCK') ?: PFB_UPGRADE_LOCK, 'c');
+	if ($upgrade_lock === FALSE || !@flock($upgrade_lock, LOCK_EX | LOCK_NB)) {
+		if (is_resource($upgrade_lock)) {
+			@fclose($upgrade_lock);
+		}
 		@unlink($tmp);
 		return FALSE;
 	}
-	if (!@rename($tmp, $file)) {
-		@unlink($tmp);
-		return FALSE;
+	try {
+		if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
+			|| is_link($file)
+			|| @file_get_contents($file) !== $expected
+		) {
+			@unlink($tmp);
+			return FALSE;
+		}
+		if (!@rename($tmp, $file)) {
+			@unlink($tmp);
+			return FALSE;
+		}
+		return TRUE;
+	} finally {
+		@flock($upgrade_lock, LOCK_UN);
+		@fclose($upgrade_lock);
 	}
-	return TRUE;
 }
 
 /*

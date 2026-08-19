@@ -271,6 +271,7 @@ _regen_one() {
 # previously-applied line anyway — revocation is handled synchronously by the
 # PHP side, not by this hook running backwards.
 _pkgconf_ca_reapply() {
+    [ "${PFB_UPGRADE_LOCK_HELD:-1}" = 1 ] || return 0
     grep -q 'Plus' "${PFB_PRODUCT_LABEL}" 2>/dev/null || return 0
     [ -e "${PFB_PKG_DIRTY}" ] && return 0
     # Consent gate, fail-closed. pfb_pkg_ca_consent is a registered config field
@@ -336,7 +337,7 @@ _pkgconf_ca_reapply() {
                     print "on"; exit
                 }
                 _line = $0
-                _self_closing = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*([[:space:]][^<>]*)?\/>/, "&", _line)
+                _self_closing = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*[[:space:]][^<>]*\/>/, "&", _line)
                 _line = $0
                 _opens = gsub(/<[A-Za-z_][A-Za-z0-9_.:-]*([[:space:]][^<>]*)?>/, "&", _line)
                 _line = $0
@@ -516,8 +517,11 @@ pfblockerng_repo_generate_start() {
 if [ "${PFB_UPGRADE_LOCK_HELD:-}" != 1 ] && [ -x "${PFB_LOCKF}" ]; then
     PFB_UPGRADE_LOCK_HELD=1
     export PFB_UPGRADE_LOCK_HELD
-    "${PFB_LOCKF}" -s -t 0 "${PFB_UPGRADE_LOCK}" /bin/sh "$0" "$@"
-    exit 0
+    if "${PFB_LOCKF}" -s -t 0 "${PFB_UPGRADE_LOCK}" /bin/sh "$0" "$@"; then
+        exit 0
+    fi
+    PFB_UPGRADE_LOCK_HELD=0
+    export PFB_UPGRADE_LOCK_HELD
 fi
 
 # Run as an rc.d service when rc.subr is present (the pfSense box); otherwise run

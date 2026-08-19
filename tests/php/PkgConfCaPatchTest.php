@@ -691,6 +691,57 @@ final class PkgConfCaPatchTest extends TestCase
 		$this->assertSame($newer, file_get_contents($file));
 	}
 
+	public function testWriteAtomicRefusesWhileUpgradeWriterOwnsLock(): void
+	{
+		if (!function_exists('pcntl_fork') || !function_exists('pcntl_waitpid')) {
+			$this->markTestSkipped('pcntl is required for the upgrade-lock contention test');
+		}
+		$file = $this->tempFile('before');
+		$lock = $this->root . '/pfSense-upgrade.lock';
+		$ready = $this->root . '/upgrade-lock-ready';
+		$release = $this->root . '/upgrade-lock-release';
+		putenv("PFB_UPGRADE_LOCK={$lock}");
+
+		$pid = pcntl_fork();
+		if ($pid === -1) {
+			putenv('PFB_UPGRADE_LOCK');
+			$this->markTestSkipped('pcntl_fork() failed');
+		}
+		if ($pid === 0) {
+			$handle = fopen($lock, 'c');
+			if ($handle === FALSE || !flock($handle, LOCK_EX)) {
+				exit(2);
+			}
+			file_put_contents($ready, 'ready');
+			$deadline = microtime(TRUE) + 5;
+			while (!is_file($release) && microtime(TRUE) < $deadline) {
+				usleep(1000);
+			}
+			$released = is_file($release);
+			flock($handle, LOCK_UN);
+			fclose($handle);
+			exit($released ? 0 : 3);
+		}
+
+		$deadline = microtime(TRUE) + 5;
+		while (!is_file($ready) && microtime(TRUE) < $deadline) {
+			usleep(1000);
+		}
+		$this->assertFileExists($ready, 'the supported writer must hold the shared upgrade lock');
+		try {
+			$ok = pfb_pkgconf_write_atomic($file, 'after', 'before');
+		} finally {
+			file_put_contents($release, 'release');
+			pcntl_waitpid($pid, $status);
+			putenv('PFB_UPGRADE_LOCK');
+		}
+
+		$this->assertTrue(pcntl_wifexited($status));
+		$this->assertSame(0, pcntl_wexitstatus($status));
+		$this->assertFalse($ok, 'the cron writer must defer while pfSense-upgrade owns the shared lock');
+		$this->assertSame('before', file_get_contents($file));
+	}
+
 	public function testSyncUnwritableDirectoryFailsNoTempLeftover(): void
 	{
 		$this->skipUnderRoot();

@@ -53,6 +53,9 @@ _pc_box() {
     PFB_CONFIG_XML="${_pcb_dir}/config.xml"
     PFB_PKG_DIRTY="${_pcb_dir}/pkg.dirty"
     PFB_UPGRADE_LOCK="${_pcb_dir}/pfSense-upgrade.lock"
+    PFB_LOCKF="${_pcb_dir}/lockf"
+    printf '%s\n' '#!/bin/sh' 'shift 4' 'exec "$@"' > "${PFB_LOCKF}"
+    chmod +x "${PFB_LOCKF}"
     PFB_SSL_CA_CERT_PATH="${_pcb_dir}/ca-certs"
     _pc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
     PFB_SSL_CA_CERT_FILE="${_pcb_dir}/netgate-ca.pem"
@@ -65,14 +68,14 @@ _pc_box() {
         "${FIX}/plus_patched.conf" > "${PFB_EXPECTED_PATCHED}"
     export PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
            PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-           PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_UPGRADE_LOCK
+           PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_UPGRADE_LOCK PFB_LOCKF
     unset _pcb_dir
 }
 
 _pc_unset_box() {
     unset PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
           PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_PKG_CONF PFB_CONFIG_XML \
-          PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_UPGRADE_LOCK \
+          PFB_SSL_CA_CERT_PATH PFB_PKG_DIRTY PFB_UPGRADE_LOCK PFB_LOCKF \
           PFB_SSL_CA_CERT_FILE PFB_PINNED PFB_EXPECTED_PATCHED
 }
 
@@ -466,6 +469,37 @@ EOF
     End
 End
 
+Describe 'pkgconf re-apply — bare self-closing tag inside a wrapper: nested consent stays ignored'
+    setup() {
+        _dep2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_depth_bare_self_close.XXXXXX")"
+        _pc_box "${_dep2_dir}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<pfsense>
+	<installedpackages>
+		<pfblockerng>
+			<config>
+				<row>
+					<empty/>
+					<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>
+				</row>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+    }
+    cleanup() { rm -rf "${_dep2_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'leaves pkg.conf byte-unchanged because PfbConfig cannot read nested consent'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
 # ── LATCH AXIS (issue #2518 B2, "F/G/J/L/M") ─────────────────────────────────
 # The gate used to `next` past a line opening <pfblockerng>/<config> WITHOUT
 # checking whether that same line also closes it -- so in_pb/in_cfg latched
@@ -507,6 +541,28 @@ EOF
       When run sh "${HOOK}" onestart
       The status should be success
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkgconf re-apply — upgrade lock unavailable: JOB 1 runs and JOB 2 defers'
+    setup() {
+        _n2_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_upgrade_lock_busy.XXXXXX")"
+        _pc_box "${_n2_dir}"
+        printf '%s\n' '#!/bin/sh' 'exit 75' > "${PFB_LOCKF}"
+        chmod +x "${PFB_LOCKF}"
+        printf '# stub pending\n' > "${PFB_STABLE_CONF}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+        _pc_config_xml on
+    }
+    cleanup() { rm -rf "${_n2_dir}"; _pc_unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'regenerates the channel conf but leaves pkg.conf byte-unchanged, exit 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The contents of file "${PFB_STABLE_CONF}" should include "pfblockerng-stable: {"
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
     End
 End
 

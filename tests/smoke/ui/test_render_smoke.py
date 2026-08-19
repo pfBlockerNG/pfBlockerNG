@@ -2713,6 +2713,12 @@ def test_software_page_renders_when_override_forces_on(
       And no new php_error.log line (php_error_log_guard sweeps).
     """
     with software_panel_forced(smoke_vm, "on"):
+        shipped = smoke_vm.ssh("cat", _PKG_CONF_PATH)
+        assert shipped.returncode == 0, f"failed to read {_PKG_CONF_PATH}: {shipped.stderr.strip()}"
+        assert "PKG_ENV" not in shipped.stdout, (
+            "precondition: the guest's shipped pkg.conf must carry no PKG_ENV block; "
+            "a leaked seed from an earlier test invalidates this case"
+        )
         resp = webui.get(_SOFTWARE_PAGE)
         result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
         assert result.ok, f"forced-on Software page render failed: {result.detail}"
