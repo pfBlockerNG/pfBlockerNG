@@ -237,6 +237,10 @@ function pfb_software_check_enabled(): bool {
 	return pfb_software_check_config_read();
 }
 
+function pfb_pkg_ca_consent_enabled(): bool {
+	return PfbConfig::read('gen/pfb_pkg_ca_consent') === 'on';
+}
+
 /*
  * The notify state machine: TRUE iff a `file_notice` should fire THIS tick.
  *
@@ -271,6 +275,22 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  * authoritative channel signal AND the repo latest is read from.
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
+
+define('PFB_SSL_CA_CERT_PATH', '/etc/ssl/certs');
+define('PFB_SSL_CA_CERT_FILE', '/etc/ssl/cert.pem');
+define('PFB_PKG_CONF', '/usr/local/etc/pkg.conf');
+define('PFB_UPGRADE_LOCK', '/tmp/pfSense-upgrade.lock');
+
+function pfb_pkg_ca_env_prefix(string $ca_path = PFB_SSL_CA_CERT_PATH, string $ca_file = PFB_SSL_CA_CERT_FILE): string {
+	$parts = [];
+	if ($ca_path !== '' && !is_link($ca_path) && is_dir($ca_path) && is_readable($ca_path)) {
+		$parts[] = 'SSL_CA_CERT_PATH=' . escapeshellarg($ca_path);
+	}
+	if ($ca_file !== '' && !is_link($ca_file) && is_file($ca_file) && is_readable($ca_file) && (int) @filesize($ca_file) > 0) {
+		$parts[] = 'SSL_CA_CERT_FILE=' . escapeshellarg($ca_file);
+	}
+	return $parts === [] ? '' : implode(' ', $parts) . ' ';
+}
 
 /*
  * The installed pfBlockerNG package NAME (e.g. 'pfSense-pkg-pfBlockerNG-devel'), read
@@ -328,6 +348,20 @@ function pfb_pkg_installed_repo(string $pkgname): string {
 	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
 }
 
+function pfb_pkg_newest_version(array $versions): string {
+	$latest = '';
+	foreach ($versions as $line) {
+		if (!is_scalar($line)) {
+			continue;
+		}
+		$version = trim((string) $line);
+		if ($version !== '' && ($latest === '' || pkg_version_compare($latest, $version) === '<')) {
+			$latest = $version;
+		}
+	}
+	return $latest;
+}
+
 /*
  * The pfBlockerNG repo's latest version of $pkgname: `pkg update -r <repo>` (best-effort refresh of
  * just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`. Reads ONLY that repo
@@ -353,12 +387,330 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
+	$ca = pfb_pkg_ca_env_prefix();
 	// Best-effort catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
-	exec("{$tmo}{$bin} update -r {$repo} 2>/dev/null");
+	exec("{$ca}{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
 	$out = array();
 	$ret = -1;
-	exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
-	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
+	exec("{$ca}{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	return ($ret === 0 && $out !== []) ? pfb_pkg_newest_version($out) : '';
+}
+
+function pfb_pkgconf_block_bounds(array $lines): ?array {
+	$open_idx = NULL;
+	$open_count = 0;
+	foreach ($lines as $i => $line) {
+		if ($line === 'PKG_ENV {') {
+			$open_count++;
+			$open_idx = $i;
+		}
+	}
+	if ($open_count !== 1) {
+		return NULL;
+	}
+	$close_idx = NULL;
+	for ($i = $open_idx + 1; $i < count($lines); $i++) {
+		if ($lines[$i] === '}') {
+			$close_idx = $i;
+			break;
+		}
+	}
+	if ($close_idx === NULL) {
+		return NULL;
+	}
+	$mid_opens = 0;
+	$mid_closes = 0;
+	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
+		if (substr($lines[$i], -1) === '{') {
+			$mid_opens++;
+		}
+		if ($lines[$i] === '}') {
+			$mid_closes++;
+		}
+	}
+	return $mid_opens === $mid_closes ? [$open_idx, $close_idx] : NULL;
+}
+
+function pfb_pkgconf_ca_needed(string $text): bool {
+	if (strpos($text, 'SSL_CA_CERT_PATH') !== FALSE) {
+		return FALSE;
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return FALSE;
+	}
+	[$open_idx, $close_idx] = $bounds;
+	$ca_file_count = 0;
+	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
+		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") !== 0) {
+			continue;
+		}
+		$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
+		if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
+			return FALSE;
+		}
+		$ca_file_count++;
+	}
+	return $ca_file_count === 1;
+}
+
+function pfb_pkgconf_ca_add(string $text, string $ca_path): string {
+	if (!pfb_pkgconf_ca_needed($text) || preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_path) !== 1) {
+		return '';
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return '';
+	}
+	[, $close_idx] = $bounds;
+	array_splice($lines, $close_idx, 0, ["\tSSL_CA_CERT_PATH={$ca_path}"]);
+	return implode("\n", $lines);
+}
+
+function pfb_pkgconf_ca_remove(string $text, string $ca_path): string {
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return '';
+	}
+	$target = "\tSSL_CA_CERT_PATH={$ca_path}";
+	for ($i = $bounds[0] + 1; $i < $bounds[1]; $i++) {
+		if ($lines[$i] === $target) {
+			array_splice($lines, $i, 1);
+			return implode("\n", $lines);
+		}
+	}
+	return '';
+}
+
+function pfb_pkgconf_safe_ca_file(string $path): bool {
+	return $path !== '' && !is_link($path) && is_file($path) && is_readable($path) && (int) @filesize($path) > 0;
+}
+
+function pfb_pkgconf_dir_populated(string $dir): bool {
+	if (is_link($dir) || !is_dir($dir) || !is_readable($dir)) {
+		return FALSE;
+	}
+	foreach (@scandir($dir) ?: [] as $entry) {
+		if ($entry !== '' && $entry[0] !== '.') {
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+function pfb_pkgconf_write_atomic(string $file, string $content, string $expected): bool {
+	if (is_link($file) || !is_file($file) || !is_readable($file)) {
+		return FALSE;
+	}
+	$dir = dirname($file);
+	if (is_link($dir) || !is_dir($dir) || !is_writable($dir)) {
+		return FALSE;
+	}
+	$mode = @fileperms($file);
+	$tmp = @tempnam($dir, '.pfbpkgconf_');
+	if (!is_string($tmp) || is_link($tmp)) {
+		return FALSE;
+	}
+	$written = @file_put_contents($tmp, $content, LOCK_EX);
+	$exact = $written === strlen($content) && @file_get_contents($tmp) === $content;
+	if (!$exact || ($mode !== FALSE && !@chmod($tmp, $mode & 0777))) {
+		@unlink($tmp);
+		return FALSE;
+	}
+	$lock = @fopen(getenv('PFB_UPGRADE_LOCK') ?: PFB_UPGRADE_LOCK, 'c');
+	if ($lock === FALSE || !@flock($lock, LOCK_EX | LOCK_NB)) {
+		if (is_resource($lock)) { @fclose($lock); }
+		@unlink($tmp);
+		return FALSE;
+	}
+	try {
+		if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
+			|| is_link($file) || @file_get_contents($file) !== $expected) {
+			@unlink($tmp);
+			return FALSE;
+		}
+		if (!@rename($tmp, $file)) {
+			@unlink($tmp);
+			return FALSE;
+		}
+		return @file_get_contents($file) === $content;
+	} finally {
+		@flock($lock, LOCK_UN);
+		@fclose($lock);
+	}
+}
+
+function pfb_pkgconf_ca_state(?string $file = NULL, ?bool $is_plus = NULL): string {
+	$file ??= PFB_PKG_CONF;
+	if ($is_plus === NULL) {
+		$product = @file_get_contents('/etc/product_label');
+		$is_plus = $product !== FALSE && strpos($product, 'Plus') !== FALSE;
+	}
+	if (!$is_plus || is_link($file) || !is_file($file) || !is_readable($file)) {
+		return '';
+	}
+	$text = @file_get_contents($file);
+	if ($text === FALSE) {
+		return '';
+	}
+	if (pfb_pkgconf_ca_needed($text)) {
+		return 'needed';
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return '';
+	}
+	$ca_file_count = 0;
+	$has_path = FALSE;
+	for ($i = $bounds[0] + 1; $i < $bounds[1]; $i++) {
+		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
+			$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
+			if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
+				return '';
+			}
+			$ca_file_count++;
+		}
+		if (strpos($lines[$i], "\tSSL_CA_CERT_PATH=") === 0) {
+			$has_path = TRUE;
+		}
+	}
+	return ($ca_file_count === 1 && $has_path) ? 'patched' : '';
+}
+
+function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
+	$file ??= PFB_PKG_CONF;
+	if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
+		|| is_link($file) || !is_file($file) || !is_readable($file)) {
+		return FALSE;
+	}
+	$text = @file_get_contents($file);
+	if ($text === FALSE) {
+		return FALSE;
+	}
+	$patched = '';
+	if ($consent) {
+		$patched = pfb_pkgconf_ca_add($text, $ca_path);
+		if ($patched !== '') {
+			$ca_file = '';
+			foreach (explode("\n", $text) as $line) {
+				if (strpos($line, "\tSSL_CA_CERT_FILE=") === 0) {
+					$ca_file = substr($line, strlen("\tSSL_CA_CERT_FILE="));
+					break;
+				}
+			}
+			if (!pfb_pkgconf_safe_ca_file($ca_file) || !pfb_pkgconf_dir_populated($ca_path)) {
+				return FALSE;
+			}
+		}
+	} else {
+		$patched = pfb_pkgconf_ca_remove($text, $ca_path);
+	}
+	return $patched === '' ? TRUE : pfb_pkgconf_write_atomic($file, $patched, $text);
+}
+
+function pfb_pkgconf_ca_notice_sentinel(): string {
+	global $pfb;
+	return ($pfb['dbdir'] ?? '/var/db/pfblockerng') . '/.pkg_ca_notice';
+}
+
+function pfb_pkgconf_ca_clear_notice_sentinel(): void {
+	@unlink(pfb_pkgconf_ca_notice_sentinel());
+}
+
+function pfb_pkgconf_ca_notice_signature(string $file): string {
+	clearstatcache(TRUE, $file);
+	$stat = @stat($file);
+	return $stat === FALSE ? '' : $stat['ino'] . ':' . $stat['mtime'] . ':' . $stat['size'];
+}
+
+/* Best-effort cron retry and notice pass; provenance denial never mutates or notifies. */
+function pfb_pkgconf_ca_tick(
+	?bool $provenance_ok = NULL,
+	?string $file = NULL,
+	string $ca_path = PFB_SSL_CA_CERT_PATH,
+	?bool $is_plus = NULL
+): void {
+	try {
+		$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
+		if (!$provenance_ok) {
+			return;
+		}
+		$file = $file ?? PFB_PKG_CONF;
+		$consent = pfb_pkg_ca_consent_enabled();
+		$state = pfb_pkgconf_ca_state($file, $is_plus);
+		if ($state === '') {
+			pfb_pkgconf_ca_clear_notice_sentinel();
+			return;
+		}
+		if ($consent) {
+			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path);
+			$state = pfb_pkgconf_ca_state($file, $is_plus);
+			if ($state !== 'needed') {
+				pfb_pkgconf_ca_clear_notice_sentinel();
+				return;
+			}
+		} elseif ($state !== 'needed') {
+			pfb_pkgconf_ca_clear_notice_sentinel();
+			return;
+		}
+
+		$sentinel = pfb_pkgconf_ca_notice_sentinel();
+		$signature = pfb_pkgconf_ca_notice_signature($file);
+		$notified = is_file($sentinel) ? @file_get_contents($sentinel) : FALSE;
+		if ($notified === FALSE || $notified !== $signature) {
+			file_notice(
+				'pfBlockerNG',
+				"pkg on this firewall trusts only Netgate's CA bundle, so pfBlockerNG and any "
+				. 'other third-party repository cannot be installed or upgraded. Enable the '
+				. 'pkg.conf CA path on the pfBlockerNG Software page to add one SSL_CA_CERT_PATH '
+				. 'line to ' . PFB_PKG_CONF . '; pfBlockerNG re-applies that line at every boot '
+				. 'and scheduled (cron) pass once enabled.',
+				'pfBlockerNG',
+				'/pfblockerng/pfblockerng_software.php',
+				1
+			);
+			@file_put_contents($sentinel, $signature);
+		}
+	} catch (Throwable) {
+		return;
+	}
+}
+
+/* Persist consent only when the conditional Software-page section was rendered. */
+function pfb_pkgconf_ca_save(array $post): string {
+	if (!isset($post['pfb_pkg_ca_consent_shown'])) {
+		return (string) (PfbConfig::read('gen/pfb_pkg_ca_consent') ?? '');
+	}
+	$token = pfb_filter($post['pfb_pkg_ca_consent'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
+	PfbConfig::write('gen/pfb_pkg_ca_consent', $token);
+	return $token;
+}
+
+/* Caller must flush config after save() and before this file mutation. */
+function pfb_pkgconf_ca_apply(
+	string $token,
+	bool $was_consented,
+	?string $file = NULL,
+	string $ca_path = PFB_SSL_CA_CERT_PATH,
+	?bool $is_plus = NULL
+): bool {
+	$file = $file ?? PFB_PKG_CONF;
+	if (pfb_pkgconf_ca_state($file, $is_plus) === '') {
+		return TRUE;
+	}
+	$consent = $token === 'on';
+	if (!$consent && !$was_consented) {
+		return TRUE;
+	}
+	$ok = pfb_pkgconf_ca_sync($consent, $file, $ca_path);
+	if (!$consent && pfb_pkgconf_ca_state($file, $is_plus) === 'needed') {
+		@file_put_contents(pfb_pkgconf_ca_notice_sentinel(), pfb_pkgconf_ca_notice_signature($file));
+	}
+	return $ok;
 }
 
 /*
