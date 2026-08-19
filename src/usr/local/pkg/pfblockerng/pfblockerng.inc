@@ -61,6 +61,7 @@ function pfb_install_settings_family_capture_restore(
 	}
 	$installed_family = $from_version((string) $version());
 	if ($installed_family === NULL || !$replace($installed_family)) {
+		$replace($source_family);
 		throw new RuntimeException('pfBlockerNG: unable to restore settings family');
 	}
 	return $installed_family;
