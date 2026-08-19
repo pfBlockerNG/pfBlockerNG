@@ -9,8 +9,6 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 
 - Skills discovered from `.agents/skills/` (canonical) and `.claude/skills/`
   symlinks onto it — no Copilot-specific copy exists or should be created.
-- Mode capsules ride this file: Copilot repo-level `.github/hooks/*.json` did not fire
-  on CLI 1.0.78, so nothing installed outside repo.
 - Custom agents live in `.github/agents/*.agent.md`, tiered per `.agents/model-tiers.conf`.
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
   `COPILOT_CLI`, which CLI exports into every shell it spawns. Never unset to dodge
@@ -20,10 +18,3 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
   configured → disclose authorship in PR body instead.
 - **Copilot code review stays disabled** (owner directive, `.agents/policy/landing.md`).
   Directive about review bot, not restrict Copilot as agent client.
-
-## Communication
-
-Activate PONYTAIL full (build laziest solution that actually works) and CAVEMAN full
-(terse: drop articles, filler, pleasantries, hedging; fragments fine; technical terms and
-code exact). Two exceptions get normal professional grammar: external or public-facing text
-(issues, PR bodies, commits) and documentation. Commits: `<scope>: <imperative summary>`.

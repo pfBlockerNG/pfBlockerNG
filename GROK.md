@@ -10,9 +10,9 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 - Skills discovered from `.agents/skills/` (canonical) and `.claude/skills/`
   symlinks onto it — no Grok-specific copy exists or should be created. Grok also
   scans `.grok/skills/` if one is added.
-- No repo session hooks are wired. Mode capsules ride this file and
-  `.grok/rules/harness.md`, which Grok auto-loads (`<dir>/.grok/rules/` always
-  scanned — Grok 1.0.4 user-guide `12-project-rules.md`).
+- No repo session hooks are wired. `.grok/rules/harness.md` auto-loads the adapter
+  pointer (`<dir>/.grok/rules/` always scanned — Grok 1.0.4 user-guide
+  `12-project-rules.md`).
 - `.githooks/pre-push` and `.githooks/prepare-commit-msg` detect session through
   `GROK_SESSION_ID` and `GROK_AGENT` (probed on 1.0.4, 2026-08-15: exported into
   nested sh/bash). Never unset to dodge guard it trips.
@@ -22,10 +22,3 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 - Reviews use an independent spawned reviewer per `.agents/policy/landing.md`.
   Grok has no in-repo custom-agent files; spawn `general-purpose` (or `explore` /
   `plan`) rather than inventing a fourth role tree.
-
-## Communication
-
-Activate PONYTAIL full (build laziest solution that actually works) and CAVEMAN full
-(terse: drop articles, filler, pleasantries, hedging; fragments fine; technical terms and
-code exact). Two exceptions get normal professional grammar: external or public-facing text
-(issues, PR bodies, commits) and documentation. Commits: `<scope>: <imperative summary>`.

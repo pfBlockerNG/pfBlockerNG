@@ -45,10 +45,6 @@ constraint on ALL direct work: session context usage ≤ 50% — past 50% sessio
   tickets with committed specs ([`workflow.md`](workflow.md)); unimplemented ADRs migrate to
   specs and tickets (#1389); implemented ADRs stay immutable historical records. Retired
   ADR-phase orchestration (`/adr-phase`, `phase-step`) live on only in those records.
-- **Mode propagation to delegates is mechanical** — `SubagentStart` hook
-  (`.claude/settings.json` / `.codex/hooks.json`) inject ponytail + caveman capsule into every
-  spawned sub-agent; capsule itself carry rules (reviewer carve-out; "terse prose, verbatim
-  evidence"). Briefs add mode line only for non-default level (e.g. `ultra`).
 - **Small tier follow every directive of canonical policy (AGENTS.md + its routed files).**
   Implementer cheaper, not exempt.
 - **Effort per role, stated explicitly in every spawn** (never rely on inheritance):
