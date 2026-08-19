@@ -174,8 +174,8 @@ def test_artifact_datetime_is_utc_minute_precision() -> None:
 def test_timestamp_html_keeps_utc_instant_and_localizes_in_the_browser(tmp_path: Path) -> None:
     """Generated dates retain a truthful UTC fallback and ISO instant, while the
     shipped script renders the visitor's local `YYYY-MM-DD HH:mm` without a suffix."""
-    epoch = datetime(2026, 8, 14, 19, 32, tzinfo=timezone.utc).timestamp()
-    timestamp = '<time datetime="2026-08-14T19:32:00Z">2026-08-14 19:32 UTC</time>'
+    epoch = datetime(2026, 8, 14, 19, 32, 17, tzinfo=timezone.utc).timestamp()
+    timestamp = '<time datetime="2026-08-14T19:32:17Z">2026-08-14 19:32 UTC</time>'
     assert gl._time_html(epoch) == timestamp
     assert gl._epoch_cell(epoch) == timestamp
 
@@ -191,7 +191,7 @@ def test_timestamp_html_keeps_utc_instant_and_localizes_in_the_browser(tmp_path:
         assert gl._LOCAL_TIME_JS in rendered
 
     runner = (
-        'var t={dateTime:"2026-08-14T19:32:00Z",textContent:"UTC fallback"};'
+        'var t={dateTime:"2026-08-14T19:32:17Z",textContent:"UTC fallback"};'
         "global.document={querySelectorAll:function(){return [t];}};"
         f"{gl._LOCAL_TIME_JS}"
         "process.stdout.write(t.textContent);"
@@ -207,7 +207,7 @@ def test_timestamp_html_keeps_utc_instant_and_localizes_in_the_browser(tmp_path:
         result = subprocess.run(["node", "-e", runner], env=env, check=True, capture_output=True, text=True)
         assert result.stdout == local_time
 
-    invalid_runner = runner.replace("2026-08-14T19:32:00Z", "invalid")
+    invalid_runner = runner.replace("2026-08-14T19:32:17Z", "invalid")
     invalid = subprocess.run(["node", "-e", invalid_runner], check=True, capture_output=True, text=True)
     assert invalid.stdout == "UTC fallback"
 
