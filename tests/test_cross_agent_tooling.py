@@ -27,6 +27,12 @@ def _commands(path: str, event: str) -> str:
     )
 
 
+def _write_plugin_manifest(config_dir: Path, plugins: dict[str, list[dict[str, str]]]) -> None:
+    manifest = config_dir / "plugins/installed_plugins.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({"version": 2, "plugins": plugins}), encoding="utf-8")
+
+
 def test_repo_contains_only_owned_skills_and_symlink_adapters() -> None:
     assert not (ROOT / "plugins").exists(), "third-party plugin trees must not be vendored"
     assert not (ROOT / "skills-lock.json").exists(), "third-party skill lock must not be vendored"
@@ -42,9 +48,22 @@ def test_repo_contains_only_owned_skills_and_symlink_adapters() -> None:
 
 
 def test_statusline_loads_ponytail_from_external_plugin_cache(tmp_path: Path) -> None:
-    hook_dir = tmp_path / "plugins/cache/ponytail/ponytail/1.0/hooks"
-    hook_dir.mkdir(parents=True)
-    (hook_dir / "ponytail-statusline.sh").write_text("#!/bin/sh\nprintf PONYTAIL", encoding="utf-8")
+    user_dir = tmp_path / "plugins/cache/ponytail/ponytail/0.9"
+    project_dir = tmp_path / "plugins/cache/ponytail/ponytail/1.0"
+    for install_dir, output in ((user_dir, "USER"), (project_dir, "PONYTAIL")):
+        hook_dir = install_dir / "hooks"
+        hook_dir.mkdir(parents=True)
+        (hook_dir / "ponytail-statusline.sh").write_text(f"#!/bin/sh\nprintf {output}", encoding="utf-8")
+    (tmp_path / "plugins/cache/ponytail/ponytail/2.0").mkdir(parents=True)
+    _write_plugin_manifest(
+        tmp_path,
+        {
+            "ponytail@ponytail": [
+                {"scope": "user", "installPath": str(user_dir)},
+                {"scope": "project", "projectPath": str(ROOT), "installPath": str(project_dir)},
+            ]
+        },
+    )
     env = os.environ | {
         "CLAUDE_CONFIG_DIR": str(tmp_path),
         "CLAUDE_PROJECT_DIR": str(ROOT),
@@ -64,9 +83,12 @@ def test_statusline_loads_ponytail_from_external_plugin_cache(tmp_path: Path) ->
 
 
 def test_caveman_stats_loads_script_from_external_plugin_cache(tmp_path: Path) -> None:
-    plugin_script = tmp_path / "plugins/cache/caveman/caveman/1.0/src/hooks/caveman-stats.js"
+    install_dir = tmp_path / "plugins/cache/caveman/caveman/1.0"
+    plugin_script = install_dir / "src/hooks/caveman-stats.js"
     plugin_script.parent.mkdir(parents=True)
     plugin_script.touch()
+    (tmp_path / "plugins/cache/caveman/caveman/2.0").mkdir(parents=True)
+    _write_plugin_manifest(tmp_path, {"caveman@caveman": [{"scope": "user", "installPath": str(install_dir)}]})
     node_log = tmp_path / "node.log"
     fake_node = tmp_path / "bin/node"
     fake_node.parent.mkdir()
@@ -95,13 +117,18 @@ def test_caveman_stats_loads_script_from_external_plugin_cache(tmp_path: Path) -
 
 
 def test_caveman_stats_skips_when_plugin_is_not_cached(tmp_path: Path) -> None:
+    node_log = tmp_path / "node.log"
     fake_node = tmp_path / "bin/node"
     fake_node.parent.mkdir(parents=True)
-    fake_node.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    fake_node.write_text('#!/bin/sh\nprintf invoked >"$NODE_LOG"\nexit 99\n', encoding="utf-8")
     fake_node.chmod(0o755)
+    missing_dir = tmp_path / "plugins/cache/caveman/caveman/missing"
+    missing_dir.mkdir(parents=True)
+    _write_plugin_manifest(tmp_path, {"caveman@caveman": [{"scope": "user", "installPath": str(missing_dir)}]})
     env = os.environ | {
         "CLAUDE_CONFIG_DIR": str(tmp_path),
         "HOME": str(tmp_path),
+        "NODE_LOG": str(node_log),
         "PATH": f"{fake_node.parent}:{os.environ['PATH']}",
         "XDG_CACHE_HOME": str(tmp_path / "cache"),
     }
@@ -116,6 +143,7 @@ def test_caveman_stats_skips_when_plugin_is_not_cached(tmp_path: Path) -> None:
     )
 
     assert result.returncode == 0, result.stderr
+    assert not node_log.exists()
 
 
 def test_project_plugin_bridges_use_external_sources_only() -> None:
