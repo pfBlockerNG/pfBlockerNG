@@ -41,10 +41,7 @@ SPOOF_DOM = f"evil-rv2041{RLO}gnp.exe"
 FIXED_TS = "2030-01-15 09:00:05"
 
 # dnsbl.log CSV shape: l_type,ts,domain,src_ip,agent,block_mode,group,final_domain,feed,dup,qtype
-_LOG_LINE = (
-    f"DNSBL-python,{FIXED_TS},{SPOOF_DOM},127.0.0.1,Python,"
-    f"DNSBL_TLD,RV2041Group,{SPOOF_DOM},RV2041Feed,+,A\n"
-)
+_LOG_LINE = f"DNSBL-python,{FIXED_TS},{SPOOF_DOM},127.0.0.1,Python,DNSBL_TLD,RV2041Group,{SPOOF_DOM},RV2041Feed,+,A\n"
 
 
 @pytest.fixture
@@ -102,16 +99,13 @@ def test_bidi_override_does_not_reach_the_rendered_cell(
     body = resp.text
     # Fixture sanity first: a page that never rendered the row would pass the bidi
     # assertion vacuously.
-    assert "evil-rv2041" in body, (
-        "the seeded dnsbl.log row did not render at all -- fixture broken, not a #2041 signal"
-    )
+    assert "evil-rv2041" in body, "the seeded dnsbl.log row did not render at all -- fixture broken, not a #2041 signal"
     assert RLO not in body, (
         "U+202E reached the rendered Alerts markup -- a log-derived value can be displayed "
         "reversed relative to the bytes actually logged (issue #2041)"
     )
     # The whole set pfb_hsc() strips, so a partial revert is caught too.
-    for ch in ("؜", "‎", "‏", "‪", "‫", "‬", "‭",
-               "⁦", "⁧", "⁨", "⁩"):
+    for ch in ("؜", "‎", "‏", "‪", "‫", "‬", "‭", "⁦", "⁧", "⁨", "⁩"):
         assert ch not in body, f"bidi control U+{ord(ch):04X} reached the rendered markup (issue #2041)"
 
     guard.assert_no_growth()
