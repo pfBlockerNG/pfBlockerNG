@@ -10,7 +10,6 @@ ROOT = Path(__file__).resolve().parent.parent
 REPO_SKILLS = {
     "coderabbit",
     "debug",
-    "new-terminal",
     "release",
     "release-with-changelog",
     "subsystem-sweep",
