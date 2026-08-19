@@ -1093,6 +1093,19 @@ def _ca_dir(root: str) -> Path:
     return Path(root) / "etc" / "ssl" / "certs"
 
 
+def _seed_ca_dir(root: str) -> Path:
+    """Create the hash dir WITH an entry.
+
+    install.sh refuses to export an empty hash dir (issue #2524), so any case that is
+    about something else — the bundle half, a path with a space, an override — needs a
+    populated one or it exercises the emptiness guard by accident.
+    """
+    ca_dir = _ca_dir(root)
+    ca_dir.mkdir(parents=True, exist_ok=True)
+    (ca_dir / "deadbeef.0").write_text("-----BEGIN CERTIFICATE-----\n")
+    return ca_dir
+
+
 def test_every_pkg_call_exports_the_system_ca_path() -> None:
     """Every pkg(8) invocation carries SSL_CA_CERT_PATH pointing at the box's store."""
     with tempfile.TemporaryDirectory() as root:
@@ -1126,11 +1139,56 @@ def test_absent_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
         assert set(files) == {"<unset>"}, f"expected SSL_CA_CERT_FILE unset, saw {sorted(set(files))}"
 
 
+def test_empty_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
+    """An EMPTY hash dir must not be exported (issue #2524).
+
+    ``-d`` alone passes a directory that exists but holds nothing, and FreeBSD ships
+    /etc/ssl/certs empty until ``certctl rehash`` runs — the state of a stock box, not a
+    hypothetical. libfetch stops calling ``SSL_CTX_set_default_verify_paths()`` as soon as
+    EITHER variable is set, so exporting an empty hash dir with no bundle beside it leaves
+    an EMPTY store: strictly worse than exporting nothing at all. Matches the guard
+    ``pfb_pkgconf_dir_populated()`` and the boot hook already carry.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        _ca_dir(root).mkdir(parents=True)
+        assert _ca_dir(root).is_dir() and not any(_ca_dir(root).iterdir())
+        assert not _ca_bundle(root).exists(), "bundle must be absent to isolate the PATH-only branch"
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_path_capture(root).read_text().splitlines()
+        assert seen, "no pkg calls were made — the run cannot prove the guard"
+        assert set(seen) == {"<unset>"}, (
+            f"an empty hash dir was exported as SSL_CA_CERT_PATH={sorted(set(seen))} — "
+            "that empties the trust store instead of widening it"
+        )
+
+
+def test_populated_ca_dir_is_still_exported() -> None:
+    """The guard must not cost the working case: one entry is enough to export the path."""
+    with tempfile.TemporaryDirectory() as root:
+        _ca_dir(root).mkdir(parents=True)
+        (_ca_dir(root) / "deadbeef.0").write_text("-----BEGIN CERTIFICATE-----\n")
+
+        proc = _run_install(root, "stable")
+        assert proc.returncode == 0, proc.stderr
+
+        seen = _pkg_ca_path_capture(root).read_text().splitlines()
+        assert seen, "no pkg calls were made — the run cannot prove the guard"
+        assert set(seen) == {str(_ca_dir(root))}, (
+            f"expected the populated hash dir to be exported, saw {sorted(set(seen))}"
+        )
+
+
 def test_ca_path_is_overridable() -> None:
     """PFB_SSL_CA_CERT_PATH overrides the default location."""
     with tempfile.TemporaryDirectory() as root:
         override = Path(root) / "custom-store"
         override.mkdir()
+        # Populated on purpose: an empty hash dir is refused by design (issue #2524), and
+        # this case is about the override being honoured, not about the emptiness guard.
+        (override / "deadbeef.0").write_text("-----BEGIN CERTIFICATE-----\n")
 
         proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_PATH": str(override)})
         assert proc.returncode == 0, proc.stderr
@@ -1248,7 +1306,7 @@ def test_empty_bundle_override_opts_out_of_the_file() -> None:
     """PFB_SSL_CA_CERT_FILE="" exports no bundle, and the path is unaffected."""
     with tempfile.TemporaryDirectory() as root:
         ca_dir = _ca_dir(root)
-        ca_dir.mkdir(parents=True)
+        _seed_ca_dir(root)
         _ca_bundle(root).write_text("# CA bundle\n")
 
         proc = _run_install(root, "stable", extra_env={"PFB_SSL_CA_CERT_FILE": ""})
@@ -1270,7 +1328,7 @@ def test_empty_bundle_file_is_not_exported() -> None:
     """
     with tempfile.TemporaryDirectory() as root:
         ca_dir = _ca_dir(root)
-        ca_dir.mkdir(parents=True)
+        _seed_ca_dir(root)
         _ca_bundle(root).write_text("")
 
         proc = _run_install(root, "stable")
@@ -1287,7 +1345,7 @@ def test_directory_as_bundle_is_not_exported() -> None:
     """A directory where the bundle should be is refused: `-s` alone is true for one."""
     with tempfile.TemporaryDirectory() as root:
         ca_dir = _ca_dir(root)
-        ca_dir.mkdir(parents=True)
+        _seed_ca_dir(root)
         _ca_bundle(root).mkdir(parents=True)  # a directory, not a bundle
 
         proc = _run_install(root, "stable")
