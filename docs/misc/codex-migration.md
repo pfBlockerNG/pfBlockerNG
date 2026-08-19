@@ -85,8 +85,6 @@ worktree coherent (preferably committed) before closing CLI, then
   failure against the base.
 - **`pyright-lsp` plugin:** Codex does not use Claude plugin protocol.
   Repository Python gates stay authoritative.
-- **Remote-control URL cloning:** `$new-terminal` can start another CLI session,
-  but Codex has no equivalent for Claude's bridge URL.
 - **Provider model identifiers:** procedures use top / mid / small tiers;
   `.agents/model-tiers.conf` maps them explicitly instead of treating one
   provider's model alias as portable.
