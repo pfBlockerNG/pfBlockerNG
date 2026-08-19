@@ -76,7 +76,7 @@ def test_boot_hook_does_not_replace_concurrent_pkgconf_rewrite(tmp_path: Path) -
         '/usr/bin/cksum < "$input"\n'
         'rm -f "$input"\n'
         'if [ "$n" -eq 2 ]; then\n'
-        '    : > "$RACE_READY"\n'
+        '    true > "$RACE_READY"\n'
         "    i=0\n"
         '    while [ ! -e "$RACE_RELEASE" ]; do\n'
         "        i=$((i + 1))\n"
