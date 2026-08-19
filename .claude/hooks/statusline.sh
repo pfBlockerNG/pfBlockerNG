@@ -8,12 +8,12 @@
 set -eu
 
 d="${CLAUDE_PROJECT_DIR:-.}/.claude"
-# Resolve the newest cached plugin versions; skip either badge when absent.
-plugin_cache="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/cache"
-ponytail_dir=$(ls -td "$plugin_cache"/ponytail/ponytail/*/ 2>/dev/null | head -1)
-caveman_dir=$(ls -td "$plugin_cache"/caveman/caveman/*/ 2>/dev/null | head -1)
-ponytail_sl="${ponytail_dir}hooks/ponytail-statusline.sh"
-caveman_sl="${caveman_dir}src/hooks/caveman-statusline.sh"
+# shellcheck source=.claude/hooks/plugin-install-path.sh
+. "$d/hooks/plugin-install-path.sh"
+ponytail_dir=$(plugin_install_path 'ponytail@ponytail')
+caveman_dir=$(plugin_install_path 'caveman@caveman')
+ponytail_sl="${ponytail_dir}/hooks/ponytail-statusline.sh"
+caveman_sl="${caveman_dir}/src/hooks/caveman-statusline.sh"
 if [ -n "$ponytail_dir" ] && [ -f "$ponytail_sl" ]; then
 	bash "$ponytail_sl"
 	printf ' '

@@ -11,8 +11,11 @@ last=$(cat "$stamp" 2>/dev/null) || last=0
 case $last in '' | *[!0-9]*) last=0 ;; esac
 [ $((now - last)) -ge 300 ] || exit 0
 command -v node >/dev/null 2>&1 || exit 0
-caveman_dir=$(ls -td "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/plugins/cache/caveman/caveman/*/ 2>/dev/null | head -1)
-js="${caveman_dir}src/hooks/caveman-stats.js"
+d="${CLAUDE_PROJECT_DIR:-.}/.claude"
+# shellcheck source=.claude/hooks/plugin-install-path.sh
+. "$d/hooks/plugin-install-path.sh"
+caveman_dir=$(plugin_install_path 'caveman@caveman')
+js="${caveman_dir}/src/hooks/caveman-stats.js"
 [ -n "$caveman_dir" ] && [ -f "$js" ] || exit 0
 
 tp=$(jq -r '.transcript_path // empty' 2>/dev/null) || tp=''
