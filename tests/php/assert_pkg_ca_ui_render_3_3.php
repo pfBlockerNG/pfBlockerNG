@@ -104,7 +104,7 @@ function check(bool $condition, string $message): void
 
 row('consent controls execute through the shipped form helper', static function (): void {
 	$form = new Form();
-	pfb_pkgconf_ca_add_form_controls($form, 'needed', false);
+	pfb_pkgconf_ca_add_form_controls($form, false);
 	check(count($form->sections) === 1, 'one consent section rendered');
 	$section = $form->sections[0];
 	check($section->title === 'Package manager CA trust', 'section title');
@@ -117,22 +117,29 @@ row('consent controls execute through the shipped form helper', static function 
 	check(count($form->globals) === 1, 'hidden marker rendered');
 	check($form->globals[0]->name === 'pfb_pkg_ca_consent_shown', 'hidden marker name');
 
-	$invalid = new Form();
-	pfb_pkgconf_ca_add_form_controls($invalid, '', true);
-	check($invalid->sections === [] && $invalid->globals === [], 'unsupported state renders nothing');
+	$enabled = new Form();
+	pfb_pkgconf_ca_add_form_controls($enabled, true);
+	check($enabled->sections[0]->inputs[0]->checked, 'enabled consent renders checked');
+	check(str_contains($enabled->sections[0]->inputs[0]->help, 'before each package check'), 'runtime hook help');
 });
 
-row('upgrade lock is explicit test injection, never environment-controlled', static function (): void {
-	$writer = new ReflectionFunction('pfb_pkgconf_write_atomic');
-	$sync = new ReflectionFunction('pfb_pkgconf_ca_sync');
+row('package PHP exposes only the hook delegation boundary', static function (): void {
+	$command = new ReflectionFunction('pfb_pkgconf_ca_command');
 	$apply = new ReflectionFunction('pfb_pkgconf_ca_apply');
-	$tick = new ReflectionFunction('pfb_pkgconf_ca_tick');
-	check($writer->getNumberOfParameters() === 4, 'writer accepts lock path');
-	check($sync->getNumberOfParameters() === 4, 'sync threads lock path');
-	check($apply->getNumberOfParameters() === 6, 'apply threads lock path');
-	check($tick->getNumberOfParameters() === 5, 'tick threads lock path');
+	check($command->getNumberOfParameters() === 1, 'command accepts only the action');
+	check($apply->getNumberOfParameters() === 2, 'apply accepts token and prior consent');
 	$source = file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_software.inc');
-	check(is_string($source) && !str_contains($source, "getenv('PFB_UPGRADE_LOCK')"), 'no environment lock override');
+	check(is_string($source), 'software source');
+	foreach (['pfb_pkg_ca_env_prefix', 'pfb_pkgconf_ca_sync', 'pfb_pkgconf_write_atomic', 'pfb_pkgconf_ca_tick'] as $removed) {
+		check(!str_contains($source, "function {$removed}"), "{$removed} removed");
+	}
+	$product = tempnam(sys_get_temp_dir(), 'pfb-plus-');
+	check(is_string($product), 'product fixture');
+	file_put_contents($product, "pfSense Plus\n");
+	check(pfb_pkg_ca_is_plus($product), 'Plus detected');
+	file_put_contents($product, "pfSense Community Edition\n");
+	check(!pfb_pkg_ca_is_plus($product), 'CE rejected');
+	@unlink($product);
 });
 
 echo $failures === 0 ? "ALL PASS\n" : "{$failures} FAILURES\n";
