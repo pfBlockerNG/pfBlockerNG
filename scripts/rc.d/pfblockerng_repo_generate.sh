@@ -266,10 +266,8 @@ _regen_one() {
 # JOB 2 (issue #2518): re-apply the consented SSL_CA_CERT_PATH line to pkg.conf
 # after pfSense-repo-setup wipes it. Every guard below fails CLOSED and quiet —
 # this runs at boot for the overwhelmingly common CE case, where none of it
-# applies, so a miss must never print or wedge boot. Never reverts: consent-off
-# simply skips the patch, and pfSense-repo-setup's own rewrite drops a
-# previously-applied line anyway — revocation is handled synchronously by the
-# PHP side, not by this hook running backwards.
+# applies, so a miss must never print or wedge boot. The boot path never
+# reverts; the explicit ca-revoke command below handles an on-to-off transition.
 _pkgconf_ca_reapply() {
     PFB_CA_REAPPLY_CONSENT=off
     [ "${PFB_UPGRADE_LOCK_HELD:-1}" = 1 ] || return 0
@@ -305,16 +303,16 @@ _pkgconf_ca_reapply() {
     # "<config>") substring belonging to a DIFFERENT, EARLIER package in the
     # document exhausts the "first occurrence" search this hook does
     # (seen_pb/seen_cfg never re-arm), so a decoy ahead of the real block can
-    # cause a FALSE NEGATIVE -- never a false positive -- and the cron tick
-    # still re-applies on that box; pfSense's own config writer never emits
-    # such a decoy or reorders sections, so this is a defensive bound, not an
+    # cause a FALSE NEGATIVE -- never a false positive -- on every hook call;
+    # pfSense's own config writer never emits such a decoy or reorders sections,
+    # so this is a defensive bound, not an
     # expected case. Nor is it sound against an XML attribute on the
     # <pfblockerng> open tag, a CDATA-wrapped value, or the whole element
     # collapsed onto one line (PfbConfig reads all three as consent, this hook
     # matches none of them) -- tracking any of those in POSIX sh is
     # disproportionate to the risk, and pfSense's own config writer emits none
     # of them (verified against a live config.xml); each is a bounded,
-    # documented miss (boot skip only -- the cron tick still re-applies),
+    # documented miss across hook calls,
     # pinned by its own spec row. Also NOT sound against a MULTI-LINE XML
     # comment that happens to wrap the element inside config/0 -- tracking
     # multi-line comment state in POSIX sh is disproportionate to that risk
@@ -361,11 +359,8 @@ _pkgconf_ca_reapply() {
     # refuse rather than patch a file that only appears to work. Glob-based
     # (no `ls | wc -l`): with no match dash leaves the pattern word literal, so
     # -e/-L on it is false and the loop body never sets the flag. A bare `*`
-    # glob under POSIX never matches a dotfile, which matches the PHP side
-    # exactly: pfb_pkgconf_dir_populated() counts only non-dot scandir()
-    # entries (issue #2518 nitpick N-dotfile-guard), so a directory holding
-    # e.g. only ".DS_Store" is NOT populated on either side -- no patch,
-    # matching the PHP read.
+    # glob under POSIX never matches a dotfile, so a directory holding only
+    # e.g. ".DS_Store" is not considered populated.
     [ -d "${PFB_SSL_CA_CERT_PATH}" ] || return 0
     _pcr_has_entry=0
     for _pcr_entry in "${PFB_SSL_CA_CERT_PATH}"/*; do
@@ -378,8 +373,8 @@ _pkgconf_ca_reapply() {
     [ "${_pcr_has_entry}" -eq 1 ] || { unset _pcr_has_entry; return 0; }
     unset _pcr_has_entry
 
-    # CA-path character whitelist, mirroring PHP's pfb_pkgconf_ca_add() guard
-    # `^/[A-Za-z0-9._/+-]+$` exactly (including that a bare "/" is refused: it
+    # CA-path character whitelist: `^/[A-Za-z0-9._/+-]+$`, including that a bare
+    # "/" is refused because it
     # has nothing after the leading slash). A '#' landing inside the PKG_ENV
     # block would make libucl treat the rest of the line as a comment and
     # silently truncate the CA path; a space or quote corrupts the block --
@@ -449,20 +444,16 @@ _pkgconf_ca_reapply() {
 
     # Patch: insert the one line immediately before the block's closing `}`,
     # nothing else touched. tmp+mv mirrors _regen_one()'s idiom, with two extra
-    # steps the PHP appender already gets for free (issue #2518 nitpicks
-    # N-mode / N-trailing-newline):
+    # steps for mode and trailing-newline preservation:
     #   - `cp -p` seeds the temp with the ORIGINAL file's permission bits
     #     before the `>` redirect below truncates it -- truncation keeps the
     #     inode (and its mode); a fresh `>` on a name that did not exist would
     #     not, which is why the patched file used to land at the process
-    #     umask instead of pkg.conf's own mode (PHP's fileperms()+chmod()
-    #     already preserves this).
+    #     umask instead of pkg.conf's own mode.
     #   - awk's `print` always terminates its last output line, which would
     #     otherwise turn a pkg.conf whose last byte is `}` (no trailing
     #     newline) into one that has one; the tail-c1 check + reprint below
-    #     restores that exact newline-less state when the original had it
-    #     (PHP round-trips the input bytes exactly; see
-    #     testAddPatchesWhenFinalBraceHasNoTrailingNewline).
+    #     restores that exact newline-less state when the original had it.
     _pcr_original_sum="$(cksum < "${PFB_PKG_CONF}" 2>/dev/null)" \
         || { unset _pcr_original_sum; return 0; }
     _pcr_tmp="${PFB_PKG_CONF}.tmp"

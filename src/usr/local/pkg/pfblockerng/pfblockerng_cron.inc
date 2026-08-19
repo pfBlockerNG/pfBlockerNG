@@ -482,18 +482,6 @@ function pfblockerng_sync_cron(
 	// Netgate-installed build.
 	pfb_software_update_check();
 
-	// issue #2518: re-apply the pkg.conf CA-path patch (consent-gated) every tick.
-	// pfSense-repo-setup can rewrite /usr/local/etc/pkg.conf at any time -- a branch
-	// switch, a repo change -- wiping a previously-patched file back to 'needed', so the
-	// patch has to be checked and re-applied here rather than once at install/boot. The
-	// same pass also raises the operator notice again whenever a tick ENDS with the file
-	// still 'needed' -- consent off, OR consent on but the re-apply above could not land
-	// (e.g. an empty CA hash directory) -- keyed on a signature of the file itself
-	// (pfb_pkgconf_ca_notice_signature(), inside pfb_pkgconf_ca_tick()) so an out-of-band
-	// rewrite that lands back in the same shape still re-notifies (issue #2518 B2). Same
-	// best-effort, fully-guarded, never-throws slot as the call above.
-	pfb_pkgconf_ca_tick();
-
 	// issue #1175: release only if this call transitioned the lock (see head of function) --
 	// the tail sync_package_pfblockerng() calls above reentered the SAME lock and no-op'd.
 	if ($pfb_feed_pass_owner) {

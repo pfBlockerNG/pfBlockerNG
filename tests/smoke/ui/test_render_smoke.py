@@ -3004,20 +3004,16 @@ def test_software_page_hidden_when_override_forces_off(
 
 
 # --------------------------------------------------------------------------- #
-# issue #2518 STEP C — the pkg.conf CA-path consent section. Rendered ONLY when
-# pfb_pkgconf_ca_state() finds a recognised PKG_ENV pin in the guest's REAL
-# /usr/local/etc/pkg.conf (a CE box, or any shape the parser does not recognise,
-# must see nothing). The smoke VMs are CE, so their shipped pkg.conf carries no
-# PKG_ENV block by default (the negative/absent case below IS that default).
-# The positive context temporarily seeds both the Plus product label and its pin.
+# issue #2518 STEP C — the Plus-only pkg.conf CA-path consent section. The smoke
+# VMs are CE by default; the positive context temporarily seeds the Plus product
+# label and a matching pin for the functional hook flow.
 # --------------------------------------------------------------------------- #
 
 _PKG_CONF_PATH = "/usr/local/etc/pkg.conf"
 _PRODUCT_LABEL_PATH = "/etc/product_label"
 # The GUEST's own real cert bundle -- never a Netgate path (that file does not
 # exist off-Plus, and pointing pkg at a missing bundle would break pkg's own TLS
-# on this guest for the rest of the test run). Matches PFB_SSL_CA_CERT_FILE's
-# production default (pfblockerng.inc), which IS this guest's real file.
+# on this guest for the rest of the test run).
 _PKG_CONF_GUEST_CA_FILE = "/etc/ssl/cert.pem"
 _CONSENT_FIELD_MARKER = "pfb_pkg_ca_consent"
 
@@ -3074,13 +3070,11 @@ def pkg_conf_ca_block_seeded(vm: SmokeVM) -> Iterator[None]:
 def test_software_page_pkgconf_ca_consent_section_present_when_pinned(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """The pkg.conf CA-consent section renders when a recognised PKG_ENV pin is present (#2518).
+    """The pkg.conf CA-consent section renders on Plus (#2518).
 
     Scenario:
       Given the override sentinel set to 'on' (so the provenance gate passes),
-      And the guest's REAL pkg.conf seeded with a well-formed, unpatched PKG_ENV block
-          (pkg_conf_ca_block_seeded — the branch every genuine Plus box with the Netgate
-          CA pin takes),
+      And the guest's product label temporarily seeded as Plus,
       When the Software page is GET,
       Then it renders clean (200, no Fatal/Warning/Notice/Uncaught — the render oracle) AND
           the pfb_pkg_ca_consent control is present in the body.
@@ -3089,15 +3083,13 @@ def test_software_page_pkgconf_ca_consent_section_present_when_pinned(
         resp = webui.get(_SOFTWARE_PAGE)
         result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
         assert result.ok, f"Software page render oracle failed with the CA pin seeded: {result.detail}"
-        assert _CONSENT_FIELD_MARKER in resp.text, (
-            "the pkg.conf CA-consent section must render when pkg.conf carries a recognised unpatched PKG_ENV block"
-        )
+        assert _CONSENT_FIELD_MARKER in resp.text, "the pkg.conf CA-consent section must render on Plus"
 
 
 def test_software_page_pkgconf_ca_consent_section_absent_on_unpinned_pkgconf(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """The pkg.conf CA-consent section stays ABSENT on a CE box's real, unpinned pkg.conf.
+    """The pkg.conf CA-consent section stays ABSENT on CE.
 
     This is the branch every real CE box takes (the Tier-A guests ship exactly this: no
     PKG_ENV block at all) -- no seeding here, deliberately, so this proves the section's
@@ -3114,11 +3106,7 @@ def test_software_page_pkgconf_ca_consent_section_absent_on_unpinned_pkgconf(
         resp = webui.get(_SOFTWARE_PAGE)
         result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
         assert result.ok, f"Software page render oracle failed on unpinned pkg.conf: {result.detail}"
-        assert _CONSENT_FIELD_MARKER not in resp.text, (
-            "the pkg.conf CA-consent section must stay ABSENT when pkg.conf carries no "
-            "recognised PKG_ENV block (a CE box, or any shape pfb_pkgconf_ca_state() does "
-            "not recognise, must see nothing here)"
-        )
+        assert _CONSENT_FIELD_MARKER not in resp.text, "the pkg.conf CA-consent section must stay ABSENT on CE"
 
 
 def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001

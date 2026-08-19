@@ -8879,23 +8879,50 @@
             }
         ]
     },
-    "pfb_pkg_ca_env_prefix": {
+    "pfb_pkg_ca_is_plus": {
         "returnsRef": false,
-        "returnType": "string",
+        "returnType": "bool",
         "params": [
             {
-                "name": "ca_path",
+                "name": "product_label",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
-                "default": "'/etc/ssl/certs'"
+                "default": "'/etc/product_label'"
+            }
+        ]
+    },
+    "pfb_pkg_exec": {
+        "returnsRef": false,
+        "returnType": "void",
+        "params": [
+            {
+                "name": "command",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             },
             {
-                "name": "ca_file",
+                "name": "out",
+                "byRef": true,
+                "variadic": false,
+                "type": "array",
+                "default": "array (\n)"
+            },
+            {
+                "name": "ret",
+                "byRef": true,
+                "variadic": false,
+                "type": "int",
+                "default": "-1"
+            },
+            {
+                "name": "sync",
                 "byRef": false,
                 "variadic": false,
-                "type": "string",
-                "default": "'/etc/ssl/cert.pem'"
+                "type": "?callable",
+                "default": "NULL"
             }
         ]
     },
@@ -8999,39 +9026,6 @@
         "returnType": null,
         "params": []
     },
-    "pfb_pkgconf_block_bounds": {
-        "returnsRef": false,
-        "returnType": "?array",
-        "params": [
-            {
-                "name": "lines",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_add": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "text",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "ca_path",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
     "pfb_pkgconf_ca_apply": {
         "returnsRef": false,
         "returnType": "bool",
@@ -9051,81 +9045,38 @@
                 "default": null
             },
             {
-                "name": "file",
+                "name": "command",
                 "byRef": false,
                 "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            },
-            {
-                "name": "ca_path",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/etc/ssl/certs'"
-            },
-            {
-                "name": "is_plus",
-                "byRef": false,
-                "variadic": false,
-                "type": "?bool",
+                "type": "?callable",
                 "default": "NULL"
             }
         ]
     },
-    "pfb_pkgconf_ca_clear_notice_sentinel": {
-        "returnsRef": false,
-        "returnType": "void",
-        "params": []
-    },
-    "pfb_pkgconf_ca_needed": {
+    "pfb_pkgconf_ca_command": {
         "returnsRef": false,
         "returnType": "bool",
         "params": [
             {
-                "name": "text",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_notice_sentinel": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": []
-    },
-    "pfb_pkgconf_ca_notice_signature": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "file",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_remove": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "text",
+                "name": "action",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
                 "default": null
             },
             {
-                "name": "ca_path",
+                "name": "hook",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",
-                "default": null
+                "default": "'/usr/local/etc/rc.d/pfblockerng_repo_generate.sh'"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/bin/timeout -s TERM -k 5 60'"
             }
         ]
     },
@@ -9138,127 +9089,6 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
-                "default": null
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_state": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "file",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            },
-            {
-                "name": "is_plus",
-                "byRef": false,
-                "variadic": false,
-                "type": "?bool",
-                "default": "NULL"
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_sync": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "consent",
-                "byRef": false,
-                "variadic": false,
-                "type": "bool",
-                "default": null
-            },
-            {
-                "name": "file",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            },
-            {
-                "name": "ca_path",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/etc/ssl/certs'"
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_tick": {
-        "returnsRef": false,
-        "returnType": "void",
-        "params": [
-            {
-                "name": "provenance_ok",
-                "byRef": false,
-                "variadic": false,
-                "type": "?bool",
-                "default": "NULL"
-            },
-            {
-                "name": "file",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
-            },
-            {
-                "name": "ca_path",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/etc/ssl/certs'"
-            },
-            {
-                "name": "is_plus",
-                "byRef": false,
-                "variadic": false,
-                "type": "?bool",
-                "default": "NULL"
-            }
-        ]
-    },
-    "pfb_pkgconf_dir_populated": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "dir",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
-    "pfb_pkgconf_write_atomic": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "file",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "content",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "expected",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
                 "default": null
             }
         ]

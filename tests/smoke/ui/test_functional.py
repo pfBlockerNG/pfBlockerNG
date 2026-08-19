@@ -460,8 +460,7 @@ def test_software_page_toggle_post_roundtrip(
             helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
 
 
-# Mirrors PFB_SSL_CA_CERT_PATH (pfblockerng.inc) -- the exact line
-# pfb_pkgconf_ca_add() inserts inside the PKG_ENV block.
+# The exact line the installed repository hook inserts inside the PKG_ENV block.
 _PKG_CONF_CA_PATH_LINE = "\tSSL_CA_CERT_PATH=/etc/ssl/certs\n"
 
 
@@ -473,7 +472,7 @@ def test_software_page_pkgconf_ca_consent_toggle_post_roundtrip(
     pkg.conf, not just config.xml (issue #2518).
 
     Unlike the plain ``ToggleFlow`` cases above, this flow's save handler has a SECOND
-    effective-state surface beyond config.xml: ``pfb_pkgconf_ca_sync()`` rewrites
+    effective-state surface beyond config.xml: the installed repository hook rewrites
     ``/usr/local/etc/pkg.conf`` itself. Both surfaces are asserted. The BEFORE state (the
     seeded, unpatched pkg.conf) is captured and asserted FIRST, so a green here proves the
     tick caused the file to change, not that it happened to already be patched.
