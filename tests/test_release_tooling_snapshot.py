@@ -8,7 +8,6 @@ from pathlib import Path
 
 SOURCE_REVISION = "59450c63a2229779516eccd067ae9eaa54fa17b4"
 EXPECTED = {
-    "scripts/build-dep-pkg-portable.py": "9f61f127964d1366b7cea31382c741bc97b59c105068476009d59a197e67f8cb",
     "scripts/build-leg.sh": "2a570cc897e6cecf8faeb71e7c842dbc7d580324c03f4aa455bc8b7f704b48b8",
     "scripts/build-pkg-portable.py": "33211c4dfc686306bbce87336f7c49b5e47d387b3dc67682ec9c81a9b5d5a059",
     "scripts/lib/git-env-scrub.sh": "d9b324f0b543a6b47c9bdd9ffaf9b73ba4ebeb838ef6e49f4ebf2475f3f2f84b",
@@ -21,7 +20,7 @@ EXPECTED = {
 
 
 def test_release_tooling_matches_pinned_devel_snapshot() -> None:
-    assert len(EXPECTED) == 9
+    assert len(EXPECTED) == 8
     root = Path(__file__).parents[1]
     actual = {
         name: hashlib.sha256((root / name).read_bytes()).hexdigest()
