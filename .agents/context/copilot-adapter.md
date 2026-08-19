@@ -39,5 +39,3 @@ Copilot specifics:
   directive — unrelated surface.
 - `work-branch.sh --worktree` resolve primary checkout from session worktree exactly
   as for other clients.
-- Plugins install from `.github/plugin/plugin.json` inside plugin root; vendored
-  set is `plugins/mattpocock-skills/.github/plugin/` and `plugins/ponytail/.github/plugin/`.

@@ -257,8 +257,6 @@ jobs:
       - name: Forbid bash shebangs
         # Repo is #!/bin/sh POSIX (no /bin/bash on FreeBSD/pfSense; macOS /bin/bash is
         # the ancient 3.2). Scans ALL tracked files, so it also covers tests/.
-        # Vendored third-party plugin trees are exempt (upstream content, never
-        # runs on the box; same fence as .githooks/pre-commit).
         run: |
           # pipefail: a step with no `shell:` keyword runs under `bash -e {0}`
           # (no pipefail), so a failing `git ls-files` would become an empty
@@ -273,10 +271,7 @@ jobs:
           bad=$(git ls-files -z | xargs -0 sh -c '
             for f; do
               case $f in
-                .claude/skills/git-guardrails-claude-code/*) continue ;;
-                .agents/skills/git-guardrails-claude-code/*) continue ;;
                 legacy/*) continue ;;
-                plugins/*) continue ;;
               esac
               case $(head -n1 "$f" 2>/dev/null) in "#!"*bash*) echo "$f" ;; esac
             done' _)

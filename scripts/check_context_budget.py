@@ -160,11 +160,9 @@ def budget_for(rel: str) -> int | None:
     if rel.startswith(".claude/rules/") and rel.endswith(".md"):
         return STUB_BUDGET
     base = rel.rsplit("/", 1)[-1]
-    # A `plugins/` path segment ANYWHERE (not just root-anchored) is vendored —
-    # its instruction files are not our dir stubs. Checked before the
-    # policy/context prefix: a nested AGENTS.md/CLAUDE.md under .agents/ is a
-    # dir stub, not a routed policy file.
-    if "/" in rel and base in ("CLAUDE.md", "AGENTS.md", "GROK.md") and "plugins" not in rel.split("/")[:-1]:
+    # Checked before the policy/context prefix: a nested AGENTS.md/CLAUDE.md
+    # under .agents/ is a dir stub, not a routed policy file.
+    if "/" in rel and base in ("CLAUDE.md", "AGENTS.md", "GROK.md"):
         return STUB_BUDGET
     if rel.startswith((".agents/policy/", ".agents/context/")) and rel.endswith(".md"):
         return POLICY_BUDGET

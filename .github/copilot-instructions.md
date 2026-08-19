@@ -8,8 +8,7 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 ## Copilot-only surfaces
 
 - Skills discovered from `.agents/skills/` (canonical) and `.claude/skills/`
-  symlinks onto it — no Copilot-specific copy exists or should be created. Vendored
-  `mattpocock-skills` plugin installs from `plugins/mattpocock-skills/.github/plugin/`.
+  symlinks onto it — no Copilot-specific copy exists or should be created.
 - Mode capsules ride this file: Copilot repo-level `.github/hooks/*.json` did not fire
   on CLI 1.0.78, so nothing installed outside repo.
 - Custom agents live in `.github/agents/*.agent.md`, tiered per `.agents/model-tiers.conf`.

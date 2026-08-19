@@ -68,8 +68,7 @@ test-results/
 .claude/settings.local.json
 
 # ── Secrets / credentials (never commit) ──────────────────────────────────────
-# Plugin-local copies live in plugins/ponytail/.gitignore; keep the same
-# contract at the repo root now that this checkout can `git push`.
+# Repository-local secret material.
 .env
 .env.*
 !.env.example
