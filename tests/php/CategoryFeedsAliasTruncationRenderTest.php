@@ -66,6 +66,41 @@ final class CategoryFeedsAliasTruncationRenderTest extends TestCase
 		);
 	}
 
+	/**
+	 * Values UNDER each gate by raw characters but over it by escaped bytes.
+	 *
+	 * The existing provider's aliases are 22-23 raw characters, past every gate, so both
+	 * cases only ever exercised cut correctness -- they pass unchanged against the
+	 * pre-fix code. These pin the gate boundary itself (issue #2078).
+	 */
+	public function testCategoryGateMeasuresRawCharactersNotEscapedBytes(): void
+	{
+		// 18 CJK characters: 18 raw, 54 bytes once escaped. Under the 20 gate.
+		$alias = str_repeat("\u{4E2D}", 18);
+		$html  = self::renderCategoryAlias($alias);
+
+		$this->assertStringNotContainsString(
+			'...',
+			$html,
+			'Category alias truncated an 18-character value against a 20-character gate -- '
+			. 'the gate is measuring escaped bytes (' . strlen(htmlspecialchars($alias)) . ' of them)'
+		);
+	}
+
+	public function testFeedsGateDoesNotEllipsiseWhenNothingIsRemoved(): void
+	{
+		// Exactly the cut length: mb_substr(0, 15) returns the whole string, so an
+		// ellipsis here names a truncation that did not happen.
+		$alias = str_repeat('a', 15);
+		$html  = self::renderFeedsAlias($alias);
+
+		$this->assertStringNotContainsString(
+			'...',
+			$html,
+			'Feeds alias rendered an ellipsis although mb_substr() removed no character'
+		);
+	}
+
 	#[DataProvider('hostileAliasProvider')]
 	public function testCategoryAliasTruncatesRawCharactersBeforeEscaping(string $alias, string $prefix): void
 	{

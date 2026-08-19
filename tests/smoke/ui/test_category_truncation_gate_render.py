@@ -96,9 +96,7 @@ def test_entity_heavy_short_values_render_without_an_ellipsis(
     escaped_desc = "aaaaaaaaaaa&amp;&amp;&amp;&amp;"
 
     # Fixture sanity: a page that never rendered the rows would pass vacuously.
-    assert escaped_alias in body, (
-        "the seeded alias did not render at all -- fixture broken, not a #2078 signal"
-    )
+    assert escaped_alias in body, "the seeded alias did not render at all -- fixture broken, not a #2078 signal"
 
     # The bug appended '...' directly after the complete escaped value.
     assert f"{escaped_alias}..." not in body, (
@@ -111,11 +109,7 @@ def test_entity_heavy_short_values_render_without_an_ellipsis(
     )
 
     # The control must still truncate, so the fix did not simply disable truncation.
-    assert "abcdefghijklmno..." in body, (
-        "a 26-character value no longer truncates -- the gate fix went too far"
-    )
-    assert f'title="{LONG_VALUE}"' in body, (
-        "the truncated cell lost its full-value title attribute"
-    )
+    assert "abcdefghijklmno..." in body, "a 26-character value no longer truncates -- the gate fix went too far"
+    assert f'title="{LONG_VALUE}"' in body, "the truncated cell lost its full-value title attribute"
 
     guard.assert_no_growth()
