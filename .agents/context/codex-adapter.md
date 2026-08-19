@@ -23,6 +23,11 @@ Codex translate canonical nouns mechanically:
   diagnostics, and diagnostic-aware refactoring: Serena's LSP backend.
 - Cross-file architecture, call graphs, flows, structural exploration, and impact
   analysis: CodeGraph.
+- Semantic, rationale, cross-document, and test-contract exploration: Graphify, only
+  when its worktree-local `graphify-out/graph.json` exists or the task justifies
+  seeding it on demand from the primary checkout. Update only affected `src`,
+  `scripts`, `.github`, or `tests` subgraphs, then merge the first three into the
+  root production graph. Never share a live Graphify output between worktrees.
 - For language-semantic code relationships, Serena is authoritative over
   structurally inferred CodeGraph edges. CodeGraph is repository context, not a compiler.
 - Final behavioral truth: compiler, static analysis, tests, CI, and live smoke.
