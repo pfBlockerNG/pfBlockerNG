@@ -63,6 +63,33 @@ check(($out['installed'] ?? null) === '3.3.2', 'installed survives');
 check(!array_key_exists('last_notified', $out), 'stored NULL drops (recomputed live)');
 check($seen === [], 'no diagnostic raised: ' . implode(' | ', $seen));
 
+/* The matcher keeps its OWN guard: its verdict, not just its log line, depends on the
+ * type. A caller handing over a cache array from anywhere else does not pass through
+ * read_cache(), and a JSON null would otherwise coalesce to '' and match an install whose
+ * own name is empty. */
+$seen2 = [];
+set_error_handler(static function (int $no, string $str) use (&$seen2): bool {
+	$seen2[] = $str;
+	return true;
+});
+try {
+	$arr_name  = pfb_software_cache_matches_install(['pkgname' => ['a']], 'pfSense-pkg-pfBlockerNG', 'x');
+	$null_name = pfb_software_cache_matches_install(['pkgname' => null], '', 'x');
+	$arr_repo  = pfb_software_cache_matches_install(
+		['pkgname' => 'pfSense-pkg-pfBlockerNG', 'repo' => ['a']], 'pfSense-pkg-pfBlockerNG', 'x'
+	);
+	$ok        = pfb_software_cache_matches_install(
+		['pkgname' => 'pfSense-pkg-pfBlockerNG', 'repo' => 'x'], 'pfSense-pkg-pfBlockerNG', 'x'
+	);
+} finally {
+	restore_error_handler();
+}
+check($arr_name === false, 'matcher refuses a non-scalar pkgname');
+check($null_name === false, 'matcher refuses a null pkgname rather than matching empty');
+check($arr_repo === false, 'matcher refuses a non-scalar repo');
+check($ok === true, 'matcher still matches a well-formed cache');
+check($seen2 === [], 'matcher raises no diagnostic: ' . implode(' | ', $seen2));
+
 @unlink($cache);
 @rmdir($tmp);
 

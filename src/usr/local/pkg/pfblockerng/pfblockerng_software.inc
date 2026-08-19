@@ -151,10 +151,23 @@ function pfb_channel_for_install(?string $repo, ?string $pkgname): ?string {
  * it would re-announce an already-notified version and blank the last-known latest.
  */
 function pfb_software_cache_matches_install(array $cache, string $pkgname, string $repo): bool {
+	// The cache is a JSON file on disk, so a non-scalar can reach either half; casting one
+	// to string emits "Array to string conversion" on every call before returning the same
+	// FALSE (issue #2367). A half that is present but not scalar names nothing, so it is
+	// refused before the cast -- including JSON null, which would otherwise coalesce to ''
+	// and match an install whose own name is empty. Both live callers reach this through
+	// pfb_software_read_cache(), which drops the same values a layer earlier; this stays for
+	// a caller that hands over a cache array from anywhere else.
+	if (array_key_exists('pkgname', $cache) && !is_scalar($cache['pkgname'])) {
+		return FALSE;
+	}
 	if ((string) ($cache['pkgname'] ?? '') !== $pkgname) {
 		return FALSE;
 	}
-	return !array_key_exists('repo', $cache) || (string) $cache['repo'] === $repo;
+	if (!array_key_exists('repo', $cache)) {
+		return TRUE;
+	}
+	return is_scalar($cache['repo']) && (string) $cache['repo'] === $repo;
 }
 
 /*
