@@ -5145,21 +5145,47 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
-/*
- * The box's own CA locations, handed to every networked pkg call we make (issue #2514).
- * On Plus, pfSense-repo-setup pins SSL_CA_CERT_FILE to a Netgate-only bundle through the
- * PKG_ENV block in pkg.conf, which libpkg applies with setenv(key, value, 1) — so a value
- * we pass for THAT variable is overwritten and lost. PKG_ENV never sets SSL_CA_CERT_PATH,
- * and libfetch loads both into one store via
- * SSL_CTX_load_verify_locations(ctx, ca_cert_file, ca_cert_path), so the path survives.
- */
-define('PFB_SSL_CA_CERT_PATH', '/etc/ssl/certs');
-define('PFB_SSL_CA_CERT_FILE', '/etc/ssl/cert.pem');
-
-// issue #2518: the file pfSense-repo-setup (Plus) rewrites the PKG_ENV pin into. The
-// consented patch below adds a single SSL_CA_CERT_PATH line to it -- never any other edit.
 define('PFB_PKG_CONF', '/usr/local/etc/pkg.conf');
-define('PFB_UPGRADE_LOCK', '/tmp/pfSense-upgrade.lock');
+
+if (!defined('PFB_REPO_GENERATE_HOOK')) {
+	define('PFB_REPO_GENERATE_HOOK', '/usr/local/etc/rc.d/pfblockerng_repo_generate.sh');
+}
+if (!defined('PFB_PKG_TIMEOUT')) {
+	define('PFB_PKG_TIMEOUT', '/usr/bin/timeout -s TERM -k 5 60');
+}
+
+function pfb_pkgconf_ca_command(
+	string $action,
+	string $hook = PFB_REPO_GENERATE_HOOK,
+	string $timeout = PFB_PKG_TIMEOUT
+): bool {
+	if (!in_array($action, ['ca-sync', 'ca-revoke'], TRUE) || !is_executable($hook)) {
+		return FALSE;
+	}
+	$out = [];
+	$ret = -1;
+	exec($timeout . ' ' . escapeshellarg($hook) . ' ' . escapeshellarg($action) . ' 2>/dev/null', $out, $ret);
+	return $ret === 0;
+}
+
+function pfb_pkg_exec(
+	string $command,
+	array &$out = [],
+	int &$ret = -1,
+	?callable $sync = NULL
+): void {
+	$out = [];
+	$ret = -1;
+	$sync ??= 'pfb_pkgconf_ca_command';
+	if ($sync('ca-sync')) {
+		exec($command, $out, $ret);
+	}
+}
+
+function pfb_pkg_ca_is_plus(string $product_label = '/etc/product_label'): bool {
+	$product = @file_get_contents($product_label);
+	return $product !== FALSE && strpos($product, 'Plus') !== FALSE;
+}
 
 if (!defined('PFB_PYTHON_WRAPPER')) {
 	define('PFB_PYTHON_WRAPPER', __DIR__ . '/pfb_python.sh');
@@ -5177,7 +5203,7 @@ function pfb_pkg_installed_name(): string {
 	// -g: match the trailing '*' as a glob. pkg query treats the pattern as an EXACT
 	// pkg-name without it, so 'pfSense-pkg-pfBlockerNG*' would match nothing and the
 	// provenance gate would wrongly read the package as not-our-build on every install.
-	exec(escapeshellarg(PFB_PKG_BIN) . " query -g '%n' " . escapeshellarg('pfSense-pkg-pfBlockerNG*') . ' 2>/dev/null', $out, $ret);
+	pfb_pkg_exec(escapeshellarg(PFB_PKG_BIN) . " query -g '%n' " . escapeshellarg('pfSense-pkg-pfBlockerNG*') . ' 2>/dev/null', $out, $ret);
 	if ($ret !== 0) {
 		return '';
 	}
@@ -5233,7 +5259,7 @@ function pfb_pkg_installed_version(string $pkgname): string {
 	}
 	$out = array();
 	$ret = -1;
-	exec(escapeshellarg(PFB_PKG_BIN) . " query '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	pfb_pkg_exec(escapeshellarg(PFB_PKG_BIN) . " query '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
 }
 
@@ -5252,7 +5278,7 @@ function pfb_pkg_installed_repo(string $pkgname): string {
 	}
 	$out = array();
 	$ret = -1;
-	exec(escapeshellarg(PFB_PKG_BIN) . " query '%R' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	pfb_pkg_exec(escapeshellarg(PFB_PKG_BIN) . " query '%R' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	return ($ret === 0 && isset($out[0])) ? trim($out[0]) : '';
 }
 
@@ -5266,7 +5292,7 @@ function pfb_pkg_annotation(string $pkgname, string $key): string {
 	}
 	$out = array();
 	$ret = -1;
-	exec(escapeshellarg(PFB_PKG_BIN) . " query '%At %Av' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	pfb_pkg_exec(escapeshellarg(PFB_PKG_BIN) . " query '%At %Av' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	if ($ret !== 0) {
 		return '';
 	}
@@ -5305,507 +5331,7 @@ function pfb_pkg_newest_version(array $versions): string {
 	return $latest;
 }
 
-/*
- * Shell-ready `VAR=value ` assignments placing the box's CA locations in front of a pkg
- * command, or '' when there is nothing safe to point at. Splice it BEFORE any wrapper so
- * the assignments apply to the whole pipeline and are inherited by pkg itself.
- *
- * The bundle rides along with the path because libfetch stops calling
- * SSL_CTX_set_default_verify_paths() as soon as EITHER variable is set: on a box with no
- * pin, a path-only export would shrink the store to a directory FreeBSD ships empty until
- * certctl rehash populates it. The bundle is required to be a NON-EMPTY REGULAR FILE
- * because X509_STORE_load_locations() reads it eagerly and abandons the path when that
- * read fails, so an empty or non-file bundle would cost the directory too. An empty
- * argument opts that half out, mirroring install.sh's PFB_SSL_CA_CERT_* knobs.
- */
-function pfb_pkg_ca_env_prefix(string $ca_path = PFB_SSL_CA_CERT_PATH, string $ca_file = PFB_SSL_CA_CERT_FILE): string {
-
-	$parts = array();
-	if ($ca_path !== '' && is_dir($ca_path)) {
-		$parts[] = 'SSL_CA_CERT_PATH=' . escapeshellarg($ca_path);
-	}
-	if ($ca_file !== '' && is_file($ca_file) && is_readable($ca_file) && (int) @filesize($ca_file) > 0) {
-		$parts[] = 'SSL_CA_CERT_FILE=' . escapeshellarg($ca_file);
-	}
-	if ($parts === array()) {
-		return '';
-	}
-	return implode(' ', $parts) . ' ';
-}
-
-/*
- * issue #2518 — the consented pkg.conf patch: PFB_SSL_CA_CERT_PATH survives the Plus
- * PKG_ENV pin (see the constant's docblock above); this is the code that ADDS that one
- * line to /usr/local/etc/pkg.conf itself, gated on operator consent (never automatic).
- *
- * The pure text functions below never touch a filesystem -- pfb_pkgconf_ca_state() and
- * pfb_pkgconf_ca_sync() are the only IO, so the parsing/patching logic is exercised
- * entirely with in-memory fixtures.
- */
-
-/*
- * [open_idx, close_idx] line indices of the text's PKG_ENV block, or NULL when $lines does
- * not contain EXACTLY ONE 'PKG_ENV {' line (column 0, no trailing content), that opener has
- * no matching close, or the lines strictly between the opener and its close are not
- * brace-balanced (issue #2518 N-nested-brace; issue #2521 cross-implementation drift).
- *
- * The close is taken as the FIRST '}' line after the opener -- matching the shell hook's
- * _pkgconf_ca_reapply() (scripts/rc.d/pfblockerng_repo_generate.sh) `sed -n
- * '/^PKG_ENV {$/,/^}$/p'` range exactly, line for line. An earlier revision of this function
- * took the LAST '}' line instead, meaning to detect a nested sub-object's own close -- but
- * that rule mistakes a DIFFERENT, later top-level braced object in the same file (e.g. an
- * unrelated "OTHER_BLOCK { ... }" appended after PKG_ENV) for PKG_ENV's own close, and wrongly
- * refuses a well-formed pkg.conf the shell hook patches correctly (issue #2521).
- *
- * A nested sub-object inside PKG_ENV -- which WOULD make the first-'}' rule land on the
- * sub-object's own close one line early -- is instead caught by a brace-balance count over the
- * strictly-interior lines: the number of lines ending in '{' must equal the number of lines
- * that are EXACTLY '}'. Because $close_idx is defined as the FIRST '}' line found, no interior
- * line can itself equal '}' (the scan would have stopped there first), so any interior line
- * ending in '{' unbalances the count and the whole shape is refused rather than guessed at.
- * This mirrors the shell hook's own `_pcr_mid_opens`/`_pcr_mid_closes` check exactly.
- */
-function pfb_pkgconf_block_bounds(array $lines): ?array {
-	$open_idx = NULL;
-	$open_count = 0;
-	foreach ($lines as $i => $line) {
-		if ($line === 'PKG_ENV {') {
-			$open_count++;
-			$open_idx = $i;
-		}
-	}
-	if ($open_count !== 1) {
-		return NULL;
-	}
-	$close_idx = NULL;
-	for ($i = $open_idx + 1; $i < count($lines); $i++) {
-		if ($lines[$i] === '}') {
-			$close_idx = $i;
-			break;
-		}
-	}
-	if ($close_idx === NULL) {
-		return NULL;
-	}
-	$mid_opens = 0;
-	$mid_closes = 0;
-	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
-		if (substr($lines[$i], -1) === '{') {
-			$mid_opens++;
-		}
-		if ($lines[$i] === '}') {
-			$mid_closes++;
-		}
-	}
-	if ($mid_opens !== $mid_closes) {
-		return NULL;
-	}
-	return array($open_idx, $close_idx);
-}
-
-/*
- * TRUE iff $text is EXACTLY the shape pfSense-repo-setup writes and is not yet patched:
- * one well-formed PKG_ENV block (pfb_pkgconf_block_bounds()) carrying a SSL_CA_CERT_FILE=
- * line, and SSL_CA_CERT_PATH appearing nowhere in the text. Refusing on anything else --
- * a hand-edited block, a CE box with no block at all, a future pfSense-repo-setup that
- * changes the shape -- means pfb_pkgconf_ca_add() only ever edits a block it fully
- * recognises, never a best-effort guess that could corrupt an operator's own pkg.conf.
- */
-function pfb_pkgconf_ca_needed(string $text): bool {
-	if (strpos($text, 'SSL_CA_CERT_PATH') !== FALSE) {
-		return FALSE;
-	}
-	$lines = explode("\n", $text);
-	$bounds = pfb_pkgconf_block_bounds($lines);
-	if ($bounds === NULL) {
-		return FALSE;
-	}
-	[$open_idx, $close_idx] = $bounds;
-	$ca_file_count = 0;
-	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
-		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") !== 0) {
-			continue;
-		}
-		$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
-		if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
-			return FALSE;
-		}
-		$ca_file_count++;
-	}
-	return $ca_file_count === 1;
-}
-
-/*
- * The patched text (the single line "\tSSL_CA_CERT_PATH={$ca_path}" inserted immediately
- * before the block's closing '}' line, nothing else touched), or '' when the patch is
- * refused: the shape is not pfb_pkgconf_ca_needed(), or $ca_path is not a bare absolute
- * path. The path allowlist (no whitespace/newline/'}'/'#'/quote) is UCL-block safety, not
- * filesystem validation -- any of those characters landing inside the PKG_ENV block would
- * either terminate it early ('}'), start a comment libucl then ignores the rest of the
- * line for ('#'), or otherwise corrupt a file every subsequent `pkg` invocation parses.
- *
- * The regex ends in '\z', not '$': in PCRE (and PHP's preg_* without the 'D' modifier) '$'
- * matches immediately before a FINAL trailing newline as well as true string end, so a
- * $ca_path of "/etc/ssl/certs\n" would otherwise be wrongly ACCEPTED -- the trailing '\n'
- * would land inside the PKG_ENV block as a stray blank line, and that blank line would then
- * make pfb_pkgconf_ca_remove() unable to match its own inserted line ever again (issue #2518
- * N-regex-newline).
- */
-function pfb_pkgconf_ca_add(string $text, string $ca_path): string {
-	if (!pfb_pkgconf_ca_needed($text)) {
-		return '';
-	}
-	if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_path) !== 1) {
-		return '';
-	}
-	$lines = explode("\n", $text);
-	$bounds = pfb_pkgconf_block_bounds($lines);
-	// pfb_pkgconf_ca_needed() above already proved exactly one well-formed block exists.
-	[, $close_idx] = $bounds;
-	array_splice($lines, $close_idx, 0, array("\tSSL_CA_CERT_PATH={$ca_path}"));
-	return implode("\n", $lines);
-}
-
-/*
- * The text with our exact line "\tSSL_CA_CERT_PATH={$ca_path}" removed from inside the
- * PKG_ENV block, or '' when that exact line is not present there (including: no block at
- * all, or a line present for a DIFFERENT path -- a hand-added override must survive an
- * unpatch). Everything else stays byte-identical, so an add()-then-remove() round trip
- * reproduces the original bytes exactly.
- */
-function pfb_pkgconf_ca_remove(string $text, string $ca_path): string {
-	$lines = explode("\n", $text);
-	$bounds = pfb_pkgconf_block_bounds($lines);
-	if ($bounds === NULL) {
-		return '';
-	}
-	[$open_idx, $close_idx] = $bounds;
-	$target = "\tSSL_CA_CERT_PATH={$ca_path}";
-	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
-		if ($lines[$i] === $target) {
-			array_splice($lines, $i, 1);
-			return implode("\n", $lines);
-		}
-	}
-	return '';
-}
-
-/*
- * TRUE iff $dir (already known to exist) holds at least one NON-DOT directory entry -- a
- * name not starting with '.'. This excludes '.' and '..' along with every dotfile (e.g.
- * '.DS_Store', '.gitkeep'): a directory holding only dotfiles is equally empty from
- * libfetch's point of view, so counting them as "populated" (the old scandir()-minus-dots
- * count did) would make the patch below a no-op that merely LOOKS fixed -- FreeBSD ships
- * /etc/ssl/certs empty until certctl rehash populates it with real hash-named entries, none
- * of which are ever dot-prefixed (issue #2518 N-dotfile-guard).
- */
-function pfb_pkgconf_dir_populated(string $dir): bool {
-	$entries = @scandir($dir);
-	if ($entries === FALSE) {
-		return FALSE;
-	}
-	foreach ($entries as $entry) {
-		if ($entry !== '' && $entry[0] !== '.') {
-			return TRUE;
-		}
-	}
-	return FALSE;
-}
-
-/*
- * Atomically replace $file's contents with $content only while it still equals $expected:
- * a temp file in the same directory is written and chmod'd to the original permission bits,
- * then renamed into place. The pfSense-upgrade lock covers the final live check and rename;
- * a pkg-subsystem marker or changed live bytes also rejects stale replacement, so a supported
- * pfSense-repo-setup regeneration always wins. The temp file is unlinked on every failure path.
- */
-function pfb_pkgconf_write_atomic(string $file, string $content, string $expected): bool {
-	$dir = dirname($file);
-	if (!is_writable($dir)) {
-		return FALSE;
-	}
-	$perms = @fileperms($file);
-	$tmp = @tempnam($dir, '.pfbpkgconf_');
-	if ($tmp === FALSE) {
-		return FALSE;
-	}
-	if (@file_put_contents($tmp, $content, LOCK_EX) === FALSE) {
-		@unlink($tmp);
-		return FALSE;
-	}
-	if ($perms !== FALSE) {
-		@chmod($tmp, $perms & 0o777);
-	}
-	$upgrade_lock = @fopen(getenv('PFB_UPGRADE_LOCK') ?: PFB_UPGRADE_LOCK, 'c');
-	if ($upgrade_lock === FALSE || !@flock($upgrade_lock, LOCK_EX | LOCK_NB)) {
-		if (is_resource($upgrade_lock)) {
-			@fclose($upgrade_lock);
-		}
-		@unlink($tmp);
-		return FALSE;
-	}
-	try {
-		if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
-			|| is_link($file)
-			|| @file_get_contents($file) !== $expected
-		) {
-			@unlink($tmp);
-			return FALSE;
-		}
-		if (!@rename($tmp, $file)) {
-			@unlink($tmp);
-			return FALSE;
-		}
-		return TRUE;
-	} finally {
-		@flock($upgrade_lock, LOCK_UN);
-		@fclose($upgrade_lock);
-	}
-}
-
-/*
- * The live pkg.conf's CA-patch state on Plus: 'needed'
- * (pfb_pkgconf_ca_needed() shape, unpatched), 'patched' (the same well-formed block,
- * already carrying a SSL_CA_CERT_PATH line), or '' for CE and every other case --
- * absent/unreadable/a directory/a symlink/no PKG_ENV block/an unrecognised block shape.
- *
- * Refuses a symlink outright (rather than following it): pfb_pkgconf_ca_sync()'s atomic
- * rename() would replace the link itself, silently detaching whatever it used to point at.
- */
-function pfb_pkgconf_ca_state(?string $file = NULL, ?bool $is_plus = NULL): string {
-	$file = $file ?? PFB_PKG_CONF;
-	if ($is_plus === NULL) {
-		$product_label = @file_get_contents('/etc/product_label');
-		$is_plus = $product_label !== FALSE && strpos($product_label, 'Plus') !== FALSE;
-	}
-	if (!$is_plus || is_link($file) || !is_file($file) || !is_readable($file)) {
-		return '';
-	}
-	$text = @file_get_contents($file);
-	if ($text === FALSE) {
-		return '';
-	}
-	if (pfb_pkgconf_ca_needed($text)) {
-		return 'needed';
-	}
-	$lines = explode("\n", $text);
-	$bounds = pfb_pkgconf_block_bounds($lines);
-	if ($bounds === NULL) {
-		return '';
-	}
-	[$open_idx, $close_idx] = $bounds;
-	$ca_file_count = 0;
-	$has_path = FALSE;
-	for ($i = $open_idx + 1; $i < $close_idx; $i++) {
-		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
-			$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
-			if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
-				return '';
-			}
-			$ca_file_count++;
-		}
-		if (strpos($lines[$i], "\tSSL_CA_CERT_PATH=") === 0) {
-			$has_path = TRUE;
-		}
-	}
-	return ($ca_file_count === 1 && $has_path) ? 'patched' : '';
-}
-
-/*
- * Make $file match $consent. A real write requires an unlocked pkg subsystem, a readable
- * non-empty SSL_CA_CERT_FILE named by the recognised block, and a populated $ca_path.
- * Immediately before rename, the live file must still equal the snapshot this function
- * transformed; a concurrent pfSense-repo-setup rewrite makes the operation fail rather
- * than lose the newer file. No-op states return TRUE without requiring either CA location.
- */
-function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
-	$file = $file ?? PFB_PKG_CONF;
-	if ((function_exists('is_subsystem_dirty') && is_subsystem_dirty('pkg'))
-		|| is_link($file)
-		|| !is_file($file)
-		|| !is_readable($file)
-	) {
-		return FALSE;
-	}
-	$text = @file_get_contents($file);
-	if ($text === FALSE) {
-		return FALSE;
-	}
-
-	if ($consent) {
-		$patched = pfb_pkgconf_ca_add($text, $ca_path);
-		if ($patched !== '') {
-			$ca_file = '';
-			foreach (explode("\n", $text) as $line) {
-				if (strpos($line, "\tSSL_CA_CERT_FILE=") === 0) {
-					$ca_file = substr($line, strlen("\tSSL_CA_CERT_FILE="));
-					break;
-				}
-			}
-			if (!is_file($ca_file) || !is_readable($ca_file) || @filesize($ca_file) <= 0
-				|| !is_dir($ca_path) || !pfb_pkgconf_dir_populated($ca_path)
-			) {
-				return FALSE;
-			}
-		}
-	} else {
-		$patched = pfb_pkgconf_ca_remove($text, $ca_path);
-	}
-
-	if ($patched === '') {
-		return TRUE;
-	}
-	return pfb_pkgconf_write_atomic($file, $patched, $text);
-}
-
-/*
- * $pfb['dbdir']/.pkg_ca_notice -- the de-dupe sentinel for the "still needed" notice below.
- * Its CONTENT is a signature of the pkg.conf file last notified about
- * (pfb_pkgconf_ca_notice_signature()), not mere presence (issue #2518 B2): an out-of-band
- * rewrite that lands back in the identical 'needed' shape (pfSense-repo-setup wiping and
- * regenerating the file) is a genuinely NEW instance of the problem and must re-notify, even
- * though the raw state string never changes across the two ticks -- a presence-only sentinel
- * could never tell that apart from calling the tick twice against the SAME untouched file.
- */
-function pfb_pkgconf_ca_notice_sentinel(): string {
-	global $pfb;
-	$dbdir = $pfb['dbdir'] ?? '/var/db/pfblockerng';
-	return $dbdir . '/.pkg_ca_notice';
-}
-
-function pfb_pkgconf_ca_clear_notice_sentinel(): void {
-	@unlink(pfb_pkgconf_ca_notice_sentinel());
-}
-
-/*
- * A signature identifying $file's CURRENT on-disk identity (inode + mtime + size), used to
- * key the notice sentinel above. A real rewrite (pfSense-repo-setup replaces the whole file
- * via unlink()+recreate()) gets a new inode; an in-place rewrite that happens to reuse the
- * same inode still changes mtime and/or size. '' when the file cannot be stat()'d -- every
- * caller already gates on pfb_pkgconf_ca_state($file) being 'needed', which requires a
- * readable regular file, so this should not normally happen; a signature that can never
- * equal a previously-recorded one is the safe fallback (treat as changed).
- */
-function pfb_pkgconf_ca_notice_signature(string $file): string {
-	clearstatcache(TRUE, $file);
-	$stat = @stat($file);
-	if ($stat === FALSE) {
-		return '';
-	}
-	return $stat['ino'] . ':' . $stat['mtime'] . ':' . $stat['size'];
-}
-
-/*
- * The re-apply + notify cron pass, wired in by pfblockerng_cron.inc beside
- * pfb_software_update_check(). Provenance-gated the same way that is (the consent control
- * lives on the same Software page), and fully guarded end to end -- it must never throw into
- * the cron pass.
- *
- * Consent on: (re-)apply the patch every tick, since pfSense-repo-setup can re-run at any
- * time and wipe a previously-patched file back to 'needed'.
- *
- * Whenever the tick ENDS with the file still 'needed' -- consent off, OR consent is on but
- * the re-apply above could not land (e.g. the CA certificate hash directory is still missing
- * or empty) -- raise a de-duped file_notice() naming the consequence and the fix (issue
- * #2518 B2: the consent-on-but-broken case previously returned silently without ever
- * reaching this notify logic at all). De-dupe is keyed on
- * pfb_pkgconf_ca_notice_signature($file), not mere sentinel presence, so an out-of-band
- * rewrite that lands back in the same 'needed' shape still re-notifies. The sentinel clears
- * whenever the tick resolves the 'needed' condition (state leaves 'needed', or the file
- * leaves the recognised shape entirely) so a later regression notifies fresh.
- *
- * $provenance_ok mirrors pfb_software_add_tab()'s injectable seam: NULL (the production
- * default) reads the real pfb_software_provenance_ok(), which is unreachable off-appliance
- * (no `pkg` binary, no writable /var/db/pfblockerng to seed its hidden override), so
- * off-box tests inject the bool directly -- the same reason pfb_software_update_check()
- * accepts 'provenance_ok' through its own $io array. $file/$ca_path thread straight through
- * to pfb_pkgconf_ca_state()/pfb_pkgconf_ca_sync() (both already take them); NULL/the
- * constant defaults reach the real /usr/local/etc/pkg.conf in production, and tests point
- * them at a fixture the same way they already do for those two functions directly;
- * $is_plus is the matching edition seam for those off-appliance fixtures.
- */
-function pfb_pkgconf_ca_tick(
-	?bool $provenance_ok = NULL,
-	?string $file = NULL,
-	string $ca_path = PFB_SSL_CA_CERT_PATH,
-	?bool $is_plus = NULL
-): void {
-	try {
-		$provenance_ok = $provenance_ok ?? pfb_software_provenance_ok();
-		if (!$provenance_ok) {
-			return;
-		}
-		$file = $file ?? PFB_PKG_CONF;
-		$consent = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
-		$state = pfb_pkgconf_ca_state($file, $is_plus);
-		if ($state === '') {
-			pfb_pkgconf_ca_clear_notice_sentinel();
-			return;
-		}
-		if ($consent) {
-			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path);
-			$state = pfb_pkgconf_ca_state($file, $is_plus);
-			if ($state !== 'needed') {
-				// The re-apply landed (or the file was already patched): resolved.
-				pfb_pkgconf_ca_clear_notice_sentinel();
-				return;
-			}
-			// Consent is on but the re-apply above could not land -- fall through to the
-			// SAME notify-with-dedupe logic the consent-off path uses below: the box is
-			// exactly as exposed as it was before the admin opted in (issue #2518 B2).
-		} elseif ($state !== 'needed') {
-			// 'patched' with consent off: our line is already there (a prior sync, or a
-			// hand-added one) -- nothing to notify about.
-			pfb_pkgconf_ca_clear_notice_sentinel();
-			return;
-		}
-
-		$sentinel = pfb_pkgconf_ca_notice_sentinel();
-		$signature = pfb_pkgconf_ca_notice_signature($file);
-		$notified = is_file($sentinel) ? @file_get_contents($sentinel) : FALSE;
-		if ($notified === FALSE || $notified !== $signature) {
-			file_notice(
-				'pfBlockerNG',
-				"pkg on this firewall trusts only Netgate's CA bundle, so pfBlockerNG and any "
-				. 'other third-party repository cannot be installed or upgraded. Enable the '
-				. 'pkg.conf CA path on the pfBlockerNG Software page to add one SSL_CA_CERT_PATH '
-				. 'line to ' . PFB_PKG_CONF . '; pfBlockerNG re-applies that line at every boot '
-				. 'and scheduled (cron) pass once enabled.',
-				'pfBlockerNG',
-				'/pfblockerng/pfblockerng_software.php',
-				1
-			);
-			@file_put_contents($sentinel, $signature);
-		}
-	} catch (Throwable) {
-		// Best-effort background pass -- never break the cron tick that called us.
-		return;
-	}
-}
-
-/*
- * The Software page's consent Save (issue #2518 finding 1): filters the posted checkbox
- * token exactly the way the page used to inline, and persists it through PfbConfig::write()
- * (issue #2367: pfSense's Form_Checkbox default 'yes' is rejected by PFB_FILTER_ON_OFF, so
- * an absent/rejected POST key canonicalises to the Off token).
- *
- * B1 (issue #2518 fix round): the consent section is rendered only when
- * pfb_pkgconf_ca_state() !== '' at RENDER time (a CE box, or any pkg.conf shape the parser
- * does not recognise, shows nothing at all). An absent 'pfb_pkg_ca_consent' POST key is then
- * ambiguous between "the admin unticked it" and "the section was never shown" -- guessing
- * Off for the latter would silently REVOKE a previously granted consent the moment pkg.conf's
- * recognised shape changes underneath the admin (e.g. mid pfSense-repo-setup rewrite). The
- * page renders a hidden 'pfb_pkg_ca_consent_shown' marker alongside the checkbox whenever
- * (and only whenever) the section itself is rendered, so ITS presence in $post -- never the
- * checkbox key -- decides whether to write at all: marker absent => make NO write, return
- * the currently persisted token unchanged.
- *
- * This function ONLY persists the token into the in-memory config array -- it never touches
- * pkg.conf. pfb_pkgconf_ca_apply() does that half, and N-write-order (issue #2518 fix round)
- * requires the CALLER to run write_config() between the two calls: consent is this feature's
- * security boundary, so it has to survive a reboot BEFORE pkg.conf is ever mutated on the
- * admin's behalf, not after.
- */
+/* Persist consent only when the Plus-only Software-page section was rendered. */
 function pfb_pkgconf_ca_save(array $post): string {
 	if (!isset($post['pfb_pkg_ca_consent_shown'])) {
 		return PfbConfig::read('gen/pfb_pkg_ca_consent')->toStored();
@@ -5815,42 +5341,17 @@ function pfb_pkgconf_ca_save(array $post): string {
 	return $token;
 }
 
-/*
- * The sync half of the Software page's consent Save. $was_consented is the state captured
- * before pfb_pkgconf_ca_save() changes it: an Off-to-Off Save must not remove an identical
- * line that pfBlockerNG never owned, while a real On-to-Off transition revokes our line.
- * Callers MUST run write_config() between save and apply.
- *
- * pfb_pkgconf_ca_state($file) === '' means there is nothing here to react to. An explicit
- * revoke records the resulting file signature as notified so the next cron tick does not
- * immediately nag the admin; a later rewrite gets a new signature and notifies normally.
- *
- * Returns TRUE when $file ends in the intended owned state, including no-op skips, and
- * FALSE when a required sync was attempted and refused or failed.
- */
+/* Caller must flush config after save() and before invoking the installed hook. */
 function pfb_pkgconf_ca_apply(
 	string $token,
 	bool $was_consented,
-	?string $file = NULL,
-	string $ca_path = PFB_SSL_CA_CERT_PATH,
-	?bool $is_plus = NULL
+	?callable $command = NULL
 ): bool {
-	$file = $file ?? PFB_PKG_CONF;
-	if (pfb_pkgconf_ca_state($file, $is_plus) === '') {
-		return TRUE;
+	$command ??= 'pfb_pkgconf_ca_command';
+	if ($token === PfbToggle::On->value) {
+		return $command('ca-sync');
 	}
-	$consent = $token === PfbToggle::On->value;
-	if (!$consent && !$was_consented) {
-		return TRUE;
-	}
-
-	$ok = pfb_pkgconf_ca_sync($consent, $file, $ca_path);
-
-	if (!$consent && pfb_pkgconf_ca_state($file, $is_plus) === 'needed') {
-		@file_put_contents(pfb_pkgconf_ca_notice_sentinel(), pfb_pkgconf_ca_notice_signature($file));
-	}
-
-	return $ok;
+	return !$was_consented || $command('ca-revoke');
 }
 
 /*
@@ -5879,18 +5380,12 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
-	// `pkg update -f -r` fetches; `pkg rquery -r` reads the local catalog DB that update
-	// just wrote. Both carry the CA locations (issue #2514) — on the fetching half because
-	// it must, on rquery as a defensive default that costs nothing. The prefix leads so the
-	// assignments cover timeout(1) and are inherited by pkg; the local `pkg query` reads
-	// elsewhere in this file never fetch and are deliberately untouched.
-	$ca = pfb_pkg_ca_env_prefix();
 	// Forced catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
 	// -f is required: Pages/file:// catalogs can keep an unchanged mtime/etag (issue #2379).
-	exec("{$ca}{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
+	pfb_pkg_exec("{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
 	$out = array();
 	$ret = -1;
-	exec("{$ca}{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
+	pfb_pkg_exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	if ($ret !== 0 || $out === array()) {
 		return '';
 	}

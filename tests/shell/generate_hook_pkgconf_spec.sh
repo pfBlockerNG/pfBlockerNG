@@ -3,14 +3,12 @@
 # (issue #2518, "STEP B"). Sibling suite to generate_hook_spec.sh: that file pins
 # the hook's original repo-conf regeneration job; this one pins its second job,
 # added at boot because pfSense-repo-setup deletes and regenerates pkg.conf on
-# upgrades and branch switches, wiping the SSL_CA_CERT_PATH line the PHP side
-# appends on consent (#2515/#2516/#2518).
+# upgrades and branch switches, wiping the SSL_CA_CERT_PATH line this hook owns.
 #
 # Cross-language contract: tests/fixtures/pkg_conf/{plus_pinned,plus_patched,
-# ce_unpinned}.conf are the SAME bytes the PHP appender's tests assert against —
-# every content assertion here diffs against those fixtures (or a value derived
-# from one via `sed`), never a hand-retyped heredoc, so the two implementations
-# cannot silently drift apart.
+# ce_unpinned}.conf are shared by the hook and smoke tests. Every content
+# assertion here diffs against those fixtures (or a value derived from one via
+# `sed`), never a hand-retyped heredoc.
 #
 # Consent lives in config.xml as the registered field pfb_pkg_ca_consent under
 # installedpackages/pfblockerng/config/0 (what PfbConfig::read('gen/pfb_pkg_ca_consent')
@@ -927,9 +925,8 @@ End
 # deliberately does NOT match any of them -- matching them in POSIX sh text
 # scanning is disproportionate to how pfSense's own config writer actually
 # serialises (verified against a live config.xml: none of these three shapes
-# occur there). Each is a BOUNDED miss: the boot re-apply is skipped, but the
-# cron tick (pfb_pkgconf_ca_tick(), synchronous with every PHP-side write) still
-# re-applies on that box. Pinned here so the gap stays a documented, deliberate
+# occur there). Each is a BOUNDED miss in the shared hook invoked at boot and
+# before package work. Pinned here so the gap stays a documented, deliberate
 # choice instead of silent, untested behaviour.
 
 Describe 'pkgconf re-apply — E_attr: <pfblockerng version="1.0"> carries an XML attribute: documented limitation, no patch'
@@ -958,7 +955,7 @@ EOF
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
     End
 
-    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the boot hook does not, by design (cron still re-applies)'
+    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the hook skips this shape by design'
       When run sh "${HOOK}" onestart
       The status should be success
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
@@ -991,7 +988,7 @@ EOF
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
     End
 
-    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the boot hook does not, by design (cron still re-applies)'
+    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the hook skips this shape by design'
       When run sh "${HOOK}" onestart
       The status should be success
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
@@ -1020,7 +1017,7 @@ EOF
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
     End
 
-    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the boot hook does not, by design (cron still re-applies)'
+    It 'leaves pkg.conf byte-unchanged, exit 0 -- PfbConfig reads "on" here; the hook skips this shape by design'
       When run sh "${HOOK}" onestart
       The status should be success
       The value "$(cmp -s "${PFB_PKG_CONF}" "${FIX}/plus_pinned.conf" && echo 0 || echo 1)" should equal 0
@@ -1481,9 +1478,7 @@ End
 Describe 'pkgconf re-apply — pkg.conf permission bits: preserved across the patch'
     # awk's `>` redirect creates the temp file at the process umask, not at
     # pkg.conf's own mode (issue #2518 nitpick N-mode) -- proven in the CI
-    # image: mode 600 in, 644 out, before the fix. The PHP appender already
-    # preserves the original file's permission bits (fileperms()+chmod()); the
-    # shell side did not.
+    # image: mode 600 in, 644 out, before the fix.
     setup() {
         _m1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_mode.XXXXXX")"
         _pc_box "${_m1_dir}"
@@ -1510,9 +1505,7 @@ End
 Describe 'pkgconf re-apply — pkg.conf whose final brace carries no trailing newline: newline-less state preserved'
     # awk's `print` always terminates its last output record, so patching a
     # pkg.conf whose last byte is "}" (no trailing newline) used to ADD one --
-    # a divergence from the PHP appender, which round-trips the exact bytes it
-    # was given (issue #2518 nitpick N-trailing-newline; PHP pins this with
-    # testAddPatchesWhenFinalBraceHasNoTrailingNewline).
+    # a byte-level regression pinned directly by this ShellSpec row.
     setup() {
         _nl1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_no_trailing_nl.XXXXXX")"
         _pc_box "${_nl1_dir}"
@@ -1647,8 +1640,8 @@ Describe 'pkgconf re-apply — PFB_SSL_CA_CERT_PATH contains one entry: patched'
 End
 
 # ── CA-PATH VALIDATION AXIS (issue #2518 F4.1: character whitelist) ─────────
-# Mirrors PHP's pfb_pkgconf_ca_add() guard `^/[A-Za-z0-9._/+-]+$` exactly
-# (including that a bare "/" is refused): a value landing inside the PKG_ENV
+# The hook allowlist is `^/[A-Za-z0-9._/+-]+$` (including that a bare "/" is
+# refused): a value landing inside the PKG_ENV
 # block containing '#' would make libucl treat the rest of the line as a
 # comment and silently truncate the CA path; a space or quote corrupts the
 # block. Each hostile value is refused rather than written.
@@ -1753,16 +1746,10 @@ Describe 'pkgconf re-apply — CA path is a bare "/": refused, no patch'
 End
 
 # ── CA-PATH POPULATED AXIS (issue #2518 F4.2 / nitpick N-dotfile-guard) ─────
-# REPOINTED (issue #2518 nitpick N-dotfile-guard): PHP's pfb_pkgconf_dir_populated()
-# used to count dotfiles via scandir() (excluding only '.'/'..'), and this glob
-# used two extra dotfile-matching words to agree with it. The rationale for
-# "populated" was always "an empty hash dir makes the patch a no-op" -- and a
-# directory holding only e.g. ".DS_Store" is equally a no-op, so the PHP side is
-# changing to count only NON-dot entries. A bare `*` glob already agrees with
-# that (POSIX globs never match a dotfile), so the two extra glob words are
-# gone; this row's expectation flips from "patched" to "unchanged" to match.
+# A bare `*` glob never matches dotfiles, and a hash directory holding only e.g.
+# ".DS_Store" is as ineffective as an empty one.
 
-Describe 'pkgconf re-apply — CA dir containing only a dotfile: NOT populated (matches PHP scandir excluding dotfiles), unchanged'
+Describe 'pkgconf re-apply — CA dir containing only a dotfile: NOT populated, unchanged'
     setup() {
         _d1_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_ca_dotfiles.XXXXXX")"
         _pc_box "${_d1_dir}"
