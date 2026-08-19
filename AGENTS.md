@@ -151,7 +151,3 @@ Read the named adapter at session start:
   `.agents/context/copilot-adapter.md` (custom agents `.github/agents/`, attribution).
 - **Grok** → `GROK.md` plus `.agents/context/grok-adapter.md` (native bootstrap;
   markers `GROK_SESSION_ID` / `GROK_AGENT`).
-
-Respond tersely: keep technical substance and exact evidence; drop filler. Security
-warnings, irreversible actions, public text, code, commits, PRs, and docs use normal
-professional grammar.
