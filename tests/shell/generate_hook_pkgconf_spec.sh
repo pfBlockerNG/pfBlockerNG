@@ -155,6 +155,167 @@ Describe 'pkgconf re-apply — consent on (C_ok, the production shape): patches 
     End
 End
 
+Describe 'pkg.conf command interface — ca-sync no-op and refusal statuses'
+    setup() {
+        _ci_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_interface_status.XXXXXX")"
+        _pc_box "${_ci_dir}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+    }
+    cleanup() { rm -rf "${_ci_dir}"; _pc_unset_box; unset _ci_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'ca-sync is successful and unchanged when consent is off'
+      _pc_config_xml off
+      When run sh "${HOOK}" ca-sync
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'ca-sync reports blocked consent truthfully'
+      _pc_config_xml on
+      printf 'DIRTY\n' > "${PFB_PKG_DIRTY}"
+      When run sh "${HOOK}" ca-sync
+      The status should not be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'ca-sync is successful when already patched'
+      cp "${PFB_EXPECTED_PATCHED}" "${PFB_PKG_CONF}"
+      _pc_config_xml on
+      When run sh "${HOOK}" ca-sync
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkg.conf command interface — ca-revoke absent is idempotent'
+    setup() {
+        _ci_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_interface_revoke_absent.XXXXXX")"
+        _pc_box "${_ci_dir}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+    }
+    cleanup() { rm -rf "${_ci_dir}"; _pc_unset_box; unset _ci_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'returns success without changing an unpatched recognized file'
+      When run sh "${HOOK}" ca-revoke
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_PINNED}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkg.conf command interface — ca-revoke refuses unsafe shapes'
+    setup() {
+        _ci_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_interface_revoke_hostile.XXXXXX")"
+        _pc_box "${_ci_dir}"
+        cp "${PFB_EXPECTED_PATCHED}" "${PFB_PKG_CONF}"
+        cp "${PFB_PKG_CONF}" "${_ci_dir}/before.conf"
+    }
+    cleanup() { rm -rf "${_ci_dir}"; _pc_unset_box; unset _ci_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'rejects a foreign CA path'
+      awk -v owned="\tSSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" '
+        $0 == owned { $0 = "\tSSL_CA_CERT_PATH=/foreign" }
+        { print }
+      ' "${PFB_PKG_CONF}" > "${PFB_PKG_CONF}.new"
+      mv "${PFB_PKG_CONF}.new" "${PFB_PKG_CONF}"
+      cp "${PFB_PKG_CONF}" "${_ci_dir}/before.conf"
+      When run sh "${HOOK}" ca-revoke
+      The status should not be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/before.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'rejects duplicate owned lines'
+      awk -v line="\tSSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" '$0 == "}" && !done { print line; done = 1 } { print }' "${PFB_PKG_CONF}" > "${PFB_PKG_CONF}.new"
+      mv "${PFB_PKG_CONF}.new" "${PFB_PKG_CONF}"
+      cp "${PFB_PKG_CONF}" "${_ci_dir}/before.conf"
+      When run sh "${HOOK}" ca-revoke
+      The status should not be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/before.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'rejects a second CA bundle key outside PKG_ENV'
+      printf '\tSSL_CA_CERT_FILE=/foreign\n' >> "${PFB_PKG_CONF}"
+      cp "${PFB_PKG_CONF}" "${_ci_dir}/before.conf"
+      When run sh "${HOOK}" ca-revoke
+      The status should not be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/before.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'rejects a symlink without changing its target'
+      mv "${PFB_PKG_CONF}" "${_ci_dir}/real.conf"
+      ln -s "${_ci_dir}/real.conf" "${PFB_PKG_CONF}"
+      When run sh "${HOOK}" ca-revoke
+      The status should not be success
+      The value "$(cmp -s "${_ci_dir}/real.conf" "${_ci_dir}/before.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'rejects a busy upgrade lock without changing the file'
+      printf '%s\n' '#!/bin/sh' 'exit 1' > "${PFB_LOCKF}"
+      chmod +x "${PFB_LOCKF}"
+      When run sh "${HOOK}" ca-revoke
+      The status should not be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/before.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'rejects an unclosed PKG_ENV block'
+      sed '$d' "${PFB_PKG_CONF}" > "${PFB_PKG_CONF}.new"
+      mv "${PFB_PKG_CONF}.new" "${PFB_PKG_CONF}"
+      cp "${PFB_PKG_CONF}" "${_ci_dir}/before.conf"
+      When run sh "${HOOK}" ca-revoke
+      The status should not be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/before.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkg.conf command interface — ca-sync reports effective consented patch'
+    setup() {
+        _ci_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_interface_sync.XXXXXX")"
+        _pc_box "${_ci_dir}"
+        cp "${PFB_PINNED}" "${PFB_PKG_CONF}"
+        _pc_config_xml on
+    }
+    cleanup() { rm -rf "${_ci_dir}"; _pc_unset_box; unset _ci_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'ca-sync patches and returns success'
+      When run sh "${HOOK}" ca-sync
+      The status should be success
+      The stderr should include "INFO"
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${PFB_EXPECTED_PATCHED}" && echo 0 || echo 1)" should equal 0
+    End
+End
+
+Describe 'pkg.conf command interface — ca-revoke removes the owned line exactly'
+    setup() {
+        _ci_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_interface_revoke.XXXXXX")"
+        _pc_box "${_ci_dir}"
+        cp "${PFB_EXPECTED_PATCHED}" "${PFB_PKG_CONF}"
+        cp "${PFB_PINNED}" "${_ci_dir}/expected.conf"
+    }
+    cleanup() { rm -rf "${_ci_dir}"; _pc_unset_box; unset _ci_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'ca-revoke restores the pinned bytes and returns success'
+      When run sh "${HOOK}" ca-revoke
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/expected.conf" && echo 0 || echo 1)" should equal 0
+    End
+
+    It 'ca-revoke still succeeds after the referenced CA bundle disappears'
+      rm -f "${PFB_SSL_CA_CERT_FILE}"
+      When run sh "${HOOK}" ca-revoke
+      The status should be success
+      The value "$(cmp -s "${PFB_PKG_CONF}" "${_ci_dir}/expected.conf" && echo 0 || echo 1)" should equal 0
+    End
+End
+
 Describe 'pkgconf re-apply — pkg subsystem dirty: byte-unchanged'
     setup() {
         _c1_dirty_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/pc_pkg_dirty.XXXXXX")"
