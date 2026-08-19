@@ -147,6 +147,21 @@ PHP;
 		$this->assertSame('6', $bounded[self::GEN]['skipfeed']);
 	}
 
+	public function testFreshMigrationPreservesRegistryFreshInstallDefaults(): void
+	{
+		$modes = array_fill_keys(array_values(PFB_SECTIONS), 'NEWCFG');
+		pfb_run_migrations();
+
+		$sections = [];
+		foreach (PFB_SECTIONS as $section) {
+			$sections[$section] = PfbConfig::readSection($section);
+		}
+		$result = pfb_registry_pass($sections, NULL, $modes);
+
+		$this->assertSame('auto', $result[self::GEN]['pfb_alias_delta_mode'] ?? NULL,
+			'a migration that seeds a fresh section must not activate its upgrade grandfather defaults');
+	}
+
 	public function testFreshMigrationPersistsSundayUniformSlotAndSkipfeed(): void
 	{
 		pfb_run_migrations();
