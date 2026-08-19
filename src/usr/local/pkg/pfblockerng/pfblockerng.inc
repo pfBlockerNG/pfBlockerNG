@@ -10750,10 +10750,167 @@ function sync_package_pfblockerng($cron='') {
 }
 
 
+/*
+ * #697: from a pkg/pkg-static argv ($argv[0] = the binary), return the mapped subcommand:
+ * 'delete' (delete/remove/autoremove), 'upgrade', 'reinstall' (install with -f/--force), 'install'
+ * (bare install), or '' (anything else).
+ *
+ * pkg's grammar is `pkg [GLOBAL opts] <command> [command flags]`, and several GLOBAL options come
+ * BEFORE the subcommand and CONSUME the following token as their value (-o -j -c -r -C -R and the
+ * long forms). Those are skipped WITH their value before the subcommand is read -- pfSense passes
+ * -c <chroot> / -r <rootdir> during an OS upgrade, so a naive "first non-dash token" read would
+ * misfire exactly then.
+ */
+function pfb_pkg_argv_subcommand(array $argv): string {
+	// Global options that consume the FOLLOWING token as their value (separated form).
+	$arg_taking_long  = array('--option', '--jail', '--chroot', '--rootdir', '--config', '--repo-conf-dir');
+	$arg_taking_short = array('-o', '-j', '-c', '-r', '-C', '-R');
+
+	$n = count($argv);
+	$i = 1;	// $argv[0] is the binary
+	while ($i < $n) {
+		$tok = (string) $argv[$i];
+		if ($tok === '' || $tok[0] !== '-') {
+			break;	// first non-option token => the subcommand
+		}
+		// Attached value (`--rootdir=/x`, `-r/x`) consumes no extra token.
+		if (str_contains($tok, '=')) {
+			$i++;
+			continue;
+		}
+		if (in_array($tok, $arg_taking_short, TRUE) || in_array($tok, $arg_taking_long, TRUE)) {
+			$i += 2;	// skip the flag AND its value
+			continue;
+		}
+		// Short arg-taking flag with the value glued on (`-r/root`, `-jname`): consume only this token.
+		if (strlen($tok) > 2 && in_array(substr($tok, 0, 2), $arg_taking_short, TRUE)) {
+			$i++;
+			continue;
+		}
+		// No-arg global flag (-v -d -l -N -4 -6, bundles), or an unrecognised bare flag: skip just it.
+		$i++;
+	}
+	if ($i >= $n) {
+		return '';
+	}
+
+	switch (strtolower((string) $argv[$i])) {
+		case 'delete':
+		case 'remove':
+		case 'autoremove':
+			return 'delete';
+		case 'upgrade':
+			return 'upgrade';
+		case 'install':
+			// -f/--force among the COMMAND flags => a forced reinstall.
+			for ($j = $i + 1; $j < $n; $j++) {
+				$f = (string) $argv[$j];
+				if ($f === '-f' || $f === '--force') {
+					return 'reinstall';
+				}
+				if (strlen($f) > 1 && $f[0] === '-' && $f[1] !== '-' && str_contains($f, 'f')) {
+					return 'reinstall';	// bundled short flags, e.g. -fy
+				}
+			}
+			return 'install';
+		default:
+			return '';
+	}
+}
+
+
+/*
+ * #697: classify the current package-manager operation by reading the pkg/pkg-static ANCESTOR's
+ * argv. Pure (no I/O) so it is unit-testable: $ps_lines is `ps -o pid,ppid,command` output (one
+ * process per line, "PID PPID COMMAND ..."), $start_pid is the pid to walk up from. Walks the ppid
+ * chain and, at the first ancestor that is pkg/pkg-static, parses + maps the subcommand. Returns ''
+ * when there is no pkg ancestor (a normal cron/manual update, or the GUI) or the subcommand is
+ * unrecognised.
+ */
+function pfb_parse_pkg_operation(array $ps_lines, int $start_pid): string {
+	$procs = array();	// pid => array(ppid, argv[])
+	foreach ($ps_lines as $line) {
+		$parts = preg_split('/\s+/', trim((string) $line));
+		if (!is_array($parts) || count($parts) < 3 || !ctype_digit($parts[0]) || !ctype_digit($parts[1])) {
+			continue;	// header row / malformed
+		}
+		$procs[(int) $parts[0]] = array((int) $parts[1], array_slice($parts, 2));
+	}
+
+	$pid  = $start_pid;
+	$seen = array();
+	for ($hops = 0; $hops < 64; $hops++) {
+		if (!isset($procs[$pid]) || isset($seen[$pid])) {
+			break;
+		}
+		$seen[$pid] = TRUE;
+		list($ppid, $argv) = $procs[$pid];
+
+		// $argv always has >= 1 element (the count()<3 guard above skips shorter rows).
+		$bin = basename((string) $argv[0]);
+		if ($bin === 'pkg' || $bin === 'pkg-static') {
+			$op = pfb_pkg_argv_subcommand($argv);
+			if ($op !== '') {
+				return $op;
+			}
+		}
+
+		if ($ppid <= 1 || $ppid === $pid) {
+			break;
+		}
+		$pid = $ppid;
+	}
+	return '';
+}
+
+
+/*
+ * #697: thin, cached wrapper around pfb_parse_pkg_operation() that reads the live process table.
+ * Returns the current pkg operation ('install'/'upgrade'/'reinstall'/'delete') or '' when not run
+ * under pkg. Cached per-process: hooks call it once per fire point and it must not re-ps each time.
+ */
+function pfb_pkg_operation(): string {
+	static $cached = NULL;
+	if ($cached !== NULL) {
+		return $cached;
+	}
+	$out = array();
+	$rc  = 0;
+	exec('/bin/ps -axww -o pid,ppid,command 2>/dev/null', $out, $rc);
+	$cached = ($rc === 0) ? pfb_parse_pkg_operation($out, (int) getmypid()) : '';
+	return $cached;
+}
+
+
+/*
+ * #697: does a pre-deinstall pass that saw pkg operation $op perform a FULL teardown (turn
+ * pfBlockerNG OFF + remove live objects), or SKIP it to keep pfBlockerNG live? Pure decision.
+ *
+ * pfSense reaches our pre-deinstall for BOTH a genuine removal and an in-place package
+ * reinstall/upgrade, but with a DIFFERENT pkg operation: a real uninstall is `pkg delete` ->
+ * 'delete'; the GUI Update / `pkg upgrade` / a forced reinstall is `pkg install -f` / `pkg upgrade`
+ * -> 'install'|'reinstall'|'upgrade'. So tear down ONLY on a delete; keep pfBlockerNG live across a
+ * package upgrade/reinstall (its resync re-applies). An unrecognised/undetectable op ('') FAILS SAFE
+ * to teardown.
+ */
+function pfb_pkg_op_tears_down(string $op): bool {
+	return $op === 'delete' || $op === '';
+}
+
+
 // Function to De-Install pfBlockerNG
 function pfblockerng_php_pre_deinstall_command() {
 	require_once('config.inc');
 	global $g, $pfb;
+
+	// #697: tear down ONLY on a genuine removal; keep pfBlockerNG live across a package upgrade.
+	// A non-delete operation skips all disable/teardown mutation; the package's post-install
+	// resync re-applies the package and the existing configuration remains live.
+	$pfb_pkg_op = pfb_pkg_operation();
+	if (!pfb_pkg_op_tears_down($pfb_pkg_op)) {
+		update_status("Keeping pfBlockerNG active across the package {$pfb_pkg_op} (not a removal).\n");
+		return;
+	}
 
 	// Set these two variables to disable pfBlockerNG on de-install
 	$pfb['save'] = $pfb['install'] = TRUE;
