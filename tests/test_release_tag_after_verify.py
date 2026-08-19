@@ -27,7 +27,7 @@ Two other parts ride along:
 * Part 2 -- only a RELEASED pfSense version may veto (see
   `tests/shell/resolve_legs_spec.sh` for the status predicate itself).
 * Part 3 -- our own alpha/beta tags skip the live suites (`run_suites`), with a
-  `force_suites` dispatch input as the manual escape hatch.
+  `force_suites` escape hatch only for release lines that carry a live corpus.
 
 The reachability tests walk the real `needs:` graph rather than asserting on one
 job's text, so ANY re-ordering that puts a mutation ahead of the build or ahead of
@@ -956,6 +956,19 @@ def test_build_record_keeps_the_original_release_33_matrix_row(tmp_path: Path) -
     )
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert json.loads((tmp_path / "build-record.json").read_text())["matrix_row"] == row
+
+
+def test_release_33_decision_and_matrix_bindings_are_not_bypassed() -> None:
+    job = _jobs()["build-pkgs-portable"]
+    decision = "\n".join(_step(_jobs()["read-matrix"], "Detect pkg channel from tag"))
+    extras = "\n".join(_step(job, "Resolve release-line extras"))
+    record = "\n".join(_step(job, "Write the destination-bound build record"))
+    build = "\n".join(_step(job, "Build the .pkg via build-leg.sh"))
+
+    assert "INPUT_SOURCE:  ${{ github.event.inputs.source }}" in decision
+    assert "MATRIX_EXTRA_PKGS: ${{ toJson(matrix.extra_pkgs) }}" in extras
+    assert "MATRIX_ROW:    ${{ toJson(matrix) }}" in record
+    assert "EXTRA_PKGS:   ${{ steps.extras.outputs.extra_pkgs }}" in build
 
 
 def test_force_suites_input_is_declared_boolean_and_defaults_off() -> None:
