@@ -29,23 +29,49 @@ final class PfbConfig
 	public static function read(string $key): mixed
 	{
 		self::assertRegistered($key);
-		return config_get_path('installedpackages/pfblockerng/config/0/settings_family', NULL);
+		return config_get_path(self::path($key), NULL);
+	}
+
+	public static function write(string $key, mixed $value): void
+	{
+		self::assertRegistered($key);
+		if ($key !== 'gen/pfb_pkg_ca_consent' || !function_exists('isAllowedPage') || !isAllowedPage('pkg_mgr_installed.php')) {
+			throw new RuntimeException("PfbConfig: write of key '{$key}' denied");
+		}
+		self::writeValue($key, $value);
 	}
 
 	public static function writeSystem(string $key, mixed $value): void
 	{
 		self::assertRegistered($key);
-		if (!is_string($value) || !isset(PFB_SETTINGS_FAMILY_RANK[$value])) {
-			throw new InvalidArgumentException('PfbConfig: invalid settings family');
-		}
-		config_set_path('installedpackages/pfblockerng/config/0/settings_family', $value);
+		self::writeValue($key, $value);
 	}
 
 	private static function assertRegistered(string $key): void
 	{
-		if ($key !== 'gen/settings_family') {
+		if (!in_array($key, ['gen/settings_family', 'gen/pfb_pkg_ca_consent'], TRUE)) {
 			throw new InvalidArgumentException("PfbConfig: key '{$key}' is not registered");
 		}
+	}
+
+	private static function path(string $key): string
+	{
+		return match ($key) {
+			'gen/settings_family' => 'installedpackages/pfblockerng/config/0/settings_family',
+			'gen/pfb_pkg_ca_consent' => 'installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent',
+		};
+	}
+
+	private static function writeValue(string $key, mixed $value): void
+	{
+		if ($key === 'gen/settings_family') {
+			if (!is_string($value) || !isset(PFB_SETTINGS_FAMILY_RANK[$value])) {
+				throw new InvalidArgumentException('PfbConfig: invalid settings family');
+			}
+		} elseif (!is_string($value) || !in_array($value, ['on', ''], TRUE)) {
+			throw new InvalidArgumentException('PfbConfig: invalid CA consent');
+		}
+		config_set_path(self::path($key), $value);
 	}
 }
 
