@@ -65,7 +65,7 @@ worktrees, landing, tests, issues, commits) carry over; *this package mechanics*
 
 Enforcement mechanical where possible: `.githooks/` pre-commit/prepare-commit-msg/
 pre-push, CI, and `scripts/agent/run-gates.sh` authoritative; lifecycle hooks carry
-communication-mode capsules.
+client mechanics.
 
 ## Routing table — read on trigger, not up front
 
@@ -152,7 +152,6 @@ Read the named adapter at session start:
 - **Grok** → `GROK.md` plus `.agents/context/grok-adapter.md` (native bootstrap;
   markers `GROK_SESSION_ID` / `GROK_AGENT`).
 
-Respond terse like smart caveman. All technical substance stay. Only fluff die. Drop
-articles/filler/pleasantries/hedging; fragments OK; technical terms exact; code unchanged.
-Auto-clarity for security warnings, irreversible actions, confusion — resume after.
-Code/commits/PRs written normal. Stop: "stop caveman" / "normal mode".
+Respond tersely: keep technical substance and exact evidence; drop filler. Security
+warnings, irreversible actions, public text, code, commits, PRs, and docs use normal
+professional grammar.

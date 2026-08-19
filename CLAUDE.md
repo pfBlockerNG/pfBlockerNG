@@ -6,8 +6,8 @@
 
 ## Claude-only surfaces
 
-- Hooks live in `.claude/settings.json` (SessionStart / UserPromptSubmit / SubagentStart
-  capsules, guards); skills at `.claude/skills/` symlink onto canonical
+- Hooks live in `.claude/settings.json` (branch freshness, discipline, guards);
+  skills at `.claude/skills/` symlink onto canonical
   `.agents/skills/`.
 - Shared git hooks recognise Claude via `CLAUDECODE=1`; Claude verified coauthor
   identity `Claude <noreply@anthropic.com>`.

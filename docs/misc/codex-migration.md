@@ -49,8 +49,7 @@ symlink; provider-specific runtime change stays in that provider's adapter.
 | Top / mid / small model tier | GPT-5.6-Sol / GPT-5.6-Terra / GPT-5.6-Luna | `.agents/model-tiers.conf` is the shared mapping; reasoning effort remains independent. |
 | Planner/implementer/analyst/verifier | `planner`, `implementer`, small/top `analyst`, and `adversarial-reviewer` plus top/mid reviewer variants | Project-scoped custom agents pin the corresponding Codex model tier without changing the canonical output contract. |
 | `PreToolUse` Git policy | `.codex/hooks.json` | Reuses the raw-payload-compatible shared guard for Codex `Bash` hook events; coverage remains subject to the client emitting that event for unified shell execution. |
-| Session and delegate activation | `.codex/hooks.json` | Runs branch synchronization and injects ponytail + caveman on startup/resume/clear/compact and every sub-agent start. |
-| Ponytail and Caveman | Plugin + repository hooks | Ponytail ships as the local Codex plugin; repository hooks guarantee both modes for root sessions and sub-agents. |
+| Session activation | `.codex/hooks.json` | Runs branch synchronization on startup/resume/clear/compact. |
 
 Shared Git hooks recognize both `CLAUDECODE=1` and Codex's
 `CODEX_THREAD_ID`. Primary-checkout commits and unfetched-history rewrites

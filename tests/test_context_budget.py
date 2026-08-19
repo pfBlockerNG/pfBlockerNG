@@ -756,7 +756,7 @@ def test_check_parity_live_repository_user_prompt_submit_clean() -> None:
         "tests/smoke/CLAUDE.md",
         ".claude/rules/smoke.md",
         ".grok/rules/harness.md",
-        ".claude/hooks/statusline.sh",
+        ".claude/hooks/session-branch-sync.sh",
     ],
 )
 def test_touches_context_surface_true(rel: str) -> None:
