@@ -10920,7 +10920,15 @@ function pfblockerng_php_pre_deinstall_command(?callable $operation = NULL) {
 		$pfb_pkg_op = $operation();
 	}
 	if (!pfb_pkg_op_tears_down($pfb_pkg_op)) {
-		update_status("Keeping pfBlockerNG active across the package {$pfb_pkg_op} (not a removal).\n");
+		$pfb_pkg_op_label = ($pfb_pkg_op !== '') ? $pfb_pkg_op : 'unknown';
+		update_status("Keeping pfBlockerNG active across the package operation '{$pfb_pkg_op_label}' (not a removal).\n");
+		if ($pfb_pkg_op === '') {
+			logger(
+				LOG_NOTICE,
+				localize_text('Package operation not detected; skipping pfBlockerNG teardown.'),
+				LOG_PREFIX_PKG_PFBLOCKERNG
+			);
+		}
 		return;
 	}
 

@@ -11,10 +11,24 @@ if (!is_string($source)) {
 
 $failures = 0;
 $status_messages = [];
+$log_messages = [];
+
+defined('LOG_NOTICE') || define('LOG_NOTICE', 5);
+define('LOG_PREFIX_PKG_PFBLOCKERNG', 'pfBlockerNG');
 
 function update_status(string $message): void
 {
 	$GLOBALS['status_messages'][] = $message;
+}
+
+function logger(int $priority, string $message, string $prefix): void
+{
+	$GLOBALS['log_messages'][] = [$priority, $message, $prefix];
+}
+
+function localize_text(string $message): string
+{
+	return $message;
 }
 
 function row(string $name, callable $test): void
@@ -114,7 +128,7 @@ row('argv grammar classifies package operations', static function (): void {
 	}
 });
 
-function process_chain(string $pkgCommand, int $extra = 0): array
+function process_chain(string $pkgCommand): array
 {
 	$lines = ['  PID  PPID COMMAND'];
 	$lines[] = ' 100   90 /usr/local/bin/php -f hook.php';
@@ -183,6 +197,33 @@ row('real pre-deinstall function returns before teardown on upgrade', static fun
 			count($GLOBALS['status_messages']) === 1
 				&& str_contains($GLOBALS['status_messages'][0], 'Keeping pfBlockerNG active'),
 			'upgrade returns through the live guard'
+		);
+	} finally {
+		set_include_path($old_include_path);
+		@unlink($fixture . '/config.inc');
+		@rmdir($fixture);
+	}
+});
+
+row('unknown operation is labeled and logged before preserving state', static function (): void {
+	$fixture = sys_get_temp_dir() . '/pfb-predeinstall-unknown-' . bin2hex(random_bytes(5));
+	mkdir($fixture, 0700, true);
+	file_put_contents($fixture . '/config.inc', "<?php\n");
+	$old_include_path = get_include_path();
+	set_include_path($fixture . PATH_SEPARATOR . $old_include_path);
+	$GLOBALS['status_messages'] = [];
+	$GLOBALS['log_messages'] = [];
+	try {
+		pfblockerng_php_pre_deinstall_command(static fn (): string => '');
+		check(
+			count($GLOBALS['status_messages']) === 1
+				&& str_contains($GLOBALS['status_messages'][0], "operation 'unknown'"),
+			'unknown operation status label'
+		);
+		check(
+			count($GLOBALS['log_messages']) === 1
+				&& str_contains($GLOBALS['log_messages'][0][1], 'Package operation not detected'),
+			'unknown operation log'
 		);
 	} finally {
 		set_include_path($old_include_path);
