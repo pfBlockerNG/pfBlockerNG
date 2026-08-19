@@ -636,7 +636,10 @@ function pfb_pkgconf_ca_clear_notice_sentinel(): void {
 function pfb_pkgconf_ca_notice_signature(string $file): string {
 	clearstatcache(TRUE, $file);
 	$stat = @stat($file);
-	return $stat === FALSE ? '' : $stat['ino'] . ':' . $stat['mtime'] . ':' . $stat['size'];
+	$content = @file_get_contents($file);
+	return $stat === FALSE || $content === FALSE
+		? ''
+		: $stat['ino'] . ':' . $stat['mtime'] . ':' . $stat['size'] . ':' . hash('sha256', $content);
 }
 
 /* Best-effort cron retry and notice pass; provenance denial never mutates or notifies. */
