@@ -47,6 +47,57 @@ function check(bool $cond, string $label): void
 check(!function_exists('logger'), 'logger() absent before extra.inc');
 check(!function_exists('localize_text'), 'localize_text() absent before extra.inc');
 
+/* Standalone resolver setup must log mount failures without the package fallback. */
+$unbound = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfb_unbound_include.inc';
+$unbound_source = file_get_contents($unbound);
+check(
+	is_string($unbound_source)
+		&& preg_match('/function pfb_python_mount\\b.*?^\\}/ms', $unbound_source, $mount_function) === 1,
+	'pfb_python_mount() source is readable'
+);
+
+$mount_errors = [];
+function log_error(string $message): void
+{
+	global $mount_errors;
+	$mount_errors[] = $message;
+}
+
+function safe_mkdir(string $path): void
+{
+}
+
+eval($mount_function[0]);
+foreach (
+	[
+		[TRUE, 'pfb-test-no-mounted-fs', 'mount'],
+		[FALSE, '', 'unmount'],
+	] as [$python_mode, $grep_string, $operation]
+) {
+	$threw = FALSE;
+	try {
+		pfb_python_mount(
+			$python_mode,
+			FALSE,
+			'pfb-test-invalid',
+			'pfb-test-invalid',
+			'',
+			'pfb-test-noop',
+			$grep_string
+		);
+	} catch (Throwable $e) {
+		$threw = TRUE;
+	}
+	check(!$threw, "{$operation} failure logs without logger() fallback");
+}
+check(
+	$mount_errors === [
+		'[Unbound-pymod]: Failed to mount /pfb-test-noop',
+		'[Unbound-pymod]: Failed to unmount /pfb-test-noop',
+	],
+	'mount and unmount failures use log_error()'
+);
+
 $extra = dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc';
 require_once $extra;
 
