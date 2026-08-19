@@ -371,7 +371,19 @@ function pfb_software_read_cache(): array {
 		return array();
 	}
 	$data = json_decode($raw, TRUE);
-	return is_array($data) ? $data : array();
+	if (!is_array($data)) {
+		return array();
+	}
+	// Every consumer reads these values through a (string) cast -- the orchestrator's
+	// latest/last_notified, the page's displayed fields, the install matcher. A non-scalar
+	// value (a hand-edit, a future writer) makes each of those casts emit "Array to string
+	// conversion" once per call, so it is dropped HERE rather than guarded at each site,
+	// where the next site added would be unguarded again (issue #2367). Every key the writer
+	// stores is a scalar or NULL; a stored NULL drops too, which costs nothing because the
+	// only nullable one ('channel') is recomputed live and never read back from here.
+	return array_filter($data, static function ($value): bool {
+		return is_scalar($value);
+	});
 }
 
 /*
