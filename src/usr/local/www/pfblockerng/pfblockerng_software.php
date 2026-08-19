@@ -76,7 +76,6 @@ $pfb_sw_channel	= pfb_channel_for_install($pfb_sw_repo, $pfb_sw_pkgname);
 // The "Check for new versions" setting (default ENABLED). The accessor reads the
 // file-local config accessor (pfb_software_check_config_read() in pfblockerng_software.inc);
 // no raw value handling here.
-$pfb_sw_check	= pfb_software_check_enabled();
 
 // Which (POST-guarded) action was requested. Only the cache-refreshing Check runs here now;
 // Update/Uninstall are plain links to pkg_mgr_install.php, not POST actions.
@@ -85,14 +84,28 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 	$pfb_sw_action = (string) $_POST['pfb_sw_action'];
 }
 
+$input_errors = array();
+
 // "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
 // unticked, so persist the owner-ruled empty Off token; an absent config key defaults On.
 if ($_POST && isset($_POST['save'])) {
 	pfb_software_check_config_write((pfb_filter($_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '') === 'on');
+	$pfb_ca_was_consented = pfb_pkg_ca_consent_enabled();
+	$pfb_ca_token = pfb_pkgconf_ca_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');
-	header('Location: /pfblockerng/pfblockerng_software.php');
-	exit;
+	$pfb_ca_ok = pfb_pkgconf_ca_apply($pfb_ca_token, $pfb_ca_was_consented);
+	if ($pfb_ca_ok) {
+		header('Location: /pfblockerng/pfblockerng_software.php');
+		exit;
+	}
+	$input_errors[] = 'The setting was saved, but pfBlockerNG could not update ' . PFB_PKG_CONF
+		. ' right now (its CA certificate directory may be missing or empty -- try running '
+		. '`certctl rehash` from the shell). pfBlockerNG will retry automatically at the next '
+		. 'boot or scheduled run.';
 }
+
+// Read after the save block so a failed CA sync re-render shows the just-posted software choice.
+$pfb_sw_check	= pfb_software_check_enabled();
 
 // "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
 // bypasses the "Check for new versions" enable-gate so a one-off check always works.
@@ -105,6 +118,10 @@ if ($pfb_sw_action === 'check') {
 $pgtitle = array(gettext('Firewall'), gettext('pfBlockerNG'), gettext('Software'));
 $pglinks = array('', '/pfblockerng/pfblockerng_general.php', '@self');
 include_once('head.inc');
+
+if ($input_errors) {
+	print_input_errors($input_errors);
+}
 
 // Define default Alerts Tab href link (Top row) — same pattern as every sibling page.
 $get_req = pfb_alerts_default_page();
@@ -188,6 +205,39 @@ $section->addInput(new Form_Checkbox(
 	'on'
 ))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
+
+// Render the consent control only for a recognised Plus pkg.conf shape.
+$pfb_ca_state = pfb_pkgconf_ca_state();
+if ($pfb_ca_state !== '') {
+	$pfb_ca_consent = pfb_pkg_ca_consent_enabled();
+	$pfb_ca_help = 'This control adds or removes exactly one SSL_CA_CERT_PATH=/etc/ssl/certs line in '
+		. PFB_PKG_CONF . '. ';
+	if ($pfb_ca_state === 'patched') {
+		$pfb_ca_help .= 'That line is currently present in the PKG_ENV block, so pkg can reach '
+			. 'pfBlockerNG\'s repository over TLS. ';
+	} elseif ($pfb_ca_state === 'needed' && $pfb_ca_consent) {
+		$pfb_ca_help .= 'Consent is on, but pfBlockerNG has not been able to add the line yet; '
+			. 'it will keep retrying automatically. ';
+	} else {
+		$pfb_ca_help .= 'Right now, pkg trusts only Netgate\'s own certificate bundle, so it '
+			. 'cannot install or update pfBlockerNG through the Package Manager or a plain '
+			. '<code>pkg install</code> in the shell. Checking this box restores the public root '
+			. 'certificate store pkg needs to reach that repository. ';
+	}
+	$pfb_ca_help .= 'pfBlockerNG re-applies the line at boot and on every scheduled (cron) pass. '
+		. 'Unchecking this removes only that one line; the rest of the file is left as pfSense wrote it.';
+
+	$section = new Form_Section('Package manager CA trust');
+	$section->addInput(new Form_Checkbox(
+		'pfb_pkg_ca_consent',
+		'Allow pfBlockerNG to manage the pkg.conf CA path',
+		'Enabled',
+		$pfb_ca_consent,
+		'on'
+	))->setHelp($pfb_ca_help);
+	$form->add($section);
+	$form->addGlobal(new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1'));
+}
 
 $section = new Form_Section('Actions');
 
