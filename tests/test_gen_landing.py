@@ -326,6 +326,7 @@ _FILE_MTIME = 1786750000  # 2026-08-14 23:26 UTC
 _SOURCE_SHA = "f2c5650a1768c5df2bf05fd2cd4ae938a2f566a8"
 _RECORD_DATE = "2026-08-14 19:32 UTC"
 _MTIME_DATE = "2026-08-14 23:26 UTC"
+_RECORD_TIME = '<time datetime="2026-08-14T19:32:00Z">2026-08-14 19:32 UTC</time>'
 
 
 def _write_pkg(path: Path, *, annotations: dict[str, str], name: str = _CANON, version: str = "3.3.2") -> None:
@@ -466,7 +467,8 @@ def test_write_site_record_only_pkg_drives_browse_and_landing(tmp_path: Path, mo
 
     listing = (site / "browse" / "stable" / "ce-2.8" / "index.html").read_text()
     pkg_row = _autoindex_row(listing, f"{_CANON}-3.3.2.pkg")
-    assert _RECORD_DATE in pkg_row
+    assert _RECORD_TIME in pkg_row
+    assert gl._LOCAL_TIME_JS in listing
     assert _MTIME_DATE not in pkg_row
     for plumbing in ("packagesite.pkg", "data.pkg", "meta.conf"):
         row = _autoindex_row(listing, plumbing)
@@ -475,7 +477,8 @@ def test_write_site_record_only_pkg_drives_browse_and_landing(tmp_path: Path, mo
         assert "&mdash;" in row
 
     landing = (site / "index.html").read_text()
-    assert _RECORD_DATE in landing
+    assert _RECORD_TIME in landing
+    assert gl._LOCAL_TIME_JS in landing
     assert _MTIME_DATE not in landing
     assert f"{gl.SOURCE_REPO_URL}/commit/{_SOURCE_SHA}" in landing
     assert f">{_SOURCE_SHA[:7]}<" in landing
@@ -711,6 +714,7 @@ def _pkg(channel: str, name: str, version: str, abi: str, rel: str, size: int = 
         "rel": rel,
         "size": size,
         "published": "2026-06-14 09:38 UTC",
+        "published_epoch": datetime(2026, 6, 14, 9, 38, tzinfo=timezone.utc).timestamp(),
         "commit": "9d4b0b4556edca49b856c093838ccd0e2e91736b",
     }
 
@@ -1172,6 +1176,8 @@ def test_older_releases_lists_retained_excludes_latest() -> None:
     stb_old = _pkg("stable", _CANON, "3.0.0", "FreeBSD:16:amd64", "s1.pkg")
     nightly = _pkg("nightly", _CANON, "3.2.16.20260614.9", "FreeBSD:16:amd64", "n.pkg")
     all_pkgs = [dev_new, dev_mid, dev_old, stb_new, stb_old, nightly]
+    dev_mid["published_epoch"] = _RECORD_EPOCH
+    stb_old["published_epoch"] = _RECORD_EPOCH
 
     # Before: the newest versions are NOT in older_releases (they live in the edition table).
     rows = gl.older_releases(all_pkgs)
@@ -1194,6 +1200,7 @@ def test_older_releases_lists_retained_excludes_latest() -> None:
     assert "<h4>pfSense CE</h4>" in stable and "<h4>pfSense CE</h4>" in testing
     assert "Older releases (1)" in stable and "3.0.0" in stable and "3.2.15" not in stable
     assert "Older releases (2)" in testing and "3.2.15" in testing and "3.2.14" in testing
+    assert _RECORD_TIME in stable and _RECORD_TIME in testing
     assert "3.0.0" not in testing
     assert "<th>Channel</th>" not in html and "<th>pfSense</th>" in html
 
@@ -1926,6 +1933,7 @@ def _eol_pkg(version: str, abi: str, varver: str, channel: str = "stable") -> di
         "rel": f"{channel}/{varver}/{_CANON}-{version}.pkg",
         "size": 42,
         "published": "2026-01-10 08:00 UTC",
+        "published_epoch": datetime(2026, 1, 10, 8, 0, tzinfo=timezone.utc).timestamp(),
         "commit": "aabbcc1122334455667788990011223344556677",
         "php": "",
         "py": "",
@@ -2168,12 +2176,14 @@ def test_eol_versions_ce_and_plus_split_into_separate_tables() -> None:
     # CE section: the CE EOL version appears; Plus EOL version does not.
     assert ">2.7<" in ce_section
     assert "3.1.0_5" in ce_section
+    assert '<time datetime="2026-01-10T08:00:00Z">2026-01-10 08:00 UTC</time>' in ce_section
     assert "25.03" not in ce_section
     assert "3.0.9_1" not in ce_section
 
     # Plus section: the Plus EOL version appears; CE EOL version does not.
     assert ">25.03<" in plus_section
     assert "3.0.9_1" in plus_section
+    assert '<time datetime="2026-01-10T08:00:00Z">2026-01-10 08:00 UTC</time>' in plus_section
     assert ">2.7<" not in plus_section
     assert "3.1.0_5" not in plus_section
 
