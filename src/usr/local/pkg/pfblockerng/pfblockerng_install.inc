@@ -26,13 +26,17 @@ require_once('/usr/local/pkg/pfblockerng/pfblockerng.inc');
 global $g, $pfb;
 pfb_global();
 
-// issue #2371: capture the DNSBL-settings section's fresh-install-ness BEFORE any
-// migration or the registry pass runs -- see pfb_psl_feed_policy_is_fresh_install()'s
-// docblock (pfblockerng.inc) for why this must be read pre-mutation and applied only
-// after pfb_install_registry_writeback() below.
+// issues #2371/#2372: capture section modes and DNSBL freshness before migrations mutate
+// their inputs; both values drive post-migration work below.
+$pfb_registry_sections = array();
+foreach (PFB_SECTIONS as $pfb_registry_section) {
+	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
+}
+$pfb_registry_modes = pfb_registry_section_modes($pfb_registry_sections);
 $pfb_psl_feed_policy_fresh_install = pfb_psl_feed_policy_is_fresh_install(
-	PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0')
+	$pfb_registry_sections[PFB_SECTIONS['dnsbl']]
 );
+unset($pfb_registry_sections, $pfb_registry_section);
 
 $pfb_installed_family = pfb_install_settings_family_capture_restore();
 pfb_global();
@@ -946,8 +950,8 @@ $pfb_registry_sections = array();
 foreach (PFB_SECTIONS as $pfb_registry_section) {
 	$pfb_registry_sections[$pfb_registry_section] = PfbConfig::readSection($pfb_registry_section);
 }
-pfb_install_registry_writeback($pfb_registry_sections);
-unset($pfb_registry_sections, $pfb_registry_section);
+pfb_install_registry_writeback($pfb_registry_sections, $pfb_registry_modes);
+unset($pfb_registry_sections, $pfb_registry_section, $pfb_registry_modes);
 update_status(" done.\n");
 
 // issue #2371: apply the fresh-install feed-at-suffix PSL policy seed captured at the

@@ -17,9 +17,16 @@ final class InstallPrePassWriteOrderTest extends TestCase
 	{
 		$source = php_strip_whitespace(self::INSTALL);
 		$this->assertNotSame('', $source, 'installer source must be readable');
-		$call = strpos($source, 'pfb_install_registry_writeback($pfb_registry_sections);');
+		$capture = strpos($source, '$pfb_registry_modes = pfb_registry_section_modes($pfb_registry_sections);');
+		$this->assertNotFalse($capture, 'installer must capture registry modes before migrations');
+		$migrations = strpos($source, 'pfb_install_settings_family_finalize($pfb_installed_family);');
+		$this->assertNotFalse($migrations, 'installer must run migrations through the settings-family seam');
+		$this->assertLessThan($migrations, $capture, 'registry modes must be captured before migrations mutate sections');
+
+		$call = strpos($source, 'pfb_install_registry_writeback($pfb_registry_sections, $pfb_registry_modes);');
 		$this->assertNotFalse($call, 'installer must dispatch its registry pass through the writeback seam');
-		$this->assertSame(1, substr_count($source, 'pfb_install_registry_writeback($pfb_registry_sections);'));
+		$this->assertSame(1, substr_count($source,
+			'pfb_install_registry_writeback($pfb_registry_sections, $pfb_registry_modes);'));
 		$prepass = substr($source, 0, $call);
 		$this->assertFalse(str_contains($prepass, 'PfbConfig::writeSectionSystem('), 'system writes must not precede registry pass');
 		$this->assertLessThan(strrpos($source, 'return TRUE;'), $call, 'registry writeback must complete before installer return');
@@ -28,10 +35,12 @@ final class InstallPrePassWriteOrderTest extends TestCase
 	public function testRegistryWritebackSeamFlushesAfterReturnedSectionWrites(): void
 	{
 		$order = [];
+		$modes = ['installedpackages/pfblockerng' => 'NEWCFG'];
 		pfb_install_registry_writeback(
 			['installedpackages/pfblockerng' => ['raw' => 'value']],
-			static function (array $sections) use (&$order): array {
-				$order[] = 'registry-pass';
+			$modes,
+			static function (array $sections, ?array $registry, ?array $received_modes) use (&$order): array {
+				$order[] = 'registry-pass:' . $received_modes['installedpackages/pfblockerng'];
 				return $sections;
 			},
 			static function (string $path, array $blob) use (&$order): void {
@@ -42,7 +51,7 @@ final class InstallPrePassWriteOrderTest extends TestCase
 			}
 		);
 		$this->assertSame(
-			['registry-pass', 'write-section:installedpackages/pfblockerng', 'write-config:[pfBlockerNG] Save installation settings'],
+			['registry-pass:NEWCFG', 'write-section:installedpackages/pfblockerng', 'write-config:[pfBlockerNG] Save installation settings'],
 			$order
 		);
 	}

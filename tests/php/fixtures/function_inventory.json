@@ -5424,6 +5424,13 @@
                 "default": null
             },
             {
+                "name": "modes",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            },
+            {
                 "name": "pass",
                 "byRef": false,
                 "variadic": false,
@@ -9325,6 +9332,26 @@
                 "variadic": false,
                 "type": "?array",
                 "default": "NULL"
+            },
+            {
+                "name": "modes",
+                "byRef": false,
+                "variadic": false,
+                "type": "?array",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_registry_section_modes": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "sections",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
             }
         ]
     },

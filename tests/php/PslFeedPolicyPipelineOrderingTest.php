@@ -192,7 +192,8 @@ final class PslFeedPolicyPipelineOrderingTest extends TestCase
 		$this->assertNotFalse($migrations, 'installer must run the migration registry via its finalize seam');
 		$this->assertLessThan($migrations, $capture, 'freshness must be captured BEFORE any migration mutates a section');
 
-		$writeback = strpos($source, 'pfb_install_registry_writeback($pfb_registry_sections);');
+		$writeback = strpos($source,
+			'pfb_install_registry_writeback($pfb_registry_sections, $pfb_registry_modes);');
 		$this->assertNotFalse($writeback, 'installer must dispatch its registry pass through the writeback seam');
 
 		$seam = strpos($source, 'pfb_install_psl_feed_policy_seed($pfb_psl_feed_policy_fresh_install);');

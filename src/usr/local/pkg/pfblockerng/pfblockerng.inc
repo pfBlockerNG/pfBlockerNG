@@ -82,6 +82,7 @@ function pfb_install_settings_family_finalize(
 
 function pfb_install_registry_writeback(
 	array $sections,
+	?array $modes = NULL,
 	?callable $pass = NULL,
 	?callable $write_section = NULL,
 	?callable $flush = NULL
@@ -89,7 +90,7 @@ function pfb_install_registry_writeback(
 	$pass ??= 'pfb_registry_pass';
 	$write_section ??= 'PfbConfig::writeSectionSystem';
 	$flush ??= 'write_config';
-	foreach ($pass($sections) as $path => $blob) {
+	foreach ($pass($sections, NULL, $modes) as $path => $blob) {
 		$write_section($path, $blob);
 	}
 	$flush('[pfBlockerNG] Save installation settings');
@@ -12831,6 +12832,18 @@ function pfb_legacy_key_rename_migrate($sections) {
 }
 
 
+/** @return array<string, string> Section path => NEWCFG/OLDCFG map. */
+function pfb_registry_section_modes(array $sections): array {
+
+	$modes = array();
+	foreach (PFB_SECTIONS as $section) {
+		$blob = $sections[$section] ?? array();
+		$modes[$section] = is_array($blob) && !empty(pfb_gconfig_operator_view($blob)) ? 'OLDCFG' : 'NEWCFG';
+	}
+	return $modes;
+}
+
+
 /**
  * pfb_registry_pass — the one registry-driven install/upgrade pass (issue #1921).
  *
@@ -12887,24 +12900,22 @@ function pfb_legacy_key_rename_migrate($sections) {
  *                                pass took).
  * @param  array|null $registry  Defaults to pfb_cfg_registry(); parameter exists only so
  *                                a fixture registry can drive the pass in tests.
+ * @param  array|null $modes     Optional pre-migration section path => NEWCFG/OLDCFG map.
  * @return array                 Section path => blob map, changed sections only.
  */
-function pfb_registry_pass(array $sections, ?array $registry = NULL): array {
+function pfb_registry_pass(array $sections, ?array $registry = NULL, ?array $modes = NULL): array {
 
 	$registry = $registry ?? pfb_cfg_registry();
 
-	// Mode decided ONCE per section, over the pre-mutation input -- an earlier key's
-	// rename/seed within the same section must never flip a later key's mode.
 	$original = array();
-	$modes    = array();
 	foreach (PFB_SECTIONS as $section) {
 		$blob = $sections[$section] ?? array();
 		if (!is_array($blob)) {
 			$blob = array();
 		}
 		$original[$section] = $blob;
-		$modes[$section]    = !empty(pfb_gconfig_operator_view($blob)) ? 'OLDCFG' : 'NEWCFG';
 	}
+	$modes = $modes ?? pfb_registry_section_modes($original);
 
 	$result    = $original;
 	$conflicts = array();
