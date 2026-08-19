@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-
 SOURCE_REVISION = "59450c63a2229779516eccd067ae9eaa54fa17b4"
 EXPECTED = {
     "scripts/build-leg.sh": "2a570cc897e6cecf8faeb71e7c842dbc7d580324c03f4aa455bc8b7f704b48b8",
@@ -16,6 +15,11 @@ EXPECTED = {
     "scripts/release_version.py": "bef92294f36c6553b52704ecb1168663db3ade6ae96699f20659180b899c54d5",
     "scripts/select-box.sh": "555dbceaa4e93f20da64fa7b5c3a24255069c5eceac29dc2b4699e1ea96258dd",
     "scripts/sparse-clone-ports.sh": "d1e1d6d62d6287485756811afc12f6d55f1bf16c1149d046913424b3c0a7c96c",
+}
+EXECUTABLES = {
+    "scripts/build-leg.sh",
+    "scripts/lib/git-env-scrub.sh",
+    "scripts/sparse-clone-ports.sh",
 }
 
 
@@ -28,3 +32,10 @@ def test_release_tooling_matches_pinned_devel_snapshot() -> None:
     }
 
     assert actual == EXPECTED, f"release tooling must match devel {SOURCE_REVISION}"
+    assert {
+        name for name in EXPECTED if (root / name).stat().st_mode & 0o111
+    } == EXECUTABLES
+    assert {path.name for path in (root / "scripts/lib").iterdir()} == {
+        "git-env-scrub.sh",
+        "run-id.sh",
+    }
