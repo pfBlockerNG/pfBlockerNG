@@ -543,7 +543,37 @@ function pfb_pkgconf_write_atomic(string $file, string $content, string $expecte
 	}
 }
 
-function pfb_pkgconf_ca_state(?string $file = NULL, ?bool $is_plus = NULL): string {
+function pfb_pkgconf_ca_patched(string $text, string $ca_path): bool {
+	if (substr_count($text, 'SSL_CA_CERT_FILE') !== 1 || substr_count($text, 'SSL_CA_CERT_PATH') !== 1) {
+		return FALSE;
+	}
+	$lines = explode("\n", $text);
+	$bounds = pfb_pkgconf_block_bounds($lines);
+	if ($bounds === NULL) {
+		return FALSE;
+	}
+	$ca_file_count = 0;
+	$path_count = 0;
+	for ($i = $bounds[0] + 1; $i < $bounds[1]; $i++) {
+		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
+			$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
+			if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
+				return FALSE;
+			}
+			$ca_file_count++;
+		}
+		if ($lines[$i] === "\tSSL_CA_CERT_PATH={$ca_path}") {
+			$path_count++;
+		}
+	}
+	return $ca_file_count === 1 && $path_count === 1;
+}
+
+function pfb_pkgconf_ca_state(
+	?string $file = NULL,
+	?bool $is_plus = NULL,
+	string $ca_path = PFB_SSL_CA_CERT_PATH
+): string {
 	$file ??= PFB_PKG_CONF;
 	if ($is_plus === NULL) {
 		$product = @file_get_contents('/etc/product_label');
@@ -559,26 +589,7 @@ function pfb_pkgconf_ca_state(?string $file = NULL, ?bool $is_plus = NULL): stri
 	if (pfb_pkgconf_ca_needed($text)) {
 		return 'needed';
 	}
-	$lines = explode("\n", $text);
-	$bounds = pfb_pkgconf_block_bounds($lines);
-	if ($bounds === NULL) {
-		return '';
-	}
-	$ca_file_count = 0;
-	$has_path = FALSE;
-	for ($i = $bounds[0] + 1; $i < $bounds[1]; $i++) {
-		if (strpos($lines[$i], "\tSSL_CA_CERT_FILE=") === 0) {
-			$ca_file = substr($lines[$i], strlen("\tSSL_CA_CERT_FILE="));
-			if (preg_match('#^/[A-Za-z0-9._/+-]+\z#', $ca_file) !== 1) {
-				return '';
-			}
-			$ca_file_count++;
-		}
-		if (strpos($lines[$i], "\tSSL_CA_CERT_PATH=") === 0) {
-			$has_path = TRUE;
-		}
-	}
-	return ($ca_file_count === 1 && $has_path) ? 'patched' : '';
+	return pfb_pkgconf_ca_patched($text, $ca_path) ? 'patched' : '';
 }
 
 function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_path = PFB_SSL_CA_CERT_PATH): bool {
@@ -594,17 +605,18 @@ function pfb_pkgconf_ca_sync(bool $consent, ?string $file = NULL, string $ca_pat
 	$patched = '';
 	if ($consent) {
 		$patched = pfb_pkgconf_ca_add($text, $ca_path);
-		if ($patched !== '') {
-			$ca_file = '';
-			foreach (explode("\n", $text) as $line) {
-				if (strpos($line, "\tSSL_CA_CERT_FILE=") === 0) {
-					$ca_file = substr($line, strlen("\tSSL_CA_CERT_FILE="));
-					break;
-				}
+		if ($patched === '') {
+			return pfb_pkgconf_ca_patched($text, $ca_path);
+		}
+		$ca_file = '';
+		foreach (explode("\n", $text) as $line) {
+			if (strpos($line, "\tSSL_CA_CERT_FILE=") === 0) {
+				$ca_file = substr($line, strlen("\tSSL_CA_CERT_FILE="));
+				break;
 			}
-			if (!pfb_pkgconf_safe_ca_file($ca_file) || !pfb_pkgconf_dir_populated($ca_path)) {
-				return FALSE;
-			}
+		}
+		if (!pfb_pkgconf_safe_ca_file($ca_file) || !pfb_pkgconf_dir_populated($ca_path)) {
+			return FALSE;
 		}
 	} else {
 		$patched = pfb_pkgconf_ca_remove($text, $ca_path);
@@ -641,14 +653,14 @@ function pfb_pkgconf_ca_tick(
 		}
 		$file = $file ?? PFB_PKG_CONF;
 		$consent = pfb_pkg_ca_consent_enabled();
-		$state = pfb_pkgconf_ca_state($file, $is_plus);
+		$state = pfb_pkgconf_ca_state($file, $is_plus, $ca_path);
 		if ($state === '') {
 			pfb_pkgconf_ca_clear_notice_sentinel();
 			return;
 		}
 		if ($consent) {
 			pfb_pkgconf_ca_sync(TRUE, $file, $ca_path);
-			$state = pfb_pkgconf_ca_state($file, $is_plus);
+			$state = pfb_pkgconf_ca_state($file, $is_plus, $ca_path);
 			if ($state !== 'needed') {
 				pfb_pkgconf_ca_clear_notice_sentinel();
 				return;
@@ -699,15 +711,15 @@ function pfb_pkgconf_ca_apply(
 	?bool $is_plus = NULL
 ): bool {
 	$file = $file ?? PFB_PKG_CONF;
-	if (pfb_pkgconf_ca_state($file, $is_plus) === '') {
-		return TRUE;
-	}
 	$consent = $token === 'on';
+	if (pfb_pkgconf_ca_state($file, $is_plus, $ca_path) === '') {
+		return !$consent || $was_consented;
+	}
 	if (!$consent && !$was_consented) {
 		return TRUE;
 	}
 	$ok = pfb_pkgconf_ca_sync($consent, $file, $ca_path);
-	if (!$consent && pfb_pkgconf_ca_state($file, $is_plus) === 'needed') {
+	if (!$consent && pfb_pkgconf_ca_state($file, $is_plus, $ca_path) === 'needed') {
 		@file_put_contents(pfb_pkgconf_ca_notice_sentinel(), pfb_pkgconf_ca_notice_signature($file));
 	}
 	return $ok;
