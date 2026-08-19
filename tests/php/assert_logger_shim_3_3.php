@@ -57,23 +57,44 @@ check(
 );
 
 $mount_errors = [];
+$mount_exists = FALSE;
+$mount_command_fails = FALSE;
 function log_error(string $message): void
 {
 	global $mount_errors;
 	$mount_errors[] = $message;
 }
 
+function pfb_test_exec(string $command, mixed &$output, mixed &$retval): void
+{
+	global $mount_exists, $mount_command_fails;
+	if (str_starts_with($command, '/sbin/mount |')) {
+		$output = $mount_exists ? ['fixture mounted'] : [];
+		$retval = $mount_exists ? 0 : 1;
+		return;
+	}
+	$output = $mount_command_fails ? ['forced failure'] : [];
+	$retval = $mount_command_fails ? 1 : 0;
+}
+
 function safe_mkdir(string $path): void
 {
 }
 
-eval($mount_function[0]);
+$mount_source = str_replace('exec(', 'pfb_test_exec(', $mount_function[0], $exec_count);
+check($exec_count === 5, 'all pfb_python_mount() commands are isolated');
+eval($mount_source);
 foreach (
 	[
-		[TRUE, 'pfb-test-no-mounted-fs', 'mount'],
-		[FALSE, '', 'unmount'],
-	] as [$python_mode, $grep_string, $operation]
+		[TRUE, FALSE, TRUE, 'mount failure', '[Unbound-pymod]: Failed to mount /pfb-test-noop'],
+		[TRUE, FALSE, FALSE, 'mount success', NULL],
+		[FALSE, TRUE, TRUE, 'unmount failure', '[Unbound-pymod]: Failed to unmount /pfb-test-noop'],
+		[FALSE, TRUE, FALSE, 'unmount success', NULL],
+	] as [$python_mode, $mounted, $command_fails, $operation, $expected_error]
 ) {
+	$mount_exists = $mounted;
+	$mount_command_fails = $command_fails;
+	$error_count = count($mount_errors);
 	$threw = FALSE;
 	try {
 		pfb_python_mount(
@@ -83,12 +104,18 @@ foreach (
 			'pfb-test-invalid',
 			'',
 			'pfb-test-noop',
-			$grep_string
+			'fixture'
 		);
 	} catch (Throwable $e) {
 		$threw = TRUE;
 	}
-	check(!$threw, "{$operation} failure logs without logger() fallback");
+	$logged_expected = $expected_error === NULL
+		? count($mount_errors) === $error_count
+		: count($mount_errors) === $error_count + 1 && end($mount_errors) === $expected_error;
+	check(
+		!$threw && $logged_expected,
+		"{$operation} logs without logger() fallback"
+	);
 }
 check(
 	$mount_errors === [
