@@ -17,10 +17,10 @@ name: Release
 #   2. read-matrix / resolve-stamp / build-pkgs-portable / ui-suite / smoke-suite:
 #      build every artifact FROM THE PINNED SHA as workflow artifacts, then verify
 #      them — against that same source tree (issue #1859).  Whether the live suites
-#      run at all is the `run_suites` decision (alpha/beta skip them; rc + stable
-#      run them; `force_suites` forces them on except for the 3.3 bridge) — one code path, the
-#      verification phase is simply empty for an alpha/beta.  Which matrix rows may
-#      VETO is the released-status predicate (scripts/resolve-legs.sh, via
+#      run at all is the `run_suites` decision (the 3.3 bridge never runs them;
+#      otherwise alpha/beta skip, rc + stable run, and `force_suites` forces them
+#      on) — one code path whose verification phase is empty when suites are skipped.
+#      Which matrix rows may VETO is the released-status predicate (scripts/resolve-legs.sh, via
 #      `release_gate: true`).
 #
 #   3. tag-release (real only): the FIRST irreversible step.  Pushes the tag on the
