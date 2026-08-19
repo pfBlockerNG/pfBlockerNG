@@ -137,6 +137,26 @@ row('pkg.conf symlink is never followed or replaced', static function () use ($r
 	@unlink($link);
 });
 
+row('foreign and duplicate CA paths never report owned success', static function () use ($pkgconf, $base): void {
+	$foreign = str_replace("}\n", "\tSSL_CA_CERT_PATH=/tmp/foreign\n}\n", $base);
+	file_put_contents($pkgconf, $foreign);
+	check(pfb_pkgconf_ca_state($pkgconf, true) === '', 'foreign path state unsupported');
+	check(!pfb_pkgconf_ca_sync(true, $pkgconf, '/etc/ssl/certs'), 'foreign path sync refused');
+	check(!pfb_pkgconf_ca_apply('on', false, $pkgconf, '/etc/ssl/certs', true), 'foreign path apply refused');
+	check(file_get_contents($pkgconf) === $foreign, 'foreign path bytes preserved');
+
+	$duplicate = str_replace(
+		"}\n",
+		"\tSSL_CA_CERT_PATH=/etc/ssl/certs\n\tSSL_CA_CERT_PATH=/etc/ssl/certs\n}\n",
+		$base
+	);
+	file_put_contents($pkgconf, $duplicate);
+	check(pfb_pkgconf_ca_state($pkgconf, true) === '', 'duplicate path state unsupported');
+	check(!pfb_pkgconf_ca_sync(true, $pkgconf, '/etc/ssl/certs'), 'duplicate path sync refused');
+	check(!pfb_pkgconf_ca_apply('on', false, $pkgconf, '/etc/ssl/certs', true), 'duplicate path apply refused');
+	check(file_get_contents($pkgconf) === $duplicate, 'duplicate path bytes preserved');
+});
+
 function remove_tree(string $path): void
 {
 	if (!is_dir($path)) {

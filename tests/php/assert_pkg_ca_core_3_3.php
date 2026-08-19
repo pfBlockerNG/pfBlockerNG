@@ -159,12 +159,12 @@ row('parser add/remove is exact and byte preserving', static function () use (&$
 
 row('state and sync enforce Plus filesystem guards', static function () use (&$pkgconf, &$base, &$bundle): void {
 	file_put_contents($pkgconf, str_replace('/tmp/bundle.pem', $bundle, $base));
-	same('needed', pfb_pkgconf_ca_state($pkgconf, true), 'needed state');
+	same('needed', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'needed state');
 	$GLOBALS['dirty'] = false;
 	check(pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'sync add');
-	same('patched', pfb_pkgconf_ca_state($pkgconf, true), 'patched state');
+	same('patched', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'patched state');
 	check(pfb_pkgconf_ca_sync(false, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'sync remove');
-	same('needed', pfb_pkgconf_ca_state($pkgconf, true), 'removed state');
+	same('needed', pfb_pkgconf_ca_state($pkgconf, true, $GLOBALS['pfb']['dbdir'] . '/certs'), 'removed state');
 	$GLOBALS['dirty'] = true;
 	check(!pfb_pkgconf_ca_sync(true, $pkgconf, $GLOBALS['pfb']['dbdir'] . '/certs'), 'dirty refused');
 	$GLOBALS['dirty'] = false;
