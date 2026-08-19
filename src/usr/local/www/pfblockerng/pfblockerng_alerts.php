@@ -1902,7 +1902,28 @@ function pfb_hsc($value) {
 	// htmlspecialchars() return '' -- blanking the WHOLE string, not just the offending
 	// byte (issue #1814). With it, the invalid byte alone is replaced with U+FFFD and the
 	// rest of the value still renders.
-	return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+	$encoded = htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+	// Unicode bidirectional controls survive HTML encoding -- they are not metacharacters --
+	// and reverse the display order of everything after them, so a log-derived domain, feed
+	// name or hostname can render as something other than the bytes actually logged
+	// (issue #2041). Config text never reaches here carrying one: pfb_sanitize_text() strips
+	// \p{C} at the persist boundary (issue #1723). Log-derived values have no such gate.
+	//
+	// Stripped AFTER encoding, not before: ENT_SUBSTITUTE guarantees its output is valid
+	// UTF-8, and preg_replace()'s /u modifier returns NULL on invalid input -- stripping
+	// first would hand that NULL straight into the cell for exactly the malformed values
+	// #1814 exists to keep rendering. No entity htmlspecialchars() emits is in this set, so
+	// running after it cannot corrupt one.
+	//
+	// Only the bidi set, not all of \p{C}: this is the encode chokepoint for every Alerts
+	// and Reports cell, and \p{C} would also take newlines and tabs out of values that may
+	// legitimately carry them.
+	// The marks (U+061C, U+200E, U+200F), the embedding/override set (U+202A-U+202E) and
+	// the isolates (U+2066-U+2069). None carry textual content.
+	$stripped = preg_replace('/[\x{061C}\x{200E}\x{200F}\x{202A}-\x{202E}\x{2066}-\x{2069}]/u', '', $encoded);
+
+	return $stripped === NULL ? $encoded : $stripped;
 }
 
 // Truncate a RAW log/host-derived token to $length CHARACTERS (never bytes), so a
