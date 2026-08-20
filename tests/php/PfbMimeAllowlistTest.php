@@ -33,7 +33,6 @@ final class PfbMimeAllowlistTest extends TestCase
 			'inode/x-empty', 'text/x-file',
 			'text/plain', 'text/html', 'text/xml', 'text/csv',
 			'application/csv', 'application/json', 'application/x-ndjson',
-			'application/x-tar',
 			'application/gzip', 'application/x-gzip',
 			'application/x-bzip2',
 			'application/zip',
@@ -91,6 +90,25 @@ final class PfbMimeAllowlistTest extends TestCase
 	{
 		// 'text/plain' is in the shipped allow-list → must be accepted.
 		$this->assertTrue(pfb_mime_in_allowlist('text/plain', $this->allowlist));
+	}
+
+	public function test_shipped_allowlist_rejects_tar_feeds(): void
+	{
+		$shipped = $GLOBALS['pfb_shipped_mime_types'] ?? [];
+
+		$this->assertNotEmpty($shipped, 'shipped mime_types snapshot is empty — bootstrap capture broke');
+		$this->assertTrue(
+			pfb_mime_in_allowlist('application/gzip', $shipped),
+			'plain gzip feeds must still reach the compressed MIME gate'
+		);
+		$this->assertTrue(
+			pfb_mime_in_allowlist('application/x-bzip2', $shipped),
+			'plain bzip2 feeds must still reach the compressed MIME gate'
+		);
+		$this->assertFalse(
+			pfb_mime_in_allowlist('application/x-tar', $shipped),
+			'raw tar and tar payloads inside gzip/bzip2 must be rejected'
+		);
 	}
 
 	public function test_shipped_allowlist_excludes_x_7z_compressed(): void
