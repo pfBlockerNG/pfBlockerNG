@@ -31,9 +31,11 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
   Boxes currently carry **uv 0.12.3** and **oras 1.3.3** — the same oras pin the
   workflows use, so a box and a runner agree.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
-- pfBlockerNG clone at `/root/pfBlockerNG`. The orchestrator's bootstrap only
-  `cd`s into it, fetches `--ref`, and checks out `FETCH_HEAD` — it never clones, so a
-  fresh box needs a one-time `git clone https://github.com/pfBlockerNG/pfBlockerNG
+- pfBlockerNG clone at `/root/pfBlockerNG`, with its remote named `origin` (the
+  default unless `--git-remote`/`PFB_GIT_REMOTE` says otherwise). The orchestrator's
+  bootstrap only `cd`s into it, narrows the sparse checkout, fetches `--ref` plus the
+  `ci-metadata` ref, and checks out `FETCH_HEAD` — it never clones, so a fresh box
+  needs a one-time `git clone https://github.com/pfBlockerNG/pfBlockerNG
   /root/pfBlockerNG` (any branch; every run re-points it at the ref under test).
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by
   `smoke-on-box.sh`; an absent — or empty — directory self-bootstraps via
