@@ -89,6 +89,17 @@ esac
 GH
     chmod +x "$stubdir/gh"
     export WB_GH_LOG="$gh_log"
+    codegraph_log="$fixture/codegraph.log"
+    cat > "$stubdir/codegraph" <<'CODEGRAPH'
+#!/bin/sh
+printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
+[ "${WB_CODEGRAPH_RC:-0}" -eq 0 ] || exit "$WB_CODEGRAPH_RC"
+[ "$1" = init ] || exit 9
+mkdir -p "$2/.codegraph"
+true > "$2/.codegraph/codegraph.db"
+CODEGRAPH
+    chmod +x "$stubdir/codegraph"
+    export WB_CODEGRAPH_LOG="$codegraph_log"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -107,6 +118,8 @@ GH
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/pfblockerng-issue-7' "$fixture")"
     The stderr should include 'Preparing worktree'
+    The contents of file "$codegraph_log" should equal "init $fixture/pfblockerng-issue-7"
+    Assert [ -f "$fixture/pfblockerng-issue-7/.codegraph/codegraph.db" ]
   End
 
   It 'anchors a relative --path at the primary root when run from a linked worktree'

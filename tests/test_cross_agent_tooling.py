@@ -115,6 +115,41 @@ def test_grok_adapter_routes_at_the_canonical_bootstrap() -> None:
     assert ".agents/context/grok-adapter.md" in pointer
 
 
+def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
+    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    heading = "## Repository intelligence routing"
+    assert heading in bootstrap, "repository-intelligence routing must be vendor-neutral"
+    routing = bootstrap.split(heading, 1)[1].split("\n## ", 1)[0]
+    for contract in (
+        "scripts/agent/ensure-codegraph.sh",
+        "codegraph_explore",
+        "codegraph serve --mcp",
+        "Serena",
+        "Graphify",
+    ):
+        assert contract in routing, f"canonical routing lost {contract}"
+
+    for entrypoint in (
+        "CLAUDE.md",
+        ".agents/context/codex-adapter.md",
+        ".github/copilot-instructions.md",
+        "GROK.md",
+    ):
+        body = (ROOT / entrypoint).read_text(encoding="utf-8")
+        assert "AGENTS.md" in body, f"{entrypoint} does not load canonical routing"
+
+    codex = (ROOT / ".agents/context/codex-adapter.md").read_text(encoding="utf-8")
+    assert heading not in codex, "Codex must not own a second routing policy"
+
+
+def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> None:
+    local_ignore = (ROOT / ".codegraph/.gitignore").read_text(encoding="utf-8").splitlines()
+    assert "*" in local_ignore
+    assert "!.gitignore" in local_ignore
+    root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert ".codegraph/" not in root_ignore, "root ignore would hide CodeGraph's own tracked contract"
+
+
 def test_copilot_roles_are_pinned_and_defined() -> None:
     tiers = dict(
         line.split("=", 1)
