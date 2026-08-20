@@ -11,9 +11,10 @@ Tests:
     test_tick_cron_entry_installed         — the installed cron entry is the cron-tick verb (#1204)
     test_cron_tick_respects_disable_flag   — cron-tick honours .pfb_cron_disable (#1204)
     test_tick_verb_ignores_disable_flag    — the direct tick verb is never gated (#1204)
-    test_tick_dispatches_due_feed          — tick fires a due feed (ledger past)
-    test_tick_skips_non_due_feed           — tick skips a feed whose next_due is future
-    test_tick_wiped_ledger_jittered        — wiped ledger gives due-now but jittered next_due
+    test_tick_dispatches_due_feed          — tick dispatches a durably-pending feed group (ADR-43)
+    test_tick_skips_non_due_feed           — tick does not dispatch once the reservation is consumed
+    test_tick_wiped_ledger_regenerates     — a wiped ledger is regenerated as a derived cache (#2506);
+                                              post-ADR-43 extras are calendar-anchored, not jittered
     test_tick_reboot_persists_ledger       — clean reboot with MFS /var keeps the schedule
                                               (ledger restored via the #468 earlyshellcmd)
 """
@@ -49,6 +50,17 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
+    # issue #2506: the due ledger is a derived cache post-ADR-43 — every tick that enters
+    # the scheduler dispatch lock recomputes the 'cron' row from the runtime model (config)
+    # + schedule state, and with NO feed group configured the refresh legitimately PRUNES
+    # 'cron' rather than write it. Configure one real feed group so the model has something
+    # to schedule, then immediately consume its reservation so tests that tick without
+    # arranging due-ness (the disable-flag tests, the ss_refresh positive control) never
+    # trigger a surprise feed pass.
+    feed_url = h.write_local_feed(smoke_vm, "smoke_tick_ip.txt", "192.0.2.10/32\n192.0.2.11/32\n")
+    h.inject(smoke_vm, h.IpCase(aliasname="smoketick", feed_url=feed_url, header="smoketick", family="v4"))
+    h.pin_cron_due(smoke_vm)
+    _complete_feed_reservation(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -93,10 +105,38 @@ _PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 # never engaged and the whole scenario would be a false positive.
 _VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_TICK_WIPE_SENTINEL"
 
+# issue #2506: the model id pin_cron_due()/pfb_schedule_runtime_config() derive for the
+# module's IpCase feed group ("ipv4:<header>_v4" — helpers._ip_inject_snippet's config
+# feeds pfb_schedule_runtime_config()'s id derivation).
+_FEED_GROUP_ID = "ipv4:smoketick_v4"
+_STATE_DIR = "/usr/local/etc"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _complete_feed_reservation(vm: SmokeVM) -> None:
+    """Consume the durable pending reservation :func:`h.pin_cron_due` made for the module's feed group.
+
+    ``pfb_schedule_state_record_outcome(..., Success, ...)`` is the product's own terminal-outcome
+    writer (pfblockerng_extra.inc): it sets ``last_completed_occurrence`` to the reserved occurrence
+    and ``last_successful_check`` to now, so the group is not due again until its next calendar
+    occurrence. Used right after ``pin_cron_due`` to arrange a "just completed, not due" baseline
+    without a surprise feed pass on every tick that does not itself arrange due-ness (#2506).
+    """
+    snippet = (
+        f"require_once('{_PFB_EXTRA}');"
+        f"pfb_schedule_state_record_outcome('{_FEED_GROUP_ID}', PfbScheduleTerminalResult::Success, "
+        f"'{_STATE_DIR}');"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_complete_feed_reservation failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
 
 
 def _read_ledger(vm: SmokeVM) -> dict:
@@ -127,10 +167,17 @@ def _write_ledger_entry(vm: SmokeVM, job_key: str, last_run: int, next_due: int,
         raise RuntimeError(f"_write_ledger_entry failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _run_tick(vm: SmokeVM, verb: Literal["tick", "cron-tick"] = "tick") -> subprocess.CompletedProcess[str]:
-    """Drain active pfBlockerNG tasks, then fire one tick verb."""
+def _run_tick(
+    vm: SmokeVM, verb: Literal["tick", "cron-tick"] = "tick", *, timeout: float = 180.0
+) -> subprocess.CompletedProcess[str]:
+    """Drain active pfBlockerNG tasks, then fire one tick verb.
+
+    issue #2506: post-ADR-43 the tick can dispatch a scheduled feed pass or a manual apply
+    INLINE (synchronously) rather than merely backgrounding it, so a tick that enters the
+    dispatch lock can run well past SmokeVM.ssh's 60s default -- widen the budget here.
+    """
     h.wait_no_active_pfb_task(vm)
-    return vm.ssh(_PHP, _PFB_PHP, verb)
+    return vm.ssh(_PHP, _PFB_PHP, verb, timeout=timeout)
 
 
 _SS_EXTDNS_STUB = "192.168.89.2"  # WAN SLIRP host alias -> the stub_dns fixture
@@ -353,12 +400,18 @@ def test_tick_verb_ignores_disable_flag(deployed_vm: SmokeVM) -> None:
 
 @pytest.mark.smoke
 @pytest.mark.tick
-@pytest.mark.timeout(150)  # the cron pass is backgrounded; its CRON PROCESS marker lands async
+@pytest.mark.timeout(190)  # the tick dispatches the cron pass inline; must exceed _run_tick's 180s ssh budget
 def test_tick_dispatches_due_feed(deployed_vm: SmokeVM) -> None:
-    """Tick fires a due feed sync, dispatched THROUGH pfblockerng_sync_cron (issue #570).
+    """Tick fires a durably-pending feed group, dispatched THROUGH pfblockerng_sync_cron (issue #570).
+
+    Post-ADR-43 (#2506) the due-ness signal is the durable schedule-state reservation
+    :func:`h.pin_cron_due` makes, not a hand-seeded ledger row — the ledger's 'cron' row is a
+    derived cache the tick rebuilds from the runtime model + schedule state on every pass that
+    enters the dispatch lock, so seeding it directly no longer represents production behaviour.
 
     Two observables (the tick logs to syslog, not stdout, so we never assert on tick stdout):
-      1. mark_ran updates the 'cron' ledger next_due (the tick dispatched a cron job), and
+      1. the ledger's 'cron' row ends up with next_due in the future (the derived cache reflects
+         the group's next planned occurrence once its pending reservation is consumed), and
       2. a ' CRON  PROCESS  START' marker appears in pfblockerng.log — that marker is logged
          ONLY by pfblockerng_sync_cron, so it proves the tick dispatches the `cron` verb
          (-> per-list Update Frequency + scheduled log reset) and NOT a bare
@@ -366,38 +419,28 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM) -> None:
          drains active pfBlockerNG tasks before dispatch, establishing a quiescent appliance.
 
     Scenario:
-        Background: pfBlockerNG installed with at least one enabled feed.
-            Given the 'cron' ledger entry has next_due in the past.
+        Background: pfBlockerNG installed with the module's smoketick feed group configured
+            and scheduling enabled (the deployed_vm fixture's pin_cron_due + reservation-complete
+            arrangement).
+            Given h.pin_cron_due(vm) reserves a fresh pending occurrence for the feed group.
             When pfblockerng.php tick runs.
-            Then the 'cron' ledger entry's next_due is updated to the future,
-            And  a ' CRON  PROCESS  START' marker appears (dispatched via pfblockerng_sync_cron).
+            Then a ' CRON  PROCESS  START' marker appears (dispatched via pfblockerng_sync_cron),
+            And  the 'cron' ledger entry's next_due ends up in the future (the derived cache was
+                rebuilt for the group's next planned occurrence).
     """
     vm = deployed_vm
     marker = "CRON  PROCESS  START"
 
-    now_ts = int(vm.ssh("date +%s").stdout.strip())
-
-    # Given: force cron past; snapshot the sync_cron marker count before the tick.
-    _write_ledger_entry(vm, "cron", now_ts - 90000, now_ts - 1)
+    # Given: a fresh durable reservation for the feed group (post-ADR-43 due-ness).
+    h.pin_cron_due(vm)
     h.wait_no_active_pfb_task(vm)
     cron_marker_before = h.count_log_marker(vm, h.PFB_LOG, marker)
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
 
-    before = _read_ledger(vm)
-    assert before.get("cron", {}).get("next_due", 0) < now_ts, (
-        f"before: cron next_due should be in the past; ledger={before}"
-    )
-
-    # When: tick fires (backgrounds the `cron` verb).
+    # When: tick fires (dispatches the `cron` verb inline).
     _run_tick(vm)
 
-    # Then (1): mark_ran persisted the updated next_due — proves the tick dispatched the cron.
-    assert h.wait_until(
-        lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
-        timeout=30,
-        interval=2,
-    ), f"after: cron next_due should be in the future;\n  ledger={_read_ledger(vm)}, now_ts={now_ts}"
-
-    # Then (2): the backgrounded pass ran through pfblockerng_sync_cron (marker count rose) —
+    # Then (1): the dispatched pass ran through pfblockerng_sync_cron (marker count rose) —
     # a bare pfb_trigger would never log CRON PROCESS, so this is the routing discriminator.
     assert h.wait_until(
         lambda: h.count_log_marker(vm, h.PFB_LOG, marker) > cron_marker_before,
@@ -410,41 +453,59 @@ def test_tick_dispatches_due_feed(deployed_vm: SmokeVM) -> None:
         "skip per-list Update Frequency and the scheduled log reset (issue #570 / ADR-30)."
     )
 
+    # Then (2): the final refresh in the dispatch pass rebuilt the derived cache with the
+    # group's next planned occurrence.
+    assert h.wait_until(
+        lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
+        timeout=60,
+        interval=2,
+    ), f"after: cron next_due should be in the future;\n  ledger={_read_ledger(vm)}, now_ts={now_ts}"
+
 
 @pytest.mark.smoke
 @pytest.mark.tick
-@pytest.mark.timeout(150)
+@pytest.mark.timeout(190)  # must exceed _run_tick's 180s ssh budget so the ssh cap reports first
 def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer) -> None:
-    """Tick does NOT dispatch a feed sync when the cron ledger entry is not yet due —
+    """Tick does NOT dispatch a feed sync once the group's reservation is consumed —
     yet the tick itself genuinely ran (issue #582 positive control).
 
-    The due ledger is the synchronous dispatch-decision observable: a non-due cron must leave
-    its entry exactly unchanged across the tick.
+    Post-ADR-43 (#2506) the due-ledger 'cron' row is a derived cache, not a synchronous
+    dispatch-decision record: even a non-due tick can legitimately REWRITE it (the refresh
+    still runs whenever the cache is absent/invalid), so "entry exactly unchanged" is no
+    longer a valid oracle. The dispatch discriminator instead is the CRON PROCESS marker
+    count, which only pfblockerng_sync_cron logs.
 
-    On its own, "unchanged ledger" cannot distinguish "tick correctly skipped the non-due cron"
-    from "tick never ran at all" — both look identical. The positive control:
+    On its own, "no CRON PROCESS marker" cannot distinguish "tick correctly skipped the
+    non-due group" from "tick never ran at all" — both look identical. The positive control:
     an absent ss_refresh ledger entry is due on this first tick (pfblockerng_tick calls it
     when due), so a SafeSearch CNAME row seeded with a STALE baked IP and a resolver (the
     'pfbextdns' setting) pointed at the hermetic stub DNS makes THIS tick's ss_refresh
     deterministically detect a change and log its own marker — proving the tick executed.
 
     Scenario:
-        Background: pfBlockerNG installed.
-            Given the 'cron' ledger entry has next_due = now + 1 hour, and a SafeSearch
-                CNAME row is seeded with a baked IP the stub will not repeat.
+        Background: pfBlockerNG installed with the module's smoketick feed group configured.
+            Given h.pin_cron_due(vm) reserves a fresh occurrence and _complete_feed_reservation(vm)
+                immediately consumes it — the group is "just completed", not due again until its
+                next calendar occurrence (arranged fresh here, not inherited from module setup or
+                a sibling test's ordering).
+            And  a SafeSearch CNAME row is seeded with a baked IP the stub will not repeat.
             When pfblockerng.php tick runs.
-            Then the 'cron' ledger entry is exactly unchanged (the cron was skipped),
-            And  the ss_refresh marker DOES appear (the tick still ran).
+            Then the ss_refresh marker DOES appear (the tick genuinely ran),
+            And  no ' CRON  PROCESS  START' marker appears (the feed group was not dispatched),
+            And  the 'cron' ledger entry still exists with next_due in the future (the derived
+                cache was rebuilt, not a stale row left over from a dispatch).
     """
     vm = deployed_vm
     ss_marker = "SafeSearch CNAME fallback IPs refreshed"
+    cron_marker = "CRON  PROCESS  START"
+
+    # Given: the feed group's reservation is freshly made, then immediately consumed — not
+    # due again until its next calendar occurrence (self-contained; never order-dependent on
+    # a sibling test having already completed it).
+    h.pin_cron_due(vm)
+    _complete_feed_reservation(vm)
 
     now_ts = int(vm.ssh("date +%s").stdout.strip())
-    _write_ledger_entry(vm, "cron", now_ts - 86400, now_ts + 3600)
-    before_entry = _read_ledger(vm).get("cron")
-    assert before_entry is not None and before_entry.get("next_due", 0) > now_ts, (
-        f"test setup failed to arrange a future cron entry (now={now_ts}, entry={before_entry!r})"
-    )
     h.wait_no_active_pfb_task(vm)
 
     # Positive control: a resolvable CNAME target the stub answers, baked stale in the CSV.
@@ -452,25 +513,36 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
     stub_dns.set_records(target, a=(h.SS_TARGET_A,))
     src_domain = _seed_ss_refresh_positive_control(vm, target, h.SS_BAKED_A)
     ss_before = h.count_log_marker(vm, h.PFB_LOG, ss_marker)
+    cron_marker_before = h.count_log_marker(vm, h.PFB_LOG, cron_marker)
 
     try:
-        # When: tick fires — cron is not due, and the absent ss_refresh entry is due.
+        # When: tick fires — the feed group is not due (reservation already consumed), and the
+        # absent ss_refresh entry is due.
         _run_tick(vm)
 
-        # Then: the synchronous ledger decision is unchanged (cron skipped).
-        after_entry = _read_ledger(vm).get("cron")
-        assert after_entry == before_entry, (
-            "tick dispatched a cron for a NON-due feed — cron ledger entry changed: "
-            f"before={before_entry!r}, after={after_entry!r}"
-        )
-
         # Then: the ss_refresh marker DID appear — the tick genuinely ran; this is what
-        # distinguishes "skipped correctly" from "never ran" above.
+        # distinguishes "skipped correctly" from "never ran" below.
         ss_after = h.count_log_marker(vm, h.PFB_LOG, ss_marker)
         assert ss_after > ss_before, (
             f"tick did not run ss_refresh (before={ss_before}, after={ss_after}) — cannot tell "
-            "'cron correctly skipped' from 'the tick itself never ran'"
+            "'feed group correctly skipped' from 'the tick itself never ran'"
         )
+
+        # Then: no feed pass was dispatched for the non-due group — the routing discriminator
+        # (a derived-cache rewrite of the ledger row, by itself, cannot prove this: #2506).
+        cron_marker_after = h.count_log_marker(vm, h.PFB_LOG, cron_marker)
+        assert cron_marker_after == cron_marker_before, (
+            "tick dispatched a cron for a NON-due feed group — "
+            f"' {cron_marker}' marker count changed: before={cron_marker_before}, after={cron_marker_after}"
+        )
+
+        # Then: the derived cache still holds a 'cron' row with next_due in the future — the
+        # refresh rebuilt it from the runtime model + schedule state rather than dispatching.
+        assert h.wait_until(
+            lambda: _read_ledger(vm).get("cron", {}).get("next_due", 0) > now_ts,
+            timeout=30,
+            interval=2,
+        ), f"after: cron next_due should be in the future;\n  ledger={_read_ledger(vm)}, now_ts={now_ts}"
     finally:
         _remove_ss_row(vm, src_domain)
         _reset_ss_extdns(vm)
@@ -478,42 +550,55 @@ def test_tick_skips_non_due_feed(deployed_vm: SmokeVM, stub_dns: _StubDnsServer)
 
 @pytest.mark.smoke
 @pytest.mark.tick
-def test_tick_wiped_ledger_jittered(deployed_vm: SmokeVM) -> None:
-    """After the ledger is wiped, the tick runs jobs but schedules them jittered.
+def test_tick_wiped_ledger_regenerates(deployed_vm: SmokeVM) -> None:
+    """After the ledger is wiped, the tick regenerates it as a derived cache (#2506).
+
+    Post-ADR-43 the wiped-ledger contract is REGENERATION of the derived cache — an absent
+    ledger makes cache_ready FALSE, so the tick's dispatch lock always engages and rebuilds
+    the document from the runtime model + schedule state — not per-entry random jitter: the
+    Extras (dcc/bl) are calendar-anchored (issue #1944 / ADR-43) and their jitter is fixed at 0.
 
     Scenario:
-        Background: pfBlockerNG installed.
+        Background: pfBlockerNG installed with the module's smoketick feed group configured.
             Given the ledger file is deleted (RAM-disk reboot simulation).
             When pfblockerng.php tick runs.
-            Then all jobs run (due-now after absent ledger).
-            And  the 'dcc' next_due has non-zero jitter (not exactly last_run+86400).
+            Then the regenerated document carries '_meta' (schema 1) and an 'extra:dcc' row
+                with next_due in the future,
+            And  the 'ss_refresh' row is present (its own independent 900s cadence also fired),
+            And  the 'cron' row is present with an integer next_due (the feed group's derived
+                schedule, calendar-anchored — not a jittered offset).
     """
     vm = deployed_vm
+    now_ts = int(vm.ssh("date +%s").stdout.strip())
 
     # Wipe the ledger.
     vm.ssh(f"rm -f {LEDGER_PATH}")
 
-    # Tick — all jobs are due (absent ledger ⇒ due-now).
+    # Tick — the absent ledger makes cache_ready FALSE, so the dispatch lock engages and
+    # regenerates the document regardless of what is/isn't due.
     _run_tick(vm)
 
-    # Poll until mark_ran has persisted the dcc entry.
-    assert h.wait_until(lambda: "dcc" in _read_ledger(vm), timeout=30, interval=2), (
-        f"dcc ledger entry missing after wiped-ledger tick; ledger={_read_ledger(vm)}"
-    )
+    # Poll until the refresh has published the regenerated document.
+    assert h.wait_until(
+        lambda: "_meta" in _read_ledger(vm) and "extra:dcc" in _read_ledger(vm),
+        timeout=30,
+        interval=2,
+    ), f"'_meta'/'extra:dcc' missing after wiped-ledger tick; ledger={_read_ledger(vm)}"
     ledger = _read_ledger(vm)
 
-    # dcc should have run and have a non-zero jitter. Read the ledger's own 'jitter' field
-    # directly (the entry schema carries it — see _write_ledger_entry) rather than inferring
-    # jitter from next_due != last_run+86400: that derivation is fragile — a *coincidental*
-    # jitter draw of exactly 86400 would make a genuinely-jittered entry look unjittered.
-    assert "dcc" in ledger, f"dcc ledger entry missing after wiped-ledger tick; ledger={ledger}"
-    now_ts = int(vm.ssh("date +%s").stdout.strip())
-    actual_jitter = ledger["dcc"]["jitter"]
-    assert actual_jitter != 0, (
-        f"dcc ledger entry should carry non-zero jitter; got jitter={actual_jitter} ledger={ledger}"
+    assert ledger["_meta"]["schema"] == 1, f"_meta.schema should be 1; ledger={ledger}"
+
+    dcc_next_due = ledger["extra:dcc"]["next_due"]
+    assert dcc_next_due > now_ts, (
+        f"extra:dcc next_due should be in the future; got {dcc_next_due} now={now_ts}; ledger={ledger}"
     )
-    actual_next = ledger["dcc"]["next_due"]
-    assert actual_next > now_ts, f"dcc next_due should be in the future; got {actual_next} now={now_ts}"
+
+    assert "ss_refresh" in ledger, f"ss_refresh row missing after wiped-ledger tick; ledger={ledger}"
+
+    assert "cron" in ledger, f"cron row missing after wiped-ledger tick; ledger={ledger}"
+    assert isinstance(ledger["cron"]["next_due"], int), (
+        f"cron next_due should be an int; got {ledger['cron']['next_due']!r}; ledger={ledger}"
+    )
 
 
 @pytest.fixture
@@ -599,8 +684,9 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
             test silently rode whatever /var state a sibling module happened to leave behind).
             Given the ledger has a future cron next_due, and the aliastables archive has been
             refreshed to include it (the archiver is called directly: ``pfb_aliastables('update')``
-            is reached only on the rule-change or alias-content-change paths, and this module
-            configures no IP feeds, so a quiescent update pass would never archive the ledger).
+            is reached only on the rule-change or alias-content-change paths, and this module's
+            one static smoketick feed (#2506) never changes between passes, so a quiescent
+            update pass would never archive the ledger).
         When the VM reboots cleanly.
         Then the /var sentinel is gone (MFS actually engaged this reboot),
         And  the ledger is restored,
@@ -622,8 +708,8 @@ def test_tick_reboot_persists_ledger(mfs_var: SmokeVM) -> None:
         f"precondition: stale {h.ALIASARCHIVE}.{{zst,bz2}} survived the wipe"
     )
 
-    # Refresh the archive directly (see docstring: 'update' mode is change-gated and this
-    # module has no IP feeds to trip either gate).
+    # Refresh the archive directly (see docstring: 'update' mode is change-gated and the
+    # module's static smoketick feed trips neither gate on a quiescent pass).
     snippet = f"require_once('{_PFB_INC}');pfb_global();pfb_aliastables('update');echo 'OK';"
     result = h.php_eval(vm, snippet)
     if result.returncode != 0 or "OK" not in result.stdout:

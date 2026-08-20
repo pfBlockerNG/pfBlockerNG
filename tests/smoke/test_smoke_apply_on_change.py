@@ -40,6 +40,16 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     h.deploy(smoke_vm)
     h.ensure_dnsbl_vip(smoke_vm)
     h.use_system_dns_upstream(smoke_vm)
+    # issue #2506: the due ledger is a derived cache post-ADR-43 — without a configured
+    # feed group the runtime model has nothing to schedule, so pfb_schedule_cache_refresh
+    # legitimately PRUNES the 'cron' row, and every "entry must exist" assertion in this
+    # module goes vacuous. Configure one real feed group, then immediately consume its
+    # reservation so the module's own quiet-hours/pending-apply scenarios (which arrange
+    # their own due-ness via _seed_pending_apply) never race a surprise scheduled feed pass.
+    feed_url = h.write_local_feed(smoke_vm, "smoke_apply_ip.txt", "192.0.2.20/32\n192.0.2.21/32\n")
+    h.inject(smoke_vm, h.IpCase(aliasname="smokeapply", feed_url=feed_url, header="smokeapply", family="v4"))
+    h.pin_cron_due(smoke_vm)
+    _complete_feed_reservation(smoke_vm)
     try:
         yield smoke_vm
     finally:
@@ -57,11 +67,40 @@ _PFB_PHP = "/usr/local/www/pfblockerng/pfblockerng.php"
 # The ledger lives at $pfb['dbdir']/pfb_due_ledger.json (dbdir = /var/db/pfblockerng).
 _LEDGER_DIR = "/var/db/pfblockerng"
 _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
+# issue #2506: the model id pin_cron_due()/pfb_schedule_runtime_config() derive for the
+# module's IpCase feed group ("ipv4:<header>_v4").
+_FEED_GROUP_ID = "ipv4:smokeapply_v4"
+_STATE_DIR = "/usr/local/etc"
+# pfblockerng_apply.inc ~840: logged by sync_package_pfblockerng() when the package master
+# switch is on and the pass is not save-only -- proof a pending manual apply actually
+# dispatched, not merely that its pending_apply flag vanished.
+_UPDATE_MARKER = "UPDATE PROCESS START"
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _complete_feed_reservation(vm: SmokeVM) -> None:
+    """Consume the durable pending reservation :func:`h.pin_cron_due` made for the module's feed group.
+
+    Same rationale as the tick module's sibling helper (#2506): completes the reservation right
+    after pin_cron_due so this module's scenarios never race a surprise scheduled feed pass —
+    module-local duplication is the house pattern here (this module already duplicates
+    _read_ledger/_write_ledger_entry rather than importing the tick module's copies).
+    """
+    snippet = (
+        f"require_once('{_PFB_EXTRA}');"
+        f"pfb_schedule_state_record_outcome('{_FEED_GROUP_ID}', PfbScheduleTerminalResult::Success, "
+        f"'{_STATE_DIR}');"
+        "echo 'OK';"
+    )
+    result = h.php_eval(vm, snippet)
+    if result.returncode != 0 or "OK" not in result.stdout:
+        raise RuntimeError(
+            f"_complete_feed_reservation failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}"
+        )
 
 
 def _read_ledger(vm: SmokeVM) -> dict:
@@ -125,16 +164,20 @@ def _seed_pending_apply(vm: SmokeVM) -> None:
         raise RuntimeError(f"_seed_pending_apply failed: rc={result.returncode} {result.stderr!r} {result.stdout!r}")
 
 
-def _run_tick(vm: SmokeVM) -> str:
+def _run_tick(vm: SmokeVM, *, timeout: float = 180.0) -> str:
     """Fire one tick synchronously and return combined stdout+stderr.
 
     Drains any in-flight pfBlockerNG pass first: the tick defers its feed cron while
     another feed pass holds the cross-process lock ("Tick: feed cron deferred (another
     feed pass is running)"), which would silently turn this module's dispatch
     assertions into false negatives (issue #1202).
+
+    issue #2506: post-ADR-43 the tick can dispatch a scheduled feed pass or a manual apply
+    INLINE (synchronously) rather than merely backgrounding it, so a tick that enters the
+    dispatch lock can run well past SmokeVM.ssh's 60s default -- widen the budget here.
     """
     h.wait_no_active_pfb_task(vm)
-    return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1").stdout
+    return vm.ssh(f"{_PHP} {_PFB_PHP} tick 2>&1", timeout=timeout).stdout
 
 
 def _cron_ledger(vm: SmokeVM) -> dict | None:
@@ -164,18 +207,30 @@ def test_apply_no_window_dispatches_immediately(deployed_vm: SmokeVM) -> None:
         And a manual apply is pending.
       When tick fires.
       Then pending_apply is cleared for dispatch.
+      And  the UPDATE PROCESS marker count rises (issue #2506: proof the pending apply
+          actually dispatched, not merely that the flag vanished).
     """
     vm = deployed_vm
 
     _clear_quiet_hours(vm)
     _seed_pending_apply(vm)
     assert _is_pending(vm), "before tick: pending_apply must be set"
+    before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
     _run_tick(vm)
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: ledger entry for 'cron' must exist; ledger={_read_ledger(vm)}"
     assert not _is_pending(vm), f"after tick (no window): pending_apply must NOT be set; ledger={entry}"
+    assert h.wait_until(
+        lambda: h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER) > before_updates,
+        timeout=60,
+        interval=2,
+    ), (
+        f"after tick (no window): the pending apply must have actually dispatched — "
+        f"' {_UPDATE_MARKER}' marker count did not rise "
+        f"(before={before_updates}, after={h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)})"
+    )
 
 
 @pytest.mark.smoke
@@ -189,18 +244,30 @@ def test_apply_inside_window_dispatches(deployed_vm: SmokeVM) -> None:
         And a manual apply is pending.
       When tick fires.
       Then pending_apply is cleared for dispatch.
+      And  the UPDATE PROCESS marker count rises (issue #2506: proof the pending apply
+          actually dispatched, not merely that the flag vanished).
     """
     vm = deployed_vm
 
     _set_quiet_hours(vm, "00:00-23:59")  # always-open window covers any real clock
     _seed_pending_apply(vm)
     assert _is_pending(vm), "before tick: pending_apply must be set"
+    before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
     _run_tick(vm)
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
     assert not _is_pending(vm), f"after tick (inside window): pending_apply must NOT be set; ledger={entry}"
+    assert h.wait_until(
+        lambda: h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER) > before_updates,
+        timeout=60,
+        interval=2,
+    ), (
+        f"after tick (inside window): the pending apply must have actually dispatched — "
+        f"' {_UPDATE_MARKER}' marker count did not rise "
+        f"(before={before_updates}, after={h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)})"
+    )
 
     _clear_quiet_hours(vm)
 
@@ -217,11 +284,17 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         And the actual clock is NOT in "00:00-00:01" (asserted).
       When tick fires.
       Then pending_apply IS set (deferred).
-      And last_run is NOT updated (job did not run — exec() not called).
+      And the UPDATE PROCESS marker count is UNCHANGED (job did not run — exec() not called).
 
     Note: This test must be run outside 00:00-00:01 local time. It asserts the
     clock is not in the window before proceeding; if the VM clock is in that
     1-minute window the test is skipped (not failed) to avoid false positives.
+
+    issue #2506: previously asserted ``last_run == 0`` directly, which breaks once the module
+    fixture seeds durable schedule state for its feed group — the derived-cache refresh
+    recomputes 'cron' last_run from the schedule state's last_successful_check, not from the
+    forced-0 seed. The UPDATE PROCESS marker count is the discriminator that survives that:
+    it only rises when sync_package_pfblockerng actually runs.
     """
     vm = deployed_vm
 
@@ -235,6 +308,7 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
     _set_quiet_hours(vm, "00:00-00:01")  # 1-min window in the dead of night
     _seed_pending_apply(vm)
     assert _is_pending(vm), "before tick: pending_apply must be set"
+    before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
     _run_tick(vm)
 
@@ -245,10 +319,11 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         f"  ledger={entry}\n"
         f"  (if this failed, verify the VM clock is outside 00:00-00:01 local time)"
     )
-    # last_run must NOT have advanced past the forced 0 (job deferred, did not execute).
-    assert entry.get("last_run", 0) == 0, (
-        f"after tick (outside window): last_run must stay at the forced 0 (deferred, not dispatched), "
-        f"got {entry.get('last_run')}; ledger={entry}"
+    # The dispatch discriminator: the deferred job must NOT have actually run.
+    after_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
+    assert after_updates == before_updates, (
+        f"after tick (outside window): the deferred apply must NOT have dispatched — "
+        f"' {_UPDATE_MARKER}' marker count changed: before={before_updates}, after={after_updates}"
     )
 
     _clear_quiet_hours(vm)
@@ -267,6 +342,8 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
       When tick fires.
       Then last_run is updated (job ran this tick).
       And pending_apply is NOT set (cleared by mark_ran in the tick).
+      And  the UPDATE PROCESS marker count rises (issue #2506: proof the pending apply
+          actually dispatched, not merely that the flag vanished).
 
     Red→green: before Phase 5, is_pending/set_pending didn't exist — a
     "pending" entry written manually would be silently ignored.
@@ -280,6 +357,7 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
     assert _is_pending(vm), f"precondition: pending_apply must be TRUE before tick; ledger={_read_ledger(vm)}"
 
     _set_quiet_hours(vm, "00:00-23:59")
+    before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
 
     _run_tick(vm)
 
@@ -287,6 +365,15 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
     assert not _is_pending(vm), (
         f"after tick (pending + window open): pending_apply must be FALSE (cleared by dispatch); ledger={entry}"
+    )
+    assert h.wait_until(
+        lambda: h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER) > before_updates,
+        timeout=60,
+        interval=2,
+    ), (
+        f"after tick (pending + window open): the pending apply must have actually dispatched — "
+        f"' {_UPDATE_MARKER}' marker count did not rise "
+        f"(before={before_updates}, after={h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)})"
     )
 
     _clear_quiet_hours(vm)
