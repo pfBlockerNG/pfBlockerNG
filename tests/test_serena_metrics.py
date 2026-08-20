@@ -254,14 +254,16 @@ def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
         assert metrics.discover_instances() == []
 
     without_length = healthy()
-    valid_oversized_json = json.dumps(
-        {
-            "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
-            "current_client": "codex",
-            "serena_version": "1.7.0",
-            "padding": "x" * metrics.READ_LIMIT,
-        }
-    ).encode()
+    valid_oversized_json = (
+        json.dumps(
+            {
+                "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
+                "current_client": "codex",
+                "serena_version": "1.7.0",
+            }
+        ).encode()
+        + b" " * metrics.READ_LIMIT
+    )
 
     def oversized_without_length(handler: SerenaHandler) -> None:
         handler.send_response(200)
