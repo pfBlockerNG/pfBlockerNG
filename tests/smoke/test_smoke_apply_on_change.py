@@ -75,10 +75,6 @@ _FEED_GROUP_ID = "ipv4:smokeapply_v4"
 # the marker is NOT manual-apply-exclusive in general — it discriminates here only because the
 # fixture keeps this module's one feed group never-due, so no scheduled pass can contribute.
 _UPDATE_MARKER = "UPDATE PROCESS START"
-# The tick's deferral branch logs this via logger() -> syslog (NOT pfblockerng.log): the
-# positive control proving a deferring tick genuinely ran and evaluated the window.
-_SYSLOG = "/var/log/system.log"
-_DEFER_MARKER = "Tick: feed cron deferred (outside apply window)."
 
 
 # ---------------------------------------------------------------------------
@@ -292,8 +288,8 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         And the actual clock is NOT in "00:00-00:01" (asserted).
       When tick fires.
       Then pending_apply IS set (deferred).
-      And the deferral syslog line count RISES (positive control: the tick genuinely ran
-          and evaluated the window),
+      And the previously-absent 'ss_refresh' ledger row APPEARS (positive control: the tick
+          genuinely ran its due-jobs pass),
       And the UPDATE PROCESS marker count is UNCHANGED (job did not run — exec() not called).
 
     Note: This test must be run outside 00:00-00:01 local time. It asserts the
@@ -316,22 +312,30 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         pytest.skip(f"VM clock {vm_hm} is inside the 1-minute exclusion window; re-run after 00:01")
 
     _set_quiet_hours(vm, "00:00-00:01")  # 1-min window in the dead of night
+    # Wipe the ledger BEFORE seeding so the 'ss_refresh' row is provably absent — that absence
+    # arms the positive control below (an absent row is due on the next tick).
+    result = vm.ssh("rm", "-f", LEDGER_PATH)
+    assert result.returncode == 0, f"precondition: ledger wipe failed rc={result.returncode} {result.stderr!r}"
     _seed_pending_apply(vm)
     assert _is_pending(vm), "before tick: pending_apply must be set"
+    assert "ss_refresh" not in _read_ledger(vm), (
+        f"precondition: 'ss_refresh' row must be absent so its appearance can prove the tick ran; "
+        f"ledger={_read_ledger(vm)}"
+    )
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
-    before_defers = h.count_log_marker(vm, _SYSLOG, _DEFER_MARKER)
 
     _run_tick(vm)
 
     # Positive control FIRST: on its own, "marker unchanged + pending still set" cannot
-    # distinguish "tick correctly deferred" from "tick never ran at all". The deferral branch
-    # logs its own syslog line the moment it declines the out-of-window pending apply, so a
-    # risen count proves the tick genuinely ran and evaluated the window.
-    after_defers = h.count_log_marker(vm, _SYSLOG, _DEFER_MARKER)
-    assert after_defers > before_defers, (
-        f"tick did not reach the deferral branch — '{_DEFER_MARKER}' syslog count did not rise "
-        f"(before={before_defers}, after={after_defers}); cannot tell 'deferred correctly' from "
-        f"'the tick itself never ran'"
+    # distinguish "tick correctly deferred" from "tick never ran at all". The tick's own
+    # ss_refresh cadence (900s, window-independent — it runs after the dispatch section
+    # regardless of quiet-hours) writes its ledger row when the row is absent, so the row's
+    # appearance proves the tick genuinely ran. (The deferral branch's own LOG_INFO syslog
+    # line was never observed in system.log on the live appliance — measured in the #2597
+    # review round — so it cannot serve as the control here.)
+    assert "ss_refresh" in _read_ledger(vm), (
+        f"tick did not run its due-jobs pass — the absent 'ss_refresh' row was not written; "
+        f"cannot tell 'deferred correctly' from 'the tick itself never ran'; ledger={_read_ledger(vm)}"
     )
 
     entry = _cron_ledger(vm)
