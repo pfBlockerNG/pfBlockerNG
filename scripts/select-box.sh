@@ -325,8 +325,15 @@ _sb_release_trap() {
 # _sb_signal_trap <status>
 # Stop the command transport, then let EXIT release the lease once.
 _sb_signal_trap() {
-    trap - HUP INT TERM
-    [ -z "$_SB_CMD_PID" ] || kill -TERM "$_SB_CMD_PID" 2>/dev/null || true
+    trap '' HUP INT TERM
+    if [ -n "$_SB_CMD_PID" ]; then
+        kill -TERM "$_SB_CMD_PID" 2>/dev/null || true
+        # ponytail: fixed local-transport grace; make configurable only if real SSH needs it.
+        sleep 1
+        kill -KILL "$_SB_CMD_PID" 2>/dev/null || true
+        wait "$_SB_CMD_PID" 2>/dev/null || true
+        _SB_CMD_PID=""
+    fi
     exit "$1"
 }
 
