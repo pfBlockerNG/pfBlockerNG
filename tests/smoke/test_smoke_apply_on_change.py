@@ -331,8 +331,8 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
     # ss_refresh cadence (900s, window-independent — it runs after the dispatch section
     # regardless of quiet-hours) writes its ledger row when the row is absent, so the row's
     # appearance proves the tick genuinely ran. (The deferral branch's own LOG_INFO syslog
-    # line was never observed in system.log on the live appliance — measured in the #2597
-    # review round — so it cannot serve as the control here.)
+    # line is not reliably observable in system.log on the appliance, so it cannot serve as
+    # the control here.)
     assert "ss_refresh" in _read_ledger(vm), (
         f"tick did not run its due-jobs pass — the absent 'ss_refresh' row was not written; "
         f"cannot tell 'deferred correctly' from 'the tick itself never ran'; ledger={_read_ledger(vm)}"
