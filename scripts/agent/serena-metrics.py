@@ -266,7 +266,8 @@ class AggregatorHandler(http.server.BaseHTTPRequestHandler):
         raise AttributeError(name)
 
     def do_GET(self) -> None:
-        if not _trusted_host(self.headers.get("Host")):
+        host_headers = self.headers.get_all("Host", [])
+        if len(host_headers) != 1 or not _trusted_host(host_headers[0]):
             self._send(421, b"misdirected request\n", "text/plain; charset=utf-8")
             return
         if self.path == "/":
