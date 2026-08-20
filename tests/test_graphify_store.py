@@ -133,16 +133,21 @@ def test_seed_prefers_exact_then_latest_snapshot_of_same_branch(tmp_path: Path) 
     assert (target / "graphify-out" / "graph.json").read_text(encoding="utf-8") == "release\n"
 
 
-def test_missing_exact_and_corrupt_store_fail_without_touching_target(tmp_path: Path) -> None:
+@pytest.mark.parametrize("corrupt_kind", ["directory", "file"])
+def test_corrupt_store_fail_without_touching_target(tmp_path: Path, corrupt_kind: str) -> None:
     target = tmp_path / "target"
     target.mkdir()
     marker = target / "keep.txt"
     marker.write_text("keep\n", encoding="utf-8")
-    empty_store = tmp_path / "empty-store"
+    corrupt_store = tmp_path / "corrupt-store"
+    if corrupt_kind == "directory":
+        corrupt_store.mkdir()
+    else:
+        corrupt_store.write_text("not a git repository\n", encoding="utf-8")
     result = run_store(
         "restore-exact",
         "--store-root",
-        str(empty_store),
+        str(corrupt_store),
         "--branch",
         "devel",
         "--sha",
@@ -152,6 +157,34 @@ def test_missing_exact_and_corrupt_store_fail_without_touching_target(tmp_path: 
     )
     assert result.returncode != 0
     assert marker.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_symlink_store_root_is_rejected_before_any_write(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    real_store = tmp_path / "real-store"
+    publish(source, real_store, "devel", sha)
+    before = git(real_store, "rev-parse", "devel")
+    linked_store = tmp_path / "linked-store"
+    linked_store.symlink_to(real_store, target_is_directory=True)
+    (source / "graphify-out" / "graph.json").write_text("changed\n", encoding="utf-8")
+
+    for command in ("has-exact", "restore-exact", "seed", "publish"):
+        args = [command, "--store-root", str(linked_store), "--branch", "devel", "--sha", sha]
+        if command == "publish":
+            args.extend(["--builder", str(source)])
+        else:
+            target = tmp_path / f"target-{command}"
+            target.mkdir()
+            marker = target / "keep.txt"
+            marker.write_text("keep\n", encoding="utf-8")
+            args.extend(["--target", str(target)])
+        result = run_store(*args)
+        assert result.returncode != 0, command
+        if command != "publish":
+            assert marker.read_text(encoding="utf-8") == "keep\n"
+
+    assert git(real_store, "rev-parse", "devel") == before
 
 
 def test_restore_rejects_unmanaged_graphify_target_symlink(tmp_path: Path) -> None:

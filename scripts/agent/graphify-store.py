@@ -45,10 +45,19 @@ def _tag(branch: str, sha: str) -> str:
     return f"source/{branch}/{sha}"
 
 
-def _ensure_store(path: Path) -> Path:
+def _store_root(path: Path) -> Path:
     path = path.absolute()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        raise StoreError(f"refusing symlinked Graphify store root: {path}")
+    return path
+
+
+def _ensure_store(path: Path) -> Path:
+    path = _store_root(path)
+    if path.exists() and not path.is_dir():
+        raise StoreError(f"Graphify store root is not a directory: {path}")
     if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.mkdir()
         _run(path.parent, "init", "-q", str(path))
         _run(path, "config", "user.name", "Graphify Store")
@@ -108,6 +117,7 @@ def _archive_payload(store: Path, commit: str, destination: Path) -> None:
 
 def has_exact(store_root: Path, branch: str, sha: str) -> bool:
     _valid_sha(sha)
+    store_root = _store_root(store_root)
     if not store_root.is_dir():
         return False
     _valid_branch(store_root, branch)
@@ -117,6 +127,7 @@ def has_exact(store_root: Path, branch: str, sha: str) -> bool:
 
 def restore_exact(store_root: Path, branch: str, sha: str, target: Path) -> None:
     _valid_sha(sha)
+    store_root = _store_root(store_root)
     if not store_root.is_dir():
         raise StoreError(f"Graphify store is missing: {store_root}")
     _valid_branch(store_root, branch)
@@ -128,6 +139,7 @@ def restore_exact(store_root: Path, branch: str, sha: str, target: Path) -> None
 
 def seed(store_root: Path, branch: str, sha: str, target: Path) -> bool:
     _valid_sha(sha)
+    store_root = _store_root(store_root)
     if not store_root.is_dir():
         return False
     _valid_branch(store_root, branch)
