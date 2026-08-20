@@ -24,6 +24,7 @@ def test_active_repository_checks_exclude_legacy() -> None:
     shellspec = (ROOT / ".shellspec").read_text()
     phpunit = (ROOT / "phpunit.xml").read_text()
     workflow = (ROOT / ".github/workflows/test.yml").read_text()
+    graphify = (ROOT / ".graphifyignore").read_text().splitlines()
 
     assert '"!legacy/**"' in coderabbit
     assert "legacy/** linguist-documentation" in attributes
@@ -39,3 +40,4 @@ def test_active_repository_checks_exclude_legacy() -> None:
     assert "legacy/*) continue" in workflow
     assert workflow.count("- 'legacy/**'") == 2
     assert "python legacy/benchmarks/" in workflow
+    assert "legacy/" in graphify
