@@ -32,10 +32,29 @@ final class QuarterHourMigrationTest extends TestCase
 		));
 	}
 
-	public function testScheduleMigrationWorksWhenExtraModuleIsLoadedStandalone(): void
+	public function testScheduleRuntimeWorksWhenExtraModuleIsLoadedStandalone(): void
 	{
 		$extra = var_export(__DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc', TRUE);
 		$script = <<<PHP
+\$standalone_config = [
+	'installedpackages/pfblockerng/config/0/pfb_scheduled_feed_updates' => 'on',
+	'installedpackages/pfblockerng/config/0/pfb_schedule_weekday' => '7',
+	'installedpackages/pfblockerng/config/0/pfb_schedule_hour' => '6',
+	'installedpackages/pfblockerng/config/0/pfb_schedule_minute' => '45',
+	'installedpackages/pfblockernglistsv4/config' => [],
+	'installedpackages/pfblockernglistsv6/config' => [],
+	'installedpackages/pfblockerngdnsbl/config' => [],
+	'installedpackages/pfblockerngblacklist' => [
+		'blacklist_enable' => 'Enable',
+		'blacklist_selected' => 'ut1',
+		'blacklist_freq' => 'EveryDay',
+		'item' => [['xml' => 'ut1', 'selected' => 'ads', 'title' => 'UT1', 'feed' => 'https://example.test/ut1']],
+	],
+];
+function config_get_path(string \$path, mixed \$default = NULL): mixed
+{
+	return \$GLOBALS['standalone_config'][\$path] ?? \$default;
+}
 require {$extra};
 \$gen = 'installedpackages/pfblockerng/config/0';
 \$v4 = 'installedpackages/pfblockernglistsv4/config';
@@ -66,7 +85,12 @@ require {$extra};
 	],
 ];
 \$extras = pfb_schedule_extra_plan(\$model, ['schema' => 1, 'items' => []], strtotime('2026-01-07 07:00:00 UTC'), new DateTimeZone('UTC'));
-echo json_encode(['group' => \$migrated[\$v4][0], 'extras_due' => \$extras['due']], JSON_THROW_ON_ERROR);
+\$runtime = pfb_schedule_runtime_config();
+echo json_encode([
+	'group' => \$migrated[\$v4][0],
+	'extras_due' => \$extras['due'],
+	'blacklist_enabled' => \$runtime['entries']['extra:bl']['enabled'] ?? NULL,
+], JSON_THROW_ON_ERROR);
 PHP;
 		$descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
 		$process = proc_open([PHP_BINARY, '-r', $script], $descriptors, $pipes);
@@ -118,6 +142,7 @@ PHP;
 		$this->assertSame('45', $group['schedule_minute']);
 		$this->assertArrayNotHasKey('dow', $group);
 		$this->assertSame(['extra:dcc'], $output['extras_due']);
+		$this->assertTrue($output['blacklist_enabled']);
 	}
 
 	public function testRegistryAddsCanonicalScheduleFieldsAndFreshSkipfeedDefault(): void

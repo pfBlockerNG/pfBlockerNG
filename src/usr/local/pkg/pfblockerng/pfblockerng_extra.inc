@@ -4764,6 +4764,9 @@ function pfb_schedule_runtime_model(array $general, array $sections, array $extr
 /** Build the scheduled-feed runtime image from the config gateway. */
 function pfb_schedule_runtime_config(): ?array
 {
+	$valid_blacklist_identity = static fn (mixed $value): bool =>
+		is_string($value) && $value !== '' && $value !== '0'
+		&& preg_match('/^[a-zA-Z0-9,_-]+$/D', $value) === 1;
 	$scheduled = PfbConfig::read('gen/pfb_scheduled_feed_updates');
 	if ($scheduled instanceof PfbToggle) {
 		$scheduled = $scheduled->toStored();
@@ -4783,8 +4786,7 @@ function pfb_schedule_runtime_config(): ?array
 	$blacklist_frequency = $blacklist['blacklist_freq'] ?? 'Never';
 	$blacklist_selected = $blacklist['blacklist_selected'] ?? '';
 	if (!is_string($blacklist_selected)
-		|| ($blacklist_selected !== ''
-			&& pfb_filter($blacklist_selected, PFB_FILTER_CSV, 'Schedule blacklist selection') !== $blacklist_selected)) {
+		|| ($blacklist_selected !== '' && !$valid_blacklist_identity($blacklist_selected))) {
 		return NULL;
 	}
 	$selected = array_flip(explode(',', $blacklist_selected));
@@ -4793,7 +4795,7 @@ function pfb_schedule_runtime_config(): ?array
 			$xml = $item['xml'] ?? NULL;
 			if (!is_array($item)
 				|| !is_string($xml) || $xml === '' || str_contains($xml, ',')
-				|| pfb_filter($xml, PFB_FILTER_CSV, 'Schedule blacklist identity') !== $xml
+				|| !$valid_blacklist_identity($xml)
 				|| !is_string($item['title'] ?? NULL)
 				|| !is_string($item['feed'] ?? NULL)) {
 				return NULL;
