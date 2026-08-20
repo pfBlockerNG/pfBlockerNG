@@ -148,7 +148,8 @@ def test_omp_adapter_and_client_detection() -> None:
         "verifier through the brief → handoff → gate contract. Read an entire GitHub issue, including comments, "
         "before working it."
     )
-    assert discipline in rules
+    expected_rules = f"# pfBlockerNG session invariants\n\n{discipline} See `.agents/policy/delegation.md`.\n"
+    assert " ".join(rules.split()) == " ".join(expected_rules.split())
 
 
 def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
