@@ -179,6 +179,18 @@ def test_repository_intelligence_routing_is_canonical_for_every_client() -> None
     assert heading not in codex, "Codex must not own a second routing policy"
 
 
+def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() -> None:
+    routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
+    for contract in (
+        "GRAPHIFY-REFRESH-REQUIRED",
+        ".git/graphify-store.lock",
+        "graphify-store.py seed",
+        "graphify-store.py publish",
+        "source SHA",
+    ):
+        assert contract in routing, f"Graphify worktree routing lost {contract}"
+
+
 def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> None:
     local_ignore = (ROOT / ".codegraph/.gitignore").read_text(encoding="utf-8").splitlines()
     assert "*" in local_ignore
