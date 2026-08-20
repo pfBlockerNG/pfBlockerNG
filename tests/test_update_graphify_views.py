@@ -85,7 +85,9 @@ def test_first_match_partition_and_future_standin_convention() -> None:
     assert views.classify_path("tools/webassets/lezer-regexp/test/cases.txt", config) == "test-support"
     assert views.classify_path("composer.json", config) == "vendor"
     assert views.classify_path("composer.lock", config) == "vendor"
+    assert views.classify_path("pyproject.toml", config) == "vendor"
     assert views.classify_path("uv.lock", config) == "vendor"
+    assert views.classify_path("LICENSE", config) is None
     assert views.classify_path("AGENTS.md", config) == "agent-context"
     assert views.classify_path(".agents/new-policy.md", config) == "agent-context"
     assert views.classify_path("scripts/agent/new-workflow.py", config) == "agent-context"
@@ -165,6 +167,35 @@ def test_agent_context_headings_and_exact_path_references_are_dynamic() -> None:
     assert all(edge["evidence"] == "exact-path-literal" for edge in refs)
 
 
+def test_agent_context_is_deterministic_for_reordered_inputs() -> None:
+    config = _config()
+    tracked = ["AGENTS.md", ".agents/new-policy.md", "src/app.py", "scripts/agent/new-workflow.py"]
+    source_texts = {
+        "AGENTS.md": "# Policy\nUse src/app.py.\n\n## Next\nKeep this section bounded.\n",
+        ".agents/new-policy.md": "# New policy\nUse scripts/agent/new-workflow.py.\n",
+    }
+    first = views._augment_agent_context_graph({}, tracked, source_texts, config)
+    second = views._augment_agent_context_graph({}, list(reversed(tracked)), source_texts, config)
+    assert json.dumps(first, sort_keys=True) == json.dumps(second, sort_keys=True)
+
+
+def test_agent_context_ignores_fenced_headings_and_suffix_path_matches() -> None:
+    config = _config()
+    built = views.build_views(
+        {},
+        config,
+        tracked_paths=["AGENTS.md", "src/app.py", "src/app.py.bak"],
+        source_texts={
+            "AGENTS.md": "# Visible heading\nUse src/app.py.bak.\n\n```text\n# Hidden heading\nsrc/app.py\n```\n",
+        },
+    )
+    context = built["agent-context"]
+    sections = [node for node in context["nodes"] if node["file_type"] == "document-section"]
+    assert {node["label"] for node in sections} == {"Visible heading"}
+    refs = [edge for edge in context["links"] if edge["relation"] == "path-reference"]
+    assert {edge["target_file"] for edge in refs} == {"src/app.py.bak"}
+
+
 def test_agent_context_collapses_adapter_aliases_and_reuses_reference_nodes() -> None:
     duplicate_id = "claude_skills_example_skill"
     raw = {
@@ -232,6 +263,25 @@ def test_synthetic_build_bridges_runtime_to_standin_and_namespaces_union() -> No
     assert all(graph.get("built_at_commit") == "abc123" for graph in built.values())
 
 
+def test_new_standin_node_and_edge_are_discovered_without_config_changes() -> None:
+    raw = _raw_graph(structural=True)
+    raw["nodes"].append(
+        {"id": "future-standin", "label": "new_dependency", "source_file": "tests/standins/new_standin.py"}
+    )
+    raw["links"].append({"source": "runtime-use", "target": "future-standin", "relation": "imports"})
+    paths = [*_paths(), "tests/standins/new_standin.py"]
+    built = views.build_views(raw, _config(), tracked_paths=paths, source_texts=_texts())
+    assert views.classify_path("tests/standins/new_standin.py", _config()) == "test-support"
+    assert any(
+        edge["target_file"] == "tests/standins/new_standin.py" and edge["evidence"] == "structural-edge"
+        for edge in built["bridge"]["links"]
+    )
+    assert any(
+        node.get("source_file") == "tests/standins/new_standin.py" and node.get("reference")
+        for node in built["investigation"]["nodes"]
+    )
+
+
 def test_structural_edge_is_evidence_backed_and_has_valid_bridge_endpoints() -> None:
     built = views.build_views(_raw_graph(structural=True), _config(), tracked_paths=_paths(), source_texts=_texts())
     structural = [edge for edge in built["bridge"]["links"] if edge["evidence"] == "structural-edge"]
@@ -285,22 +335,36 @@ def test_fixture_nodes_from_one_source_file_share_one_literal_bridge() -> None:
 
 
 def test_python_literal_evidence_ignores_comments_docstrings_and_prose() -> None:
+    raw = _raw_graph()
+    for identifier, path in (
+        ("doc-only", "tests/fixtures/doc-only.json"),
+        ("comment-only", "tests/fixtures/comment-only.json"),
+        ("prose-only", "tests/fixtures/prose-only.json"),
+    ):
+        raw["nodes"].append({"id": identifier, "label": path, "source_file": path})
+    tracked = [
+        *_paths(),
+        "tests/fixtures/doc-only.json",
+        "tests/fixtures/comment-only.json",
+        "tests/fixtures/prose-only.json",
+    ]
     built = views.build_views(
-        _raw_graph(),
+        raw,
         _config(),
-        tracked_paths=_paths(),
+        tracked_paths=tracked,
         source_texts={
             "tests/test_app.py": """\
-\"\"\"fixture.json\"\"\"
-# fixture.json
-prose = \"fixture.json is only documentation\"
-actual = \"fixture.json\"
+\"\"\"doc-only.json\"\"\"
+# comment-only.json
+prose = \"prose-only.json\"
+open(\"fixture.json\")
 """,
         },
     )
     literal = [edge for edge in built["bridge"]["links"] if edge["evidence"] == "literal-fixture"]
     assert len(literal) == 1
     assert literal[0]["source_file"] == "tests/test_app.py"
+    assert literal[0]["target_file"] == "tests/fixtures/fixture.json"
 
 
 def test_support_definitions_group_by_file_and_investigation_filters_unrelated_hops() -> None:
@@ -383,6 +447,13 @@ def _current_output_paths(root: Path) -> list[Path]:
     ]
 
 
+def _generation_paths(root: Path) -> set[str]:
+    generations = root / "generations"
+    if not generations.exists():
+        return set()
+    return {path.name for path in generations.iterdir() if path.is_dir() and not path.name.startswith(".stage-")}
+
+
 def test_write_outputs_switches_one_generation_and_malformed_config_preserves_it(tmp_path: Path) -> None:
     config = _config()
     built = views.build_views(_raw_graph(), config, tracked_paths=_paths(), source_texts=_texts())
@@ -451,6 +522,7 @@ def test_generation_staging_and_pointer_failures_leave_current_unchanged(
     old_target = current.readlink()
     output_paths = _current_output_paths(tmp_path)
     before = {path: path.read_bytes() for path in output_paths}
+    generations_before = _generation_paths(tmp_path)
 
     original_write_text = Path.write_text
     writes = 0
@@ -474,6 +546,7 @@ def test_generation_staging_and_pointer_failures_leave_current_unchanged(
         views.write_outputs(tmp_path, second, config)
     assert current.readlink() == old_target
     assert {path: path.read_bytes() for path in output_paths} == before
+    assert _generation_paths(tmp_path) == generations_before
 
     monkeypatch.setattr(Path, "write_text", original_write_text)
     original_replace_symlink = views._replace_symlink
@@ -488,6 +561,27 @@ def test_generation_staging_and_pointer_failures_leave_current_unchanged(
         views.write_outputs(tmp_path, second, config)
     assert current.readlink() == old_target
     assert {path: path.read_bytes() for path in output_paths} == before
+    assert _generation_paths(tmp_path) == generations_before
+
+
+def test_malformed_compatibility_failure_does_not_publish_generation(tmp_path: Path) -> None:
+    config = _config()
+    first = views.build_views(_raw_graph(), config, tracked_paths=_paths(), source_texts=_texts())
+    second = views.build_views(
+        _raw_graph(), config, tracked_paths=_paths(), source_texts=_texts(), built_at_commit="new"
+    )
+    views.write_outputs(tmp_path, first, config)
+    old_target = (tmp_path / "current").readlink()
+    generations_before = _generation_paths(tmp_path)
+    (tmp_path / "VIEW.json").unlink()
+    (tmp_path / "VIEW.json").write_bytes(b"malformed compatibility")
+
+    with pytest.raises(views.GraphifyViewsError, match="compatibility links"):
+        views.write_outputs(tmp_path, second, config)
+
+    assert (tmp_path / "current").readlink() == old_target
+    assert (tmp_path / "VIEW.json").read_bytes() == b"malformed compatibility"
+    assert _generation_paths(tmp_path) == generations_before
 
 
 def test_successful_updates_keep_current_and_one_rollback_generation(tmp_path: Path) -> None:
@@ -510,6 +604,7 @@ def test_legacy_output_migration_rolls_back_compatibility_failure(
     (tmp_path / "graph.json").write_bytes(old_graph)
     (tmp_path / "VIEW.json").write_bytes(old_view)
     built = views.build_views(_raw_graph(), _config(), tracked_paths=_paths(), source_texts=_texts())
+    generations_before = _generation_paths(tmp_path)
     original_replace_symlink = views._replace_symlink
     failed = False
 
@@ -525,6 +620,8 @@ def test_legacy_output_migration_rolls_back_compatibility_failure(
         views.write_outputs(tmp_path, built, _config())
     assert (tmp_path / "graph.json").read_bytes() == old_graph
     assert (tmp_path / "VIEW.json").read_bytes() == old_view
+    assert _generation_paths(tmp_path) == generations_before
+    assert not list((tmp_path / "generations").glob("legacy-*"))
 
     monkeypatch.setattr(views, "_replace_symlink", original_replace_symlink)
     views.write_outputs(tmp_path, built, _config())

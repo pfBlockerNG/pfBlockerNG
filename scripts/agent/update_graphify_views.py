@@ -366,26 +366,42 @@ def _augment_agent_context_graph(
     source_texts: Mapping[str, str],
     config: Mapping[str, Any],
 ) -> dict[str, Any]:
-    tracked_set = set(tracked)
+    tracked_paths = sorted(set(tracked))
     nodes = _nodes(graph)
     links = _links(graph)
     by_source = _representatives_by_source(nodes)
     node_ids = {str(node["id"]) for node in nodes}
-    for path in tracked:
+    for path in tracked_paths:
         if Path(path).suffix.lower() not in (".md", ".mdx"):
             continue
         text = source_texts.get(path, "")
         if not text:
             continue
         headings: list[tuple[int, str, str]] = []
-        lines = text.splitlines()
-        for line_number, line in enumerate(lines, 1):
+        visible_lines: list[tuple[int, str]] = []
+        fence: str | None = None
+        for line_number, line in enumerate(text.splitlines(), 1):
+            fence_match = re.match(r"^\s*(`{3,}|~{3,})", line)
+            if fence_match:
+                marker = fence_match.group(1)[0]
+                if fence is None:
+                    fence = marker
+                elif marker == fence:
+                    fence = None
+                continue
+            if fence is None:
+                visible_lines.append((line_number, line))
+        for line_number, line in visible_lines:
             match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
             if match:
                 headings.append((line_number, match.group(2), match.group(1)))
         for index, (line_number, title, marks) in enumerate(headings):
-            end = headings[index + 1][0] - 1 if index + 1 < len(headings) else len(lines)
-            description = " ".join(line.strip() for line in lines[line_number:end] if line.strip())[:500]
+            end = headings[index + 1][0] if index + 1 < len(headings) else None
+            description = " ".join(
+                line.strip()
+                for visible_number, line in visible_lines
+                if visible_number > line_number and (end is None or visible_number < end) and line.strip()
+            )[:500]
             node_id = f"section:{path}:L{line_number}"
             nodes.append(
                 {
@@ -402,11 +418,18 @@ def _augment_agent_context_graph(
             )
             node_ids.add(node_id)
         section_for_line = [(line, f"section:{path}:L{line}") for line, _, _ in headings]
-        for target in tracked_set:
-            if target == path or target not in text:
+        for target in tracked_paths:
+            if target == path:
                 continue
             target_owner = _classify_path_unchecked(target, config)
             if target_owner is None:
+                continue
+            target_pattern = re.compile(rf"(?<![A-Za-z0-9_/-]){re.escape(target)}(?![A-Za-z0-9_/-]|\.[A-Za-z0-9_/-])")
+            occurrence_line = next(
+                (line_number for line_number, line in visible_lines if target_pattern.search(line)),
+                None,
+            )
+            if occurrence_line is None:
                 continue
             target_node = by_source.get(target)
             if target_node is None:
@@ -427,7 +450,6 @@ def _augment_agent_context_graph(
                 by_source[target] = target_node
             else:
                 target_id = str(target_node["id"])
-            occurrence_line = text[: text.find(target)].count("\n") + 1
             section_id = next(
                 (node_id for line, node_id in reversed(section_for_line) if line <= occurrence_line),
                 str(by_source.get(path, {}).get("id", _file_node_id(path))),
@@ -485,27 +507,22 @@ def _representatives_by_source(
     return {source: _representative(items) for source, items in grouped.items()}
 
 
-def _python_string_literals(text: str) -> list[str]:
+def _python_call_string_literals(text: str) -> list[str]:
     try:
         tree = ast.parse(text)
     except SyntaxError:
         return []
-    docstring_values: set[int] = set()
-    for owner in ast.walk(tree):
-        body = getattr(owner, "body", None)
-        if isinstance(body, list) and body:
-            first = body[0]
-            if (
-                isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Constant)
-                and isinstance(first.value.value, str)
-            ):
-                docstring_values.add(id(first.value))
-    return [
-        str(node.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstring_values
-    ]
+    literals: list[str] = []
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        arguments = [*call.args, *(keyword.value for keyword in call.keywords)]
+        literals.extend(
+            str(argument.value)
+            for argument in arguments
+            if isinstance(argument, ast.Constant) and isinstance(argument.value, str)
+        )
+    return literals
 
 
 def _bridge_edge(
@@ -538,7 +555,7 @@ def derive_bridges(
     config: Mapping[str, Any],
     source_texts: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Derive only structural, exact-symbol, and unique-literal evidence."""
+    """Derive only structural and syntactic literal evidence."""
 
     validate_config(config)
     source_texts = {_path(key): value for key, value in (source_texts or {}).items()}
@@ -599,7 +616,7 @@ def derive_bridges(
         text = source_texts.get(test_file, "")
         if not text:
             continue
-        for literal in _python_string_literals(text):
+        for literal in _python_call_string_literals(text):
             literal_path = _path(literal)
             candidate_sources = support_files.get(Path(literal_path).name, {})
             if literal_path in support_by_path:
@@ -797,50 +814,56 @@ def write_outputs(
         payloads[directory / "VIEW.json"] = view_text
     generations = root / "generations"
     generations.mkdir(exist_ok=True)
-    stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=generations))
+    stage: Path | None = None
     generation = generations / f"generation-{uuid.uuid4().hex}"
-    try:
-        for relative, text in payloads.items():
-            staged_path = stage / relative
-            staged_path.parent.mkdir(parents=True, exist_ok=True)
-            staged_path.write_text(text, encoding="utf-8")
-        os.replace(stage, generation)
-    except Exception:
-        shutil.rmtree(stage, ignore_errors=True)
-        raise
-
+    legacy: Path | None = None
     current = root / "current"
     compatibility = {
         root / "graph.json": "current/graph.json",
         root / "VIEW.json": "current/VIEW.json",
     }
-    if os.path.lexists(current) and not current.is_symlink():
-        raise GraphifyViewsError(f"managed pointer is not a symlink: {current}")
-    previous_current = os.readlink(current) if current.is_symlink() else None
-    managed_compatibility = all(
-        path.is_symlink() and os.readlink(path) == target for path, target in compatibility.items()
-    )
-    if previous_current is not None and not managed_compatibility:
-        raise GraphifyViewsError("current exists but compatibility links are missing or unmanaged")
-
-    legacy: Path | None = None
-    if previous_current is None and any(os.path.lexists(path) for path in compatibility):
-        if any(path.is_symlink() for path in compatibility if os.path.lexists(path)):
-            raise GraphifyViewsError("legacy compatibility paths must be regular files")
-        legacy = generations / f"legacy-{uuid.uuid4().hex}"
-        legacy.mkdir()
-        for relative in payloads:
-            existing = root / relative
-            if existing.is_file() and not existing.is_symlink():
-                destination = legacy / relative
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(existing, destination)
-        if not (legacy / "graph.json").exists():
-            raise GraphifyViewsError("legacy output has no graph.json")
-        _replace_symlink(current, str(legacy.relative_to(root)))
-
+    previous_current: str | None = None
     installed_compatibility: list[Path] = []
+    publication_started = False
+
+    def published(path: Path) -> bool:
+        return current.is_symlink() and current.resolve() == path.resolve()
+
     try:
+        stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=generations))
+        for relative, text in payloads.items():
+            staged_path = stage / relative
+            staged_path.parent.mkdir(parents=True, exist_ok=True)
+            staged_path.write_text(text, encoding="utf-8")
+        os.replace(stage, generation)
+
+        if os.path.lexists(current) and not current.is_symlink():
+            raise GraphifyViewsError(f"managed pointer is not a symlink: {current}")
+        previous_current = os.readlink(current) if current.is_symlink() else None
+        managed_compatibility = all(
+            path.is_symlink() and os.readlink(path) == target for path, target in compatibility.items()
+        )
+        if previous_current is not None and not managed_compatibility:
+            raise GraphifyViewsError("current exists but compatibility links are missing or unmanaged")
+
+        if previous_current is None and any(os.path.lexists(path) for path in compatibility):
+            if any(path.is_symlink() for path in compatibility if os.path.lexists(path)):
+                raise GraphifyViewsError("legacy compatibility paths must be regular files")
+            legacy = generations / f"legacy-{uuid.uuid4().hex}"
+            legacy.mkdir()
+            for relative in payloads:
+                existing = root / relative
+                if existing.is_file() and not existing.is_symlink():
+                    destination = legacy / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(existing, destination)
+            if not (legacy / "graph.json").exists():
+                raise GraphifyViewsError("legacy output has no graph.json")
+            publication_started = True
+            _replace_symlink(current, str(legacy.relative_to(root)))
+
+        installed_compatibility = []
+        publication_started = True
         for path, target in compatibility.items():
             if path.is_symlink() and os.readlink(path) == target:
                 continue
@@ -848,22 +871,30 @@ def write_outputs(
             installed_compatibility.append(path)
         _replace_symlink(current, str(generation.relative_to(root)))
     except Exception:
-        if previous_current is not None:
-            _replace_symlink(current, previous_current)
-        else:
-            current.unlink(missing_ok=True)
-        if legacy is not None:
-            for path in installed_compatibility:
-                relative = Path(path.name)
-                source = legacy / relative
-                if source.exists():
-                    _restore_regular_file(path, source)
-                else:
+        if publication_started:
+            if previous_current is not None:
+                _replace_symlink(current, previous_current)
+            else:
+                current.unlink(missing_ok=True)
+            if legacy is not None:
+                for path in installed_compatibility:
+                    relative = Path(path.name)
+                    source = legacy / relative
+                    if source.exists():
+                        _restore_regular_file(path, source)
+                    else:
+                        path.unlink(missing_ok=True)
+            else:
+                for path in installed_compatibility:
                     path.unlink(missing_ok=True)
-        else:
-            for path in installed_compatibility:
-                path.unlink(missing_ok=True)
         raise
+    finally:
+        if stage is not None and stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+        if generation.exists() and not published(generation):
+            shutil.rmtree(generation, ignore_errors=True)
+        if legacy is not None and legacy.exists() and not published(legacy):
+            shutil.rmtree(legacy, ignore_errors=True)
     _prune_generations(generations, current)
 
 

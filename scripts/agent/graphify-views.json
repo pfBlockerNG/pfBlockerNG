@@ -19,6 +19,7 @@
           "tools/webassets/**/package-lock.json",
           "composer.json",
           "composer.lock",
+          "pyproject.toml",
           "uv.lock"
         ]
       }
