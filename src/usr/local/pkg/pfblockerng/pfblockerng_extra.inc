@@ -2239,9 +2239,12 @@ const PFB_NIGHTLY_SETTINGS_FAMILY = '4.1';
 
 function pfb_settings_family_from_version(string $version): ?string
 {
-	// pfb_pkg_ver() prefixes 'v'; strip before the nightly stamp so POST-INSTALL
-	// can map vYYYYMMDDHHMMSS.<sha7> to 4.1 (otherwise the stamp never matches).
-	$version = ltrim(trim($version), 'vV');
+	// pfb_pkg_ver() prefixes exactly one 'v'; strip that one character before
+	// the nightly stamp so POST-INSTALL can map vYYYYMMDDHHMMSS.<sha7> to 4.1.
+	$version = trim($version);
+	if ($version !== '' && ($version[0] === 'v' || $version[0] === 'V')) {
+		$version = substr($version, 1);
+	}
 	if (preg_match('/^(\d{14})\.[0-9a-f]{7}$/', $version, $match) === 1) {
 		$timestamp = $match[1];
 		return checkdate((int) substr($timestamp, 4, 2), (int) substr($timestamp, 6, 2), (int) substr($timestamp, 0, 4))
@@ -2264,14 +2267,11 @@ function pfb_settings_family_current(): ?string
 	return is_string($value) && isset(PFB_SETTINGS_FAMILY_RANK[$value]) ? $value : NULL;
 }
 
-function pfb_settings_family_save(string $family): bool
+function pfb_settings_family_owned_sections(): array
 {
-	if (!isset(PFB_SETTINGS_FAMILY_RANK[$family])) {
-		return FALSE;
-	}
 	$installed = config_get_path('installedpackages', []);
 	if (!is_array($installed)) {
-		return TRUE;
+		return [];
 	}
 	$owned = [];
 	foreach ($installed as $section => $value) {
@@ -2279,6 +2279,15 @@ function pfb_settings_family_save(string $family): bool
 			$owned[(string) $section] = $value;
 		}
 	}
+	return $owned;
+}
+
+function pfb_settings_family_save(string $family): bool
+{
+	if (!isset(PFB_SETTINGS_FAMILY_RANK[$family])) {
+		return FALSE;
+	}
+	$owned = pfb_settings_family_owned_sections();
 	if ($owned === []) {
 		return TRUE;
 	}

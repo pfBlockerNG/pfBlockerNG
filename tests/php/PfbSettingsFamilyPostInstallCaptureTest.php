@@ -8,6 +8,35 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 {
 	private const INSTALL = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_install.inc';
 
+	private string $root;
+
+	protected function setUp(): void
+	{
+		$this->root = sys_get_temp_dir() . '/pfb_cap_' . bin2hex(random_bytes(5));
+		mkdir($this->root, 0700, TRUE);
+		$GLOBALS['pfb']['dbdir'] = $this->root;
+		$GLOBALS['config'] = [
+			'installedpackages' => [
+				'pfblockerng' => ['config' => ['0' => ['pfb_keep' => 'off']]],
+			],
+		];
+	}
+
+	protected function tearDown(): void
+	{
+		unset($GLOBALS['config'], $GLOBALS['pfb']['dbdir']);
+		if (!is_dir($this->root)) {
+			return;
+		}
+		foreach (scandir($this->root) ?: [] as $entry) {
+			if ($entry === '.' || $entry === '..') {
+				continue;
+			}
+			@unlink($this->root . '/' . $entry);
+		}
+		@rmdir($this->root);
+	}
+
 	public function testPostInstallCapturesSourceBeforeTargetRestoreAndMigrations(): void
 	{
 		$order = [];
@@ -71,6 +100,97 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 			);
 		}
 		$this->assertSame(['current', 'version', 'from:v20260819010101.abcdef1'], $order);
+	}
+
+	public function testFirstInstallWithNoOwnedSectionsAllowsFourX(): void
+	{
+		$GLOBALS['config'] = ['installedpackages' => []];
+		$this->assertSame('3.2', pfb_settings_family_current());
+		$order = [];
+		$installed = pfb_install_settings_family_capture_restore(
+			NULL,
+			static function (string $family) use (&$order): bool {
+				$order[] = "save:{$family}";
+				return TRUE;
+			},
+			static function () use (&$order): string {
+				$order[] = 'version';
+				return '4.0.0.a1';
+			},
+			static function (string $version) use (&$order): string {
+				$order[] = "from:{$version}";
+				return '4.0';
+			},
+			static function (string $family) use (&$order): bool {
+				$order[] = "replace:{$family}";
+				return TRUE;
+			}
+		);
+		$this->assertSame('4.0', $installed);
+		$this->assertSame(['version', 'from:4.0.0.a1', 'save:3.2', 'replace:4.0'], $order);
+	}
+
+	public function testProductionCurrentMissingMarkerWithOwnedConfigCannotSkipBridge(): void
+	{
+		$this->assertSame('3.2', pfb_settings_family_current());
+		$order = [];
+		try {
+			pfb_install_settings_family_capture_restore(
+				NULL,
+				static function (string $family) use (&$order): bool {
+					$order[] = "save:{$family}";
+					return TRUE;
+				},
+				static function () use (&$order): string {
+					$order[] = 'version';
+					return '4.0.0.a1';
+				},
+				static function (string $version) use (&$order): string {
+					$order[] = "from:{$version}";
+					return '4.0';
+				},
+				static function (string $family) use (&$order): bool {
+					$order[] = "replace:{$family}";
+					return TRUE;
+				}
+			);
+			$this->fail('owned 3.2-default config must not skip the 3.3 bridge onto 4.x');
+		} catch (RuntimeException $error) {
+			$this->assertSame(
+				'pfBlockerNG: install the 3.3 bridge before a 4.x family',
+				$error->getMessage()
+			);
+		}
+		$this->assertSame(['version', 'from:4.0.0.a1'], $order);
+	}
+
+	public function testThreeTwoCanInstallThreeThreeBridge(): void
+	{
+		$order = [];
+		$installed = pfb_install_settings_family_capture_restore(
+			static function () use (&$order): string {
+				$order[] = 'current';
+				return '3.2';
+			},
+			static function (string $family) use (&$order): bool {
+				$order[] = "save:{$family}";
+				return TRUE;
+			},
+			static function () use (&$order): string {
+				$order[] = 'version';
+				return '3.3.2';
+			},
+			static function (string $version) use (&$order): string {
+				$order[] = "from:{$version}";
+				return '3.3';
+			},
+			static function (string $family) use (&$order): bool {
+				$order[] = "replace:{$family}";
+				return TRUE;
+			}
+		);
+		$this->assertSame('3.3', $installed);
+		$this->assertSame(['current', 'version', 'from:3.3.2', 'save:3.2', 'replace:3.3'], $order);
 	}
 
 	public function testCaptureAndRestoreFailuresStopBeforeLaterEffects(): void
