@@ -243,3 +243,15 @@ once the maintainer confirms smoke results.
 - Any feed that previously succeeded now fails after normalisation.
 - `application/octet-stream` is ever promoted through the normalisation path.
 - `PFB_FILTER_FILE_MIME_COMPARE` (16) behaviour changes in any way.
+
+---
+
+## 8. Post-acceptance addendum
+
+### 2026-08-20 — tar MIME removed (issue #2510)
+
+Issue #2510 supersedes the claims in §§1–3 that the allow-list remains unchanged.
+`application/x-tar` is no longer supported by the shared download MIME allow-list:
+raw tar feeds are rejected at the outer gate, and generic gzip/bzip2 feeds whose
+decompressed MIME is tar are rejected at the inner gate. The specialized GeoIP and
+blacklist archive-extraction paths remain unchanged.
