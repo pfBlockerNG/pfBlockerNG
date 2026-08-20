@@ -659,10 +659,14 @@ function sync_package_pfblockerng($cron=''): bool {
 	// API. A lock deferral is benign ONLY for the unattended tick dispatch
 	// (trigger=cron force=false — what pfblockerng_tick()'s due job execs through
 	// `pfblockerng.php pfb_trigger`): the pass stands down with its durable retry
-	// state intact (pending marker / due ledger) and the next tick retries, so
-	// pfblockerng.php:285 must exit 0. Every operator-initiated request — trigger=
-	// manual/force, any force=true, the GUI Save '' string path, the deprecated
-	// string verbs — keeps reporting the deferral (SyncFeedPassDeferralTest pins '').
+	// state intact (pending marker / due ledger) and the next tick retries, so the
+	// pfb_trigger case in pfblockerng.php must exit 0. Every operator-initiated
+	// request — trigger=manual/force, any force=true, the GUI Save '' string path,
+	// the deprecated string verbs — keeps reporting the deferral
+	// (SyncFeedPassDeferralTest pins ''). Only the two LOCK guards below return
+	// this: stage/publish recovery failure is a genuine failure and the GeoIP-swap
+	// guard is out of #2505's scope, so both keep FALSE. Escalation signal is one
+	// syslog notice per deferred pass, no counter — matches the feed-pass guard.
 	$pfb_deferral_benign = is_array($cron)
 		&& ($cron['trigger'] ?? '') === 'cron'
 		&& empty($cron['force']);
