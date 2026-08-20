@@ -1,0 +1,160 @@
+{
+  "schema_version": 1,
+  "views": [
+    {
+      "name": "vendor",
+      "kind": "source",
+      "purpose": "third-party sources and temporary downstream overlays",
+      "rules": {
+        "path_globs": [
+          "src/**/vendor/**",
+          "src/vendor/**",
+          "tools/webassets/patches/**",
+          "vendor/**",
+          "tools/webassets/package.json",
+          "tools/webassets/package-lock.json",
+          "tools/webassets/*/package.json",
+          "tools/webassets/*/package-lock.json",
+          "tools/webassets/**/package.json",
+          "tools/webassets/**/package-lock.json"
+        ]
+      }
+    },
+    {
+      "name": "test-support",
+      "kind": "source",
+      "purpose": "fixtures, shims, stand-ins, doubles, bootstraps, and stubs",
+      "rules": {
+        "path_globs": [
+          "tests/**/fixtures/**",
+          "tests/fixtures/**",
+          "tests/**/fixture/**",
+          "tests/fixture/**",
+          "tests/**/shims/**",
+          "tests/shims/**",
+          "tests/**/shim/**",
+          "tests/shim/**",
+          "tests/**/standins/**",
+          "tests/standins/**",
+          "tests/**/standin/**",
+          "tests/standin/**",
+          "tests/**/doubles/**",
+          "tests/doubles/**",
+          "tests/**/double/**",
+          "tests/double/**",
+          "tests/**/fakes/**",
+          "tests/fakes/**",
+          "tests/**/fake/**",
+          "tests/fake/**",
+          "tests/php/pfsense_doubles.php",
+          "tools/*/test/cases.*",
+          "tools/**/test/**/cases.*",
+          "tools/**/test/**/fixtures/**",
+          "stubs/**"
+        ],
+        "file_globs": [
+          "tests/*_double.*",
+          "tests/**/*_double.*",
+          "tests/*_standin.*",
+          "tests/**/*_standin.*",
+          "tests/*_fake.*",
+          "tests/**/*_fake.*",
+          "tests/*_shim.*",
+          "tests/**/*_shim.*",
+          "tests/**/conftest.py",
+          "tests/**/bootstrap.php",
+          "tests/conftest.py",
+          "tests/bootstrap.php",
+          "tools/*/test/cases.*",
+          "tools/**/test/**/cases.*"
+        ]
+      }
+    },
+    {
+      "name": "test-code",
+      "kind": "source",
+      "purpose": "test assertions and test cases",
+      "rules": {
+        "path_globs": [
+          "tests/**"
+        ],
+        "file_globs": [
+          "tools/*/test/*.test.*",
+          "tools/**/test/**/*.test.*",
+          "tools/*/test/*.spec.*",
+          "tools/**/test/**/*.spec.*"
+        ]
+      }
+    },
+    {
+      "name": "tooling",
+      "kind": "source",
+      "purpose": "repository build, release, CI, and developer tooling",
+      "rules": {
+        "path_globs": [
+          "scripts/**",
+          ".github/**",
+          "tools/**"
+        ]
+      }
+    },
+    {
+      "name": "runtime",
+      "kind": "source",
+      "purpose": "first-party shipped runtime",
+      "rules": {
+        "path_globs": [
+          "src/**"
+        ]
+      }
+    },
+    {
+      "name": "unclassified",
+      "kind": "source",
+      "purpose": "tracked paths outside the ownership map; fail closed",
+      "rules": {
+        "path_globs": []
+      },
+      "fail_closed": true
+    },
+    {
+      "name": "bridge",
+      "kind": "derived",
+      "purpose": "typed evidence-backed relationships between ownership views",
+      "rules": {}
+    },
+    {
+      "name": "investigation",
+      "kind": "derived",
+      "purpose": "runtime graph with typed references into other ownership views",
+      "rules": {}
+    },
+    {
+      "name": "whole-repository",
+      "kind": "derived",
+      "purpose": "namespaced union of ownership views and bridge edges",
+      "rules": {}
+    }
+  ],
+  "bridge": {
+    "minimum_identifier_length": 5,
+    "identifier_denylist": [
+      "get",
+      "set",
+      "main",
+      "run",
+      "test",
+      "init",
+      "setup",
+      "build",
+      "update"
+    ],
+    "support_views": [
+      "test-support",
+      "vendor",
+      "tooling"
+    ],
+    "test_view": "test-code",
+    "runtime_view": "runtime"
+  }
+}
