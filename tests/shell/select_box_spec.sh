@@ -304,6 +304,7 @@ SSHEOF
     _already_released_count="$(grep -c 'not found (already released)' "$_selector_err" || true)"
     printf 'ready=yes\n'
     printf 'release-started=yes\n'
+    printf 'release-finished=%s\n' "$([ -f "$_release_finished" ] && echo yes || echo no)"
     printf 'status=%s expected=143\n' "$_selector_status"
     printf 'lock-count=%s\n' "$_locks"
     printf 'release-count=%s\n' "$_release_count"
@@ -315,10 +316,11 @@ SSHEOF
     The status should be success
     The line 1 of output should equal 'ready=yes'
     The line 2 of output should equal 'release-started=yes'
-    The line 3 of output should equal 'status=143 expected=143'
-    The line 4 of output should equal 'lock-count=0'
-    The line 5 of output should equal 'release-count=1'
-    The line 6 of output should equal 'already-released-count=0'
+    The line 3 of output should equal 'release-finished=yes'
+    The line 4 of output should equal 'status=143 expected=143'
+    The line 5 of output should equal 'lock-count=0'
+    The line 6 of output should equal 'release-count=1'
+    The line 7 of output should equal 'already-released-count=0'
   End
 
   # ── two-contenders: both concurrent acquires succeed ───────────────────────
