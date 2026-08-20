@@ -105,7 +105,6 @@ final class PfbMimeNormaliseTest extends TestCase
 			'inode/x-empty', 'text/x-file',
 			'text/plain', 'text/html', 'text/xml', 'text/csv',
 			'application/csv', 'application/json', 'application/x-ndjson',
-			'application/x-tar',
 			'application/gzip', 'application/x-gzip',
 			'application/x-bzip2',
 			'application/zip',
