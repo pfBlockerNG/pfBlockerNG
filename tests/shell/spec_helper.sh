@@ -10,7 +10,7 @@ PFB_PKGDIR="${PFB_ROOT}/src/usr/local/pkg/pfblockerng"
 PFB_FIXTURES="${PFB_ROOT}/tests/shell/fixtures"
 PFB_SHIMS="${PFB_ROOT}/tests/shell/bin"
 
-unset CODEX_THREAD_ID
+unset CODEX_THREAD_ID OMP_CLI PI_CLI
 
 # ── GIT_* scrub (ADR-47 P5) — sourced once, aliased as scrub_git_env ─────────
 # All git-touching specs call scrub_git_env in their setup() / subshells.

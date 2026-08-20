@@ -1,9 +1,10 @@
 #shellcheck shell=sh
 # .githooks/prepare-commit-msg agent worktree guard (issue #1262): an agent
-# commit (CLAUDECODE=1, CODEX_THREAD_ID, or GROK_SESSION_ID set) in the PRIMARY checkout aborts;
-# a linked-worktree commit, a human commit, and an agent-dedicated checkout (managed-remote
-# marker CLAUDE_CODE_USER_EMAIL, or the pfblockerng.allowprimarycommit valve)
-# all pass. Enforced in prepare-commit-msg because that hook still runs when
+# commit (Claude, Codex, Copilot, Grok, or OMP marker set) in the PRIMARY
+# checkout aborts; a linked-worktree commit, a human commit, and an
+# agent-dedicated checkout (managed-remote marker CLAUDE_CODE_USER_EMAIL, or the
+# pfblockerng.allowprimarycommit valve) all pass. Enforced in
+# prepare-commit-msg because that hook still runs when
 # verification is skipped — the verify-skip row below is the point.
 #
 # The guard discriminates on git STATE (--git-dir vs --git-common-dir), never
@@ -45,23 +46,28 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
   # set explicitly per row because the suite itself may run under CLAUDECODE=1.
   agent_hook_in() {
     cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
-      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT CLAUDECODE=1 \
-      sh "$hook" "$2"
+      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
+      CLAUDECODE=1 sh "$hook" "$2"
   }
   codex_hook_in() {
     cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
-      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+      -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
       CODEX_THREAD_ID=codex-test sh "$hook" "$2"
   }
   grok_hook_in() {
     cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
-      -u COPILOT_CLI -u CODEX_THREAD_ID \
+      -u COPILOT_CLI -u CODEX_THREAD_ID -u OMP_CLI -u PI_CLI \
       GROK_AGENT=1 GROK_SESSION_ID=grok-test sh "$hook" "$2"
+  }
+  omp_hook_in() {
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u CODEX_THREAD_ID \
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+      -u PI_CLI OMP_CLI=1 sh "$hook" "$2"
   }
   human_hook_in() {
     cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
       -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
-      sh "$hook" "$2"
+      -u OMP_CLI -u PI_CLI sh "$hook" "$2"
   }
 
   It 'blocks an agent commit in the primary checkout'
@@ -99,6 +105,29 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     When run grok_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The stderr should equal ''
+  End
+
+  It 'blocks an OMP commit in the primary checkout'
+    When run omp_hook_in "$primary" .git/PCM_MSG
+    The status should equal 1
+    The stderr should include 'primary checkout'
+  End
+
+  It 'passes an OMP commit in a linked worktree'
+    When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  It 'credits OMP only from its provider-specific identity'
+    git_fixture -C "$primary" config coauthor.name Claude
+    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
+    git_fixture -C "$primary" config coauthor.omp.name OMP
+    git_fixture -C "$primary" config coauthor.omp.email omp@example.com
+    When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: OMP <omp@example.com>'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
   End
 
   It 'does not apply a legacy Claude coauthor identity to a Codex commit'

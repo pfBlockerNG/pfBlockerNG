@@ -7,9 +7,9 @@
 #   - every versioned tag is annotated and carries exactly one explicit channel trailer
 #   - its commit must be reachable from the exact release/X.Y line derived by the parser
 #   - malformed metadata, an unknown channel, or an unreachable release line -> rejected
-#   - agent (CLAUDECODE=1, CODEX_THREAD_ID, COPILOT_CLI, or GROK_SESSION_ID set) branch push
-#     rewriting remote
-#     history -> allowed only when the advertised remote oid equals the local
+#   - agent (Claude, Codex, Copilot, Grok, or OMP marker set) branch push
+#     rewriting remote history -> allowed only when the advertised remote oid
+#     equals the local
 #     remote-tracking ref, i.e. the history being overwritten was fetched
 #     (--force-with-lease's check, applied to the push's effect regardless of
 #     how it was spelled)
@@ -105,9 +105,9 @@ PFB_TAG_UPDATES
 # Copilot CLI exports COPILOT_CLI=1 into every shell it spawns (probed on 1.0.78,
 # 2026-08-06: inherited by nested shells and visible to git hooks), and the cloud
 # agent sets COPILOT_AGENT_PROMPT. Grok CLI exports GROK_AGENT=1 and
-# GROK_SESSION_ID (probed on 1.0.4, 2026-08-15: inherited by nested sh/bash
-# and visible to git hooks). Same shape as CLAUDECODE and CODEX_THREAD_ID —
-# nothing is installed, and no process tree is inspected.
+# GROK_SESSION_ID (probed on 1.0.4, 2026-08-15: inherited by nested sh/bash).
+# OMP reads OMP_CLI=1 from its user .env and mirrors it to PI_CLI=1. The same
+# inherited-variable contract applies; no process tree is inspected.
 copilot_session() {
 	[ -n "${COPILOT_CLI:-}" ] || [ -n "${COPILOT_AGENT_PROMPT:-}" ]
 }
@@ -116,11 +116,16 @@ grok_session() {
 	[ -n "${GROK_SESSION_ID:-}" ] || [ -n "${GROK_AGENT:-}" ]
 }
 
+omp_session() {
+	[ -n "${OMP_CLI:-}" ] || [ -n "${PI_CLI:-}" ]
+}
+
 agent_runtime=0
 [ "${CLAUDECODE:-}" = "1" ] && agent_runtime=1
 [ -n "${CODEX_THREAD_ID:-}" ] && agent_runtime=1
 [ "$agent_runtime" = "1" ] || ! copilot_session || agent_runtime=1
 [ "$agent_runtime" = "1" ] || ! grok_session || agent_runtime=1
+[ "$agent_runtime" = "1" ] || ! omp_session || agent_runtime=1
 if [ "$agent_runtime" = "1" ]; then
     remote_name="${1:-origin}"
     while IFS=' ' read -r _local_ref local_sha remote_ref remote_sha; do

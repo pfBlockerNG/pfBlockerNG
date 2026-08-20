@@ -157,6 +157,7 @@ Read the named adapter at session start:
   skills `.claude/skills/` → `.agents/skills/`, marker `CLAUDECODE=1`).
 - **Codex** → `.agents/context/codex-adapter.md` (native bootstrap; noun table,
   subagents, attribution, resume, hook/marker).
+- **OMP** → `.agents/context/omp-adapter.md`.
 - **GitHub Copilot** → `.github/copilot-instructions.md` plus
   `.agents/context/copilot-adapter.md` (custom agents `.github/agents/`, attribution).
 - **Grok** → `GROK.md` plus `.agents/context/grok-adapter.md` (native bootstrap;

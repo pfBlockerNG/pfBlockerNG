@@ -63,7 +63,7 @@ def test_copilot_client_detection_needs_nothing_installed() -> None:
     # Every client present is credited from its OWN key, and the legacy key —
     # which holds Claude's identity here — is gated on no client being present.
     trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
-    assert "for pfb_provider in claude codex copilot grok" in trailer, "attribution is no longer per-client"
+    assert "for pfb_provider in claude codex copilot grok omp" in trailer, "attribution is no longer per-client"
     assert "coauthor.${pfb_provider}.email" in trailer, "identities no longer come from per-client keys"
     assert "any_client" in trailer, "the legacy coauthor key is no longer gated on a client marker"
 
@@ -93,7 +93,7 @@ def test_grok_client_detection_needs_nothing_installed() -> None:
         assert "grok_session" in body, f"{hook} lost grok_session helper"
 
     trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
-    assert "for pfb_provider in claude codex copilot grok" in trailer, "Grok is missing from per-client attribution"
+    assert "for pfb_provider in claude codex copilot grok omp" in trailer, "Grok is missing from per-client attribution"
     assert "grok) grok_session || continue" in trailer, "Grok is no longer a trailer provider"
 
 
@@ -113,6 +113,28 @@ def test_grok_adapter_routes_at_the_canonical_bootstrap() -> None:
     pointer = harness.read_text(encoding="utf-8")
     assert "GROK.md" in pointer
     assert ".agents/context/grok-adapter.md" in pointer
+
+
+def test_omp_adapter_and_client_detection() -> None:
+    for hook in (".githooks/prepare-commit-msg", ".githooks/pre-push"):
+        body = (ROOT / hook).read_text(encoding="utf-8")
+        assert "OMP_CLI" in body, f"{hook} lost OMP detection"
+        assert "PI_CLI" in body, f"{hook} lost Pi-compatible detection"
+        assert "omp_session" in body, f"{hook} lost omp_session helper"
+
+    trailer = (ROOT / ".githooks/prepare-commit-msg").read_text(encoding="utf-8")
+    assert "for pfb_provider in claude codex copilot grok omp" in trailer
+    assert "omp) omp_session || continue" in trailer
+
+    adapter = ROOT / ".agents/context/omp-adapter.md"
+    assert adapter.exists()
+    bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+    assert ".agents/context/omp-adapter.md" in bootstrap
+
+    native = (ROOT / ".omp/AGENTS.md").read_text(encoding="utf-8")
+    assert "@../AGENTS.md" in native
+    assert "@../.agents/context/omp-adapter.md" in native
+    assert (ROOT / ".omp/RULES.md").is_file()
 
 
 def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
