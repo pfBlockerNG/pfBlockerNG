@@ -179,6 +179,20 @@ PYEOF
     The output should include 'not a git work-tree'
   End
 
+  # issue #2490: an EMPTY pre-created DEST (historically Docker's bind-mount side effect,
+  # generally any `mkdir` that beat the first run) carries nothing to protect — it must take
+  # the fresh-clone path, not the refuse-foreign one, or a fresh box can never self-bootstrap.
+  empty_dir_result() {
+    mkdir -p "$DEST"
+    run_clone >/dev/null 2>&1 || { echo "script-failed=$?"; return 1; }
+    if is_build_input_variant; then echo 'variant=usegithub'; else echo 'variant=stub'; fi
+  }
+  It 'fresh-clone-into-empty: an empty pre-created DEST clones as if absent (issue #2490)'
+    When call empty_dir_result
+    The status should be success
+    The output should equal 'variant=usegithub'
+  End
+
   # ── REF-shape hostile inputs (issue #1676) ────────────────────────────────
   #
   # None of these REF values may be misclassified as a full 40-hex SHA — each must take
