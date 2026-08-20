@@ -4,6 +4,7 @@ import http.client
 import http.server
 import importlib.util
 import json
+import socketserver
 import threading
 import time
 from collections.abc import Iterator
@@ -58,6 +59,27 @@ def listener(responses: dict[str, Any], port: int = 0) -> Iterator[tuple[int, ty
     thread.start()
     try:
         yield server.server_address[1], handler
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+@contextmanager
+def raw_listener(payload: bytes) -> Iterator[int]:
+    class RawHandler(socketserver.BaseRequestHandler):
+        def handle(self) -> None:
+            self.request.recv(4096)
+            try:
+                self.request.sendall(payload)
+            except OSError:
+                pass
+
+    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), RawHandler)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        yield server.server_address[1]
     finally:
         server.shutdown()
         thread.join()
@@ -146,6 +168,14 @@ def test_instance_without_project_or_client_is_still_listed(metrics: Any) -> Non
     assert "unknown" in page
 
 
+def test_default_scan_covers_serena_allocator_range(metrics: Any) -> None:
+    assert metrics.SCAN_START == 24282
+    assert metrics.SCAN_END == 65535
+    with listener(healthy()) as (port, _):
+        assert port > 24345, f"ephemeral fixture port must exercise the former ceiling, got {port}"
+        assert metrics._discover_port(port) is not None
+
+
 def test_multiple_instances_are_sorted_and_have_aggregate_totals(metrics: Any) -> None:
     with listener(healthy("second")) as (first_port, _):
         with listener(healthy("first")) as (second_port, _):
@@ -213,13 +243,14 @@ def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
         assert metrics.discover_instances() == []
 
     without_length = healthy()
+    valid_oversized_json = json.dumps({"padding": "x" * metrics.READ_LIMIT}).encode()
 
     def oversized_without_length(handler: SerenaHandler) -> None:
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
         handler.end_headers()
         try:
-            handler.wfile.write(b"x" * (metrics.READ_LIMIT + 1))
+            handler.wfile.write(valid_oversized_json)
         except BrokenPipeError:
             pass
 
@@ -227,6 +258,28 @@ def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
     with listener(without_length) as (port, _):
         configure_scan(metrics, port, port)
         assert metrics.discover_instances() == []
+
+
+def test_malformed_http_and_deep_json_are_ignored(metrics: Any) -> None:
+    deep_json = b"[" * 1100 + b"0" + b"]" * 1100
+    valid_json = b'{"status":"alive"}'
+    payloads = [
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\n{}\r\n0\r\n\r\n",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Large: " + b"x" * 65537 + b"\r\n\r\n{}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + b"X: y\r\n" * 101 + b"\r\n{}",
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        + str(len(deep_json)).encode()
+        + b"\r\n\r\n"
+        + deep_json,
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        + str(len(valid_json) + 100).encode()
+        + b"\r\n\r\n"
+        + valid_json,
+    ]
+    for payload in payloads:
+        with raw_listener(payload) as port:
+            configure_scan(metrics, port, port)
+            assert metrics.discover_instances() == []
 
 
 def test_slow_listener_is_bounded_and_ignored(metrics: Any) -> None:
@@ -300,16 +353,13 @@ def test_redirect_is_not_followed(metrics: Any) -> None:
     assert target_handler.requests == []
 
 
-@pytest.mark.parametrize(
-    "counter",
-    [-1, 1.5, True],
-    ids=["negative", "float", "bool"],
-)
-def test_negative_and_non_integer_counters_are_ignored(metrics: Any, counter: object) -> None:
+@pytest.mark.parametrize("counter_name", ["num_times_called", "input_tokens", "output_tokens"])
+@pytest.mark.parametrize("counter", [-1, 1.5, True], ids=["negative", "float", "bool"])
+def test_negative_and_non_integer_counters_are_ignored(metrics: Any, counter_name: str, counter: object) -> None:
     responses = healthy()
-    responses["/get_tool_stats"] = response(
-        {"stats": {"find_symbol": {"num_times_called": counter, "input_tokens": 1, "output_tokens": 1}}}
-    )
+    counters: dict[str, object] = {"num_times_called": 1, "input_tokens": 1, "output_tokens": 1}
+    counters[counter_name] = counter
+    responses["/get_tool_stats"] = response({"stats": {"find_symbol": counters}})
     with listener(responses) as (port, _):
         configure_scan(metrics, port, port)
         assert metrics.discover_instances() == []
@@ -387,8 +437,11 @@ def test_http_surface_rejects_untrusted_host_and_accepts_tailnet_host(metrics: A
         "foo.ts.net:bad",
         "foo.ts.net:443@evil",
         "127.0.0.1:bad",
+        "foo.ts.net..",
+        "127.0.0.1..",
         "foo.ts.net:443:evil",
         "evil@foo.ts.net",
+        ".".join(["a" * 63] * 4) + ".ts.net",
     ],
 )
 def test_http_surface_rejects_malformed_host(metrics: Any, host: str) -> None:

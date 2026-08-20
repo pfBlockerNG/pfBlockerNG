@@ -18,7 +18,8 @@ from typing import Any
 HOST = "127.0.0.1"
 DEFAULT_PORT = 24182
 SCAN_START = 24282
-SCAN_END = 24345
+SCAN_END = 65535
+SCAN_BATCH = 256
 REQUEST_TIMEOUT = 0.5
 READ_LIMIT = 64 * 1024
 MAX_WORKERS = 8
@@ -59,18 +60,20 @@ def _request_json(port: int, path: str) -> object | None:
         content_type = response.getheader("Content-Type", "").split(";", 1)[0].strip().lower()
         if content_type != "application/json":
             return None
-        content_length = response.getheader("Content-Length")
-        if content_length is not None:
+        content_length_header = response.getheader("Content-Length")
+        content_length = None
+        if content_length_header is not None:
             try:
-                if int(content_length) > READ_LIMIT:
+                content_length = int(content_length_header)
+                if content_length < 0 or content_length > READ_LIMIT:
                     return None
             except ValueError:
                 return None
         body = response.read(READ_LIMIT + 1)
-        if len(body) > READ_LIMIT:
+        if len(body) > READ_LIMIT or (content_length is not None and len(body) != content_length):
             return None
         return json.loads(body.decode("utf-8"))
-    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+    except (OSError, UnicodeError, ValueError, RecursionError, http.client.HTTPException, json.JSONDecodeError):
         return None
     finally:
         connection.close()
@@ -150,10 +153,12 @@ def _discover_port(port: int) -> dict[str, Any] | None:
 
 
 def discover_instances() -> list[dict[str, Any]]:
-    ports = range(SCAN_START, SCAN_END + 1)
-    workers = min(MAX_WORKERS, len(ports))
+    workers = min(MAX_WORKERS, SCAN_END - SCAN_START + 1)
+    instances: list[dict[str, Any]] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        instances = [instance for instance in executor.map(_discover_port, ports) if instance is not None]
+        for batch_start in range(SCAN_START, SCAN_END + 1, SCAN_BATCH):
+            ports = range(batch_start, min(batch_start + SCAN_BATCH, SCAN_END + 1))
+            instances.extend(instance for instance in executor.map(_discover_port, ports) if instance is not None)
     return sorted(instances, key=lambda instance: instance["port"])
 
 
@@ -188,7 +193,13 @@ def _trusted_host(value: str | None) -> bool:
         or parsed.netloc.endswith(":")
     ):
         return False
-    hostname = (parsed.hostname or "").lower().rstrip(".")
+    hostname = (parsed.hostname or "").lower()
+    if hostname.endswith("."):
+        hostname = hostname[:-1]
+        if hostname.endswith("."):
+            return False
+    if len(hostname) > 253:
+        return False
     if hostname in {"127.0.0.1", "localhost"}:
         return True
     labels = hostname.split(".")
