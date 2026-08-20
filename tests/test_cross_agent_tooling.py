@@ -126,15 +126,26 @@ def test_omp_adapter_and_client_detection() -> None:
     assert "for pfb_provider in claude codex copilot grok omp" in trailer
     assert "omp) omp_session || continue" in trailer
 
-    adapter = ROOT / ".agents/context/omp-adapter.md"
-    assert adapter.exists()
+    adapter = (ROOT / ".agents/context/omp-adapter.md").read_text(encoding="utf-8")
+    for contract in (".omp/AGENTS.md", ".omp/RULES.md", "OMP_CLI=1", "PI_CLI=1", "coauthor.omp"):
+        assert contract in adapter, f"OMP adapter lost {contract}"
     bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     assert ".agents/context/omp-adapter.md" in bootstrap
 
     native = (ROOT / ".omp/AGENTS.md").read_text(encoding="utf-8")
     assert "@../AGENTS.md" in native
     assert "@../.agents/context/omp-adapter.md" in native
-    assert (ROOT / ".omp/RULES.md").is_file()
+
+    rules = (ROOT / ".omp/RULES.md").read_text(encoding="utf-8")
+    for contract in (
+        "confirm a genuine fork before building",
+        "Environmental claims written into artifacts are probed in-session first",
+        "No self-exemption from a MUST without quoted user authorization",
+        "Every behavior change",
+        "Every change ships with tests",
+        "delegation.md",
+    ):
+        assert contract in rules, f"OMP sticky rules lost {contract}"
 
 
 def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
