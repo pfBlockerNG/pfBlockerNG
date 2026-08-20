@@ -64,6 +64,11 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
       -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
       -u PI_CLI OMP_CLI=1 sh "$hook" "$2"
   }
+  pi_hook_in() {
+    cd "$1" && env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u CODEX_THREAD_ID \
+      -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+      -u OMP_CLI PI_CLI=1 sh "$hook" "$2"
+  }
   human_hook_in() {
     cd "$1" && env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
       -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
@@ -127,6 +132,45 @@ Describe 'prepare-commit-msg agent worktree guard (issue #1262)'
     When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
     The status should equal 0
     The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: OMP <omp@example.com>'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  End
+
+  It 'blocks a Pi-compatible commit in the primary checkout'
+    When run pi_hook_in "$primary" .git/PCM_MSG
+    The status should equal 1
+    The stderr should include 'primary checkout'
+  End
+
+  It 'passes a Pi-compatible commit in a linked worktree'
+    When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The stderr should equal ''
+  End
+
+  It 'credits a Pi-compatible session as OMP'
+    git_fixture -C "$primary" config coauthor.name Claude
+    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
+    git_fixture -C "$primary" config coauthor.omp.name OMP
+    git_fixture -C "$primary" config coauthor.omp.email omp@example.com
+    When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should include 'Co-Authored-By: OMP <omp@example.com>'
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  End
+
+  It 'does not borrow the legacy Claude identity for unconfigured OMP'
+    git_fixture -C "$primary" config coauthor.name Claude
+    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
+    When run omp_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
+    The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
+  End
+
+  It 'does not borrow the legacy Claude identity for unconfigured Pi compatibility'
+    git_fixture -C "$primary" config coauthor.name Claude
+    git_fixture -C "$primary" config coauthor.email noreply@anthropic.com
+    When run pi_hook_in "$wt" ../primary/.git/worktrees/wt/PCM_MSG
+    The status should equal 0
     The contents of file "${primary}/.git/worktrees/wt/PCM_MSG" should not include 'noreply@anthropic.com'
   End
 

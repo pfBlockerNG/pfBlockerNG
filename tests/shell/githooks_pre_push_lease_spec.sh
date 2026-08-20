@@ -1,12 +1,12 @@
 #shellcheck shell=sh
-# .githooks/pre-push agent lease-by-effect guard (issue #1307): an agent
-# (CLAUDECODE=1, CODEX_THREAD_ID, or GROK_SESSION_ID set) push that rewrites a remote branch's
+# .githooks/pre-push agent lease-by-effect guard (issue #1307): a recognized
+# Claude, Codex, Copilot, Grok, or OMP/Pi session that rewrites a remote branch's
 # history is allowed only
 # when the hook's advertised remote oid equals the local remote-tracking ref —
 # i.e. the agent has fetched the history it is about to overwrite. That is
 # --force-with-lease's check, enforced on the push's EFFECT, so an alias or a
 # script that never spells a force flag is still caught. Fast-forwards, branch
-# creations/deletions, tag refs, and humans (no CLAUDECODE) pass untouched.
+# creations/deletions, tag refs, and sessions with no recognized agent marker pass untouched.
 #
 # Fixture: a bare remote, clone A (the agent, whose tracking ref goes stale),
 # and clone B (another session that advances the remote behind A's back).
@@ -80,6 +80,12 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
         -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
         -u PI_CLI OMP_CLI=1 sh "$hook" origin "${base}/remote.git"
   }
+  pi_hook() {
+    cd "${base}/A" && printf '%s\n' "$1" \
+      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u CODEX_THREAD_ID \
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+        -u OMP_CLI PI_CLI=1 sh "$hook" origin "${base}/remote.git"
+  }
   human_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
       | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
@@ -121,6 +127,12 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
   It 'denies the same stale rewrite for an OMP session'
     When run omp_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+    The status should equal 1
+    The stderr should include 'unfetched'
+  End
+
+  It 'denies the same stale rewrite for a Pi-compatible session'
+    When run pi_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     The status should equal 1
     The stderr should include 'unfetched'
   End
