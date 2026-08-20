@@ -212,22 +212,43 @@ def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
         configure_scan(metrics, port, port)
         assert metrics.discover_instances() == []
 
+    without_length = healthy()
+
+    def oversized_without_length(handler: SerenaHandler) -> None:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "application/json")
+        handler.end_headers()
+        try:
+            handler.wfile.write(b"x" * (metrics.READ_LIMIT + 1))
+        except BrokenPipeError:
+            pass
+
+    without_length["/get_config_overview"] = oversized_without_length
+    with listener(without_length) as (port, _):
+        configure_scan(metrics, port, port)
+        assert metrics.discover_instances() == []
+
 
 def test_slow_listener_is_bounded_and_ignored(metrics: Any) -> None:
     responses = healthy()
 
     def slow(handler: SerenaHandler) -> None:
-        time.sleep(0.3)
+        body = json.dumps({"status": "alive"}).encode()
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
-        handler.send_header("Content-Length", "2")
         handler.end_headers()
-        handler.wfile.write(b"{}")
+        try:
+            for byte in body:
+                handler.wfile.write(bytes((byte,)))
+                handler.wfile.flush()
+                time.sleep(0.02)
+        except BrokenPipeError:
+            pass
 
     responses["/heartbeat"] = slow
     with listener(responses) as (port, _):
-        metrics.REQUEST_TIMEOUT = 0.01
         configure_scan(metrics, port, port)
+        metrics.REQUEST_TIMEOUT = 0.05
         assert metrics.discover_instances() == []
 
 
@@ -237,40 +258,45 @@ def test_html_escapes_metacharacters_and_removes_controls(metrics: Any) -> None:
         {
             "active_project": {
                 "name": '<script>alert("x")</script> & "quoted"\x01',
-                "path": "/repo",
-                "language": "Python",
+                "path": '<img src=x onerror="path">\x03',
+                "language": "Python & <b>language</b>",
             },
             "current_client": "client\x02",
-            "serena_version": "1.7.0",
+            "serena_version": "<svg onload=version>",
         }
+    )
+    dangerous["/get_tool_stats"] = response(
+        {"stats": {"<script>tool</script>\x04": {"num_times_called": 1, "input_tokens": 2, "output_tokens": 3}}}
+    )
+    dangerous["/get_token_count_estimator_name"] = response(
+        {"token_count_estimator_name": "<iframe>estimator</iframe>\x05"}
     )
     with listener(dangerous) as (port, _):
         configure_scan(metrics, port, port)
         html = metrics.render_html(metrics.discover_instances())
 
     assert "<script>" not in html
+    assert "<img" not in html and "<b>" not in html and "<svg" not in html and "<iframe>" not in html
     assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html
-    assert "\x01" not in html and "\x02" not in html
+    assert all(control not in html for control in ("\x01", "\x02", "\x03", "\x04", "\x05"))
 
 
 def test_redirect_is_not_followed(metrics: Any) -> None:
     responses = healthy()
-    responses["/heartbeat"] = (302, b"", "text/plain")
-    target_hit = False
+    with listener(healthy()) as (target_port, target_handler):
 
-    def redirect(handler: SerenaHandler) -> None:
-        handler.send_response(302)
-        handler.send_header("Location", "http://127.0.0.1:1/heartbeat")
-        handler.send_header("Content-Length", "0")
-        handler.end_headers()
+        def redirect(handler: SerenaHandler) -> None:
+            handler.send_response(302)
+            handler.send_header("Location", f"http://127.0.0.1:{target_port}/heartbeat")
+            handler.send_header("Content-Length", "0")
+            handler.end_headers()
 
-    responses["/heartbeat"] = redirect
-    with listener(responses) as (port, handler):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
-        target_hit = "/heartbeat" in handler.requests
+        responses["/heartbeat"] = redirect
+        with listener(responses) as (port, _):
+            configure_scan(metrics, port, port)
+            assert metrics.discover_instances() == []
 
-    assert target_hit
+    assert target_handler.requests == []
 
 
 @pytest.mark.parametrize(
@@ -349,6 +375,48 @@ def test_http_surface_rejects_untrusted_host_and_accepts_tailnet_host(metrics: A
             server.shutdown()
             thread.join()
             server.server_close()
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["foo.ts.net:bad", "foo.ts.net:443@evil", "127.0.0.1:bad", "foo.ts.net:443:evil", "evil@foo.ts.net"],
+)
+def test_http_surface_rejects_malformed_host(metrics: Any, host: str) -> None:
+    server = metrics.make_server(0)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+        connection.putrequest("GET", "/api/instances", skip_host=True)
+        connection.putheader("Host", host)
+        connection.endheaders()
+        response = connection.getresponse()
+        assert response.status == 421
+        response.read()
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+@pytest.mark.parametrize("method", ["HEAD", "TRACE", "CONNECT", "DELETE", "OPTIONS", "PATCH", "POST", "PUT"])
+def test_http_surface_rejects_every_non_get_method(metrics: Any, method: str) -> None:
+    server = metrics.make_server(0)
+    thread = threading.Thread(target=server.serve_forever)
+    thread.start()
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+        connection.request(method, "/api/instances")
+        response = connection.getresponse()
+        assert response.status == 405
+        assert response.getheader("Allow") == "GET"
+        response.read()
+    finally:
+        connection.close()
+        server.shutdown()
+        thread.join()
+        server.server_close()
 
 
 def test_help_describes_loopback_and_tailscale_serve(metrics: Any, capsys: pytest.CaptureFixture[str]) -> None:

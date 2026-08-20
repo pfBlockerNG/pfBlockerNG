@@ -9,6 +9,9 @@ import html
 import http.client
 import http.server
 import json
+import socket
+import time
+import urllib.parse
 from collections.abc import Mapping
 from typing import Any
 
@@ -22,9 +25,33 @@ MAX_WORKERS = 8
 COUNTERS = ("num_times_called", "input_tokens", "output_tokens")
 
 
+class _DeadlineSocket(socket.socket):
+    def __init__(self, deadline: float) -> None:
+        super().__init__(socket.AF_INET, socket.SOCK_STREAM)
+        self._deadline = deadline
+
+    def _apply_deadline(self) -> None:
+        remaining = self._deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("Serena request deadline exceeded")
+        self.settimeout(remaining)
+
+    def connect_with_deadline(self, address: tuple[str, int]) -> None:
+        self._apply_deadline()
+        self.connect(address)
+
+    def recv_into(self, buffer: Any, nbytes: int = 0, flags: int = 0) -> int:
+        self._apply_deadline()
+        return super().recv_into(buffer, nbytes, flags)
+
+
 def _request_json(port: int, path: str) -> object | None:
+    deadline_socket = _DeadlineSocket(time.monotonic() + REQUEST_TIMEOUT)
     connection = http.client.HTTPConnection(HOST, port, timeout=REQUEST_TIMEOUT)
     try:
+        deadline_socket.connect_with_deadline((HOST, port))
+        connection.sock = deadline_socket
+        deadline_socket._apply_deadline()
         connection.request("GET", path, headers={"Accept": "application/json"})
         response = connection.getresponse()
         if response.status != http.client.OK:
@@ -47,6 +74,7 @@ def _request_json(port: int, path: str) -> object | None:
         return None
     finally:
         connection.close()
+        deadline_socket.close()
 
 
 def _strings(
@@ -140,9 +168,20 @@ def _html_text(value: object) -> str:
 
 
 def _trusted_host(value: str | None) -> bool:
-    if value is None:
+    if (
+        value is None
+        or value != value.strip()
+        or any(not character.isprintable() or character.isspace() for character in value)
+    ):
         return False
-    hostname = value.lower().partition(":")[0].rstrip(".")
+    try:
+        parsed = urllib.parse.urlsplit(f"//{value}")
+        parsed.port
+    except ValueError:
+        return False
+    if parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment:
+        return False
+    hostname = (parsed.hostname or "").lower().rstrip(".")
     return hostname in {"127.0.0.1", "localhost"} or hostname.endswith(".ts.net")
 
 
@@ -188,7 +227,8 @@ class AggregatorHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _reject_method(self) -> None:
-        self._send(405, b"method not allowed\n", "text/plain; charset=utf-8", "GET")
+        body = b"" if self.command == "HEAD" else b"method not allowed\n"
+        self._send(405, body, "text/plain; charset=utf-8", "GET")
 
     def do_GET(self) -> None:
         if not _trusted_host(self.headers.get("Host")):
@@ -203,20 +243,14 @@ class AggregatorHandler(http.server.BaseHTTPRequestHandler):
         else:
             self._send(404, b"not found\n", "text/plain; charset=utf-8")
 
-    def do_DELETE(self) -> None:
-        self._reject_method()
-
-    def do_OPTIONS(self) -> None:
-        self._reject_method()
-
-    def do_PATCH(self) -> None:
-        self._reject_method()
-
-    def do_POST(self) -> None:
-        self._reject_method()
-
-    def do_PUT(self) -> None:
-        self._reject_method()
+    do_CONNECT = _reject_method
+    do_DELETE = _reject_method
+    do_HEAD = _reject_method
+    do_OPTIONS = _reject_method
+    do_PATCH = _reject_method
+    do_POST = _reject_method
+    do_PUT = _reject_method
+    do_TRACE = _reject_method
 
     def log_message(self, format: str, *args: object) -> None:
         pass
