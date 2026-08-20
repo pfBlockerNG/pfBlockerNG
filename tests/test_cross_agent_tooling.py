@@ -149,7 +149,7 @@ def test_omp_adapter_and_client_detection() -> None:
         "before working it."
     )
     expected_rules = f"# pfBlockerNG session invariants\n\n{discipline} See `.agents/policy/delegation.md`.\n"
-    assert " ".join(rules.split()) == " ".join(expected_rules.split())
+    assert rules == expected_rules
 
 
 def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
