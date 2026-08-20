@@ -8,10 +8,19 @@ usage() {
 
 index_complete() {
 	status=$(codegraph status --json "$root" 2>/dev/null) || return 1
-	case "$status" in
-		*'"initialized":true'*'"worktreeMismatch":null'*'"reindexRecommended":false'*'"state":"complete"'*'"pendingRefs":0'*) return 0 ;;
-		*) return 1 ;;
-	esac
+	normalized=$(printf '%s' "$status" | tr -d '[:space:]')
+	for required in \
+		'"initialized":true' \
+		'"worktreeMismatch":null' \
+		'"reindexRecommended":false' \
+		'"state":"complete"' \
+		'"pendingRefs":0'; do
+		case "$normalized" in
+			*"$required"*) ;;
+			*) return 1 ;;
+		esac
+	done
+	return 0
 }
 
 main() {
