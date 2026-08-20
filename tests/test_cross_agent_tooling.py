@@ -137,15 +137,18 @@ def test_omp_adapter_and_client_detection() -> None:
     assert "@../.agents/context/omp-adapter.md" in native
 
     rules = (ROOT / ".omp/RULES.md").read_text(encoding="utf-8")
-    for contract in (
-        "confirm a genuine fork before building",
-        "Environmental claims written into artifacts are probed in-session first",
-        "No self-exemption from a MUST without quoted user authorization",
-        "Every behavior change",
-        "Every change ships with tests",
-        "delegation.md",
-    ):
-        assert contract in rules, f"OMP sticky rules lost {contract}"
+    discipline = (
+        "Never assume: read the source of truth, investigate live state, and confirm a genuine fork before building. "
+        "A claim without a run artifact is ASSUMED. Environmental claims written into artifacts are probed "
+        "in-session first. Before any fix edit, list at least two hypotheses and run a discriminating probe. "
+        "No self-exemption from a MUST without quoted user authorization. Every behavior change requires an "
+        "unchanged test executed red before the production edit and green afterward. Every change ships with tests "
+        "whose assertions fail on regression; no coverage theater. Substantial coding work is planned and gated by "
+        "the top tier, implemented by small-tier sub-agents, and every step is gated by an independent small-tier "
+        "verifier through the brief → handoff → gate contract. Read an entire GitHub issue, including comments, "
+        "before working it."
+    )
+    assert discipline in rules
 
 
 def test_repository_intelligence_routing_is_canonical_for_every_client() -> None:
