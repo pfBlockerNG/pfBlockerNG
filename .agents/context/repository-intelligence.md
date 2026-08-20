@@ -14,10 +14,11 @@ Load when: every agent session, from `AGENTS.md`.
 - Use the client's LSP surface—Serena where available—for exact symbols,
   definitions, references, implementations, call/type hierarchy, diagnostics, and
   diagnostic-aware refactoring.
-- Use Graphify for semantic, rationale, cross-document, and test-contract exploration
-  only when the worktree-local `graphify-out/graph.json` exists or the task justifies
-  seeding it from the primary checkout. Update only affected `src`, `scripts`,
-  `.github`, or `tests` subgraphs, merge the first three into the root production
-  graph, and never share live Graphify output between worktrees.
+- After relevant classified-source changes, run
+  `scripts/agent/update_graphify_views.py`. Query the worktree-local
+  `graphify-out/graph.json` (investigation) by default; use
+  `graphify-out/runtime/graph.json` for ownership questions, then follow each
+  reference edge's `target_view` and `source_file`. Outputs stay worktree-local
+  and are never shared between worktrees.
 - LSP/Serena language-semantic relationships override structurally inferred
   CodeGraph edges. Compiler, static analysis, tests, CI, and live smoke remain final.
