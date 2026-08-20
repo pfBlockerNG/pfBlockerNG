@@ -73,6 +73,18 @@ while [ "$#" -gt 0 ]; do
 done
 # $1 is the target (skip); $2 is the remote command string.
 shift
+if [ -n "${PFB_TEST_RELEASE_GATE:-}" ]; then
+    case "$1" in
+        *"rm -rf"*)
+            true > "$PFB_TEST_RELEASE_STARTED"
+            read _release_gate < "$PFB_TEST_RELEASE_GATE"
+            sh -c "$1"
+            _release_status=$?
+            true > "$PFB_TEST_RELEASE_FINISHED"
+            exit "$_release_status"
+            ;;
+    esac
+fi
 exec sh -c "$1"
 SSHEOF
     chmod +x "${BIN}/ssh"
@@ -134,18 +146,19 @@ SSHEOF
   command_signal_result() {
     _signal="$1"
     _expected_status="$2"
+    _transport_mode="${3:-normal}"
     _ready="${WORK}/${_signal}.ready"
     _remote_pid_file="${WORK}/${_signal}.pid"
     _command_gate="${WORK}/${_signal}.gate"
     _command_completed="${WORK}/${_signal}.completed"
     _selector_err="${WORK}/${_signal}.err"
     mkfifo "$_command_gate"
-    _command="printf '%s\\n' \"\$\$\" > '${_remote_pid_file}'; true > '${_ready}'; trap 'exit 0' INT TERM HUP; read _signal_gate < '${_command_gate}'; true > '${_command_completed}'"
+    _remote_trap="trap 'exit 0' INT TERM HUP"
+    [ "$_transport_mode" = "ignore-term" ] && _remote_trap="trap '' TERM; trap 'exit 0' INT HUP"
+    _command="printf '%s\\n' \"\$\$\" > '${_remote_pid_file}'; true > '${_ready}'; ${_remote_trap}; read _signal_gate < '${_command_gate}'; true > '${_command_completed}'"
 
-    (
-      trap - INT TERM HUP
-      exec sh "$SCRIPT" -- "$_command"
-    ) > "${WORK}/${_signal}.out" 2> "$_selector_err" &
+    python3 -c 'import os, signal, sys; [signal.signal(sig, signal.SIG_DFL) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)]; os.execvp("sh", ["sh", *sys.argv[1:]])' \
+      "$SCRIPT" -- "$_command" > "${WORK}/${_signal}.out" 2> "$_selector_err" &
     _selector_pid=$!
 
     _ready_checks=0
@@ -177,7 +190,9 @@ SSHEOF
     wait "$_selector_pid"
     _selector_status=$?
 
-    kill -TERM "$_remote_pid" 2>/dev/null || true
+    _transport_alive=no
+    kill -0 "$_remote_pid" 2>/dev/null && _transport_alive=yes
+    kill -KILL "$_remote_pid" 2>/dev/null || true
 
     _release_count="$(grep -c '^select-box: released ' "$_selector_err" || true)"
     _already_released_count="$(grep -c 'not found (already released)' "$_selector_err" || true)"
@@ -185,6 +200,7 @@ SSHEOF
     printf 'selector-exited-before-command-release=%s\n' "$_exited_before_release"
     printf 'status=%s expected=%s\n' "$_selector_status" "$_expected_status"
     printf 'command-completed=%s\n' "$([ -f "$_command_completed" ] && echo yes || echo no)"
+    printf 'transport-alive-after-selector=%s\n' "$_transport_alive"
     printf 'release-count=%s\n' "$_release_count"
     printf 'already-released-count=%s\n' "$_already_released_count"
   }
@@ -196,8 +212,9 @@ SSHEOF
     The line 2 of output should equal 'selector-exited-before-command-release=yes'
     The line 3 of output should equal 'status=130 expected=130'
     The line 4 of output should equal 'command-completed=no'
-    The line 5 of output should equal 'release-count=1'
-    The line 6 of output should equal 'already-released-count=0'
+    The line 5 of output should equal 'transport-alive-after-selector=no'
+    The line 6 of output should equal 'release-count=1'
+    The line 7 of output should equal 'already-released-count=0'
   End
 
   It 'TERM stops a running command and releases its lease exactly once'
@@ -207,8 +224,9 @@ SSHEOF
     The line 2 of output should equal 'selector-exited-before-command-release=yes'
     The line 3 of output should equal 'status=143 expected=143'
     The line 4 of output should equal 'command-completed=no'
-    The line 5 of output should equal 'release-count=1'
-    The line 6 of output should equal 'already-released-count=0'
+    The line 5 of output should equal 'transport-alive-after-selector=no'
+    The line 6 of output should equal 'release-count=1'
+    The line 7 of output should equal 'already-released-count=0'
   End
 
   It 'HUP stops a running command and releases its lease exactly once'
@@ -218,6 +236,87 @@ SSHEOF
     The line 2 of output should equal 'selector-exited-before-command-release=yes'
     The line 3 of output should equal 'status=129 expected=129'
     The line 4 of output should equal 'command-completed=no'
+    The line 5 of output should equal 'transport-alive-after-selector=no'
+    The line 6 of output should equal 'release-count=1'
+    The line 7 of output should equal 'already-released-count=0'
+  End
+
+  It 'TERM escalates and reaps a transport that ignores TERM before releasing'
+    When call command_signal_result TERM 143 ignore-term
+    The status should be success
+    The line 1 of output should equal 'ready=yes'
+    The line 2 of output should equal 'selector-exited-before-command-release=yes'
+    The line 3 of output should equal 'status=143 expected=143'
+    The line 4 of output should equal 'command-completed=no'
+    The line 5 of output should equal 'transport-alive-after-selector=no'
+    The line 6 of output should equal 'release-count=1'
+    The line 7 of output should equal 'already-released-count=0'
+  End
+
+  repeated_signal_result() {
+    _ready="${WORK}/repeated.ready"
+    _remote_pid_file="${WORK}/repeated.pid"
+    _command_gate="${WORK}/repeated-command.gate"
+    _release_gate="${WORK}/repeated-release.gate"
+    _release_started="${WORK}/repeated-release.started"
+    _release_finished="${WORK}/repeated-release.finished"
+    _selector_err="${WORK}/repeated.err"
+    mkfifo "$_command_gate" "$_release_gate"
+    PFB_TEST_RELEASE_GATE="$_release_gate"
+    PFB_TEST_RELEASE_STARTED="$_release_started"
+    PFB_TEST_RELEASE_FINISHED="$_release_finished"
+    PFB_BOXES="root@10.0.0.23"
+    export PFB_TEST_RELEASE_GATE PFB_TEST_RELEASE_STARTED PFB_TEST_RELEASE_FINISHED
+    export PFB_BOXES
+    _command="printf '%s\\n' \"\$\$\" > '${_remote_pid_file}'; true > '${_ready}'; trap 'exit 0' TERM; read _signal_gate < '${_command_gate}'"
+
+    python3 -c 'import os, signal, sys; [signal.signal(sig, signal.SIG_DFL) for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM)]; os.execvp("sh", ["sh", *sys.argv[1:]])' \
+      "$SCRIPT" -- "$_command" > "${WORK}/repeated.out" 2> "$_selector_err" &
+    _selector_pid=$!
+
+    _ready_checks=0
+    while [ ! -f "$_ready" ] && [ "$_ready_checks" -lt 100 ]; do
+      sleep 0.05
+      _ready_checks=$(( _ready_checks + 1 ))
+    done
+    [ -f "$_ready" ] || { printf 'ready=no (stuck/environment)\n'; return; }
+
+    kill -TERM "$_selector_pid"
+    _release_checks=0
+    while [ ! -f "$_release_started" ] && [ "$_release_checks" -lt 100 ]; do
+      sleep 0.05
+      _release_checks=$(( _release_checks + 1 ))
+    done
+    [ -f "$_release_started" ] || { printf 'release-started=no (stuck/environment)\n'; return; }
+
+    kill -TERM "$_selector_pid"
+    printf '\n' > "$_release_gate"
+    wait "$_selector_pid"
+    _selector_status=$?
+
+    _finish_checks=0
+    while [ ! -f "$_release_finished" ] && [ "$_finish_checks" -lt 100 ]; do
+      sleep 0.05
+      _finish_checks=$(( _finish_checks + 1 ))
+    done
+    _locks="$(find "$LEASE_DIR" -type d -name '*.lock' | wc -l | tr -d ' ')"
+    _release_count="$(grep -c '^select-box: released ' "$_selector_err" || true)"
+    _already_released_count="$(grep -c 'not found (already released)' "$_selector_err" || true)"
+    printf 'ready=yes\n'
+    printf 'release-started=yes\n'
+    printf 'status=%s expected=143\n' "$_selector_status"
+    printf 'lock-count=%s\n' "$_locks"
+    printf 'release-count=%s\n' "$_release_count"
+    printf 'already-released-count=%s\n' "$_already_released_count"
+  }
+
+  It 'a repeated TERM cannot interrupt lease cleanup'
+    When call repeated_signal_result
+    The status should be success
+    The line 1 of output should equal 'ready=yes'
+    The line 2 of output should equal 'release-started=yes'
+    The line 3 of output should equal 'status=143 expected=143'
+    The line 4 of output should equal 'lock-count=0'
     The line 5 of output should equal 'release-count=1'
     The line 6 of output should equal 'already-released-count=0'
   End
