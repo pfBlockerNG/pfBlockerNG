@@ -32,9 +32,10 @@ def _run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProc
     return result
 
 
-def _valid_sha(sha: str) -> None:
+def _valid_sha(sha: str) -> str:
     if not SHA_RE.fullmatch(sha):
         raise StoreError(f"invalid source SHA: {sha!r}")
+    return sha.lower()
 
 
 def _valid_branch(root: Path, branch: str) -> None:
@@ -123,7 +124,7 @@ def _archive_payload(store: Path, commit: str, destination: Path) -> None:
 
 
 def has_exact(store_root: Path, branch: str, sha: str) -> bool:
-    _valid_sha(sha)
+    sha = _valid_sha(sha)
     store_root = _store_root(store_root)
     if not store_root.is_dir():
         return False
@@ -133,7 +134,7 @@ def has_exact(store_root: Path, branch: str, sha: str) -> bool:
 
 
 def restore_exact(store_root: Path, branch: str, sha: str, target: Path) -> None:
-    _valid_sha(sha)
+    sha = _valid_sha(sha)
     store_root = _store_root(store_root)
     target = _physical_path(target, "restore target")
     if not store_root.is_dir():
@@ -146,7 +147,7 @@ def restore_exact(store_root: Path, branch: str, sha: str, target: Path) -> None
 
 
 def seed(store_root: Path, branch: str, sha: str, target: Path) -> bool:
-    _valid_sha(sha)
+    sha = _valid_sha(sha)
     store_root = _store_root(store_root)
     target = _physical_path(target, "restore target")
     if not store_root.is_dir():
@@ -162,7 +163,7 @@ def seed(store_root: Path, branch: str, sha: str, target: Path) -> bool:
 
 
 def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
-    _valid_sha(sha)
+    sha = _valid_sha(sha)
     builder = _physical_path(builder, "builder")
     payload = _source_payload(builder)
     head = _run(builder, "rev-parse", "HEAD").stdout.strip()
