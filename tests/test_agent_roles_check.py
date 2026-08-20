@@ -472,6 +472,7 @@ def test_shared_bindings_use_each_roles_tier_intersection(tmp_path: Path) -> Non
     _assert_flags(problems, ".claude/workflows/check.js pins 'claude-top-x' (top tier), outside tier(s) small")
     _assert_flags(problems, ".codex/agents/checker-top.toml model 'codex-top' is not a Codex model")
     _assert_flags(problems, ".github/agents/checker-top.agent.md model 'copilot-top' is not a Copilot model")
+    assert len(problems) == 3, problems
 
 
 # --------------------------------------------------------------------------- #
