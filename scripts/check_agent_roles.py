@@ -8,10 +8,10 @@ Codex surfaces (`.codex/agents/*.toml`, skills, policy docs, the session), and
 Copilot surfaces (`.github/agents/*.agent.md`, skills, policy docs, the
 session — issue #2177). This
 checker validates the SEMANTIC fields — tier vocabulary, mutation boundaries,
-binding targets, model-tier pins, contract-section completeness — never textual
-identity, so vendor-native wording may differ freely while capability drift (a
-retiered model pin, a sandbox/mutation mismatch, an orphaned vendor role, a
-missing contract field) fails loudly.
+binding targets, model-tier pins, Codex review-effort pins, contract-section
+completeness — never textual identity, so vendor-native wording may differ freely
+while capability drift (a retiered model pin, a sandbox/mutation mismatch, an
+orphaned vendor role, a missing contract field) fails loudly.
 
 CONDITIONAL: in --staged / --diff mode the full validation runs IF AND ONLY IF
 the change touches a role surface (.agents/policy/, .agents/model-tiers.conf,
@@ -286,6 +286,15 @@ def _check_codex_agents(
                 f"{_CODEX_AGENTS}/{target}.toml model {model!r} is not a Codex model of "
                 f"the tier(s) declared for role(s) {names}"
             )
+        review_roles = sorted({role.name for role in bound} & {"reviewer", "verifier"})
+        if review_roles and isinstance(model, str):
+            required_effort = "high" if model == tiers_conf.get("SMALL_CODEX") else "medium"
+            effort = data.get("model_reasoning_effort")
+            if effort != required_effort:
+                problems.append(
+                    f"{_CODEX_AGENTS}/{target}.toml model_reasoning_effort {effort!r} != required "
+                    f"{required_effort!r} for Codex reviewer/verifier role(s) {'/'.join(review_roles)}"
+                )
         mutations = {role.mutation for role in bound}
         if len(mutations) > 1:
             problems.append(f"{_CODEX_AGENTS}/{target}.toml is bound by roles with conflicting Mutation: {names}")

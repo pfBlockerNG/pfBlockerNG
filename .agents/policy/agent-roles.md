@@ -6,7 +6,7 @@
   fresh-session ticket workflow in [`workflow.md`](workflow.md)).
 - **Load-when:** defining or routing agent role; changing `.codex/agents/`, `.github/agents/`,
   `.agents/model-tiers.conf`, or this registry.
-- **Owner:** repo owner. **Last-verified:** 2026-07-17.
+- **Owner:** repo owner. **Last-verified:** 2026-08-20.
 
 ## Goal
 
@@ -27,8 +27,8 @@ policy corpus.
   contract may narrow them, never weaken.
 - `scripts/check_agent_roles.py` validate registry below against each vendor's
   definitions if and only if either side change (pre-commit + CI). Check semantic
-  fields — tier vocabulary, mutation boundaries, binding targets, model-tier pins —
-  never textual identity, so vendor-native wording stay free.
+  fields — tier vocabulary, mutation boundaries, binding targets, model-tier pins, Codex
+  review-effort pins — never textual identity, so vendor-native wording stay free.
 
 ## Tier economics (Sol/Luna discipline, every vendor)
 
