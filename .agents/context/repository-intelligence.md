@@ -21,9 +21,11 @@ Load when: every agent session, from `AGENTS.md`.
   the reported source SHA; run `graphify-store.py seed`, the full Graphify update
   skill, then `graphify-store.py publish`; release/remove the builder and retry
   `work-branch.sh`. Each agent worktree receives its own snapshot copy.
-- After relevant classified-source changes, run `update_graphify_views.py` in that
-  worktree. Query `graphify-out/current/graph.json` (investigation) by default;
-  use `current/runtime/graph.json` for ownership and `current/agent-context/graph.json`
+- The full semantic Graphify update remains skill-owned at `graphify-out/` (and in
+  the opaque local Graphify store). After relevant classified-source changes, run
+  `update_graphify_views.py` in that worktree. Query
+  `graphify-out/views/current/graph.json` (investigation) by default; use
+  `current/runtime/graph.json` for ownership and `current/agent-context/graph.json`
   for process improvement; follow `target_view`/`source_file` references.
 - LSP/Serena language-semantic relationships override structurally inferred
   CodeGraph edges. Compiler, static analysis, tests, CI, and live smoke remain final.

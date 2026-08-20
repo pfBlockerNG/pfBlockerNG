@@ -3,7 +3,7 @@
   // `.markdownlint.jsonc`. Run from the repo root: `npx markdownlint-cli2`
   // (add `--fix` to auto-fix). Lints maintained Markdown and skips historical,
   // dependency/virtualenv trees and duplicate adapter paths.
-  "globs": ["**/*.md"],
+  "globs": ["**/*.md", "!graphify-out/**"],
   "ignores": [
     "node_modules",
     "**/node_modules/**",
