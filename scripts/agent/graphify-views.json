@@ -16,7 +16,10 @@
           "tools/webassets/*/package.json",
           "tools/webassets/*/package-lock.json",
           "tools/webassets/**/package.json",
-          "tools/webassets/**/package-lock.json"
+          "tools/webassets/**/package-lock.json",
+          "composer.json",
+          "composer.lock",
+          "uv.lock"
         ]
       }
     },
@@ -87,6 +90,24 @@
       }
     },
     {
+      "name": "agent-context",
+      "kind": "source",
+      "purpose": "agent policy, adapters, skills, and agent-facing workflows",
+      "rules": {
+        "path_globs": [
+          "AGENTS.md",
+          "CLAUDE.md",
+          "GROK.md",
+          ".agents/**",
+          ".codex/**",
+          ".claude/**",
+          ".github/agents/**",
+          ".github/copilot-instructions.md",
+          "scripts/agent/**"
+        ]
+      }
+    },
+    {
       "name": "tooling",
       "kind": "source",
       "purpose": "repository build, release, CI, and developer tooling",
@@ -137,18 +158,6 @@
     }
   ],
   "bridge": {
-    "minimum_identifier_length": 5,
-    "identifier_denylist": [
-      "get",
-      "set",
-      "main",
-      "run",
-      "test",
-      "init",
-      "setup",
-      "build",
-      "update"
-    ],
     "support_views": [
       "test-support",
       "vendor",

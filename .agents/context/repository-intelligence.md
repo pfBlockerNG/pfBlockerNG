@@ -16,9 +16,10 @@ Load when: every agent session, from `AGENTS.md`.
   diagnostic-aware refactoring.
 - After relevant classified-source changes, run
   `scripts/agent/update_graphify_views.py`. Query the worktree-local
-  `graphify-out/graph.json` (investigation) by default; use
-  `graphify-out/runtime/graph.json` for ownership questions, then follow each
-  reference edge's `target_view` and `source_file`. Outputs stay worktree-local
-  and are never shared between worktrees.
+  `graphify-out/current/graph.json` (investigation) by default; use
+  `graphify-out/current/runtime/graph.json` for ownership questions, then follow
+  each reference edge's `target_view` and `source_file`. Query `agent-context`
+  for agent policy, adapters, and process/tooling self-improvement. Outputs stay
+  worktree-local and are never shared between worktrees.
 - LSP/Serena language-semantic relationships override structurally inferred
   CodeGraph edges. Compiler, static analysis, tests, CI, and live smoke remain final.
