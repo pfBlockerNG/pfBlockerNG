@@ -129,6 +129,17 @@ CODEGRAPH
         sh "$script_abs" adr 9 codegraph --worktree --base HEAD --path "$target"
   }
 
+  fail_divergent_worktree() {
+    base_branch=$(git_fixture -C "$primary" branch --show-current) || return 1
+    git_fixture -C "$primary" switch -q -c divergent &&
+      git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q --allow-empty -m divergent &&
+      git_fixture -C "$primary" switch -q "$base_branch" || return 1
+    target="$fixture/divergent-worktree"
+    cd "$primary" || return 1
+    CODEGRAPH_RC=7 sh "$script_abs" adr 10 codegraph --worktree --base divergent --path "$target"
+  }
+
   It 'initializes a new worktree without relying on a client marker'
     When call create_unmarked_worktree
     The status should equal 0
@@ -147,6 +158,15 @@ CODEGRAPH
     Assert [ ! -e "$fixture/agent-worktree" ]
     Assert [ ! -f "$primary/.git/refs/heads/adr/9-codegraph" ]
     Assert [ ! -f "$fixture/agent-worktree/.codegraph/codegraph.db" ]
+  End
+
+  It 'removes the new branch after failure from a divergent base'
+    When call fail_divergent_worktree
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'CodeGraph initialization failed'
+    Assert [ ! -e "$fixture/divergent-worktree" ]
+    Assert [ ! -f "$primary/.git/refs/heads/adr/10-codegraph" ]
   End
 
   Parameters
