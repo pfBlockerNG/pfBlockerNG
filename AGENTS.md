@@ -71,6 +71,12 @@ Enforcement mechanical where possible: `.githooks/` pre-commit/prepare-commit-ms
 pre-push, CI, and `scripts/agent/run-gates.sh` authoritative; lifecycle hooks carry
 client mechanics.
 
+## Repository intelligence routing
+
+At session start read `.agents/context/repository-intelligence.md`: it owns
+`scripts/agent/ensure-codegraph.sh`, `codegraph_explore`, `codegraph serve --mcp`,
+Serena, and Graphify.
+
 ## Routing table — read on trigger, not up front
 
 | Task touches | Read first |

@@ -1,5 +1,5 @@
 #!/bin/sh
-# One-time developer setup: point git at the repo's tracked hooks in .githooks.
+# One-time developer setup: activate tracked Git hooks and bootstrap CodeGraph.
 #
 # Run once after cloning:
 #   sh scripts/setup-hooks.sh
@@ -7,12 +7,18 @@
 # git cannot auto-apply a committed core.hooksPath (by design — cloning a repo
 # must not silently install executable hooks), so this single explicit opt-in is
 # the closest to "automatic". After running it, .githooks/pre-commit and
-# .githooks/pre-push are active in this clone.
+# .githooks/pre-push are active in this clone. When CodeGraph is installed, the
+# same command also creates this checkout's exact-root index.
 
 set -eu
 
 root=$(git rev-parse --show-toplevel)
 git -C "$root" config core.hooksPath .githooks
+
+if command -v codegraph >/dev/null 2>&1; then
+	script_dir=$(CDPATH='' cd "$(dirname "$0")" && pwd -P)
+	sh "$script_dir/agent/ensure-codegraph.sh" "$root"
+fi
 
 printf 'core.hooksPath set to: %s\n' "$(git -C "$root" config core.hooksPath)"
 printf 'Active hooks:\n'

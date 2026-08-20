@@ -51,7 +51,8 @@ git worktree remove <path>            # run from any directory OUTSIDE <path>
 
 Activate once after cloning: `sh scripts/setup-hooks.sh` (sets `core.hooksPath`). If
 `git config core.hooksPath` not `.githooks`, agent runs it at session start
-(idempotent). Any GitHub Actions workflow that commits code runs it after checkout too.
+(idempotent). When CodeGraph is installed, the same setup creates the checkout's
+exact-root index. Any GitHub Actions workflow that commits code runs it after checkout too.
 
 - **`pre-commit`** — fast lint, style, and policy checks, path-scoped to staged file types
   (Python → ruff; Markdown → markdownlint; shell → shebang gate + `sh -n` +
