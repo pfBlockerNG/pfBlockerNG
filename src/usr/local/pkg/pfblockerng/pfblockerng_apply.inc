@@ -655,6 +655,18 @@ function sync_package_pfblockerng($cron=''): bool {
 	global $g, $pfb, $pfbarr;
 	pfb_global();
 
+	// issue #2505: mirror the cron verb's issue #2491 semantics for the ADR-43 array
+	// API. A lock deferral is benign ONLY for the unattended tick dispatch
+	// (trigger=cron force=false — what pfblockerng_tick()'s due job execs through
+	// `pfblockerng.php pfb_trigger`): the pass stands down with its durable retry
+	// state intact (pending marker / due ledger) and the next tick retries, so
+	// pfblockerng.php:285 must exit 0. Every operator-initiated request — trigger=
+	// manual/force, any force=true, the GUI Save '' string path, the deprecated
+	// string verbs — keeps reporting the deferral (SyncFeedPassDeferralTest pins '').
+	$pfb_deferral_benign = is_array($cron)
+		&& ($cron['trigger'] ?? '') === 'cron'
+		&& empty($cron['force']);
+
 	// The update owns scheduler state from before feed selection through final publication.
 	// Nested calls made by a scheduled tick reuse its existing dispatcher hold.
 	$pfb_dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
@@ -663,8 +675,12 @@ function sync_package_pfblockerng($cron=''): bool {
 		// issue #2496: pfblockerng.php exits 1 on a FALSE from this function with no
 		// other output, so every guard must name itself or the failure is undiagnosable.
 		pfb_logger("\n sync aborted: dispatcher lock unavailable; pending changes retained.\n", 1);
+		// issue #2505: feed-pass parity (pfb_feed_pass_begin() raises LOG_NOTICE) --
+		// a live wedged lock holder must be visible outside /var/log/pfblockerng.
+		logger(LOG_NOTICE, localize_text('Feed pass [ sync ] deferred - the scheduler dispatcher lock is unavailable.'),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
 		pfb_mark_pending_changes();
-		return FALSE;
+		return $pfb_deferral_benign;
 	}
 
 	// issue #1175: serialize feed passes. Capture ownership BEFORE acquiring -- only the
@@ -678,7 +694,7 @@ function sync_package_pfblockerng($cron=''): bool {
 		if ($pfb_dispatch_owner) {
 			pfb_schedule_dispatch_release();
 		}
-		return FALSE;
+		return $pfb_deferral_benign;
 	}
 	if (!pfb_stage_publish_dir_recover($pfb['dbdir'])) {
 		pfb_logger("\n sync aborted: stage/publish recovery failed in {$pfb['dbdir']}; pending changes retained.\n", 1);

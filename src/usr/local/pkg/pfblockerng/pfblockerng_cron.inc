@@ -264,6 +264,10 @@ function pfblockerng_sync_cron(
 		|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 	if (!pfb_schedule_dispatch_begin()) {
 		pfb_logger("\n Scheduled feed pass deferred: dispatcher lock unavailable; durable pending occurrences retained.\n", 1);
+		// issue #2505: feed-pass parity (pfb_feed_pass_begin() raises LOG_NOTICE) --
+		// a live wedged lock holder must be visible outside /var/log/pfblockerng.
+		logger(LOG_NOTICE, localize_text('Feed pass [ %s ] deferred - the scheduler dispatcher lock is unavailable.',
+			$force_all ? 'forcecheck' : 'cron'), LOG_PREFIX_PKG_PFBLOCKERNG);
 		// issue #2491: a deferral is benign for the UNATTENDED cron verb and a real
 		// non-event for Force Check. Both reach here; only $force_all separates them
 		// (pfblockerng.php:255 passes nothing, :304 passes TRUE).
