@@ -167,6 +167,9 @@ _pkg_mutate() {
         _mut_log=$(mktemp "${TMPDIR:-/tmp}/pfb-install-pkg.XXXXXX") ||
             die "${_mut_code}" "mktemp failed while capturing pkg output"
     fi
+    # die() exits the script; EXIT trap removes the file on that path too.
+    # /tmp on pfSense is a small RAM disk.
+    trap 'rm -f "${_mut_log}"' EXIT
     _mut_rc=0
     _pkg "$@" >"${_mut_log}" 2>&1 || _mut_rc=$?
     cat "${_mut_log}"
@@ -182,6 +185,8 @@ _pkg_mutate() {
                 ;;
         esac
     done < "${_mut_log}"
+    trap - EXIT
+    rm -f "${_mut_log}"
     unset _mut_code _mut_msg _mut_log _mut_rc _mut_line
 }
 
