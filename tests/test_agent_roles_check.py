@@ -442,6 +442,25 @@ def test_codex_conflicting_mutation_roles(tmp_path: Path) -> None:
     _assert_flags(_problems(tmp_path), "bound by roles with conflicting Mutation")
 
 
+def test_codex_luna_reviewer_rejects_xhigh(tmp_path: Path) -> None:
+    rows = tuple(row.replace("| checker |", "| reviewer |") for row in _ROWS)
+    sections = tuple("reviewer" if name == "checker" else name for name in _ROLE_NAMES)
+    make_tree(
+        tmp_path,
+        doc=_doc(rows=rows, sections=sections),
+        checker_toml=(
+            'name = "x"\nmodel = "codex-small"\nmodel_reasoning_effort = "xhigh"\nsandbox_mode = "read-only"\n'
+        ),
+        checker_top_toml=(
+            'name = "x"\nmodel = "codex-top"\nmodel_reasoning_effort = "medium"\nsandbox_mode = "read-only"\n'
+        ),
+    )
+    _assert_flags(
+        _problems(tmp_path),
+        "checker.toml model_reasoning_effort 'xhigh' != required 'high' for Codex reviewer/verifier role(s) reviewer",
+    )
+
+
 # --------------------------------------------------------------------------- #
 # Skill / policy bindings and orphaned vendor definitions
 # --------------------------------------------------------------------------- #

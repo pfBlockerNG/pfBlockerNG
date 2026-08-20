@@ -47,15 +47,13 @@ constraint on ALL direct work: session context usage ≤ 50% — past 50% sessio
   ADR-phase orchestration (`/adr-phase`, `phase-step`) live on only in those records.
 - **Small tier follow every directive of canonical policy (AGENTS.md + its routed files).**
   Implementer cheaper, not exempt.
-- **Effort per role, stated explicitly in every spawn** (never rely on inheritance):
-  implementers run at `xhigh` (session default in `.claude/settings.json`,
-  `effortLevel: xhigh`); every review or verification spawn — adversarial reviewer legs
-  AND per-step verifiers — runs at `medium`, raised to `high` only when the brief states
-  why; `xhigh` for a review or verification role is allowed only on Codex `gpt-5.6-luna`
-  (owner ruling 2026-08-16), which is why `.codex/agents/adversarial-reviewer.toml` keeps
-  its `xhigh` pin and the `-top`/`-mid` variants do not. This bullet is the single ceiling
-  for review and verification effort; [`landing.md`](landing.md) and every procedure point
-  here rather than restating a number.
+- **Effort per role, selected through each client's native surface** (never rely on
+  inheritance): implementers run at `xhigh`; review and verification roles run at `medium`,
+  except `gpt-5.6-luna`, which runs at `high`. This matrix is fixed — no reviewer or
+  verifier runs at `xhigh`. Codex custom-agent files carry the effective effort because
+  their `model_reasoning_effort` overrides spawn values; other clients set the same matrix
+  through their native agent/session control. This bullet is the single source of truth;
+  [`landing.md`](landing.md) and every procedure point here instead of restating it.
 
 ## The delegation contract (brief → handoff → gate)
 
