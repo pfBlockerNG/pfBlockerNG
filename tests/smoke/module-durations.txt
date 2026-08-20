@@ -299,7 +299,7 @@ test_smoke_tick.py::test_tick_cron_entry_installed 12.53
 test_smoke_tick.py::test_tick_dispatches_due_feed 1.20
 test_smoke_tick.py::test_tick_skips_non_due_feed 21.95
 test_smoke_tick.py::test_tick_verb_ignores_disable_flag 0.99
-test_smoke_tick.py::test_tick_wiped_ledger_jittered 3.68
+test_smoke_tick.py::test_tick_wiped_ledger_regenerates 3.68
 test_smoke_tld_wildcard.py 18.19
 test_smoke_tld_wildcard.py::test_tld_wildcard_toggle_governs_subdomain_blocking 18.19
 test_smoke_upstream_block.py 41.93
