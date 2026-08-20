@@ -195,6 +195,11 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
     assert "graphify-out/current/graph.json" not in routing
 
 
+def test_markdownlint_excludes_generated_graphify_reports() -> None:
+    config = (ROOT / ".markdownlint-cli2.jsonc").read_text(encoding="utf-8")
+    assert '"!graphify-out/**"' in config
+
+
 def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> None:
     local_ignore = (ROOT / ".codegraph/.gitignore").read_text(encoding="utf-8").splitlines()
     assert "*" in local_ignore
