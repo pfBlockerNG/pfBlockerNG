@@ -892,6 +892,32 @@ def test_postinstall_script_failed_glued_to_hook_output_exits_5_without_done() -
         assert "Done" not in proc.stdout
 
 
+def test_pkg_capture_log_is_removed_after_success() -> None:
+    """mktemp capture files live on a small RAM /tmp on the appliance; they
+    must not leak after a successful mutate."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "stable")
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        leftovers = sorted(Path(root, "tmp").glob("pfb-install-pkg.*"))
+        assert leftovers == [], leftovers
+
+
+def test_pkg_capture_log_is_removed_after_script_failed() -> None:
+    """The die() path must remove the capture file too (same as the hook
+    staging mktemp)."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(
+            root,
+            "stable",
+            extra_env={"PFB_STUB_POSTINSTALL_FAIL": "1"},
+        )
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        leftovers = sorted(Path(root, "tmp").glob("pfb-install-pkg.*"))
+        assert leftovers == [], leftovers
+
+
 def test_benign_pkg_diagnostic_is_not_a_hook_failure() -> None:
     """A ``pkg: ``-prefixed warning that is not ``script failed`` must not
     abort a successful install."""
