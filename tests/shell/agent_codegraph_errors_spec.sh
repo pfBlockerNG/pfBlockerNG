@@ -43,7 +43,17 @@ case "$1" in
         printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"indexing","pendingRefs":0}}'
         ;;
       complete)
-        printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+        case "${CODEGRAPH_STATUS_FORMAT:-compact}" in
+          compact)
+            printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+            ;;
+          reordered)
+            printf '%s\n' '{"index":{"pendingRefs":0,"state":"complete","reindexRecommended":false},"worktreeMismatch":null,"initialized":true}'
+            ;;
+          spaced)
+            printf '%s\n' '{ "initialized" : true, "worktreeMismatch" : null, "index" : { "reindexRecommended" : false, "state" : "complete", "pendingRefs" : 0 } }'
+            ;;
+        esac
         ;;
     esac
     ;;
@@ -97,6 +107,26 @@ CODEGRAPH
     The stderr should include 'Rebuilding CodeGraph'
     The contents of file "$codegraph_log" should equal "index $primary"
     Assert [ -f "$codegraph_state" ]
+  End
+
+  It 'accepts complete status fields in a different member order'
+    mkdir -p "$primary/.codegraph"
+    true > "$primary/.codegraph/codegraph.db"
+    export CODEGRAPH_STATUS_FORMAT=reordered
+    When run sh "$script_abs" "$primary"
+    The status should equal 0
+    The stderr should equal ''
+    The file "$codegraph_log" should not be exist
+  End
+
+  It 'accepts whitespace-formatted complete status'
+    mkdir -p "$primary/.codegraph"
+    true > "$primary/.codegraph/codegraph.db"
+    export CODEGRAPH_STATUS_FORMAT=spaced
+    When run sh "$script_abs" "$primary"
+    The status should equal 0
+    The stderr should equal ''
+    The file "$codegraph_log" should not be exist
   End
 
   It 'uses the agent-tool missing exit contract when CodeGraph is unavailable'
