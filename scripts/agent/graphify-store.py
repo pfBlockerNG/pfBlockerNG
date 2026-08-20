@@ -116,7 +116,7 @@ def _archive_payload(store: Path, commit: str, destination: Path) -> None:
                 member_path = Path(member.name)
                 if member_path.is_absolute() or ".." in member_path.parts:
                     raise StoreError("store snapshot contains an unsafe path")
-            tar.extractall(unpacked)
+            tar.extractall(unpacked, filter="data")
         payload = unpacked / "graphify-out"
         if not payload.is_dir():
             raise StoreError(f"store snapshot has no graphify-out payload: {commit}")

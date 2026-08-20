@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import subprocess
+import tarfile
 from pathlib import Path
 
 import pytest
@@ -90,6 +91,33 @@ def test_publish_and_restore_preserve_opaque_state_and_source_tag(tmp_path: Path
     assert (target / "graphify-out" / "current").readlink() == Path("cache")
 
 
+def test_restore_uses_safe_tar_filter_and_preserves_relative_symlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    (source / "graphify-out" / "cache").mkdir()
+    (source / "graphify-out" / "cache" / "payload.txt").write_text("payload\n", encoding="utf-8")
+    (source / "graphify-out" / "current").symlink_to("cache")
+    store_root = tmp_path / "store"
+    publish(source, store_root, "devel", sha)
+    target = tmp_path / "target"
+    target.mkdir()
+    observed: dict[str, object] = {}
+    original_extractall = store.tarfile.TarFile.extractall
+
+    def extractall(tar: tarfile.TarFile, *args: object, **kwargs: object) -> None:
+        observed["filter"] = kwargs["filter"]
+        original_extractall(tar, *args, **kwargs)
+
+    monkeypatch.setattr(store.tarfile.TarFile, "extractall", extractall)
+    store.restore_exact(store_root, "devel", sha, target)
+    assert observed["filter"] == "data"
+    assert (target / "graphify-out" / "cache" / "payload.txt").read_text(encoding="utf-8") == "payload\n"
+    assert (target / "graphify-out" / "current").is_symlink()
+    assert (target / "graphify-out" / "current").readlink() == Path("cache")
+
+
 def test_uppercase_source_sha_is_normalized_for_publish_lookup_and_restore(tmp_path: Path) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
@@ -171,11 +199,31 @@ def test_seed_prefers_exact_then_latest_snapshot_of_same_branch(tmp_path: Path) 
     store_root = tmp_path / "store"
     publish(source, store_root, "devel", sha)
     (source / "graphify-out" / "graph.json").write_text("devel\n", encoding="utf-8")
+    git(source, "add", "graphify-out")
+    git(source, "commit", "-q", "-m", "devel graph")
     sha2 = git(source, "rev-parse", "HEAD")
     publish(source, store_root, "devel", sha2)
-    release_sha = sha2
+    exact_target = tmp_path / "exact-target"
+    exact_target.mkdir()
+    result = run_store(
+        "seed",
+        "--store-root",
+        str(store_root),
+        "--branch",
+        "devel",
+        "--sha",
+        sha,
+        "--target",
+        str(exact_target),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (exact_target / "graphify-out" / "graph.json").read_text(encoding="utf-8") == '{"version":1}\n'
+
     git(source, "switch", "-c", "release/4.0")
     (source / "graphify-out" / "graph.json").write_text("release\n", encoding="utf-8")
+    git(source, "add", "graphify-out")
+    git(source, "commit", "-q", "-m", "release graph")
+    release_sha = git(source, "rev-parse", "HEAD")
     publish(source, store_root, "release/4.0", release_sha)
 
     target = tmp_path / "builder"
