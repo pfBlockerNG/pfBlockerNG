@@ -65,6 +65,7 @@ pfb_scrub_git_env
 
 # ── State ─────────────────────────────────────────────────────────────────────
 _SB_LEASED_BOX=""
+_SB_CMD_PID=""
 RUN_ID=""
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
@@ -82,6 +83,14 @@ _sb_ssh() {
     # SC2086: word-split of PFB_SSH is intentional — it holds "ssh [opts...]"
     # shellcheck disable=SC2086
     ${PFB_SSH} "$1" "$2"
+}
+
+# _sb_ssh_start <target> <cmd-string>
+# Start the command transport asynchronously so signal traps run while we wait.
+_sb_ssh_start() {
+    # shellcheck disable=SC2086
+    ${PFB_SSH} "$1" "$2" &
+    _SB_CMD_PID=$!
 }
 
 # _sb_jitter_sleep
@@ -313,6 +322,14 @@ _sb_release_trap() {
     _sb_release "${RUN_ID}"
 }
 
+# _sb_signal_trap <status>
+# Stop the command transport, then let EXIT release the lease once.
+_sb_signal_trap() {
+    trap - HUP INT TERM
+    [ -z "$_SB_CMD_PID" ] || kill -TERM "$_SB_CMD_PID" 2>/dev/null || true
+    exit "$1"
+}
+
 # ── Argument parsing ───────────────────────────────────────────────────────────
 _SB_MODE="default"
 _SB_RELEASE_ID=""
@@ -369,9 +386,11 @@ if [ -z "${PFB_BOXES:-}" ]; then
     exit 1
 fi
 
-# Arm the EXIT/INT/TERM/HUP trap now. _SB_LEASED_BOX is empty until we successfully
-# lease, so the trap is a no-op until then.
-trap '_sb_release_trap' EXIT INT TERM HUP
+# EXIT owns cleanup; signal traps terminate with the conventional 128 + signo status.
+trap '_sb_release_trap' EXIT
+trap '_sb_signal_trap 129' HUP
+trap '_sb_signal_trap 130' INT
+trap '_sb_signal_trap 143' TERM
 
 # Pre-mint a session ID for reclaim-dir uniqueness (box-agnostic, unique per run).
 _SB_SID="$(od -An -tx1 -N4 /dev/urandom | tr -d ' \t\n')"
@@ -447,5 +466,6 @@ printf 'select-box: leased %s (RUN_ID=%s)\n' "$_SB_LEASED_BOX" "$RUN_ID" >&2
 # If a command was given (after --), run it on the leased box over ssh.
 # The EXIT trap releases the lease when this script exits (normally or on signal).
 if [ -n "$_SB_CMD" ]; then
-    _sb_ssh "$_SB_LEASED_BOX" "$_SB_CMD"
+    _sb_ssh_start "$_SB_LEASED_BOX" "$_SB_CMD"
+    wait "$_SB_CMD_PID"
 fi

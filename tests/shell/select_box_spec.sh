@@ -31,6 +31,8 @@
 #                             proves rename-capture is NECESSARY.
 #   release           — --release frees only the matching-owner lock; a mismatched
 #                       RUN_ID does NOT free the lock.
+#   command signals   — INT/TERM/HUP stop the selector before its command completes,
+#                       return 128 + signo, and release exactly once.
 #   no-alias          — local-<...> and ci-<...> run-ids never collide.
 
 Describe 'select-box.sh'
@@ -127,6 +129,97 @@ SSHEOF
     The line 1 of output should equal 'rid-prefix=local-'
     The line 2 of output should equal 'box-set=yes'
     The line 3 of output should equal 'run-dir=yes'
+  End
+
+  command_signal_result() {
+    _signal="$1"
+    _expected_status="$2"
+    _ready="${WORK}/${_signal}.ready"
+    _remote_pid_file="${WORK}/${_signal}.pid"
+    _command_gate="${WORK}/${_signal}.gate"
+    _command_completed="${WORK}/${_signal}.completed"
+    _selector_err="${WORK}/${_signal}.err"
+    mkfifo "$_command_gate"
+    _command="printf '%s\\n' \"\$\$\" > '${_remote_pid_file}'; true > '${_ready}'; trap 'exit 0' INT TERM HUP; read _signal_gate < '${_command_gate}'; true > '${_command_completed}'"
+
+    (
+      trap - INT TERM HUP
+      exec sh "$SCRIPT" -- "$_command"
+    ) > "${WORK}/${_signal}.out" 2> "$_selector_err" &
+    _selector_pid=$!
+
+    _ready_checks=0
+    while [ ! -f "$_ready" ] && [ "$_ready_checks" -lt 100 ]; do
+      sleep 0.05
+      _ready_checks=$(( _ready_checks + 1 ))
+    done
+    if [ ! -f "$_ready" ]; then
+      kill -TERM "$_selector_pid" 2>/dev/null || true
+      wait "$_selector_pid" 2>/dev/null || true
+      printf 'ready=no (stuck/environment)\n'
+      return
+    fi
+
+    _remote_pid="$(cat "$_remote_pid_file")"
+    kill "-${_signal}" "$_selector_pid"
+
+    _exit_checks=0
+    while kill -0 "$_selector_pid" 2>/dev/null && [ "$_exit_checks" -lt 100 ]; do
+      sleep 0.05
+      _exit_checks=$(( _exit_checks + 1 ))
+    done
+    _exited_before_release=yes
+    if kill -0 "$_selector_pid" 2>/dev/null; then
+      _exited_before_release='no (stuck/environment)'
+      printf '\n' > "$_command_gate"
+    fi
+
+    wait "$_selector_pid"
+    _selector_status=$?
+
+    kill -TERM "$_remote_pid" 2>/dev/null || true
+
+    _release_count="$(grep -c '^select-box: released ' "$_selector_err" || true)"
+    _already_released_count="$(grep -c 'not found (already released)' "$_selector_err" || true)"
+    printf 'ready=yes\n'
+    printf 'selector-exited-before-command-release=%s\n' "$_exited_before_release"
+    printf 'status=%s expected=%s\n' "$_selector_status" "$_expected_status"
+    printf 'command-completed=%s\n' "$([ -f "$_command_completed" ] && echo yes || echo no)"
+    printf 'release-count=%s\n' "$_release_count"
+    printf 'already-released-count=%s\n' "$_already_released_count"
+  }
+
+  It 'INT stops a running command and releases its lease exactly once'
+    When call command_signal_result INT 130
+    The status should be success
+    The line 1 of output should equal 'ready=yes'
+    The line 2 of output should equal 'selector-exited-before-command-release=yes'
+    The line 3 of output should equal 'status=130 expected=130'
+    The line 4 of output should equal 'command-completed=no'
+    The line 5 of output should equal 'release-count=1'
+    The line 6 of output should equal 'already-released-count=0'
+  End
+
+  It 'TERM stops a running command and releases its lease exactly once'
+    When call command_signal_result TERM 143
+    The status should be success
+    The line 1 of output should equal 'ready=yes'
+    The line 2 of output should equal 'selector-exited-before-command-release=yes'
+    The line 3 of output should equal 'status=143 expected=143'
+    The line 4 of output should equal 'command-completed=no'
+    The line 5 of output should equal 'release-count=1'
+    The line 6 of output should equal 'already-released-count=0'
+  End
+
+  It 'HUP stops a running command and releases its lease exactly once'
+    When call command_signal_result HUP 129
+    The status should be success
+    The line 1 of output should equal 'ready=yes'
+    The line 2 of output should equal 'selector-exited-before-command-release=yes'
+    The line 3 of output should equal 'status=129 expected=129'
+    The line 4 of output should equal 'command-completed=no'
+    The line 5 of output should equal 'release-count=1'
+    The line 6 of output should equal 'already-released-count=0'
   End
 
   # ── two-contenders: both concurrent acquires succeed ───────────────────────
