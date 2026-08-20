@@ -187,8 +187,12 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "graphify-store.py seed",
         "graphify-store.py publish",
         "source SHA",
+        "graphify-out/views/current/graph.json",
+        "graphify-out/",
+        "opaque local Graphify store",
     ):
         assert contract in routing, f"Graphify worktree routing lost {contract}"
+    assert "graphify-out/current/graph.json" not in routing
 
 
 def test_codegraph_generated_state_is_ignored_by_its_own_tracked_contract() -> None:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Graphify's ownership-separated views from one extraction.
+"""Build Graphify's ownership-separated views from an existing semantic graph.
 
 The ownership map is deliberately data, not Python.  Classification is first-match
 ordered, while bridge and investigation graphs are derived from the same namespaced
@@ -12,7 +12,6 @@ import argparse
 import ast
 import contextlib
 import fnmatch
-import importlib.util
 import json
 import os
 import re
@@ -22,7 +21,7 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = Path(__file__).with_name("graphify-views.json")
@@ -33,10 +32,6 @@ ALL_VIEWS = SOURCE_VIEWS + ("unclassified",) + DERIVED_VIEWS
 
 class GraphifyViewsError(ValueError):
     """Invalid ownership input or graph data."""
-
-
-class BootstrapError(RuntimeError):
-    """Graphify is not available for extraction."""
 
 
 def _path(value: str | Path) -> str:
@@ -921,56 +916,21 @@ def _read_sources(root: Path, paths: Iterable[str]) -> dict[str, str]:
     return result
 
 
-def _reexec_graphify_python() -> None:
-    """Use the per-graph virtualenv when the host interpreter lacks Graphify."""
+def _semantic_graph(root: Path, explicit_input: Path | None) -> dict[str, Any]:
+    """Load Graphify's full semantic graph without invoking Graphify extraction."""
 
-    if os.environ.get("PFB_GRAPHIFY_REEXEC") == "1":
-        return
-    if importlib.util.find_spec("graphify") is not None:
-        return
-    pointer = ROOT / "graphify-out" / ".graphify_python"
-    if pointer.exists():
-        executable = pointer.read_text(encoding="utf-8").strip()
-        if executable and Path(executable).is_file():
-            environment = dict(os.environ, PFB_GRAPHIFY_REEXEC="1")
-            os.execve(executable, [executable, str(Path(__file__).resolve()), *sys.argv[1:]], environment)
-    raise BootstrapError(
-        "Graphify is unavailable. Bootstrap graphify-out/.graphify_python or install Graphify, then rerun "
-        "scripts/agent/update_graphify_views.py"
-    )
-
-
-def _collect_graphify_paths(
-    root: Path,
-    tracked_paths: Iterable[str],
-    config: Mapping[str, Any],
-    collector: Callable[..., list[Path]] | None = None,
-) -> list[Path]:
-    """Collect only already-classified tracked files for one Graphify pass."""
-
-    if collector is None:
-        from graphify import collect_files
-
-        collector = collect_files
-    collected: set[Path] = set()
-    accepted = (path for path in tracked_paths if _classify_path_unchecked(path, config) in SOURCE_VIEWS)
-    for relative in accepted:
-        target = root / relative
-        collected.update(collector(target, root=root))
-    return sorted(collected)
-
-
-def _extract_graph(
-    root: Path,
-    tracked_paths: Sequence[str],
-    config: Mapping[str, Any],
-    cache_root: Path,
-) -> dict[str, Any]:
-    _reexec_graphify_python()
-    from graphify.extract import extract
-
-    paths = _collect_graphify_paths(root, tracked_paths, config)
-    return extract(paths, root=root, cache_root=cache_root, parallel=False)
+    path = explicit_input or root / "graphify-out" / "graph.json"
+    if explicit_input is None and not path.is_file():
+        raise GraphifyViewsError(
+            f"semantic Graphify graph is missing at {path}; run the full Graphify skill before updating views"
+        )
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise GraphifyViewsError(f"cannot read semantic Graphify graph {path}: {exc}") from exc
+    if not isinstance(value, Mapping):
+        raise GraphifyViewsError(f"semantic Graphify graph must be a JSON object: {path}")
+    return dict(value)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -978,18 +938,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=ROOT)
     parser.add_argument("--config", type=Path, default=CONFIG_PATH)
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--input", type=Path, help="use an existing Graphify JSON extraction")
+    parser.add_argument("--input", type=Path, help="use an explicit existing Graphify JSON graph")
     args = parser.parse_args(argv)
     config = load_config(args.config)
     root = args.repo_root.resolve()
+    graph = _semantic_graph(root, args.input)
     tracked = _tracked_paths(root, config)
-    output_root = args.output or root / "graphify-out"
-    cache_root = output_root / "cache"
-    graph = (
-        json.loads(args.input.read_text(encoding="utf-8"))
-        if args.input
-        else _extract_graph(root, tracked, config, cache_root)
-    )
+    output_root = args.output or root / "graphify-out" / "views"
     source_texts = _read_sources(root, tracked)
     commit = subprocess.run(
         ["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -1006,6 +961,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (BootstrapError, GraphifyViewsError, OSError, subprocess.CalledProcessError) as exc:
+    except (GraphifyViewsError, OSError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(2)

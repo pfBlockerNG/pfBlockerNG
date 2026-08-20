@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -117,7 +118,7 @@ def test_source_view_order_and_ambiguous_prefixes_fail_closed() -> None:
     assert not any(node["id"].endswith("unowned") for node in built["runtime"]["nodes"])
 
 
-def test_extraction_input_excludes_unclassified_files_and_keeps_artifact_nodes(tmp_path: Path) -> None:
+def test_partition_excludes_unclassified_files_and_keeps_artifact_nodes() -> None:
     config = _config()
     accepted = [
         "src/app.py",
@@ -128,19 +129,9 @@ def test_extraction_input_excludes_unclassified_files_and_keeps_artifact_nodes(t
         "uv.lock",
     ]
     unclassified = "misc/unclassified_code.py"
-    for relative in (*accepted, unclassified):
-        path = tmp_path / relative
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("placeholder", encoding="utf-8")
-    calls: list[Path] = []
-
-    def collect(target: Path, *, root: Path) -> list[Path]:
-        calls.append(target)
-        return [target]
-
-    extracted = views._collect_graphify_paths(tmp_path, [*accepted, unclassified], config, collector=collect)
-    assert extracted == sorted(tmp_path / relative for relative in accepted)
-    assert unclassified not in {path.relative_to(tmp_path).as_posix() for path in calls}
+    partition = views.partition_paths(accepted, config)
+    assert sorted(path for paths in partition.values() for path in paths) == sorted(accepted)
+    assert views.classify_path(unclassified, config) is None
     built = views.build_views({}, config, tracked_paths=accepted)
     assert all(unclassified not in node.get("source_file", "") for node in built["whole-repository"]["nodes"])
     assert {node["source_file"] for node in built["whole-repository"]["nodes"]} >= set(accepted)
@@ -471,6 +462,83 @@ def _generation_paths(root: Path) -> set[str]:
     if not generations.exists():
         return set()
     return {path.name for path in generations.iterdir() if path.is_dir() and not path.name.startswith(".stage-")}
+
+
+def _semantic_repo(tmp_path: Path, graph: dict | None = None) -> tuple[Path, str]:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src/app.py").write_text("print('runtime')\n", encoding="utf-8")
+    graph_root = repo / "graphify-out"
+    graph_root.mkdir()
+    (graph_root / "graph.json").write_bytes(
+        (json.dumps(graph or {"nodes": [], "links": []}, sort_keys=True) + "\n").encode()
+    )
+    (graph_root / "manifest.json").write_bytes(b"semantic-manifest\n")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Graphify test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "graphify-test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "src/app.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-qm", "seed"], cwd=repo, check=True)
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    return repo, commit
+
+
+def _view_output_names() -> set[str]:
+    return set(views.SOURCE_VIEWS + views.DERIVED_VIEWS)
+
+
+def test_main_uses_semantic_root_and_publishes_views_without_mutating_semantic_state(tmp_path: Path) -> None:
+    repo, commit = _semantic_repo(
+        tmp_path,
+        {"nodes": [{"id": "runtime", "label": "runtime", "source_file": "src/app.py"}], "links": []},
+    )
+    graph_path = repo / "graphify-out/graph.json"
+    manifest_path = repo / "graphify-out/manifest.json"
+    semantic_before = (graph_path.read_bytes(), manifest_path.read_bytes())
+
+    assert views.main(["--repo-root", str(repo)]) == 0
+
+    assert (graph_path.read_bytes(), manifest_path.read_bytes()) == semantic_before
+    output = repo / "graphify-out/views"
+    assert (output / "current/graph.json").is_file()
+    assert (output / "current/VIEW.json").is_file()
+    assert {path.name for path in (output / "current").iterdir()} >= _view_output_names() - {"investigation"}
+    assert json.loads((output / "current/graph.json").read_text())["built_at_commit"] == commit
+    assert not (repo / "graphify-out/current").exists()
+
+
+def test_main_explicit_input_and_output_override_defaults(tmp_path: Path) -> None:
+    repo, commit = _semantic_repo(tmp_path)
+    explicit_input = tmp_path / "input.json"
+    explicit_graph = {
+        "nodes": [{"id": "runtime", "label": "explicit-input", "source_file": "src/app.py"}],
+        "links": [],
+    }
+    explicit_input.write_text(json.dumps(explicit_graph), encoding="utf-8")
+    output = tmp_path / "explicit-output"
+
+    assert views.main(["--repo-root", str(repo), "--input", str(explicit_input), "--output", str(output)]) == 0
+
+    assert (output / "current/graph.json").is_file()
+    assert json.loads((output / "current/graph.json").read_text())["built_at_commit"] == commit
+    assert any(
+        node.get("label") == "explicit-input"
+        for node in json.loads((output / "current/runtime/graph.json").read_text())["nodes"]
+    )
+    assert not (repo / "graphify-out/views").exists()
+
+
+def test_main_missing_default_semantic_graph_fails_before_output(tmp_path: Path) -> None:
+    repo, _ = _semantic_repo(tmp_path)
+    (repo / "graphify-out/graph.json").unlink()
+
+    with pytest.raises(views.GraphifyViewsError, match="run the full Graphify skill"):
+        views.main(["--repo-root", str(repo)])
+
+    assert not (repo / "graphify-out/views").exists()
 
 
 def test_write_outputs_switches_one_generation_and_malformed_config_preserves_it(tmp_path: Path) -> None:
