@@ -586,8 +586,10 @@ def test_tick_wiped_ledger_regenerates(deployed_vm: SmokeVM) -> None:
     vm = deployed_vm
     now_ts = int(vm.ssh("date +%s").stdout.strip())
 
-    # Wipe the ledger.
-    vm.ssh(f"rm -f {LEDGER_PATH}")
+    # Wipe the ledger — verify it took, else a stale document would satisfy the assertions below.
+    wipe = vm.ssh("rm", "-f", LEDGER_PATH)
+    assert wipe.returncode == 0, f"precondition: ledger wipe failed rc={wipe.returncode} {wipe.stderr!r}"
+    assert _read_ledger(vm) == {}, f"precondition: ledger must be empty before the tick; ledger={_read_ledger(vm)}"
 
     # Tick — the absent ledger makes cache_ready FALSE, so the dispatch lock engages and
     # regenerates the document regardless of what is/isn't due.
