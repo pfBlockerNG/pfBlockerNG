@@ -472,9 +472,11 @@ def _semantic_repo(tmp_path: Path, graph: dict | None = None) -> tuple[Path, str
     graph_root = repo / "graphify-out"
     graph_root.mkdir()
     (graph_root / "manifest.json").write_bytes(b"semantic-manifest\n")
-    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "init.defaultBranch=main", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "Graphify test"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "graphify-test@example.invalid"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "core.hooksPath", "/dev/null"], cwd=repo, check=True)
     subprocess.run(["git", "add", "src/app.py"], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-qm", "seed"], cwd=repo, check=True)
     commit = subprocess.run(
@@ -581,6 +583,27 @@ def test_main_rejects_canonical_output_alias_with_external_input(tmp_path: Path)
     assert (canonical_graph.read_bytes(), manifest.read_bytes(), explicit_input.read_bytes()) == before
     assert not (repo / "graphify-out/current").exists()
     assert not (repo / "graphify-out/views").exists()
+
+
+@pytest.mark.parametrize("output_kind", ["cache", "repo", "cache-link"])
+def test_main_rejects_output_containing_or_inside_canonical_graphify_root(tmp_path: Path, output_kind: str) -> None:
+    repo, _ = _semantic_repo(tmp_path)
+    canonical_graph = repo / "graphify-out/graph.json"
+    manifest = repo / "graphify-out/manifest.json"
+    before = (canonical_graph.read_bytes(), manifest.read_bytes())
+    if output_kind == "cache":
+        output = repo / "graphify-out/cache"
+    elif output_kind == "repo":
+        output = repo
+    else:
+        output = repo / "cache-link"
+        output.symlink_to(repo / "graphify-out/cache", target_is_directory=True)
+
+    with pytest.raises(views.GraphifyViewsError, match="overlaps semantic graph"):
+        views.main(["--repo-root", str(repo), "--output", str(output)])
+
+    assert (canonical_graph.read_bytes(), manifest.read_bytes()) == before
+    assert not (repo / "graphify-out/views/current").exists()
 
 
 @pytest.mark.parametrize("staged", [False, True])
