@@ -4,8 +4,7 @@ Scope: cross-client repository discovery, exact code semantics, and persistent g
 Load when: every agent session, from `AGENTS.md`.
 
 - Run `sh scripts/agent/ensure-codegraph.sh` at session start. It is exact-root and
-  idempotent; `work-branch.sh --worktree` also runs it for worktrees created by
-  Codex, Claude, Copilot, or Grok.
+  idempotent; `work-branch.sh --worktree` also runs it for every worktree it creates.
 - For indexed code discovery, understanding, cross-file architecture, call paths,
   flows, structural exploration, and impact analysis, use CodeGraph first through
   `codegraph_explore` or `codegraph explore`. Every client uses the same standard

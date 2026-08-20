@@ -17,13 +17,20 @@ Describe 'ensure-codegraph.sh exact-root initialization'
     codegraph_log="$fixture/codegraph.log"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
-printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
 [ "${CODEGRAPH_RC:-0}" -eq 0 ] || exit "$CODEGRAPH_RC"
-[ "$1" = init ] || exit 9
-if [ "${CODEGRAPH_CREATE_DB:-1}" -eq 1 ]; then
-  mkdir -p "$2/.codegraph"
-  true > "$2/.codegraph/codegraph.db"
-fi
+case "$1" in
+  init|index)
+    printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
+    if [ "${CODEGRAPH_CREATE_DB:-1}" -eq 1 ]; then
+      mkdir -p "$2/.codegraph"
+      true > "$2/.codegraph/codegraph.db"
+    fi
+    ;;
+  status)
+    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+    ;;
+  *) exit 9 ;;
+esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
     export CODEGRAPH_LOG="$codegraph_log"
@@ -84,9 +91,18 @@ Describe 'work-branch.sh cross-client CodeGraph initialization'
     codegraph_log="$fixture/codegraph.log"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
-printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
-mkdir -p "$2/.codegraph"
-true > "$2/.codegraph/codegraph.db"
+[ "${CODEGRAPH_RC:-0}" -eq 0 ] || exit "$CODEGRAPH_RC"
+case "$1" in
+  init|index)
+    printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    ;;
+  status)
+    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+    ;;
+  *) exit 9 ;;
+esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
     export CODEGRAPH_LOG="$codegraph_log"
@@ -104,6 +120,34 @@ CODEGRAPH
         GROK_SESSION_ID= GROK_AGENT= "$marker=1" \
         sh "$script_abs" adr 9 codegraph --worktree --base HEAD --path "$target"
   }
+
+  create_unmarked_worktree() {
+    target="$fixture/agent-worktree"
+    cd "$primary" || return 1
+    env CLAUDECODE= CODEX_THREAD_ID= COPILOT_CLI= COPILOT_AGENT_PROMPT= \
+        GROK_SESSION_ID= GROK_AGENT= \
+        sh "$script_abs" adr 9 codegraph --worktree --base HEAD --path "$target"
+  }
+
+  It 'initializes a new worktree without relying on a client marker'
+    When call create_unmarked_worktree
+    The status should equal 0
+    The output should equal "$(printf 'adr/9-codegraph\t%s/agent-worktree' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    The contents of file "$codegraph_log" should equal "init $fixture/agent-worktree"
+    Assert [ -f "$fixture/agent-worktree/.codegraph/codegraph.db" ]
+  End
+
+  It 'fails loudly when worktree CodeGraph initialization fails'
+    export CODEGRAPH_RC=7
+    When call create_unmarked_worktree
+    The status should equal 1
+    The output should equal ''
+    The stderr should include 'CodeGraph initialization failed'
+    Assert [ ! -e "$fixture/agent-worktree" ]
+    Assert [ ! -f "$primary/.git/refs/heads/adr/9-codegraph" ]
+    Assert [ ! -f "$fixture/agent-worktree/.codegraph/codegraph.db" ]
+  End
 
   Parameters
     'CLAUDECODE'

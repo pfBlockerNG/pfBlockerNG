@@ -92,11 +92,18 @@ GH
     codegraph_log="$fixture/codegraph.log"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
-printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
 [ "${WB_CODEGRAPH_RC:-0}" -eq 0 ] || exit "$WB_CODEGRAPH_RC"
-[ "$1" = init ] || exit 9
-mkdir -p "$2/.codegraph"
-true > "$2/.codegraph/codegraph.db"
+case "$1" in
+  init|index)
+    printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    ;;
+  status)
+    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+    ;;
+  *) exit 9 ;;
+esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
     export WB_CODEGRAPH_LOG="$codegraph_log"
@@ -191,7 +198,25 @@ esac
 GH
     chmod +x "$stubdir/gh"
     export WB_GH_LOG="$gh_log"
-    PATH="$stubdir:$PATH"; export PATH
+    codegraph_dir="$fixture/codegraph-bin"; mkdir -p "$codegraph_dir"
+    codegraph_log="$fixture/codegraph.log"
+    cat > "$codegraph_dir/codegraph" <<'CODEGRAPH'
+#!/bin/sh
+case "$1" in
+  init|index)
+    printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    ;;
+  status)
+    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+    ;;
+  *) exit 9 ;;
+esac
+CODEGRAPH
+    chmod +x "$codegraph_dir/codegraph"
+    export WB_CODEGRAPH_LOG="$codegraph_log"
+    PATH="$stubdir:$codegraph_dir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
   BeforeEach 'setup'
@@ -243,7 +268,7 @@ GH
   End
 
   It 'warns and proceeds when gh is not installed at all'
-    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$(dirname "$(command -v git)"):/usr/bin:/bin"
+    When run sh -c 'cd "$1" && PATH="$4:$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$(dirname "$(command -v git)"):/usr/bin:/bin" "$codegraph_dir"
     The status should equal 0
     The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
     The stderr should include 'claim NOT verified'

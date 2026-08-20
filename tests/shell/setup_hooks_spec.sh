@@ -19,9 +19,17 @@ Describe 'setup-hooks.sh CodeGraph bootstrap'
     codegraph_log="$fixture/codegraph.log"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
-printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
-mkdir -p "$2/.codegraph"
-true > "$2/.codegraph/codegraph.db"
+case "$1" in
+  init|index)
+    printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    ;;
+  status)
+    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+    ;;
+  *) exit 9 ;;
+esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
     export CODEGRAPH_LOG="$codegraph_log"
@@ -38,5 +46,14 @@ CODEGRAPH
     The stderr should include 'Initializing CodeGraph'
     The contents of file "$codegraph_log" should equal "init $primary"
     Assert [ -f "$primary/.codegraph/codegraph.db" ]
+  End
+
+  It 'still activates Git hooks when CodeGraph is unavailable'
+    tool_path="$(dirname "$(command -v git)"):/usr/bin:/bin"
+    When run env PATH="$tool_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should include 'core.hooksPath set to: .githooks'
+    The stderr should equal ''
+    The file "$codegraph_log" should not be exist
   End
 End
