@@ -14,12 +14,16 @@ Load when: every agent session, from `AGENTS.md`.
 - Use the client's LSP surface—Serena where available—for exact symbols,
   definitions, references, implementations, call/type hierarchy, diagnostics, and
   diagnostic-aware refactoring.
-- After relevant classified-source changes, run
-  `scripts/agent/update_graphify_views.py`. Query the worktree-local
-  `graphify-out/current/graph.json` (investigation) by default; use
-  `graphify-out/current/runtime/graph.json` for ownership questions, then follow
-  each reference edge's `target_view` and `source_file`. Query `agent-context`
-  for agent policy, adapters, and process/tooling self-improvement. Outputs stay
-  worktree-local and are never shared between worktrees.
+- `work-branch.sh --worktree` restores an exact source-SHA snapshot from the local
+  branch-mirrored Graphify store. `GRAPHIFY-REFRESH-REQUIRED` means delegate a
+  top-tier/high Graphify coordinator: hold `.git/graphify-store.lock` in one
+  harness-tracked `lockf`/`flock` session; create a temporary detached builder at
+  the reported source SHA; run `graphify-store.py seed`, the full Graphify update
+  skill, then `graphify-store.py publish`; release/remove the builder and retry
+  `work-branch.sh`. Each agent worktree receives its own snapshot copy.
+- After relevant classified-source changes, run `update_graphify_views.py` in that
+  worktree. Query `graphify-out/current/graph.json` (investigation) by default;
+  use `current/runtime/graph.json` for ownership and `current/agent-context/graph.json`
+  for process improvement; follow `target_view`/`source_file` references.
 - LSP/Serena language-semantic relationships override structurally inferred
   CodeGraph edges. Compiler, static analysis, tests, CI, and live smoke remain final.
