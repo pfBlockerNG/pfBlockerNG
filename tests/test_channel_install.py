@@ -119,10 +119,16 @@ delete)
     _name="$3"
     rm -rf "${STATE:?}/${_name}"
     if [ -n "${PFB_STUB_DEINSTALL_FAIL:-}" ]; then
+        if [ -n "${PFB_STUB_SCRIPT_FAILED_GLUED:-}" ]; then
+            printf '  thrown</pre>'
+        fi
         printf 'pkg: DEINSTALL script failed\n' >&2
     fi
     if [ -n "${PFB_STUB_SCRIPT_FAILED_NOISE:-}" ]; then
         printf 'the POST-INSTALL script failed to mention foo\n'
+    fi
+    if [ -n "${PFB_STUB_PKG_DIAG:-}" ]; then
+        printf 'pkg: Repository pfblockerng-stable has a missing meta file, using previous version\n'
     fi
     exit 0
     ;;
@@ -161,10 +167,16 @@ install)
         rm -f "${PFB_STUB_DELETE_CONFIG_XML}"
     fi
     if [ -n "${PFB_STUB_POSTINSTALL_FAIL:-}" ]; then
+        if [ -n "${PFB_STUB_SCRIPT_FAILED_GLUED:-}" ]; then
+            printf '  thrown</pre>'
+        fi
         printf 'pkg: POST-INSTALL script failed\n' >&2
     fi
     if [ -n "${PFB_STUB_SCRIPT_FAILED_NOISE:-}" ]; then
         printf 'the POST-INSTALL script failed to mention foo\n'
+    fi
+    if [ -n "${PFB_STUB_PKG_DIAG:-}" ]; then
+        printf 'pkg: Repository pfblockerng-stable has a missing meta file, using previous version\n'
     fi
     exit 0
     ;;
@@ -858,6 +870,41 @@ def test_script_failed_without_pkg_prefix_is_not_a_hook_failure() -> None:
         assert proc.returncode == 0, proc.stdout + proc.stderr
         assert "Done" in proc.stdout
         assert "the POST-INSTALL script failed to mention foo" in proc.stdout
+
+
+def test_postinstall_script_failed_glued_to_hook_output_exits_5_without_done() -> None:
+    """pfSense hook stdout often ends without a newline, so pkg's stderr is
+    glued: ``thrown</pre>pkg: POST-INSTALL script failed``. The matcher must
+    still fail closed (issue #2575, live legs.log)."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(
+            root,
+            "stable",
+            extra_env={
+                "PFB_STUB_POSTINSTALL_FAIL": "1",
+                "PFB_STUB_SCRIPT_FAILED_GLUED": "1",
+            },
+        )
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        combined = proc.stdout + proc.stderr
+        assert "pkg: POST-INSTALL script failed" in combined, combined
+        assert "Done" not in proc.stdout
+
+
+def test_benign_pkg_diagnostic_is_not_a_hook_failure() -> None:
+    """A ``pkg: ``-prefixed warning that is not ``script failed`` must not
+    abort a successful install."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(
+            root,
+            "stable",
+            extra_env={"PFB_STUB_PKG_DIAG": "1"},
+        )
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Done" in proc.stdout
+        assert "pkg: Repository" in proc.stdout
 
 
 # --------------------------------------------------------------------------- #

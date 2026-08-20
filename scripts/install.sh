@@ -161,9 +161,11 @@ _pkg_mutate() {
     shift
     if [ -n "${ROOT}" ]; then
         mkdir -p "${ROOT}/tmp" || die "${_mut_code}" "could not create ${ROOT}/tmp"
-        _mut_log="${ROOT}/tmp/pfb-install-pkg.log"
+        _mut_log=$(mktemp "${ROOT}/tmp/pfb-install-pkg.XXXXXX") ||
+            die "${_mut_code}" "mktemp failed while capturing pkg output"
     else
-        _mut_log="${TMPDIR:-/tmp}/pfb-install-pkg.log"
+        _mut_log=$(mktemp "${TMPDIR:-/tmp}/pfb-install-pkg.XXXXXX") ||
+            die "${_mut_code}" "mktemp failed while capturing pkg output"
     fi
     _mut_rc=0
     _pkg "$@" >"${_mut_log}" 2>&1 || _mut_rc=$?
@@ -172,9 +174,11 @@ _pkg_mutate() {
         die "${_mut_code}" "${_mut_msg}"
     fi
     while IFS= read -r _mut_line || [ -n "${_mut_line}" ]; do
+        # Hook stdout often ends without a newline, so pkg's message is glued
+        # mid-line: ``thrown</pre>pkg: POST-INSTALL script failed``.
         case "${_mut_line}" in
-            'pkg: '*' script failed')
-                die "${_mut_code}" "pkg reported '${_mut_line}' — ${_mut_msg}"
+            *'pkg: '*' script failed'*)
+                die "${_mut_code}" "pkg reported a package-script failure — ${_mut_msg}"
                 ;;
         esac
     done < "${_mut_log}"
