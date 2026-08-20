@@ -55,6 +55,145 @@ Describe 'work-branch.sh branch naming'
   End
 End
 
+Describe 'work-branch.sh Graphify store integration'
+  script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/work-branch.sh"
+
+  setup() {
+    . "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/lib/git-env-scrub.sh"
+    pfb_scrub_git_env
+    fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_graphify.XXXXXX") || return 1
+    fixture=$(cd "$fixture" && pwd -P) || return 1
+    primary="$fixture/primary"
+    mkdir -p "$primary/scripts/agent"
+    git_fixture init -q -b devel "$primary" || return 1
+    git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+      config user.email t@t
+    git_fixture -C "$primary" config user.name t
+    cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/graphify-store.py" "$primary/scripts/agent/graphify-store.py"
+    chmod +x "$primary/scripts/agent/graphify-store.py"
+    git_fixture -C "$primary" add scripts/agent/graphify-store.py &&
+      git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m helper || return 1
+    mkdir -p "$primary/graphify-out/cache"
+    printf '%s\n' graph > "$primary/graphify-out/graph.json"
+    printf '%s\n' payload > "$primary/graphify-out/cache/payload.txt"
+    ln -s cache "$primary/graphify-out/current"
+    sha=$(git_fixture -C "$primary" rev-parse HEAD)
+    python3 "$primary/scripts/agent/graphify-store.py" publish \
+      --store-root "$primary/.git/graphify-store" --builder "$primary" --branch devel --sha "$sha" || return 1
+    stubdir="$fixture/bin"; mkdir -p "$stubdir"
+    codegraph_log="$fixture/codegraph.log"
+    cat > "$stubdir/codegraph" <<'CODEGRAPH'
+#!/bin/sh
+case "$1" in
+  init|index)
+    printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    ;;
+  status)
+    printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+    ;;
+  *) exit 9 ;;
+esac
+CODEGRAPH
+    chmod +x "$stubdir/codegraph"
+    export WB_CODEGRAPH_LOG="$codegraph_log"
+    PATH="$stubdir:$PATH"; export PATH
+  }
+  cleanup() { rm -rf "$fixture"; }
+  BeforeEach 'setup'
+  AfterEach 'cleanup'
+
+  It 'requires an exact snapshot before creating a worktree'
+    rm -rf "$primary/.git/graphify-store"
+    When run sh -c 'cd "$1" && exec sh "$2" issue 31 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/missing"
+    The status should equal 1
+    The stderr should include "GRAPHIFY-REFRESH-REQUIRED branch=devel sha=$sha"
+    Assert [ ! -e "$fixture/missing" ]
+  End
+
+  It 'restores the exact opaque snapshot before CodeGraph initialization'
+    When run sh -c 'cd "$1" && exec sh "$2" issue 32 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/exact"
+    The status should equal 0
+    The output should equal "$(printf 'issue/32-graph\t%s/exact' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    Assert [ -f "$fixture/exact/graphify-out/cache/payload.txt" ]
+    Assert [ -L "$fixture/exact/graphify-out/current" ]
+    The contents of file "$codegraph_log" should equal "init $fixture/exact"
+  End
+
+  It 'fails loudly when neither kernel lock tool exists'
+    minimal="$fixture/minimal-bin"; mkdir -p "$minimal"
+    for tool in sh git dirname python3; do ln -s "$(command -v "$tool")" "$minimal/$tool"; done
+    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" adr 33 graph --worktree --base HEAD --path "$4"' _ "$primary" "$script_abs" "$minimal" "$fixture/no-lock"
+    The status should equal 4
+    The stderr should include 'TOOL-MISSING: lockf/flock'
+    Assert [ ! -e "$fixture/no-lock" ]
+  End
+
+  It 'removes the worktree and branch when exact snapshot restoration fails'
+    helper="$primary/scripts/agent/graphify-store.py"
+    mv "$helper" "$helper.real.py"
+    cat > "$helper" <<'HELPER'
+#!/usr/bin/env python3
+import pathlib
+import subprocess
+import sys
+
+if sys.argv[1] == "has-exact":
+    raise SystemExit(0)
+if sys.argv[1] == "restore-exact":
+    raise SystemExit(1)
+raise SystemExit(subprocess.call([sys.executable, str(pathlib.Path(__file__).with_name("graphify-store.real.py")), *sys.argv[1:]]))
+HELPER
+    chmod +x "$helper"
+    When run sh -c 'cd "$1" && exec sh "$2" issue 34 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/restore-fail"
+    The status should equal 1
+    The stderr should include 'Graphify snapshot restore failure'
+    Assert [ ! -e "$fixture/restore-fail" ]
+    Assert [ ! -e "$primary/.git/refs/heads/issue/34-graph" ]
+  End
+
+  It 'serializes concurrent callers across the worktree and CodeGraph sequence'
+    release="$fixture/release"
+    started="$fixture/started"
+    events="$fixture/events"
+    cat > "$stubdir/codegraph" <<'CODEGRAPH'
+#!/bin/sh
+case "$1" in
+  init)
+    mkdir -p "$2/.codegraph"
+    case "$2" in
+      *work-31) printf '%s\n' first-start >> "$WB_EVENTS"; : > "$WB_STARTED"; while [ ! -f "$WB_RELEASE" ]; do sleep 1; done; printf '%s\n' first-end >> "$WB_EVENTS" ;;
+      *work-32) printf '%s\n' second-start >> "$WB_EVENTS" ;;
+    esac
+    true > "$2/.codegraph/codegraph.db"
+    ;;
+  status) printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}' ;;
+  *) exit 9 ;;
+esac
+CODEGRAPH
+    chmod +x "$stubdir/codegraph"
+    export WB_RELEASE="$release" WB_STARTED="$started" WB_EVENTS="$events"
+    (cd "$primary" && sh "$script_abs" issue 31 graph --worktree --base HEAD --path "$fixture/work-31" >"$fixture/out1" 2>"$fixture/err1"; printf '%s\n' "$?" >"$fixture/status1") &
+    first_pid=$!
+    i=0
+    while [ ! -f "$started" ] && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
+    Assert [ -f "$started" ]
+    (cd "$primary" && sh "$script_abs" issue 32 graph --worktree --base HEAD --path "$fixture/work-32" >"$fixture/out2" 2>"$fixture/err2"; printf '%s\n' "$?" >"$fixture/status2") &
+    second_pid=$!
+    sleep 1
+    The contents of file "$events" should equal "first-start"
+    : > "$release"
+    wait "$first_pid"
+    wait "$second_pid"
+    The contents of file "$events" should equal "$(printf 'first-start\nfirst-end\nsecond-start')"
+    The contents of file "$fixture/status1" should equal 0
+    The contents of file "$fixture/status2" should equal 0
+  End
+End
+
 Describe 'work-branch.sh --worktree anchors at the primary checkout'
   # rc-mode / managed sessions run inside a linked session worktree; a new
   # worktree must land under the PRIMARY root, never nested in the session tree.

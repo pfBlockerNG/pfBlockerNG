@@ -116,11 +116,59 @@ main() {
 	common=$(git rev-parse --git-common-dir) || exit 2
 	# CDPATH= : a CDPATH hit would echo the dir and hijack a relative cd.
 	root=$(CDPATH='' cd "$common/.." && pwd -P) || exit 2
-	if [ ! -e "$root/.git" ]; then
+	if [ ! -d "$root/.git" ]; then
 		echo "work-branch.sh: cannot locate the primary checkout from '$common' (unsupported layout, e.g. --separate-git-dir)" >&2
 		exit 2
 	fi
-	git fetch origin >/dev/null 2>&1
+	graphify_store_script="$root/scripts/agent/graphify-store.py"
+	graphify_store_active=0
+	if [ -f "$graphify_store_script" ]; then
+		graphify_store_active=1
+		lock_path="$root/.git/graphify-store.lock"
+		exec 9>"$lock_path" || {
+			echo "work-branch.sh: cannot open Graphify store lock '$lock_path'" >&2
+			exit 1
+		}
+		if command -v lockf >/dev/null 2>&1; then
+			lockf -k 9 || {
+				echo "work-branch.sh: could not acquire Graphify store lock" >&2
+				exit 1
+			}
+		elif command -v flock >/dev/null 2>&1; then
+			flock 9 || {
+				echo "work-branch.sh: could not acquire Graphify store lock" >&2
+				exit 1
+			}
+		else
+			echo "TOOL-MISSING: lockf/flock" >&2
+			exit 4
+		fi
+		require_tool python3
+	fi
+	git -C "$root" fetch origin >/dev/null 2>&1
+	source_sha=''
+	graph_branch=''
+	if [ "$graphify_store_active" -eq 1 ]; then
+		source_sha=$(git -C "$root" rev-parse "$base^{commit}") || {
+			echo "work-branch.sh: cannot resolve source ref '$base'" >&2
+			exit 2
+		}
+		case "$base" in
+			origin/*) graph_branch=${base#origin/} ;;
+			refs/remotes/origin/*) graph_branch=${base#refs/remotes/origin/} ;;
+			refs/heads/*) graph_branch=${base#refs/heads/} ;;
+			HEAD) graph_branch=$(git -C "$root" symbolic-ref --short HEAD 2>/dev/null) || graph_branch=devel ;;
+			*) graph_branch=$base ;;
+		esac
+		case "$graph_branch" in
+			refs/*) graph_branch=${graph_branch#refs/heads/} ;;
+		esac
+		if ! python3 "$graphify_store_script" has-exact \
+			--store-root "$root/.git/graphify-store" --branch "$graph_branch" --sha "$source_sha"; then
+			echo "GRAPHIFY-REFRESH-REQUIRED branch=$graph_branch sha=$source_sha" >&2
+			exit 1
+		fi
+	fi
 	if git show-ref --verify -q "refs/heads/$branch" ||
 	   git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
 		branch="$branch-$(date +%s)"
@@ -134,7 +182,22 @@ main() {
 	fi
 	case "$path" in /*) ;; *) path="$root/$path" ;; esac   # worktree add needs ABSOLUTE paths
 	[ -e "$path" ] && path="$path-$(date +%s)"
-	git worktree add -b "$branch" "$path" "$base" >/dev/null || exit 1
+	worktree_base=$base
+	[ "$graphify_store_active" -eq 1 ] && worktree_base=$source_sha
+	git worktree add -b "$branch" "$path" "$worktree_base" >/dev/null || exit 1
+	if [ "$graphify_store_active" -eq 1 ] && ! python3 "$graphify_store_script" restore-exact \
+		--store-root "$root/.git/graphify-store" --branch "$graph_branch" --sha "$source_sha" --target "$path"; then
+		echo "work-branch.sh: removing worktree and branch after Graphify snapshot restore failure" >&2
+		git worktree remove "$path" >/dev/null 2>&1 || {
+			echo "work-branch.sh: failed to remove incomplete worktree '$path'" >&2
+			exit 1
+		}
+		git branch -D "$branch" >/dev/null 2>&1 || {
+			echo "work-branch.sh: failed to delete incomplete branch '$branch'" >&2
+			exit 1
+		}
+		exit 1
+	fi
 	if ! sh "$(dirname "$0")/ensure-codegraph.sh" "$path"; then
 		echo "work-branch.sh: removing worktree and branch after CodeGraph initialization failure" >&2
 		git worktree remove "$path" >/dev/null 2>&1 || {
