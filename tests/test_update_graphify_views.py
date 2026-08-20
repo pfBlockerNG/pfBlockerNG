@@ -471,9 +471,6 @@ def _semantic_repo(tmp_path: Path, graph: dict | None = None) -> tuple[Path, str
     (repo / "src/app.py").write_text("print('runtime')\n", encoding="utf-8")
     graph_root = repo / "graphify-out"
     graph_root.mkdir()
-    (graph_root / "graph.json").write_bytes(
-        (json.dumps(graph or {"nodes": [], "links": []}, sort_keys=True) + "\n").encode()
-    )
     (graph_root / "manifest.json").write_bytes(b"semantic-manifest\n")
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "Graphify test"], cwd=repo, check=True)
@@ -483,6 +480,9 @@ def _semantic_repo(tmp_path: Path, graph: dict | None = None) -> tuple[Path, str
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
+    semantic_graph = dict(graph or {"nodes": [], "links": []})
+    semantic_graph["built_at_commit"] = commit
+    (graph_root / "graph.json").write_bytes((json.dumps(semantic_graph, sort_keys=True) + "\n").encode())
     return repo, commit
 
 
@@ -516,6 +516,7 @@ def test_main_explicit_input_and_output_override_defaults(tmp_path: Path) -> Non
     explicit_graph = {
         "nodes": [{"id": "runtime", "label": "explicit-input", "source_file": "src/app.py"}],
         "links": [],
+        "built_at_commit": commit,
     }
     explicit_input.write_text(json.dumps(explicit_graph), encoding="utf-8")
     output = tmp_path / "explicit-output"
@@ -536,6 +537,67 @@ def test_main_missing_default_semantic_graph_fails_before_output(tmp_path: Path)
     (repo / "graphify-out/graph.json").unlink()
 
     with pytest.raises(views.GraphifyViewsError, match="run the full Graphify skill"):
+        views.main(["--repo-root", str(repo)])
+
+    assert not (repo / "graphify-out/views").exists()
+
+
+@pytest.mark.parametrize("symlink_default", [False, True])
+def test_main_rejects_output_that_aliases_semantic_graph(tmp_path: Path, symlink_default: bool) -> None:
+    repo, _ = _semantic_repo(tmp_path)
+    semantic_graph = repo / "graphify-out/graph.json"
+    manifest = repo / "graphify-out/manifest.json"
+    before = (semantic_graph.read_bytes(), manifest.read_bytes())
+    if symlink_default:
+        (repo / "graphify-out/views").symlink_to(".")
+        args = ["--repo-root", str(repo)]
+    else:
+        args = ["--repo-root", str(repo), "--output", str(repo / "graphify-out")]
+
+    with pytest.raises(views.GraphifyViewsError, match="overlaps semantic graph"):
+        views.main(args)
+
+    assert (semantic_graph.read_bytes(), manifest.read_bytes()) == before
+    assert not (repo / "graphify-out/current").exists()
+    assert not (repo / "graphify-out/views/current").exists()
+
+
+@pytest.mark.parametrize("provenance", [None, "stale"])
+def test_main_rejects_missing_or_stale_semantic_provenance(tmp_path: Path, provenance: str | None) -> None:
+    repo, commit = _semantic_repo(tmp_path)
+    graph_path = repo / "graphify-out/graph.json"
+    graph = json.loads(graph_path.read_text())
+    if provenance is None:
+        graph.pop("built_at_commit")
+    else:
+        graph["built_at_commit"] = provenance
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    with pytest.raises(views.GraphifyViewsError, match="run the full Graphify skill"):
+        views.main(["--repo-root", str(repo)])
+
+    assert graph_path.is_file()
+    assert not (repo / "graphify-out/views").exists()
+
+
+@pytest.mark.parametrize(
+    "graph",
+    [
+        {"built_at_commit": "current", "manifest": {}},
+        {"built_at_commit": "current", "nodes": {}, "links": []},
+        {"built_at_commit": "current", "nodes": [None], "links": []},
+        {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [None]},
+        {"built_at_commit": "current", "nodes": [{"id": ""}], "links": []},
+        {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [{"source": "node"}]},
+    ],
+)
+def test_main_rejects_non_graph_semantic_inputs(tmp_path: Path, graph: dict) -> None:
+    repo, commit = _semantic_repo(tmp_path)
+    graph["built_at_commit"] = commit
+    graph_path = repo / "graphify-out/graph.json"
+    graph_path.write_text(json.dumps(graph), encoding="utf-8")
+
+    with pytest.raises(views.GraphifyViewsError, match="semantic graph"):
         views.main(["--repo-root", str(repo)])
 
     assert not (repo / "graphify-out/views").exists()

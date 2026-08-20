@@ -916,7 +916,7 @@ def _read_sources(root: Path, paths: Iterable[str]) -> dict[str, str]:
     return result
 
 
-def _semantic_graph(root: Path, explicit_input: Path | None) -> dict[str, Any]:
+def _semantic_graph(root: Path, explicit_input: Path | None, commit: str) -> dict[str, Any]:
     """Load Graphify's full semantic graph without invoking Graphify extraction."""
 
     path = explicit_input or root / "graphify-out" / "graph.json"
@@ -929,8 +929,41 @@ def _semantic_graph(root: Path, explicit_input: Path | None) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as exc:
         raise GraphifyViewsError(f"cannot read semantic Graphify graph {path}: {exc}") from exc
     if not isinstance(value, Mapping):
-        raise GraphifyViewsError(f"semantic Graphify graph must be a JSON object: {path}")
+        raise GraphifyViewsError(f"semantic graph must be a JSON object: {path}")
+    nodes = value.get("nodes")
+    if not isinstance(nodes, list):
+        raise GraphifyViewsError("semantic graph nodes must be a list")
+    for index, node in enumerate(nodes):
+        if not isinstance(node, Mapping):
+            raise GraphifyViewsError(f"semantic graph node {index} must be an object")
+        node_id = node.get("id")
+        if node_id is None or isinstance(node_id, (Mapping, list)) or not str(node_id).strip():
+            raise GraphifyViewsError(f"semantic graph node {index} has no usable id")
+    link_key = "links" if "links" in value else "edges" if "edges" in value else None
+    links = value.get(link_key) if link_key else None
+    if not isinstance(links, list):
+        raise GraphifyViewsError("semantic graph requires a links or edges list")
+    for index, edge in enumerate(links):
+        if not isinstance(edge, Mapping):
+            raise GraphifyViewsError(f"semantic graph edge {index} must be an object")
+        for endpoint in ("source", "target"):
+            endpoint_value = edge.get(endpoint)
+            if endpoint_value is None or isinstance(endpoint_value, (Mapping, list)) or not str(endpoint_value).strip():
+                raise GraphifyViewsError(f"semantic graph edge {index} has no usable {endpoint}")
+    if value.get("built_at_commit") != commit:
+        raise GraphifyViewsError(
+            "semantic graph provenance does not match current HEAD; run the full Graphify skill before updating views"
+        )
     return dict(value)
+
+
+def _current_commit(root: Path) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -942,16 +975,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = load_config(args.config)
     root = args.repo_root.resolve()
-    graph = _semantic_graph(root, args.input)
-    tracked = _tracked_paths(root, config)
     output_root = args.output or root / "graphify-out" / "views"
+    semantic_input = (args.input or root / "graphify-out" / "graph.json").resolve(strict=False)
+    commit = _current_commit(root)
+    graph = _semantic_graph(root, args.input, commit)
+    if (output_root / "graph.json").resolve(strict=False) == semantic_input:
+        raise GraphifyViewsError(f"output {output_root} overlaps semantic graph {semantic_input}")
+    tracked = _tracked_paths(root, config)
     source_texts = _read_sources(root, tracked)
-    commit = subprocess.run(
-        ["git", "-C", str(root), "rev-parse", "HEAD"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
     views = build_views(graph, config, tracked_paths=tracked, source_texts=source_texts, built_at_commit=commit)
     write_outputs(output_root, views, config)
     print(f"updated {len(views)} Graphify views under {output_root}")
