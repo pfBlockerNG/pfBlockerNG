@@ -11,8 +11,9 @@
 #
 #   URL        FreeBSD-ports HTTPS clone URL
 #   REF        branch, tag, or full 40-hex commit SHA to fetch (e.g. pfblockerng/use-github)
-#   DEST       destination directory — created (fresh clone) if absent; an EXISTING
-#              git work-tree is fetched + checked out at REF (idempotent reuse)
+#   DEST       destination directory — created (fresh clone) if absent or an empty
+#              directory; an EXISTING git work-tree is fetched + checked out at REF
+#              (idempotent reuse); a non-empty non-git DEST is refused
 #   CHANNEL    build-pkg-portable --channel value (stable|testing|edge|nightly)
 #   PHP        build-pkg-portable --php value (e.g. 8.3)
 #   PYFLAVOR   build-pkg-portable --py-flavor value (e.g. py311)
@@ -77,7 +78,11 @@ if [ -e "${DEST}/.git" ]; then
 	git -C "$DEST" remote set-url origin "$URL" 2>/dev/null || git -C "$DEST" remote add origin "$URL"
 	git -C "$DEST" fetch --depth 1 --filter=blob:none origin "$REF"
 	co_target=FETCH_HEAD
-elif [ -e "$DEST" ]; then
+elif [ -e "$DEST" ] && { [ ! -d "$DEST" ] || [ -n "$(ls -A "$DEST")" ]; }; then
+	# Refuse only when there is something to protect. An EMPTY directory (issue #2490:
+	# historically Docker's bind-mount side effect, generally any mkdir that beat the
+	# first run) falls through to the fresh-clone branches below, which both tolerate
+	# an existing empty DEST.
 	printf '%s: %s exists but is not a git work-tree — refusing to overwrite\n' "$0" "$DEST" >&2
 	exit 1
 elif _pfb_is_full_sha "$REF"; then
