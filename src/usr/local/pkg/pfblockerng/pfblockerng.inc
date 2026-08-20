@@ -56,10 +56,22 @@ function pfb_install_settings_family_capture_restore(
 	$from_version ??= 'pfb_settings_family_from_version';
 	$replace ??= 'pfb_settings_family_replace';
 	$source_family = $current();
+	$installed_family = $from_version((string) $version());
+	$bridge_rank = PFB_SETTINGS_FAMILY_RANK['3.3'];
+	$source_rank = (is_string($source_family) && isset(PFB_SETTINGS_FAMILY_RANK[$source_family]))
+		? PFB_SETTINGS_FAMILY_RANK[$source_family]
+		: -1;
+	$target_rank = (is_string($installed_family) && isset(PFB_SETTINGS_FAMILY_RANK[$installed_family]))
+		? PFB_SETTINGS_FAMILY_RANK[$installed_family]
+		: NULL;
+	// Owner ruling #2158: 3.3 is the migration floor. A 4.x package must not
+	// accept a missing/3.2 source; only a 3.3 target may bootstrap a bare marker.
+	if ($target_rank !== NULL && $target_rank > $bridge_rank && $source_rank < $bridge_rank) {
+		throw new RuntimeException('pfBlockerNG: install the 3.3 bridge before a 4.x family');
+	}
 	if ($source_family === NULL || !$save($source_family)) {
 		throw new RuntimeException('pfBlockerNG: unable to save source settings family');
 	}
-	$installed_family = $from_version((string) $version());
 	if ($installed_family === NULL || !$replace($installed_family)) {
 		$replace($source_family);
 		throw new RuntimeException('pfBlockerNG: unable to restore settings family');
