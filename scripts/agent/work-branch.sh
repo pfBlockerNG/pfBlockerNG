@@ -145,7 +145,12 @@ main() {
 		fi
 		require_tool python3
 	fi
-	git -C "$root" fetch origin >/dev/null 2>&1
+	if git -C "$root" remote get-url origin >/dev/null 2>&1; then
+		if ! git -C "$root" fetch origin >/dev/null 2>&1; then
+			echo "work-branch.sh: git fetch origin failed" >&2
+			exit 1
+		fi
+	fi
 	source_sha=''
 	graph_branch=''
 	if [ "$graphify_store_active" -eq 1 ]; then

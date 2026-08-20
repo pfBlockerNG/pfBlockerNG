@@ -103,6 +103,29 @@ def test_republish_same_sha_moves_tag_and_keeps_history(tmp_path: Path) -> None:
     assert int(git(store_root, "rev-list", "--count", "devel")) == 2
 
 
+def test_publish_rejects_builder_sha_mismatch_before_store_mutation(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / "store"
+    publish(source, store_root, "devel", sha)
+    before = git(store_root, "rev-parse", "devel")
+    (source / "graphify-out" / "graph.json").write_text("changed\n", encoding="utf-8")
+    result = run_store(
+        "publish",
+        "--store-root",
+        str(store_root),
+        "--builder",
+        str(source),
+        "--branch",
+        "devel",
+        "--sha",
+        "b" * 40,
+    )
+    assert result.returncode != 0
+    assert git(store_root, "rev-parse", "devel") == before
+    assert git(store_root, "tag", "--list", "source/devel/" + "b" * 40) == ""
+
+
 def test_seed_prefers_exact_then_latest_snapshot_of_same_branch(tmp_path: Path) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
@@ -162,11 +185,14 @@ def test_corrupt_store_fail_without_touching_target(tmp_path: Path, corrupt_kind
 def test_symlink_store_root_is_rejected_before_any_write(tmp_path: Path) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
-    real_store = tmp_path / "real-store"
+    real_store_parent = tmp_path / "real-store-parent"
+    real_store_parent.mkdir()
+    real_store = real_store_parent / "real-store"
     publish(source, real_store, "devel", sha)
     before = git(real_store, "rev-parse", "devel")
-    linked_store = tmp_path / "linked-store"
-    linked_store.symlink_to(real_store, target_is_directory=True)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_store_parent, target_is_directory=True)
+    linked_store = linked_parent / "real-store"
     (source / "graphify-out" / "graph.json").write_text("changed\n", encoding="utf-8")
 
     for command in ("has-exact", "restore-exact", "seed", "publish"):
@@ -185,6 +211,56 @@ def test_symlink_store_root_is_rejected_before_any_write(tmp_path: Path) -> None
             assert marker.read_text(encoding="utf-8") == "keep\n"
 
     assert git(real_store, "rev-parse", "devel") == before
+
+
+def test_symlinked_builder_parent_is_rejected_before_store_creation(tmp_path: Path) -> None:
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    source = real_parent / "source"
+    sha = make_repo(source)
+    linked_parent = tmp_path / "linked-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    result = run_store(
+        "publish",
+        "--store-root",
+        str(tmp_path / "store"),
+        "--builder",
+        str(linked_parent / "source"),
+        "--branch",
+        "devel",
+        "--sha",
+        sha,
+    )
+    assert result.returncode != 0
+    assert not (tmp_path / "store").exists()
+
+
+def test_symlinked_restore_target_parent_is_rejected_before_delete(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / "store"
+    publish(source, store_root, "devel", sha)
+    real_parent = tmp_path / "real-target-parent"
+    real_parent.mkdir()
+    target = real_parent / "target"
+    target.mkdir()
+    marker = target / "keep.txt"
+    marker.write_text("keep\n", encoding="utf-8")
+    linked_parent = tmp_path / "linked-target-parent"
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    result = run_store(
+        "restore-exact",
+        "--store-root",
+        str(store_root),
+        "--branch",
+        "devel",
+        "--sha",
+        sha,
+        "--target",
+        str(linked_parent / "target"),
+    )
+    assert result.returncode != 0
+    assert marker.read_text(encoding="utf-8") == "keep\n"
 
 
 def test_restore_rejects_unmanaged_graphify_target_symlink(tmp_path: Path) -> None:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import shutil
 import subprocess
@@ -45,11 +46,15 @@ def _tag(branch: str, sha: str) -> str:
     return f"source/{branch}/{sha}"
 
 
+def _physical_path(path: Path, label: str) -> Path:
+    absolute = Path(os.path.abspath(path))
+    if absolute != absolute.resolve(strict=False):
+        raise StoreError(f"refusing symlinked {label} path: {absolute}")
+    return absolute
+
+
 def _store_root(path: Path) -> Path:
-    path = path.absolute()
-    if path.is_symlink():
-        raise StoreError(f"refusing symlinked Graphify store root: {path}")
-    return path
+    return _physical_path(path, "Graphify store root")
 
 
 def _ensure_store(path: Path) -> Path:
@@ -68,6 +73,7 @@ def _ensure_store(path: Path) -> Path:
 
 
 def _source_payload(builder: Path) -> Path:
+    builder = _physical_path(builder, "builder")
     if not builder.is_dir() or builder.is_symlink():
         raise StoreError(f"builder is not a directory: {builder}")
     payload = builder / "graphify-out"
@@ -77,6 +83,7 @@ def _source_payload(builder: Path) -> Path:
 
 
 def _replace_payload(source: Path, target_root: Path) -> None:
+    target_root = _physical_path(target_root, "restore target")
     if not target_root.is_dir() or target_root.is_symlink():
         raise StoreError(f"target is not a directory: {target_root}")
     target = target_root / "graphify-out"
@@ -128,6 +135,7 @@ def has_exact(store_root: Path, branch: str, sha: str) -> bool:
 def restore_exact(store_root: Path, branch: str, sha: str, target: Path) -> None:
     _valid_sha(sha)
     store_root = _store_root(store_root)
+    target = _physical_path(target, "restore target")
     if not store_root.is_dir():
         raise StoreError(f"Graphify store is missing: {store_root}")
     _valid_branch(store_root, branch)
@@ -140,6 +148,7 @@ def restore_exact(store_root: Path, branch: str, sha: str, target: Path) -> None
 def seed(store_root: Path, branch: str, sha: str, target: Path) -> bool:
     _valid_sha(sha)
     store_root = _store_root(store_root)
+    target = _physical_path(target, "restore target")
     if not store_root.is_dir():
         return False
     _valid_branch(store_root, branch)
@@ -154,7 +163,11 @@ def seed(store_root: Path, branch: str, sha: str, target: Path) -> bool:
 
 def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
     _valid_sha(sha)
+    builder = _physical_path(builder, "builder")
     payload = _source_payload(builder)
+    head = _run(builder, "rev-parse", "HEAD").stdout.strip()
+    if head != sha:
+        raise StoreError(f"builder HEAD {head} does not match source SHA {sha}")
     store = _ensure_store(store_root)
     _valid_branch(store, branch)
     if _branch_exists(store, branch):
