@@ -233,23 +233,24 @@ def test_slow_listener_is_bounded_and_ignored(metrics: Any) -> None:
     responses = healthy()
 
     def slow(handler: SerenaHandler) -> None:
-        body = json.dumps({"status": "alive"}).encode()
+        body = b"{}"
         handler.send_response(200)
         handler.send_header("Content-Type", "application/json")
+        handler.send_header("Content-Length", str(len(body)))
         handler.end_headers()
+        handler.wfile.flush()
         try:
             for byte in body:
+                time.sleep(0.04)
                 handler.wfile.write(bytes((byte,)))
                 handler.wfile.flush()
-                time.sleep(0.02)
         except BrokenPipeError:
             pass
 
     responses["/heartbeat"] = slow
     with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
         metrics.REQUEST_TIMEOUT = 0.05
-        assert metrics.discover_instances() == []
+        assert metrics._request_json(port, "/heartbeat") is None
 
 
 def test_html_escapes_metacharacters_and_removes_controls(metrics: Any) -> None:
@@ -379,7 +380,16 @@ def test_http_surface_rejects_untrusted_host_and_accepts_tailnet_host(metrics: A
 
 @pytest.mark.parametrize(
     "host",
-    ["foo.ts.net:bad", "foo.ts.net:443@evil", "127.0.0.1:bad", "foo.ts.net:443:evil", "evil@foo.ts.net"],
+    [
+        ".ts.net",
+        "foo..ts.net",
+        "foo.ts.net:",
+        "foo.ts.net:bad",
+        "foo.ts.net:443@evil",
+        "127.0.0.1:bad",
+        "foo.ts.net:443:evil",
+        "evil@foo.ts.net",
+    ],
 )
 def test_http_surface_rejects_malformed_host(metrics: Any, host: str) -> None:
     server = metrics.make_server(0)
@@ -400,7 +410,7 @@ def test_http_surface_rejects_malformed_host(metrics: Any, host: str) -> None:
         server.server_close()
 
 
-@pytest.mark.parametrize("method", ["HEAD", "TRACE", "CONNECT", "DELETE", "OPTIONS", "PATCH", "POST", "PUT"])
+@pytest.mark.parametrize("method", ["HEAD", "TRACE", "CONNECT", "DELETE", "OPTIONS", "PATCH", "POST", "PUT", "FOO"])
 def test_http_surface_rejects_every_non_get_method(metrics: Any, method: str) -> None:
     server = metrics.make_server(0)
     thread = threading.Thread(target=server.serve_forever)
