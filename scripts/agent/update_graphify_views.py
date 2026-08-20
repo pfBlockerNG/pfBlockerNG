@@ -787,8 +787,9 @@ def _prune_generations(generations: Path, current: Path) -> None:
         key=lambda path: path.stat().st_mtime_ns,
         reverse=True,
     )
+    rollback = [path.resolve() for path in candidates if path.resolve() != active]
     keep = {active}
-    keep.update(path.resolve() for path in candidates if path.resolve() != active and len(keep) < 2)
+    keep.update(rollback[:1])
     for path in candidates:
         if path.resolve() not in keep:
             with contextlib.suppress(OSError):
