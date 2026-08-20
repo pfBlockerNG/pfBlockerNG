@@ -141,7 +141,7 @@ main() {
 			echo "work-branch.sh: failed to remove incomplete worktree '$path'" >&2
 			exit 1
 		}
-		git branch -d "$branch" >/dev/null 2>&1 || {
+		git branch -D "$branch" >/dev/null 2>&1 || {
 			echo "work-branch.sh: failed to delete incomplete branch '$branch'" >&2
 			exit 1
 		}
