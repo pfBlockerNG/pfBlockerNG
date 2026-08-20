@@ -13,7 +13,8 @@
 #   REF        branch, tag, or full 40-hex commit SHA to fetch (e.g. pfblockerng/use-github)
 #   DEST       destination directory — created (fresh clone) if absent or an empty
 #              directory; an EXISTING git work-tree is fetched + checked out at REF
-#              (idempotent reuse); a non-empty non-git DEST is refused
+#              (idempotent reuse); any other existing DEST (non-empty directory,
+#              or a non-directory of any kind) is refused
 #   CHANNEL    build-pkg-portable --channel value (stable|testing|edge|nightly)
 #   PHP        build-pkg-portable --php value (e.g. 8.3)
 #   PYFLAVOR   build-pkg-portable --py-flavor value (e.g. py311)
