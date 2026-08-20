@@ -189,6 +189,11 @@ def _endpoint(edge: Mapping[str, Any], side: str) -> str | None:
     return str(value) if value is not None else None
 
 
+def _usable_endpoint(edge: Mapping[str, Any], key: str) -> bool:
+    value = edge.get(key)
+    return not (value is None or isinstance(value, (Mapping, list)) or not str(value).strip())
+
+
 def _graph(
     nodes: Iterable[Mapping[str, Any]],
     links: Iterable[Mapping[str, Any]],
@@ -916,10 +921,14 @@ def _read_sources(root: Path, paths: Iterable[str]) -> dict[str, str]:
     return result
 
 
+def _canonical_graph_path(root: Path) -> Path:
+    return root / "graphify-out" / "graph.json"
+
+
 def _semantic_graph(root: Path, explicit_input: Path | None, commit: str) -> dict[str, Any]:
     """Load Graphify's full semantic graph without invoking Graphify extraction."""
 
-    path = explicit_input or root / "graphify-out" / "graph.json"
+    path = explicit_input or _canonical_graph_path(root)
     if explicit_input is None and not path.is_file():
         raise GraphifyViewsError(
             f"semantic Graphify graph is missing at {path}; run the full Graphify skill before updating views"
@@ -947,13 +956,10 @@ def _semantic_graph(root: Path, explicit_input: Path | None, commit: str) -> dic
         if not isinstance(edge, Mapping):
             raise GraphifyViewsError(f"semantic graph edge {index} must be an object")
 
-        def usable(endpoint: str) -> bool:
-            endpoint_value = edge.get(endpoint)
-            return not (
-                endpoint_value is None or isinstance(endpoint_value, (Mapping, list)) or not str(endpoint_value).strip()
-            )
-
-        if not ((usable("source") and usable("target")) or (usable("from") and usable("to"))):
+        if not (
+            (_usable_endpoint(edge, "source") and _usable_endpoint(edge, "target"))
+            or (_usable_endpoint(edge, "from") and _usable_endpoint(edge, "to"))
+        ):
             raise GraphifyViewsError(f"semantic graph edge {index} requires source/target or from/to")
     if value.get("built_at_commit") != commit:
         raise GraphifyViewsError(
@@ -989,14 +995,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     config = load_config(args.config)
     root = args.repo_root.resolve()
+    canonical_input = _canonical_graph_path(root).resolve(strict=False)
     output_root = args.output or root / "graphify-out" / "views"
-    canonical_input = (root / "graphify-out" / "graph.json").resolve(strict=False)
-    semantic_input = (args.input or root / "graphify-out" / "graph.json").resolve(strict=False)
+    semantic_input = (args.input or _canonical_graph_path(root)).resolve(strict=False)
     commit = _current_commit(root)
     _require_clean_tracked_tree(root)
     graph = _semantic_graph(root, args.input, commit)
     output_graph = (output_root / "graph.json").resolve(strict=False)
-    if output_graph in {semantic_input, canonical_input}:
+    canonical_root = canonical_input.parent
+    canonical_views = (canonical_root / "views").resolve(strict=False)
+    resolved_output = output_root.resolve(strict=False)
+    output_inside_canonical = canonical_root == resolved_output or canonical_root in resolved_output.parents
+    output_ancestor_of_canonical = resolved_output in canonical_root.parents
+    if output_graph in {semantic_input, canonical_input} or (
+        resolved_output != canonical_views and (output_inside_canonical or output_ancestor_of_canonical)
+    ):
         raise GraphifyViewsError(f"output {output_root} overlaps semantic graph {semantic_input}")
     tracked = _tracked_paths(root, config)
     source_texts = _read_sources(root, tracked)
