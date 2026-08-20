@@ -345,6 +345,15 @@ CODEGRAPH
     The output should equal "$(printf 'issue/12-tld\t%s/abs-target' "$fixture")"
     The stderr should include 'Preparing worktree'
   End
+
+  It 'keeps legacy offline worktree creation when origin is unreachable and the helper is absent'
+    git_fixture -C "$primary" remote add origin "$fixture/missing-origin"
+    When run sh -c 'cd "$1" && exec sh "$2" issue 13 tld --worktree --base HEAD --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/offline"
+    The status should equal 0
+    The output should equal "$(printf 'issue/13-tld\t%s/offline' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    Assert [ -f "$fixture/offline/.codegraph/codegraph.db" ]
+  End
 End
 
 Describe 'work-branch.sh --worktree claim gate (workflow.md "Claim")'
