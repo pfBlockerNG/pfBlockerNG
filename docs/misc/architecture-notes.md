@@ -1535,8 +1535,11 @@ The reload entrypoint `sync_package_pfblockerng()` now takes a `{scope, force, t
 - **`scope`** ∈ `ip` | `dnsbl` | `both` — which side reloads.
 - **`force`** ∈ bool — `TRUE` = always reparse (bypass the reuse gate); `FALSE` = respect ADR-42's
   detector (an unchanged feed is reuse-cached, not reparsed — the #517-style "no change" pass).
-- **`trigger`** ∈ `cron` | `manual` | `force` — identity only, mapped to the ADR-12 hook env
+- **`trigger`** ∈ `cron` | `manual` | `force` — the caller's identity, mapped to the ADR-12 hook env
   `PFB_TRIGGER` by `pfb_req_to_hook_trigger()`: `cron`→`cron`, `manual`→`update`, `force`→`force-reload`.
+  It also carries two behavioural roles: `trigger=cron` (with `force=FALSE`) selects the cron-tick
+  reuse plan inside `pfb_sync_run_plan()`, and it selects the benign-deferral exit code below
+  (issue #2505).
 
 `sync_package_pfblockerng()` accepts the request array **or** a legacy verb string (back-compat).
 `pfb_trigger_request($verb)` maps each legacy verb to its request; the string path additionally
@@ -1582,7 +1585,13 @@ non-blocking flock (`pfb_feed_pass.lock` under `$pfb['dbdir']`; helpers `pfb_fee
 `pfblockerng.inc`). Both funnels — `sync_package_pfblockerng()` and `pfblockerng_sync_cron()` —
 acquire it at entry (`pfb_feed_pass_begin()`) and skip with a logged message when another pass
 holds it; the tick pre-checks a busy probe and **defers** (not skips) a busy feed-cron dispatch via
-the existing `pending` mechanism, so the run retries next tick. The `bl`/`bls`/`dcc` download verbs
+the existing `pending` mechanism, so the run retries next tick. A lock deferral (dispatcher or
+feed-pass) exits **0** for the unattended shapes — the array request `trigger=cron force=false`
+(issue #2505) and the bare `cron` verb (issue #2491) — because the pass stands down with its durable
+retry state intact; every operator-initiated request (`trigger=manual`/`force`, any `force=true`,
+Force Check, the deprecated string verbs) keeps exiting **1**. Dispatcher-lock deferrals in both
+funnels also raise a `LOG_NOTICE` syslog line (feed-pass parity), so a wedged holder is visible
+outside `pfblockerng.log`. The `bl`/`bls`/`dcc` download verbs
 are deliberately unguarded (`bls` runs synchronously inside a pass — a pass-level lock there would
 deadlock the parent). The lock is kernel-released on process death; a crashed pass never wedges
 scheduling.
