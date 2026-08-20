@@ -416,7 +416,9 @@ def test_http_surface_is_json_html_loopback_and_get_only(metrics: Any) -> None:
             page = connection.getresponse()
             assert page.status == 200
             assert page.getheader("Content-Type") == "text/html; charset=utf-8"
-            assert "pfBlockerNG" in page.read().decode()
+            page_body = page.read().decode()
+            assert "pfBlockerNG" in page_body
+            assert "Totals: calls=3, input=16, output=10" in page_body
             connection.request("GET", "/missing")
             assert connection.getresponse().status == 404
             connection.request("POST", "/api/instances")

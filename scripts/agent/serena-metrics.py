@@ -219,6 +219,7 @@ def render_html(instances: list[dict[str, Any]]) -> str:
     rows: list[str] = []
     for instance in instances:
         project = instance["active_project"]
+        totals = instance["totals"]
         tools = "".join(
             f"<li>{_html_text(name)}: calls={values['num_times_called']}, "
             f"input={values['input_tokens']}, output={values['output_tokens']}</li>"
@@ -230,7 +231,8 @@ def render_html(instances: list[dict[str, Any]]) -> str:
             f"<p>Path: {_html_text(project['path'])}; language: {_html_text(project['language'])}; "
             f"client: {_html_text(instance['current_client'])}; Serena: {_html_text(instance['serena_version'])}; "
             f"estimator: {_html_text(instance['token_count_estimator_name'])}</p>"
-            f"<p>Totals: {_html_text(instance['totals'])}</p><ul>{tools}</ul></section>"
+            f"<p>Totals: calls={totals['num_times_called']}, input={totals['input_tokens']}, "
+            f"output={totals['output_tokens']}</p><ul>{tools}</ul></section>"
         )
     return (
         "<!doctype html><html><head><meta charset='utf-8'><title>Serena metrics</title></head>"
