@@ -108,6 +108,10 @@ class Role(NamedTuple):
     copilot: tuple[tuple[str, str], ...]
 
 
+def _common_tiers(bound: list[Role]) -> set[str]:
+    return set(bound[0].tiers).intersection(*(role.tiers for role in bound[1:]))
+
+
 def _parse_tiers_conf(text: str, problems: list[str]) -> dict[str, str]:
     """Parse KEY=VALUE tier lines; require exactly the six known keys, once each."""
     values: dict[str, str] = {}
@@ -242,7 +246,7 @@ def _check_claude_workflows(
             problems.append(f"role(s) {names}: missing Claude workflow {_CLAUDE_WORKFLOWS}/{target}.js")
             continue
         pins = _scan_model_pins(path)
-        allowed = {tier for role in bound for tier in role.tiers}
+        allowed = _common_tiers(bound)
         for pin in sorted(set(pins)):
             tier = model_tier.get(pin)
             if tier is None:
@@ -278,7 +282,7 @@ def _check_codex_agents(
             problems.append(f"{_CODEX_AGENTS}/{target}.toml: unparsable TOML: {exc}")
             continue
         model, sandbox = data.get("model"), data.get("sandbox_mode")
-        allowed = {tiers_conf.get(f"{tier.upper()}_CODEX") for role in bound for tier in role.tiers} - {None}
+        allowed = {tiers_conf.get(f"{tier.upper()}_CODEX") for tier in _common_tiers(bound)} - {None}
         if isinstance(model, str):
             agent_model[target] = model
         if not isinstance(model, str) or model not in allowed:
@@ -364,7 +368,7 @@ def _check_copilot_agents(
         if not fields.get("description"):
             problems.append(f"{_COPILOT_AGENTS}/{target}.agent.md: front matter has no description")
         model = fields.get("model")
-        allowed = {tiers_conf.get(f"{tier.upper()}_COPILOT") for role in bound for tier in role.tiers} - {None}
+        allowed = {tiers_conf.get(f"{tier.upper()}_COPILOT") for tier in _common_tiers(bound)} - {None}
         if model is not None:
             agent_model[target] = model
         if model is None or model not in allowed:
