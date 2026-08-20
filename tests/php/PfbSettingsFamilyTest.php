@@ -67,6 +67,9 @@ final class PfbSettingsFamilyTest extends TestCase
 		$this->assertSame('4.0', pfb_settings_family_from_version('4.0.0'));
 		$this->assertSame('4.1', pfb_settings_family_from_version('4.1.0'));
 		$this->assertSame('4.1', pfb_settings_family_from_version('20260819010101.abcdef1'));
+		// pfb_pkg_ver() prefixes 'v'; POST-INSTALL on nightly was failing closed as NULL (lab finding 16).
+		$this->assertSame('4.1', pfb_settings_family_from_version('v20260819010101.abcdef1'));
+		$this->assertSame('3.3', pfb_settings_family_from_version('v3.3.2'));
 		$this->assertNull(pfb_settings_family_from_version('5.0.1'));
 		$this->assertNull(pfb_settings_family_from_version('20260230010101.abcdef1'));
 		$this->assertNull(pfb_settings_family_from_version('20260819010101.ABCDEF1'));
@@ -280,7 +283,7 @@ final class PfbSettingsFamilyTest extends TestCase
 	{
 		$order = [];
 		$family = pfb_install_settings_family_capture_restore(
-			static function () use (&$order): string { $order[] = 'current'; return '3.2'; },
+			static function () use (&$order): string { $order[] = 'current'; return '3.3'; },
 			static function (string $value) use (&$order): bool { $order[] = 'save'; return TRUE; },
 			static function () use (&$order): string { $order[] = 'version'; return '4.0.0'; },
 			static function (string $value) use (&$order): string { $order[] = 'from-version'; return '4.0'; },
@@ -292,7 +295,7 @@ final class PfbSettingsFamilyTest extends TestCase
 			static function (string $value) use (&$order): bool { $order[] = 'record'; return TRUE; }
 		);
 		$this->assertSame('4.0', $family);
-		$this->assertSame(['current', 'save', 'version', 'from-version', 'replace', 'migrations', 'record'], $order);
+		$this->assertSame(['current', 'version', 'from-version', 'save', 'replace', 'migrations', 'record'], $order);
 	}
 
 	/**

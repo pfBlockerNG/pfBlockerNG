@@ -2239,7 +2239,9 @@ const PFB_NIGHTLY_SETTINGS_FAMILY = '4.1';
 
 function pfb_settings_family_from_version(string $version): ?string
 {
-	$version = trim($version);
+	// pfb_pkg_ver() prefixes 'v'; strip before the nightly stamp so POST-INSTALL
+	// can map vYYYYMMDDHHMMSS.<sha7> to 4.1 (otherwise the stamp never matches).
+	$version = ltrim(trim($version), 'vV');
 	if (preg_match('/^(\d{14})\.[0-9a-f]{7}$/', $version, $match) === 1) {
 		$timestamp = $match[1];
 		return checkdate((int) substr($timestamp, 4, 2), (int) substr($timestamp, 6, 2), (int) substr($timestamp, 0, 4))
@@ -2249,7 +2251,6 @@ function pfb_settings_family_from_version(string $version): ?string
 			? PFB_NIGHTLY_SETTINGS_FAMILY
 			: NULL;
 	}
-	$version = ltrim($version, 'vV');
 	if (preg_match('/^(\d+\.\d+)(?:\.\d+)?(?:[.-].*)?$/', $version, $match) !== 1
 		|| !isset(PFB_SETTINGS_FAMILY_RANK[$match[1]])) {
 		return NULL;

@@ -14,7 +14,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		$installed = pfb_install_settings_family_capture_restore(
 			static function () use (&$order): string {
 				$order[] = 'current';
-				return '3.2';
+				return '3.3';
 			},
 			static function (string $family) use (&$order): bool {
 				$order[] = "save:{$family}";
@@ -44,9 +44,33 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 
 		$this->assertSame('4.0', $installed);
 		$this->assertSame(
-			['current', 'save:3.2', 'version', 'from:4.0.0', 'replace:4.0', 'migrations', 'record:4.0'],
+			['current', 'version', 'from:4.0.0', 'save:3.3', 'replace:4.0', 'migrations', 'record:4.0'],
 			$order
 		);
+	}
+
+	public function testThreeTwoCannotSkipThreeThreeBridgeToFourX(): void
+	{
+		$order = [];
+		try {
+			pfb_install_settings_family_capture_restore(
+				static function () use (&$order): string { $order[] = 'current'; return '3.2'; },
+				static function (string $family) use (&$order): bool { $order[] = "save:{$family}"; return TRUE; },
+				static function () use (&$order): string { $order[] = 'version'; return 'v20260819010101.abcdef1'; },
+				static function (string $version) use (&$order): string {
+					$order[] = "from:{$version}";
+					return '4.1';
+				},
+				static function (string $family) use (&$order): bool { $order[] = "replace:{$family}"; return TRUE; }
+			);
+			$this->fail('3.2 must not skip the 3.3 bridge onto a 4.x family');
+		} catch (RuntimeException $error) {
+			$this->assertSame(
+				'pfBlockerNG: install the 3.3 bridge before a 4.x family',
+				$error->getMessage()
+			);
+		}
+		$this->assertSame(['current', 'version', 'from:v20260819010101.abcdef1'], $order);
 	}
 
 	public function testCaptureAndRestoreFailuresStopBeforeLaterEffects(): void
@@ -54,7 +78,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 		$order = [];
 		try {
 			pfb_install_settings_family_capture_restore(
-			static function () use (&$order): string { $order[] = 'current'; return '3.2'; },
+			static function () use (&$order): string { $order[] = 'current'; return '3.3'; },
 			static function () use (&$order): bool { $order[] = 'save'; return FALSE; },
 			static fn (): string => '4.0.0',
 			static fn (string $version): string => '4.0',
@@ -88,7 +112,7 @@ final class PfbSettingsFamilyPostInstallCaptureTest extends TestCase
 			}
 			$targetRestore = $target === NULL ? [] : ['replace:4.1'];
 			$this->assertSame(
-				['current', 'save:3.3', 'version', 'from-version', ...$targetRestore, 'replace:3.3'],
+				['current', 'version', 'from-version', 'save:3.3', ...$targetRestore, 'replace:3.3'],
 				$order
 			);
 		}
