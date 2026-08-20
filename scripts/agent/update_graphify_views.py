@@ -9,25 +9,26 @@ source graphs on every run.
 from __future__ import annotations
 
 import argparse
+import ast
+import contextlib
 import fnmatch
 import importlib.util
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = Path(__file__).with_name("graphify-views.json")
-SOURCE_VIEWS = ("runtime", "tooling", "test-code", "test-support", "vendor")
+SOURCE_VIEWS = ("runtime", "tooling", "test-code", "test-support", "vendor", "agent-context")
 DERIVED_VIEWS = ("bridge", "investigation", "whole-repository")
 ALL_VIEWS = SOURCE_VIEWS + ("unclassified",) + DERIVED_VIEWS
-IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-IDENTIFIER_SCAN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
-LITERAL_SCAN_RE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 class GraphifyViewsError(ValueError):
@@ -107,16 +108,13 @@ def validate_config(config: Mapping[str, Any]) -> None:
     missing = set(ALL_VIEWS) - set(names)
     if missing:
         raise GraphifyViewsError(f"ownership config is missing views: {', '.join(sorted(missing))}")
+    source_order = [row["name"] for row in rows if row["kind"] == "source"]
+    if source_order != ["vendor", "test-support", "test-code", "agent-context", "tooling", "runtime", "unclassified"]:
+        raise GraphifyViewsError("source ownership views must retain canonical first-match order")
     bridge = config.get("bridge")
     if not isinstance(bridge, Mapping):
         raise GraphifyViewsError("ownership config bridge must be an object")
-    minimum = bridge.get("minimum_identifier_length")
-    if not isinstance(minimum, int) or minimum < 4:
-        raise GraphifyViewsError("bridge minimum_identifier_length must be an integer >= 4")
-    denylist = bridge.get("identifier_denylist")
     support_views = bridge.get("support_views")
-    if not isinstance(denylist, list) or not all(isinstance(item, str) for item in denylist):
-        raise GraphifyViewsError("bridge identifier_denylist must be a string list")
     if (
         not isinstance(support_views, list)
         or not all(isinstance(item, str) for item in support_views)
@@ -221,10 +219,10 @@ def _owner_nodes(
 ) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
     owners: dict[str, str] = {}
     nodes: dict[str, dict[str, Any]] = {}
-    prefixes = _source_prefixes(raw_graph, config)
+    prefixes, ambiguous = _source_prefixes(raw_graph, config)
     for node in _nodes(raw_graph):
         node_id = str(node["id"])
-        owner = _node_owner(node, config, prefixes)
+        owner = _node_owner(node, config, prefixes, ambiguous)
         if owner not in SOURCE_VIEWS:
             continue
         owners[node_id] = str(owner)
@@ -241,23 +239,32 @@ def _graphify_id_prefix(source_file: str) -> str:
     return re.sub(r"\W+", "_", stem).strip("_").casefold()
 
 
-def _source_prefixes(raw_graph: Mapping[str, Any], config: Mapping[str, Any]) -> dict[str, tuple[str, str]]:
+def _source_prefixes(
+    raw_graph: Mapping[str, Any], config: Mapping[str, Any]
+) -> tuple[dict[str, tuple[str, str]], set[str]]:
     prefixes: dict[str, tuple[str, str]] = {}
+    ambiguous: set[str] = set()
     for node in _nodes(raw_graph):
         source = str(node.get("source_file", ""))
         owner = _classify_path_unchecked(source, config) if source else None
         if owner in SOURCE_VIEWS:
             prefix = _graphify_id_prefix(source)
+            if prefix in ambiguous:
+                continue
             existing = prefixes.get(prefix)
             if existing is None:
                 prefixes[prefix] = (owner, source)
             elif existing[0] != owner or existing[1] != source:
                 prefixes.pop(prefix, None)
-    return prefixes
+                ambiguous.add(prefix)
+    return prefixes, ambiguous
 
 
 def _node_owner(
-    node: Mapping[str, Any], config: Mapping[str, Any], prefixes: Mapping[str, tuple[str, str]]
+    node: Mapping[str, Any],
+    config: Mapping[str, Any],
+    prefixes: Mapping[str, tuple[str, str]],
+    ambiguous: set[str],
 ) -> str | None:
     source = str(node.get("source_file", ""))
     if source:
@@ -268,6 +275,8 @@ def _node_owner(
         return str(owner)
     node_id = str(node.get("id", ""))
     matches = [prefix for prefix in prefixes if node_id == prefix or node_id.startswith(prefix + "_")]
+    if any(prefix in ambiguous for prefix in matches):
+        return None
     if not matches:
         return None
     return prefixes[max(matches, key=len)][0]
@@ -276,15 +285,32 @@ def _node_owner(
 def namespace_graph(graph: Mapping[str, Any], view: str) -> dict[str, Any]:
     """Namespace every node and edge so equal labels remain distinct by view."""
 
-    nodes: list[dict[str, Any]] = []
+    nodes_by_id: dict[str, dict[str, Any]] = {}
     ids: set[str] = set()
     for node in _nodes(graph):
         old = str(node["id"])
+        if old in nodes_by_id:
+            existing = nodes_by_id[old]
+            if existing.get("label") != node.get("label"):
+                raise GraphifyViewsError(f"conflicting duplicate node id: {old}")
+            aliases = {
+                str(source)
+                for source in (
+                    existing.get("source_file"),
+                    node.get("source_file"),
+                    *existing.get("source_aliases", []),
+                )
+                if source
+            }
+            existing["source_aliases"] = sorted(aliases)
+            if str(node.get("source_file", "")) < str(existing.get("source_file", "")):
+                existing["source_file"] = node.get("source_file")
+            continue
         new = dict(node)
         new["id"] = _namespace(view, old)
         new["view"] = view
         new["ownership"] = view
-        nodes.append(new)
+        nodes_by_id[old] = new
         ids.add(old)
     links: list[dict[str, Any]] = []
     for edge in _links(graph):
@@ -298,16 +324,16 @@ def namespace_graph(graph: Mapping[str, Any], view: str) -> dict[str, Any]:
         new_edge.pop("from", None)
         new_edge.pop("to", None)
         links.append(new_edge)
-    return _graph(nodes, links, directed=bool(graph.get("directed", False)))
+    return _graph(nodes_by_id.values(), links, directed=bool(graph.get("directed", False)))
 
 
 def _select_source_graph(
     raw_graph: Mapping[str, Any], view: str, config: Mapping[str, Any], tracked: Sequence[str]
 ) -> dict[str, Any]:
     selected: list[dict[str, Any]] = []
-    prefixes = _source_prefixes(raw_graph, config)
+    prefixes, ambiguous = _source_prefixes(raw_graph, config)
     for node in _nodes(raw_graph):
-        owner = _node_owner(node, config, prefixes)
+        owner = _node_owner(node, config, prefixes, ambiguous)
         if owner == view:
             selected.append(node)
     ids = {str(node["id"]) for node in selected}
@@ -334,17 +360,100 @@ def _select_source_graph(
     return _graph(selected, selected_links, directed=bool(raw_graph.get("directed", False)))
 
 
-def _label(node: Mapping[str, Any]) -> str:
-    raw = str(node.get("label", "")).strip()
-    if raw.endswith("()"):
-        raw = raw[:-2]
-    return raw
-
-
-def _identifier(label: str, minimum: int, denylist: set[str]) -> str | None:
-    if len(label) < minimum or label in denylist or not IDENTIFIER_RE.fullmatch(label):
-        return None
-    return label
+def _augment_agent_context_graph(
+    graph: dict[str, Any],
+    tracked: Sequence[str],
+    source_texts: Mapping[str, str],
+    config: Mapping[str, Any],
+) -> dict[str, Any]:
+    tracked_set = set(tracked)
+    nodes = _nodes(graph)
+    links = _links(graph)
+    by_source = _representatives_by_source(nodes)
+    node_ids = {str(node["id"]) for node in nodes}
+    for path in tracked:
+        if Path(path).suffix.lower() not in (".md", ".mdx"):
+            continue
+        text = source_texts.get(path, "")
+        if not text:
+            continue
+        headings: list[tuple[int, str, str]] = []
+        lines = text.splitlines()
+        for line_number, line in enumerate(lines, 1):
+            match = re.match(r"^(#{1,6})\s+(.+?)\s*$", line)
+            if match:
+                headings.append((line_number, match.group(2), match.group(1)))
+        for index, (line_number, title, marks) in enumerate(headings):
+            end = headings[index + 1][0] - 1 if index + 1 < len(headings) else len(lines)
+            description = " ".join(line.strip() for line in lines[line_number:end] if line.strip())[:500]
+            node_id = f"section:{path}:L{line_number}"
+            nodes.append(
+                {
+                    "id": node_id,
+                    "label": title,
+                    "file_type": "document-section",
+                    "source_file": path,
+                    "source_location": f"L{line_number}",
+                    "section_level": len(marks),
+                    "description": description,
+                    "view": "agent-context",
+                    "ownership": "agent-context",
+                }
+            )
+            node_ids.add(node_id)
+        section_for_line = [(line, f"section:{path}:L{line}") for line, _, _ in headings]
+        for target in tracked_set:
+            if target == path or target not in text:
+                continue
+            target_owner = _classify_path_unchecked(target, config)
+            if target_owner is None:
+                continue
+            target_node = by_source.get(target)
+            if target_node is None:
+                target_id = f"reference:{target}"
+                target_node = {
+                    "id": target_id,
+                    "label": target,
+                    "file_type": "file-reference",
+                    "source_file": target,
+                    "source_location": None,
+                    "view": "agent-context",
+                    "ownership": "agent-context",
+                    "target_view": target_owner,
+                    "reference": True,
+                }
+                nodes.append(target_node)
+                node_ids.add(target_id)
+                by_source[target] = target_node
+            else:
+                target_id = str(target_node["id"])
+            occurrence_line = text[: text.find(target)].count("\n") + 1
+            section_id = next(
+                (node_id for line, node_id in reversed(section_for_line) if line <= occurrence_line),
+                str(by_source.get(path, {}).get("id", _file_node_id(path))),
+            )
+            edge = {
+                "source": section_id,
+                "target": target_id,
+                "relation": "path-reference",
+                "evidence": "exact-path-literal",
+                "source_file": path,
+                "target_file": target,
+                "target_view": target_owner,
+                "ownership": "agent-context",
+            }
+            if (
+                section_id in node_ids
+                and target_id in node_ids
+                and not any(
+                    existing.get("source") == section_id
+                    and existing.get("target") == target_id
+                    and existing.get("relation") == "path-reference"
+                    for existing in links
+                )
+            ):
+                links.append(edge)
+    return _graph(nodes, links, directed=True)
 
 
 def _source_line(node: Mapping[str, Any]) -> int:
@@ -374,6 +483,29 @@ def _representatives_by_source(
         if source:
             grouped.setdefault(source, []).append(node)
     return {source: _representative(items) for source, items in grouped.items()}
+
+
+def _python_string_literals(text: str) -> list[str]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return []
+    docstring_values: set[int] = set()
+    for owner in ast.walk(tree):
+        body = getattr(owner, "body", None)
+        if isinstance(body, list) and body:
+            first = body[0]
+            if (
+                isinstance(first, ast.Expr)
+                and isinstance(first.value, ast.Constant)
+                and isinstance(first.value.value, str)
+            ):
+                docstring_values.add(id(first.value))
+    return [
+        str(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstring_values
+    ]
 
 
 def _bridge_edge(
@@ -456,66 +588,25 @@ def derive_bridges(
         target["view"] = owners[target_id]
         add(source, target, evidence="structural-edge", confidence="high", detail=str(edge.get("relation", "edge")))
 
-    bridge_cfg = config["bridge"]
-    minimum = int(bridge_cfg["minimum_identifier_length"])
-    denylist = set(bridge_cfg["identifier_denylist"])
-    support_views = set(bridge_cfg["support_views"])
-    runtime_nodes = nodes_by_view.get("runtime", [])
-    support_nodes = [node for view in support_views for node in nodes_by_view.get(view, [])]
-    support_by_label: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for node in support_nodes:
-        identifier = _identifier(_label(node), minimum, denylist)
-        if identifier:
-            support_source = _path(str(node.get("source_file", "")))
-            if support_source:
-                support_by_label.setdefault(identifier, {}).setdefault(support_source, []).append(node)
-    runtime_by_file: dict[str, list[dict[str, Any]]] = {}
-    for runtime in runtime_nodes:
-        source_file = _path(str(runtime.get("source_file", "")))
-        if source_file:
-            runtime_by_file.setdefault(source_file, []).append(runtime)
-    for source_file, text in source_texts.items():
-        if _classify_path_unchecked(source_file, config) != "runtime":
-            continue
-        candidates = runtime_by_file.get(source_file, [])
-        if not candidates:
-            continue
-        seen_identifiers: set[str] = set()
-        for occurrence in IDENTIFIER_SCAN_RE.finditer(text):
-            identifier = occurrence.group()
-            matches = support_by_label.get(identifier)
-            if matches is None or identifier in seen_identifiers:
-                continue
-            seen_identifiers.add(identifier)
-            occurrence_line = text.count("\n", 0, occurrence.start()) + 1
-            runtime = min(
-                candidates,
-                key=lambda node: abs(_source_line(node) - occurrence_line),
-            )
-            for support_nodes_for_file in matches.values():
-                add(
-                    runtime,
-                    _representative(support_nodes_for_file),
-                    evidence="exact-symbol",
-                    confidence="medium",
-                    detail=identifier,
-                )
-
     support_files: dict[str, dict[str, dict[str, Any]]] = {}
     for support_source, node in _representatives_by_source(nodes_by_view.get("test-support", [])).items():
         support_files.setdefault(Path(support_source).name, {})[support_source] = node
     test_files = _representatives_by_source(nodes_by_view.get("test-code", []))
+    support_by_path = {source: node for candidates in support_files.values() for source, node in candidates.items()}
     for test_file, test in test_files.items():
+        if Path(test_file).suffix.lower() != ".py":
+            continue
         text = source_texts.get(test_file, "")
         if not text:
             continue
-        seen_literals: set[str] = set()
-        for occurrence in LITERAL_SCAN_RE.finditer(text):
-            basename = occurrence.group()
-            candidate_sources = support_files.get(basename)
-            if candidate_sources is None or basename in seen_literals or len(candidate_sources) != 1:
+        for literal in _python_string_literals(text):
+            literal_path = _path(literal)
+            candidate_sources = support_files.get(Path(literal_path).name, {})
+            if literal_path in support_by_path:
+                candidate_sources = {literal_path: support_by_path[literal_path]}
+            if len(candidate_sources) != 1:
                 continue
-            seen_literals.add(basename)
+            basename = next(iter(candidate_sources))
             add(
                 test,
                 next(iter(candidate_sources.values())),
@@ -553,9 +644,13 @@ def build_views(
 
     validate_config(config)
     paths = partition_paths(tracked_paths, config)
+    all_tracked = [path for view_paths in paths.values() for path in view_paths]
     source_graphs: dict[str, dict[str, Any]] = {}
     for view in SOURCE_VIEWS:
-        source_graphs[view] = namespace_graph(_select_source_graph(raw_graph, view, config, paths[view]), view)
+        selected = _select_source_graph(raw_graph, view, config, paths[view])
+        if view == "agent-context":
+            selected = _augment_agent_context_graph(selected, all_tracked, source_texts or {}, config)
+        source_graphs[view] = namespace_graph(selected, view)
     # Bridge derivation needs unnamespaced source IDs and ownership annotations.
     raw_sources: dict[str, dict[str, Any]] = {}
     for view in SOURCE_VIEWS:
@@ -646,39 +741,130 @@ def _view_metadata(config: Mapping[str, Any], name: str, graph: Mapping[str, Any
     }
 
 
+def _replace_symlink(link: Path, target: str) -> None:
+    """Atomically replace one relative symlink."""
+
+    temporary = link.with_name(f".{link.name}.{uuid.uuid4().hex}.tmp")
+    temporary.unlink(missing_ok=True)
+    os.symlink(target, temporary)
+    try:
+        os.replace(temporary, link)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _restore_regular_file(path: Path, source: Path) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    shutil.copy2(source, temporary)
+    os.replace(temporary, path)
+
+
+def _prune_generations(generations: Path, current: Path) -> None:
+    """Keep the published generation and one rollback generation."""
+
+    active = current.resolve()
+    candidates = sorted(
+        (path for path in generations.iterdir() if path.is_dir() and not path.name.startswith(".stage-")),
+        key=lambda path: path.stat().st_mtime_ns,
+        reverse=True,
+    )
+    keep = {active}
+    keep.update(path.resolve() for path in candidates if path.resolve() != active and len(keep) < 2)
+    for path in candidates:
+        if path.resolve() not in keep:
+            with contextlib.suppress(OSError):
+                shutil.rmtree(path)
+
+
 def write_outputs(
     output_root: str | Path,
     views: Mapping[str, Mapping[str, Any]],
     config: Mapping[str, Any],
 ) -> None:
-    """Atomically replace each output only after all JSON has serialized."""
+    """Stage one generation, then publish it with one ``current`` switch."""
 
     validate_config(config)
     root = Path(output_root)
+    root.mkdir(parents=True, exist_ok=True)
     payloads: dict[Path, str] = {}
     for name, graph in views.items():
         if name not in SOURCE_VIEWS + DERIVED_VIEWS:
             raise GraphifyViewsError(f"unexpected output view: {name}")
         graph_text = json.dumps(dict(graph), indent=2, sort_keys=True) + "\n"
         view_text = json.dumps(_view_metadata(config, name, graph), indent=2, sort_keys=True) + "\n"
-        directory = root if name == "investigation" else root / name
+        directory = Path() if name == "investigation" else Path(name)
         payloads[directory / "graph.json"] = graph_text
         payloads[directory / "VIEW.json"] = view_text
-    with tempfile.TemporaryDirectory(
-        prefix="graphify-views-",
-        dir=str(root.parent if root.parent.exists() else Path.cwd()),
-    ) as temp:
-        stage = Path(temp)
-        staged: list[tuple[Path, Path]] = []
-        for destination, text in payloads.items():
-            relative = destination.relative_to(root)
+    generations = root / "generations"
+    generations.mkdir(exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".stage-", dir=generations))
+    generation = generations / f"generation-{uuid.uuid4().hex}"
+    try:
+        for relative, text in payloads.items():
             staged_path = stage / relative
             staged_path.parent.mkdir(parents=True, exist_ok=True)
             staged_path.write_text(text, encoding="utf-8")
-            staged.append((staged_path, destination))
-        for staged_path, destination in staged:
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(staged_path, destination)
+        os.replace(stage, generation)
+    except Exception:
+        shutil.rmtree(stage, ignore_errors=True)
+        raise
+
+    current = root / "current"
+    compatibility = {
+        root / "graph.json": "current/graph.json",
+        root / "VIEW.json": "current/VIEW.json",
+    }
+    if os.path.lexists(current) and not current.is_symlink():
+        raise GraphifyViewsError(f"managed pointer is not a symlink: {current}")
+    previous_current = os.readlink(current) if current.is_symlink() else None
+    managed_compatibility = all(
+        path.is_symlink() and os.readlink(path) == target for path, target in compatibility.items()
+    )
+    if previous_current is not None and not managed_compatibility:
+        raise GraphifyViewsError("current exists but compatibility links are missing or unmanaged")
+
+    legacy: Path | None = None
+    if previous_current is None and any(os.path.lexists(path) for path in compatibility):
+        if any(path.is_symlink() for path in compatibility if os.path.lexists(path)):
+            raise GraphifyViewsError("legacy compatibility paths must be regular files")
+        legacy = generations / f"legacy-{uuid.uuid4().hex}"
+        legacy.mkdir()
+        for relative in payloads:
+            existing = root / relative
+            if existing.is_file() and not existing.is_symlink():
+                destination = legacy / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(existing, destination)
+        if not (legacy / "graph.json").exists():
+            raise GraphifyViewsError("legacy output has no graph.json")
+        _replace_symlink(current, str(legacy.relative_to(root)))
+
+    installed_compatibility: list[Path] = []
+    try:
+        for path, target in compatibility.items():
+            if path.is_symlink() and os.readlink(path) == target:
+                continue
+            _replace_symlink(path, target)
+            installed_compatibility.append(path)
+        _replace_symlink(current, str(generation.relative_to(root)))
+    except Exception:
+        if previous_current is not None:
+            _replace_symlink(current, previous_current)
+        else:
+            current.unlink(missing_ok=True)
+        if legacy is not None:
+            for path in installed_compatibility:
+                relative = Path(path.name)
+                source = legacy / relative
+                if source.exists():
+                    _restore_regular_file(path, source)
+                else:
+                    path.unlink(missing_ok=True)
+        else:
+            for path in installed_compatibility:
+                path.unlink(missing_ok=True)
+        raise
+    _prune_generations(generations, current)
 
 
 def _tracked_paths(root: Path, config: Mapping[str, Any]) -> list[str]:
