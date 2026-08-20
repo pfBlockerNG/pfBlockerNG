@@ -57,28 +57,34 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
   agent_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
       | env -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID -u COPILOT_AGENT_PROMPT \
-        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
         CLAUDECODE=1 sh "$hook" origin "${base}/remote.git"
   }
   codex_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
       | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
-        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+        -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
         CODEX_THREAD_ID=codex-test \
         sh "$hook" origin "${base}/remote.git"
   }
   grok_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
       | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u COPILOT_AGENT_PROMPT \
-        -u COPILOT_CLI -u CODEX_THREAD_ID \
+        -u COPILOT_CLI -u CODEX_THREAD_ID -u OMP_CLI -u PI_CLI \
         GROK_AGENT=1 GROK_SESSION_ID=grok-test \
         sh "$hook" origin "${base}/remote.git"
+  }
+  omp_hook() {
+    cd "${base}/A" && printf '%s\n' "$1" \
+      | env -u CLAUDE_CODE_USER_EMAIL -u CLAUDECODE -u CODEX_THREAD_ID \
+        -u COPILOT_AGENT_PROMPT -u COPILOT_CLI -u GROK_SESSION_ID -u GROK_AGENT \
+        -u PI_CLI OMP_CLI=1 sh "$hook" origin "${base}/remote.git"
   }
   human_hook() {
     cd "${base}/A" && printf '%s\n' "$1" \
       | env -u CLAUDECODE -u CLAUDE_CODE_USER_EMAIL -u CODEX_THREAD_ID \
         -u COPILOT_AGENT_PROMPT -u COPILOT_CLI \
-        -u GROK_SESSION_ID -u GROK_AGENT \
+        -u GROK_SESSION_ID -u GROK_AGENT -u OMP_CLI -u PI_CLI \
         sh "$hook" origin "${base}/remote.git"
   }
 
@@ -109,6 +115,12 @@ Describe 'pre-push agent lease-by-effect guard (issue #1307)'
 
   It 'denies the same stale rewrite for a Grok session'
     When run grok_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
+    The status should equal 1
+    The stderr should include 'unfetched'
+  End
+
+  It 'denies the same stale rewrite for an OMP session'
+    When run omp_hook "refs/heads/devel $a_local refs/heads/devel $remote_tip"
     The status should equal 1
     The stderr should include 'unfetched'
   End
