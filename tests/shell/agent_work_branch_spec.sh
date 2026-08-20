@@ -132,32 +132,42 @@ CODEGRAPH
     Assert [ ! -e "$fixture/no-lock" ]
   End
 
-  It 'removes the worktree and branch when exact snapshot restoration fails'
-    helper="$primary/scripts/agent/graphify-store.py"
-    mv "$helper" "$helper.real.py"
-    cat > "$helper" <<'HELPER'
-#!/usr/bin/env python3
-import pathlib
-import subprocess
-import sys
+  It 'uses the flock fallback when lockf is absent and passes fd 9'
+    fallback="$fixture/flock-bin"; mkdir -p "$fallback"
+    for tool in sh git dirname python3 mkdir tr sed rm pwd; do ln -s "$(command -v "$tool")" "$fallback/$tool"; done
+    ln -s "$stubdir/codegraph" "$fallback/codegraph"
+    cat > "$fallback/flock" <<'FLOCK'
+#!/bin/sh
+printf '%s\n' "$1" > "$WB_FLOCK_USED"
+FLOCK
+    chmod +x "$fallback/flock"
+    export WB_FLOCK_USED="$fixture/flock-used"
+    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" adr 35 graph --worktree --base HEAD --path "$4"' _ "$primary" "$script_abs" "$fallback" "$fixture/flock-worktree"
+    The status should equal 0
+    The output should equal "$(printf 'adr/35-graph\t%s/flock-worktree' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    The contents of file "$WB_FLOCK_USED" should equal 9
+    Assert [ -f "$fixture/flock-worktree/graphify-out/cache/payload.txt" ]
+  End
 
-if sys.argv[1] == "has-exact":
-    raise SystemExit(0)
-if sys.argv[1] == "restore-exact":
-    raise SystemExit(1)
-raise SystemExit(subprocess.call([sys.executable, str(pathlib.Path(__file__).with_name("graphify-store.real.py")), *sys.argv[1:]]))
-HELPER
-    chmod +x "$helper"
+  It 'removes the worktree and branch when exact snapshot restoration fails'
+    store="$primary/.git/graphify-store"
+    git_fixture -C "$store" rm -q -r graphify-out &&
+      git_fixture -C "$store" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
+        commit -q -m corrupt &&
+      git_fixture -C "$store" tag -f "source/devel/$sha" devel >/dev/null 2>&1 || return 1
     When run sh -c 'cd "$1" && exec sh "$2" issue 34 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/restore-fail"
     The status should equal 1
     The stderr should include 'Graphify snapshot restore failure'
     Assert [ ! -e "$fixture/restore-fail" ]
-    Assert [ ! -e "$primary/.git/refs/heads/issue/34-graph" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'issue/34-graph')" ]
   End
 
   It 'serializes concurrent callers across the worktree and CodeGraph sequence'
-    release="$fixture/release"
-    started="$fixture/started"
+    release_fifo="$fixture/release.fifo"
+    started_fifo="$fixture/started.fifo"
+    second_fifo="$fixture/second.fifo"
+    mkfifo "$release_fifo" "$started_fifo" "$second_fifo"
     events="$fixture/events"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
@@ -165,7 +175,7 @@ case "$1" in
   init)
     mkdir -p "$2/.codegraph"
     case "$2" in
-      *work-31) printf '%s\n' first-start >> "$WB_EVENTS"; : > "$WB_STARTED"; while [ ! -f "$WB_RELEASE" ]; do sleep 1; done; printf '%s\n' first-end >> "$WB_EVENTS" ;;
+      *work-31) printf '%s\n' first-start >> "$WB_EVENTS"; printf '%s\n' first-start > "$WB_STARTED_FIFO"; read release_token < "$WB_RELEASE_FIFO"; printf '%s\n' first-end >> "$WB_EVENTS" ;;
       *work-32) printf '%s\n' second-start >> "$WB_EVENTS" ;;
     esac
     true > "$2/.codegraph/codegraph.db"
@@ -175,17 +185,38 @@ case "$1" in
 esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
-    export WB_RELEASE="$release" WB_STARTED="$started" WB_EVENTS="$events"
-    (cd "$primary" && sh "$script_abs" issue 31 graph --worktree --base HEAD --path "$fixture/work-31" >"$fixture/out1" 2>"$fixture/err1"; printf '%s\n' "$?" >"$fixture/status1") &
+    real_lockf=$(command -v lockf 2>/dev/null || true)
+    real_flock=$(command -v flock 2>/dev/null || true)
+    cat > "$stubdir/lockf" <<'LOCKF'
+#!/bin/sh
+if [ "$WB_CALLER" = second ]; then
+  printf '%s\n' second-attempt > "$WB_SECOND_FIFO"
+fi
+if [ -n "$WB_REAL_LOCKF" ]; then
+  exec "$WB_REAL_LOCKF" -k 9
+fi
+exec "$WB_REAL_FLOCK" 9
+LOCKF
+    cat > "$stubdir/flock" <<'FLOCK'
+#!/bin/sh
+if [ "$WB_CALLER" = second ]; then
+  printf '%s\n' second-attempt > "$WB_SECOND_FIFO"
+fi
+exec "$WB_REAL_FLOCK" 9
+FLOCK
+    chmod +x "$stubdir/lockf" "$stubdir/flock"
+    export WB_RELEASE_FIFO="$release_fifo" WB_STARTED_FIFO="$started_fifo" WB_SECOND_FIFO="$second_fifo"
+    export WB_REAL_LOCKF="$real_lockf" WB_REAL_FLOCK="$real_flock" WB_EVENTS="$events"
+    (cd "$primary" && WB_CALLER=first sh "$script_abs" issue 31 graph --worktree --base HEAD --path "$fixture/work-31" >"$fixture/out1" 2>"$fixture/err1"; printf '%s\n' "$?" >"$fixture/status1") &
     first_pid=$!
-    i=0
-    while [ ! -f "$started" ] && [ "$i" -lt 20 ]; do sleep 1; i=$((i + 1)); done
-    Assert [ -f "$started" ]
-    (cd "$primary" && sh "$script_abs" issue 32 graph --worktree --base HEAD --path "$fixture/work-32" >"$fixture/out2" 2>"$fixture/err2"; printf '%s\n' "$?" >"$fixture/status2") &
+    read started_token < "$started_fifo"
+    Assert [ "$started_token" = first-start ]
+    (cd "$primary" && WB_CALLER=second sh "$script_abs" issue 32 graph --worktree --base HEAD --path "$fixture/work-32" >"$fixture/out2" 2>"$fixture/err2"; printf '%s\n' "$?" >"$fixture/status2") &
     second_pid=$!
-    sleep 1
+    read second_token < "$second_fifo"
+    Assert [ "$second_token" = second-attempt ]
     The contents of file "$events" should equal "first-start"
-    : > "$release"
+    printf '%s\n' release > "$release_fifo"
     wait "$first_pid"
     wait "$second_pid"
     The contents of file "$events" should equal "$(printf 'first-start\nfirst-end\nsecond-start')"
