@@ -90,6 +90,45 @@ def test_publish_and_restore_preserve_opaque_state_and_source_tag(tmp_path: Path
     assert (target / "graphify-out" / "current").readlink() == Path("cache")
 
 
+def test_uppercase_source_sha_is_normalized_for_publish_lookup_and_restore(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    uppercase_sha = sha.upper()
+    store_root = tmp_path / "store"
+    result = run_store(
+        "publish",
+        "--store-root",
+        str(store_root),
+        "--builder",
+        str(source),
+        "--branch",
+        "devel",
+        "--sha",
+        uppercase_sha,
+    )
+    assert result.returncode == 0, result.stderr
+    assert git(store_root, "rev-parse", "source/devel/" + sha) == git(store_root, "rev-parse", "devel")
+    assert (
+        run_store("has-exact", "--store-root", str(store_root), "--branch", "devel", "--sha", uppercase_sha).returncode
+        == 0
+    )
+    target = tmp_path / "target"
+    target.mkdir()
+    result = run_store(
+        "restore-exact",
+        "--store-root",
+        str(store_root),
+        "--branch",
+        "devel",
+        "--sha",
+        uppercase_sha,
+        "--target",
+        str(target),
+    )
+    assert result.returncode == 0, result.stderr
+    assert (target / "graphify-out" / "graph.json").exists()
+
+
 def test_republish_same_sha_moves_tag_and_keeps_history(tmp_path: Path) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
