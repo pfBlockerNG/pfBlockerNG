@@ -113,6 +113,14 @@ CODEGRAPH
     Assert [ ! -e "$fixture/missing" ]
   End
 
+  It 'aborts before creating a worktree when configured origin fetch fails'
+    git_fixture -C "$primary" remote add origin "$fixture/missing-origin"
+    When run sh -c 'cd "$1" && exec sh "$2" issue 36 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/fetch-fail"
+    The status should equal 1
+    The stderr should include 'git fetch origin failed'
+    Assert [ ! -e "$fixture/fetch-fail" ]
+  End
+
   It 'restores the exact opaque snapshot before CodeGraph initialization'
     When run sh -c 'cd "$1" && exec sh "$2" issue 32 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/exact"
     The status should equal 0
