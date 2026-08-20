@@ -150,6 +150,37 @@ _pkg() {
     fi
 }
 
+# _pkg_mutate DIE_CODE DIE_MSG ARGS... — mutating pkg verbs (install/delete).
+# Stream captured output, then die if pkg rc != 0 OR a line is
+# `pkg: * script failed` (pkg(8) can exit 0 after POST-INSTALL/DEINSTALL
+# still failed — the files are already in place; issue #2575).
+_pkg_mutate() {
+    _mut_code="$1"
+    shift
+    _mut_msg="$1"
+    shift
+    if [ -n "${ROOT}" ]; then
+        mkdir -p "${ROOT}/tmp" || die "${_mut_code}" "could not create ${ROOT}/tmp"
+        _mut_log="${ROOT}/tmp/pfb-install-pkg.log"
+    else
+        _mut_log="${TMPDIR:-/tmp}/pfb-install-pkg.log"
+    fi
+    _mut_rc=0
+    _pkg "$@" >"${_mut_log}" 2>&1 || _mut_rc=$?
+    cat "${_mut_log}"
+    if [ "${_mut_rc}" -ne 0 ]; then
+        die "${_mut_code}" "${_mut_msg}"
+    fi
+    while IFS= read -r _mut_line || [ -n "${_mut_line}" ]; do
+        case "${_mut_line}" in
+            'pkg: '*' script failed')
+                die "${_mut_code}" "pkg reported '${_mut_line}' — ${_mut_msg}"
+                ;;
+        esac
+    done < "${_mut_log}"
+    unset _mut_code _mut_msg _mut_log _mut_rc _mut_line
+}
+
 usage() {
     cat <<USAGE
 install.sh — put this pfSense box on a pfBlockerNG channel.
@@ -172,7 +203,7 @@ Exit codes:
   2  usage: unknown argument, unknown/missing --channel
   4  target unavailable: the hook could not resolve the conf, pkg update failed, the
      catalogue offers nothing, or pkg version -t gave no usable answer
-  5  a pkg operation (delete/install) failed
+  5  a pkg operation (delete/install) failed, including a package-script failure while pkg exited 0
   6  post-install verification failed
 USAGE
 }
@@ -387,8 +418,8 @@ pfb_channel_install() {
     for _iname in ${_installed_names}; do
         [ "${_iname}" = "${CANONICAL_PKG}" ] && continue
         printf '==> Removing %s\n' "${_iname}"
-        _pkg delete -y "${_iname}" ||
-            die 5 "\`pkg delete ${_iname}\` failed — re-run after fixing the cause, or finish manually: ${PKG_BIN} delete -y ${_iname}"
+        _pkg_mutate 5 "\`pkg delete ${_iname}\` failed — re-run after fixing the cause, or finish manually: ${PKG_BIN} delete -y ${_iname}" \
+            delete -y "${_iname}"
     done
 
     _canon_ver="$(_pkg query '%v' "${CANONICAL_PKG}" 2>/dev/null || true)"
@@ -415,13 +446,13 @@ pfb_channel_install() {
             fi
         fi
         printf '==> Reinstalling %s from %s (repository-qualified)\n' "${CANONICAL_PKG}" "${REPO_NAME}"
-        _pkg install -y -f -r "${REPO_NAME}" "${CANONICAL_PKG}-${OFFERED}" ||
-            die 5 "\`pkg install -f -r ${REPO_NAME} ${CANONICAL_PKG}-${OFFERED}\` failed — the previous build is still installed"
+        _pkg_mutate 5 "\`pkg install -f -r ${REPO_NAME} ${CANONICAL_PKG}-${OFFERED}\` failed — the previous build is still installed" \
+            install -y -f -r "${REPO_NAME}" "${CANONICAL_PKG}-${OFFERED}"
     else
         # 9d. Nothing canonical installed (fresh box, or right after 9a's deletes).
         printf '==> Installing %s from %s\n' "${CANONICAL_PKG}" "${REPO_NAME}"
-        _pkg install -y -r "${REPO_NAME}" "${CANONICAL_PKG}" ||
-            die 5 "\`pkg install -r ${REPO_NAME} ${CANONICAL_PKG}\` failed — no pfBlockerNG is currently installed; fix the cause, then finish with: ${PKG_BIN} install -y -r ${REPO_NAME} ${CANONICAL_PKG}"
+        _pkg_mutate 5 "\`pkg install -r ${REPO_NAME} ${CANONICAL_PKG}\` failed — no pfBlockerNG is currently installed; fix the cause, then finish with: ${PKG_BIN} install -y -r ${REPO_NAME} ${CANONICAL_PKG}" \
+            install -y -r "${REPO_NAME}" "${CANONICAL_PKG}"
     fi
 
     # 10. Prove the result — every claim is re-read from pkg after the fact.

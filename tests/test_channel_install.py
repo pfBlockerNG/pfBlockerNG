@@ -118,6 +118,12 @@ query)
 delete)
     _name="$3"
     rm -rf "${STATE:?}/${_name}"
+    if [ -n "${PFB_STUB_DEINSTALL_FAIL:-}" ]; then
+        printf 'pkg: DEINSTALL script failed\n' >&2
+    fi
+    if [ -n "${PFB_STUB_SCRIPT_FAILED_NOISE:-}" ]; then
+        printf 'the POST-INSTALL script failed to mention foo\n'
+    fi
     exit 0
     ;;
 install)
@@ -153,6 +159,12 @@ install)
     printf '%s' "${_repo}" > "${STATE}/${_name}/repo"
     if [ -n "${PFB_STUB_DELETE_CONFIG_XML:-}" ]; then
         rm -f "${PFB_STUB_DELETE_CONFIG_XML}"
+    fi
+    if [ -n "${PFB_STUB_POSTINSTALL_FAIL:-}" ]; then
+        printf 'pkg: POST-INSTALL script failed\n' >&2
+    fi
+    if [ -n "${PFB_STUB_SCRIPT_FAILED_NOISE:-}" ]; then
+        printf 'the POST-INSTALL script failed to mention foo\n'
     fi
     exit 0
     ;;
@@ -791,7 +803,65 @@ def test_empty_catalogue_leaves_a_pre_existing_target_conf_in_place() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# 13. pkg update failure: fails, no mutation, created stub removed
+# 13. pkg script-failed with rc 0 is still a failed install (issue #2575)
+# --------------------------------------------------------------------------- #
+
+
+def test_postinstall_script_failed_exits_5_without_done() -> None:
+    """pkg(8) can exit 0 after POST-INSTALL fails (files already extracted).
+    install.sh must not print Done or return 0 — lifecycle on smoke-1 showed
+    ``pkg: POST-INSTALL script failed`` followed by ``==> Done`` (issue #2575)."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(
+            root,
+            "stable",
+            extra_env={"PFB_STUB_POSTINSTALL_FAIL": "1"},
+        )
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        combined = proc.stdout + proc.stderr
+        assert "pkg: POST-INSTALL script failed" in combined, combined
+        assert "Done" not in proc.stdout
+
+
+def test_deinstall_script_failed_on_legacy_delete_exits_5_without_done() -> None:
+    """Same pkg(8) contract on delete: DEINSTALL can fail while pkg still
+    exits 0 and the identity is already gone. Fail closed (issue #2575)."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_installed(root, f"{_CANONICAL}-devel", "3.2.14_2", "pfblockerng")
+        _seed_conf_file(root, _LEGACY_CONF, "# legacy release conf\n")
+
+        proc = _run_install(
+            root,
+            "stable",
+            catalog=("4.0.0",),
+            extra_env={"PFB_STUB_DEINSTALL_FAIL": "1"},
+        )
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        combined = proc.stdout + proc.stderr
+        assert "pkg: DEINSTALL script failed" in combined, combined
+        assert "Done" not in proc.stdout
+
+
+def test_script_failed_without_pkg_prefix_is_not_a_hook_failure() -> None:
+    """Only ``pkg: <script> script failed`` is the hook-failure signal. A
+    coincidental ``script failed`` substring in pkg stdout must not fail the
+    run."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(
+            root,
+            "stable",
+            extra_env={"PFB_STUB_SCRIPT_FAILED_NOISE": "1"},
+        )
+
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+        assert "Done" in proc.stdout
+        assert "the POST-INSTALL script failed to mention foo" in proc.stdout
+
+
+# --------------------------------------------------------------------------- #
+# 13b. pkg update failure: fails, no mutation, created stub removed
 # --------------------------------------------------------------------------- #
 
 
