@@ -64,9 +64,11 @@ function pfb_install_settings_family_capture_restore(
 	$target_rank = (is_string($installed_family) && isset(PFB_SETTINGS_FAMILY_RANK[$installed_family]))
 		? PFB_SETTINGS_FAMILY_RANK[$installed_family]
 		: NULL;
-	// Owner ruling #2158: 3.3 is the migration floor. A 4.x package must not
-	// accept a missing/3.2 source; only a 3.3 target may bootstrap a bare marker.
-	if ($target_rank !== NULL && $target_rank > $bridge_rank && $source_rank < $bridge_rank) {
+	// Owner ruling #2158: 3.3 is the migration floor. Skip the guard when
+	// owned sections are empty (first install); current() defaults missing
+	// markers to '3.2', which is indistinguishable from a real 3.2 box.
+	if ($target_rank !== NULL && $target_rank > $bridge_rank && $source_rank < $bridge_rank
+		&& pfb_settings_family_owned_sections() !== []) {
 		throw new RuntimeException('pfBlockerNG: install the 3.3 bridge before a 4.x family');
 	}
 	if ($source_family === NULL || !$save($source_family)) {

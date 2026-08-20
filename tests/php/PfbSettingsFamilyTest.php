@@ -70,6 +70,8 @@ final class PfbSettingsFamilyTest extends TestCase
 		// pfb_pkg_ver() prefixes 'v'; POST-INSTALL on nightly was failing closed as NULL (lab finding 16).
 		$this->assertSame('4.1', pfb_settings_family_from_version('v20260819010101.abcdef1'));
 		$this->assertSame('3.3', pfb_settings_family_from_version('v3.3.2'));
+		$this->assertSame('4.0', pfb_settings_family_from_version('v4.0.0.a1'));
+		$this->assertNull(pfb_settings_family_from_version('vv4.0.0'));
 		$this->assertNull(pfb_settings_family_from_version('5.0.1'));
 		$this->assertNull(pfb_settings_family_from_version('20260230010101.abcdef1'));
 		$this->assertNull(pfb_settings_family_from_version('20260819010101.ABCDEF1'));
