@@ -6,6 +6,14 @@ usage() {
 	exit 2
 }
 
+index_complete() {
+	status=$(codegraph status --json "$root" 2>/dev/null) || return 1
+	case "$status" in
+		*'"initialized":true'*'"worktreeMismatch":null'*'"reindexRecommended":false'*'"state":"complete"'*'"pendingRefs":0'*) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
 main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
@@ -19,15 +27,25 @@ main() {
 		echo "ensure-codegraph.sh: '$target' is not a git worktree" >&2
 		exit 2
 	}
-	[ -f "$root/.codegraph/codegraph.db" ] && exit 0
-
-	echo "Initializing CodeGraph in $root" >&2
-	codegraph init "$root" >&2 || {
-		echo "ensure-codegraph.sh: CodeGraph initialization failed in '$root'" >&2
-		exit 1
-	}
+	if [ ! -f "$root/.codegraph/codegraph.db" ]; then
+		echo "Initializing CodeGraph in $root" >&2
+		codegraph init "$root" >&2 || {
+			echo "ensure-codegraph.sh: CodeGraph initialization failed in '$root'" >&2
+			exit 1
+		}
+	elif ! index_complete; then
+		echo "Rebuilding CodeGraph in $root" >&2
+		codegraph index "$root" >&2 || {
+			echo "ensure-codegraph.sh: CodeGraph rebuild failed in '$root'" >&2
+			exit 1
+		}
+	fi
 	[ -f "$root/.codegraph/codegraph.db" ] || {
 		echo "ensure-codegraph.sh: CodeGraph reported success without creating '$root/.codegraph/codegraph.db'" >&2
+		exit 1
+	}
+	index_complete || {
+		echo "ensure-codegraph.sh: CodeGraph did not produce a complete index in '$root'" >&2
 		exit 1
 	}
 }

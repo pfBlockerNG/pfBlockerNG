@@ -14,11 +14,45 @@ Describe 'ensure-codegraph.sh failures'
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
+    codegraph_log="$fixture/codegraph.log"
+    codegraph_state="$fixture/codegraph.complete"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
-exit "${CODEGRAPH_RC:-0}"
+case "$1" in
+  init)
+    [ "${CODEGRAPH_RC:-0}" -eq 0 ] || exit "$CODEGRAPH_RC"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    true > "$CODEGRAPH_STATE"
+    ;;
+  index)
+    printf '%s\n' "$*" >> "$CODEGRAPH_LOG"
+    mkdir -p "$2/.codegraph"
+    true > "$2/.codegraph/codegraph.db"
+    true > "$CODEGRAPH_STATE"
+    ;;
+  status)
+    if [ -f "$CODEGRAPH_STATE" ]; then
+      state=complete
+    else
+      state=${CODEGRAPH_EXISTING_STATE:-complete}
+    fi
+    case "$state" in
+      corrupt) exit 1 ;;
+      incomplete)
+        printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"indexing","pendingRefs":0}}'
+        ;;
+      complete)
+        printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}'
+        ;;
+    esac
+    ;;
+  *) exit 9 ;;
+esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
+    export CODEGRAPH_LOG="$codegraph_log"
+    export CODEGRAPH_STATE="$codegraph_state"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -41,6 +75,28 @@ CODEGRAPH
     When run env CODEGRAPH_RC=7 sh "$script_abs" "$primary"
     The status should equal 1
     The stderr should include 'CodeGraph initialization failed'
+  End
+
+  It 'rebuilds an existing corrupt database'
+    mkdir -p "$primary/.codegraph"
+    true > "$primary/.codegraph/codegraph.db"
+    export CODEGRAPH_EXISTING_STATE=corrupt
+    When run sh "$script_abs" "$primary"
+    The status should equal 0
+    The stderr should include 'Rebuilding CodeGraph'
+    The contents of file "$codegraph_log" should equal "index $primary"
+    Assert [ -f "$codegraph_state" ]
+  End
+
+  It 'rebuilds an existing incomplete index'
+    mkdir -p "$primary/.codegraph"
+    true > "$primary/.codegraph/codegraph.db"
+    export CODEGRAPH_EXISTING_STATE=incomplete
+    When run sh "$script_abs" "$primary"
+    The status should equal 0
+    The stderr should include 'Rebuilding CodeGraph'
+    The contents of file "$codegraph_log" should equal "index $primary"
+    Assert [ -f "$codegraph_state" ]
   End
 
   It 'uses the agent-tool missing exit contract when CodeGraph is unavailable'

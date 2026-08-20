@@ -8,7 +8,7 @@
 #               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>,
 #               or <TMPDIR>/pfblockerng-<type>-<NN> under Codex; a relative --path anchors
 #               at the primary checkout); an existing branch or path gets a `-<epoch>` suffix
-#               (collision rule). Agent sessions initialize an exact-root CodeGraph index.
+#               (collision rule). Every created worktree gets an exact-root CodeGraph index.
 #               Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
@@ -135,8 +135,17 @@ main() {
 	case "$path" in /*) ;; *) path="$root/$path" ;; esac   # worktree add needs ABSOLUTE paths
 	[ -e "$path" ] && path="$path-$(date +%s)"
 	git worktree add -b "$branch" "$path" "$base" >/dev/null || exit 1
-	if [ -n "${CLAUDECODE:-}${CODEX_THREAD_ID:-}${COPILOT_CLI:-}${COPILOT_AGENT_PROMPT:-}${GROK_SESSION_ID:-}${GROK_AGENT:-}" ]; then
-		sh "$(dirname "$0")/ensure-codegraph.sh" "$path" || exit 1
+	if ! sh "$(dirname "$0")/ensure-codegraph.sh" "$path"; then
+		echo "work-branch.sh: removing worktree and branch after CodeGraph initialization failure" >&2
+		git worktree remove "$path" >/dev/null 2>&1 || {
+			echo "work-branch.sh: failed to remove incomplete worktree '$path'" >&2
+			exit 1
+		}
+		git branch -d "$branch" >/dev/null 2>&1 || {
+			echo "work-branch.sh: failed to delete incomplete branch '$branch'" >&2
+			exit 1
+		}
+		exit 1
 	fi
 	printf '%s\t%s\n' "$branch" "$path"
 }
