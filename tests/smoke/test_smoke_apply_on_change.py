@@ -70,11 +70,15 @@ _PFB_EXTRA = "/usr/local/pkg/pfblockerng/pfblockerng_extra.inc"
 # issue #2506: the model id pin_cron_due()/pfb_schedule_runtime_config() derive for the
 # module's IpCase feed group ("ipv4:<header>_v4").
 _FEED_GROUP_ID = "ipv4:smokeapply_v4"
-_STATE_DIR = "/usr/local/etc"
-# pfblockerng_apply.inc ~840: logged by sync_package_pfblockerng() when the package master
-# switch is on and the pass is not save-only -- proof a pending manual apply actually
-# dispatched, not merely that its pending_apply flag vanished.
+# Logged by sync_package_pfblockerng (pfblockerng_apply.inc) when the package master switch is
+# on and the pass is not save-only. The scheduled cron pass tail-calls the same function, so
+# the marker is NOT manual-apply-exclusive in general — it discriminates here only because the
+# fixture keeps this module's one feed group never-due, so no scheduled pass can contribute.
 _UPDATE_MARKER = "UPDATE PROCESS START"
+# The tick's deferral branch logs this via logger() -> syslog (NOT pfblockerng.log): the
+# positive control proving a deferring tick genuinely ran and evaluated the window.
+_SYSLOG = "/var/log/system.log"
+_DEFER_MARKER = "Tick: feed cron deferred (outside apply window)."
 
 
 # ---------------------------------------------------------------------------
@@ -90,11 +94,15 @@ def _complete_feed_reservation(vm: SmokeVM) -> None:
     module-local duplication is the house pattern here (this module already duplicates
     _read_ledger/_write_ledger_entry rather than importing the tick module's copies).
     """
+    # State dir derived the way pin_cron_due derives it (pfb_global guarded + the production
+    # `?? '/usr/local/etc'` fallback), and record_outcome's bool — its only failure signal —
+    # is echoed rather than discarded.
     snippet = (
         f"require_once('{_PFB_EXTRA}');"
-        f"pfb_schedule_state_record_outcome('{_FEED_GROUP_ID}', PfbScheduleTerminalResult::Success, "
-        f"'{_STATE_DIR}');"
-        "echo 'OK';"
+        "if (function_exists('pfb_global')) { pfb_global(); }"
+        "$state_dir = $pfb['schedule_state_dir'] ?? '/usr/local/etc';"
+        f"echo pfb_schedule_state_record_outcome('{_FEED_GROUP_ID}', "
+        "PfbScheduleTerminalResult::Success, $state_dir) ? 'OK' : 'FAIL';"
     )
     result = h.php_eval(vm, snippet)
     if result.returncode != 0 or "OK" not in result.stdout:
@@ -284,6 +292,8 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
         And the actual clock is NOT in "00:00-00:01" (asserted).
       When tick fires.
       Then pending_apply IS set (deferred).
+      And the deferral syslog line count RISES (positive control: the tick genuinely ran
+          and evaluated the window),
       And the UPDATE PROCESS marker count is UNCHANGED (job did not run — exec() not called).
 
     Note: This test must be run outside 00:00-00:01 local time. It asserts the
@@ -309,8 +319,20 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
     _seed_pending_apply(vm)
     assert _is_pending(vm), "before tick: pending_apply must be set"
     before_updates = h.count_log_marker(vm, h.PFB_LOG, _UPDATE_MARKER)
+    before_defers = h.count_log_marker(vm, _SYSLOG, _DEFER_MARKER)
 
     _run_tick(vm)
+
+    # Positive control FIRST: on its own, "marker unchanged + pending still set" cannot
+    # distinguish "tick correctly deferred" from "tick never ran at all". The deferral branch
+    # logs its own syslog line the moment it declines the out-of-window pending apply, so a
+    # risen count proves the tick genuinely ran and evaluated the window.
+    after_defers = h.count_log_marker(vm, _SYSLOG, _DEFER_MARKER)
+    assert after_defers > before_defers, (
+        f"tick did not reach the deferral branch — '{_DEFER_MARKER}' syslog count did not rise "
+        f"(before={before_defers}, after={after_defers}); cannot tell 'deferred correctly' from "
+        f"'the tick itself never ran'"
+    )
 
     entry = _cron_ledger(vm)
     assert entry is not None, f"after tick: 'cron' entry must exist; ledger={_read_ledger(vm)}"
@@ -332,7 +354,7 @@ def test_apply_outside_window_defers(deployed_vm: SmokeVM) -> None:
 @pytest.mark.smoke
 @pytest.mark.apply_on_change
 def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
-    """Pending job is applied when window opens (pending cleared, last_run updated).
+    """Pending job is applied when window opens (pending cleared, apply dispatched).
 
     Scenario:
       Background: a job was deferred in a prior tick (pending_apply=TRUE).
@@ -340,8 +362,7 @@ def test_apply_pending_cleared_by_window_open(deployed_vm: SmokeVM) -> None:
         And pfb_quiet_hours = '00:00-23:59' (always-open window).
         And the cron job is still due (next_due = 0).
       When tick fires.
-      Then last_run is updated (job ran this tick).
-      And pending_apply is NOT set (cleared by mark_ran in the tick).
+      Then pending_apply is NOT set (cleared by the dispatch in the tick).
       And  the UPDATE PROCESS marker count rises (issue #2506: proof the pending apply
           actually dispatched, not merely that the flag vanished).
 
