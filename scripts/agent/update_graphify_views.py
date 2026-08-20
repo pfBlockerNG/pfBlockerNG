@@ -946,10 +946,15 @@ def _semantic_graph(root: Path, explicit_input: Path | None, commit: str) -> dic
     for index, edge in enumerate(links):
         if not isinstance(edge, Mapping):
             raise GraphifyViewsError(f"semantic graph edge {index} must be an object")
-        for endpoint in ("source", "target"):
+
+        def usable(endpoint: str) -> bool:
             endpoint_value = edge.get(endpoint)
-            if endpoint_value is None or isinstance(endpoint_value, (Mapping, list)) or not str(endpoint_value).strip():
-                raise GraphifyViewsError(f"semantic graph edge {index} has no usable {endpoint}")
+            return not (
+                endpoint_value is None or isinstance(endpoint_value, (Mapping, list)) or not str(endpoint_value).strip()
+            )
+
+        if not ((usable("source") and usable("target")) or (usable("from") and usable("to"))):
+            raise GraphifyViewsError(f"semantic graph edge {index} requires source/target or from/to")
     if value.get("built_at_commit") != commit:
         raise GraphifyViewsError(
             "semantic graph provenance does not match current HEAD; run the full Graphify skill before updating views"
@@ -966,6 +971,15 @@ def _current_commit(root: Path) -> str:
     ).stdout.strip()
 
 
+def _require_clean_tracked_tree(root: Path) -> None:
+    for diff_args in (("diff", "--quiet"), ("diff", "--cached", "--quiet")):
+        result = subprocess.run(["git", "-C", str(root), *diff_args], check=False)
+        if result.returncode == 1:
+            raise GraphifyViewsError("tracked Git tree is dirty; commit or stash tracked changes before updating views")
+        if result.returncode != 0:
+            raise subprocess.CalledProcessError(result.returncode, ["git", "-C", str(root), *diff_args])
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=ROOT)
@@ -976,10 +990,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     config = load_config(args.config)
     root = args.repo_root.resolve()
     output_root = args.output or root / "graphify-out" / "views"
+    canonical_input = (root / "graphify-out" / "graph.json").resolve(strict=False)
     semantic_input = (args.input or root / "graphify-out" / "graph.json").resolve(strict=False)
     commit = _current_commit(root)
+    _require_clean_tracked_tree(root)
     graph = _semantic_graph(root, args.input, commit)
-    if (output_root / "graph.json").resolve(strict=False) == semantic_input:
+    output_graph = (output_root / "graph.json").resolve(strict=False)
+    if output_graph in {semantic_input, canonical_input}:
         raise GraphifyViewsError(f"output {output_root} overlaps semantic graph {semantic_input}")
     tracked = _tracked_paths(root, config)
     source_texts = _read_sources(root, tracked)
