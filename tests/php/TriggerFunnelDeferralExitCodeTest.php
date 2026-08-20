@@ -149,6 +149,26 @@ final class TriggerFunnelDeferralExitCodeTest extends TestCase
 		return implode("\n", array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'));
 	}
 
+	/**
+	 * Assert one captured syslog entry matches the dispatcher-deferral notice —
+	 * message AND priority, so a LOG_NOTICE -> other-priority regression fails too
+	 * (feed-pass parity is specifically LOG_NOTICE, per pfb_feed_pass_begin()).
+	 */
+	private function assertDispatcherDeferralNotice(): void
+	{
+		$this->assertStringContainsString('dispatcher lock', $this->syslogMessages(),
+			'a wedged dispatcher-lock holder must be visible on syslog, not only in pfblockerng.log (issue #2505)');
+		$priorities = [];
+		foreach ($GLOBALS['pfb_test_logger_calls'] ?? [] as $call) {
+			if (str_contains($call['message'], 'dispatcher lock')) {
+				$priorities[] = $call['priority'];
+			}
+		}
+		$this->assertContains(LOG_NOTICE, $priorities,
+			'the dispatcher-lock deferral notice must be LOG_NOTICE (feed-pass parity) — got priorities: '
+			. var_export($priorities, TRUE));
+	}
+
 	private static function cronTrigger(): array
 	{
 		return ['scope' => 'both', 'force' => FALSE, 'trigger' => 'cron'];
@@ -197,8 +217,7 @@ final class TriggerFunnelDeferralExitCodeTest extends TestCase
 
 		sync_package_pfblockerng(self::cronTrigger());
 
-		$this->assertStringContainsString('dispatcher lock', $this->syslogMessages(),
-			'a wedged dispatcher-lock holder must be visible on syslog, not only in pfblockerng.log (issue #2505)');
+		$this->assertDispatcherDeferralNotice();
 	}
 
 	public function testCronFunnelDispatcherDeferralRaisesSyslogNotice(): void
@@ -209,8 +228,7 @@ final class TriggerFunnelDeferralExitCodeTest extends TestCase
 			'before-state sanity: the cron verb already exits cleanly on this deferral (issue #2491)');
 		$this->assertStringContainsString('dispatcher lock unavailable', $this->mainLog(),
 			'before-state: the run must actually have taken the dispatcher-deferral path');
-		$this->assertStringContainsString('dispatcher lock', $this->syslogMessages(),
-			'a wedged dispatcher-lock holder must be visible on syslog, not only in pfblockerng.log (issue #2505)');
+		$this->assertDispatcherDeferralNotice();
 	}
 
 	// -----------------------------------------------------------------------
