@@ -562,6 +562,45 @@ def test_main_rejects_output_that_aliases_semantic_graph(tmp_path: Path, symlink
     assert not (repo / "graphify-out/views/current").exists()
 
 
+def test_main_rejects_canonical_output_alias_with_external_input(tmp_path: Path) -> None:
+    repo, commit = _semantic_repo(tmp_path)
+    canonical_graph = repo / "graphify-out/graph.json"
+    manifest = repo / "graphify-out/manifest.json"
+    explicit_input = tmp_path / "semantic-input.json"
+    explicit_graph = {
+        "nodes": [{"id": "runtime", "source_file": "src/app.py"}],
+        "links": [],
+        "built_at_commit": commit,
+    }
+    explicit_input.write_text(json.dumps(explicit_graph), encoding="utf-8")
+    before = (canonical_graph.read_bytes(), manifest.read_bytes(), explicit_input.read_bytes())
+
+    with pytest.raises(views.GraphifyViewsError, match="overlaps semantic graph"):
+        views.main(["--repo-root", str(repo), "--input", str(explicit_input), "--output", str(repo / "graphify-out")])
+
+    assert (canonical_graph.read_bytes(), manifest.read_bytes(), explicit_input.read_bytes()) == before
+    assert not (repo / "graphify-out/current").exists()
+    assert not (repo / "graphify-out/views").exists()
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_main_rejects_dirty_tracked_tree_before_publication(tmp_path: Path, staged: bool) -> None:
+    repo, _ = _semantic_repo(tmp_path)
+    canonical_graph = repo / "graphify-out/graph.json"
+    manifest = repo / "graphify-out/manifest.json"
+    before = (canonical_graph.read_bytes(), manifest.read_bytes())
+    source = repo / "src/app.py"
+    source.write_text("print('dirty')\n", encoding="utf-8")
+    if staged:
+        subprocess.run(["git", "add", "src/app.py"], cwd=repo, check=True)
+
+    with pytest.raises(views.GraphifyViewsError, match="tracked Git tree is dirty"):
+        views.main(["--repo-root", str(repo)])
+
+    assert (canonical_graph.read_bytes(), manifest.read_bytes()) == before
+    assert not (repo / "graphify-out/views").exists()
+
+
 @pytest.mark.parametrize("provenance", [None, "stale"])
 def test_main_rejects_missing_or_stale_semantic_provenance(tmp_path: Path, provenance: str | None) -> None:
     repo, commit = _semantic_repo(tmp_path)
@@ -589,6 +628,9 @@ def test_main_rejects_missing_or_stale_semantic_provenance(tmp_path: Path, prove
         {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [None]},
         {"built_at_commit": "current", "nodes": [{"id": ""}], "links": []},
         {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [{"source": "node"}]},
+        {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [{"from": "node"}]},
+        {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [{"source": "node", "to": "node"}]},
+        {"built_at_commit": "current", "nodes": [{"id": "node"}], "links": [{"from": "node", "target": "node"}]},
     ],
 )
 def test_main_rejects_non_graph_semantic_inputs(tmp_path: Path, graph: dict) -> None:
@@ -601,6 +643,22 @@ def test_main_rejects_non_graph_semantic_inputs(tmp_path: Path, graph: dict) -> 
         views.main(["--repo-root", str(repo)])
 
     assert not (repo / "graphify-out/views").exists()
+
+
+def test_main_accepts_from_to_semantic_edges(tmp_path: Path) -> None:
+    repo, _ = _semantic_repo(
+        tmp_path,
+        {
+            "nodes": [
+                {"id": "runtime", "source_file": "src/app.py"},
+                {"id": "support", "source_file": "tests/standins/support.py"},
+            ],
+            "links": [{"from": "runtime", "to": "support"}],
+        },
+    )
+
+    assert views.main(["--repo-root", str(repo)]) == 0
+    assert (repo / "graphify-out/views/current/graph.json").is_file()
 
 
 def test_write_outputs_switches_one_generation_and_malformed_config_preserves_it(tmp_path: Path) -> None:
