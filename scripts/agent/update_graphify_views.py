@@ -372,6 +372,8 @@ def _augment_agent_context_graph(
     by_source = _representatives_by_source(nodes)
     node_ids = {str(node["id"]) for node in nodes}
     for path in tracked_paths:
+        if _classify_path_unchecked(path, config) != "agent-context":
+            continue
         if Path(path).suffix.lower() not in (".md", ".mdx"):
             continue
         text = source_texts.get(path, "")

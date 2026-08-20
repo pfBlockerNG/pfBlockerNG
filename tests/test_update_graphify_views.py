@@ -196,6 +196,25 @@ def test_agent_context_ignores_fenced_headings_and_suffix_path_matches() -> None
     assert {edge["target_file"] for edge in refs} == {"src/app.py.bak"}
 
 
+def test_agent_context_sections_stay_owned_but_references_cross_views() -> None:
+    config = _config()
+    tracked = ["AGENTS.md", "tests/README.md", "src/vendor/README.md", "src/app.py"]
+    built = views.build_views(
+        {},
+        config,
+        tracked_paths=tracked,
+        source_texts={
+            "AGENTS.md": "# Agent policy\nSee tests/README.md and src/vendor/README.md.\n",
+            "tests/README.md": "# Test documentation\nThis belongs to test-code.\n",
+            "src/vendor/README.md": "# Vendor documentation\nThis belongs to vendor.\n",
+        },
+    )
+    sections = [node for node in built["agent-context"]["nodes"] if node["file_type"] == "document-section"]
+    assert {(node["source_file"], node["label"]) for node in sections} == {("AGENTS.md", "Agent policy")}
+    refs = [edge for edge in built["agent-context"]["links"] if edge["relation"] == "path-reference"]
+    assert {edge["target_file"] for edge in refs} == {"tests/README.md", "src/vendor/README.md"}
+
+
 def test_agent_context_collapses_adapter_aliases_and_reuses_reference_nodes() -> None:
     duplicate_id = "claude_skills_example_skill"
     raw = {
