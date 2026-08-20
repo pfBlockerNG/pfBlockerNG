@@ -168,12 +168,23 @@ def test_instance_without_project_or_client_is_still_listed(metrics: Any) -> Non
     assert "unknown" in page
 
 
-def test_default_scan_covers_serena_allocator_range(metrics: Any) -> None:
+def test_default_scan_covers_serena_allocator_range(metrics: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     assert metrics.SCAN_START == 24282
     assert metrics.SCAN_END == 65535
-    with listener(healthy()) as (port, _):
-        assert port > 24345, f"ephemeral fixture port must exercise the former ceiling, got {port}"
-        assert metrics._discover_port(port) is not None
+    visited: set[int] = set()
+    lock = threading.Lock()
+
+    def discover(port: int) -> dict[str, int] | None:
+        with lock:
+            visited.add(port)
+        return {"port": port} if port in {24346, 65535} else None
+
+    monkeypatch.setattr(metrics, "_discover_port", discover)
+    instances = metrics.discover_instances()
+
+    assert len(visited) == metrics.SCAN_END - metrics.SCAN_START + 1
+    assert min(visited) == 24282 and max(visited) == 65535
+    assert [instance["port"] for instance in instances] == [24346, 65535]
 
 
 def test_multiple_instances_are_sorted_and_have_aggregate_totals(metrics: Any) -> None:
@@ -243,7 +254,14 @@ def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
         assert metrics.discover_instances() == []
 
     without_length = healthy()
-    valid_oversized_json = json.dumps({"padding": "x" * metrics.READ_LIMIT}).encode()
+    valid_oversized_json = json.dumps(
+        {
+            "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
+            "current_client": "codex",
+            "serena_version": "1.7.0",
+            "padding": "x" * metrics.READ_LIMIT,
+        }
+    ).encode()
 
     def oversized_without_length(handler: SerenaHandler) -> None:
         handler.send_response(200)
@@ -262,7 +280,6 @@ def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
 
 def test_malformed_http_and_deep_json_are_ignored(metrics: Any) -> None:
     deep_json = b"[" * 1100 + b"0" + b"]" * 1100
-    valid_json = b'{"status":"alive"}'
     payloads = [
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\n{}\r\n0\r\n\r\n",
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Large: " + b"x" * 65537 + b"\r\n\r\n{}",
@@ -271,15 +288,26 @@ def test_malformed_http_and_deep_json_are_ignored(metrics: Any) -> None:
         + str(len(deep_json)).encode()
         + b"\r\n\r\n"
         + deep_json,
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-        + str(len(valid_json) + 100).encode()
-        + b"\r\n\r\n"
-        + valid_json,
     ]
     for payload in payloads:
         with raw_listener(payload) as port:
-            configure_scan(metrics, port, port)
-            assert metrics.discover_instances() == []
+            assert metrics._request_json(port, "/heartbeat") is None
+
+    valid_config = json.dumps(
+        {
+            "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
+            "current_client": "codex",
+            "serena_version": "1.7.0",
+        }
+    ).encode()
+    truncated = (
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+        + str(len(valid_config) + 100).encode()
+        + b"\r\n\r\n"
+        + valid_config
+    )
+    with raw_listener(truncated) as port:
+        assert metrics._request_json(port, "/get_config_overview") is None
 
 
 def test_slow_listener_is_bounded_and_ignored(metrics: Any) -> None:
@@ -421,6 +449,14 @@ def test_http_surface_rejects_untrusted_host_and_accepts_tailnet_host(metrics: A
             accepted = connection.getresponse()
             assert accepted.status == 200
             accepted.read()
+
+            connection.putrequest("GET", "/api/instances", skip_host=True)
+            connection.putheader("Host", "localhost")
+            connection.putheader("Host", "attacker.example")
+            connection.endheaders()
+            duplicate = connection.getresponse()
+            assert duplicate.status == 421
+            duplicate.read()
         finally:
             connection.close()
             server.shutdown()
