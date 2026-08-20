@@ -11,7 +11,7 @@ from tests.smoke import test_smoke_tick as tick
 
 
 def _tick_fixture(monkeypatch: pytest.MonkeyPatch, *, emit_tick_marker: bool) -> tuple[dict[str, int], tick.SmokeVM]:
-    state = {"drains": 0, "marker": 0, "next_due": 0}
+    state = {"drains": 0, "marker": 0, "next_due": 0, "pins": 0}
 
     class VM(tick.SmokeVM):
         def ssh(self, *args: str, timeout: float = 60.0) -> Any:
@@ -24,8 +24,11 @@ def _tick_fixture(monkeypatch: pytest.MonkeyPatch, *, emit_tick_marker: bool) ->
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(args)
 
-    def write_ledger(_vm: Any, _key: str, _last: int, next_due: int) -> None:
-        state["next_due"] = next_due
+    # issue #2506: due-ness now rides h.pin_cron_due's durable schedule-state reservation,
+    # not a hand-seeded ledger row — stub it (it would otherwise reach for a real box).
+    def pin_cron_due(_vm: Any) -> int:
+        state["pins"] += 1
+        return 0
 
     def read_ledger(_vm: Any) -> dict[str, dict[str, int]]:
         return {"cron": {"next_due": state["next_due"]}}
@@ -35,8 +38,8 @@ def _tick_fixture(monkeypatch: pytest.MonkeyPatch, *, emit_tick_marker: bool) ->
         if state["drains"] == 1:
             state["marker"] += 1
 
-    monkeypatch.setattr(tick, "_write_ledger_entry", write_ledger)
     monkeypatch.setattr(tick, "_read_ledger", read_ledger)
+    monkeypatch.setattr(tick.h, "pin_cron_due", pin_cron_due)
     monkeypatch.setattr(tick.h, "wait_no_active_pfb_task", drain)
     monkeypatch.setattr(tick.h, "count_log_marker", lambda *_args: state["marker"])
     monkeypatch.setattr(tick.h, "wait_until", lambda predicate, **_kwargs: bool(predicate()))
@@ -56,4 +59,4 @@ def test_due_marker_after_baseline_is_accepted(monkeypatch: pytest.MonkeyPatch) 
 
     tick.test_tick_dispatches_due_feed(vm)
 
-    assert state == {"drains": 2, "marker": 2, "next_due": 101}
+    assert state == {"drains": 2, "marker": 2, "next_due": 101, "pins": 1}
