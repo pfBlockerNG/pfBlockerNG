@@ -461,6 +461,19 @@ def test_codex_luna_reviewer_rejects_xhigh(tmp_path: Path) -> None:
     )
 
 
+def test_shared_bindings_use_each_roles_tier_intersection(tmp_path: Path) -> None:
+    rows = (
+        *_ROWS,
+        "| auditor | small | read-only | yes | workflow:check "
+        "| agent:checker, agent:checker-top | agent:checker, agent:checker-top |",
+    )
+    make_tree(tmp_path, doc=_doc(rows=rows, sections=(*_ROLE_NAMES, "auditor")))
+    problems = _problems(tmp_path)
+    _assert_flags(problems, ".claude/workflows/check.js pins 'claude-top-x' (top tier), outside tier(s) small")
+    _assert_flags(problems, ".codex/agents/checker-top.toml model 'codex-top' is not a Codex model")
+    _assert_flags(problems, ".github/agents/checker-top.agent.md model 'copilot-top' is not a Copilot model")
+
+
 # --------------------------------------------------------------------------- #
 # Skill / policy bindings and orphaned vendor definitions
 # --------------------------------------------------------------------------- #
