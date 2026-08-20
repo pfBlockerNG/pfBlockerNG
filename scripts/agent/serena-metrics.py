@@ -179,10 +179,29 @@ def _trusted_host(value: str | None) -> bool:
         parsed.port
     except ValueError:
         return False
-    if parsed.username is not None or parsed.password is not None or parsed.path or parsed.query or parsed.fragment:
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.path
+        or parsed.query
+        or parsed.fragment
+        or parsed.netloc.endswith(":")
+    ):
         return False
     hostname = (parsed.hostname or "").lower().rstrip(".")
-    return hostname in {"127.0.0.1", "localhost"} or hostname.endswith(".ts.net")
+    if hostname in {"127.0.0.1", "localhost"}:
+        return True
+    labels = hostname.split(".")
+    valid_labels = all(
+        0 < len(label) <= 63
+        and label[0].isascii()
+        and label[0].isalnum()
+        and label[-1].isascii()
+        and label[-1].isalnum()
+        and all(character.isascii() and (character.isalnum() or character == "-") for character in label)
+        for label in labels
+    )
+    return valid_labels and hostname.endswith(".ts.net")
 
 
 def render_html(instances: list[dict[str, Any]]) -> str:
@@ -229,6 +248,11 @@ class AggregatorHandler(http.server.BaseHTTPRequestHandler):
     def _reject_method(self) -> None:
         body = b"" if self.command == "HEAD" else b"method not allowed\n"
         self._send(405, body, "text/plain; charset=utf-8", "GET")
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("do_"):
+            return self._reject_method
+        raise AttributeError(name)
 
     def do_GET(self) -> None:
         if not _trusted_host(self.headers.get("Host")):
