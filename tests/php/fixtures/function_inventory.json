@@ -10580,6 +10580,11 @@
             }
         ]
     },
+    "pfb_settings_family_owned_sections": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": []
+    },
     "pfb_settings_family_pre_uninstall": {
         "returnsRef": false,
         "returnType": "void",
