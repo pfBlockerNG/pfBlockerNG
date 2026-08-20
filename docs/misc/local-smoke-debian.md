@@ -33,10 +33,29 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
 - FreeBSD-ports checkout under `/root/FreeBSD-ports` (auto-cloned/updated by `smoke-on-box.sh`).
 
-Image storage is not a box prerequisite. Each workload pulls its selected pfSense image
-(and civm image unless `--no-two-vm`) into `/root/images/{pfsense,civm}` on the box.
-Set `PFB_LAN_REGISTRY` on the box to use the durable LAN zot cache; without it, pulls use
-GHCR and `SMOKE_GHCR_TOKEN` may authenticate the pull.
+Image storage is not a box prerequisite. Each workload clears and pulls its selected
+pfSense image (and civm image unless `--no-two-vm`) into
+`/root/images/{pfsense,civm}` on the box. The directories deliberately do not persist as
+a cache: retaining every digest on every box needs eviction and eventually fills the
+box storage.
+
+### Shared image registry (recommended for multi-box pools)
+
+Run one pull-through OCI registry outside the smoke boxes when using a multi-box pool,
+especially with `--shards`. A shared registry keeps image storage and retention in one
+place while every box pulls over the LAN. zot is known to work with this setup.
+
+Put the registry address in `/etc/environment` on every box:
+
+```text
+PFB_LAN_REGISTRY=registry.lan:5000
+```
+
+The value is a bare `host[:port]`, without a scheme or trailing slash. The registry must
+serve the GHCR paths `pfblockerng/pfsense-ce` and `pfblockerng/civm` anonymously over
+plain HTTP. `smoke-on-box.sh` rewrites leading `ghcr.io/` image references to this
+registry and still resolves and pulls the exact digest selected for the leg. When the
+variable is unset, pulls use GHCR and `SMOKE_GHCR_TOKEN` may authenticate them.
 
 ## Running (new: via lease + on-box execution)
 
@@ -134,8 +153,8 @@ tests collected) would fail that shard spuriously. `N` should stay at or under f
    - `sparse-clone-ports.sh` to bring `/root/FreeBSD-ports` to `pfblockerng/use-github`.
    - the leg on the box itself, after `sysctl -w net.ipv4.ip_unprivileged_port_start=53`.
      `oras` pulls pfSense and civm images into `/root/images/{pfsense,civm}`.
-     The LAN zot registry remains the durable fleet cache when `PFB_LAN_REGISTRY` is set;
-     no qcow2 store is shared between boxes.
+     The shared registry described above is the durable fleet cache when
+     `PFB_LAN_REGISTRY` is set; qcow2 directories on the boxes remain workload-local.
    - `pkill -9 -f qemu-system-x86_64`. Port floor lowered by the caller, not in-script:
      the bootstrap `local-smoke.sh` sends runs
      `sysctl -w net.ipv4.ip_unprivileged_port_start=53` before the handoff, and `smoke-on-box.sh`
