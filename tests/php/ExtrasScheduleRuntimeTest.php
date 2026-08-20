@@ -291,5 +291,13 @@ final class ExtrasScheduleRuntimeTest extends TestCase
 			]],
 		]);
 		$this->assertNull(pfb_schedule_runtime_config());
+
+		config_set_path('installedpackages/pfblockerngblacklist', [
+			'blacklist_enable' => 'Enable', 'blacklist_selected' => '0', 'blacklist_freq' => 'EveryDay',
+			'item' => [[
+				'xml' => '0', 'selected' => 'yes', 'title' => 'Zero', 'feed' => 'https://example.test/zero',
+			]],
+		]);
+		$this->assertNull(pfb_schedule_runtime_config());
 	}
 }
