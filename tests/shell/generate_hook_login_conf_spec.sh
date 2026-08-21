@@ -642,10 +642,11 @@ Describe 'login-ca-revoke — 22: stock (never had ours), byte-identical no-op'
     Before 'setup'
     After  'cleanup'
 
-    It 'returns success without changing a file that never had our value, no INFO'
+    It 'returns success without changing a file that never had our value, no INFO, no WARNING'
       When run sh "${HOOK}" login-ca-revoke
       The status should be success
       The stderr should not include "INFO"
+      The stderr should not include "WARNING"
       The value "$(_lc_cmp "${PFB_LOGIN_CONF}" "${_r22_dir}/before.conf")" should equal 0
     End
 End
@@ -720,10 +721,11 @@ Describe 'login-ca-revoke — 26: a foreign value is never stripped'
     Before 'setup'
     After  'cleanup'
 
-    It 'leaves login.conf byte-identical, no INFO -- the value present is not ours'
+    It 'leaves login.conf byte-identical, no INFO, but WARNS -- an opt-out that cannot strip a foreign value must say so, never report a clean success'
       When run sh "${HOOK}" login-ca-revoke
       The status should be success
       The stderr should not include "INFO"
+      The stderr should include "WARNING"
       The value "$(_lc_cmp "${PFB_LOGIN_CONF}" "${_r26_dir}/before.conf")" should equal 0
     End
 End
