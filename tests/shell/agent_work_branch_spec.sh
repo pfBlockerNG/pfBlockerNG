@@ -83,10 +83,27 @@ Describe 'work-branch.sh Graphify store integration'
       --store-root "$primary/.git/graphify-store" --builder "$primary" --branch devel --sha "$sha" || return 1
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
     codegraph_log="$fixture/codegraph.log"
+    lock_probe_log="$fixture/lock-probe.log"
+    # Records, at a named step, whether the Graphify store lock is free RIGHT THEN --
+    # a direct, instantaneous read of the critical section's extent, so the ordering
+    # invariant never rides on wall-clock or on one process out-racing another.
+    cat > "$stubdir/wb-probe-lock" <<'PROBE'
+#!/bin/sh
+if [ -n "$WB_REAL_FLOCK" ]; then
+  if "$WB_REAL_FLOCK" -n "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
+elif [ -n "$WB_REAL_LOCKF" ]; then
+  if "$WB_REAL_LOCKF" -t 0 "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
+else
+  state=lock-tool-missing
+fi
+printf '%s:%s\n' "$1" "$state" >> "$WB_LOCK_PROBE_LOG"
+PROBE
+    chmod +x "$stubdir/wb-probe-lock"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
 case "$1" in
   init|index)
+    [ -n "$WB_LOCK_PROBE_LOG" ] && wb-probe-lock codegraph
     printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
     mkdir -p "$2/.codegraph"
     true > "$2/.codegraph/codegraph.db"
@@ -98,7 +115,21 @@ case "$1" in
 esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
+    # Transparent python3 wrapper: probes the lock as the store step runs, then hands
+    # off to the real interpreter, so graphify-store.py itself stays the real script.
+    cat > "$stubdir/python3" <<'PYTHON3'
+#!/bin/sh
+case "$2" in
+  restore-exact|has-exact) [ -n "$WB_LOCK_PROBE_LOG" ] && wb-probe-lock "$2" ;;
+esac
+exec "$WB_REAL_PYTHON3" "$@"
+PYTHON3
+    chmod +x "$stubdir/python3"
     export WB_CODEGRAPH_LOG="$codegraph_log"
+    export WB_LOCK_PATH="$primary/.git/graphify-store.lock"
+    export WB_REAL_FLOCK="$(command -v flock 2>/dev/null || true)"
+    export WB_REAL_LOCKF="$(command -v lockf 2>/dev/null || true)"
+    export WB_REAL_PYTHON3="$(command -v python3)"
     PATH="$stubdir:$PATH"; export PATH
   }
   cleanup() { rm -rf "$fixture"; }
@@ -171,65 +202,27 @@ FLOCK
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'issue/34-graph')" ]
   End
 
-  It 'serializes concurrent callers across the worktree and CodeGraph sequence'
-    release_fifo="$fixture/release.fifo"
-    started_fifo="$fixture/started.fifo"
-    second_fifo="$fixture/second.fifo"
-    mkfifo "$release_fifo" "$started_fifo" "$second_fifo"
-    events="$fixture/events"
-    cat > "$stubdir/codegraph" <<'CODEGRAPH'
-#!/bin/sh
-case "$1" in
-  init)
-    mkdir -p "$2/.codegraph"
-    case "$2" in
-      *work-31) printf '%s\n' first-start >> "$WB_EVENTS"; printf '%s\n' first-start > "$WB_STARTED_FIFO"; read release_token < "$WB_RELEASE_FIFO"; printf '%s\n' first-end >> "$WB_EVENTS" ;;
-      *work-32) printf '%s\n' second-start >> "$WB_EVENTS" ;;
-    esac
-    true > "$2/.codegraph/codegraph.db"
-    ;;
-  status) printf '%s\n' '{"initialized":true,"worktreeMismatch":null,"index":{"reindexRecommended":false,"state":"complete","pendingRefs":0}}' ;;
-  *) exit 9 ;;
-esac
-CODEGRAPH
-    chmod +x "$stubdir/codegraph"
-    real_lockf=$(command -v lockf 2>/dev/null || true)
-    real_flock=$(command -v flock 2>/dev/null || true)
-    cat > "$stubdir/lockf" <<'LOCKF'
-#!/bin/sh
-if [ "$WB_CALLER" = second ]; then
-  printf '%s\n' second-attempt > "$WB_SECOND_FIFO"
-fi
-if [ -n "$WB_REAL_LOCKF" ]; then
-  exec "$WB_REAL_LOCKF" -k 9
-fi
-exec "$WB_REAL_FLOCK" 9
-LOCKF
-    cat > "$stubdir/flock" <<'FLOCK'
-#!/bin/sh
-if [ "$WB_CALLER" = second ]; then
-  printf '%s\n' second-attempt > "$WB_SECOND_FIFO"
-fi
-exec "$WB_REAL_FLOCK" 9
-FLOCK
-    chmod +x "$stubdir/lockf" "$stubdir/flock"
-    export WB_RELEASE_FIFO="$release_fifo" WB_STARTED_FIFO="$started_fifo" WB_SECOND_FIFO="$second_fifo"
-    export WB_REAL_LOCKF="$real_lockf" WB_REAL_FLOCK="$real_flock" WB_EVENTS="$events"
-    (cd "$primary" && WB_CALLER=first sh "$script_abs" issue 31 graph --worktree --base HEAD --path "$fixture/work-31" >"$fixture/out1" 2>"$fixture/err1"; printf '%s\n' "$?" >"$fixture/status1") &
-    first_pid=$!
-    read started_token < "$started_fifo"
-    Assert [ "$started_token" = first-start ]
-    (cd "$primary" && WB_CALLER=second sh "$script_abs" issue 32 graph --worktree --base HEAD --path "$fixture/work-32" >"$fixture/out2" 2>"$fixture/err2"; printf '%s\n' "$?" >"$fixture/status2") &
-    second_pid=$!
-    read second_token < "$second_fifo"
-    Assert [ "$second_token" = second-attempt ]
-    The contents of file "$events" should equal "first-start"
-    printf '%s\n' release > "$release_fifo"
-    wait "$first_pid"
-    wait "$second_pid"
-    The contents of file "$events" should equal "$(printf 'first-start\nfirst-end\nsecond-start')"
-    The contents of file "$fixture/status1" should equal 0
-    The contents of file "$fixture/status2" should equal 0
+  # issue #2609: the lock guards .git/graphify-store, and the store is untouched once
+  # restore-exact has copied the snapshot into the new worktree -- CodeGraph writes only
+  # <worktree>/.codegraph. Holding the lock across a full index made every waiting agent
+  # queue behind an unrelated indexing run. These two pin the critical section's extent
+  # by reading the lock's state at each step, never by racing two callers.
+  It 'holds the Graphify store lock across the snapshot restore'
+    export WB_LOCK_PROBE_LOG="$lock_probe_log"
+    When run sh -c 'cd "$1" && exec sh "$2" issue 37 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/held"
+    The status should equal 0
+    The output should equal "$(printf 'issue/37-graph\t%s/held' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    The contents of file "$lock_probe_log" should include 'restore-exact:lock-held'
+  End
+
+  It 'releases the Graphify store lock before CodeGraph initialization'
+    export WB_LOCK_PROBE_LOG="$lock_probe_log"
+    When run sh -c 'cd "$1" && exec sh "$2" issue 38 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/released"
+    The status should equal 0
+    The output should equal "$(printf 'issue/38-graph\t%s/released' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    The contents of file "$lock_probe_log" should include 'codegraph:lock-free'
   End
 End
 

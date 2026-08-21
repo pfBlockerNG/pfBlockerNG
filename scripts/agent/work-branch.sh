@@ -203,6 +203,12 @@ main() {
 		}
 		exit 1
 	fi
+	# issue #2609: the Graphify store is not touched again from here -- CodeGraph writes
+	# only into the new worktree's own .codegraph. Drop the lock before indexing so a
+	# concurrent caller cutting its own worktree does not queue behind an unrelated index.
+	if [ "$graphify_store_active" -eq 1 ]; then
+		exec 9>&-
+	fi
 	if ! sh "$(dirname "$0")/ensure-codegraph.sh" "$path"; then
 		echo "work-branch.sh: removing worktree and branch after CodeGraph initialization failure" >&2
 		git worktree remove "$path" >/dev/null 2>&1 || {
