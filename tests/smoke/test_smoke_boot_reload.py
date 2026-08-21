@@ -152,6 +152,7 @@ class RebootObservation:
     # issues #2621/#2617: the login.conf CA-carry boot-path proof (constants block
     # explains the two legs' complementary roles).
     login_conf_read_ok: bool | None = None
+    login_conf_preboot_read_ok: bool | None = None
     login_ca_preboot_clean: bool | None = None  # standard leg: revoke really cleared it
     login_ca_preboot_present: bool | None = None  # ramdisk leg: sync really compiled it
     login_ca_after: bool | None = None
@@ -274,11 +275,11 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
     verb_res = vm.ssh("/bin/sh", GUEST_HOOK_PATH, _verb)
     if verb_res.returncode != 0:
         print(f"[smoke] pre-reboot {_verb} rc={verb_res.returncode}: {verb_res.stderr!r}")
-    _read_ok, _present = _login_ca_in_default_class(vm)
+    login_conf_preboot_read_ok, _present = _login_ca_in_default_class(vm)
     if ramdisk:
-        login_ca_preboot_present = _read_ok and _present
+        login_ca_preboot_present = _present
     else:
-        login_ca_preboot_clean = _read_ok and not _present
+        login_ca_preboot_clean = not _present
 
     # When: reboot the guest, exercising the boot-time sync short-circuit (and, on the
     # ramdisk leg, the /var wipe + earlyshellcmd archive restore) AND (issue #2621) the
@@ -329,6 +330,7 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
         var_wiped=var_wiped,
         var_mount=var_mount,
         login_conf_read_ok=login_conf_read_ok,
+        login_conf_preboot_read_ok=login_conf_preboot_read_ok,
         login_ca_preboot_clean=login_ca_preboot_clean,
         login_ca_preboot_present=login_ca_preboot_present,
         login_ca_after=login_ca_after,
@@ -412,6 +414,10 @@ def test_login_ca_carry_applies_at_boot(reboot_observation: RebootObservation) -
     obs = reboot_observation
     leg = "ramdisk" if obs.ramdisk else "standard"
 
+    assert obs.login_conf_preboot_read_ok is True, (
+        f"capture [{leg}]: could not read {LOGIN_CONF} over ssh BEFORE the reboot — "
+        "a transport failure during setup, not a verdict on the verbs"
+    )
     assert obs.login_conf_read_ok is True, (
         f"capture [{leg}]: could not read {LOGIN_CONF} over ssh after the reboot — "
         "a transport failure, not a verdict on the boot reconcile"
