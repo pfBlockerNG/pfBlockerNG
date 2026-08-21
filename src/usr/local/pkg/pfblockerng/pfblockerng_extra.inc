@@ -5834,9 +5834,14 @@ function pfblockerng_tick(
 	// issue #2607: an absent manifest means the Python resolver is matching nothing
 	// (ADR-65), so it dispatches like a *.fail marker -- same scheduled-updates gate,
 	// but no apply window, which defers changes and must not extend an outage.
+	$manifest_path = (string) ($pfb['unbound_py_sources'] ?? '');
+	// Only a pass that can publish a manifest may be dispatched for a missing one: DNSBL
+	// off takes the disable branch and publishes nothing, and an empty path is a broken
+	// setting, so either would retry every tick forever without repairing anything.
 	$manifest_due = $runtime_ready && $runtime_model !== NULL && $runtime_model['scheduled']
+		&& PfbConfig::read('dnsbl/pfb_dnsbl') === PfbToggle::On
 		&& pfb_unbound_py_mode_active()
-		&& !file_exists((string) ($pfb['unbound_py_sources'] ?? ''));
+		&& $manifest_path !== '' && !file_exists($manifest_path);
 	$scheduled_due = $runtime_ready && $cache_ready && $runtime_model !== NULL
 		&& $runtime_model['scheduled'] && $cron_due;
 	$scheduled_due = $scheduled_due || ($runtime_ready && $runtime_model !== NULL

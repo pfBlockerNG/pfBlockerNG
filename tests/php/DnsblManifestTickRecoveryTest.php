@@ -94,6 +94,7 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 			config_set_path('installedpackages/pfblockerngdnsblsettings/config/0/' . $key, $value);
 		}
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
+		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
 		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		config_set_path('installedpackages/pfblockernglistsv4/config', [[
 			'action' => 'Deny_Inbound',
@@ -261,6 +262,38 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$this->assertSame(0, $this->feedRuns,
 			'with scheduled feed updates opted out, a missing manifest must not force an '
 			. 'automatic pass -- the same gate the *.fail dispatch respects');
+	}
+
+	/**
+	 * With DNSBL switched off, a dispatched pass takes the disable branch and publishes no
+	 * manifest — so dispatching on its absence would repeat every tick forever without ever
+	 * repairing anything. There is nothing to repair: DNSBL is off.
+	 */
+	public function testMissingManifestIsIgnoredWhenDnsblIsDisabled(): void
+	{
+		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::Off);
+		$this->assertTrue(unlink($GLOBALS['pfb']['unbound_py_sources']));
+
+		$this->tick();
+
+		$this->assertSame(0, $this->feedRuns,
+			'with DNSBL disabled no pass can publish a manifest, so dispatching on its absence '
+			. 'would be an unbounded retry loop');
+	}
+
+	/**
+	 * A manifest path that is empty rather than merely missing is a broken configuration,
+	 * not an empty resolver: file_exists('') is false, so without this guard every tick
+	 * would read it as "manifest gone" and dispatch forever.
+	 */
+	public function testEmptyManifestPathDoesNotDispatch(): void
+	{
+		$GLOBALS['pfb']['unbound_py_sources'] = '';
+
+		$this->tick();
+
+		$this->assertSame(0, $this->feedRuns,
+			'an unset manifest path must not be read as an absent manifest');
 	}
 
 	/**
