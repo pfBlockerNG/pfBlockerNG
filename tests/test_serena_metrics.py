@@ -107,6 +107,8 @@ def test_listening_endpoints_parses_filters_deduplicates_and_sorts(
             b"n127.0.0.1:24282",
             b"n[fd7a:115c:a1e0::10]:24285",
             b"n[::1]:24283",
+            b"n[::1%lo0]:24291",
+            b"n[fd7a:115c:a1e0::10%utun0]:24292",
             b"n127.0.0.1:24282",
             b"n*:24286",
             b"n0.0.0.0:24287",
@@ -162,6 +164,7 @@ def test_lsof_timeout_expired_and_nonzero_or_nontext_output_are_empty(
         timeout,
         SimpleNamespace(returncode=1, stdout=b"n127.0.0.1:24282"),
         SimpleNamespace(returncode=0, stdout=object()),
+        SimpleNamespace(returncode=0, stdout=b"\xff"),
     ]:
         if isinstance(result, BaseException):
 
@@ -246,6 +249,22 @@ def test_request_json_supports_ipv6(metrics: Any) -> None:
     with listener(healthy(), host="::1") as (host, port):
         assert host == "::1"
         assert metrics._request_json(host, port, "/heartbeat") == {"status": "alive"}
+
+
+def test_discovery_brackets_tailscale_ipv6_dashboard_url(metrics: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    host = "fd7a:115c:a1e0::10"
+    monkeypatch.setattr(metrics, "_listening_endpoints", lambda: [(host, 24282)])
+    responses = {
+        "/heartbeat": {"status": "alive"},
+        "/get_config_overview": {
+            "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
+            "current_client": None,
+            "serena_version": "1.7.0",
+        },
+    }
+    monkeypatch.setattr(metrics, "_request_json", lambda request_host, port, path: responses[path])
+
+    assert metrics.discover_instances()[0]["dashboard_url"] == f"http://[{host}]:24282/dashboard/"
 
 
 def test_request_json_rejects_oversized_content_length(metrics: Any, monkeypatch: pytest.MonkeyPatch) -> None:
