@@ -1,12 +1,12 @@
 #shellcheck shell=sh
 # pfblockerng_repo_generate.sh — login.conf `default`-class setenv editor
-# (issue #2617). Sibling suite to generate_hook_pkgconf_spec.sh: that file
-# pins JOB 2 (pkg.conf's PKG_ENV re-apply); this one pins the standalone
+# (issue #2617). Sibling suite to generate_hook_ca_consent_spec.sh: that file
+# pins JOB 2 (the consent read, _login_ca_consent(), and its wiring into
+# `onestart` via _login_ca_reconcile()); this one pins the standalone
 # login.conf editing primitive (_logincap_setenv_add() /
-# _logincap_setenv_remove()), exercised through the `login-ca-sync` /
-# `login-ca-revoke` CLI verbs. Neither verb is wired into onestart or the
-# pkg.conf ca-sync/ca-revoke commands yet -- that integration is a separate
-# change; this suite only pins the editor itself.
+# _logincap_setenv_remove()) directly, exercised through the `login-ca-sync` /
+# `login-ca-revoke` CLI verbs -- consent-independent verbs the sibling suite's
+# `onestart` wiring calls into.
 #
 # Every content assertion diffs the resulting file against a fixture under
 # tests/fixtures/login_conf/ (or a sed-substituted copy of one), or -- for the

@@ -38,9 +38,6 @@ import pytest
 from .. import helpers
 from .render_oracle import PhpErrorLogGuard
 from .test_render_smoke import (
-    _CONSENT_FIELD_MARKER,
-    _PKG_CONF_PATH,
-    pkg_conf_ca_block_seeded,
     software_panel_forced,
 )
 from .webui import looks_like_login_page, scrape_form_fields
@@ -409,18 +406,17 @@ def _pin_posted_value(rendered: dict[str, str], flow: ToggleFlow) -> bool:
     return True
 
 
-def test_software_page_toggle_post_roundtrip(
+def _software_page_checkbox_roundtrip(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
+    flow: ToggleFlow,
 ) -> None:
-    """Software-page checkbox stores checked ``on`` and unchecked ``''`` tokens."""
-    flow = ToggleFlow(
-        name="software_update_check",
-        page="/pfblockerng/pfblockerng_software.php",
-        field="pfb_software_check",
-        config_path="installedpackages/pfblockerng/config/0/pfb_software_check",
-        absent="on",
-    )
+    """Drive one Software-page checkbox through off/on/off and read config.xml back.
+
+    Shared by the two Software-page flows below: same page, same ``on``/``''``
+    token shape, same posted-value pin (issue #2367). The oracle is config.xml
+    over SSH; the final restore leaves the exact original raw state.
+    """
     original_state = helpers.config_get_state(smoke_vm, flow.config_path)
     original = flow.absent if not original_state[0] else (flow.off if original_state[1] != flow.on else flow.on)
     flipped = flow.off if original == flow.on else flow.on
@@ -460,79 +456,52 @@ def test_software_page_toggle_post_roundtrip(
             helpers.config_restore_state(smoke_vm, flow.config_path, original_state)
 
 
-# The exact line the installed repository hook inserts inside the PKG_ENV block.
-_PKG_CONF_CA_PATH_LINE = "\tSSL_CA_CERT_PATH=/etc/ssl/certs\n"
-
-
-def test_software_page_pkgconf_ca_consent_toggle_post_roundtrip(
+def test_software_page_toggle_post_roundtrip(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
 ) -> None:
-    """Ticking/unticking the pkg.conf CA-consent box patches/unpatches the guest's REAL
-    pkg.conf, not just config.xml (issue #2518).
+    """Software-page "New version check" checkbox stores ``on``/``''`` tokens."""
+    _software_page_checkbox_roundtrip(
+        webui,
+        smoke_vm,
+        ToggleFlow(
+            name="software_update_check",
+            page="/pfblockerng/pfblockerng_software.php",
+            field="pfb_software_check",
+            config_path="installedpackages/pfblockerng/config/0/pfb_software_check",
+            absent="on",
+        ),
+    )
 
-    Unlike the plain ``ToggleFlow`` cases above, this flow's save handler has a SECOND
-    effective-state surface beyond config.xml: the installed repository hook rewrites
-    ``/usr/local/etc/pkg.conf`` itself. Both surfaces are asserted. The BEFORE state (the
-    seeded, unpatched pkg.conf) is captured and asserted FIRST, so a green here proves the
-    tick caused the file to change, not that it happened to already be patched.
+
+def test_software_page_login_ca_consent_toggle_post_roundtrip(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """The login.conf CA-consent checkbox (issue #2617) persists ``on``/``''`` tokens.
+
+    UI persistence only, deliberately: smoke guests never run ``pkg``, so proving
+    the variable lands in the guest's ``/etc/login.conf`` buys nothing here — the
+    editor's byte-level behaviour (append/insert/remove, first-setenv-only,
+    refusal shapes, cap_mkdb) is pinned exhaustively by
+    tests/shell/generate_hook_login_conf_spec.sh and
+    tests/shell/generate_hook_ca_consent_spec.sh. The save handler still invokes
+    the installed hook on the guest (login-ca-sync/login-ca-revoke); config.xml
+    stays the oracle either way — the field is registered default-ON, and an
+    apply refusal (e.g. an unpopulated /etc/ssl/certs) re-renders with a notice
+    while the token is already persisted.
     """
-    page = "/pfblockerng/pfblockerng_software.php"
-    field = "pfb_pkg_ca_consent"
-    config_path = "installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent"
-    original_state = helpers.config_get_state(smoke_vm, config_path)
-
-    try:
-        with software_panel_forced(smoke_vm, "on"), pkg_conf_ca_block_seeded(smoke_vm):
-            before = smoke_vm.ssh("cat", _PKG_CONF_PATH)
-            assert before.returncode == 0, f"failed to read {_PKG_CONF_PATH}: {before.stderr.strip()}"
-            before_content = before.stdout
-            assert "SSL_CA_CERT_PATH" not in before_content, (
-                "precondition: the seeded pkg.conf must start UNPATCHED, or a green tick below would not prove anything"
-            )
-
-            form_page = webui.get(page)
-            assert _CONSENT_FIELD_MARKER in form_page.text, (
-                "the consent control must be reachable with the PKG_ENV block seeded"
-            )
-
-            # Tick + Save: config.xml AND the guest's pkg.conf must both move.
-            resp = webui.post(page, {field: "on"}, timeout=SAVE_TIMEOUT)
-            assert not looks_like_login_page(resp.text), "POST returned the login form (session lost)"
-            assert helpers.config_get(smoke_vm, config_path) == "on", (
-                "ticking + Save must persist the On token in config.xml"
-            )
-            patched = smoke_vm.ssh("cat", _PKG_CONF_PATH)
-            assert patched.returncode == 0, f"failed to read {_PKG_CONF_PATH}: {patched.stderr.strip()}"
-            patched_lines = patched.stdout.splitlines(keepends=True)
-            ca_hits = [i for i, ln in enumerate(patched_lines) if ln == _PKG_CONF_CA_PATH_LINE]
-            assert len(ca_hits) == 1, (
-                f"expected exactly one {_PKG_CONF_CA_PATH_LINE!r} line after ticking, found "
-                f"{len(ca_hits)} in:\n{patched.stdout}"
-            )
-            without_ca_line = patched_lines[: ca_hits[0]] + patched_lines[ca_hits[0] + 1 :]
-            assert "".join(without_ca_line) == before_content, (
-                "ticking must add EXACTLY the one SSL_CA_CERT_PATH line and touch nothing else in pkg.conf"
-            )
-
-            # Untick + Save: config.xml AND the guest's pkg.conf must both revert.
-            resp = webui.post(page, {field: ""}, timeout=SAVE_TIMEOUT)
-            assert not looks_like_login_page(resp.text), "POST returned the login form (session lost)"
-            assert helpers.config_get(smoke_vm, config_path) == "", (
-                "unticking + Save must persist the canonical Off token in config.xml"
-            )
-            restored = smoke_vm.ssh("cat", _PKG_CONF_PATH)
-            assert restored.returncode == 0, f"failed to read {_PKG_CONF_PATH}: {restored.stderr.strip()}"
-            assert restored.stdout == before_content, (
-                "unticking must restore pkg.conf BYTE-IDENTICAL to its pre-tick (seeded) "
-                "state -- removing only the one line it added"
-            )
-
-        helpers.config_restore_state(smoke_vm, config_path, original_state)
-        assert helpers.config_get_state(smoke_vm, config_path) == original_state
-    finally:
-        if helpers.config_get_state(smoke_vm, config_path) != original_state:
-            helpers.config_restore_state(smoke_vm, config_path, original_state)
+    _software_page_checkbox_roundtrip(
+        webui,
+        smoke_vm,
+        ToggleFlow(
+            name="login_ca_consent",
+            page="/pfblockerng/pfblockerng_software.php",
+            field="pfb_pkg_ca_consent",
+            config_path="installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent",
+            absent="on",
+        ),
+    )
 
 
 # --------------------------------------------------------------------------- #

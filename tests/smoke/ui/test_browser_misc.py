@@ -58,7 +58,6 @@ from .conftest import mask_page_identity
 from .test_render_smoke import (
     _CONSENT_FIELD_MARKER,
     _seed_vm_file,
-    pkg_conf_ca_block_seeded,
     software_panel_forced,
 )
 
@@ -320,27 +319,23 @@ def test_software_panel_screenshot_when_enabled(
         _shot(browser_page, screenshot_dir, "software_panel_enabled")
 
 
-def test_software_panel_pkgconf_ca_consent_section_screenshot(
+def test_software_panel_login_ca_consent_section_screenshot(
     smoke_vm: SmokeVM,
     browser_page: Page,
     webui: WebUI,
     screenshot_dir: Path,
 ) -> None:
-    """Capture the pkg.conf CA-consent section (issue #2518) in its rendered state.
+    """Capture the login.conf CA-consent section (issue #2617) in its rendered state.
 
-    Mirrors ``test_software_panel_screenshot_when_enabled``: the section only ever
-    appears when the guest's REAL pkg.conf carries a recognised, unpatched PKG_ENV
-    block (pkg_conf_ca_block_seeded — the CE Tier-A/B guests ship with none by
-    default), so it is seeded here for the DOM/screenshot capture, then restored
-    byte-for-byte on exit.
+    Mirrors ``test_software_panel_screenshot_when_enabled``: the section now renders
+    unconditionally (issue #2617 retired the #2518 Plus-only pkg.conf PKG_ENV gate), so
+    no seeding is needed for the DOM/screenshot capture.
     """
-    with software_panel_forced(smoke_vm, "on"), pkg_conf_ca_block_seeded(smoke_vm):
+    with software_panel_forced(smoke_vm, "on"):
         _open(browser_page, webui, SOFTWARE_PAGE)
         assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
-        assert _CONSENT_FIELD_MARKER in browser_page.content(), (
-            "pkg.conf CA-consent control absent from the DOM with the PKG_ENV block seeded"
-        )
-        _shot(browser_page, screenshot_dir, "software_panel_pkgconf_ca_consent")
+        assert _CONSENT_FIELD_MARKER in browser_page.content(), "login.conf CA-consent control absent from the DOM"
+        _shot(browser_page, screenshot_dir, "software_panel_login_ca_consent")
 
 
 @pytest.mark.ui_browser
