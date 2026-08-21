@@ -291,4 +291,40 @@ final class IpParseLineTest extends TestCase
 			$this->assertLine($line, $config, $this->expectedResult($line));
 		}
 	}
+
+	/**
+	 * Scenario: DShield block.txt ships start/end/prefix as tab columns (issue #2602).
+	 *   Given a production auto-typed feed row
+	 *     5.61.209.0<TAB>5.61.209.255<TAB>24<TAB>...
+	 *   When pfb_ip_parse_line runs with pftype=auto (URL suffix .txt)
+	 *   Then entries are the declared CIDR, not the two extracted hosts.
+	 * Stock auto sanitize of the TSV fails, parse_error takes the IPv4 regex
+	 * fallback, and both columns become independent addresses. The shared
+	 * hyphen RANGE constant is unused for this shape — do not widen it.
+	 */
+	public function testIpv4AutoDshieldTabRangeYieldsDeclaredCidr(): void
+	{
+		$line = "5.61.209.0\t5.61.209.255\t24\t339\tASN\tUS\tNone";
+		$this->assertLine(
+			$line,
+			$this->config('_v4', 'auto', FALSE),
+			$this->expectedResult($line, ['entries' => ['5.61.209.0/24']])
+		);
+	}
+
+	/**
+	 * Scenario: a host-list feed writes a bare trailing .0 with no mask.
+	 *   Given 8.152.209.0 (CINS shape) on the auto path
+	 *   When parsed
+	 *   Then it stays a single host — the DShield tab path must not revive
+	 *        v3's empty-mask .0→/24 widen (issue #320 is orthogonal).
+	 */
+	public function testIpv4AutoBareDotZeroHostIsNotWidenedToSlash24(): void
+	{
+		$this->assertLine(
+			'8.152.209.0',
+			$this->config('_v4', 'auto', FALSE),
+			$this->expectedResult('8.152.209.0', ['entries' => ['8.152.209.0']])
+		);
+	}
 }
