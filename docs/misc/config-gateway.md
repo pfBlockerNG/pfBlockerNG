@@ -38,9 +38,10 @@ Authorization = property of **write**, not call site (generalises
   write re-asserts via `isAllowedPage()`. Absent means `PfbConfig::WRITE_PRIV_DEFAULT`
   (`pfblockerng/pfblockerng_general.php`, package page — pfSense grants all
   pfBlockerNG pages through one privilege entry, so finer per-page defaults meaningless).
-  Explicit overrides: `pfb_software_check` and `pfb_pkg_ca_consent` (#2518, the
-  consented pkg.conf CA-path patch) → `pkg_mgr_installed.php` (#485 Software-page
-  secondary gate) — both controls live on the Software page.
+  Explicit overrides: `pfb_software_check` and `pfb_pkg_ca_consent` (#2617, the
+  consented login.conf CA-carry — supersedes #2518's retired pkg.conf patch) →
+  `pkg_mgr_installed.php` (#485 Software-page secondary gate) — both controls live
+  on the Software page.
 - `PfbConfig::write()` / `writeSection()` enforce **fail-closed**: undefined
   `isAllowedPage()` (no web session — `priv.inc` only in web auth include chain)
   or FALSE return throws `RuntimeException`. `writeSection()` checks every registered

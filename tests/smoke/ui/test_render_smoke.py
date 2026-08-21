@@ -32,7 +32,7 @@ import os
 import re
 import subprocess
 import uuid
-from contextlib import ExitStack, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -3004,109 +3004,39 @@ def test_software_page_hidden_when_override_forces_off(
 
 
 # --------------------------------------------------------------------------- #
-# issue #2518 STEP C — the Plus-only pkg.conf CA-path consent section. The smoke
-# VMs are CE by default; the positive context temporarily seeds the Plus product
-# label and a matching pin for the functional hook flow.
+# issue #2617 — the login.conf CA-carry consent section on the Software page.
+# #2518's Plus-only pkg.conf PKG_ENV gate (and its seeding helper below) was
+# retired: the section is now a plain, edition-independent Software-page
+# control that always renders, with no "_shown" marker and no pkg.conf pin to
+# simulate.
 # --------------------------------------------------------------------------- #
 
 _PKG_CONF_PATH = "/usr/local/etc/pkg.conf"
-_PRODUCT_LABEL_PATH = "/etc/product_label"
-# The GUEST's own real cert bundle -- never a Netgate path (that file does not
-# exist off-Plus, and pointing pkg at a missing bundle would break pkg's own TLS
-# on this guest for the rest of the test run).
-_PKG_CONF_GUEST_CA_FILE = "/etc/ssl/cert.pem"
 _CONSENT_FIELD_MARKER = "pfb_pkg_ca_consent"
 
 
-def _overwrite_vm_file(vm: SmokeVM, path: str, content: str, *, timeout: float = 30.0) -> None:
-    """Replace *path*'s entire contents on the guest via plain ``tee`` (NOT ``-a``: a full
-    overwrite, unlike :func:`_seed_vm_file`'s append), so the caller controls the file's
-    exact bytes rather than adding to whatever is already there."""
-    result = subprocess.run(
-        vm.ssh_argv("tee", path),
-        input=content,
-        capture_output=True,
-        text=True,
-        timeout=timeout,
-        check=False,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"_overwrite_vm_file({path!r}) failed: rc={result.returncode} {result.stderr!r}")
-
-
-@contextmanager
-def pkg_conf_ca_block_seeded(vm: SmokeVM) -> Iterator[None]:
-    """Temporarily give the CE smoke guest the two facts this feature requires on Plus:
-    a Plus product label and a well-formed, unpatched ``PKG_ENV`` block in the guest's real
-    ``pkg.conf``. Both files are restored byte-for-byte even when another seed or restore
-    fails, so the simulated edition and pin cannot leak into later tests.
-    """
-    original = vm.ssh("cat", _PKG_CONF_PATH)
-    assert original.returncode == 0, (
-        f"failed to read {_PKG_CONF_PATH} before seeding (rc={original.returncode}): {original.stderr.strip()!r}"
-    )
-    original_label = vm.ssh("cat", _PRODUCT_LABEL_PATH)
-    assert original_label.returncode == 0, (
-        f"failed to read {_PRODUCT_LABEL_PATH} before seeding "
-        f"(rc={original_label.returncode}): {original_label.stderr.strip()!r}"
-    )
-    seeded_content = (
-        original.stdout.rstrip("\n") + "\nPKG_ENV {\n" + f"\tSSL_CA_CERT_FILE={_PKG_CONF_GUEST_CA_FILE}\n" + "}\n"
-    )
-
-    def restore(path: str, content: str) -> None:
-        _overwrite_vm_file(vm, path, content)
-        restored = vm.ssh("cat", path)
-        assert restored.returncode == 0 and restored.stdout == content, f"failed to restore {path}"
-
-    with ExitStack() as cleanup:
-        cleanup.callback(restore, _PRODUCT_LABEL_PATH, original_label.stdout)
-        _overwrite_vm_file(vm, _PRODUCT_LABEL_PATH, "pfSense Plus\n")
-        cleanup.callback(restore, _PKG_CONF_PATH, original.stdout)
-        _overwrite_vm_file(vm, _PKG_CONF_PATH, seeded_content)
-        yield
-
-
-def test_software_page_pkgconf_ca_consent_section_present_when_pinned(
+def test_software_page_login_ca_consent_section_always_renders(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """The pkg.conf CA-consent section renders on Plus (#2518).
+    """The login.conf CA-consent section renders unconditionally on the Software page (#2617).
+
+    #2617 replaced the retired #2518 Plus-only pkg.conf PKG_ENV gate (and its two
+    present-on-Plus / absent-on-CE tests) with a plain control that always renders,
+    regardless of edition or any pkg.conf state — so this single case, with no seeding
+    of any kind, is now the section's whole render coverage.
 
     Scenario:
-      Given the override sentinel set to 'on' (so the provenance gate passes),
-      And the guest's product label temporarily seeded as Plus,
+      Given the override sentinel set to 'on' (so the Software page's OWN provenance
+        gate passes — unrelated to the CA-consent section under test),
       When the Software page is GET,
       Then it renders clean (200, no Fatal/Warning/Notice/Uncaught — the render oracle) AND
-          the pfb_pkg_ca_consent control is present in the body.
-    """
-    with software_panel_forced(smoke_vm, "on"), pkg_conf_ca_block_seeded(smoke_vm):
-        resp = webui.get(_SOFTWARE_PAGE)
-        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
-        assert result.ok, f"Software page render oracle failed with the CA pin seeded: {result.detail}"
-        assert _CONSENT_FIELD_MARKER in resp.text, "the pkg.conf CA-consent section must render on Plus"
-
-
-def test_software_page_pkgconf_ca_consent_section_absent_on_unpinned_pkgconf(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """The pkg.conf CA-consent section stays ABSENT on CE.
-
-    This is the branch every real CE box takes (the Tier-A guests ship exactly this: no
-    PKG_ENV block at all) -- no seeding here, deliberately, so this proves the section's
-    DEFAULT off-state against the guest's actual shipped file, not a fixture standing in
-    for it.
-
-    Scenario:
-      Given the override sentinel set to 'on' (so the provenance gate passes),
-      And the guest's pkg.conf is left exactly as pfSense shipped it (no PKG_ENV block),
-      When the Software page is GET,
-      Then it renders clean AND the pfb_pkg_ca_consent control is ABSENT from the body.
+        the pfb_pkg_ca_consent control is present in the body.
     """
     with software_panel_forced(smoke_vm, "on"):
         resp = webui.get(_SOFTWARE_PAGE)
         result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
-        assert result.ok, f"Software page render oracle failed on unpinned pkg.conf: {result.detail}"
-        assert _CONSENT_FIELD_MARKER not in resp.text, "the pkg.conf CA-consent section must stay ABSENT on CE"
+        assert result.ok, f"Software page render oracle failed: {result.detail}"
+        assert _CONSENT_FIELD_MARKER in resp.text, "the login.conf CA-consent section must always render"
 
 
 def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001
