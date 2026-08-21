@@ -2526,6 +2526,28 @@ HOOK_MARKER_DIR = "/tmp"
 HOOK_SCRIPT_DIR = "/usr/local/pkg/pfblockerng/hooks"
 
 
+def scp_to_guest(vm: SmokeVM, local: Path, remote: str, *, timeout: float = 120.0) -> None:
+    """Copy a local file to the guest via ``scp`` (mirrors test_repo_install's ``_scp_to_guest``)."""
+    argv = [
+        "scp",
+        "-i",
+        vm.ssh_key_path,
+        "-P",
+        str(vm.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "BatchMode=yes",
+        str(local),
+        f"{vm.ssh_target}:{remote}",
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"scp {local} -> {remote} failed: rc={result.returncode} {result.stderr!r}")
+
+
 def install_hook_script(vm: SmokeVM, name: str, body: str, *, timeout: float = 60.0) -> str:
     """Write an executable hook script ``name`` into the on-box hook-script dir; return ``name``.
 
