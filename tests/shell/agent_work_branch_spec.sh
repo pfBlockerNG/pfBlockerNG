@@ -89,10 +89,12 @@ Describe 'work-branch.sh Graphify store integration'
     # invariant never rides on wall-clock or on one process out-racing another.
     cat > "$stubdir/wb-probe-lock" <<'PROBE'
 #!/bin/sh
-if [ -n "$WB_REAL_FLOCK" ]; then
+# -k / -n keep the probe read-only: without -k, a SUCCESSFUL lockf unlinks the very
+# lock file under inspection. Tool preference mirrors work-branch.sh's own order.
+if [ -n "$WB_REAL_LOCKF" ]; then
+  if "$WB_REAL_LOCKF" -k -t 0 "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
+elif [ -n "$WB_REAL_FLOCK" ]; then
   if "$WB_REAL_FLOCK" -n "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
-elif [ -n "$WB_REAL_LOCKF" ]; then
-  if "$WB_REAL_LOCKF" -t 0 "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
 else
   state=lock-tool-missing
 fi
@@ -205,24 +207,36 @@ FLOCK
   # issue #2609: the lock guards .git/graphify-store, and the store is untouched once
   # restore-exact has copied the snapshot into the new worktree -- CodeGraph writes only
   # <worktree>/.codegraph. Holding the lock across a full index made every waiting agent
-  # queue behind an unrelated indexing run. These two pin the critical section's extent
-  # by reading the lock's state at each step, never by racing two callers.
-  It 'holds the Graphify store lock across the snapshot restore'
+  # queue behind an unrelated indexing run. The extent is read off the lock itself at each
+  # step, never inferred from one caller out-racing another.
+  It 'holds the Graphify store lock across the snapshot restore and drops it before indexing'
     export WB_LOCK_PROBE_LOG="$lock_probe_log"
     When run sh -c 'cd "$1" && exec sh "$2" issue 37 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/held"
     The status should equal 0
     The output should equal "$(printf 'issue/37-graph\t%s/held' "$fixture")"
     The stderr should include 'Preparing worktree'
-    The contents of file "$lock_probe_log" should include 'restore-exact:lock-held'
+    The contents of file "$lock_probe_log" should equal "$(printf 'has-exact:lock-held\nrestore-exact:lock-held\ncodegraph:lock-free')"
   End
 
-  It 'releases the Graphify store lock before CodeGraph initialization'
+  # The window this widens is concurrency, so the concurrent case stays covered: two
+  # callers racing through the same store must both come out with their own worktree.
+  # No ordering is asserted -- which one indexes first is not a contract.
+  It 'lets concurrent callers each complete with their own worktree'
     export WB_LOCK_PROBE_LOG="$lock_probe_log"
-    When run sh -c 'cd "$1" && exec sh "$2" issue 38 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/released"
-    The status should equal 0
-    The output should equal "$(printf 'issue/38-graph\t%s/released' "$fixture")"
-    The stderr should include 'Preparing worktree'
-    The contents of file "$lock_probe_log" should include 'codegraph:lock-free'
+    (cd "$primary" && sh "$script_abs" issue 39 graph --worktree --base HEAD --path "$fixture/race-a" >"$fixture/out-a" 2>"$fixture/err-a"; printf '%s\n' "$?" >"$fixture/status-a") &
+    a_pid=$!
+    (cd "$primary" && sh "$script_abs" issue 40 graph --worktree --base HEAD --path "$fixture/race-b" >"$fixture/out-b" 2>"$fixture/err-b"; printf '%s\n' "$?" >"$fixture/status-b") &
+    b_pid=$!
+    wait "$a_pid"
+    wait "$b_pid"
+    The contents of file "$fixture/status-a" should equal 0
+    The contents of file "$fixture/status-b" should equal 0
+    The contents of file "$fixture/out-a" should equal "$(printf 'issue/39-graph\t%s/race-a' "$fixture")"
+    The contents of file "$fixture/out-b" should equal "$(printf 'issue/40-graph\t%s/race-b' "$fixture")"
+    Assert [ -f "$fixture/race-a/graphify-out/cache/payload.txt" ]
+    Assert [ -f "$fixture/race-b/graphify-out/cache/payload.txt" ]
+    Assert [ -f "$fixture/race-a/.codegraph/codegraph.db" ]
+    Assert [ -f "$fixture/race-b/.codegraph/codegraph.db" ]
   End
 End
 
