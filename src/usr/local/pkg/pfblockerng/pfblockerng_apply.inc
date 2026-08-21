@@ -345,29 +345,46 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 			$line = str_replace('#', '', strstr($line, '#', TRUE));
 		}
 		$line = trim($line);
+	}
 
-		// issue #2602: DShield-style start<TAB>end<TAB>prefix. Cheap tab
-		// gate, then a narrow second regex — do not widen $config['range']
-		// (hyphen). Accept only when the derived range is exactly
-		// "{start}/{prefix}"; otherwise fall through (legacy two-host
-		// extract). A reversed start/end is rejected, not swapped:
-		// ip_range_to_subnet_array would swap, so start/prefix cannot
-		// equal the derived cidr.
-		if (strpos($line, "\t") !== FALSE && strpos($line, '.') !== FALSE &&
-			preg_match('/^((?:\d{1,3}\.){3}\d{1,3})\t((?:\d{1,3}\.){3}\d{1,3})\t(\d{1,2})\b/', $line, $pfb_tab)) {
-			$pfb_tab_declared = $pfb_tab[1] . '/' . $pfb_tab[3];
-			$a_cidr = ip_range_to_subnet_array($pfb_tab[1], $pfb_tab[2]);
-			if (count($a_cidr) === 1 && $a_cidr[0] === $pfb_tab_declared) {
-				$sanitized = pfb_sanitize_ipaddr($pfb_tab_declared, $custom, $pfbcidr, $suppression);
-				$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
-				if (!pfb_is_empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
-					$result['entries'][] = $sanitized['address'];
-				}
+	// issue #2604: DShield start<TAB>end<TAB>prefix rows declare their own
+	// family; accept only one exact CIDR and leave opposite-family rows alone.
+	if ($pftype == 'auto' && strpos($line, "\t") !== FALSE) {
+		$pfb_tab = explode("\t", $line, 4);
+		$pfb_tab_family = NULL;
+		if (count($pfb_tab) >= 3 && ctype_digit($pfb_tab[2])) {
+			if (validate_ipv4($pfb_tab[0]) && validate_ipv4($pfb_tab[1])) {
+				$pfb_tab_family = '_v4';
+			} elseif (validate_ipv6($pfb_tab[0]) && validate_ipv6($pfb_tab[1])) {
+				$pfb_tab_family = '_v6';
+			}
+		}
+		if ($pfb_tab_family !== NULL) {
+			$a_cidr = ip_range_to_subnet_array($pfb_tab[0], $pfb_tab[1]);
+			$pfb_tab_cidr = count($a_cidr) === 1 ? explode('/', $a_cidr[0], 2) : [];
+			if (count($pfb_tab_cidr) === 2 && $pfb_tab_cidr[1] === $pfb_tab[2] &&
+				inet_pton($pfb_tab_cidr[0]) === inet_pton($pfb_tab[0])) {
 				$result['line'] = $line;
+				if ($pfb_tab_family !== $vtype) {
+					return $result;
+				}
+				$sanitized = $vtype == '_v4'
+					? pfb_sanitize_ipaddr($a_cidr[0], $custom, $pfbcidr, $suppression)
+					: pfb_sanitize_ipaddr_v6($a_cidr[0], $custom, $pfbcidr_v6, $suppression);
+				$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+				if (!pfb_is_empty($sanitized['address']) &&
+					(($vtype == '_v4' && validate_ipv4($sanitized['address'])) ||
+					($vtype == '_v6' && validate_ipv6($sanitized['address'])))) {
+					$result['entries'][] = $sanitized['address'];
+				} elseif ($vtype == '_v6') {
+					$result['suppressed'] = TRUE;
+				}
 				return $result;
 			}
 		}
+	}
 
+	if ($vtype == '_v4' && $pftype == 'auto') {
 		if (strpos($line, '-') !== FALSE) {
 			$matches = explode('-', $line);
 			if (count($matches) == 2) {

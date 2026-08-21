@@ -391,4 +391,75 @@ final class IpParseLineTest extends TestCase
 		$ipTabText = "8.8.8.8\tnot-an-address";
 		$this->assertLine($ipTabText, $config, $this->expectedResult($ipTabText, ['entries' => ['8.8.8.8']]));
 	}
+
+	/**
+	 * Scenario: a tab-delimited source contains rows from both address families.
+	 *   Given matching IPv4 and IPv6 alias passes over the same rows
+	 *   When each row is parsed independently
+	 *   Then each pass emits only its family's declared CIDR and ignores the other.
+	 */
+	public function testAutoDshieldTabRangeUsesMatchingFamilyPerLine(): void
+	{
+		$v4Config = $this->config('_v4', 'auto', FALSE);
+		$v6Config = $this->config('_v6', 'auto', FALSE);
+		$v4Row = "5.61.209.0\t5.61.209.255\t24\t339\tASN\tUS\tNone";
+		$v6Row = "2001:4860:4860:0:0:0:0:0\t2001:4860:4860::3\t126\t339\tASN\tUS\tNone";
+
+		$this->assertLine(
+			$v4Row,
+			$v4Config,
+			$this->expectedResult($v4Row, ['entries' => ['5.61.209.0/24']])
+		);
+		$this->assertLine($v6Row, $v4Config, $this->expectedResult($v6Row));
+		$this->assertLine($v4Row, $v6Config, $this->expectedResult($v4Row));
+		$this->assertLine(
+			$v6Row,
+			$v6Config,
+			$this->expectedResult($v6Row, ['entries' => ['2001:4860:4860::/126']])
+		);
+	}
+
+	/**
+	 * Scenario: IPv6 tab rows do not describe exactly one declared CIDR.
+	 *   Given reversed, invalid, contradictory, or overlong rows
+	 *   When parsed by an IPv6 alias pass
+	 *   Then the tab path falls through without silently widening the range.
+	 */
+	public function testIpv6AutoDshieldTabInconsistentPrefixFallsThrough(): void
+	{
+		$config = $this->config('_v6', 'auto', FALSE);
+		$legacyTwo = static function (string $a, string $b): array {
+			return ['entries' => [$a, $b]];
+		};
+
+		$reversed = "2001:4860:4860::3\t2001:4860:4860::\t126";
+		$this->assertLine($reversed, $config, $this->expectedResult(
+			$reversed,
+			$legacyTwo('2001:4860:4860::3', '2001:4860:4860::')
+		));
+
+		$prefix129 = "2001:4860:4860::\t2001:4860:4860::3\t129";
+		$this->assertLine($prefix129, $config, $this->expectedResult(
+			$prefix129,
+			$legacyTwo('2001:4860:4860::', '2001:4860:4860::3')
+		));
+
+		$contradict = "2001:4860:4860::\t2001:4860:4860::3\t127";
+		$this->assertLine($contradict, $config, $this->expectedResult(
+			$contradict,
+			$legacyTwo('2001:4860:4860::', '2001:4860:4860::3')
+		));
+
+		$overlong = "2001:4860:4860::\t2001:4860:4860::4\t126";
+		$this->assertLine($overlong, $config, $this->expectedResult(
+			$overlong,
+			$legacyTwo('2001:4860:4860::', '2001:4860:4860::4')
+		));
+
+		$numericThirdColumn = "2001:4860:4860::\t2001:4860:4860::3\t80\tpayload";
+		$this->assertLine($numericThirdColumn, $config, $this->expectedResult(
+			$numericThirdColumn,
+			$legacyTwo('2001:4860:4860::', '2001:4860:4860::3')
+		));
+	}
 }
