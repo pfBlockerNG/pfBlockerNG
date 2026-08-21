@@ -222,7 +222,11 @@ def test_only_lsof_candidates_are_probed_and_healthy_config_is_projected(
     [
         (
             {"status": "alive", "service": "other"},
-            {"active_project": {}, "current_client": "x", "serena_version": "1"},
+            {
+                "active_project": {"name": "x", "path": "/repo", "language": "Python"},
+                "current_client": "x",
+                "serena_version": "1",
+            },
         ),
         ({"status": "alive"}, None),
         (
