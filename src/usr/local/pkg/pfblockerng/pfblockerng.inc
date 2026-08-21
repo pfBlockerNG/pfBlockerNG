@@ -9549,10 +9549,8 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 	try {
 		unlink_if_exists($pfb['unbound_py_sources']);
 		// issue #2607: every Python-emitted artifact describes the generation this manifest
-		// defines, and Python rewrites them only for a build that produced a snapshot -- so
-		// they die with it, or they are read back as live (the entry total by the update log
-		// and by pfb_unbound_py_swap_fits_ram()'s RAM projection, the reject tally by
-		// pfb_emit_entry_reject_stats(), the regex total by the DNSBL_Regex alias count).
+		// defines and is rewritten only for a build that produced a snapshot, so each one
+		// left behind is read back as live by the update log, the RAM gate or the alias count.
 		foreach (array('unbound_py_count', 'unbound_py_regex_count', 'unbound_py_reject_stats') as $emitted) {
 			if (!empty($pfb[$emitted])) {
 				unlink_if_exists($pfb[$emitted]);
@@ -11230,9 +11228,8 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// count meant 'entries removed by subdomain collapse') no longer applies; just
 	// report both numbers for visibility.
 	$loaded_cnt = trim((string) @file_get_contents($pfb['unbound_py_count']));
-	// issue #2607: no emitted count means nothing is loaded -- Python writes the artifact
-	// only for a build that produced a snapshot, and the teardown removes it with the
-	// manifest it describes. Report that as 0 rather than an empty field.
+	// issue #2607: no emitted count means nothing is loaded -- Python writes it only for a
+	// build that produced a snapshot, and the teardown removes it with its manifest.
 	if ($loaded_cnt === '') {
 		$loaded_cnt = '0';
 	}

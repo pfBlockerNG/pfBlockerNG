@@ -237,6 +237,24 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 	}
 
 	/**
+	 * Scheduled Feed Updates OFF is an explicit opt-out of automatic dispatch, and the
+	 * *.fail marker this recovery is modelled on honours it (its due-condition is gated on
+	 * $runtime_model['scheduled']). A missing manifest gets the same treatment: the operator
+	 * is still told through the DNSBL notice, and the rebuild waits for their own Update.
+	 */
+	public function testMissingManifestIsIgnoredWhenScheduledFeedUpdatesAreOff(): void
+	{
+		config_set_path('installedpackages/pfblockerng/config/0/pfb_scheduled_feed_updates', '');
+		$this->assertTrue(unlink($GLOBALS['pfb']['unbound_py_sources']));
+
+		$this->tick();
+
+		$this->assertSame(0, $this->feedRuns,
+			'with scheduled feed updates opted out, a missing manifest must not force an '
+			. 'automatic pass -- the same gate the *.fail dispatch respects');
+	}
+
+	/**
 	 * The contract belongs to Python mode: with the resolver not wired to pfb_unbound.py
 	 * the manifest is not its blocklist source, so its absence dispatches nothing.
 	 */
