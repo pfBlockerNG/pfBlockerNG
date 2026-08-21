@@ -304,11 +304,23 @@ final class IpParseLineTest extends TestCase
 	 */
 	public function testIpv4AutoDshieldTabRangeYieldsDeclaredCidr(): void
 	{
+		$config = $this->config('_v4', 'auto', FALSE);
 		$line = "5.61.209.0\t5.61.209.255\t24\t339\tASN\tUS\tNone";
 		$this->assertLine(
 			$line,
-			$this->config('_v4', 'auto', FALSE),
+			$config,
 			$this->expectedResult($line, ['entries' => ['5.61.209.0/24']])
+		);
+
+		// Real DShield org column contains spaces; auto truncates at the
+		// first space before the tab branch. The start/end/prefix prefix
+		// of the line must still yield the declared /24.
+		$spaced = "66.132.186.0\t66.132.186.255\t24\t580\tAKAMAI-LINODE-AP Akamai Connected Cloud\tSG\tnone@example.com";
+		$truncated = strstr($spaced, ' ', TRUE);
+		$this->assertLine(
+			$spaced,
+			$config,
+			$this->expectedResult($truncated, ['entries' => ['66.132.186.0/24']])
 		);
 	}
 
@@ -316,8 +328,9 @@ final class IpParseLineTest extends TestCase
 	 * Scenario: a host-list feed writes a bare trailing .0 with no mask.
 	 *   Given 8.152.209.0 (CINS shape) on the auto path
 	 *   When parsed
-	 *   Then it stays a single host. This fixture has no tab, so it never
-	 *        enters the DShield branch; it pins pre-existing #320 behaviour.
+	 *   Then pfb_sanitize_ipaddr leaves it as a host. This fixture has no
+	 *        tab and never enters the DShield branch; it pins pre-existing
+	 *        .0 behaviour (issue #320), not the new path.
 	 */
 	public function testIpv4AutoBareDotZeroHostIsNotWidenedToSlash24(): void
 	{
@@ -366,5 +379,11 @@ final class IpParseLineTest extends TestCase
 
 		$startNotNetwork = "5.61.209.1\t5.61.209.255\t24";
 		$this->assertLine($startNotNetwork, $config, $this->expectedResult($startNotNetwork, $legacyTwo('5.61.209.1', '5.61.209.255')));
+
+		$threeDigitPrefix = "5.61.209.0\t5.61.209.255\t100";
+		$this->assertLine($threeDigitPrefix, $config, $this->expectedResult($threeDigitPrefix, $legacyTwo('5.61.209.0', '5.61.209.255')));
+
+		$ipTabText = "8.8.8.8\tnot-an-address";
+		$this->assertLine($ipTabText, $config, $this->expectedResult($ipTabText, ['entries' => ['8.8.8.8']]));
 	}
 }
