@@ -9548,6 +9548,11 @@ function pfb_unbound_py_teardown_raw_set(): bool {
 	}
 	try {
 		unlink_if_exists($pfb['unbound_py_sources']);
+		// issue #2607: the Python-emitted entry total describes the generation the manifest
+		// defines, so it dies with it. Left behind it is read back as live by the update log
+		// and by pfb_unbound_py_swap_fits_ram(), which sizes the zero-downtime swap's RAM
+		// projection from a snapshot that is no longer loaded.
+		unlink_if_exists($pfb['unbound_py_count'] ?? '/var/unbound/pfb_py_count');
 		pfb_unbound_py_remove_raw_artifact($pfb['unbound_py_rawdir']);
 		$ok = TRUE;
 		foreach (pfb_unbound_py_raw_artifacts($pfb) as $artifact) {
@@ -11220,6 +11225,12 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// count meant 'entries removed by subdomain collapse') no longer applies; just
 	// report both numbers for visibility.
 	$loaded_cnt = trim((string) @file_get_contents($pfb['unbound_py_count']));
+	// issue #2607: no emitted count means nothing is loaded -- Python writes the artifact
+	// only for a build that produced a snapshot, and the teardown removes it with the
+	// manifest it describes. Report that as 0 rather than an empty field.
+	if ($loaded_cnt === '') {
+		$loaded_cnt = '0';
+	}
 	$log = "\nDNSBL update [ feed lines: {$dnsbl_cnt} | loaded entries: {$loaded_cnt} ]... completed";
 	pfb_logger("{$log}", 1);
 
@@ -11227,6 +11238,16 @@ function pfb_update_unbound($mode, $pfbupdate, $pfbpython, array $dnsbl_tld_grou
 	// parse-stage ledger entry (absent/unparseable/build-failed manifest) here, the
 	// same per-update-pass cadence the MaxMind/VIP notices already use.
 	if (pfb_unbound_py_mode_active()) {
+		// issue #2607: the manifest is GONE, not merely unparseable -- a real `pkg delete`
+		// (a channel switch is one) tears it down, and the reinstall's resync is a
+		// config-save pass, whose feed section (and with it the pfb_dnsbl_manifest_missing()
+		// rebuild gate) is guarded by !$pfb['save']. Nothing else would rebuild it until a
+		// feed next fell due, which on a daily/weekly schedule leaves the resolver empty for
+		// hours. Queue the rebuild for the next tick instead; running a DNSBL pass inline
+		// from the package lifecycle path is what hung the uninstall in issue #682.
+		if (!file_exists($pfb['unbound_py_sources'])) {
+			pfb_due_ledger_set_pending('cron', $pfb['dbdir']);
+		}
 		pfb_dnsbl_manifest_failure_notice();
 	}
 

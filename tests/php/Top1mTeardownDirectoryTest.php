@@ -23,6 +23,7 @@ final class Top1mTeardownDirectoryTest extends TestCase
 			'log'                => "{$this->tmp}/pfblockerng.log",
 			'errlog'             => "{$this->tmp}/error.log",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
+			'unbound_py_count'   => "{$this->tmp}/pfb_py_count",
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'unbound_py_top1m'   => "{$this->tmp}/unbound/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
@@ -98,5 +99,27 @@ final class Top1mTeardownDirectoryTest extends TestCase
 			$this->assertSame('keep', file_get_contents($path), "preserved {$path}");
 		}
 		$this->assertTrue(pfb_unbound_py_teardown_raw_set(), 'second teardown is idempotent');
+	}
+
+	/**
+	 * issue #2607: pfb_py_count is Python's emitted total for the generation the manifest
+	 * describes, so it cannot survive the manifest's teardown. Left behind, it is read back
+	 * as a live figure by the update log AND by pfb_unbound_py_swap_fits_ram(), which sizes
+	 * the zero-downtime swap's RAM projection from it — after a `pkg delete` + reinstall that
+	 * is a snapshot no longer loaded.
+	 */
+	public function testTeardownRemovesTheEmittedCountAlongsideTheManifest(): void
+	{
+		$manifest = $GLOBALS['pfb']['unbound_py_sources'];
+		$count = $GLOBALS['pfb']['unbound_py_count'];
+		$this->assertNotFalse(file_put_contents($manifest, '{"feeds":[]}'), "seed {$manifest}");
+		$this->assertNotFalse(file_put_contents($count, "11732\n"), "seed {$count}");
+
+		$this->assertFileExists($count, 'before-state: the emitted count is on disk');
+		$this->assertTrue(pfb_unbound_py_teardown_raw_set());
+
+		$this->assertFileDoesNotExist($manifest, 'the teardown removes the manifest');
+		$this->assertFileDoesNotExist($count,
+			'the emitted count must not outlive the manifest generation it describes');
 	}
 }
