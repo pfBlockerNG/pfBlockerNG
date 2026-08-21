@@ -316,8 +316,8 @@ final class IpParseLineTest extends TestCase
 	 * Scenario: a host-list feed writes a bare trailing .0 with no mask.
 	 *   Given 8.152.209.0 (CINS shape) on the auto path
 	 *   When parsed
-	 *   Then it stays a single host — the DShield tab path must not revive
-	 *        v3's empty-mask .0→/24 widen (issue #320 is orthogonal).
+	 *   Then it stays a single host. This fixture has no tab, so it never
+	 *        enters the DShield branch; it pins pre-existing #320 behaviour.
 	 */
 	public function testIpv4AutoBareDotZeroHostIsNotWidenedToSlash24(): void
 	{
@@ -326,5 +326,42 @@ final class IpParseLineTest extends TestCase
 			$this->config('_v4', 'auto', FALSE),
 			$this->expectedResult('8.152.209.0', ['entries' => ['8.152.209.0']])
 		);
+	}
+
+	/**
+	 * Scenario: tab-shaped rows that are not a consistent start/end/prefix.
+	 *   Given reversed range, invalid/contradicting prefix, missing prefix,
+	 *        or a port-as-third-column pair
+	 *   When parsed
+	 *   Then the tab branch falls through to the legacy two-host extract
+	 *        instead of emitting a spanning cidr.
+	 */
+	public function testIpv4AutoDshieldTabInconsistentPrefixFallsThrough(): void
+	{
+		$config = $this->config('_v4', 'auto', FALSE);
+		$legacyTwo = static function (string $a, string $b): array {
+			return ['entries' => [$a, $b]];
+		};
+
+		$reversed = "5.61.209.255\t5.61.209.0\t24";
+		$this->assertLine($reversed, $config, $this->expectedResult($reversed, $legacyTwo('5.61.209.255', '5.61.209.0')));
+
+		$prefix99 = "5.61.209.0\t5.61.209.255\t99";
+		$this->assertLine($prefix99, $config, $this->expectedResult($prefix99, $legacyTwo('5.61.209.0', '5.61.209.255')));
+
+		$prefix33 = "5.61.209.0\t5.61.209.255\t33";
+		$this->assertLine($prefix33, $config, $this->expectedResult($prefix33, $legacyTwo('5.61.209.0', '5.61.209.255')));
+
+		$prefix0 = "5.61.209.0\t5.61.209.255\t0";
+		$this->assertLine($prefix0, $config, $this->expectedResult($prefix0, $legacyTwo('5.61.209.0', '5.61.209.255')));
+
+		$contradict = "5.61.209.0\t5.61.209.127\t24";
+		$this->assertLine($contradict, $config, $this->expectedResult($contradict, $legacyTwo('5.61.209.0', '5.61.209.127')));
+
+		$noPrefix = "5.61.209.0\t5.61.209.255";
+		$this->assertLine($noPrefix, $config, $this->expectedResult($noPrefix, $legacyTwo('5.61.209.0', '5.61.209.255')));
+
+		$portAsPrefix = "1.2.3.4\t9.8.7.6\t80\tpayload";
+		$this->assertLine($portAsPrefix, $config, $this->expectedResult($portAsPrefix, $legacyTwo('1.2.3.4', '9.8.7.6')));
 	}
 }
