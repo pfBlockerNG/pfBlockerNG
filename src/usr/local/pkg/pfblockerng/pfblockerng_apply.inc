@@ -360,7 +360,7 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 			if (count($a_cidr) === 1 && $a_cidr[0] === $pfb_tab_declared) {
 				$sanitized = pfb_sanitize_ipaddr($pfb_tab_declared, $custom, $pfbcidr, $suppression);
 				$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
-				if (!empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
+				if (!pfb_is_empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
 					$result['entries'][] = $sanitized['address'];
 				}
 				$result['line'] = $line;

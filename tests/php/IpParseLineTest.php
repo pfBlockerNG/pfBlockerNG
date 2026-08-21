@@ -380,6 +380,11 @@ final class IpParseLineTest extends TestCase
 		$startNotNetwork = "5.61.209.1\t5.61.209.255\t24";
 		$this->assertLine($startNotNetwork, $config, $this->expectedResult($startNotNetwork, $legacyTwo('5.61.209.1', '5.61.209.255')));
 
+		// /23-sized span declared as /24: first derived chunk equals
+		// start/24, count is 2. The count===1 clause is what rejects it.
+		$overlong = "5.61.209.0\t5.61.210.255\t24";
+		$this->assertLine($overlong, $config, $this->expectedResult($overlong, $legacyTwo('5.61.209.0', '5.61.210.255')));
+
 		$threeDigitPrefix = "5.61.209.0\t5.61.209.255\t100";
 		$this->assertLine($threeDigitPrefix, $config, $this->expectedResult($threeDigitPrefix, $legacyTwo('5.61.209.0', '5.61.209.255')));
 
