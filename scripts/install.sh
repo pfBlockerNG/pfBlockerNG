@@ -112,9 +112,9 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 # EMPTY until `certctl rehash` populates it, and libfetch abandons
 # SSL_CTX_set_default_verify_paths() as soon as EITHER variable is set -- so exporting an
 # empty hash dir with no bundle beside it leaves an EMPTY store, strictly worse than
-# exporting nothing (issue #2524). Mirrors pfb_pkgconf_dir_populated() (pfblockerng.inc)
-# and the boot hook's glob loop: any non-dot entry counts, including a dangling symlink,
-# which is what a hash dir is made of.
+# exporting nothing (issue #2524). Mirrors the boot hook's populated-directory glob loop
+# and pfb_pkg_exec()'s glob() guard: any non-dot entry counts, including a dangling
+# symlink, which is what a hash dir is made of.
 _ca_path_populated() {
     [ -d "$1" ] || return 1
     _cap_has_entry=0
@@ -331,6 +331,8 @@ pfb_channel_install() {
     # path, so every peer conf is aimed at a path that cannot exist: a run against
     # another base (fork, staged prefix) that fails before verify must not have
     # re-pointed a working peer subscription — peers are only ever retired, after.
+    # JOB 2's paths are ROOT-prefixed too (issue #2617): without them a ROOT-staged
+    # run would reconcile the HOST's /etc/login.conf against the HOST's config.xml.
     printf '==> Running the generator hook to resolve the conf now\n'
     _no_conf="${REPOS_DIR}/.pfb-no-such-conf"
     _own_conf_var="PFB_$(printf '%s' "${PFB_CHANNEL}" | tr '[:lower:]' '[:upper:]')_CONF"
@@ -342,6 +344,9 @@ pfb_channel_install() {
         PFB_BASE_URL="${PFB_BASE_URL}" \
         PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
         PFB_VERSION_FILE="${ROOT}/etc/version" \
+        PFB_CONFIG_XML="${ROOT}/cf/conf/config.xml" \
+        PFB_LOGIN_CONF="${ROOT}/etc/login.conf" \
+        PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
         sh "${ON_BOX_HOOK}" onestart </dev/null || true
 
     if ! grep -q "${CONF_MARKER}" "${CONF_PATH}" 2>/dev/null; then

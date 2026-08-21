@@ -175,6 +175,33 @@ Describe 'login-ca-sync — 4: a DIFFERENT value already present'
     End
 End
 
+Describe 'login-ca-sync — 4b: ours AND a foreign SSL_CA_CERT_PATH coexist in the list'
+    setup() {
+        _a4b_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/lc_mixed_ca.XXXXXX")"
+        _lc_box "${_a4b_dir}"
+        # getcap applies the list in order with overwrite semantics, so a
+        # foreign entry AFTER ours wins at login while ours sits dead -- the
+        # editor must at least say so instead of reporting a clean no-op.
+        printf '%s\n' \
+            'default:\' \
+            "	:setenv=SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH},FOO=1,SSL_CA_CERT_PATH=/bogus/path:\\" \
+            '	:umask=022:' \
+            > "${PFB_LOGIN_CONF}"
+        cp "${PFB_LOGIN_CONF}" "${_a4b_dir}/before.conf"
+    }
+    cleanup() { rm -rf "${_a4b_dir}"; _lc_unset_box; unset _a4b_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'leaves the mixed list unchanged but WARNS -- never a silent success while a foreign value wins'
+      When run sh "${HOOK}" login-ca-sync
+      The status should be success
+      The stderr should include "WARNING"
+      The stderr should not include "INFO"
+      The value "$(_lc_cmp "${PFB_LOGIN_CONF}" "${_a4b_dir}/before.conf")" should equal 0
+    End
+End
+
 Describe 'login-ca-sync — 5: default has TWO setenv lines, only the FIRST is patched'
     setup() {
         _a5_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/lc_duplicate.XXXXXX")"
@@ -381,6 +408,33 @@ Describe 'login-ca-sync — 13: HOSTILE unterminated setenv field'
       The status should not be success
       The stderr should include "WARNING"
       The value "$(_lc_cmp "${PFB_LOGIN_CONF}" "${_a13_dir}/before.conf")" should equal 0
+    End
+End
+
+Describe 'login-ca-sync — 13b: HOSTILE unterminated setenv field, no backslash anywhere'
+    setup() {
+        _a13b_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/lc_hostile_unterm2.XXXXXX")"
+        _lc_box "${_a13b_dir}"
+        # Unlike 13 above, the raw value carries NO backslash, so ONLY the
+        # missing-terminator check can refuse it -- this example isolates that
+        # guard from the sibling backslash-in-value guard.
+        printf '%s\n' \
+            'default:\' \
+            '	:passwd_format=sha512:\' \
+            '	:setenv=BLOCKSIZE=K' \
+            > "${PFB_LOGIN_CONF}"
+        cp "${PFB_LOGIN_CONF}" "${_a13b_dir}/before.conf"
+    }
+    cleanup() { rm -rf "${_a13b_dir}"; _lc_unset_box; unset _a13b_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'refuses on the missing terminator alone -- byte-unchanged, no INFO'
+      When run sh "${HOOK}" login-ca-sync
+      The status should not be success
+      The stderr should include "WARNING"
+      The stderr should not include "INFO"
+      The value "$(_lc_cmp "${PFB_LOGIN_CONF}" "${_a13b_dir}/before.conf")" should equal 0
     End
 End
 

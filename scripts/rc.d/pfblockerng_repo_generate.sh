@@ -263,11 +263,14 @@ _regen_one() {
 }
 
 # JOB 2 (issue #2617): read the admin's consent for carrying SSL_CA_CERT_PATH
-# into login.conf. Prints `on` or `off`; DEFAULT-ON (owner ruling) -- an
-# absent element (including a missing/unreadable config.xml) means the
-# registered default, which is now On. PHP writes an empty token for an
-# explicit Off and the literal token "on" for an explicit On, so "present but
-# empty" is an explicit opt-out, never "absent".
+# into login.conf. Prints `on`, `off`, or `skip`; DEFAULT-ON (owner ruling) --
+# an absent ELEMENT means the registered default, which is now On. PHP writes
+# an empty token for an explicit Off and the literal token "on" for an
+# explicit On, so "present but empty" is an explicit opt-out, never "absent".
+# A missing/unreadable config.xml is `skip`, not On: consent is unknowable
+# there, and a pfSense box cannot boot without /cf/conf/config.xml, so the
+# only runs that hit this are off-box (a ROOT-staged install.sh, a dev host)
+# -- exactly the runs that must never edit the host's real login.conf.
 #
 # pfb_pkg_ca_consent is a registered config field read on the PHP side at
 # installedpackages/pfblockerng/config/0 -- PfbConfig::read('gen/pfb_pkg_ca_consent')
@@ -285,17 +288,19 @@ _regen_one() {
 # line it opens rather than latching the scope open to EOF.
 #
 # Hardening (issue #2617, decoy-vs-default-on): under the OLD fail-closed
-# default, a decoy "<pfblockerng>" substring belonging to an earlier, unrelated
-# package could exhaust the first-occurrence search and leave the real block
-# unread -- a bounded FALSE NEGATIVE. Under default-on that same miss reads as
-# "absent" = On, a FALSE POSITIVE against an explicit opt-out. The opening
-# match below is therefore anchored to a full line (mirroring the consent
-# element's own full-line requirement): only a "<pfblockerng>" that starts its
-# own line (pfSense's own shape) opens the scope, so a decoy embedded inside
-# another element's text never does.
+# default a scoping miss was a bounded FALSE NEGATIVE; under default-on the
+# same miss reads as "absent" = On -- a FALSE POSITIVE against an explicit
+# opt-out. The opening match is therefore line-anchored (only a "<pfblockerng>"
+# or "<pfblockerng ...attrs...>" starting its own line opens the scope, so a
+# decoy embedded in another element's text never does), and an attribute on
+# the open tag is accepted. Remaining accepted bounded misses, all shapes
+# pfSense's own config writer never emits: an attribute on the consent element
+# itself, and a CDATA value containing a literal "</config>" ahead of the
+# element -- each would read as "absent" = On against an explicit opt-out.
 _login_ca_consent() {
+    [ -r "${PFB_CONFIG_XML}" ] || { printf 'skip'; return 0; }
     _lcc_consent="$(awk '
-            !seen_pb && /^[[:space:]]*<pfblockerng>/ {
+            !seen_pb && /^[[:space:]]*<pfblockerng([[:space:]][^>]*)?>/ {
                 in_pb = 1; seen_pb = 1
                 if ($0 ~ /<\/pfblockerng>/) { in_pb = 0 }
                 next
@@ -336,13 +341,14 @@ _login_ca_consent() {
 
 # Reconcile login.conf with the live consent read: on -> carry the CA path
 # (_logincap_setenv_add()); explicitly off -> strip it
-# (_logincap_setenv_remove()). Propagates the editor's rc.
+# (_logincap_setenv_remove()); skip (no readable config.xml) -> touch nothing.
+# Propagates the editor's rc.
 _login_ca_reconcile() {
-    if [ "$(_login_ca_consent)" = on ]; then
-        _logincap_setenv_add
-    else
-        _logincap_setenv_remove
-    fi
+    case "$(_login_ca_consent)" in
+        on) _logincap_setenv_add ;;
+        off) _logincap_setenv_remove ;;
+        *) return 0 ;;
+    esac
 }
 
 # login.conf `default`-class setenv editor (issue #2617): the actual write side
@@ -377,7 +383,6 @@ _logincap_scan() {
                     if (cur == "default" && !done_def) {
                         in_def = 1
                         done_def = 1
-                        found = 1
                         label = NR
                         last = NR
                         wellformed = (line == "default:\\") ? 1 : 0
@@ -414,7 +419,6 @@ _logincap_scan() {
             prev_cont = has_cont
         }
         END {
-            printf "FOUND=%d\n", found ? 1 : 0
             printf "WELLFORMED=%d\n", wellformed ? 1 : 0
             printf "LABEL=%d\n", label + 0
             printf "LAST=%d\n", last + 0
@@ -436,8 +440,13 @@ _logincap_field() {
 # Shared writer: $@ is an awk program (with any -v args) applied over
 # PFB_LOGIN_CONF. A raw value handed in MUST travel via ENVIRON, never -v
 # (which decodes backslash escapes and would corrupt it).
+# One shared value-splice program: replace the chars [vs, ve) on line tgt with
+# $PFB_LC_NEWVAL (via ENVIRON -- `awk -v` would decode escapes in the value).
+# shellcheck disable=SC2016  # awk's own $0/vs/ve, not shell expansion
+_LC_SPLICE='NR==tgt { $0 = substr($0,1,vs-1) ENVIRON["PFB_LC_NEWVAL"] substr($0,ve) } { print }'
+
 _logincap_write() {
-    _lc_tmp="${PFB_LOGIN_CONF}.tmp"
+    _lc_tmp="${PFB_LOGIN_CONF}.tmp.$$"
     if cp -p "${PFB_LOGIN_CONF}" "${_lc_tmp}" 2>/dev/null \
         && awk "$@" "${PFB_LOGIN_CONF}" > "${_lc_tmp}" 2>/dev/null \
         && mv "${_lc_tmp}" "${PFB_LOGIN_CONF}" 2>/dev/null; then
@@ -544,12 +553,15 @@ _logincap_setenv_add() {
     set +f
     unset IFS _lc_entry_v
 
-    if [ "${_lc_found_ours}" -eq 1 ]; then
+    # Foreign first: getcap applies the list in order with overwrite
+    # semantics, so when ours and a foreign entry coexist the LATER one wins
+    # at login -- a mixed list must warn, never read as a clean no-op.
+    if [ "${_lc_found_foreign}" -eq 1 ]; then
+        printf '[%s] WARNING: login.conf already sets SSL_CA_CERT_PATH to a different value in the default class -- leaving it unchanged, something else owns that variable\n' "${name}" >&2
         unset _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign
         return 0
     fi
-    if [ "${_lc_found_foreign}" -eq 1 ]; then
-        printf '[%s] WARNING: login.conf already sets SSL_CA_CERT_PATH to a different value in the default class -- leaving it unchanged, something else owns that variable\n' "${name}" >&2
+    if [ "${_lc_found_ours}" -eq 1 ]; then
         unset _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign
         return 0
     fi
@@ -562,9 +574,8 @@ _logincap_setenv_add() {
         PFB_LC_NEWVAL="${_lc_value},${_lc_want}"
     fi
     export PFB_LC_NEWVAL
-    # shellcheck disable=SC2016  # awk's own $0/vs/ve, not shell expansion
     if _logincap_write -v tgt="${_lc_se_line}" -v vs="${_lc_vstart}" -v ve="${_lc_vend}" \
-        'NR==tgt { $0 = substr($0,1,vs-1) ENVIRON["PFB_LC_NEWVAL"] substr($0,ve) } { print }'; then
+        "${_LC_SPLICE}"; then
         printf '[%s] INFO: added SSL_CA_CERT_PATH to the default class setenv in %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
         _logincap_compile
         unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign _lc_vstart _lc_vend
@@ -626,9 +637,8 @@ _logincap_setenv_remove() {
     if [ -n "${_lc_newval}" ]; then
         PFB_LC_NEWVAL="${_lc_newval}"
         export PFB_LC_NEWVAL
-        # shellcheck disable=SC2016  # awk's own $0/vs/ve, not shell expansion
         if _logincap_write -v tgt="${_lc_se_line}" -v vs="${_lc_vstart}" -v ve="${_lc_vend}" \
-            'NR==tgt { $0 = substr($0,1,vs-1) ENVIRON["PFB_LC_NEWVAL"] substr($0,ve) } { print }'; then
+            "${_LC_SPLICE}"; then
             printf '[%s] INFO: removed SSL_CA_CERT_PATH from the default class setenv in %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
             _logincap_compile
             unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend

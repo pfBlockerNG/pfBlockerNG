@@ -1282,6 +1282,65 @@ def test_absent_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
         assert set(files) == {"<unset>"}, f"expected SSL_CA_CERT_FILE unset, saw {sorted(set(files))}"
 
 
+def _root_login_conf(root: str) -> Path:
+    return Path(root) / "etc" / "login.conf"
+
+
+_STOCK_LOGIN_CONF = "default:\\\n\t:setenv=BLOCKSIZE=K:\\\n\t:umask=022:\n"
+
+
+def test_root_staged_run_reconciles_the_root_login_conf_never_the_host(tmp_path: Path) -> None:
+    """A PFBLOCKERNG_ROOT run must aim JOB 2 at the ROOT tree (issue #2617).
+
+    install.sh invokes the generator hook, whose JOB 2 now edits login.conf under
+    consent (default-on). The hook's own defaults point at the HOST's
+    /cf/conf/config.xml and /etc/login.conf; install.sh must override them with
+    ROOT-prefixed paths, or a ROOT-staged run on a FreeBSD host would edit the host's
+    real system file. With a consent-on config.xml and a populated CA dir staged
+    INSIDE the root, the root's login.conf must gain the carry — proving the override
+    wiring, not just the hook's own logic (which its shellspec suite pins).
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    cfg = Path(root) / "cf" / "conf" / "config.xml"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        "<pfsense>\n\t<installedpackages>\n\t\t<pfblockerng>\n\t\t\t<config>\n"
+        "\t\t\t\t<pfb_pkg_ca_consent>on</pfb_pkg_ca_consent>\n"
+        "\t\t\t</config>\n\t\t</pfblockerng>\n\t</installedpackages>\n</pfsense>\n"
+    )
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+
+    proc = _run_install(root, "stable")
+    assert proc.returncode == 0, proc.stderr
+
+    after = _root_login_conf(root).read_text()
+    assert "SSL_CA_CERT_PATH=" in after, (
+        "the ROOT-staged login.conf must gain the carry when the ROOT config.xml consents:\n" + after
+    )
+
+
+def test_root_staged_run_without_config_xml_touches_no_login_conf(tmp_path: Path) -> None:
+    """No readable config.xml inside the root: consent is unknowable, nothing is edited.
+
+    This is the exact state of every off-box run (CI, a dev checkout) — the guard that
+    keeps a root run on a FreeBSD host from writing the HOST's /etc/login.conf with no
+    consent recorded anywhere.
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+    assert not (Path(root) / "cf" / "conf" / "config.xml").exists()
+
+    proc = _run_install(root, "stable")
+    assert proc.returncode == 0, proc.stderr
+    assert _root_login_conf(root).read_text() == _STOCK_LOGIN_CONF, (
+        "with no config.xml in the root, login.conf must stay byte-identical"
+    )
+
+
 def test_empty_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
     """An EMPTY hash dir must not be exported (issue #2524).
 
@@ -1289,8 +1348,8 @@ def test_empty_ca_dir_leaves_ssl_ca_cert_path_unset() -> None:
     /etc/ssl/certs empty until ``certctl rehash`` runs — the state of a stock box, not a
     hypothetical. libfetch stops calling ``SSL_CTX_set_default_verify_paths()`` as soon as
     EITHER variable is set, so exporting an empty hash dir with no bundle beside it leaves
-    an EMPTY store: strictly worse than exporting nothing at all. Matches the guard
-    ``pfb_pkgconf_dir_populated()`` and the boot hook already carry.
+    an EMPTY store: strictly worse than exporting nothing at all. Matches the
+    populated-directory guard the boot hook and ``pfb_pkg_exec()`` also carry.
     """
     with tempfile.TemporaryDirectory() as root:
         _ca_dir(root).mkdir(parents=True)
