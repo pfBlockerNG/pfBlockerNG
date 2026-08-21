@@ -13,7 +13,7 @@ reached" notice appears, or you are dispatching the CLI-in-CI workflow.
   we already believe is mergeable. Predicting the free window was not
   worth the machinery it cost, and it is retired (owner, 2026-08-17).
 
-Composes with [`landing.md`](landing.md) (triage, three-leg, merge gate),
+Composes with [`landing.md`](landing.md) (triage, leg review, merge gate),
 [`waits.md`](waits.md) (no orphaned waits), and `.coderabbit.yaml`.
 
 ## Fixed floors
@@ -29,7 +29,7 @@ Composes with [`landing.md`](landing.md) (triage, three-leg, merge gate),
   worth a slot.
 - CodeRabbit stays **advisory**: the `CodeRabbit` check never blocks
   `wait-checks.sh` and never blocks merge.
-- Three-leg adversarial review is still mandatory and still runs first.
+- The adversarial leg review is still mandatory and still runs first.
   CodeRabbit does not replace it, and it does not replace CodeRabbit.
 - A quota notice is not a review. A SHA whose only CodeRabbit engagement
   is a quota notice is **unreviewed by CodeRabbit**; do not report it as
@@ -74,11 +74,11 @@ Composes with [`landing.md`](landing.md) (triage, three-leg, merge gate),
      Otherwise post one more `@coderabbitai review` and re-arm. A second
      quota notice ends it: record the miss, do not loop.
    - **NOACK / NOTPRESENT / TIMEOUT** → re-ask **once** with a fresh
-     window. Still silent → CodeRabbit is unavailable; the three legs
+     window. Still silent → CodeRabbit is unavailable; the legs
      carry the review step. Never a second silent-nudge.
 5. Merge never waits on the CodeRabbit check, but it does follow this
    path before claiming CodeRabbit reviewed the head. If the path ends in
-   a recorded miss, three-leg may land the PR and the SHA stays on the
+   a recorded miss, the leg review may land the PR and the SHA stays on the
    unreviewed-by-CodeRabbit list.
 
 Every quota notice still gets one line on the PR audit saying what spent
@@ -89,7 +89,7 @@ the explicit ask above, so the fix is almost always "ask later, once".
 
 Only the **repo owner**, in conversation, may spend a slot anyway or name
 another reviewer. No labels. Agents never invent a substitute, and
-three-leg still runs. CLI-in-CI is #2436:
+the leg review still runs. CLI-in-CI is #2436:
 `.github/workflows/coderabbit-cli.yml` is **dispatch-only** (not on push)
 so it cannot walk the PR Fair Usage band by itself. It needs the secret
 `CODERABBIT_API_KEY` (Agentic key), and its findings are file-level.

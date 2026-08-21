@@ -167,9 +167,9 @@ fresh native sub-agent it spawn with role's contract; Codex kinds: `agent` =
 
 ### reviewer
 
-- **Purpose & routing:** three parallel leg reviewers (contract · correctness+hostile
-  · test honesty) over whole PR diff; re-review legs focus on changes since their
-  own leg's recorded head SHA. Route: every code PR and fix round.
+- **Purpose & routing:** four parallel leg reviewers (contract · correctness+hostile
+  · test honesty · over-engineering) over whole PR diff; re-review legs focus on
+  changes since their own leg's recorded head SHA. Route: every code PR and fix round.
 - **Inputs & task packet:** PR number, leg, its latest audit comment (head SHA =
   focus base), worktree, intent/acceptance spec.
 - **Outputs & evidence:** schema-forced findings — severity, location, evidence,
@@ -184,7 +184,8 @@ fresh native sub-agent it spawn with role's contract; Codex kinds: `agent` =
   round has blocking finding; hard cap 3 rounds, then human decide.
 - **Independence:** required — fresh context, never author of change.
 - **Tier intent:** per leg — correctness+hostile top (mid iff top unavailable),
-  contract mid, test honesty small; re-reviews all small.
+  contract mid, test honesty small, over-engineering top (mid iff top
+  unavailable); re-reviews all small.
 
 ### publisher
 
