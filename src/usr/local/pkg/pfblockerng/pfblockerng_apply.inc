@@ -350,9 +350,10 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	// issue #2604: DShield start<TAB>end<TAB>prefix rows declare their own
 	// family; accept only one exact CIDR and leave opposite-family rows alone.
 	if ($pftype == 'auto' && strpos($line, "\t") !== FALSE) {
-		$pfb_tab = explode("\t", $line, 4);
+		$pfb_tab = explode("\t", $line);
 		$pfb_tab_family = NULL;
-		if (count($pfb_tab) >= 3 && ctype_digit($pfb_tab[2])) {
+		if (count($pfb_tab) >= 3 && ctype_digit($pfb_tab[2]) &&
+			!str_contains($pfb_tab[0], "\0") && !str_contains($pfb_tab[1], "\0")) {
 			if (validate_ipv4($pfb_tab[0]) && validate_ipv4($pfb_tab[1])) {
 				$pfb_tab_family = '_v4';
 			} elseif (validate_ipv6($pfb_tab[0]) && validate_ipv6($pfb_tab[1])) {
