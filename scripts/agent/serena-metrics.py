@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Aggregate live Serena dashboard metrics for a local Tailscale Serve backend."""
+"""List live Serena dashboards for a local Tailscale Serve backend."""
 
 from __future__ import annotations
 
 import argparse
-import concurrent.futures
 import html
 import http.client
 import http.server
+import ipaddress
 import json
 import socket
+import subprocess
 import time
 import urllib.parse
 from collections.abc import Mapping
@@ -17,18 +18,15 @@ from typing import Any
 
 HOST = "127.0.0.1"
 DEFAULT_PORT = 24182
-SCAN_START = 24282
-SCAN_END = 65535
-SCAN_BATCH = 256
+SERENA_BASE_PORT = 24282
+LSOF_TIMEOUT = 0.5
 REQUEST_TIMEOUT = 0.5
 READ_LIMIT = 64 * 1024
-MAX_WORKERS = 8
-COUNTERS = ("num_times_called", "input_tokens", "output_tokens")
 
 
 class _DeadlineSocket(socket.socket):
-    def __init__(self, deadline: float) -> None:
-        super().__init__(socket.AF_INET, socket.SOCK_STREAM)
+    def __init__(self, family: socket.AddressFamily, deadline: float) -> None:
+        super().__init__(family, socket.SOCK_STREAM)
         self._deadline = deadline
 
     def _apply_deadline(self) -> None:
@@ -37,7 +35,7 @@ class _DeadlineSocket(socket.socket):
             raise TimeoutError("Serena request deadline exceeded")
         self.settimeout(remaining)
 
-    def connect_with_deadline(self, address: tuple[str, int]) -> None:
+    def connect_with_deadline(self, address: tuple[Any, ...]) -> None:
         self._apply_deadline()
         self.connect(address)
 
@@ -46,11 +44,18 @@ class _DeadlineSocket(socket.socket):
         return super().recv_into(buffer, nbytes, flags)
 
 
-def _request_json(port: int, path: str) -> object | None:
-    deadline_socket = _DeadlineSocket(time.monotonic() + REQUEST_TIMEOUT)
-    connection = http.client.HTTPConnection(HOST, port, timeout=REQUEST_TIMEOUT)
+def _request_json(host: str, port: int, path: str) -> object | None:
+    deadline = time.monotonic() + REQUEST_TIMEOUT
+    deadline_socket: _DeadlineSocket | None = None
+    connection: http.client.HTTPConnection | None = None
     try:
-        deadline_socket.connect_with_deadline((HOST, port))
+        addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM, flags=socket.AI_NUMERICHOST)
+        if not addresses:
+            return None
+        family, _, _, _, address = addresses[0]
+        deadline_socket = _DeadlineSocket(family, deadline)
+        connection = http.client.HTTPConnection(host, port, timeout=REQUEST_TIMEOUT)
+        deadline_socket.connect_with_deadline(address)
         connection.sock = deadline_socket
         deadline_socket._apply_deadline()
         connection.request("GET", path, headers={"Accept": "application/json"})
@@ -76,8 +81,10 @@ def _request_json(port: int, path: str) -> object | None:
     except (OSError, UnicodeError, ValueError, RecursionError, http.client.HTTPException, json.JSONDecodeError):
         return None
     finally:
-        connection.close()
-        deadline_socket.close()
+        if connection is not None:
+            connection.close()
+        if deadline_socket is not None:
+            deadline_socket.close()
 
 
 def _strings(
@@ -89,82 +96,105 @@ def _strings(
         return None
     strings: dict[str, str | None] = {}
     for key in keys:
-        item = value.get(key)
+        if key not in value:
+            return None
+        item = value[key]
         if not isinstance(item, str) and not (item is None and key in nullable):
             return None
         strings[key] = item
     return strings
 
 
-def _counter_values(value: object) -> dict[str, int] | None:
-    if not isinstance(value, Mapping):
+def _allowed_host(host: str) -> str | None:
+    if not host.isascii():
         return None
-    counters: dict[str, int] = {}
-    for key in COUNTERS:
-        counter = value.get(key)
-        if type(counter) is not int or counter < 0:
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return None
+    if (
+        address.is_loopback
+        or address in ipaddress.ip_network("100.64.0.0/10")
+        or address in ipaddress.ip_network("fd7a:115c:a1e0::/48")
+    ):
+        return str(address)
+    return None
+
+
+def _parse_endpoint(line: str) -> tuple[str, int] | None:
+    if not line.startswith("n") or any(character.isspace() or not character.isprintable() for character in line):
+        return None
+    value = line[1:]
+    if value.startswith("["):
+        closing = value.find("]")
+        if closing <= 1 or closing + 1 >= len(value) or value[closing + 1] != ":":
             return None
-        counters[key] = counter
-    return counters
-
-
-def _project_stats(value: object) -> dict[str, dict[str, int]] | None:
-    if not isinstance(value, Mapping):
+        host, port_text = value[1:closing], value[closing + 2 :]
+    elif ":" in value:
+        host, port_text = value.rsplit(":", 1)
+    else:
         return None
-    stats = value.get("stats")
-    if not isinstance(stats, Mapping):
+    if not port_text.isascii() or not port_text.isdigit():
         return None
-    projected: dict[str, dict[str, int]] = {}
-    for name, counters in stats.items():
-        if not isinstance(name, str):
-            return None
-        parsed = _counter_values(counters)
-        if parsed is None:
-            return None
-        projected[name] = parsed
-    return dict(sorted(projected.items()))
-
-
-def _totals(tools: Mapping[str, Mapping[str, int]]) -> dict[str, int]:
-    return {key: sum(tool[key] for tool in tools.values()) for key in COUNTERS}
-
-
-def _discover_port(port: int) -> dict[str, Any] | None:
-    if _request_json(port, "/heartbeat") != {"status": "alive"}:
+    try:
+        port = int(port_text)
+    except ValueError:
         return None
-    config = _request_json(port, "/get_config_overview")
+    if not SERENA_BASE_PORT <= port <= 65535:
+        return None
+    normalized_host = _allowed_host(host)
+    return None if normalized_host is None else (normalized_host, port)
+
+
+def _listening_endpoints() -> list[tuple[str, int]]:
+    try:
+        result = subprocess.run(
+            ["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "n"],
+            capture_output=True,
+            timeout=LSOF_TIMEOUT,
+            check=False,
+        )
+    except (OSError, UnicodeError, subprocess.TimeoutExpired, TimeoutError):
+        return []
+    if result.returncode != 0 or not isinstance(result.stdout, bytes):
+        return []
+    try:
+        output = result.stdout.decode("utf-8")
+    except UnicodeError:
+        return []
+    return sorted({endpoint for line in output.split("\n") if (endpoint := _parse_endpoint(line)) is not None})
+
+
+def _dashboard_url(host: str, port: int) -> str:
+    url_host = f"[{host}]" if ":" in host else host
+    return f"http://{url_host}:{port}/dashboard/"
+
+
+def _discover_endpoint(host: str, port: int) -> dict[str, Any] | None:
+    if _request_json(host, port, "/heartbeat") != {"status": "alive"}:
+        return None
+    config = _request_json(host, port, "/get_config_overview")
     if not isinstance(config, Mapping):
         return None
     project_keys = ("name", "path", "language")
     project = _strings(config.get("active_project"), project_keys, nullable=project_keys)
     identity = _strings(config, ("current_client", "serena_version"), nullable=("current_client",))
-    stats = _project_stats(_request_json(port, "/get_tool_stats"))
-    estimator = _strings(_request_json(port, "/get_token_count_estimator_name"), ("token_count_estimator_name",))
-    if project is None or identity is None or stats is None or estimator is None:
+    if project is None or identity is None:
         return None
     return {
+        "host": host,
         "port": port,
+        "dashboard_url": _dashboard_url(host, port),
         "active_project": project,
         **identity,
-        **estimator,
-        "tools": stats,
-        "totals": _totals(stats),
     }
 
 
 def discover_instances() -> list[dict[str, Any]]:
-    workers = min(MAX_WORKERS, SCAN_END - SCAN_START + 1)
-    instances: list[dict[str, Any]] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        for batch_start in range(SCAN_START, SCAN_END + 1, SCAN_BATCH):
-            ports = range(batch_start, min(batch_start + SCAN_BATCH, SCAN_END + 1))
-            instances.extend(instance for instance in executor.map(_discover_port, ports) if instance is not None)
-    return sorted(instances, key=lambda instance: instance["port"])
-
-
-def aggregate(instances: list[dict[str, Any]]) -> dict[str, Any]:
-    totals = _totals({str(index): instance["totals"] for index, instance in enumerate(instances)})
-    return {"instances": instances, "totals": totals}
+    instances = (
+        instance for host, port in _listening_endpoints() if (instance := _discover_endpoint(host, port)) is not None
+    )
+    return list(instances)
 
 
 def _html_text(value: object) -> str:
@@ -219,31 +249,25 @@ def render_html(instances: list[dict[str, Any]]) -> str:
     rows: list[str] = []
     for instance in instances:
         project = instance["active_project"]
-        totals = instance["totals"]
-        tools = "".join(
-            f"<li>{_html_text(name)}: calls={values['num_times_called']}, "
-            f"input={values['input_tokens']}, output={values['output_tokens']}</li>"
-            for name, values in instance["tools"].items()
-        )
         rows.append(
             "<section>"
-            f"<h2>Port {_html_text(instance['port'])}: {_html_text(project['name'])}</h2>"
-            f"<p>Path: {_html_text(project['path'])}; language: {_html_text(project['language'])}; "
+            f"<h2>{_html_text(project['name'])}</h2>"
+            f"<p>Host: {_html_text(instance['host'])}; port: {_html_text(instance['port'])}; "
+            f"path: {_html_text(project['path'])}; language: {_html_text(project['language'])}; "
             f"client: {_html_text(instance['current_client'])}; Serena: {_html_text(instance['serena_version'])}; "
-            f"estimator: {_html_text(instance['token_count_estimator_name'])}</p>"
-            f"<p>Totals: calls={totals['num_times_called']}, input={totals['input_tokens']}, "
-            f"output={totals['output_tokens']}</p><ul>{tools}</ul></section>"
+            f'<a href="{_html_text(instance["dashboard_url"])}" target="_blank" '
+            'rel="noopener noreferrer">Open dashboard</a></p></section>'
         )
     return (
-        "<!doctype html><html><head><meta charset='utf-8'><title>Serena metrics</title></head>"
-        "<body><h1>Live Serena metrics</h1>"
-        + ("".join(rows) or "<p>No healthy Serena dashboards found.</p>")
+        "<!doctype html><html><head><meta charset='utf-8'><title>Serena instances</title></head>"
+        "<body><h1>Serena instances</h1>"
+        + ("".join(rows) or "<p>No healthy Serena instances found.</p>")
         + "</body></html>"
     )
 
 
-class AggregatorHandler(http.server.BaseHTTPRequestHandler):
-    server_version = "SerenaMetrics/1"
+class DirectoryHandler(http.server.BaseHTTPRequestHandler):
+    server_version = "SerenaDirectory/1"
 
     def _send(self, status: int, body: bytes, content_type: str, allow: str | None = None) -> None:
         self.send_response(status)
@@ -276,7 +300,7 @@ class AggregatorHandler(http.server.BaseHTTPRequestHandler):
             body = render_html(discover_instances()).encode("utf-8")
             self._send(200, body, "text/html; charset=utf-8")
         elif self.path == "/api/instances":
-            body = json.dumps(aggregate(discover_instances()), ensure_ascii=True, separators=(",", ":")).encode()
+            body = json.dumps({"instances": discover_instances()}, ensure_ascii=True, separators=(",", ":")).encode()
             self._send(200, body, "application/json; charset=utf-8")
         else:
             self._send(404, b"not found\n", "text/plain; charset=utf-8")
@@ -294,21 +318,24 @@ class AggregatorHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-class AggregatorServer(http.server.ThreadingHTTPServer):
+class DirectoryServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
 
 
-def make_server(port: int = DEFAULT_PORT) -> AggregatorServer:
-    return AggregatorServer((HOST, port), AggregatorHandler)
+def make_server(port: int = DEFAULT_PORT) -> DirectoryServer:
+    return DirectoryServer((HOST, port), DirectoryHandler)
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Read-only local Serena metrics aggregator.",
-        epilog=f"Tailscale Serve: tailscale serve --bg http://{HOST}:{DEFAULT_PORT}",
+        description="Read-only local Serena instance directory.",
+        epilog=(
+            f"Tailscale Serve: tailscale serve --bg http://{HOST}:{DEFAULT_PORT}; "
+            "dashboard links use each Serena listener address."
+        ),
     )
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"aggregate port (default: {DEFAULT_PORT})")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"directory port (default: {DEFAULT_PORT})")
     return parser
 
 
@@ -317,9 +344,9 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = parser.parse_args(argv)
     except SystemExit as error:
-        return int(error.code)
+        return error.code if isinstance(error.code, int) else 1
     server = make_server(args.port)
-    print(f"Serena metrics listening on http://{HOST}:{server.server_address[1]}", flush=True)
+    print(f"Serena directory listening on http://{HOST}:{server.server_address[1]}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
