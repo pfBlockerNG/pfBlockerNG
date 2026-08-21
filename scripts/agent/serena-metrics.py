@@ -106,7 +106,7 @@ def _strings(
 
 
 def _allowed_host(host: str) -> str | None:
-    if not host.isascii():
+    if not host.isascii() or "%" in host:
         return None
     try:
         address = ipaddress.ip_address(host)
