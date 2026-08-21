@@ -1,4 +1,6 @@
-"""Issue #334 — continent/IP ``pfB_*`` aliases lost across a reboot.
+"""Issue #334 — continent/IP ``pfB_*`` aliases lost across a reboot — and, riding
+the same reboots, issues #2621/#2617 — the login.conf CA carry across a real boot
+(file-side reconcile on the standard leg, daemon env inheritance on the ramdisk leg).
 
 REPRODUCE-FIRST regression guard. A pfBlockerNG IP/GeoIP feed builds a
 ``pfB_<name>_v4`` urltable alias plus an auto firewall rule that references it.
@@ -43,6 +45,8 @@ smoke deps; without them it skips cleanly.
 from __future__ import annotations
 
 import os
+import subprocess
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,20 +68,68 @@ VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_WIPE_SENTINEL"
 
 # issue #2621 (Part of #2617): the module's ALREADY-happening reboots also prove the
 # boot path's login.conf CA carry. The rc.d hook is installed by install.sh in
-# production, but the .pkg deploy this module uses does NOT install it — so the
-# fixture stages it itself (same technique as test_repo_install's GUEST_HOOK_PATH /
-# _stage_generate_hook).
+# production, but the .pkg deploy this module uses does NOT — the fixture stages it.
+# The two legs prove complementary halves of #2617's boot claim:
+#   standard — revoke first, reboot: the boot reconcile re-adds the carry (file
+#     side), while nginx must NOT have it in env — init fixes the rc tree's
+#     environment from the compiled db AS OF BOOT START, and the revoke left it clean.
+#   ramdisk  — login-ca-sync first (carry compiled BEFORE the reboot), reboot: nginx
+#     MUST now carry it — the daemon-inheritance proof, one boot after the write.
 GUEST_HOOK_PATH = "/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
 LOGIN_CONF = "/etc/login.conf"
 LOGIN_CA_ENTRY = "SSL_CA_CERT_PATH=/etc/ssl/certs"
 CA_DIR = "/etc/ssl/certs"
-# A dummy CA-dir entry seeded ONLY when CA_DIR is empty/missing: the hook's
-# _logincap_setenv_add() refuses to carry the variable over an empty/missing trust
-# store (scripts/rc.d/pfblockerng_repo_generate.sh), so an image that ships no CA
-# bundle would make the boot-carry assertion below a false negative rather than
-# proving the boot path itself.
+# Seeded ONLY when CA_DIR is empty/missing: _logincap_setenv_add() refuses an
+# empty/missing trust store, which would turn the boot-carry proof into a setup red.
 CA_DUMMY = f"{CA_DIR}/pfb-smoke-reboot-dummy.0"
+
+
+def _scp_to_guest(vm: SmokeVM, local: Path, remote: str, *, timeout: float = 120.0) -> None:
+    """Copy a local file to the guest via ``scp`` (per-suite copy, mirrors install-pkg.sh)."""
+    argv = [
+        "scp",
+        "-i",
+        vm.ssh_key_path,
+        "-P",
+        str(vm.ssh_port),
+        "-o",
+        "StrictHostKeyChecking=no",
+        "-o",
+        "UserKnownHostsFile=/dev/null",
+        "-o",
+        "BatchMode=yes",
+        str(local),
+        f"{vm.ssh_target}:{remote}",
+    ]
+    result = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+    if result.returncode != 0:
+        raise RuntimeError(f"scp {local} -> {remote} failed: rc={result.returncode} {result.stderr!r}")
+
+
+def _default_class_record(login_conf_text: str) -> str:
+    """The ``default:`` record only — the class #2617's placement contract names."""
+    record: list[str] = []
+    in_default = False
+    for line in login_conf_text.splitlines():
+        if in_default:
+            record.append(line)
+            if not line.endswith("\\"):
+                break
+        elif line.startswith("default:"):
+            record.append(line)
+            in_default = True
+            if not line.endswith("\\"):
+                break
+    return "\n".join(record)
+
+
+def _login_ca_in_default_class(vm: SmokeVM) -> tuple[bool, bool]:
+    """(read_ok, entry_present_in_default_record) — rc-checked, never ''-on-failure."""
+    res = vm.ssh("/bin/cat", LOGIN_CONF)
+    if res.returncode != 0:
+        return False, False
+    return True, LOGIN_CA_ENTRY in _default_class_record(res.stdout)
 
 
 @dataclass
@@ -97,12 +149,15 @@ class RebootObservation:
     sentinel_created: bool | None = None
     var_wiped: bool | None = None
     var_mount: str = ""
-    # issue #2621: the login.conf CA-carry boot-path proof (both legs — login.conf
-    # lives on the root fs, never on ramdisk /var).
-    login_ca_normalized: bool | None = None
+    # issues #2621/#2617: the login.conf CA-carry boot-path proof (constants block
+    # explains the two legs' complementary roles).
+    login_conf_read_ok: bool | None = None
+    login_ca_preboot_clean: bool | None = None  # standard leg: revoke really cleared it
+    login_ca_preboot_present: bool | None = None  # ramdisk leg: sync really compiled it
     login_ca_after: bool | None = None
-    login_db_after: bool | None = None
+    login_ca_wait_s: float | None = None
     nginx_pid: str = ""
+    nginx_procstat_rc: int | None = None
     nginx_env_has_ca: bool | None = None
 
 
@@ -119,29 +174,22 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
     if not os.environ.get("SMOKE_PKG"):
         pytest.skip("SMOKE_PKG not set — no built .pkg to deploy")
     h.deploy(smoke_vm)
-    h.snapshot_unbound_conf(smoke_vm)
-    h.ensure_dnsbl_vip(smoke_vm)
-    h.use_system_dns_upstream(smoke_vm)
-
-    # issue #2621: stage the rc.d hook the .pkg deploy above does NOT install
-    # (install.sh does, in production) so the module's reboots exercise its JOB 2
-    # boot reconcile — same technique as test_repo_install's _stage_generate_hook.
-    smoke_vm.ssh("/bin/mkdir", "-p", "/".join(GUEST_HOOK_PATH.split("/")[:-1]))
-    h.scp_to_guest(smoke_vm, HOOK_SRC, GUEST_HOOK_PATH)
-    smoke_vm.ssh("/bin/chmod", "755", GUEST_HOOK_PATH)
-
-    # Seed CA_DIR only if it is empty/missing: _logincap_setenv_add() (JOB 2's write
-    # side, scripts/rc.d/pfblockerng_repo_generate.sh) refuses to carry the variable
-    # over an empty/missing trust store, which would make the boot-carry assertion a
-    # false negative on an image that ships no CA bundle rather than proving the boot
-    # path itself. Recorded so teardown removes exactly what was seeded here.
-    ls_ca = smoke_vm.ssh("/bin/sh", "-c", f"ls -A {CA_DIR} 2>/dev/null")
-    ca_seeded = not ls_ca.stdout.strip()
-    if ca_seeded:
-        smoke_vm.ssh("/bin/mkdir", "-p", CA_DIR)
-        smoke_vm.ssh("/usr/bin/touch", CA_DUMMY)
-
     try:
+        h.snapshot_unbound_conf(smoke_vm)
+        h.ensure_dnsbl_vip(smoke_vm)
+        h.use_system_dns_upstream(smoke_vm)
+
+        # issue #2621: stage the rc.d hook the .pkg deploy above does NOT install,
+        # and seed the CA dir only when the hook's own populated-dir glob would see
+        # it as empty (plain `ls`, dotfiles excluded — matching the glob's view).
+        # Inside the try: a mid-staging failure must still reach the teardown below.
+        _scp_to_guest(smoke_vm, HOOK_SRC, GUEST_HOOK_PATH)
+        smoke_vm.ssh("/bin/chmod", "755", GUEST_HOOK_PATH)
+        ls_ca = smoke_vm.ssh("/bin/sh", "-c", f"ls {CA_DIR} 2>/dev/null")
+        if not ls_ca.stdout.strip():
+            smoke_vm.ssh("/bin/mkdir", "-p", CA_DIR)
+            smoke_vm.ssh("/usr/bin/touch", CA_DUMMY)
+
         yield smoke_vm
     finally:
         # Diagnostics FIRST: the revert reboot below wipes the MFS /var this module ran
@@ -152,25 +200,14 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 
         # issue #2621: revoke the carry and remove what this fixture staged/seeded,
         # BEFORE the module's final ramdisk-off reboot below — that reboot must leave
-        # the guest without the hook and without the CA carry, matching a box that
-        # never had #2617 installed. Each step is its own best-effort try/except
-        # (matching this fixture's existing teardown style below): a failure here must
-        # never mask the module's test result.
+        # the guest without the hook and without the CA carry. One best-effort block:
+        # the `;` chain keeps the removals running past a failed revoke (which needs
+        # the hook still present), and the dummy's name is smoke-unique so an
+        # unconditional rm is exactly as safe as a recorded one.
         try:
-            revoke = smoke_vm.ssh("/bin/sh", GUEST_HOOK_PATH, "login-ca-revoke")
-            if revoke.returncode != 0:
-                print(f"[smoke] login-ca-revoke teardown rc={revoke.returncode} (non-fatal): {revoke.stderr!r}")
+            smoke_vm.ssh(f"sh {GUEST_HOOK_PATH} login-ca-revoke; rm -f {CA_DUMMY} {GUEST_HOOK_PATH}")
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
-            print(f"[smoke] login-ca-revoke teardown failed (non-fatal): {exc}")
-        if ca_seeded:
-            try:
-                smoke_vm.ssh("/bin/rm", "-f", CA_DUMMY)
-            except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
-                print(f"[smoke] CA dummy removal teardown failed (non-fatal): {exc}")
-        try:
-            smoke_vm.ssh("/bin/rm", "-f", GUEST_HOOK_PATH)
-        except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
-            print(f"[smoke] hook removal teardown failed (non-fatal): {exc}")
+            print(f"[smoke] login-ca teardown failed (non-fatal): {exc}")
 
         # Leave RAM disks OFF and rebuild the aliases the reboot may have dropped, so
         # the box is left in a known-good state. Best-effort — never mask the result.
@@ -226,15 +263,22 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
         vm.ssh("/usr/bin/touch", VAR_WIPE_SENTINEL)
         sentinel_created = vm.ssh("test", "-e", VAR_WIPE_SENTINEL).returncode == 0
 
-    # issue #2621: normalize the login.conf CA carry BEFORE the reboot (both legs —
-    # login.conf lives on the root fs, never on ramdisk /var) so a post-reboot
-    # presence is attributable to the boot reconcile, not a leftover from a prior
-    # module/hook run. login-ca-revoke is consent-independent (it runs even though
-    # this box's default consent is On), which is exactly what "normalize" needs.
-    revoke = vm.ssh("/bin/sh", GUEST_HOOK_PATH, "login-ca-revoke")
-    if revoke.returncode != 0:
-        print(f"[smoke] pre-reboot login-ca-revoke rc={revoke.returncode}: {revoke.stderr!r}")
-    login_ca_normalized = LOGIN_CA_ENTRY not in h.read_log_file(vm, LOGIN_CONF)
+    # issues #2621/#2617, complementary per leg (see the constants block): the
+    # standard leg REVOKES so the post-reboot file state is attributable to the boot
+    # reconcile (and nginx, whose env init fixes from the then-clean db at boot
+    # start, must NOT carry it); the ramdisk leg SYNCS so the carry is compiled
+    # BEFORE the reboot and nginx MUST carry it — the daemon-inheritance proof.
+    login_ca_preboot_clean: bool | None = None
+    login_ca_preboot_present: bool | None = None
+    _verb = "login-ca-sync" if ramdisk else "login-ca-revoke"
+    verb_res = vm.ssh("/bin/sh", GUEST_HOOK_PATH, _verb)
+    if verb_res.returncode != 0:
+        print(f"[smoke] pre-reboot {_verb} rc={verb_res.returncode}: {verb_res.stderr!r}")
+    _read_ok, _present = _login_ca_in_default_class(vm)
+    if ramdisk:
+        login_ca_preboot_present = _read_ok and _present
+    else:
+        login_ca_preboot_clean = _read_ok and not _present
 
     # When: reboot the guest, exercising the boot-time sync short-circuit (and, on the
     # ramdisk leg, the /var wipe + earlyshellcmd archive restore) AND (issue #2621) the
@@ -252,17 +296,24 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
         mounts = vm.ssh("/sbin/mount")
         var_mount = next((ln for ln in mounts.stdout.splitlines() if " on /var " in ln), "")
 
-    # issue #2621 / #2617: the boot reconcile (JOB 2, default-on) must have carried
-    # SSL_CA_CERT_PATH into login.conf's default class and recompiled login.conf.db,
-    # and a daemon started by init (nginx) must show the setenv in its OWN process
-    # environment — the process-start inheritance proof, not just a file edit.
-    login_ca_after = LOGIN_CA_ENTRY in h.read_log_file(vm, LOGIN_CONF)
-    login_db_after = vm.ssh("test", "-f", "/etc/login.conf.db").returncode == 0
+    # issues #2621/#2617 post-reboot captures. The file-side read POLLS with a
+    # bounded deadline: pfSense runs the package rc.d scripts late in boot, so a
+    # fast readiness pass can land before JOB 2 wrote — the deadline's expiry is a
+    # distinguishable capture outcome, never a hidden sleep.
+    deadline = time.monotonic() + 120.0
+    login_conf_read_ok, login_ca_after = _login_ca_in_default_class(vm)
+    while not (login_conf_read_ok and login_ca_after) and time.monotonic() < deadline:
+        time.sleep(3.0)
+        login_conf_read_ok, login_ca_after = _login_ca_in_default_class(vm)
+    login_ca_wait_s = 120.0 - max(0.0, deadline - time.monotonic())
+
     pgrep_res = vm.ssh("pgrep -x nginx || true")
     nginx_pid = next(iter(pgrep_res.stdout.split()), "")
+    nginx_procstat_rc: int | None = None
     nginx_env_has_ca: bool | None = None
     if nginx_pid:
         procstat_res = vm.ssh("procstat", "-e", nginx_pid)
+        nginx_procstat_rc = procstat_res.returncode
         nginx_env_has_ca = LOGIN_CA_ENTRY in procstat_res.stdout
 
     return RebootObservation(
@@ -277,10 +328,13 @@ def reboot_observation(request: pytest.FixtureRequest, deployed_vm: SmokeVM) -> 
         sentinel_created=sentinel_created,
         var_wiped=var_wiped,
         var_mount=var_mount,
-        login_ca_normalized=login_ca_normalized,
+        login_conf_read_ok=login_conf_read_ok,
+        login_ca_preboot_clean=login_ca_preboot_clean,
+        login_ca_preboot_present=login_ca_preboot_present,
         login_ca_after=login_ca_after,
-        login_db_after=login_db_after,
+        login_ca_wait_s=login_ca_wait_s,
         nginx_pid=nginx_pid,
+        nginx_procstat_rc=nginx_procstat_rc,
         nginx_env_has_ca=nginx_env_has_ca,
     )
 
@@ -337,50 +391,58 @@ def test_ip_alias_and_rule_survive_reboot(reboot_observation: RebootObservation)
 
 
 def test_login_ca_carry_applies_at_boot(reboot_observation: RebootObservation) -> None:
-    """Issues #2621/#2617 — the rc.d hook's boot reconcile carries the CA path.
+    """Issues #2621/#2617 — the login.conf CA carry across a real boot, both halves.
 
-    Scenario: a real guest reboot exercises the default-on JOB 2 boot reconcile.
+    Scenario (standard leg — file-side reconcile):
+      Given the carry was revoked (file and db clean at boot start)
+      When the guest reboots (JOB 2 boot reconcile, consent default-on)
+      Then the ``default`` class carries the entry again, and nginx does NOT
+          have it in env — init fixed the rc tree's environment from the
+          then-clean compiled db at boot start. (The db itself is never probed
+          here: the ramdisk leg's inheritance proof only passes if the hook
+          compiled it, so compilation is proven transitively; byte-level
+          compile behaviour is the shellspec suites' job.)
 
-    Given the login.conf CA carry was revoked (normalized) before the reboot
-    When the guest reboots (the rc.d hook's boot reconcile runs, consent default-on)
-    Then login.conf's ``default`` class carries ``SSL_CA_CERT_PATH`` again,
-        ``login.conf.db`` is recompiled, AND a daemon started by init (nginx)
-        inherited the setenv in its OWN process environment.
-
-    This is the process-start inheritance proof issue #2617 reserved for a live
-    reboot, piggybacked on THIS module's already-happening reboot instead of a
-    production firewall's. Runs on both legs for free: login.conf lives on the
-    root fs, not ramdisk /var, so standard and ramdisk equally prove it.
+    Scenario (ramdisk leg — daemon inheritance, the proof #2617 reserved for a
+    live reboot):
+      Given the carry was synced (compiled into the db BEFORE the reboot)
+      When the guest reboots
+      Then nginx carries the entry in its OWN process environment.
     """
     obs = reboot_observation
     leg = "ramdisk" if obs.ramdisk else "standard"
 
-    # --- Given (setup validity): the pre-reboot revoke actually normalized state ---
-    assert obs.login_ca_normalized is True, (
-        f"setup [{leg}]: pre-reboot login-ca-revoke did not clear {LOGIN_CA_ENTRY!r} from "
-        f"{LOGIN_CONF} (login_ca_normalized={obs.login_ca_normalized!r}) — the post-reboot "
-        "presence check below would be vacuous (proving a leftover, not the boot path)"
+    assert obs.login_conf_read_ok is True, (
+        f"capture [{leg}]: could not read {LOGIN_CONF} over ssh after the reboot — "
+        "a transport failure, not a verdict on the boot reconcile"
     )
-
-    # --- Then (after reboot): the boot reconcile must have carried the CA path ---
     assert obs.login_ca_after is True, (
-        f"issue #2617 [{leg}]: {LOGIN_CA_ENTRY!r} is absent from {LOGIN_CONF} after reboot "
-        f"(login_ca_after={obs.login_ca_after!r}) — the rc.d hook's boot reconcile "
+        f"issue #2617 [{leg}]: {LOGIN_CA_ENTRY!r} is absent from {LOGIN_CONF}'s default "
+        f"class after reboot (waited {obs.login_ca_wait_s:.0f}s) — the boot reconcile "
         "(JOB 2, default-on) did not carry it"
     )
-    assert obs.login_db_after is True, (
-        f"issue #2617 [{leg}]: /etc/login.conf.db is missing after reboot "
-        f"(login_db_after={obs.login_db_after!r}) — cap_mkdb did not recompile the login "
-        "capability database"
+    assert obs.nginx_pid, f"capture [{leg}]: no nginx process found after reboot — cannot judge daemon env inheritance"
+    assert obs.nginx_procstat_rc == 0, (
+        f"capture [{leg}]: procstat -e rc={obs.nginx_procstat_rc!r} — a tool failure, not a verdict on inheritance"
     )
-    assert obs.nginx_pid, (
-        f"issue #2621 [{leg}]: no nginx process found after reboot (pgrep -x nginx, got "
-        f"nginx_pid={obs.nginx_pid!r}) — cannot prove an init-started daemon inherited the "
-        "default-class setenv"
-    )
-    assert obs.nginx_env_has_ca is True, (
-        f"issue #2617 [{leg}]: nginx (pid {obs.nginx_pid!r}) does not carry {LOGIN_CA_ENTRY!r} "
-        f"in its own process environment (nginx_env_has_ca={obs.nginx_env_has_ca!r}) — the "
-        "default-class setenv exists but was not inherited by a daemon started after the "
-        "boot reconcile ran"
-    )
+
+    if obs.ramdisk:
+        assert obs.login_ca_preboot_present is True, (
+            "setup [ramdisk]: pre-reboot login-ca-sync did not land the carry — the "
+            "inheritance proof below would be vacuous"
+        )
+        assert obs.nginx_env_has_ca is True, (
+            f"issue #2617 [ramdisk]: nginx (pid {obs.nginx_pid}) does not carry "
+            f"{LOGIN_CA_ENTRY!r} in its environment although the compiled db held it at "
+            "boot start — the init-started-daemon inheritance the whole design rests on"
+        )
+    else:
+        assert obs.login_ca_preboot_clean is True, (
+            "setup [standard]: pre-reboot login-ca-revoke did not clear the carry — the "
+            "file-side proof below would show a leftover, not the boot path"
+        )
+        assert obs.nginx_env_has_ca is False, (
+            f"model [standard]: nginx carries {LOGIN_CA_ENTRY!r} although the db was "
+            "clean at boot start — same-boot application exists after all; relax this "
+            "assertion and the two-leg design if this reproduces"
+        )
