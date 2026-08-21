@@ -120,13 +120,6 @@ _cc_cmp() {
     cmp -s "$1" "$2" && echo 0 || echo 1
 }
 
-# Catastrophic-damage smoke check (never the primary oracle): when cap_mkdb is
-# on PATH, the compiled .db must exist after a real write; when it is absent
-# (Linux CI), trivially OK.
-_cc_db_ok() {
-    command -v "${PFB_CAP_MKDB}" >/dev/null 2>&1 || return 0
-    [ -f "${PFB_LOGIN_CONF}.db" ]
-}
 
 # `Skip if` condition: true (rc 0) iff cap_mkdb is NOT on PATH.
 no_cap_mkdb() {
@@ -275,27 +268,32 @@ Describe 'onestart consent — 6: <pfb_pkg_ca_consent>off</pfb_pkg_ca_consent>: 
     End
 End
 
-Describe 'onestart consent — 7: config.xml missing entirely: ADD (default-on)'
+Describe 'onestart consent — 7: config.xml missing entirely: NO ACTION in either direction'
     setup() {
         _r7_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/cc_noxml.XXXXXX")"
         _cc_box "${_r7_dir}"
-        _cc_stage_login stock
         rm -f "${PFB_CONFIG_XML}"
-        _cc_expected_login stock_with_ca "${_r7_dir}/expected.conf"
     }
     cleanup() { rm -rf "${_r7_dir}"; _cc_unset_box; unset _r7_dir; }
     Before 'setup'
     After  'cleanup'
 
-    It 'before-state: config.xml does not exist'
-      The path "${PFB_CONFIG_XML}" should not be exist
-    End
-
-    It 'carries SSL_CA_CERT_PATH into login.conf -- a missing config.xml also defaults on'
+    It 'does not ADD: with no config.xml the consent is unknowable, so the file is never touched (an off-box or ROOT-staged run must not edit the host login.conf)'
+      _cc_stage_login stock
+      cp "${PFB_LOGIN_CONF}" "${_r7_dir}/before.conf"
       When run sh "${HOOK}" onestart
       The status should be success
-      The stderr should include "INFO"
-      The value "$(_cc_cmp "${PFB_LOGIN_CONF}" "${_r7_dir}/expected.conf")" should equal 0
+      The stderr should not include "INFO"
+      The value "$(_cc_cmp "${PFB_LOGIN_CONF}" "${_r7_dir}/before.conf")" should equal 0
+    End
+
+    It 'does not REMOVE either: an unreadable config never launders an existing carry away'
+      _cc_stage_login stock_with_ca
+      cp "${PFB_LOGIN_CONF}" "${_r7_dir}/before.conf"
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should not include "INFO"
+      The value "$(_cc_cmp "${PFB_LOGIN_CONF}" "${_r7_dir}/before.conf")" should equal 0
     End
 End
 
@@ -474,13 +472,6 @@ Describe 'onestart consent — 12: consent on, login.conf already carries the va
       The stderr should not include "INFO"
       The value "$(_cc_cmp "${PFB_LOGIN_CONF}" "${_r12_dir}/before.conf")" should equal 0
     End
-
-    It 'does not regenerate a .db on this no-op, even when cap_mkdb is on PATH'
-      Skip if 'cap_mkdb not on PATH' no_cap_mkdb
-      When run sh "${HOOK}" onestart
-      The status should be success
-      The path "${PFB_LOGIN_CONF}.db" should not be exist
-    End
 End
 
 Describe 'onestart consent — 13: consent off, login.conf never patched: NOOP'
@@ -529,6 +520,36 @@ Describe 'onestart consent — 14: consent on but the CA directory is empty: log
 End
 
 # ── VERB-INDEPENDENCE AXIS (row 15) ──────────────────────────────────────────
+
+Describe 'onestart consent — 16: <pfblockerng version="x"> open tag carries an attribute, config/0 explicitly opts out: REMOVE'
+    setup() {
+        _r16_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/cc_attr.XXXXXX")"
+        _cc_box "${_r16_dir}"
+        _cc_stage_login stock_with_ca
+        cat > "${PFB_CONFIG_XML}" <<'EOF'
+<pfsense>
+	<installedpackages>
+		<pfblockerng version="1">
+			<config>
+				<pfb_pkg_ca_consent></pfb_pkg_ca_consent>
+			</config>
+		</pfblockerng>
+	</installedpackages>
+</pfsense>
+EOF
+        _cc_expected_login stock "${_r16_dir}/expected.conf"
+    }
+    cleanup() { rm -rf "${_r16_dir}"; _cc_unset_box; unset _r16_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'strips SSL_CA_CERT_PATH -- an attribute on the open tag must not turn an explicit opt-out into consent'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include "INFO"
+      The value "$(_cc_cmp "${PFB_LOGIN_CONF}" "${_r16_dir}/expected.conf")" should equal 0
+    End
+End
 
 Describe 'login-ca-sync/-revoke verbs — 15: consent-INDEPENDENT, unlike onestart'
     # The PHP caller flushes config to disk before invoking either verb

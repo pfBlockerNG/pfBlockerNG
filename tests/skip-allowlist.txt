@@ -40,6 +40,5 @@ pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var
 
 # shellspec -- cap_mkdb-gated examples (issue #2617): the .db assertions only run where
 # BSD cap_mkdb exists (the appliance, macOS); Linux CI observes them as skips.
-shellspec:tests/shell/generate_hook_ca_consent_spec.sh::onestart consent — 12: consent on, login.conf already carries the value: NOOP does not regenerate a .db on this no-op, even when cap_mkdb is on PATH  # cap_mkdb is BSD userland; CI's Linux runner has none -- the file-byte oracle still runs
 shellspec:tests/shell/generate_hook_login_conf_spec.sh::login-ca-sync — 3: already carries our value, byte-identical no-op does not create a .db on this no-op, even when cap_mkdb is on PATH  # cap_mkdb is BSD userland; CI's Linux runner has none -- the file-byte oracle still runs
 shellspec:tests/shell/generate_hook_login_conf_spec.sh::login-ca-sync — 17: cap_mkdb smoke (guarded) compiles login.conf.db after a successful add, when cap_mkdb is on PATH  # cap_mkdb is BSD userland; CI's Linux runner has none -- the file-byte oracle still runs

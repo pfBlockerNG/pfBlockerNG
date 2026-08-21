@@ -63,6 +63,15 @@ final class LoginCaConsentPageTest extends TestCase
 		$this->assertStringNotContainsString('pfb_pkg_ca_consent_shown', $source);
 		$this->assertStringContainsString("'pfb_pkg_ca_consent'", $source);
 		$this->assertStringContainsString('/etc/login.conf', $source);
+
+		// The save-failure notice diagnoses per verb (issue #2617 review): a failed
+		// SYNC points at the CA directory (certctl rehash), a failed REVOKE cannot be
+		// a CA-dir problem by design, so its text names the file-shape causes instead.
+		// And no comment may still claim the hook runs "before package operations" --
+		// pfb_pkg_exec() no longer invokes it.
+		$this->assertStringContainsString('certctl rehash', $source);
+		$this->assertStringContainsString('may be a symlink, or have a shape pfBlockerNG does not edit', $source);
+		$this->assertStringNotContainsString('before package operations', $source);
 	}
 
 	public function testCronHasNoSecondLoginConfWriter(): void

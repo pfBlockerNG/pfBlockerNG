@@ -102,9 +102,15 @@ if ($_POST && isset($_POST['save'])) {
 		header('Location: /pfblockerng/pfblockerng_software.php');
 		exit;
 	}
-	$input_errors[] = 'The setting was saved, but pfBlockerNG could not update /etc/login.conf '
-		. 'right now (the CA certificate directory may be missing or empty -- try '
-		. '`certctl rehash`); it will retry at the next boot.';
+	// Diagnose per verb: a failed sync is almost always the unpopulated-CA-dir guard;
+	// a failed revoke has no CA-dir dependency by design, so its causes are the file's.
+	$input_errors[] = $pfb_ca_token === PfbToggle::On->value
+		? 'The setting was saved, but pfBlockerNG could not update /etc/login.conf right now '
+			. '(the CA certificate directory may be missing or empty -- try `certctl rehash`); '
+			. 'it will retry at the next boot.'
+		: 'The setting was saved, but pfBlockerNG could not update /etc/login.conf right now '
+			. '(the file may be a symlink, or have a shape pfBlockerNG does not edit); '
+			. 'it will retry at the next boot.';
 }
 
 // N-stale-checkbox (issue #2518 fix round): read AFTER the save block above, not before -- a
@@ -220,9 +226,9 @@ $section->addInput(new Form_Checkbox(
 $form->add($section);
 
 // Package manager CA trust -- always renders (owner ruling: no edition gate; the installed
-// rc.d hook applies the login.conf edit at boot and before package operations, and its value
-// is inert on a box with no Plus CA pin, so a CE box that later upgrades to Plus already
-// carries the setting).
+// rc.d hook applies the login.conf edit at boot and this save applies it immediately, and
+// its value is inert on a box with no Plus CA pin, so a CE box that later upgrades to Plus
+// already carries the setting).
 $pfb_ca_consent = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
 $pfb_ca_help = 'pfSense Plus pins pkg to a Netgate-only CA bundle, which blocks third-party '
 	. 'package repositories. When enabled, pfBlockerNG keeps '
