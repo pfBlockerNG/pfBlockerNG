@@ -24,6 +24,8 @@ final class Top1mTeardownDirectoryTest extends TestCase
 			'errlog'             => "{$this->tmp}/error.log",
 			'unbound_py_sources' => "{$this->tmp}/pfb_py_sources.json",
 			'unbound_py_count'   => "{$this->tmp}/pfb_py_count",
+			'unbound_py_regex_count' => "{$this->tmp}/pfb_py_regex_count",
+			'unbound_py_reject_stats' => "{$this->tmp}/pfb_py_reject_stats.json",
 			'unbound_py_rawdir'  => "{$this->tmp}/pfb_py_raw",
 			'unbound_py_top1m'   => "{$this->tmp}/unbound/pfb_py_top1m.txt",
 			'dbdir'              => "{$this->tmp}/db",
@@ -102,24 +104,38 @@ final class Top1mTeardownDirectoryTest extends TestCase
 	}
 
 	/**
-	 * issue #2607: pfb_py_count is Python's emitted total for the generation the manifest
-	 * describes, so it cannot survive the manifest's teardown. Left behind, it is read back
-	 * as a live figure by the update log AND by pfb_unbound_py_swap_fits_ram(), which sizes
-	 * the zero-downtime swap's RAM projection from it — after a `pkg delete` + reinstall that
-	 * is a snapshot no longer loaded.
+	 * issue #2607: every pfb_py_* artifact Python emits describes the generation the manifest
+	 * defines, and Python rewrites them only for a build that produced a snapshot — so none of
+	 * them may survive the manifest's teardown. Left behind, each is read back as live:
+	 * pfb_py_count by the update log and by pfb_unbound_py_swap_fits_ram(), which sizes the
+	 * zero-downtime swap's RAM projection from it; pfb_py_reject_stats by
+	 * pfb_emit_entry_reject_stats(), which replays a dead generation's stage=entries lines;
+	 * pfb_py_regex_count by the DNSBL_Regex alias count. After a `pkg delete` + reinstall all
+	 * three describe a snapshot that is no longer loaded.
 	 */
-	public function testTeardownRemovesTheEmittedCountAlongsideTheManifest(): void
+	public function testTeardownRemovesEveryEmittedArtifactAlongsideTheManifest(): void
 	{
 		$manifest = $GLOBALS['pfb']['unbound_py_sources'];
-		$count = $GLOBALS['pfb']['unbound_py_count'];
+		$emitted = [
+			'count' => $GLOBALS['pfb']['unbound_py_count'],
+			'regex count' => $GLOBALS['pfb']['unbound_py_regex_count'],
+			'reject tally' => $GLOBALS['pfb']['unbound_py_reject_stats'],
+		];
 		$this->assertNotFalse(file_put_contents($manifest, '{"feeds":[]}'), "seed {$manifest}");
-		$this->assertNotFalse(file_put_contents($count, "11732\n"), "seed {$count}");
+		$this->assertNotFalse(file_put_contents($emitted['count'], "11732\n"));
+		$this->assertNotFalse(file_put_contents($emitted['regex count'], "4\n"));
+		$this->assertNotFalse(file_put_contents($emitted['reject tally'],
+			'[{"feed":"StaleFeed","group":"StaleGroup","shape":3}]'));
 
-		$this->assertFileExists($count, 'before-state: the emitted count is on disk');
+		foreach ($emitted as $label => $path) {
+			$this->assertFileExists($path, "before-state: the emitted {$label} is on disk");
+		}
 		$this->assertTrue(pfb_unbound_py_teardown_raw_set());
 
 		$this->assertFileDoesNotExist($manifest, 'the teardown removes the manifest');
-		$this->assertFileDoesNotExist($count,
-			'the emitted count must not outlive the manifest generation it describes');
+		foreach ($emitted as $label => $path) {
+			$this->assertFileDoesNotExist($path,
+				"the emitted {$label} must not outlive the manifest generation it describes");
+		}
 	}
 }

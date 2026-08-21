@@ -5831,6 +5831,17 @@ function pfblockerng_tick(
 			}
 		}
 	}
+	// issue #2607: the DNSBL manifest is Python's sole blocklist source (ADR-65), and a
+	// real `pkg delete` tears it down while the reinstall's config-save resync cannot
+	// rebuild it -- so its absence means the resolver is matching nothing. That is a
+	// failure, like a *.fail marker, not a change waiting for a convenient moment:
+	// dispatch on the same footing, apply window included (owner ruling, 2026-08-21).
+	$manifest_due = pfb_unbound_py_mode_active()
+		&& !file_exists((string) ($pfb['unbound_py_sources'] ?? ''));
+	if ($manifest_due) {
+		logger(LOG_NOTICE, localize_text('Tick: DNSBL manifest absent - dispatching a rebuild pass.'),
+			LOG_PREFIX_PKG_PFBLOCKERNG);
+	}
 	$scheduled_due = $runtime_ready && $cache_ready && $runtime_model !== NULL
 		&& $runtime_model['scheduled'] && $cron_due;
 	$scheduled_due = $scheduled_due || ($runtime_ready && $runtime_model !== NULL
@@ -5854,7 +5865,8 @@ function pfblockerng_tick(
 
 	// Active schedule cache and durable markers have one owner: the scheduled process.
 	// Hold both locks through Extras, feed checks, apply work, and final cache publication.
-	if ($manual_due || $scheduled_due || $extras_due || $runtime_pending || ($runtime_ready && !$cache_ready)) {
+	if ($manual_due || $scheduled_due || $extras_due || $runtime_pending || $manifest_due
+		|| ($runtime_ready && !$cache_ready)) {
 		$dispatch_owner = !isset($GLOBALS['pfb_schedule_dispatch_lock'])
 			|| !is_resource($GLOBALS['pfb_schedule_dispatch_lock']);
 		$feed_pass_owner = !isset($GLOBALS['pfb_feed_pass_lock'])
@@ -6012,7 +6024,7 @@ function pfblockerng_tick(
 						}
 					}
 				}
-				$feed_due = $feed_due || $fail_due;
+				$feed_due = $feed_due || $fail_due || $manifest_due;
 				if ($dcc_changed && !$in_win) {
 					pfb_mark_pending_changes();
 					pfb_due_ledger_set_pending('cron', $dbdir);
