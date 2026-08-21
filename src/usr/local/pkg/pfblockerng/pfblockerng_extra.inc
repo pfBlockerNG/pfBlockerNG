@@ -968,17 +968,18 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'ADR-19 Software page capability; #1887 relocated the pre-existing ON default into the registry, absent unchanged',
 		],
 
-		// issue #2518: consent to add a single SSL_CA_CERT_PATH line to pkg.conf's PKG_ENV
-		// block (Plus's Netgate-only CA pin otherwise blocks third-party repos). Default ''
-		// (off) -- the patch is opt-in, never applied without this flag.
+		// issue #2617: consent to carry SSL_CA_CERT_PATH=/etc/ssl/certs in login.conf's
+		// `default` login class setenv (supersedes the retired #2518 pkg.conf PKG_ENV patch).
+		// ON by default with a Software-page opt-out (owner ruling 2026-08-21): absent reads
+		// on; a present empty token is the explicit opt-out.
 		'gen/pfb_pkg_ca_consent' => [
-			'default'       => '',
+			'default'       => 'on',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
 			'write_adapter' => 'pfb_cfg_toggle_write',
 			// The consent control lives on the Software page (same as pfb_software_check
 			// above), so it shares that page's secondary privilege gate (issue #1895).
 			'write_priv'    => 'pkg_mgr_installed.php',
-			'no_grandfather' => 'new 4.0 field (issue #2518); \'\' = consent withheld = pre-existing behaviour (pkg.conf untouched)',
+			'no_grandfather' => 'issue #2617 (owner ruling 2026-08-21): default carries the CA path for every install, new or upgrading; the #2518 off default it replaces only gated the retired pkg.conf patcher, not a preference worth preserving',
 		],
 
 		// Internal-address feed-host filter toggle: 'on'|''. Default 'on'.
