@@ -85,7 +85,17 @@ final class PkgCaHookDelegateTest extends TestCase
 		$this->assertSame(0, $ret);
 	}
 
-	public function testPkgExecExportsCaPathOnlyWhenConsentedAndPopulated(): void
+	/*
+	 * pfb_pkg_exec() no longer exports SSL_CA_CERT_PATH itself under any consent/CA-dir
+	 * combination (issue #2623) -- that per-call putenv is superseded by install.sh
+	 * restarting the webConfigurator once its login.conf carry lands, which reaches every
+	 * later GUI-driven pkg call natively. A caller still passing a CA-dir hint (the
+	 * retired 4th argument) proves the OLD contract would have exported here -- the new
+	 * one silently ignores it. An ambient value the process environment already carried
+	 * (what a restarted php-fpm inherits) must still pass through untouched, since
+	 * pfb_pkg_exec is a plain exec() that never mutates the environment either way.
+	 */
+	public function testPkgExecNeverExportsCaPathItself(): void
 	{
 		$caDir = $this->root . '/ca';
 		mkdir($caDir, 0o755, TRUE);
@@ -93,31 +103,30 @@ final class PkgCaHookDelegateTest extends TestCase
 		// symlinks -- glob() still lists them, so a real directory always counts here.
 		symlink('/nonexistent-target', $caDir . '/dead.0');
 
-		$emptyDir = $this->root . '/empty-ca';
-		mkdir($emptyDir, 0o755, TRUE);
-
 		$out = [];
 		$ret = -1;
 
-		// (a) consent ON + populated dir -> child sees the value.
+		// (a) consent ON + populated dir -- the retired contract exported here; the
+		// current one must not.
 		putenv('SSL_CA_CERT_PATH');
 		PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', PfbToggle::On);
 		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
-		$this->assertSame(0, $ret);
-		$this->assertSame([$caDir], $out);
-
-		// (b) consent ON + EMPTY dir -> child does not see it.
-		putenv('SSL_CA_CERT_PATH');
-		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $emptyDir);
 		$this->assertSame(1, $ret);
 		$this->assertSame([], $out);
 
-		// (c) consent OFF + populated dir -> child does not see it.
+		// (b) consent OFF + populated dir -- same non-behaviour either way.
 		putenv('SSL_CA_CERT_PATH');
 		PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', PfbToggle::Off);
 		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
 		$this->assertSame(1, $ret);
 		$this->assertSame([], $out);
+
+		// (c) an ambient value the process environment already carried passes through
+		// untouched -- proving pfb_pkg_exec never unsets it either.
+		putenv('SSL_CA_CERT_PATH=' . $caDir);
+		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
+		$this->assertSame(0, $ret);
+		$this->assertSame([$caDir], $out);
 	}
 
 	public function testApplyMapsConsentTransitions(): void

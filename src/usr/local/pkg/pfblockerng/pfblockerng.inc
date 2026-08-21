@@ -5187,29 +5187,14 @@ function pfb_login_ca_command(
 }
 
 /*
- * Run a pkg(8) shell command directly. When the admin has consented (issue #2617:
- * gen/pfb_pkg_ca_consent) AND the CA hash directory is populated, export SSL_CA_CERT_PATH for
- * this process's children -- login.conf's setenv only reaches processes started AFTER it is
- * compiled, and php-fpm predates any mid-session consent flip, so without this a Software-page
- * pkg call would fail on a pinned box until the next reboot. Never unset when consent is off:
- * a stale value from an earlier consented call in the same worker is harmless where no pin
- * exists and self-heals on worker recycle.
+ * Run a pkg(8) shell command directly. Carries no CA environment itself (issue #2623) --
+ * SSL_CA_CERT_PATH reaches every pkg call through process inheritance instead: login.conf's
+ * setenv at boot, and install.sh's one-time webConfigurator restart right after that carry
+ * lands, which covers the current session too.
  */
-function pfb_pkg_exec(
-	string $command,
-	array &$out = [],
-	int &$ret = -1,
-	?string $ca_dir = NULL
-): void {
+function pfb_pkg_exec(string $command, array &$out = [], int &$ret = -1): void {
 	$out = [];
 	$ret = -1;
-	$ca_dir ??= '/etc/ssl/certs';
-	// glob() lists dangling symlinks too, which is exactly what a CA hash directory
-	// (certctl rehash output) contains -- is_dir() alone would pass on an empty one.
-	$ca_entries = is_dir($ca_dir) ? glob($ca_dir . '/*') : FALSE;
-	if (PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On && !empty($ca_entries)) {
-		putenv('SSL_CA_CERT_PATH=' . $ca_dir);
-	}
 	exec($command, $out, $ret);
 }
 

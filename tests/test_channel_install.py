@@ -1558,3 +1558,132 @@ def test_directory_as_bundle_is_not_exported() -> None:
         assert files, "no pkg calls were made — the run cannot prove the guard"
         assert set(files) == {"<unset>"}, f"a directory was exported as the bundle, saw {sorted(set(files))}"
         assert set(paths) == {str(ca_dir)}, f"the path must still export, saw {sorted(set(paths))}"
+
+
+# --------------------------------------------------------------------------- #
+# webConfigurator restart on the login.conf change-gate (issue #2623).
+#
+# pfb_pkg_exec() drops its consent-gated putenv (issue #2617's per-call export): a
+# php-fpm worker that started with SSL_CA_CERT_PATH keeps it for its whole life, so
+# instead install.sh restarts the webConfigurator once, right after a run that just
+# changed /etc/login.conf (the JOB 2 CA carry) -- covering every later GUI-driven pkg
+# call, including pfSense's own Package Manager pages, which the old per-call putenv
+# never reached. The restart's own environment must carry SSL_CA_CERT_PATH so the
+# freshly-started php-fpm has it immediately, without waiting for the login.conf carry
+# to take effect at the NEXT boot.
+# --------------------------------------------------------------------------- #
+
+
+def _write_consent_config_xml(root: str, consent: str) -> Path:
+    """Stage a ROOT config.xml with pfb_pkg_ca_consent at config/0 (issue #2617's read
+    scope) -- mirrors test_root_staged_run_reconciles_the_root_login_conf_never_the_host.
+    """
+    cfg = _config_xml_path(root)
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text(
+        "<pfsense>\n\t<installedpackages>\n\t\t<pfblockerng>\n\t\t\t<config>\n"
+        f"\t\t\t\t<pfb_pkg_ca_consent>{consent}</pfb_pkg_ca_consent>\n"
+        "\t\t\t</config>\n\t\t</pfblockerng>\n\t</installedpackages>\n</pfsense>\n"
+    )
+    return cfg
+
+
+def _webgui_restart_called(root: str) -> Path:
+    return Path(root) / "webgui-restart-called"
+
+
+def _webgui_restart_witness(root: str) -> Path:
+    return Path(root) / "webgui-restart-env"
+
+
+def _write_webgui_restart_stub(root: str) -> Path:
+    """A stub PFB_WEBGUI_RESTART: records that it ran and dumps its own environment,
+    so a test can assert both invocation and what SSL_CA_CERT_PATH it inherited.
+    """
+    bin_dir = Path(root) / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    stub = bin_dir / "restart_webgui_stub"
+    called = _webgui_restart_called(root)
+    witness = _webgui_restart_witness(root)
+    stub.write_text(f'#!/bin/sh\ntouch "{called}"\nenv >"{witness}"\n')
+    stub.chmod(0o755)
+    return stub
+
+
+def test_login_conf_change_restarts_the_webgui_with_the_ca_path(tmp_path: Path) -> None:
+    """(a) A fresh install carries the login.conf CA setenv for the first time ->
+    login.conf changed -> the webConfigurator restart stub runs exactly once, and its
+    own environment carries SSL_CA_CERT_PATH pointing at the ROOT CA dir -- the
+    restarted php-fpm must inherit what a future boot would deliver, not wait for it.
+    """
+    root = str(tmp_path)
+    ca_dir = _seed_ca_dir(root)
+    _write_consent_config_xml(root, "on")
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+    stub = _write_webgui_restart_stub(root)
+
+    proc = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
+    assert proc.returncode == 0, proc.stderr
+
+    assert "SSL_CA_CERT_PATH=" in _root_login_conf(root).read_text(), (
+        "fixture broken: login.conf did not gain the carry, so this run cannot prove the change-gate"
+    )
+    assert _webgui_restart_called(root).exists(), (
+        "login.conf changed but the webConfigurator restart stub was never invoked"
+    )
+    witness = _webgui_restart_witness(root).read_text().splitlines()
+    expected = f"SSL_CA_CERT_PATH={ca_dir}"
+    assert expected in witness, f"the restart's own environment must carry {expected}, saw: {witness}"
+
+
+def test_login_conf_unchanged_second_run_never_restarts_the_webgui(tmp_path: Path) -> None:
+    """(b) An idempotent re-run on an already-carried box: JOB 2 is a no-op the second
+    time (login.conf already holds the entry), so the change-gate sees no diff and the
+    restart stub must NOT run again.
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    _write_consent_config_xml(root, "on")
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+    stub = _write_webgui_restart_stub(root)
+
+    first = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
+    assert first.returncode == 0, first.stderr
+    assert _webgui_restart_called(root).exists(), "setup precondition failed: the first run must restart"
+
+    # Isolate the second run's own evidence: a leftover file from the first run cannot
+    # be mistaken for a fresh invocation.
+    _webgui_restart_called(root).unlink()
+    _webgui_restart_witness(root).unlink()
+
+    second = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
+    assert second.returncode == 0, second.stderr
+
+    assert not _webgui_restart_called(root).exists(), (
+        "login.conf did not change on this re-run, but the webConfigurator restart stub ran anyway"
+    )
+
+
+def test_no_root_config_xml_skips_login_conf_and_never_restarts_the_webgui(tmp_path: Path) -> None:
+    """(c) No readable ROOT config.xml: consent is unknowable, JOB 2 touches nothing
+    (test_root_staged_run_without_config_xml_touches_no_login_conf), so login.conf
+    cannot have changed and the restart stub must never run.
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+    assert not _config_xml_path(root).exists()
+    stub = _write_webgui_restart_stub(root)
+
+    proc = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
+    assert proc.returncode == 0, proc.stderr
+
+    assert _root_login_conf(root).read_text() == _STOCK_LOGIN_CONF, (
+        "fixture broken: login.conf must stay byte-identical with no config.xml to consult"
+    )
+    assert not _webgui_restart_called(root).exists(), (
+        "login.conf was untouched, but the webConfigurator restart stub ran anyway"
+    )
