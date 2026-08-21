@@ -394,6 +394,7 @@ _logincap_scan() {
                 last = NR
                 if (se_line == 0 && index(line, ":setenv=") > 0) {
                     se_line = NR
+                    se_text = line
                     tmp = line
                     n = 0
                     while ((p = index(tmp, ":setenv=")) > 0) { n++; tmp = substr(tmp, p + 8) }
@@ -427,6 +428,7 @@ _logincap_scan() {
             printf "VSTART=%d\n", vstart + 0
             printf "VEND=%d\n", vend + 0
             printf "VALUE=%s\n", value
+            printf "LINE=%s\n", se_text
             printf "OTHER=%s\n", other
         }
     ' "${PFB_LOGIN_CONF}" 2>/dev/null)"
@@ -442,8 +444,14 @@ _logincap_field() {
 # (which decodes backslash escapes and would corrupt it).
 # One shared value-splice program: replace the chars [vs, ve) on line tgt with
 # $PFB_LC_NEWVAL (via ENVIRON -- `awk -v` would decode escapes in the value).
+# Line tgt must still read exactly as the scan saw it ($PFB_LC_EXPECT): the
+# scan and this transform are separate reads of the file, so a concurrent
+# editor invocation (boot reconcile vs a Software-page save) could land its
+# mv in between -- splicing scan-time offsets into changed content would
+# corrupt the class, while aborting here degrades the race to a clean
+# refusal/lost update that the next boot reconcile repairs.
 # shellcheck disable=SC2016  # awk's own $0/vs/ve, not shell expansion
-_LC_SPLICE='NR==tgt { $0 = substr($0,1,vs-1) ENVIRON["PFB_LC_NEWVAL"] substr($0,ve) } { print }'
+_LC_SPLICE='NR==tgt { if ($0 != ENVIRON["PFB_LC_EXPECT"]) exit 9; $0 = substr($0,1,vs-1) ENVIRON["PFB_LC_NEWVAL"] substr($0,ve) } { print }'
 
 _logincap_write() {
     _lc_tmp="${PFB_LOGIN_CONF}.tmp.$$"
@@ -527,15 +535,16 @@ _logincap_setenv_add() {
         _lc_label="$(_logincap_field LABEL)"
         PFB_LC_NEWVAL="${_lc_want}"
         export PFB_LC_NEWVAL
+        # shellcheck disable=SC2016  # awk's own $0/lbl, not shell expansion
         if _logincap_write -v lbl="${_lc_label}" \
-            '{ print } NR==lbl { print "\t:setenv=" ENVIRON["PFB_LC_NEWVAL"] ":\\" }'; then
+            'NR==lbl && $0 != "default:\\" { exit 9 } { print } NR==lbl { print "\t:setenv=" ENVIRON["PFB_LC_NEWVAL"] ":\\" }'; then
             printf '[%s] INFO: added SSL_CA_CERT_PATH to the default class setenv in %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
             _logincap_compile
-            unset PFB_LC_NEWVAL _lc_label _lc_want _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok
+            unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_label _lc_want _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok
             return 0
         fi
         printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
-        unset PFB_LC_NEWVAL _lc_label _lc_want _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok
+        unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_label _lc_want _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok
         return 1
     fi
 
@@ -573,16 +582,17 @@ _logincap_setenv_add() {
     else
         PFB_LC_NEWVAL="${_lc_value},${_lc_want}"
     fi
-    export PFB_LC_NEWVAL
+    PFB_LC_EXPECT="$(_logincap_field LINE)"
+    export PFB_LC_NEWVAL PFB_LC_EXPECT
     if _logincap_write -v tgt="${_lc_se_line}" -v vs="${_lc_vstart}" -v ve="${_lc_vend}" \
         "${_LC_SPLICE}"; then
         printf '[%s] INFO: added SSL_CA_CERT_PATH to the default class setenv in %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
         _logincap_compile
-        unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign _lc_vstart _lc_vend
+        unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign _lc_vstart _lc_vend
         return 0
     fi
     printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
-    unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign _lc_vstart _lc_vend
+    unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_found_ours _lc_found_foreign _lc_vstart _lc_vend
     return 1
 }
 
@@ -626,7 +636,14 @@ _logincap_setenv_remove() {
     unset IFS _lc_entry_v
 
     if [ "${_lc_newval}" = "${_lc_value}" ]; then
-        # Not ours -- a foreign value is never stripped.
+        # Not ours -- a foreign value is never stripped, but an opt-out that
+        # leaves the variable exported must say so instead of reporting a
+        # clean success. A list with no SSL_CA_CERT_PATH at all stays silent.
+        case ",${_lc_value}," in
+            *,SSL_CA_CERT_PATH=*)
+                printf '[%s] WARNING: login.conf sets SSL_CA_CERT_PATH to a value this hook did not write -- leaving it in place, the opt-out did not remove it\n' "${name}" >&2
+                ;;
+        esac
         unset _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval
         return 0
     fi
@@ -636,16 +653,17 @@ _logincap_setenv_remove() {
 
     if [ -n "${_lc_newval}" ]; then
         PFB_LC_NEWVAL="${_lc_newval}"
-        export PFB_LC_NEWVAL
+        PFB_LC_EXPECT="$(_logincap_field LINE)"
+        export PFB_LC_NEWVAL PFB_LC_EXPECT
         if _logincap_write -v tgt="${_lc_se_line}" -v vs="${_lc_vstart}" -v ve="${_lc_vend}" \
             "${_LC_SPLICE}"; then
             printf '[%s] INFO: removed SSL_CA_CERT_PATH from the default class setenv in %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
             _logincap_compile
-            unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend
+            unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend
             return 0
         fi
         printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
-        unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend
+        unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend
         return 1
     fi
 
@@ -667,18 +685,22 @@ _logincap_setenv_remove() {
     ' 2>/dev/null)"
 
     # shellcheck disable=SC2016  # awk's own $0/tgt/whole/fs/ve, not shell expansion
+    PFB_LC_EXPECT="$(_logincap_field LINE)"
+    export PFB_LC_EXPECT
+    # shellcheck disable=SC2016  # awk's own $0/tgt/whole/fs/ve, not shell expansion
     if _logincap_write -v tgt="${_lc_se_line}" -v last="${_lc_last}" -v whole="${_lc_whole}" -v fs="${_lc_fs}" -v ve="${_lc_vend}" \
-        'NR == tgt - 1 && whole == 1 && tgt == last { sub(/\\$/, "") }
+        'NR == tgt && $0 != ENVIRON["PFB_LC_EXPECT"] { exit 9 }
+         NR == tgt - 1 && whole == 1 && tgt == last { sub(/\\$/, "") }
          NR == tgt && whole == 1 { next }
          NR == tgt && whole == 0 { $0 = substr($0, 1, fs - 1) substr($0, ve) }
          { print }'; then
         printf '[%s] INFO: removed SSL_CA_CERT_PATH from the default class setenv in %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
         _logincap_compile
-        unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend _lc_fs _lc_line _lc_last _lc_whole
+        unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend _lc_fs _lc_line _lc_last _lc_whole
         return 0
     fi
     printf '[%s] WARNING: could not patch %s\n' "${name}" "${PFB_LOGIN_CONF}" >&2
-    unset PFB_LC_NEWVAL _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend _lc_fs _lc_line _lc_last _lc_whole
+    unset PFB_LC_NEWVAL PFB_LC_EXPECT _lc_scan_raw _lc_wellformed _lc_se_line _lc_se_ok _lc_value _lc_want _lc_newval _lc_vstart _lc_vend _lc_fs _lc_line _lc_last _lc_whole
     return 1
 }
 
