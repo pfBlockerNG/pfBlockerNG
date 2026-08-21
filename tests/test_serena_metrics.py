@@ -279,7 +279,7 @@ def test_request_json_rejects_oversized_content_length(metrics: Any, monkeypatch
             return "application/json" if name == "Content-Type" else str(metrics.READ_LIMIT + 1)
 
         def read(self, limit: int) -> bytes:
-            return b"{}"
+            raise AssertionError("oversized Content-Length must be rejected before reading the body")
 
     class FakeConnection:
         sock: Any = None
@@ -296,7 +296,21 @@ def test_request_json_rejects_oversized_content_length(metrics: Any, monkeypatch
         def close(self) -> None:
             pass
 
+    class FakeSocket:
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def connect_with_deadline(self, address: object) -> None:
+            pass
+
+        def _apply_deadline(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
     monkeypatch.setattr(metrics.http.client, "HTTPConnection", FakeConnection)
+    monkeypatch.setattr(metrics, "_DeadlineSocket", FakeSocket)
     monkeypatch.setattr(
         metrics.socket,
         "getaddrinfo",
@@ -356,23 +370,30 @@ def test_http_directory_json_html_host_validation_and_get_only(metrics: Any, mon
         assert "Serena instances" in page.read().decode()
 
         connection.request("GET", "/missing")
-        assert connection.getresponse().status == 404
+        missing = connection.getresponse()
+        assert missing.status == 404
+        missing.read()
 
         connection.putrequest("GET", "/api/instances", skip_host=True)
         connection.putheader("Host", "attacker.example")
         connection.endheaders()
-        assert connection.getresponse().status == 421
+        untrusted = connection.getresponse()
+        assert untrusted.status == 421
+        untrusted.read()
 
         connection.putrequest("GET", "/api/instances", skip_host=True)
         connection.putheader("Host", "localhost")
         connection.putheader("Host", "localhost")
         connection.endheaders()
-        assert connection.getresponse().status == 421
+        duplicate = connection.getresponse()
+        assert duplicate.status == 421
+        duplicate.read()
 
         connection.request("POST", "/api/instances")
         rejected = connection.getresponse()
         assert rejected.status == 405
         assert rejected.getheader("Allow") == "GET"
+        rejected.read()
     finally:
         connection.close()
         server.shutdown()
@@ -405,6 +426,7 @@ def test_help_describes_local_directory_and_tailscale_links_not_metrics(
 ) -> None:
     assert metrics.main(["--help"]) == 0
     output = capsys.readouterr().out.lower()
+    assert output.startswith("usage: serena-directory")
     assert "serena instance directory" in output
     assert "tailscale serve" in output
     assert "dashboard" in output
