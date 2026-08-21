@@ -229,18 +229,27 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$this->assertSame(1, $this->feedRuns,
 			'a missing DNSBL manifest must dispatch an update pass on the next tick, rather than leaving '
 			. 'the resolver matching nothing until a feed falls due');
+		$messages = array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message');
 		$this->assertContains(
 			'Tick: running scheduled feed pass.',
-			array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'),
+			$messages,
 			'the recovery pass must be visible in the log, not silent'
+		);
+		$this->assertContains(
+			'Tick: DNSBL manifest absent - this pass rebuilds it.',
+			$messages,
+			'an out-of-window pass needs its reason on the record, or the operator sees only '
+			. 'an update that ran when they asked for none to'
 		);
 	}
 
 	/**
 	 * Scheduled Feed Updates OFF is an explicit opt-out of automatic dispatch, and the
 	 * *.fail marker this recovery is modelled on honours it (its due-condition is gated on
-	 * $runtime_model['scheduled']). A missing manifest gets the same treatment: the operator
-	 * is still told through the DNSBL notice, and the rebuild waits for their own Update.
+	 * $runtime_model['scheduled']). A missing manifest gets the same treatment, and the box
+	 * is not left silent about it: the GUI notice pfb_dnsbl_manifest_failure_notice() raises
+	 * from the pass that found the manifest gone is independent of both the tick and this
+	 * toggle. Only the automatic rebuild waits for the Update the operator runs themselves.
 	 */
 	public function testMissingManifestIsIgnoredWhenScheduledFeedUpdatesAreOff(): void
 	{
