@@ -348,20 +348,20 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 
 		// issue #2602: DShield-style start<TAB>end<TAB>prefix. Cheap tab
 		// gate, then a narrow second regex — do not widen $config['range']
-		// (hyphen). Sanitize each cidr so host-list .0 behaviour (#320) is
-		// unchanged for non-tab lines.
+		// (hyphen). Accept only when the derived range is exactly
+		// "{start}/{prefix}"; otherwise fall through (legacy two-host
+		// extract). A reversed start/end is rejected, not swapped:
+		// ip_range_to_subnet_array would swap, so start/prefix cannot
+		// equal the derived cidr.
 		if (strpos($line, "\t") !== FALSE && strpos($line, '.') !== FALSE &&
 			preg_match('/^((?:\d{1,3}\.){3}\d{1,3})\t((?:\d{1,3}\.){3}\d{1,3})\t(\d{1,2})\b/', $line, $pfb_tab)) {
+			$pfb_tab_declared = $pfb_tab[1] . '/' . $pfb_tab[3];
 			$a_cidr = ip_range_to_subnet_array($pfb_tab[1], $pfb_tab[2]);
-			if (!empty($a_cidr)) {
-				foreach ($a_cidr as $cidr) {
-					$sanitized = pfb_sanitize_ipaddr($cidr, $custom, $pfbcidr, $suppression);
-					$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
-					if (!empty($sanitized['address'])) {
-						if (validate_ipv4($sanitized['address'])) {
-							$result['entries'][] = $sanitized['address'];
-						}
-					}
+			if (count($a_cidr) === 1 && $a_cidr[0] === $pfb_tab_declared) {
+				$sanitized = pfb_sanitize_ipaddr($pfb_tab_declared, $custom, $pfbcidr, $suppression);
+				$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+				if (!empty($sanitized['address']) && validate_ipv4($sanitized['address'])) {
+					$result['entries'][] = $sanitized['address'];
 				}
 				$result['line'] = $line;
 				return $result;
