@@ -346,6 +346,28 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 		}
 		$line = trim($line);
 
+		// issue #2602: DShield-style start<TAB>end<TAB>prefix. Cheap tab
+		// gate, then a narrow second regex — do not widen $config['range']
+		// (hyphen). Sanitize each cidr so host-list .0 behaviour (#320) is
+		// unchanged for non-tab lines.
+		if (strpos($line, "\t") !== FALSE && strpos($line, '.') !== FALSE &&
+			preg_match('/^((?:\d{1,3}\.){3}\d{1,3})\t((?:\d{1,3}\.){3}\d{1,3})\t(\d{1,2})\b/', $line, $pfb_tab)) {
+			$a_cidr = ip_range_to_subnet_array($pfb_tab[1], $pfb_tab[2]);
+			if (!empty($a_cidr)) {
+				foreach ($a_cidr as $cidr) {
+					$sanitized = pfb_sanitize_ipaddr($cidr, $custom, $pfbcidr, $suppression);
+					$result['messages'] = array_merge($result['messages'], $sanitized['messages']);
+					if (!empty($sanitized['address'])) {
+						if (validate_ipv4($sanitized['address'])) {
+							$result['entries'][] = $sanitized['address'];
+						}
+					}
+				}
+				$result['line'] = $line;
+				return $result;
+			}
+		}
+
 		if (strpos($line, '-') !== FALSE) {
 			$matches = explode('-', $line);
 			if (count($matches) == 2) {
