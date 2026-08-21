@@ -417,6 +417,32 @@ final class IpParseLineTest extends TestCase
 			$v6Config,
 			$this->expectedResult($v6Row, ['entries' => ['2001:4860:4860::/126']])
 		);
+		$this->assertLine(
+			$v6Row,
+			$this->config('_v6', 'regex', FALSE),
+			$this->expectedResult($v6Row, ['entries' => ['2001:4860:4860::', '2001:4860:4860::3']])
+		);
+	}
+
+	/** DShield tab rows retain the selected family's sanitizer side effects. */
+	public function testAutoDshieldTabRangeReplaysSanitizerSideEffects(): void
+	{
+		$v4Row = "5.61.209.0\t5.61.209.255\t24";
+		$this->assertLine(
+			$v4Row,
+			$this->config('_v4', 'auto', FALSE, 'on', 25),
+			$this->expectedResult($v4Row, [
+				'entries'  => ['5.61.209.0/32'],
+				'messages' => ["\n  Suppression CIDR Limit: 5.61.209.0/24"],
+			])
+		);
+
+		$v6Row = "fd00::\tfd00::3\t126";
+		$this->assertLine(
+			$v6Row,
+			$this->config('_v6', 'auto', FALSE, 'on'),
+			$this->expectedResult($v6Row, ['suppressed' => TRUE])
+		);
 	}
 
 	/**
@@ -459,6 +485,12 @@ final class IpParseLineTest extends TestCase
 		$numericThirdColumn = "2001:4860:4860::\t2001:4860:4860::3\t80\tpayload";
 		$this->assertLine($numericThirdColumn, $config, $this->expectedResult(
 			$numericThirdColumn,
+			$legacyTwo('2001:4860:4860::', '2001:4860:4860::3')
+		));
+
+		$nulEndpoint = "2001:4860:4860::\0\t2001:4860:4860::3\t126";
+		$this->assertLine($nulEndpoint, $config, $this->expectedResult(
+			$nulEndpoint,
 			$legacyTwo('2001:4860:4860::', '2001:4860:4860::3')
 		));
 	}
