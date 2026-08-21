@@ -70,7 +70,7 @@
       "php_version": "8.5",
       "py_flavor": "py311",
       "variant": "CE",
-      "status": "beta",
+      "status": "active",
       "ci": true,
       "extra_pkgs": [
         "textproc/py-charset-normalizer"
