@@ -5159,8 +5159,6 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
-define('PFB_PKG_CONF', '/usr/local/etc/pkg.conf');
-
 if (!defined('PFB_REPO_GENERATE_HOOK')) {
 	define('PFB_REPO_GENERATE_HOOK', '/usr/local/etc/rc.d/pfblockerng_repo_generate.sh');
 }
@@ -5168,12 +5166,18 @@ if (!defined('PFB_PKG_TIMEOUT')) {
 	define('PFB_PKG_TIMEOUT', '/usr/bin/timeout -s TERM -k 5 60');
 }
 
-function pfb_pkgconf_ca_command(
+/*
+ * Run one login.conf editor verb ('login-ca-sync' / 'login-ca-revoke', issue #2617) via the
+ * installed rc.d hook, bounded by timeout(1) so a hung hook can never stall the caller. The
+ * verbs are consent-independent: pfb_login_ca_apply() below decides which one to invoke and
+ * must flush config.xml first, since the hook re-reads consent live from config.xml itself.
+ */
+function pfb_login_ca_command(
 	string $action,
 	string $hook = PFB_REPO_GENERATE_HOOK,
 	string $timeout = PFB_PKG_TIMEOUT
 ): bool {
-	if (!in_array($action, ['ca-sync', 'ca-revoke'], TRUE) || !is_executable($hook)) {
+	if (!in_array($action, ['login-ca-sync', 'login-ca-revoke'], TRUE) || !is_executable($hook)) {
 		return FALSE;
 	}
 	$out = [];
@@ -5182,23 +5186,31 @@ function pfb_pkgconf_ca_command(
 	return $ret === 0;
 }
 
+/*
+ * Run a pkg(8) shell command directly. When the admin has consented (issue #2617:
+ * gen/pfb_pkg_ca_consent) AND the CA hash directory is populated, export SSL_CA_CERT_PATH for
+ * this process's children -- login.conf's setenv only reaches processes started AFTER it is
+ * compiled, and php-fpm predates any mid-session consent flip, so without this a Software-page
+ * pkg call would fail on a pinned box until the next reboot. Never unset when consent is off:
+ * a stale value from an earlier consented call in the same worker is harmless where no pin
+ * exists and self-heals on worker recycle.
+ */
 function pfb_pkg_exec(
 	string $command,
 	array &$out = [],
 	int &$ret = -1,
-	?callable $sync = NULL
+	?string $ca_dir = NULL
 ): void {
 	$out = [];
 	$ret = -1;
-	$sync ??= 'pfb_pkgconf_ca_command';
-	if ($sync('ca-sync')) {
-		exec($command, $out, $ret);
+	$ca_dir ??= '/etc/ssl/certs';
+	// glob() lists dangling symlinks too, which is exactly what a CA hash directory
+	// (certctl rehash output) contains -- is_dir() alone would pass on an empty one.
+	$ca_entries = is_dir($ca_dir) ? glob($ca_dir . '/*') : FALSE;
+	if (PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On && !empty($ca_entries)) {
+		putenv('SSL_CA_CERT_PATH=' . $ca_dir);
 	}
-}
-
-function pfb_pkg_ca_is_plus(string $product_label = '/etc/product_label'): bool {
-	$product = @file_get_contents($product_label);
-	return $product !== FALSE && strpos($product, 'Plus') !== FALSE;
+	exec($command, $out, $ret);
 }
 
 if (!defined('PFB_PYTHON_WRAPPER')) {
@@ -5345,27 +5357,28 @@ function pfb_pkg_newest_version(array $versions): string {
 	return $latest;
 }
 
-/* Persist consent only when the Plus-only Software-page section was rendered. */
-function pfb_pkgconf_ca_save(array $post): string {
-	if (!isset($post['pfb_pkg_ca_consent_shown'])) {
-		return PfbConfig::read('gen/pfb_pkg_ca_consent')->toStored();
-	}
+/*
+ * Persist the login.conf CA-carry consent token (issue #2617). The section always renders
+ * now, so an absent checkbox in the POST is the explicit Off token -- mirrors
+ * pfb_software_check's save above, no "was it shown" marker gate.
+ */
+function pfb_login_ca_consent_save(array $post): string {
 	$token = pfb_filter($post['pfb_pkg_ca_consent'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
 	PfbConfig::write('gen/pfb_pkg_ca_consent', $token);
 	return $token;
 }
 
 /* Caller must flush config after save() and before invoking the installed hook. */
-function pfb_pkgconf_ca_apply(
+function pfb_login_ca_apply(
 	string $token,
 	bool $was_consented,
 	?callable $command = NULL
 ): bool {
-	$command ??= 'pfb_pkgconf_ca_command';
+	$command ??= 'pfb_login_ca_command';
 	if ($token === PfbToggle::On->value) {
-		return $command('ca-sync');
+		return $command('login-ca-sync');
 	}
-	return !$was_consented || $command('ca-revoke');
+	return !$was_consented || $command('login-ca-revoke');
 }
 
 /*

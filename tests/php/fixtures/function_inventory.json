@@ -8142,6 +8142,73 @@
             }
         ]
     },
+    "pfb_login_ca_apply": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "token",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "was_consented",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "command",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_login_ca_command": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "action",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "hook",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/etc/rc.d/pfblockerng_repo_generate.sh'"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/bin/timeout -s TERM -k 5 60'"
+            }
+        ]
+    },
+    "pfb_login_ca_consent_save": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_lstrip": {
         "returnsRef": false,
         "returnType": "string",
@@ -8886,19 +8953,6 @@
             }
         ]
     },
-    "pfb_pkg_ca_is_plus": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "product_label",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/etc/product_label'"
-            }
-        ]
-    },
     "pfb_pkg_exec": {
         "returnsRef": false,
         "returnType": "void",
@@ -8925,10 +8979,10 @@
                 "default": "-1"
             },
             {
-                "name": "sync",
+                "name": "ca_dir",
                 "byRef": false,
                 "variadic": false,
-                "type": "?callable",
+                "type": "?string",
                 "default": "NULL"
             }
         ]
@@ -9032,73 +9086,6 @@
         "returnsRef": false,
         "returnType": null,
         "params": []
-    },
-    "pfb_pkgconf_ca_apply": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "token",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "was_consented",
-                "byRef": false,
-                "variadic": false,
-                "type": "bool",
-                "default": null
-            },
-            {
-                "name": "command",
-                "byRef": false,
-                "variadic": false,
-                "type": "?callable",
-                "default": "NULL"
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_command": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "action",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "hook",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/usr/local/etc/rc.d/pfblockerng_repo_generate.sh'"
-            },
-            {
-                "name": "timeout",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": "'/usr/bin/timeout -s TERM -k 5 60'"
-            }
-        ]
-    },
-    "pfb_pkgconf_ca_save": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "post",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
     },
     "pfb_port_alias_types": {
         "returnsRef": false,

@@ -5,16 +5,17 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
-#[CoversFunction('pfb_pkgconf_ca_command')]
+#[CoversFunction('pfb_login_ca_command')]
 #[CoversFunction('pfb_pkg_exec')]
-#[CoversFunction('pfb_pkg_ca_is_plus')]
-#[CoversFunction('pfb_pkgconf_ca_apply')]
+#[CoversFunction('pfb_login_ca_apply')]
 final class PkgCaHookDelegateTest extends TestCase
 {
 	private string $root;
 	private string $hook;
 	private string $log;
 	private string $timeout;
+	private bool $hadConfig;
+	private mixed $originalConfig;
 
 	protected function setUp(): void
 	{
@@ -30,50 +31,93 @@ final class PkgCaHookDelegateTest extends TestCase
 				. "\n[ \"\${PFB_HOOK_SLEEP:-0}\" = 1 ] && sleep 3\nexit \${PFB_HOOK_STATUS:-0}\n"
 		);
 		chmod($this->hook, 0o700);
+
+		$this->hadConfig = array_key_exists('config', $GLOBALS);
+		$this->originalConfig = $GLOBALS['config'] ?? NULL;
+		$GLOBALS['config'] = [];
+		putenv('SSL_CA_CERT_PATH');
 	}
 
 	protected function tearDown(): void
 	{
 		putenv('PFB_HOOK_SLEEP');
 		putenv('PFB_HOOK_STATUS');
+		putenv('SSL_CA_CERT_PATH');
 		@unlink($this->hook);
 		@unlink($this->log);
 		@rmdir($this->root);
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->originalConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
 	}
 
-	public function testCommandValidatesActionsAndPropagatesStatus(): void
+	public function testCommandRunsLoginCaVerbsAndPropagatesStatus(): void
 	{
-		$this->assertTrue(pfb_pkgconf_ca_command('ca-sync', $this->hook, $this->timeout));
-		$this->assertTrue(pfb_pkgconf_ca_command('ca-revoke', $this->hook, $this->timeout));
-		$this->assertFalse(pfb_pkgconf_ca_command('ca-state', $this->hook, $this->timeout));
-		$this->assertSame("ca-sync\nca-revoke\n", file_get_contents($this->log));
+		$this->assertTrue(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
+		$this->assertTrue(pfb_login_ca_command('login-ca-revoke', $this->hook, $this->timeout));
+		$this->assertSame("login-ca-sync\nlogin-ca-revoke\n", file_get_contents($this->log));
 		putenv('PFB_HOOK_STATUS=7');
-		$this->assertFalse(pfb_pkgconf_ca_command('ca-sync', $this->hook, $this->timeout));
+		$this->assertFalse(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
+	}
+
+	public function testCommandRefusesRetiredVerbsWithoutRunningTheHook(): void
+	{
+		$this->assertFalse(pfb_login_ca_command('ca-sync', $this->hook, $this->timeout));
+		$this->assertFalse(pfb_login_ca_command('ca-revoke', $this->hook, $this->timeout));
+		$this->assertFalse(pfb_login_ca_command('ca-state', $this->hook, $this->timeout));
+		$this->assertFileDoesNotExist($this->log);
 	}
 
 	public function testCommandBoundsAHangingHook(): void
 	{
 		putenv('PFB_HOOK_SLEEP=1');
-		$this->assertFalse(pfb_pkgconf_ca_command('ca-sync', $this->hook, $this->timeout));
+		$this->assertFalse(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
 	}
 
-	public function testPkgExecSyncsAndFailsClosed(): void
+	public function testPkgExecRunsTheCommandDirectlyWithNoSyncGate(): void
 	{
-		$actions = [];
 		$out = [];
 		$ret = -1;
-		pfb_pkg_exec('/usr/bin/printf ok', $out, $ret, static function (string $action) use (&$actions): bool {
-			$actions[] = $action;
-			return TRUE;
-		});
-		$this->assertSame(['ca-sync'], $actions);
+		pfb_pkg_exec('/usr/bin/printf ok', $out, $ret);
 		$this->assertSame(['ok'], $out);
 		$this->assertSame(0, $ret);
-		$forbidden = $this->root . '/forbidden-command-ran';
-		pfb_pkg_exec('/usr/bin/touch ' . escapeshellarg($forbidden), $out, $ret, static fn (string $action): bool => FALSE);
+	}
+
+	public function testPkgExecExportsCaPathOnlyWhenConsentedAndPopulated(): void
+	{
+		$caDir = $this->root . '/ca';
+		mkdir($caDir, 0o755, TRUE);
+		// A CA hash directory (certctl rehash output) is populated with dangling
+		// symlinks -- glob() still lists them, so a real directory always counts here.
+		symlink('/nonexistent-target', $caDir . '/dead.0');
+
+		$emptyDir = $this->root . '/empty-ca';
+		mkdir($emptyDir, 0o755, TRUE);
+
+		$out = [];
+		$ret = -1;
+
+		// (a) consent ON + populated dir -> child sees the value.
+		putenv('SSL_CA_CERT_PATH');
+		PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', PfbToggle::On);
+		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
+		$this->assertSame(0, $ret);
+		$this->assertSame([$caDir], $out);
+
+		// (b) consent ON + EMPTY dir -> child does not see it.
+		putenv('SSL_CA_CERT_PATH');
+		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $emptyDir);
+		$this->assertSame(1, $ret);
 		$this->assertSame([], $out);
-		$this->assertSame(-1, $ret);
-		$this->assertFileDoesNotExist($forbidden);
+
+		// (c) consent OFF + populated dir -> child does not see it.
+		putenv('SSL_CA_CERT_PATH');
+		PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', PfbToggle::Off);
+		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
+		$this->assertSame(1, $ret);
+		$this->assertSame([], $out);
 	}
 
 	public function testApplyMapsConsentTransitions(): void
@@ -83,23 +127,9 @@ final class PkgCaHookDelegateTest extends TestCase
 			$actions[] = $action;
 			return TRUE;
 		};
-		$this->assertTrue(pfb_pkgconf_ca_apply('on', FALSE, $command));
-		$this->assertTrue(pfb_pkgconf_ca_apply('', TRUE, $command));
-		$this->assertTrue(pfb_pkgconf_ca_apply('', FALSE, $command));
-		$this->assertSame(['ca-sync', 'ca-revoke'], $actions);
-	}
-
-	public function testPlusDetectionAndSourceBoundary(): void
-	{
-		$product = $this->root . '/product_label';
-		file_put_contents($product, "pfSense Plus\n");
-		$this->assertTrue(pfb_pkg_ca_is_plus($product));
-		file_put_contents($product, "pfSense Community Edition\n");
-		$this->assertFalse(pfb_pkg_ca_is_plus($product));
-		$source = (string) file_get_contents(dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc');
-		$this->assertSame(7, substr_count($source, 'pfb_pkg_exec('));
-		foreach (['pfb_pkg_ca_env_prefix', 'pfb_pkgconf_ca_sync', 'pfb_pkgconf_write_atomic', 'pfb_pkgconf_ca_tick'] as $removed) {
-			$this->assertStringNotContainsString("function {$removed}", $source);
-		}
+		$this->assertTrue(pfb_login_ca_apply('on', FALSE, $command));
+		$this->assertTrue(pfb_login_ca_apply('', TRUE, $command));
+		$this->assertTrue(pfb_login_ca_apply('', FALSE, $command));
+		$this->assertSame(['login-ca-sync', 'login-ca-revoke'], $actions);
 	}
 }
