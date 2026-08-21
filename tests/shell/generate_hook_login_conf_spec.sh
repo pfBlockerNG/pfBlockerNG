@@ -710,6 +710,38 @@ Describe 'login-ca-revoke — 25: login.conf missing entirely, success'
     End
 End
 
+Describe 'login-ca-revoke — 26b: the literal exists only in a SIBLING class, default is clean: silent no-op'
+    setup() {
+        _r26b_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/lc_revoke_sibling.XXXXXX")"
+        _lc_box "${_r26b_dir}"
+        # The whole-file grep fast-path matches (the literal IS in the file),
+        # but default's own list carries no SSL_CA_CERT_PATH -- the unremovable-
+        # foreign-value warning must key on default's OWN value, never on a
+        # sibling class the editor would not touch anyway.
+        printf '%s\n' \
+            'default:\' \
+            '	:setenv=BLOCKSIZE=K:\' \
+            '	:umask=022:' \
+            '' \
+            'staff:\' \
+            "	:setenv=SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}:\\" \
+            '	:tc=default:' \
+            > "${PFB_LOGIN_CONF}"
+        cp "${PFB_LOGIN_CONF}" "${_r26b_dir}/before.conf"
+    }
+    cleanup() { rm -rf "${_r26b_dir}"; _lc_unset_box; unset _r26b_dir; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'stays silent -- no WARNING, no INFO, byte-identical'
+      When run sh "${HOOK}" login-ca-revoke
+      The status should be success
+      The stderr should not include "WARNING"
+      The stderr should not include "INFO"
+      The value "$(_lc_cmp "${PFB_LOGIN_CONF}" "${_r26b_dir}/before.conf")" should equal 0
+    End
+End
+
 Describe 'login-ca-revoke — 26: a foreign value is never stripped'
     setup() {
         _r26_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/lc_revoke_foreign.XXXXXX")"
