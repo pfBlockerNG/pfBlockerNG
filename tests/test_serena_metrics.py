@@ -4,12 +4,12 @@ import http.client
 import http.server
 import importlib.util
 import json
-import socketserver
+import socket
 import threading
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -29,10 +29,8 @@ def metrics() -> Any:
 
 class SerenaHandler(http.server.BaseHTTPRequestHandler):
     response_map: dict[str, Any] = {}
-    requests: list[str] = []
 
     def do_GET(self) -> None:
-        self.__class__.requests.append(self.path)
         response = self.__class__.response_map.get(self.path)
         if callable(response):
             response(self)
@@ -51,35 +49,21 @@ class SerenaHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
-@contextmanager
-def listener(responses: dict[str, Any], port: int = 0) -> Iterator[tuple[int, type[SerenaHandler]]]:
-    handler = type("TestSerenaHandler", (SerenaHandler,), {"response_map": responses, "requests": []})
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
-    thread = threading.Thread(target=server.serve_forever)
-    thread.start()
-    try:
-        yield server.server_address[1], handler
-    finally:
-        server.shutdown()
-        thread.join()
-        server.server_close()
+class IPv6SerenaServer(http.server.ThreadingHTTPServer):
+    address_family = socket.AF_INET6
 
 
 @contextmanager
-def raw_listener(payload: bytes) -> Iterator[int]:
-    class RawHandler(socketserver.BaseRequestHandler):
-        def handle(self) -> None:
-            self.request.recv(4096)
-            try:
-                self.request.sendall(payload)
-            except OSError:
-                pass
-
-    server = socketserver.ThreadingTCPServer(("127.0.0.1", 0), RawHandler)
+def listener(responses: dict[str, Any], host: str = "127.0.0.1", port: int = 0) -> Iterator[tuple[str, int]]:
+    handler = type("TestSerenaHandler", (SerenaHandler,), {"response_map": responses})
+    server_class: type[http.server.ThreadingHTTPServer] = (
+        IPv6SerenaServer if ":" in host else http.server.ThreadingHTTPServer
+    )
+    server = server_class((host, port), handler)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
-        yield server.server_address[1]
+        yield str(server.server_address[0]), int(server.server_address[1])
     finally:
         server.shutdown()
         thread.join()
@@ -100,402 +84,272 @@ def healthy(project: str = "pfBlockerNG") -> dict[str, Any]:
                 "serena_version": "1.7.0",
             }
         ),
-        "/get_tool_stats": response(
-            {
-                "stats": {
-                    "find_symbol": {"num_times_called": 2, "input_tokens": 11, "output_tokens": 7},
-                    "replace_symbol": {"num_times_called": 1, "input_tokens": 5, "output_tokens": 3},
-                }
-            }
-        ),
-        "/get_token_count_estimator_name": response({"token_count_estimator_name": "tiktoken"}),
     }
 
 
-def configure_scan(metrics: Any, start: int, end: int) -> None:
-    metrics.SCAN_START = start
-    metrics.SCAN_END = end
-    metrics.REQUEST_TIMEOUT = 0.1
+def test_constants_keep_entry_point_and_remove_scan_metrics_contract(metrics: Any) -> None:
+    assert metrics.HOST == "127.0.0.1"
+    assert metrics.DEFAULT_PORT == 24182
+    assert metrics.SERENA_BASE_PORT == 24282
+    for old_name in ("SCAN_START", "SCAN_END", "SCAN_BATCH", "MAX_WORKERS", "COUNTERS"):
+        assert not hasattr(metrics, old_name), f"obsolete full-scan constant remains: {old_name}"
+    for old_name in ("aggregate", "_project_stats", "_totals", "_counter_values"):
+        assert not hasattr(metrics, old_name), f"obsolete metrics helper remains: {old_name}"
 
 
-def test_healthy_instance_is_projected_with_tools_and_totals(metrics: Any) -> None:
-    with listener(healthy()) as (port, _):
-        configure_scan(metrics, port, port)
-        instances = metrics.discover_instances()
-
-    assert instances == [
-        {
-            "port": port,
-            "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
-            "current_client": "codex",
-            "serena_version": "1.7.0",
-            "token_count_estimator_name": "tiktoken",
-            "tools": {
-                "find_symbol": {"num_times_called": 2, "input_tokens": 11, "output_tokens": 7},
-                "replace_symbol": {"num_times_called": 1, "input_tokens": 5, "output_tokens": 3},
-            },
-            "totals": {"num_times_called": 3, "input_tokens": 16, "output_tokens": 10},
-        }
-    ]
-
-
-def test_instance_without_project_or_client_is_still_listed(metrics: Any) -> None:
-    responses = healthy()
-    responses["/get_config_overview"] = response(
-        {
-            "active_project": {"name": None, "path": None, "language": None},
-            "current_client": None,
-            "serena_version": "1.7.0",
-        }
+def test_listening_endpoints_parses_filters_deduplicates_and_sorts(
+    metrics: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = b"\n".join(
+        [
+            b"p1",
+            b"n100.64.1.2:24284",
+            b"n127.0.0.1:24282",
+            b"n[fd7a:115c:a1e0::10]:24285",
+            b"n[::1]:24283",
+            b"n127.0.0.1:24282",
+            b"n*:24286",
+            b"n0.0.0.0:24287",
+            b"n192.168.1.4:24288",
+            b"n127.0.0.1",
+            b"n127.0.0.1:bad",
+            b"n127.0.0.1:24281",
+            b"n127.0.0.1:65536",
+            b"n 127.0.0.1:24289",
+            b"n127.0.0.1:24290\x01",
+        ]
     )
-    responses["/get_tool_stats"] = response({"stats": {}})
-    with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
-        instances = metrics.discover_instances()
-        page = metrics.render_html(instances)
 
-    assert instances == [
-        {
-            "port": port,
-            "active_project": {"name": None, "path": None, "language": None},
-            "current_client": None,
-            "serena_version": "1.7.0",
-            "token_count_estimator_name": "tiktoken",
-            "tools": {},
-            "totals": {"num_times_called": 0, "input_tokens": 0, "output_tokens": 0},
-        }
+    def run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        assert command == ["/usr/sbin/lsof", "-nP", "-iTCP", "-sTCP:LISTEN", "-F", "n"]
+        assert kwargs["capture_output"] is True
+        assert kwargs["timeout"] == metrics.LSOF_TIMEOUT
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    monkeypatch.setattr(metrics.subprocess, "run", run)
+    assert metrics._listening_endpoints() == [
+        ("100.64.1.2", 24284),
+        ("127.0.0.1", 24282),
+        ("::1", 24283),
+        ("fd7a:115c:a1e0::10", 24285),
     ]
-    assert "unknown" in page
-
-
-def test_default_scan_covers_serena_allocator_range(metrics: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    assert metrics.SCAN_START == 24282
-    assert metrics.SCAN_END == 65535
-    visited: set[int] = set()
-    lock = threading.Lock()
-
-    def discover(port: int) -> dict[str, int] | None:
-        with lock:
-            visited.add(port)
-        return {"port": port} if port in {24346, 65535} else None
-
-    monkeypatch.setattr(metrics, "_discover_port", discover)
-    instances = metrics.discover_instances()
-
-    assert len(visited) == metrics.SCAN_END - metrics.SCAN_START + 1
-    assert min(visited) == 24282 and max(visited) == 65535
-    assert [instance["port"] for instance in instances] == [24346, 65535]
-
-
-def test_multiple_instances_are_sorted_and_have_aggregate_totals(metrics: Any) -> None:
-    with listener(healthy("second")) as (first_port, _):
-        with listener(healthy("first")) as (second_port, _):
-            low, high = sorted((first_port, second_port))
-            configure_scan(metrics, low, high)
-            instances = metrics.discover_instances()
-            assert [instance["port"] for instance in instances] == sorted((first_port, second_port))
-            aggregate = metrics.aggregate(instances)
-
-    assert aggregate["totals"] == {"num_times_called": 6, "input_tokens": 32, "output_tokens": 20}
-
-
-def test_closed_port_is_ignored(metrics: Any) -> None:
-    with listener(healthy()) as (port, _):
-        configure_scan(metrics, port, port + 1)
-        instances = metrics.discover_instances()
-
-    assert [instance["port"] for instance in instances] == [port]
-
-
-def test_non_serena_listener_requires_exact_heartbeat_shape(metrics: Any) -> None:
-    responses = healthy()
-    responses["/heartbeat"] = response({"status": "alive", "service": "other"})
-    with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
-
-
-def test_listener_that_fails_after_heartbeat_is_ignored(metrics: Any) -> None:
-    responses = healthy()
-
-    def fail(_: SerenaHandler) -> None:
-        raise OSError("listener disappeared")
-
-    responses["/get_config_overview"] = fail
-    with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
 
 
 @pytest.mark.parametrize(
-    "payload",
-    [None, [], {"status": "alive"}, {"stats": {"tool": {"num_times_called": 1}}}],
-    ids=["null", "array", "incomplete-config", "incomplete-stats"],
+    "failure",
+    [
+        FileNotFoundError,
+        lambda: TimeoutError("expired"),
+        UnicodeError,
+    ],
+    ids=["missing", "timeout", "decode"],
 )
-def test_invalid_or_incomplete_json_is_ignored(metrics: Any, payload: object) -> None:
-    responses = healthy()
-    responses["/get_config_overview"] = response(payload)
-    with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
+def test_lsof_failures_return_bounded_empty_directory(
+    metrics: Any, monkeypatch: pytest.MonkeyPatch, failure: Any
+) -> None:
+    def run(*args: object, **kwargs: object) -> object:
+        raise failure()
+
+    monkeypatch.setattr(metrics.subprocess, "run", run)
+    assert metrics._listening_endpoints() == []
 
 
-def test_malformed_and_oversized_responses_are_ignored(metrics: Any) -> None:
-    responses = healthy()
-    responses["/get_config_overview"] = (200, b"{not-json", "application/json")
-    with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
+def test_lsof_timeout_expired_and_nonzero_or_nontext_output_are_empty(
+    metrics: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    timeout = metrics.subprocess.TimeoutExpired("lsof", metrics.LSOF_TIMEOUT)
+    for result in [
+        timeout,
+        SimpleNamespace(returncode=1, stdout=b"n127.0.0.1:24282"),
+        SimpleNamespace(returncode=0, stdout=object()),
+    ]:
+        if isinstance(result, BaseException):
 
-    oversized = healthy()
-    oversized["/get_config_overview"] = (200, b"x" * (metrics.READ_LIMIT + 1), "application/json")
-    with listener(oversized) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
+            def run(*args: object, **kwargs: object) -> object:
+                raise result
 
-    without_length = healthy()
-    valid_oversized_json = (
-        json.dumps(
-            {
+        else:
+
+            def run(*args: object, **kwargs: object) -> object:
+                return result
+
+        monkeypatch.setattr(metrics.subprocess, "run", run)
+        assert metrics._listening_endpoints() == []
+
+
+def test_only_lsof_candidates_are_probed_and_healthy_config_is_projected(
+    metrics: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    candidates = [("127.0.0.1", 24282), ("::1", 24283)]
+    monkeypatch.setattr(metrics, "_listening_endpoints", lambda: candidates)
+    calls: list[tuple[str, int, str]] = []
+
+    def request(host: str, port: int, path: str) -> object | None:
+        calls.append((host, port, path))
+        if port == 24282 and path == "/heartbeat":
+            return {"status": "alive"}
+        if port == 24282 and path == "/get_config_overview":
+            return {
                 "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
                 "current_client": "codex",
                 "serena_version": "1.7.0",
             }
-        ).encode()
-        + b" " * metrics.READ_LIMIT
-    )
+        return {"status": "not-serena"} if path == "/heartbeat" else None
 
-    def oversized_without_length(handler: SerenaHandler) -> None:
-        handler.send_response(200)
-        handler.send_header("Content-Type", "application/json")
-        handler.end_headers()
-        try:
-            handler.wfile.write(valid_oversized_json)
-        except BrokenPipeError:
-            pass
-
-    without_length["/get_config_overview"] = oversized_without_length
-    with listener(without_length) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
-
-
-def test_malformed_http_and_deep_json_are_ignored(metrics: Any) -> None:
-    deep_json = b"[" * 1100 + b"0" + b"]" * 1100
-    payloads = [
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\nZZ\r\n{}\r\n0\r\n\r\n",
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-Large: " + b"x" * 65537 + b"\r\n\r\n{}",
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n" + b"X: y\r\n" * 101 + b"\r\n{}",
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-        + str(len(deep_json)).encode()
-        + b"\r\n\r\n"
-        + deep_json,
-    ]
-    for payload in payloads:
-        with raw_listener(payload) as port:
-            assert metrics._request_json(port, "/heartbeat") is None
-
-    valid_config = json.dumps(
+    monkeypatch.setattr(metrics, "_request_json", request)
+    assert metrics.discover_instances() == [
         {
+            "host": "127.0.0.1",
+            "port": 24282,
+            "dashboard_url": "http://127.0.0.1:24282/dashboard/",
             "active_project": {"name": "pfBlockerNG", "path": "/repo", "language": "Python"},
             "current_client": "codex",
             "serena_version": "1.7.0",
         }
-    ).encode()
-    truncated = (
-        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-        + str(len(valid_config) + 100).encode()
-        + b"\r\n\r\n"
-        + valid_config
-    )
-    with raw_listener(truncated) as port:
-        assert metrics._request_json(port, "/get_config_overview") is None
-
-
-def test_slow_listener_is_bounded_and_ignored(metrics: Any) -> None:
-    responses = healthy()
-
-    def slow(handler: SerenaHandler) -> None:
-        body = b"{}"
-        handler.send_response(200)
-        handler.send_header("Content-Type", "application/json")
-        handler.send_header("Content-Length", str(len(body)))
-        handler.end_headers()
-        handler.wfile.flush()
-        try:
-            for byte in body:
-                time.sleep(0.04)
-                handler.wfile.write(bytes((byte,)))
-                handler.wfile.flush()
-        except BrokenPipeError:
-            pass
-
-    responses["/heartbeat"] = slow
-    with listener(responses) as (port, _):
-        metrics.REQUEST_TIMEOUT = 0.05
-        assert metrics._request_json(port, "/heartbeat") is None
-
-
-def test_html_escapes_metacharacters_and_removes_controls(metrics: Any) -> None:
-    dangerous = healthy('<script>alert("x")</script> & "quoted"\x01')
-    dangerous["/get_config_overview"] = response(
-        {
-            "active_project": {
-                "name": '<script>alert("x")</script> & "quoted"\x01',
-                "path": '<img src=x onerror="path">\x03',
-                "language": "Python & <b>language</b>",
-            },
-            "current_client": "client\x02",
-            "serena_version": "<svg onload=version>",
-        }
-    )
-    dangerous["/get_tool_stats"] = response(
-        {"stats": {"<script>tool</script>\x04": {"num_times_called": 1, "input_tokens": 2, "output_tokens": 3}}}
-    )
-    dangerous["/get_token_count_estimator_name"] = response(
-        {"token_count_estimator_name": "<iframe>estimator</iframe>\x05"}
-    )
-    with listener(dangerous) as (port, _):
-        configure_scan(metrics, port, port)
-        html = metrics.render_html(metrics.discover_instances())
-
-    assert "<script>" not in html
-    assert "<img" not in html and "<b>" not in html and "<svg" not in html and "<iframe>" not in html
-    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html
-    assert all(control not in html for control in ("\x01", "\x02", "\x03", "\x04", "\x05"))
-
-
-def test_redirect_is_not_followed(metrics: Any) -> None:
-    responses = healthy()
-    with listener(healthy()) as (target_port, target_handler):
-
-        def redirect(handler: SerenaHandler) -> None:
-            handler.send_response(302)
-            handler.send_header("Location", f"http://127.0.0.1:{target_port}/heartbeat")
-            handler.send_header("Content-Length", "0")
-            handler.end_headers()
-
-        responses["/heartbeat"] = redirect
-        with listener(responses) as (port, _):
-            configure_scan(metrics, port, port)
-            assert metrics.discover_instances() == []
-
-    assert target_handler.requests == []
-
-
-@pytest.mark.parametrize("counter_name", ["num_times_called", "input_tokens", "output_tokens"])
-@pytest.mark.parametrize("counter", [-1, 1.5, True], ids=["negative", "float", "bool"])
-def test_negative_and_non_integer_counters_are_ignored(metrics: Any, counter_name: str, counter: object) -> None:
-    responses = healthy()
-    counters: dict[str, object] = {"num_times_called": 1, "input_tokens": 1, "output_tokens": 1}
-    counters[counter_name] = counter
-    responses["/get_tool_stats"] = response({"stats": {"find_symbol": counters}})
-    with listener(responses) as (port, _):
-        configure_scan(metrics, port, port)
-        assert metrics.discover_instances() == []
-
-
-def test_http_surface_is_json_html_loopback_and_get_only(metrics: Any) -> None:
-    with listener(healthy()) as (port, _):
-        configure_scan(metrics, port, port)
-        server = metrics.make_server(0)
-        assert server.server_address[0] == "127.0.0.1"
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
-            connection.request("GET", "/api/instances")
-            api = connection.getresponse()
-            assert api.status == 200
-            assert api.getheader("Content-Type") == "application/json; charset=utf-8"
-            content_security_policy = api.getheader("Content-Security-Policy")
-            assert content_security_policy is not None
-            assert "frame-ancestors 'none'" in content_security_policy
-            assert json.loads(api.read())["instances"][0]["port"] == port
-            connection.request("GET", "/")
-            page = connection.getresponse()
-            assert page.status == 200
-            assert page.getheader("Content-Type") == "text/html; charset=utf-8"
-            page_body = page.read().decode()
-            assert "pfBlockerNG" in page_body
-            assert "Totals: calls=3, input=16, output=10" in page_body
-            connection.request("GET", "/missing")
-            assert connection.getresponse().status == 404
-            connection.request("POST", "/api/instances")
-            rejected = connection.getresponse()
-            assert rejected.status == 405
-            assert rejected.getheader("Allow") == "GET"
-        finally:
-            connection.close()
-            server.shutdown()
-            thread.join()
-            server.server_close()
-
-
-def test_http_surface_rejects_untrusted_host_and_accepts_tailnet_host(metrics: Any) -> None:
-    with listener(healthy()) as (port, _):
-        configure_scan(metrics, port, port)
-        server = metrics.make_server(0)
-        thread = threading.Thread(target=server.serve_forever)
-        thread.start()
-        try:
-            connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
-            connection.putrequest("GET", "/api/instances", skip_host=True)
-            connection.putheader("Host", "attacker.example")
-            connection.endheaders()
-            rejected = connection.getresponse()
-            assert rejected.status == 421
-            rejected.read()
-
-            connection.putrequest("GET", "/api/instances", skip_host=True)
-            connection.putheader("Host", "serena.private-tailnet.ts.net")
-            connection.endheaders()
-            accepted = connection.getresponse()
-            assert accepted.status == 200
-            accepted.read()
-
-            connection.putrequest("GET", "/api/instances", skip_host=True)
-            connection.putheader("Host", "localhost")
-            connection.putheader("Host", "attacker.example")
-            connection.endheaders()
-            duplicate = connection.getresponse()
-            assert duplicate.status == 421
-            duplicate.read()
-        finally:
-            connection.close()
-            server.shutdown()
-            thread.join()
-            server.server_close()
+    ]
+    assert calls == [
+        ("127.0.0.1", 24282, "/heartbeat"),
+        ("127.0.0.1", 24282, "/get_config_overview"),
+        ("::1", 24283, "/heartbeat"),
+    ]
 
 
 @pytest.mark.parametrize(
-    "host",
+    "heartbeat,config",
     [
-        ".ts.net",
-        "foo..ts.net",
-        "foo.ts.net:",
-        "foo.ts.net:bad",
-        "foo.ts.net:443@evil",
-        "127.0.0.1:bad",
-        "foo.ts.net..",
-        "127.0.0.1..",
-        "foo.ts.net:443:evil",
-        "evil@foo.ts.net",
-        ".".join(["a" * 63] * 4) + ".ts.net",
+        (
+            {"status": "alive", "service": "other"},
+            {"active_project": {}, "current_client": "x", "serena_version": "1"},
+        ),
+        ({"status": "alive"}, None),
+        (
+            {"status": "alive"},
+            {"active_project": None, "current_client": "x", "serena_version": "1"},
+        ),
+        (
+            {"status": "alive"},
+            {"active_project": {"name": "x"}, "current_client": "x", "serena_version": "1"},
+        ),
     ],
+    ids=["extra-heartbeat", "disappearing-config", "null-project", "incomplete-config"],
 )
-def test_http_surface_rejects_malformed_host(metrics: Any, host: str) -> None:
+def test_stale_non_serena_and_invalid_config_are_ignored(
+    metrics: Any, monkeypatch: pytest.MonkeyPatch, heartbeat: object, config: object
+) -> None:
+    monkeypatch.setattr(metrics, "_listening_endpoints", lambda: [("127.0.0.1", 24282)])
+    responses = {"/heartbeat": heartbeat, "/get_config_overview": config}
+    monkeypatch.setattr(metrics, "_request_json", lambda host, port, path: responses[path])
+    assert metrics.discover_instances() == []
+
+
+def test_request_json_supports_ipv6(metrics: Any) -> None:
+    with listener(healthy(), host="::1") as (host, port):
+        assert host == "::1"
+        assert metrics._request_json(host, port, "/heartbeat") == {"status": "alive"}
+
+
+def test_request_json_rejects_oversized_content_length(metrics: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResponse:
+        status = 200
+
+        def getheader(self, name: str, default: str = "") -> str:
+            return "application/json" if name == "Content-Type" else str(metrics.READ_LIMIT + 1)
+
+        def read(self, limit: int) -> bytes:
+            return b"{}"
+
+    class FakeConnection:
+        sock: Any = None
+
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def request(self, *args: object, **kwargs: object) -> None:
+            pass
+
+        def getresponse(self) -> FakeResponse:
+            return FakeResponse()
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(metrics.http.client, "HTTPConnection", FakeConnection)
+    monkeypatch.setattr(
+        metrics.socket,
+        "getaddrinfo",
+        lambda *args, **kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 24282))],
+    )
+    assert metrics._request_json("127.0.0.1", 24282, "/heartbeat") is None
+
+
+def test_html_uses_direct_safe_link_and_escapes_every_projected_string(metrics: Any) -> None:
+    dangerous = '<script>alert("x")</script> & "quoted"\x01'
+    instances = [
+        {
+            "host": "127.0.0.1",
+            "port": 24282,
+            "dashboard_url": "http://127.0.0.1:24282/dashboard/",
+            "active_project": {"name": dangerous, "path": dangerous, "language": dangerous},
+            "current_client": dangerous,
+            "serena_version": dangerous,
+        }
+    ]
+    page = metrics.render_html(instances)
+    assert "<title>Serena instances</title>" in page
+    assert "<h1>Serena instances</h1>" in page
+    assert 'target="_blank"' in page
+    assert 'rel="noopener noreferrer"' in page
+    assert 'href="http://127.0.0.1:24282/dashboard/"' in page
+    assert "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in page
+    assert "<script>" not in page
+    assert "\x01" not in page
+    assert "metrics" not in page.lower()
+
+
+def test_http_directory_json_html_host_validation_and_get_only(metrics: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    instance = {
+        "host": "::1",
+        "port": 24282,
+        "dashboard_url": "http://[::1]:24282/dashboard/",
+        "active_project": {"name": "project", "path": "/repo", "language": "Python"},
+        "current_client": "codex",
+        "serena_version": "1.7.0",
+    }
+    monkeypatch.setattr(metrics, "discover_instances", lambda: [instance])
     server = metrics.make_server(0)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
     try:
         connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1])
+        connection.request("GET", "/api/instances")
+        api = connection.getresponse()
+        assert api.status == 200
+        assert json.loads(api.read()) == {"instances": [instance]}
+        assert api.getheader("Content-Security-Policy") == "default-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+
+        connection.request("GET", "/")
+        page = connection.getresponse()
+        assert page.status == 200
+        assert "Serena instances" in page.read().decode()
+
+        connection.request("GET", "/missing")
+        assert connection.getresponse().status == 404
+
         connection.putrequest("GET", "/api/instances", skip_host=True)
-        connection.putheader("Host", host)
+        connection.putheader("Host", "attacker.example")
         connection.endheaders()
-        response = connection.getresponse()
-        assert response.status == 421
-        response.read()
+        assert connection.getresponse().status == 421
+
+        connection.putrequest("GET", "/api/instances", skip_host=True)
+        connection.putheader("Host", "localhost")
+        connection.putheader("Host", "localhost")
+        connection.endheaders()
+        assert connection.getresponse().status == 421
+
+        connection.request("POST", "/api/instances")
+        rejected = connection.getresponse()
+        assert rejected.status == 405
+        assert rejected.getheader("Allow") == "GET"
     finally:
         connection.close()
         server.shutdown()
@@ -504,7 +358,8 @@ def test_http_surface_rejects_malformed_host(metrics: Any, host: str) -> None:
 
 
 @pytest.mark.parametrize("method", ["HEAD", "TRACE", "CONNECT", "DELETE", "OPTIONS", "PATCH", "POST", "PUT", "FOO"])
-def test_http_surface_rejects_every_non_get_method(metrics: Any, method: str) -> None:
+def test_http_rejects_every_non_get_method(metrics: Any, monkeypatch: pytest.MonkeyPatch, method: str) -> None:
+    monkeypatch.setattr(metrics, "discover_instances", lambda: [])
     server = metrics.make_server(0)
     thread = threading.Thread(target=server.serve_forever)
     thread.start()
@@ -522,8 +377,13 @@ def test_http_surface_rejects_every_non_get_method(metrics: Any, method: str) ->
         server.server_close()
 
 
-def test_help_describes_loopback_and_tailscale_serve(metrics: Any, capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_describes_local_directory_and_tailscale_links_not_metrics(
+    metrics: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
     assert metrics.main(["--help"]) == 0
-    output = capsys.readouterr().out
-    assert "127.0.0.1" in output
-    assert "tailscale serve --bg" in output
+    output = capsys.readouterr().out.lower()
+    assert "serena instance directory" in output
+    assert "tailscale serve" in output
+    assert "dashboard" in output
+    assert "metric" not in output
+    assert "aggregate" not in output
