@@ -95,6 +95,10 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		}
 		config_set_path('installedpackages/pfblockerngglobal/pfbextdns', '8.8.8.8');
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::On);
+		// ADR-13 auto-VIP: without it, pfb_global()'s manual-mode VIP validation force-disables
+		// DNSBL at runtime for these VIP-less fixtures, so the box under test would not be one
+		// where DNSBL is actually live.
+		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::On);
 		$GLOBALS['g']['unbound_chroot_path'] = '/var/unbound';
 		config_set_path('installedpackages/pfblockernglistsv4/config', [[
 			'action' => 'Deny_Inbound',
@@ -272,6 +276,7 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 	public function testMissingManifestIsIgnoredWhenDnsblIsDisabled(): void
 	{
 		PfbConfig::writeSystem('dnsbl/pfb_dnsbl', PfbToggle::Off);
+		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
 		$this->assertTrue(unlink($GLOBALS['pfb']['unbound_py_sources']));
 
 		$this->tick();
@@ -279,6 +284,27 @@ final class DnsblManifestTickRecoveryTest extends TestCase
 		$this->assertSame(0, $this->feedRuns,
 			'with DNSBL disabled no pass can publish a manifest, so dispatching on its absence '
 			. 'would be an unbounded retry loop');
+	}
+
+	/**
+	 * DNSBL can be enabled in the configuration and still be OFF at runtime: manual VIP mode
+	 * with a missing or invalid sinkhole VIP makes pfb_global() force-disable it (issue #331).
+	 * A pass dispatched in that state publishes no manifest either, so the gate has to read
+	 * the effective value, not the stored one.
+	 */
+	public function testMissingManifestIsIgnoredWhenAnInvalidVipDisablesDnsblAtRuntime(): void
+	{
+		PfbConfig::writeSystem('dnsbl/pfb_dnsvip_auto', PfbToggle::Off);
+		$GLOBALS['pfb']['dnsbl'] = PfbToggle::Off;
+		$this->assertSame(PfbToggle::On, PfbConfig::read('dnsbl/pfb_dnsbl'),
+			'before-state: the stored setting still says DNSBL is enabled');
+		$this->assertTrue(unlink($GLOBALS['pfb']['unbound_py_sources']));
+
+		$this->tick();
+
+		$this->assertSame(0, $this->feedRuns,
+			'a runtime-disabled DNSBL publishes no manifest, so dispatching on its absence '
+			. 'would retry every tick forever -- the gate must read the effective state');
 	}
 
 	/**
