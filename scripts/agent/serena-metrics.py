@@ -329,6 +329,7 @@ def make_server(port: int = DEFAULT_PORT) -> DirectoryServer:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
+        prog="serena-directory",
         description="Read-only local Serena instance directory.",
         epilog=(
             f"Tailscale Serve: tailscale serve --bg http://{HOST}:{DEFAULT_PORT}; "
