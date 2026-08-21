@@ -5831,17 +5831,12 @@ function pfblockerng_tick(
 			}
 		}
 	}
-	// issue #2607: the DNSBL manifest is Python's sole blocklist source (ADR-65), and a
-	// real `pkg delete` tears it down while the reinstall's config-save resync cannot
-	// rebuild it -- so its absence means the resolver is matching nothing. That is a
-	// failure, like a *.fail marker, not a change waiting for a convenient moment:
-	// dispatch on the same footing, apply window included (owner ruling, 2026-08-21).
-	$manifest_due = pfb_unbound_py_mode_active()
+	// issue #2607: an absent manifest means the Python resolver is matching nothing
+	// (ADR-65), so it dispatches like a *.fail marker -- same scheduled-updates gate,
+	// but no apply window, which defers changes and must not extend an outage.
+	$manifest_due = $runtime_ready && $runtime_model !== NULL && $runtime_model['scheduled']
+		&& pfb_unbound_py_mode_active()
 		&& !file_exists((string) ($pfb['unbound_py_sources'] ?? ''));
-	if ($manifest_due) {
-		logger(LOG_NOTICE, localize_text('Tick: DNSBL manifest absent - dispatching a rebuild pass.'),
-			LOG_PREFIX_PKG_PFBLOCKERNG);
-	}
 	$scheduled_due = $runtime_ready && $cache_ready && $runtime_model !== NULL
 		&& $runtime_model['scheduled'] && $cron_due;
 	$scheduled_due = $scheduled_due || ($runtime_ready && $runtime_model !== NULL
@@ -6030,6 +6025,10 @@ function pfblockerng_tick(
 					pfb_due_ledger_set_pending('cron', $dbdir);
 				}
 				if ($feed_due) {
+					if ($manifest_due) {
+						logger(LOG_NOTICE, localize_text('Tick: DNSBL manifest absent - this pass rebuilds it.'),
+							LOG_PREFIX_PKG_PFBLOCKERNG);
+					}
 					logger(LOG_NOTICE, localize_text('Tick: running scheduled feed pass.'), LOG_PREFIX_PKG_PFBLOCKERNG);
 					try {
 						$pending_change = $dcc_changed || ($cron_pending && !$manual_due);
