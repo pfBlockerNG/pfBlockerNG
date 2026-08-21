@@ -185,11 +185,15 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
         # it as empty (plain `ls`, dotfiles excluded — matching the glob's view).
         # Inside the try: a mid-staging failure must still reach the teardown below.
         _scp_to_guest(smoke_vm, HOOK_SRC, GUEST_HOOK_PATH)
-        smoke_vm.ssh("/bin/chmod", "755", GUEST_HOOK_PATH)
+        chmod = smoke_vm.ssh("/bin/chmod", "755", GUEST_HOOK_PATH)
+        if chmod.returncode != 0:
+            raise RuntimeError(f"chmod on the staged hook failed: {chmod.stderr!r}")
         ls_ca = smoke_vm.ssh("/bin/sh", "-c", f"ls {CA_DIR} 2>/dev/null")
         if not ls_ca.stdout.strip():
             smoke_vm.ssh("/bin/mkdir", "-p", CA_DIR)
-            smoke_vm.ssh("/usr/bin/touch", CA_DUMMY)
+            touch = smoke_vm.ssh("/usr/bin/touch", CA_DUMMY)
+            if touch.returncode != 0:
+                raise RuntimeError(f"seeding {CA_DUMMY} failed: {touch.stderr!r}")
 
         yield smoke_vm
     finally:
@@ -201,12 +205,16 @@ def deployed_vm(smoke_vm: SmokeVM, stub_dns: _StubDnsServer) -> Iterator[SmokeVM
 
         # issue #2621: revoke the carry and remove what this fixture staged/seeded,
         # BEFORE the module's final ramdisk-off reboot below — that reboot must leave
-        # the guest without the hook and without the CA carry. One best-effort block:
-        # the `;` chain keeps the removals running past a failed revoke (which needs
-        # the hook still present), and the dummy's name is smoke-unique so an
-        # unconditional rm is exactly as safe as a recorded one.
+        # the guest without the hook and without the CA carry. Revoke runs first
+        # (it needs the hook still present) and each step reports its own failure,
+        # so a failed revoke is never masked by a clean rm.
         try:
-            smoke_vm.ssh(f"sh {GUEST_HOOK_PATH} login-ca-revoke; rm -f {CA_DUMMY} {GUEST_HOOK_PATH}")
+            revoke = smoke_vm.ssh("/bin/sh", GUEST_HOOK_PATH, "login-ca-revoke")
+            if revoke.returncode != 0:
+                print(f"[smoke] login-ca revoke teardown failed (non-fatal): {revoke.stderr!r}")
+            cleanup = smoke_vm.ssh("/bin/rm", "-f", CA_DUMMY, GUEST_HOOK_PATH)
+            if cleanup.returncode != 0:
+                print(f"[smoke] login-ca file cleanup failed (non-fatal): {cleanup.stderr!r}")
         except Exception as exc:  # noqa: BLE001 -- teardown cleanup, never mask the test result
             print(f"[smoke] login-ca teardown failed (non-fatal): {exc}")
 
