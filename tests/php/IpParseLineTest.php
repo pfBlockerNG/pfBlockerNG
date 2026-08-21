@@ -363,5 +363,8 @@ final class IpParseLineTest extends TestCase
 
 		$portAsPrefix = "1.2.3.4\t9.8.7.6\t80\tpayload";
 		$this->assertLine($portAsPrefix, $config, $this->expectedResult($portAsPrefix, $legacyTwo('1.2.3.4', '9.8.7.6')));
+
+		$startNotNetwork = "5.61.209.1\t5.61.209.255\t24";
+		$this->assertLine($startNotNetwork, $config, $this->expectedResult($startNotNetwork, $legacyTwo('5.61.209.1', '5.61.209.255')));
 	}
 }
