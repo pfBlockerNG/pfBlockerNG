@@ -8977,13 +8977,6 @@
                 "variadic": false,
                 "type": "int",
                 "default": "-1"
-            },
-            {
-                "name": "ca_dir",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": "NULL"
             }
         ]
     },
