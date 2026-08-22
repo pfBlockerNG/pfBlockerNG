@@ -59,7 +59,9 @@ exact-root index. Any GitHub Actions workflow that commits code runs it after ch
   shellcheck; PHP → `php -l` + PHPCS; URL-encoding check when
   `*.sh`/`*.md` staged). NOT unit suites — run `python3 -m pytest` yourself while
   iterating; tests and static analysis run in CI only. Missing tool = reported + skipped.
-  `--no-verify` bypass is for humans, not agents.
+  `--no-verify` bypass is for humans, not agents. Release-line trees lacking the
+  checker corpus opt out per gate via a committed root `.githooks-exempt`
+  manifest (issue #2633) instead of bypassing.
 - **`prepare-commit-msg`** — first aborts agent commit (`CLAUDECODE=1`,
   `CODEX_THREAD_ID`, Copilot, Grok, or OMP marker set) in **primary checkout**
   (agents commit only in linked worktrees — issue #1262; state-checked via

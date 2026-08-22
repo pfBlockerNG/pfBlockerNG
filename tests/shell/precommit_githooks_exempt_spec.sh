@@ -6,16 +6,18 @@
 
 Describe '.githooks/pre-commit .githooks-exempt legacy opt-out'
   gitc() { git_fixture -C "$repo" -c user.email=t@t -c user.name=t "$@"; }
-  # The sandbox stages a PHP file so the hook wants all seven repo checkers, none
-  # of which exist in the sandbox scripts/ dir -- the release-line situation. The
-  # REAL host python runs, so a missing checker fails exactly as it does live.
+  # The sandbox stages PHP and shell files so the hook wants the repo checkers,
+  # none of which exist in the sandbox scripts/ dir -- the release-line situation.
+  # The REAL host python runs, so a missing checker fails exactly as it does live.
   ALL_CHECKERS='scripts/check_noopener.py
 scripts/check_appliance_python.py
 scripts/check_version_literals.py
 scripts/check_comment_narration.py
 scripts/check_agent_roles.py
 scripts/check_context_budget.py
-scripts/check_composer_vendor.py'
+scripts/check_composer_vendor.py
+scripts/check_url_encoding.py
+scripts/agent/check-agent-config-parity.sh'
   make_repo() {
     scrub_git_env
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/precommitexempt.XXXXXX")"
@@ -39,12 +41,39 @@ scripts/check_composer_vendor.py'
 
   It 'skips an absent checker only through the committed manifest and passes'
     printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    printf '#!/bin/sh\nexit 0\n' > "$repo/src/b.sh"
+    gitc add src/b.sh
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 0
     The output should include 'listed in .githooks-exempt): composer vendor'
     The output should include 'listed in .githooks-exempt): noopener'
+    The output should include 'listed in .githooks-exempt): url-encoding'
     The output should include '[pre-commit] php -l'
     The output should include '[pre-commit] phpcs'
+    The stderr should not include 'FAILED'
+  End
+
+  It 'ignores a manifest that is not tracked by git'
+    printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should include '[pre-commit] composer vendor'
+    The output should not include 'listed in .githooks-exempt'
+    The stderr should include '[pre-commit] FAILED: composer vendor'
+  End
+
+  It 'exempts the agent-config parity gate only through the manifest'
+    printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    printf '# sandbox agent adapter\n' > "$repo/CLAUDE.md"
+    gitc add CLAUDE.md
+    # markdownlint would shell out through npx for the staged .md; stub it.
+    printf '#!/bin/sh\nexit 0\n' > "$stubdir/npx"
+    chmod +x "$stubdir/npx"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 0
+    The output should include 'listed in .githooks-exempt): agent-config parity'
     The stderr should not include 'FAILED'
   End
 
@@ -57,6 +86,7 @@ scripts/check_composer_vendor.py'
 
   It 'still hard-fails a missing checker the manifest does not list'
     printf 'scripts/check_noopener.py\n' > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 1
     The output should include 'listed in .githooks-exempt): noopener'
@@ -65,6 +95,7 @@ scripts/check_composer_vendor.py'
 
   It 'runs a checker that is present even when the manifest lists it'
     printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
     printf 'import pathlib, sys\npathlib.Path(%s).touch()\nsys.exit(0)\n' "'$checker_marker'" \
       > "$repo/scripts/check_composer_vendor.py"
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
@@ -72,5 +103,15 @@ scripts/check_composer_vendor.py'
     The output should include '[pre-commit] composer vendor'
     The output should not include 'listed in .githooks-exempt): composer vendor'
     Assert [ -e "$checker_marker" ]
+  End
+
+  It 'treats a directory at a listed checker path as present and fails closed'
+    printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    mkdir "$repo/scripts/check_composer_vendor.py"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should not include 'listed in .githooks-exempt): composer vendor'
+    The stderr should include '[pre-commit] FAILED: composer vendor'
   End
 End

@@ -51,12 +51,17 @@ skip() { skipped="${skipped}${skipped:+,} $1"; }
 # Explicit legacy-branch opt-out (issue #2633): every worktree runs THIS hook via the
 # absolute shared core.hooksPath, but release-line trees never shipped the devel
 # checker corpus. A repo-script gate whose checker is absent from the tree is skipped
-# only when the tree explicitly commits that exact script path in .githooks-exempt.
-# A missing checker with no listed exemption stays a hard failure -- deleting a
-# checker on devel can never silently open its gate (devel commits no manifest) --
-# and a listed checker that IS present still runs.
+# only when the tree explicitly commits that exact script path in .githooks-exempt:
+# the manifest must be git-tracked (an untracked file is invisible to review and
+# exempts nothing). A missing checker with no listed exemption stays a hard failure
+# -- deleting a checker on devel can never silently open its gate (devel commits no
+# manifest) -- and a listed checker that IS present still runs; -e also counts a
+# directory at the path as present, so it runs (and fails) rather than exempts.
+# Manifest comment lines are inert: with grep -x a '# ...' line never equals a path.
 exempted() {
-	[ ! -f "$1" ] && [ -f .githooks-exempt ] && grep -qxF -e "$1" .githooks-exempt
+	[ ! -e "$1" ] && [ -f .githooks-exempt ] \
+		&& git ls-files --error-unmatch -- .githooks-exempt >/dev/null 2>&1 \
+		&& grep -qxF -e "$1" .githooks-exempt
 }
 exempt() { printf '[pre-commit] exempt (checker not shipped on this branch; listed in .githooks-exempt): %s\n' "$1"; }
 
@@ -84,8 +89,12 @@ printf '%s\n' "$staged_all" | grep -qE \
 # The detailed policy/procedures have one canonical source. Codex files are
 # discovery/runtime adapters only; catch a new or removed source with no mapping.
 if [ "$staged_agentcfg" = 1 ]; then
-	step 'agent-config parity (shared sources, adapters, and model tiers)'
-	sh scripts/agent/check-agent-config-parity.sh || failed 'agent-config parity'
+	if exempted scripts/agent/check-agent-config-parity.sh; then
+		exempt 'agent-config parity'
+	else
+		step 'agent-config parity (shared sources, adapters, and model tiers)'
+		sh scripts/agent/check-agent-config-parity.sh || failed 'agent-config parity'
+	fi
 fi
 
 # =============================== Python (*.py) =============================== #
@@ -270,6 +279,11 @@ fi
 # =============================== PHP (*.php, *.inc) ========================== #
 if [ "$staged_php" = 1 ]; then
 	composer_vendor_ok=1
+	# An exempted vendor check deliberately leaves the style gates enabled: php -l
+	# grades against the host interpreter regardless of vendor state, and phpcs
+	# self-skips when vendor/bin/phpcs is absent (the release-line case), so the
+	# fail-closed rationale (grading against wrong Composer tool versions) cannot
+	# bite on a tree that ships no Composer machinery at all.
 	if exempted scripts/check_composer_vendor.py; then
 		exempt 'composer vendor'
 	elif [ -n "$py_bin" ]; then
