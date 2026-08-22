@@ -24,3 +24,6 @@ venv/
 *.tar.gz
 *.tar.bz2
 *.zip
+
+# ── Agent tooling artefacts (repository intelligence; never shipped) ──────────
+graphify-out/

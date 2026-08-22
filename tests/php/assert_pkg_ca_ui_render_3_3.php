@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+define('PFB_REPO_GENERATE_HOOK', sys_get_temp_dir() . '/pfb-ca-ui-hook-' . bin2hex(random_bytes(4)));
+
 if (!function_exists('gettext')) {
 	function gettext(string $text): string
 	{
@@ -121,6 +123,19 @@ row('consent controls execute through the shipped form helper', static function 
 	pfb_pkgconf_ca_add_form_controls($enabled, true);
 	check($enabled->sections[0]->inputs[0]->checked, 'enabled consent renders checked');
 	check(str_contains($enabled->sections[0]->inputs[0]->help, 'before each package check'), 'runtime hook help');
+});
+
+row('login generation: help names login.conf, never pkg.conf; old generation unchanged', static function (): void {
+	file_put_contents(PFB_REPO_GENERATE_HOOK, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nexit 0\n");
+	$form = new Form();
+	pfb_pkgconf_ca_add_form_controls($form, true);
+	$help = $form->sections[0]->inputs[0]->help;
+	check(str_contains($help, '/etc/login.conf'), 'login-generation help names /etc/login.conf');
+	check(!str_contains($help, 'pkg.conf'), 'login-generation help does not name pkg.conf');
+	unlink(PFB_REPO_GENERATE_HOOK);
+	$legacy = new Form();
+	pfb_pkgconf_ca_add_form_controls($legacy, false);
+	check(str_contains($legacy->sections[0]->inputs[0]->help, 'pkg.conf'), 'old-generation help still names pkg.conf');
 });
 
 row('package PHP exposes only the hook delegation boundary', static function (): void {

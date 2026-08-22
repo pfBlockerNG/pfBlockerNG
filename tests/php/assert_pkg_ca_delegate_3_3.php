@@ -100,6 +100,46 @@ row('delegate bounds a hanging hook', static function (): void {
 	putenv('PFB_HOOK_SLEEP');
 });
 
+// -- login-generation hook (issue #2630): the published installer now ships a hook
+// whose verbs are login-ca-sync/login-ca-revoke; the page probes the hook body and
+// switches verbs. Rewrite the stub so the probe reads the new generation.
+file_put_contents($hook, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($log) . "\nexit \${PFB_HOOK_STATUS:-0}\n");
+chmod($hook, 0700);
+
+row('probe detects the login-generation hook, and old-generation before it', static function () use ($hook, $log): void {
+	check(pfb_pkgconf_ca_hook_is_login(), 'login marker in the hook body reads as the new generation');
+	file_put_contents($hook, "#!/bin/sh\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($log) . "\nexit 0\n");
+	check(!pfb_pkgconf_ca_hook_is_login(), 'no marker reads as the old generation');
+	file_put_contents($hook, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($log) . "\nexit \${PFB_HOOK_STATUS:-0}\n");
+	chmod($hook, 0700);
+});
+
+row('login generation: delegate speaks login verbs and refuses the retired ones', static function () use ($log): void {
+	file_put_contents($log, '');
+	check(pfb_pkgconf_ca_command('login-ca-sync'), 'login sync succeeds');
+	check(pfb_pkgconf_ca_command('login-ca-revoke'), 'login revoke succeeds');
+	check(!pfb_pkgconf_ca_command('ca-sync'), 'retired sync verb refused under the login hook');
+	same(file_get_contents($log), "login-ca-sync\nlogin-ca-revoke\n", 'hook saw only login verbs');
+});
+
+row('login generation: pfb_pkg_exec is a plain exec, never a per-check sync', static function () use ($log): void {
+	file_put_contents($log, '');
+	$out = [];
+	$ret = -1;
+	pfb_pkg_exec('printf greeting', $out, $ret);
+	same(0, $ret, 'command executed');
+	same(['greeting'], $out, 'command output captured');
+	same('', file_get_contents($log), 'the hook was never invoked -- login-ca-sync is consent-independent and must not run per check');
+});
+
+row('login generation: apply maps consent to the login verbs', static function () use ($log): void {
+	file_put_contents($log, '');
+	check(pfb_pkgconf_ca_apply('on', false), 'consent on applies');
+	check(pfb_pkgconf_ca_apply('', true), 'opt-out revokes');
+	check(pfb_pkgconf_ca_apply('', false), 'never-consented opt-out is a no-op');
+	same(file_get_contents($log), "login-ca-sync\nlogin-ca-revoke\n", 'verb order and count');
+});
+
 @unlink($hook);
 @unlink($log);
 @rmdir($root);

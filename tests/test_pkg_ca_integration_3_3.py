@@ -52,7 +52,9 @@ def test_ui_is_conditional_and_posts_an_explicit_consent_token() -> None:
         "re-applies the line at boot and before package checks",
     ):
         assert token in source
-    assert "if (pfb_pkg_ca_is_plus()) {" in page
+    # issue #2630: the login-generation hook applies on every edition; the pkg.conf
+    # generation stays Plus-only.
+    assert "if (pfb_pkg_ca_is_plus() || pfb_pkgconf_ca_hook_is_login()) {" in page
     assert "config_get_path" not in page
     assert "gen/pfb_pkg_ca_consent" not in page
 

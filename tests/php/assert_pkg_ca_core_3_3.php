@@ -163,9 +163,14 @@ row('both pkg commands delegate to the hook immediately before execution', stati
 	$wrapper_end = strpos($source, 'function pfb_pkg_installed_name', $wrapper_start);
 	check($wrapper_start !== false && $wrapper_end !== false, 'pkg wrapper slice');
 	$wrapper = substr($source, $wrapper_start, $wrapper_end - $wrapper_start);
+	// issue #2630: the login-generation branch returns early with a plain exec;
+	// the OLD-generation exec (the last one in the wrapper) must still sit behind
+	// the ca-sync gate.
+	$login_pos = strpos($wrapper, 'pfb_pkgconf_ca_hook_is_login()');
 	$sync_pos = strpos($wrapper, "pfb_pkgconf_ca_command('ca-sync')");
-	$exec_pos = strpos($wrapper, 'exec($command');
-	check($sync_pos !== false && $exec_pos !== false && $sync_pos < $exec_pos, 'hook before pkg exec');
+	$exec_pos = strrpos($wrapper, 'exec($command');
+	check($login_pos !== false, 'login-generation early return present');
+	check($sync_pos !== false && $exec_pos !== false && $sync_pos < $exec_pos, 'old-generation exec stays behind the ca-sync gate');
 	$start = strpos($source, 'function pfb_pkg_latest');
 	$end = strpos($source, 'function pfb_pkgconf_ca_save', $start);
 	check($start !== false && $end !== false, 'latest slice');
@@ -173,6 +178,26 @@ row('both pkg commands delegate to the hook immediately before execution', stati
 	check(substr_count($latest, 'pfb_pkg_exec("{$tmo}{$bin}') === 2, 'both latest calls use wrapper');
 	check(substr_count($source, 'pfb_pkg_exec(') === 6, 'all five pkg calls use the wrapper');
 	check(!str_contains($latest, 'SSL_CA_CERT_PATH='), 'no PHP environment decoration');
+});
+
+// -- login-generation semantics (issue #2630): under the installer's new hook the
+// consent defaults ON (absent key = on; a present empty token = explicit opt-out).
+row('login generation: consent defaults on, present-empty opts out', static function (): void {
+	file_put_contents(PFB_REPO_GENERATE_HOOK, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nexit 0\n");
+	chmod(PFB_REPO_GENERATE_HOOK, 0700);
+	config_set_path('installedpackages/pfblockerng/config/0', []);
+	check(pfb_pkg_ca_consent_enabled(), 'absent key reads as consented under the login hook');
+	config_set_path('installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent', '');
+	check(!pfb_pkg_ca_consent_enabled(), 'present empty token is the explicit opt-out');
+	config_set_path('installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent', 'on');
+	check(pfb_pkg_ca_consent_enabled(), 'explicit on stays on');
+});
+
+row('old generation: consent stays opt-in', static function (): void {
+	file_put_contents(PFB_REPO_GENERATE_HOOK, "#!/bin/sh\nexit 0\n");
+	chmod(PFB_REPO_GENERATE_HOOK, 0700);
+	config_set_path('installedpackages/pfblockerng/config/0', []);
+	check(!pfb_pkg_ca_consent_enabled(), 'absent key stays off under the old hook');
 });
 
 @unlink(PFB_REPO_GENERATE_HOOK);
