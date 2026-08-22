@@ -51,17 +51,22 @@ skip() { skipped="${skipped}${skipped:+,} $1"; }
 # Explicit legacy-branch opt-out (issue #2633): every worktree runs THIS hook via the
 # absolute shared core.hooksPath, but release-line trees never shipped the devel
 # checker corpus. A repo-script gate whose checker is absent from the tree is skipped
-# only when the tree explicitly commits that exact script path in .githooks-exempt:
-# the manifest must be git-tracked (an untracked file is invisible to review and
-# exempts nothing). A missing checker with no listed exemption stays a hard failure
-# -- deleting a checker on devel can never silently open its gate (devel commits no
-# manifest) -- and a listed checker that IS present still runs; -e also counts a
-# directory at the path as present, so it runs (and fails) rather than exempts.
-# Manifest comment lines are inert: with grep -x a '# ...' line never equals a path.
+# only when the tree explicitly commits that exact script path in .githooks-exempt.
+# The manifest is graded from the STAGED index blob, never the working tree: an
+# untracked file or an unstaged edit is invisible to review and exempts nothing,
+# and a symlinked manifest (index mode 120000) is rejected outright. A missing
+# checker with no listed exemption stays a hard failure -- deleting a checker on
+# devel can never silently open its gate (devel commits no manifest) -- and a
+# listed checker that IS present still runs; -e also counts a directory at the
+# path as present, so it runs (and fails) rather than exempts. Manifest comment
+# lines are inert: with grep -x a '# ...' line never equals a path.
 exempted() {
-	[ ! -e "$1" ] && [ -f .githooks-exempt ] \
-		&& git ls-files --error-unmatch -- .githooks-exempt >/dev/null 2>&1 \
-		&& grep -qxF -e "$1" .githooks-exempt
+	[ ! -e "$1" ] || return 1
+	case $(git ls-files --stage -- .githooks-exempt 2>/dev/null) in
+	100*) ;;
+	*) return 1 ;;
+	esac
+	git show :.githooks-exempt 2>/dev/null | grep -qxF -e "$1"
 }
 exempt() { printf '[pre-commit] exempt (checker not shipped on this branch; listed in .githooks-exempt): %s\n' "$1"; }
 
