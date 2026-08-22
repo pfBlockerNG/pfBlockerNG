@@ -157,5 +157,7 @@ row('package PHP exposes only the hook delegation boundary', static function ():
 	@unlink($product);
 });
 
+@unlink(PFB_REPO_GENERATE_HOOK);
+
 echo $failures === 0 ? "ALL PASS\n" : "{$failures} FAILURES\n";
 exit($failures === 0 ? 0 : 1);

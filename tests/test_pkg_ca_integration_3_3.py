@@ -36,6 +36,17 @@ def test_save_persists_consent_before_applying_pkg_conf() -> None:
     assert "pfb_software_check_config_write(" in save
     assert "if ($pfb_ca_ok)" in save
     assert "$input_errors[]" in save
+    # issue #2631 review round: the failure notice speaks the installed generation.
+    # Login hook: per-verb diagnosis naming /etc/login.conf, boot-only retry (there
+    # is no per-check reapply to promise). Old hook: the shipped 3.3.3 sentence,
+    # byte-preserved, naming pkg.conf.
+    assert "if (pfb_pkgconf_ca_hook_is_login()) {" in save
+    assert save.count("could not update /etc/login.conf right now") == 2
+    assert "the file may be a symlink, or have a shape pfBlockerNG does not edit" in save
+    assert save.count("it will retry at the next boot.") == 2
+    assert "pfBlockerNG will retry at the next boot or package check." in save
+    assert "PFB_PKG_CONF" in save
+    assert "/etc/login.conf' : PFB_PKG_CONF" not in save
 
 
 def test_ui_is_conditional_and_posts_an_explicit_consent_token() -> None:

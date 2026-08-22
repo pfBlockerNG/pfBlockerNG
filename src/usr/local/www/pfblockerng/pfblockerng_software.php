@@ -98,14 +98,32 @@ if ($_POST && isset($_POST['save'])) {
 		header('Location: /pfblockerng/pfblockerng_software.php');
 		exit;
 	}
-	$input_errors[] = sprintf(
-		gettext(
-			'The setting was saved, but pfBlockerNG could not update %s right now (its CA '
-			. 'certificate directory may be missing or empty -- try running `certctl rehash` '
-			. 'from the shell). pfBlockerNG will retry at the next boot or package check.'
-		),
-		pfb_pkgconf_ca_hook_is_login() ? '/etc/login.conf' : PFB_PKG_CONF
-	);
+	// Diagnose per verb under the login hook (a failed sync is almost always the
+	// unpopulated-CA-dir guard; a failed revoke has no CA-dir dependency, so its causes
+	// are the file's) and promise only the boot reconcile -- the login generation has no
+	// per-check reapply. The old generation keeps the shipped 3.3.3 sentence.
+	if (pfb_pkgconf_ca_hook_is_login()) {
+		$input_errors[] = $pfb_ca_token === 'on'
+			? gettext(
+				'The setting was saved, but pfBlockerNG could not update /etc/login.conf right now '
+				. '(the CA certificate directory may be missing or empty -- try running `certctl '
+				. 'rehash` from the shell); it will retry at the next boot.'
+			)
+			: gettext(
+				'The setting was saved, but pfBlockerNG could not update /etc/login.conf right now '
+				. '(the file may be a symlink, or have a shape pfBlockerNG does not edit); '
+				. 'it will retry at the next boot.'
+			);
+	} else {
+		$input_errors[] = sprintf(
+			gettext(
+				'The setting was saved, but pfBlockerNG could not update %s right now (its CA '
+				. 'certificate directory may be missing or empty -- try running `certctl rehash` '
+				. 'from the shell). pfBlockerNG will retry at the next boot or package check.'
+			),
+			PFB_PKG_CONF
+		);
+	}
 }
 
 // Read after the save block so a failed CA sync re-render shows the just-posted software choice.
@@ -210,9 +228,9 @@ $section->addInput(new Form_Checkbox(
 ))->setHelp('Periodically check for a new version and notify when one is available.');
 $form->add($section);
 
-// The installed repository hook owns pkg.conf; Plus is the only edition with the vendor pin.
-// Login-generation hooks apply on every edition (issue #2630); the pkg.conf
-// generation stays Plus-only as shipped.
+// Login-generation hooks own /etc/login.conf and apply on every edition (issue
+// #2630); the pkg.conf generation stays Plus-only as shipped -- Plus is the only
+// edition with the vendor pin.
 if (pfb_pkg_ca_is_plus() || pfb_pkgconf_ca_hook_is_login()) {
 	pfb_pkgconf_ca_add_form_controls($form, pfb_pkg_ca_consent_enabled());
 }
