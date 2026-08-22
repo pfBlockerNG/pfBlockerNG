@@ -458,6 +458,18 @@ def test_symlinked_builder_parent_is_rejected_before_store_creation(tmp_path: Pa
     assert not (tmp_path / "store").exists()
 
 
+def test_validate_rejects_unmanaged_graphify_file_without_traceback(tmp_path: Path) -> None:
+    builder = tmp_path / "builder"
+    builder.mkdir()
+    (builder / "graphify-out").write_text("unmanaged\n", encoding="utf-8")
+
+    result = run_store("validate-builder", "--builder", str(builder))
+
+    assert result.returncode != 0
+    assert result.stderr.startswith("graphify-store:")
+    assert "Traceback" not in result.stderr
+
+
 def test_symlinked_restore_target_parent_is_rejected_before_delete(tmp_path: Path) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)

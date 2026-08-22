@@ -22,10 +22,10 @@ Load when: every agent session, from `AGENTS.md`.
 - `work-branch.sh --worktree` restores an exact source-SHA snapshot from the local
   Graphify store. `GRAPHIFY-REFRESH-REQUIRED` means hold `.git/graphify-store.lock`
   in one harness-tracked `lockf`/`flock` session; create a temporary detached builder
-  at the reported source SHA; run `graphify-store.py seed`, refresh with Graphify
-  0.9.48 only after `graphify-store.py validate-builder --builder .` succeeds,
-  using `PYTHONHASHSEED=0` and `--code-only` with `GRAPHIFY_VIZ_NODE_LIMIT=0`
-  (the default `--no-viz` policy), run
+  at the reported source SHA; run `graphify-store.py seed`, then
+  `graphify-store.py validate-builder --builder .`, then refresh with Graphify 0.9.48
+  using `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify extract . --code-only --force`;
+  run
   `graphify cluster-only . --no-viz --no-label`, then run `graphify-store.py publish`;
   release/remove the builder and retry. The store
   archives exactly `graph.json` and `GRAPH_REPORT.md` and rejects a refresh when
