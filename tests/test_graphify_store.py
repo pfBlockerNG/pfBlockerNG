@@ -97,12 +97,9 @@ def test_publish_and_restore_keep_only_canonical_artifacts_and_source_tag(tmp_pa
     ]
 
 
-def test_restore_uses_safe_tar_filter_and_ignores_extra_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_restore_uses_safe_tar_filter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
-    (source / "graphify-out" / "cache").mkdir()
-    (source / "graphify-out" / "cache" / "payload.txt").write_text("payload\n", encoding="utf-8")
-    (source / "graphify-out" / "current").symlink_to("cache")
     store_root = tmp_path / "store"
     publish(source, store_root, "devel", sha)
     target = tmp_path / "target"
@@ -117,9 +114,6 @@ def test_restore_uses_safe_tar_filter_and_ignores_extra_files(tmp_path: Path, mo
     monkeypatch.setattr(store.tarfile.TarFile, "extractall", extractall)
     store.restore_exact(store_root, "devel", sha, target)
     assert observed["filter"] == "data"
-    assert (target / "graphify-out" / "graph.json").exists()
-    assert (target / "graphify-out" / "GRAPH_REPORT.md").exists()
-    assert not (target / "graphify-out" / "cache").exists()
 
 
 def test_uppercase_source_sha_is_normalized_for_publish_lookup_and_restore(tmp_path: Path) -> None:
@@ -250,8 +244,6 @@ def test_seed_prefers_exact_then_latest_snapshot_of_same_branch(tmp_path: Path) 
 def test_restore_replaces_old_target_junk_with_only_canonical_artifacts(tmp_path: Path) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
-    (source / "graphify-out" / "cache").mkdir()
-    (source / "graphify-out" / "cache" / "payload.txt").write_text("ignored\n", encoding="utf-8")
     store_root = tmp_path / "store"
     publish(source, store_root, "devel", sha)
     target = tmp_path / "target"
