@@ -63,6 +63,27 @@ scripts/agent/check-agent-config-parity.sh'
     The stderr should include '[pre-commit] FAILED: composer vendor'
   End
 
+  It 'grades exemptions against the staged manifest, not working-tree edits'
+    printf 'scripts/check_noopener.py\n' > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should include 'listed in .githooks-exempt): noopener'
+    The output should not include 'listed in .githooks-exempt): composer vendor'
+    The stderr should include '[pre-commit] FAILED: composer vendor'
+  End
+
+  It 'rejects a symlinked manifest even when its target lists the checkers'
+    printf '%s\n' "$ALL_CHECKERS" > "$stubdir/exempt-target"
+    ln -s "$stubdir/exempt-target" "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should not include 'listed in .githooks-exempt'
+    The stderr should include '[pre-commit] FAILED: composer vendor'
+  End
+
   It 'exempts the agent-config parity gate only through the manifest'
     printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
     gitc add .githooks-exempt
