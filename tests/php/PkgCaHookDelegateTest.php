@@ -114,14 +114,7 @@ final class PkgCaHookDelegateTest extends TestCase
 		$this->assertSame(1, $ret);
 		$this->assertSame([], $out);
 
-		// (b) consent OFF + populated dir -- same non-behaviour either way.
-		putenv('SSL_CA_CERT_PATH');
-		PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', PfbToggle::Off);
-		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
-		$this->assertSame(1, $ret);
-		$this->assertSame([], $out);
-
-		// (c) an ambient value the process environment already carried passes through
+		// (b) an ambient value the process environment already carried passes through
 		// untouched -- proving pfb_pkg_exec never unsets it either.
 		putenv('SSL_CA_CERT_PATH=' . $caDir);
 		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);

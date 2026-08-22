@@ -35,9 +35,10 @@
 #                         either to "" to opt that half out.
 #   PFB_WEBGUI_RESTART    webConfigurator restart script (default: /etc/rc.restart_webgui),
 #                         run once when this install run just changed login.conf (issue
-#                         #2623); a missing/non-executable path is a silent skip, so this
-#                         is a no-op off-box. Never runs on an idempotent re-run or an
-#                         upgrade — those never touch login.conf again.
+#                         #2623); a missing/non-executable path is a silent skip (no-op
+#                         off-box), and setting it to the empty string opts out (`-`, not
+#                         `:-`, like the CA knobs). Never runs on an idempotent re-run or
+#                         an upgrade — those never touch login.conf again.
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
@@ -110,13 +111,9 @@ die() {
 PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH-${ROOT}/etc/ssl/certs}"
 PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 
-# webConfigurator restart knob (issue #2623): fired once, only when THIS run just
-# changed login.conf (the JOB 2 CA carry, issue #2617) -- a php-fpm worker keeps
-# whatever environment it started with for its whole life, so a restart here is what
-# makes a fresh login.conf carry reach every later GUI-driven pkg call natively,
-# instead of waiting for the next reboot. Absent/non-executable (off-box, a dev
-# checkout, CI) is a silent skip -- see the change-gate below.
-PFB_WEBGUI_RESTART="${PFB_WEBGUI_RESTART:-/etc/rc.restart_webgui}"
+# webConfigurator restart knob (issue #2623) -- semantics in the header above; the
+# change-gate lives at the hook invocation below.
+PFB_WEBGUI_RESTART="${PFB_WEBGUI_RESTART-/etc/rc.restart_webgui}"
 
 # Spelled out per combination so every path stays quoted: a single accumulated string
 # would have to be word-split to become separate env(1) operands, which breaks the moment
@@ -353,7 +350,7 @@ pfb_channel_install() {
     # nothing to reconcile yet) never trips `set -e`; it gets its own placeholder so
     # "absent before, absent after" reads as unchanged rather than a spurious diff.
     _login_conf="${ROOT}/etc/login.conf"
-    _login_conf_before="$(cksum <"${_login_conf}" 2>/dev/null || printf 'absent\n')"
+    _login_conf_before="$(cksum 2>/dev/null <"${_login_conf}" || printf 'absent\n')"
 
     printf '==> Running the generator hook to resolve the conf now\n'
     _no_conf="${REPOS_DIR}/.pfb-no-such-conf"
@@ -371,10 +368,14 @@ pfb_channel_install() {
         PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
         sh "${ON_BOX_HOOK}" onestart </dev/null || true
 
-    _login_conf_after="$(cksum <"${_login_conf}" 2>/dev/null || printf 'absent\n')"
+    _login_conf_after="$(cksum 2>/dev/null <"${_login_conf}" || printf 'absent\n')"
     if [ "${_login_conf_before}" != "${_login_conf_after}" ] && [ -x "${PFB_WEBGUI_RESTART}" ]; then
         printf '==> login.conf changed -- restarting the webConfigurator\n'
-        if _ca_path_populated "${PFB_SSL_CA_CERT_PATH}"; then
+        # Export only what a future boot would deliver: the value must actually be in
+        # the post-hook login.conf (a strip run restarts CLEAN -- never re-arm the
+        # variable the admin just revoked) and the CA dir must be populated.
+        if grep -F -q "SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" "${_login_conf}" 2>/dev/null \
+            && _ca_path_populated "${PFB_SSL_CA_CERT_PATH}"; then
             env SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" "${PFB_WEBGUI_RESTART}" </dev/null || true
         else
             "${PFB_WEBGUI_RESTART}" </dev/null || true
