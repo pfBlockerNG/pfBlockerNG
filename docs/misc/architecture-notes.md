@@ -901,8 +901,12 @@ auto-registers every file in `tests/smoke/fixtures/` when it starts; individual 
 in-memory dict; the HTTP handler serves it verbatim (plain body, no `Content-Encoding`, no
 `Content-Disposition`) at `GET /<name>`. The fixture directory variant
 (`mock_feeds.feed_url("<filename>")`) reads the file on first access and registers it under its
-basename. `curl` does not send `Accept-Encoding: gzip` nor `If-Modified-Since`, so the mock
-needs no compression or ETag/304 logic — plain body is fine.
+basename. Conditional-GET behaviour is opt-in per name — `enable_etag()` (ETag +
+`If-None-Match` 304), `enable_lastmod_304()` (RFC-conformant `If-Modified-Since`),
+`disable_lastmod()` (no validator at all) — so a case picks the branch it means to exercise.
+`enable_content_encoding_gzip()` (issue #2634) labels a response `Content-Encoding: gzip`
+without touching the body, reproducing the Apache `AddEncoding` origin; pfBlockerNG offers no
+`Accept-Encoding`, so the published bytes must survive that label untouched.
 
 **Adding a new format fixture.**
 
