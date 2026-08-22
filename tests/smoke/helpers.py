@@ -3674,16 +3674,11 @@ def reboot_vm(
     The boottime poll is the reboot event; ``timeout`` supplies independent salvage caps for
     that event and the subsequent readiness gate. No duration is asserted.
 
-    ``require_pkg_metadata`` defaults False (issue #2624): the sentinel exists to
-    protect a pkg operation through the metadata refresh's ABI-flip window
-    (#2242/#2458), and no reboot caller pkg-adds after its own reboot. Measured
-    (CI and a pfb box alike): post-reboot the metadata job's ``pfSense-upgrade
-    -C`` never finishes within the settle window, so requiring the sentinel
-    deadlocked every reboot test; the leading reading is the harness stub DNS
-    answering its lookups with the test sentinel address (poisoned resolution,
-    hang at connect). A future pkg-adding reboot caller passes True explicitly;
-    a later module's own deploy is covered by install-pkg.sh's retry and the
-    pre-#2491 history.
+    ``require_pkg_metadata`` defaults False: the metadata sentinel only guards a
+    pkg operation through the refresh's ABI-flip window (#2242/#2458), and no
+    reboot caller performs one after its own reboot -- requiring it deadlocks
+    the reboot tests (issue #2624). A caller that pkg-adds after its reboot
+    passes True explicitly.
     """
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
     # refusing to reboot saves the whole reboot+readiness cycle and leaves the box up in
@@ -3754,7 +3749,6 @@ def reboot_vm(
         raise RuntimeError(
             f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
         )
-    # Metadata-sentinel rationale in this function's docstring (issue #2624).
     wait_boot_complete(vm, require_pkg_metadata=require_pkg_metadata)
     flag = vm.ssh("/bin/test", "-f", PFB_CRON_DISABLE_PATH)
     if flag.returncode != 0:
@@ -4162,8 +4156,8 @@ def wait_boot_complete(
     raise RuntimeError(
         f"pfSense boot did not settle after {timeout:.0f}s: "
         + (
-            f"the package-metadata sentinel /var/run/pfSense_version.rc never appeared "
-            f"(last probe: {last_metadata}) "
+            f"the package-metadata sentinel /var/run/pfSense_version.rc was not observed "
+            f"before the deadline (last probe: {last_metadata}) "
             f"while is_platform_booting() last returned {last!r}"
             if last == "0"
             else f"is_platform_booting() last returned {last!r} (expected '0'); metadata last probe: {last_metadata}"
