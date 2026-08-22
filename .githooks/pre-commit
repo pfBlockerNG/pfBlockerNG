@@ -48,6 +48,18 @@ step() { printf '[pre-commit] %s\n' "$1"; }
 failed() { printf '[pre-commit] FAILED: %s\n' "$1" >&2; fail=1; }
 skip() { skipped="${skipped}${skipped:+,} $1"; }
 
+# Explicit legacy-branch opt-out (issue #2633): every worktree runs THIS hook via the
+# absolute shared core.hooksPath, but release-line trees never shipped the devel
+# checker corpus. A repo-script gate whose checker is absent from the tree is skipped
+# only when the tree explicitly commits that exact script path in .githooks-exempt.
+# A missing checker with no listed exemption stays a hard failure -- deleting a
+# checker on devel can never silently open its gate (devel commits no manifest) --
+# and a listed checker that IS present still runs.
+exempted() {
+	[ ! -f "$1" ] && [ -f .githooks-exempt ] && grep -qxF -e "$1" .githooks-exempt
+}
+exempt() { printf '[pre-commit] exempt (checker not shipped on this branch; listed in .githooks-exempt): %s\n' "$1"; }
+
 # --- Stage classification: run a language's gates ONLY when this commit stages a
 #     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
 #     deletion stages nothing to lint.) Nothing staged -> nothing to do.
@@ -160,7 +172,9 @@ fi
 #     Relevant to shell scripts AND Markdown shell fences, so it runs when either
 #     is staged. Reuses the python resolved above (CI is the hard gate when absent). ---
 if [ "$staged_sh" = 1 ] || [ "$staged_md" = 1 ]; then
-	if [ -n "$py_bin" ]; then
+	if exempted scripts/check_url_encoding.py; then
+		exempt url-encoding
+	elif [ -n "$py_bin" ]; then
 		step 'url-encoding (no naked $var in curl URLs)'
 		"$py_bin" scripts/check_url_encoding.py || failed 'url-encoding'
 	else
@@ -172,7 +186,9 @@ fi
 #     (issue #1217, reverse-tabnabbing defence). Relevant to the Web UI surface:
 #     PHP/inc pages and the wizard XML under src/usr/local/www. ---
 if [ "$staged_php" = 1 ] || [ "$staged_xml" = 1 ]; then
-	if [ -n "$py_bin" ]; then
+	if exempted scripts/check_noopener.py; then
+		exempt noopener
+	elif [ -n "$py_bin" ]; then
 		step 'noopener (target=_blank needs adjacent rel=noopener noreferrer)'
 		"$py_bin" scripts/check_noopener.py || failed 'noopener'
 	else
@@ -183,7 +199,9 @@ fi
 # --- Forbid direct Python interpreter paths ON the pfSense appliance. Consumers
 #     invoke pfb_python.sh, the sole dependency-derived resolver. ---
 if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ]; then
-	if [ -n "$py_bin" ]; then
+	if exempted scripts/check_appliance_python.py; then
+		exempt no-appliance-python
+	elif [ -n "$py_bin" ]; then
 		step 'no-direct-appliance-python'
 		"$py_bin" scripts/check_appliance_python.py || failed 'no-appliance-python'
 	else
@@ -198,7 +216,9 @@ fi
 #     py/php/sh/yaml). Scans the whole tracked set; escape a real one-off inline
 #     with `# version-literal-ok: <reason>`. ---
 if [ "$staged_py" = 1 ] || [ "$staged_php" = 1 ] || [ "$staged_sh" = 1 ] || [ "$staged_yaml" = 1 ]; then
-	if [ -n "$py_bin" ]; then
+	if exempted scripts/check_version_literals.py; then
+		exempt version-literals
+	elif [ -n "$py_bin" ]; then
 		step 'version-literals (no hardcoded version tokens)'
 		"$py_bin" scripts/check_version_literals.py || failed 'version-literals'
 	else
@@ -210,7 +230,9 @@ fi
 #     archaeology) in ADDED comment lines under src/ + scripts/. Diff-scoped:
 #     judges only the staged diff, so pre-existing narration is grandfathered
 #     until its cleanup lands. Escape inline with `# narration-ok: <reason>`. ---
-if [ -n "$py_bin" ]; then
+if exempted scripts/check_comment_narration.py; then
+	exempt comment-narration
+elif [ -n "$py_bin" ]; then
 	step 'comment-narration (no process narration in new comments)'
 	"$py_bin" scripts/check_comment_narration.py --staged || failed 'comment-narration'
 else
@@ -222,7 +244,9 @@ fi
 #     checker self-scopes: it validates iff the staged diff touches a role
 #     surface (.agents/policy/, model-tiers.conf, .codex/agents/,
 #     .claude/workflows/, .agents/skills/); otherwise it reports the skip. ---
-if [ -n "$py_bin" ]; then
+if exempted scripts/check_agent_roles.py; then
+	exempt agent-roles
+elif [ -n "$py_bin" ]; then
 	step 'agent-roles (role registry vs vendor role definitions)'
 	"$py_bin" scripts/check_agent_roles.py --staged || failed 'agent-roles'
 else
@@ -234,7 +258,9 @@ fi
 #     their byte budgets, and every AGENTS.md routing-table target keeps its
 #     Scope/Load-when header. Self-scopes: validates iff the staged diff
 #     touches a context surface; otherwise reports the skip. ---
-if [ -n "$py_bin" ]; then
+if exempted scripts/check_context_budget.py; then
+	exempt context-budget
+elif [ -n "$py_bin" ]; then
 	step 'context-budget (bootstrap/policy byte budgets + routing headers)'
 	"$py_bin" scripts/check_context_budget.py --staged || failed 'context-budget'
 else
@@ -244,7 +270,9 @@ fi
 # =============================== PHP (*.php, *.inc) ========================== #
 if [ "$staged_php" = 1 ]; then
 	composer_vendor_ok=1
-	if [ -n "$py_bin" ]; then
+	if exempted scripts/check_composer_vendor.py; then
+		exempt 'composer vendor'
+	elif [ -n "$py_bin" ]; then
 		step 'composer vendor'
 		"$py_bin" scripts/check_composer_vendor.py || {
 			failed 'composer vendor'
