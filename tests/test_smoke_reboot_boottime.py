@@ -90,7 +90,6 @@ def test_reboot_vm_waits_for_changed_boottime_before_readiness(
     assert ready_calls
     assert "/sbin/reboot" in fake_vm.calls
     assert fake_vm.boottime_reads == 4
-    # Default flipped to False by issue #2624: the metadata sentinel guards a pkg
-    # operation through the ABI-flip window, which no reboot caller performs.
+    # Default False since issue #2624.
     assert boot_waits == [(vm, False if require_pkg_metadata is None else require_pkg_metadata)]
     assert cron_guards == [vm]

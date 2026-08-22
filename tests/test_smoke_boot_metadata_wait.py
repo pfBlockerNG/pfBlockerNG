@@ -86,7 +86,7 @@ def test_wait_boot_complete_keeps_polling_when_first_probe_finds_no_metadata_job
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
 
-    with pytest.raises(RuntimeError, match="never appeared"):
+    with pytest.raises(RuntimeError, match=r"sentinel /var/run/pfSense_version\.rc was not observed"):
         helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=10, delay=0)
 
     assert len([c for c in calls if c == _PROBE_ARGV]) >= 2
@@ -183,7 +183,7 @@ def test_wait_boot_complete_metadata_job_stuck_running_times_out(monkeypatch: py
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
 
-    with pytest.raises(RuntimeError, match="never appeared"):
+    with pytest.raises(RuntimeError, match=r"sentinel /var/run/pfSense_version\.rc was not observed"):
         helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=3, delay=0)
 
     assert _PROBE_ARGV in calls
@@ -224,7 +224,7 @@ def test_wait_boot_complete_nan_deadline_does_not_probe(monkeypatch: pytest.Monk
     )
     monkeypatch.setattr(helpers.time, "monotonic", lambda: 0.0)
 
-    with pytest.raises(RuntimeError, match="last returned"):
+    with pytest.raises(RuntimeError, match=r"last returned '\?' \(expected '0'\)"):
         helpers.wait_boot_complete(cast(helpers.SmokeVM, object()), timeout=float("nan"))
 
 
