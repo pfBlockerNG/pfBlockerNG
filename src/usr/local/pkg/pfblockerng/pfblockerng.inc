@@ -369,12 +369,9 @@ $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL d
 				CURLOPT_FORBID_REUSE	=> TRUE,
 				CURLOPT_SSL_ENABLE_ALPN	=> TRUE,
 				CURLOPT_SSL_ENABLE_NPN	=> TRUE,
-				// issue #2634: NO Accept-Encoding is offered. A feed body is a hashed artifact
-				// (ADR-42 stores a digest of the RAW fetched bytes and the conditional-GET
-				// compare rides on it) and extraction dispatches on that body's detected MIME
-				// type. An origin that labels an archive 'Content-Encoding: gzip' (Apache's
-				// AddEncoding) would have libcurl decode it in flight, so what reached disk
-				// was the archive's inner bytes -- a different digest and the wrong branch.
+				// issue #2634: no Accept-Encoding is offered -- a decoded body breaks both the
+				// ADR-42 raw-byte digest and MIME dispatch (architecture-notes, "Transfer
+				// encoding").
 				// Constrain libcurl to the schemes pfBlockerNG fetches feeds over (http/https/ftp;
 				// rsync uses exec separately) — an independent backstop to the PFB_FILTER_URL scheme
 				// allowlist, since PHP parse_url and libcurl can disagree on crafted input.
@@ -13649,7 +13646,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 
 				// Load curl default settings — incl. the CURLOPT_PROTOCOLS scheme allow-list
-				// (an independent libcurl-layer backstop to PFB_FILTER_URL) and gzip encoding.
+				// (an independent libcurl-layer backstop to PFB_FILTER_URL).
 				curl_setopt_array($ch, $pfb['curl_defaults']);
 
 				curl_setopt($ch, CURLOPT_FILE, $fhandle);	// Add $fhandle setting to cURL

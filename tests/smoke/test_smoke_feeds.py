@@ -3882,13 +3882,6 @@ def _blacklist_tar_gz(top: str, category: str, domain: str) -> bytes:
 def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """issue #2634: a feed labelled Content-Encoding: gzip still ingests as the PUBLISHED archive.
 
-    An origin that serves ``.tar.gz`` with ``Content-Encoding: gzip`` (Apache's
-    ``AddEncoding x-gzip .gz``) is common in the wild. What must never happen is the
-    download deciding, on the strength of that label, to store something other than
-    what the origin published: pfBlockerNG hashes the fetched body (ADR-42) and
-    dispatches extraction on its detected type, so a body decoded in flight is both a
-    different digest and a different branch.
-
     Given an origin serving a valid UT1-shaped ``.tar.gz`` under a
       ``Content-Encoding: gzip`` label,
     When  pfb_download() fetches it as type='blacklist',
@@ -3914,7 +3907,7 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
             f"expected pfb_download success on a valid .tar.gz served with Content-Encoding: gzip; got stdout: {out!r}"
         )
         stored = deployed_vm.ssh(f"/usr/bin/file -b --mime-type {archive} 2>&1").stdout.strip()
-        assert stored == "application/gzip", (
+        assert stored in {"application/gzip", "application/x-gzip"}, (
             f"expected the stored archive to still be the PUBLISHED gzip, not its "
             f"decoded inner tar; /usr/bin/file reported {stored!r} for {archive}"
         )

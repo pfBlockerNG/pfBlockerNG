@@ -898,8 +898,8 @@ auto-registers every file in `tests/smoke/fixtures/` when it starts; individual 
 `mock_feeds.feed_url("<name>")` to get the guest URL.
 
 **How `_MockFeedServer.register()` works.** `register(name, body)` stores the body in an
-in-memory dict; the HTTP handler serves it verbatim (plain body, no `Content-Encoding`, no
-`Content-Disposition`) at `GET /<name>`. The fixture directory variant
+in-memory dict; the HTTP handler serves it verbatim (plain body, no `Content-Encoding` by
+default, no `Content-Disposition`) at `GET /<name>`. The fixture directory variant
 (`mock_feeds.feed_url("<filename>")`) reads the file on first access and registers it under its
 basename. Conditional-GET behaviour is opt-in per name — `enable_etag()` (ETag +
 `If-None-Match` 304), `enable_lastmod_304()` (RFC-conformant `If-Modified-Since`),
@@ -1452,6 +1452,14 @@ sibling of ADR-40 (which gates IP **pf-table** reloads on radix-tree set members
 *not* file hashing) — different data, different mechanism; cross-reference only, no overlap. The
 deferred DNSBL structure-reuse ADR will build on this convention (persist each loaded file's hash
 to reuse an unchanged file's in-memory structure on a swap) but is out of scope here.
+
+**Transfer encoding — feed fetches offer no `Accept-Encoding`** (issue #2634). The digest above
+covers the RAW fetched bytes, and extraction dispatches on the same bytes' detected MIME type, so
+the body on disk must be what the origin published. Offering gzip let an origin that labels an
+archive `Content-Encoding: gzip` (Apache's `AddEncoding x-gzip .gz`) have libcurl decode it in
+flight: a digest of different bytes, and a `.tar.gz` arriving as `application/x-tar`. Transfers
+are therefore uncompressed for plain-text feeds too — re-introducing negotiated compression
+requires solving the raw-digest contract first, not just the extraction branch.
 
 **Per-side hash algorithm** — each side uses a hash native to it and compares only its own
 digests; **no cross-language digest is ever produced or compared**:
