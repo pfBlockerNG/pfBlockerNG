@@ -3667,7 +3667,7 @@ def reboot_vm(
     vm: SmokeVM,
     *,
     timeout: float = DEFAULT_BOOT_TIMEOUT,
-    require_pkg_metadata: bool = True,
+    require_pkg_metadata: bool = False,
 ) -> None:
     """Reboot, observe a changed ``kern.boottime``, then await full readiness.
 
@@ -3749,8 +3749,13 @@ def reboot_vm(
         raise RuntimeError(
             f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
         )
-    # Plain smoke reboots need the platform boot flag. Upgrade-oriented callers can also
-    # require the package-metadata sentinel used by initial boot readiness.
+    # Plain smoke reboots need the platform boot flag only. The package-metadata
+    # sentinel exists to protect a pkg operation through the ABI-flip window
+    # (#2242/#2458) -- no reboot caller performs one, and post-reboot the harness
+    # stub DNS starves rc.update_pkg_metadata's pfSense-upgrade -C of name
+    # resolution, so requiring the sentinel here deadlocks every reboot test
+    # (issue #2624, measured: the job sat `running` past 180s on CI and on a
+    # pfb box alike). A future pkg-adding reboot caller opts in explicitly.
     wait_boot_complete(vm, require_pkg_metadata=require_pkg_metadata)
     flag = vm.ssh("/bin/test", "-f", PFB_CRON_DISABLE_PATH)
     if flag.returncode != 0:
@@ -4156,9 +4161,14 @@ def wait_boot_complete(
             break
         time.sleep(min(delay, remaining))
     raise RuntimeError(
-        f"pfSense boot did not settle after {timeout:.0f}s: is_platform_booting() last returned "
-        f"{last!r} (expected '0'); /var/run/pfSense_version.rc last probe: {last_metadata}. "
-        f"pfBlockerNG updates would race boot-time state."
+        f"pfSense boot did not settle after {timeout:.0f}s: "
+        + (
+            f"the package-metadata sentinel never appeared (last probe: {last_metadata}) "
+            f"while is_platform_booting() last returned {last!r}"
+            if last == "0"
+            else f"is_platform_booting() last returned {last!r} (expected '0'); metadata last probe: {last_metadata}"
+        )
+        + ". pfBlockerNG updates would race boot-time state."
     )
 
 
