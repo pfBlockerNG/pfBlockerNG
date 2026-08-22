@@ -7,6 +7,7 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -14,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
+CANONICAL_ARTIFACTS = ("graph.json", "GRAPH_REPORT.md")
 
 
 class StoreError(RuntimeError):
@@ -83,16 +85,33 @@ def _source_payload(builder: Path) -> Path:
     return payload
 
 
+def _canonical_files(payload: Path) -> tuple[Path, ...]:
+    files: list[Path] = []
+    for name in CANONICAL_ARTIFACTS:
+        path = payload / name
+        try:
+            mode = path.lstat().st_mode
+        except FileNotFoundError as error:
+            raise StoreError(f"missing canonical Graphify artifact: {path}") from error
+        if not stat.S_ISREG(mode):
+            raise StoreError(f"canonical Graphify artifact is not a regular file: {path}")
+        files.append(path)
+    return tuple(files)
+
+
 def _replace_payload(source: Path, target_root: Path) -> None:
     target_root = _physical_path(target_root, "restore target")
     if not target_root.is_dir() or target_root.is_symlink():
         raise StoreError(f"target is not a directory: {target_root}")
+    artifacts = _canonical_files(source)
     target = target_root / "graphify-out"
     if target.is_symlink() or (target.exists() and not target.is_dir()):
         raise StoreError(f"refusing unmanaged graphify-out target: {target}")
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(source, target, symlinks=True, copy_function=shutil.copy2)
+    target.mkdir()
+    for source_file in artifacts:
+        shutil.copy2(source_file, target / source_file.name)
 
 
 def _branch_exists(store: Path, branch: str) -> bool:
@@ -166,6 +185,7 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
     sha = _valid_sha(sha)
     builder = _physical_path(builder, "builder")
     payload = _source_payload(builder)
+    artifacts = _canonical_files(payload)
     head = _run(builder, "rev-parse", "HEAD").stdout.strip()
     if head != sha:
         raise StoreError(f"builder HEAD {head} does not match source SHA {sha}")
@@ -180,7 +200,9 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
         raise StoreError(f"refusing unmanaged store payload: {target}")
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(payload, target, symlinks=True, copy_function=shutil.copy2)
+    target.mkdir()
+    for source_file in artifacts:
+        shutil.copy2(source_file, target / source_file.name)
     _run(store, "add", "-A", "--", "graphify-out")
     if _run(store, "diff", "--cached", "--quiet", check=False).returncode:
         _run(store, "commit", "--quiet", "-m", sha)

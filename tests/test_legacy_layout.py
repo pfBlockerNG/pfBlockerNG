@@ -40,4 +40,21 @@ def test_active_repository_checks_exclude_legacy() -> None:
     assert "legacy/*) continue" in workflow
     assert workflow.count("- 'legacy/**'") == 2
     assert "python legacy/benchmarks/" in workflow
-    assert "legacy/" in graphify
+    suffixes = (
+        "md mdx qmd skill txt rst html yaml yml pdf png jpg jpeg gif webp svg docx xlsx "
+        "mp4 mov webm mkv avi m4v mp3 wav m4a ogg gdoc gsheet gslides"
+    )
+    expected_graphify = [
+        "*",
+        "!src/",
+        "!src/**",
+        "!tests/",
+        "!tests/**",
+        "!stubs/",
+        "!stubs/**",
+        "src/**/vendor/",
+        "src/**/vendor/**",
+        *(f"*.{suffix}" for suffix in suffixes.split()),
+    ]
+    assert graphify == expected_graphify
+    assert not any(line.startswith("!legacy") for line in graphify)

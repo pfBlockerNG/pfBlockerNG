@@ -76,6 +76,7 @@ Describe 'work-branch.sh Graphify store integration'
         commit -q -m helper || return 1
     mkdir -p "$primary/graphify-out/cache"
     printf '%s\n' graph > "$primary/graphify-out/graph.json"
+    printf '%s\n' report > "$primary/graphify-out/GRAPH_REPORT.md"
     printf '%s\n' payload > "$primary/graphify-out/cache/payload.txt"
     ln -s cache "$primary/graphify-out/current"
     sha=$(git_fixture -C "$primary" rev-parse HEAD)
@@ -159,8 +160,10 @@ PYTHON3
     The status should equal 0
     The output should equal "$(printf 'issue/32-graph\t%s/exact' "$fixture")"
     The stderr should include 'Preparing worktree'
-    Assert [ -f "$fixture/exact/graphify-out/cache/payload.txt" ]
-    Assert [ -L "$fixture/exact/graphify-out/current" ]
+    Assert [ -f "$fixture/exact/graphify-out/graph.json" ]
+    Assert [ -f "$fixture/exact/graphify-out/GRAPH_REPORT.md" ]
+    Assert [ ! -e "$fixture/exact/graphify-out/cache" ]
+    Assert [ ! -e "$fixture/exact/graphify-out/current" ]
     The contents of file "$codegraph_log" should equal "init $fixture/exact"
   End
 
@@ -188,7 +191,8 @@ FLOCK
     The output should equal "$(printf 'adr/35-graph\t%s/flock-worktree' "$fixture")"
     The stderr should include 'Preparing worktree'
     The contents of file "$WB_FLOCK_USED" should equal 9
-    Assert [ -f "$fixture/flock-worktree/graphify-out/cache/payload.txt" ]
+    Assert [ -f "$fixture/flock-worktree/graphify-out/graph.json" ]
+    Assert [ -f "$fixture/flock-worktree/graphify-out/GRAPH_REPORT.md" ]
   End
 
   It 'removes the worktree and branch when exact snapshot restoration fails'
@@ -233,8 +237,8 @@ FLOCK
     The contents of file "$fixture/status-b" should equal 0
     The contents of file "$fixture/out-a" should equal "$(printf 'issue/39-graph\t%s/race-a' "$fixture")"
     The contents of file "$fixture/out-b" should equal "$(printf 'issue/40-graph\t%s/race-b' "$fixture")"
-    Assert [ -f "$fixture/race-a/graphify-out/cache/payload.txt" ]
-    Assert [ -f "$fixture/race-b/graphify-out/cache/payload.txt" ]
+    Assert [ -f "$fixture/race-a/graphify-out/graph.json" ]
+    Assert [ -f "$fixture/race-b/graphify-out/graph.json" ]
     Assert [ -f "$fixture/race-a/.codegraph/codegraph.db" ]
     Assert [ -f "$fixture/race-b/.codegraph/codegraph.db" ]
   End

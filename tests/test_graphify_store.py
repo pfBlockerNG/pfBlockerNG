@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import socket
 import subprocess
 import tarfile
 from pathlib import Path
@@ -39,6 +41,7 @@ def make_repo(path: Path, branch: str = "devel") -> str:
     git(path, "config", "user.name", "Graphify Test")
     (path / "graphify-out").mkdir()
     (path / "graphify-out" / "graph.json").write_text('{"version":1}\n', encoding="utf-8")
+    (path / "graphify-out" / "GRAPH_REPORT.md").write_text("report\n", encoding="utf-8")
     git(path, "add", "graphify-out")
     git(path, "commit", "-q", "-m", "source")
     return git(path, "rev-parse", "HEAD")
@@ -59,7 +62,7 @@ def publish(source: Path, store_root: Path, branch: str, sha: str) -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_publish_and_restore_preserve_opaque_state_and_source_tag(tmp_path: Path) -> None:
+def test_publish_and_restore_keep_only_canonical_artifacts_and_source_tag(tmp_path: Path) -> None:
     source = tmp_path / "source tree"
     sha = make_repo(source)
     (source / "graphify-out" / "cache").mkdir()
@@ -86,14 +89,17 @@ def test_publish_and_restore_preserve_opaque_state_and_source_tag(tmp_path: Path
         str(target),
     )
     assert result.returncode == 0, result.stderr
-    assert (target / "graphify-out" / "cache" / "payload.txt").read_text(encoding="utf-8") == "payload\n"
-    assert (target / "graphify-out" / "current").is_symlink()
-    assert (target / "graphify-out" / "current").readlink() == Path("cache")
+    assert (target / "graphify-out" / "graph.json").exists()
+    assert (target / "graphify-out" / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "report\n"
+    assert not (target / "graphify-out" / "cache").exists()
+    assert not (target / "graphify-out" / "current").exists()
+    assert git(store_root, "ls-tree", "-r", "--name-only", "devel", "graphify-out").splitlines() == [
+        "graphify-out/GRAPH_REPORT.md",
+        "graphify-out/graph.json",
+    ]
 
 
-def test_restore_uses_safe_tar_filter_and_preserves_relative_symlinks(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_restore_uses_safe_tar_filter_and_ignores_extra_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
     (source / "graphify-out" / "cache").mkdir()
@@ -113,9 +119,9 @@ def test_restore_uses_safe_tar_filter_and_preserves_relative_symlinks(
     monkeypatch.setattr(store.tarfile.TarFile, "extractall", extractall)
     store.restore_exact(store_root, "devel", sha, target)
     assert observed["filter"] == "data"
-    assert (target / "graphify-out" / "cache" / "payload.txt").read_text(encoding="utf-8") == "payload\n"
-    assert (target / "graphify-out" / "current").is_symlink()
-    assert (target / "graphify-out" / "current").readlink() == Path("cache")
+    assert (target / "graphify-out" / "graph.json").exists()
+    assert (target / "graphify-out" / "GRAPH_REPORT.md").exists()
+    assert not (target / "graphify-out" / "cache").exists()
 
 
 def test_uppercase_source_sha_is_normalized_for_publish_lookup_and_restore(tmp_path: Path) -> None:
@@ -241,6 +247,89 @@ def test_seed_prefers_exact_then_latest_snapshot_of_same_branch(tmp_path: Path) 
     )
     assert result.returncode == 0, result.stderr
     assert (target / "graphify-out" / "graph.json").read_text(encoding="utf-8") == "release\n"
+
+
+def test_restore_replaces_old_target_junk_with_only_canonical_artifacts(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    (source / "graphify-out" / "cache").mkdir()
+    (source / "graphify-out" / "cache" / "payload.txt").write_text("ignored\n", encoding="utf-8")
+    store_root = tmp_path / "store"
+    publish(source, store_root, "devel", sha)
+    target = tmp_path / "target"
+    target.mkdir()
+    old = target / "graphify-out"
+    old.mkdir()
+    (old / "history").mkdir()
+    (old / "history" / "old.txt").write_text("old\n", encoding="utf-8")
+    (old / "secret.txt").write_text("secret\n", encoding="utf-8")
+
+    store.restore_exact(store_root, "devel", sha, target)
+
+    assert sorted(path.name for path in (target / "graphify-out").iterdir()) == ["GRAPH_REPORT.md", "graph.json"]
+
+
+@pytest.mark.parametrize("invalid_kind", ["missing", "symlink", "directory", "fifo", "socket"])
+def test_publish_rejects_invalid_canonical_artifact_before_store_mutation(tmp_path: Path, invalid_kind: str) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    report = source / "graphify-out" / "GRAPH_REPORT.md"
+    report.unlink()
+    if invalid_kind == "symlink":
+        report.symlink_to("missing-report")
+    elif invalid_kind == "directory":
+        report.mkdir()
+    elif invalid_kind == "fifo":
+        os.mkfifo(report)
+    elif invalid_kind == "socket":
+        sock = socket.socket(socket.AF_UNIX)
+        socket_path = Path("/private/tmp") / f"graphify-store-{os.getpid()}"
+        sock.bind(str(socket_path))
+        socket_path.rename(report)
+    store_root = tmp_path / "store"
+    try:
+        result = run_store(
+            "publish",
+            "--store-root",
+            str(store_root),
+            "--builder",
+            str(source),
+            "--branch",
+            "devel",
+            "--sha",
+            sha,
+        )
+    finally:
+        if invalid_kind == "socket":
+            sock.close()
+            report.unlink(missing_ok=True)
+    assert result.returncode != 0
+    assert not store_root.exists()
+
+
+@pytest.mark.parametrize("invalid_kind", ["symlink", "directory", "fifo"])
+def test_replace_rejects_invalid_canonical_artifact_before_target_mutation(tmp_path: Path, invalid_kind: str) -> None:
+    source = tmp_path / "payload"
+    source.mkdir()
+    (source / "graph.json").write_text("{}\n", encoding="utf-8")
+    report = source / "GRAPH_REPORT.md"
+    if invalid_kind == "symlink":
+        report.symlink_to("missing-report")
+    elif invalid_kind == "directory":
+        report.mkdir()
+    else:
+        os.mkfifo(report)
+    target = tmp_path / "target"
+    target.mkdir()
+    old = target / "graphify-out"
+    old.mkdir()
+    keep = old / "keep.txt"
+    keep.write_text("keep\n", encoding="utf-8")
+
+    with pytest.raises(store.StoreError, match="canonical Graphify artifact"):
+        store._replace_payload(source, target)
+
+    assert keep.read_text(encoding="utf-8") == "keep\n"
 
 
 @pytest.mark.parametrize("corrupt_kind", ["directory", "file"])

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -187,12 +188,30 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "graphify-store.py seed",
         "graphify-store.py publish",
         "source SHA",
-        "graphify-out/views/current/graph.json",
-        "skill-owned at `graphify-out/`",
-        "opaque local Graphify store",
+        "graphify-out/graph.json",
+        "graphify-out/GRAPH_REPORT.md",
+        "PYTHONHASHSEED=0",
+        "--code-only",
+        "--no-viz",
+        "legacy/",
+        "src/**/vendor/**",
+        "source_file",
+        "src/` is production",
+        "tests/` is",
+        "harness/test",
+        "stubs/` is shim/support",
+        "ignored and untracked",
     ):
         assert contract in routing, f"Graphify worktree routing lost {contract}"
-    assert "graphify-out/current/graph.json" not in routing
+    assert "graphify-out/views" not in routing
+    assert "update_graphify_views.py" not in routing
+
+    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8").casefold()
+    assert "graphify" not in attrs
+    assert (
+        subprocess.run(["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True).stdout
+        == ""
+    )
 
 
 def test_markdownlint_excludes_generated_graphify_reports() -> None:
