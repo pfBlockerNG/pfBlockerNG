@@ -1692,13 +1692,17 @@ def test_revoke_run_restarts_the_webgui_without_the_ca_path(tmp_path: Path) -> N
             ":setenv=BLOCKSIZE=K:",
             f":setenv=BLOCKSIZE=K,SSL_CA_CERT_PATH={_ca_dir(root)}:",
         )
+        # An untouched sibling class whose foreign value shares our path as a literal
+        # PREFIX: the strip must still leave the restart env clean -- a substring
+        # match on the file would wrongly re-arm the revoked variable off this line.
+        + f"decoy:\\\n\t:setenv=SSL_CA_CERT_PATH={_ca_dir(root)}-other:\n"
     )
     stub = _write_webgui_restart_stub(root)
 
     proc = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
     assert proc.returncode == 0, proc.stderr
 
-    assert "SSL_CA_CERT_PATH" not in _root_login_conf(root).read_text(), (
+    assert f"SSL_CA_CERT_PATH={_ca_dir(root)}:" not in _root_login_conf(root).read_text(), (
         "fixture broken: the opt-out run did not strip the carry, so nothing is proven"
     )
     assert _webgui_restart_called(root).exists(), "login.conf changed (carry stripped) but the restart stub never ran"

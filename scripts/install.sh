@@ -374,7 +374,9 @@ pfb_channel_install() {
         # Export only what a future boot would deliver: the value must actually be in
         # the post-hook login.conf (a strip run restarts CLEAN -- never re-arm the
         # variable the admin just revoked) and the CA dir must be populated.
-        if grep -F -q "SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}" "${_login_conf}" 2>/dev/null \
+        # Delimiter-anchored: a capability entry is always followed by `,` or `:`,
+        # so a foreign value merely sharing our path as a prefix never matches.
+        if grep -F -q -e "SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}," -e "SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}:" "${_login_conf}" 2>/dev/null \
             && _ca_path_populated "${PFB_SSL_CA_CERT_PATH}"; then
             env SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" "${PFB_WEBGUI_RESTART}" </dev/null || true
         else
