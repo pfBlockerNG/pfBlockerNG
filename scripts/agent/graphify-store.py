@@ -79,10 +79,23 @@ def _source_payload(builder: Path) -> Path:
     builder = _physical_path(builder, "builder")
     if not builder.is_dir() or builder.is_symlink():
         raise StoreError(f"builder is not a directory: {builder}")
+    validate_builder(builder)
     payload = builder / "graphify-out"
     if not payload.is_dir() or payload.is_symlink():
         raise StoreError(f"builder has no managed graphify-out directory: {payload}")
     return payload
+
+
+def validate_builder(builder: Path) -> None:
+    builder = _physical_path(builder, "builder")
+    if not builder.is_dir() or builder.is_symlink():
+        raise StoreError(f"builder is not a directory: {builder}")
+    memory = builder / "graphify-out" / "memory"
+    try:
+        memory.lstat()
+    except FileNotFoundError:
+        return
+    raise StoreError(f"refusing Graphify work memory: {memory}")
 
 
 def _canonical_files(payload: Path) -> tuple[Path, ...]:
@@ -103,6 +116,7 @@ def _replace_payload(source: Path, target_root: Path) -> None:
     target_root = _physical_path(target_root, "restore target")
     if not target_root.is_dir() or target_root.is_symlink():
         raise StoreError(f"target is not a directory: {target_root}")
+    validate_builder(target_root)
     artifacts = _canonical_files(source)
     target = target_root / "graphify-out"
     if target.is_symlink() or (target.exists() and not target.is_dir()):
@@ -224,6 +238,8 @@ def _parser() -> argparse.ArgumentParser:
     publish_parser.add_argument("--builder", type=Path, required=True)
     publish_parser.add_argument("--branch", required=True)
     publish_parser.add_argument("--sha", required=True)
+    validate_parser = subparsers.add_parser("validate-builder")
+    validate_parser.add_argument("--builder", type=Path, required=True)
     return parser
 
 
@@ -237,6 +253,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "seed":
             return 0 if seed(args.store_root, args.branch, args.sha, args.target) else 1
+        if args.command == "validate-builder":
+            validate_builder(args.builder)
+            return 0
         publish(args.store_root, args.builder, args.branch, args.sha)
         return 0
     except StoreError as error:

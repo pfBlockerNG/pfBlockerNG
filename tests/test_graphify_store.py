@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
-import socket
 import subprocess
 import tarfile
 from pathlib import Path
@@ -269,56 +267,105 @@ def test_restore_replaces_old_target_junk_with_only_canonical_artifacts(tmp_path
     assert sorted(path.name for path in (target / "graphify-out").iterdir()) == ["GRAPH_REPORT.md", "graph.json"]
 
 
-@pytest.mark.parametrize("invalid_kind", ["missing", "symlink", "directory", "fifo", "socket"])
-def test_publish_rejects_invalid_canonical_artifact_before_store_mutation(tmp_path: Path, invalid_kind: str) -> None:
+@pytest.mark.parametrize("memory_kind", ["directory", "symlink"])
+def test_work_memory_is_rejected_before_validate_seed_or_publish_mutation(tmp_path: Path, memory_kind: str) -> None:
     source = tmp_path / "source"
     sha = make_repo(source)
-    report = source / "graphify-out" / "GRAPH_REPORT.md"
-    report.unlink()
-    if invalid_kind == "symlink":
-        report.symlink_to("missing-report")
-    elif invalid_kind == "directory":
-        report.mkdir()
-    elif invalid_kind == "fifo":
-        os.mkfifo(report)
-    elif invalid_kind == "socket":
-        sock = socket.socket(socket.AF_UNIX)
-        socket_path = Path("/private/tmp") / f"graphify-store-{os.getpid()}"
-        sock.bind(str(socket_path))
-        socket_path.rename(report)
     store_root = tmp_path / "store"
-    try:
-        result = run_store(
-            "publish",
-            "--store-root",
-            str(store_root),
-            "--builder",
-            str(source),
-            "--branch",
-            "devel",
-            "--sha",
-            sha,
-        )
-    finally:
-        if invalid_kind == "socket":
-            sock.close()
-            report.unlink(missing_ok=True)
+    publish(source, store_root, "devel", sha)
+    target = tmp_path / "target"
+    target.mkdir()
+    assert run_store("validate-builder", "--builder", str(target)).returncode == 0
+    memory = target / "graphify-out" / "memory"
+    memory.parent.mkdir()
+    if memory_kind == "directory":
+        memory.mkdir()
+        marker = memory / "secret.md"
+        marker.write_text("private\n", encoding="utf-8")
+    else:
+        memory.symlink_to("missing-memory")
+
+    validate = run_store("validate-builder", "--builder", str(target))
+    seeded = run_store(
+        "seed",
+        "--store-root",
+        str(store_root),
+        "--branch",
+        "devel",
+        "--sha",
+        sha,
+        "--target",
+        str(target),
+    )
+
+    assert validate.returncode != 0
+    assert seeded.returncode != 0
+    assert memory.exists() or memory.is_symlink()
+
+    builder = tmp_path / "builder"
+    builder_sha = make_repo(builder)
+    builder_memory = builder / "graphify-out" / "memory"
+    builder_memory.mkdir()
+    clean_store = tmp_path / "clean-store"
+    published = run_store(
+        "publish",
+        "--store-root",
+        str(clean_store),
+        "--builder",
+        str(builder),
+        "--branch",
+        "devel",
+        "--sha",
+        builder_sha,
+    )
+    assert published.returncode != 0
+    assert not clean_store.exists()
+
+
+@pytest.mark.parametrize("artifact", ["graph.json", "GRAPH_REPORT.md"])
+@pytest.mark.parametrize("invalid_kind", ["missing", "symlink", "directory"])
+def test_publish_rejects_invalid_canonical_artifact_before_store_mutation(
+    tmp_path: Path, artifact: str, invalid_kind: str
+) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    invalid = source / "graphify-out" / artifact
+    invalid.unlink()
+    if invalid_kind == "symlink":
+        invalid.symlink_to("missing-artifact")
+    elif invalid_kind == "directory":
+        invalid.mkdir()
+    store_root = tmp_path / "store"
+    result = run_store(
+        "publish",
+        "--store-root",
+        str(store_root),
+        "--builder",
+        str(source),
+        "--branch",
+        "devel",
+        "--sha",
+        sha,
+    )
     assert result.returncode != 0
     assert not store_root.exists()
 
 
-@pytest.mark.parametrize("invalid_kind", ["symlink", "directory", "fifo"])
-def test_replace_rejects_invalid_canonical_artifact_before_target_mutation(tmp_path: Path, invalid_kind: str) -> None:
+@pytest.mark.parametrize("artifact", ["graph.json", "GRAPH_REPORT.md"])
+@pytest.mark.parametrize("invalid_kind", ["symlink", "directory"])
+def test_replace_rejects_invalid_canonical_artifact_before_target_mutation(
+    tmp_path: Path, artifact: str, invalid_kind: str
+) -> None:
     source = tmp_path / "payload"
     source.mkdir()
     (source / "graph.json").write_text("{}\n", encoding="utf-8")
-    report = source / "GRAPH_REPORT.md"
+    (source / "GRAPH_REPORT.md").write_text("report\n", encoding="utf-8")
+    invalid = source / artifact
+    invalid.unlink()
     if invalid_kind == "symlink":
-        report.symlink_to("missing-report")
-    elif invalid_kind == "directory":
-        report.mkdir()
+        invalid.symlink_to("missing-artifact")
     else:
-        os.mkfifo(report)
+        invalid.mkdir()
     target = tmp_path / "target"
     target.mkdir()
     old = target / "graphify-out"

@@ -23,14 +23,17 @@ Load when: every agent session, from `AGENTS.md`.
   Graphify store. `GRAPHIFY-REFRESH-REQUIRED` means hold `.git/graphify-store.lock`
   in one harness-tracked `lockf`/`flock` session; create a temporary detached builder
   at the reported source SHA; run `graphify-store.py seed`, refresh with Graphify
-  0.9.48 in the foreground using `PYTHONHASHSEED=0` and `--code-only` with
-  `GRAPHIFY_VIZ_NODE_LIMIT=0` (the default `--no-viz` policy), then run
-  `graphify-store.py publish`; release/remove the builder and retry. The store
+  0.9.48 only after `graphify-store.py validate-builder --builder .` succeeds,
+  using `PYTHONHASHSEED=0` and `--code-only` with `GRAPHIFY_VIZ_NODE_LIMIT=0`
+  (the default `--no-viz` policy), run
+  `graphify cluster-only . --no-viz --no-label`, then run `graphify-store.py publish`;
+  release/remove the builder and retry. The store
   archives exactly `graph.json` and `GRAPH_REPORT.md` and rejects a refresh when
-  `graphify-out/memory` or other non-canonical roots are present.
+  `graphify-out/memory` is present; other non-canonical roots are filtered out.
 - Canonical refreshes use `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify
-  extract . --code-only --force`; no semantic agents, HTML, hooks, merge drivers,
-  views, or generated artifacts are repository contracts. The exact-SHA store
+  extract . --code-only --force` followed by `graphify cluster-only . --no-viz
+  --no-label`; no semantic agents, HTML, hooks, merge drivers, views, or generated
+  artifacts are repository contracts. The exact-SHA store
   stores/restores only the root `graphify-out/graph.json` and
   `graphify-out/GRAPH_REPORT.md`; both remain ignored and untracked locally.
   Compiler, static analysis, tests, CI, and live smoke remain final.
