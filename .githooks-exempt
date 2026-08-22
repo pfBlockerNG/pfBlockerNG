@@ -1,0 +1,19 @@
+# Explicit pre-commit opt-out for the release/3.3 family (issue #2633).
+#
+# Every worktree runs the primary checkout's .githooks/pre-commit (core.hooksPath
+# is absolute in the shared .git/config), but this legacy branch does not ship
+# the devel checker corpus. The hook skips a repo-script gate ONLY when the
+# checker is absent from this tree AND its exact path is listed here; a missing
+# checker with no listed exemption stays a hard failure. This is a deliberate,
+# documented limitation of the 3.3 family: these gates are enforced on devel,
+# and release/3.3 changes get their equivalent scrutiny in PR review and the
+# branch pytest suite.
+scripts/check_agent_roles.py
+scripts/check_appliance_python.py
+scripts/check_comment_narration.py
+scripts/check_composer_vendor.py
+scripts/check_context_budget.py
+scripts/check_noopener.py
+scripts/check_url_encoding.py
+scripts/check_version_literals.py
+scripts/agent/check-agent-config-parity.sh
