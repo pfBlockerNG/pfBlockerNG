@@ -54,6 +54,7 @@ import ipaddress
 import os
 import shlex
 import subprocess
+import tarfile
 import zipfile
 from collections.abc import Iterator
 
@@ -3860,6 +3861,72 @@ def test_adr46_hostile_member_blacklist_rejected(deployed_vm: SmokeVM, mock_feed
         )
     finally:
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} {escape_file}")
+
+
+def _blacklist_tar_gz(top: str, category: str, domain: str) -> bytes:
+    """A UT1-shaped blacklist archive: gzip(tar) holding ``<top>/<category>/domains``.
+
+    Mirrors the real UT1 layout the blacklist branch's ``-s`` rewrite rules expect,
+    so the extracted category file lands at ``{dbdir}/<top>/<top>_<category>``.
+    """
+    payload = f"{domain}\n".encode()
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        info = tarfile.TarInfo(f"{top}/{category}/domains")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    return gzip.compress(raw.getvalue(), mtime=0)
+
+
+@pytest.mark.timeout(120)
+def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2634: a feed labelled Content-Encoding: gzip still ingests as the PUBLISHED archive.
+
+    An origin that serves ``.tar.gz`` with ``Content-Encoding: gzip`` (Apache's
+    ``AddEncoding x-gzip .gz``) is common in the wild. What must never happen is the
+    download deciding, on the strength of that label, to store something other than
+    what the origin published: pfBlockerNG hashes the fetched body (ADR-42) and
+    dispatches extraction on its detected type, so a body decoded in flight is both a
+    different digest and a different branch.
+
+    Given an origin serving a valid UT1-shaped ``.tar.gz`` under a
+      ``Content-Encoding: gzip`` label,
+    When  pfb_download() fetches it as type='blacklist',
+    Then  the download succeeds, the stored archive is still gzip (not its inner tar),
+      and the category file is extracted from it.
+    """
+    domain = h.unique_domain("pfb2634")
+    name = "pfb2634.tar.gz"
+    workdir = f"{_ADR46_WORKDIR}_2634"
+    category_dir = f"{h.PFB_DBDIR}/pfb2634"
+    archive = f"{workdir}/pfb2634.tar.gz"
+    try:
+        # Given -- clean slate; the origin labels the archive as gzip-encoded.
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} && /bin/mkdir -p {workdir}")
+        feed_url = mock_feeds.register(name, _blacklist_tar_gz("pfb2634", "testcat", domain))
+        mock_feeds.enable_content_encoding_gzip(name)
+
+        # When -- the blacklist branch fetches it.
+        out = _adr46_download(deployed_vm, feed_url, archive, "pfb2634", "blacklist")
+
+        # Then -- success, the published bytes on disk, and the category extracted from them.
+        assert "PFB_DL_TRUE" in out, (
+            f"expected pfb_download success on a valid .tar.gz served with Content-Encoding: gzip; got stdout: {out!r}"
+        )
+        stored = deployed_vm.ssh(f"/usr/bin/file -b --mime-type {archive} 2>&1").stdout.strip()
+        assert stored == "application/gzip", (
+            f"expected the stored archive to still be the PUBLISHED gzip, not its "
+            f"decoded inner tar; /usr/bin/file reported {stored!r} for {archive}"
+        )
+        extracted = deployed_vm.ssh(f"/bin/cat {category_dir}/pfb2634_testcat 2>&1").stdout
+        assert domain in extracted, (
+            f"expected {domain!r} in the extracted category file "
+            f"{category_dir}/pfb2634_testcat; got: {extracted!r}\n"
+            f"category dir now holds: "
+            f"{deployed_vm.ssh(f'/bin/ls -A {category_dir} 2>&1').stdout!r}"
+        )
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
 
 
 # --------------------------------------------------------------------------- #

@@ -924,11 +924,18 @@ class _MockFeedServer:
         # issue #722: names in this set get a real If-Modified-Since responder
         # (RFC 9110 §13.1.3) instead of the fixed header being ignored.
         self._ims_304: set[str] = set()
+        # issue #2634: names in this set are served with a Content-Encoding: gzip
+        # response header over an already-gzip body -- the Apache `AddEncoding
+        # x-gzip .gz` misconfiguration. A client that requests gzip transfer
+        # encoding decodes such a response in flight, so what reaches disk is the
+        # archive's INNER bytes rather than the archive the origin published.
+        self._content_encoding_gzip: set[str] = set()
         self._lock = threading.Lock()
         registered = self._registered
         etag_map = self._etag_map
         no_lastmod = self._no_lastmod
         ims_304 = self._ims_304
+        content_encoding_gzip = self._content_encoding_gzip
         lock = self._lock
 
         class Handler(SimpleHTTPRequestHandler):
@@ -940,6 +947,7 @@ class _MockFeedServer:
                     etag = etag_map.get(name)
                     emit_lastmod = name not in no_lastmod
                     honour_ims = name in ims_304
+                    label_gzip_encoded = name in content_encoding_gzip
                 if body is None:
                     super().do_GET()
                     return
@@ -970,6 +978,11 @@ class _MockFeedServer:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/plain")
                 self.send_header("Content-Length", str(len(body)))
+                if label_gzip_encoded:
+                    # issue #2634: the body is served verbatim; only the label claims it
+                    # is gzip-ENCODED. Whether the bytes on the client's disk end up
+                    # decoded is decided entirely by whether the client asked for gzip.
+                    self.send_header("Content-Encoding", "gzip")
                 if etag is not None:
                     self.send_header("ETag", etag)
                 if emit_lastmod:
@@ -1064,6 +1077,18 @@ class _MockFeedServer:
         """
         with self._lock:
             self._ims_304.add(name)
+
+    def enable_content_encoding_gzip(self, name: str) -> None:
+        """Serve a registered feed with a ``Content-Encoding: gzip`` response header.
+
+        issue #2634: an origin that labels an already-compressed archive as
+        gzip-*encoded* (Apache's ``AddEncoding x-gzip .gz``) is common in the wild.
+        The body is still served verbatim -- only the label changes -- so a client
+        that does not offer ``Accept-Encoding: gzip`` receives the published archive
+        untouched, while one that does receives it decoded by its HTTP library.
+        """
+        with self._lock:
+            self._content_encoding_gzip.add(name)
 
     def feed_url(self, name: str) -> str:
         """The URL the GUEST uses to fetch ``name`` (via the SLIRP host alias)."""
