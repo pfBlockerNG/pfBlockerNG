@@ -3674,11 +3674,16 @@ def reboot_vm(
     The boottime poll is the reboot event; ``timeout`` supplies independent salvage caps for
     that event and the subsequent readiness gate. No duration is asserted.
 
-    ``require_pkg_metadata`` defaults True: the reboot re-opens the same package-metadata ABI
-    transition window first boot has to wait out (``rc.update_pkg_metadata`` can still be
-    rewriting pkg's effective ABI after the guest answers SSH again), so every production
-    caller must wait on it too (issue #2242). Pass ``False`` only from a unit test proving the
-    flag itself.
+    ``require_pkg_metadata`` defaults False (issue #2624): the sentinel exists to
+    protect a pkg operation through the metadata refresh's ABI-flip window
+    (#2242/#2458), and no reboot caller pkg-adds after its own reboot. Measured
+    (CI and a pfb box alike): post-reboot the metadata job's ``pfSense-upgrade
+    -C`` never finishes within the settle window, so requiring the sentinel
+    deadlocked every reboot test; the leading reading is the harness stub DNS
+    answering its lookups with the test sentinel address (poisoned resolution,
+    hang at connect). A future pkg-adding reboot caller passes True explicitly;
+    a later module's own deploy is covered by install-pkg.sh's retry and the
+    pre-#2491 history.
     """
     # Fail FAST on an unreadable before-side: without it the proof is already lost, so
     # refusing to reboot saves the whole reboot+readiness cycle and leaves the box up in
@@ -3749,13 +3754,7 @@ def reboot_vm(
         raise RuntimeError(
             f"reboot_vm: VM not ready after reboot (wait_ready exit {result.returncode}); stderr={result.stderr!r}"
         )
-    # Plain smoke reboots need the platform boot flag only. The package-metadata
-    # sentinel exists to protect a pkg operation through the ABI-flip window
-    # (#2242/#2458) -- no reboot caller performs one, and post-reboot the harness
-    # stub DNS starves rc.update_pkg_metadata's pfSense-upgrade -C of name
-    # resolution, so requiring the sentinel here deadlocks every reboot test
-    # (issue #2624, measured: the job sat `running` past 180s on CI and on a
-    # pfb box alike). A future pkg-adding reboot caller opts in explicitly.
+    # Metadata-sentinel rationale in this function's docstring (issue #2624).
     wait_boot_complete(vm, require_pkg_metadata=require_pkg_metadata)
     flag = vm.ssh("/bin/test", "-f", PFB_CRON_DISABLE_PATH)
     if flag.returncode != 0:
@@ -4163,7 +4162,8 @@ def wait_boot_complete(
     raise RuntimeError(
         f"pfSense boot did not settle after {timeout:.0f}s: "
         + (
-            f"the package-metadata sentinel never appeared (last probe: {last_metadata}) "
+            f"the package-metadata sentinel /var/run/pfSense_version.rc never appeared "
+            f"(last probe: {last_metadata}) "
             f"while is_platform_booting() last returned {last!r}"
             if last == "0"
             else f"is_platform_booting() last returned {last!r} (expected '0'); metadata last probe: {last_metadata}"
