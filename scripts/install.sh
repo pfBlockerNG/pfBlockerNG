@@ -113,7 +113,7 @@ PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
 
 # webConfigurator restart knob (issue #2623) -- semantics in the header above; the
 # change-gate lives at the hook invocation below.
-PFB_WEBGUI_RESTART="${PFB_WEBGUI_RESTART-/etc/rc.restart_webgui}"
+PFB_WEBGUI_RESTART="${PFB_WEBGUI_RESTART-${ROOT}/etc/rc.restart_webgui}"
 
 # Spelled out per combination so every path stays quoted: a single accumulated string
 # would have to be word-split to become separate env(1) operands, which breaks the moment
