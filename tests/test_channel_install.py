@@ -1711,6 +1711,29 @@ def test_revoke_run_restarts_the_webgui_without_the_ca_path(tmp_path: Path) -> N
     assert not hits, f"the restart after an opt-out strip must not export the just-revoked variable, saw: {hits}"
 
 
+def test_unset_restart_knob_resolves_inside_the_staged_root(tmp_path: Path) -> None:
+    """(f) Knob left UNSET under ROOT staging: the default must resolve to
+    ${ROOT}/etc/rc.restart_webgui -- a staged run may never execute the HOST's
+    restart script (the same host-escape class as the other JOB 2 paths).
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    _write_consent_config_xml(root)
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+    staged = Path(root) / "etc" / "rc.restart_webgui"
+    called = Path(root) / "staged-restart-called"
+    staged.write_text(f'#!/bin/sh\ntouch "{called}"\n')
+    staged.chmod(0o755)
+
+    proc = _run_install(root, "stable")
+    assert proc.returncode == 0, proc.stderr
+    assert "SSL_CA_CERT_PATH=" in _root_login_conf(root).read_text(), (
+        "fixture broken: the carry did not land, so the default-resolution claim is untested"
+    )
+    assert called.exists(), "the unset knob must default to the ROOT-staged rc.restart_webgui, not the host path"
+
+
 def test_non_executable_restart_knob_is_a_silent_skip(tmp_path: Path) -> None:
     """(e) The knob pointing at a nonexistent path on a carry-landing run: the install
     still succeeds and prints no restart message -- the silent-skip claim, pinned.
