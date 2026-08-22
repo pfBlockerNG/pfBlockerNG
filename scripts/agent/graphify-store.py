@@ -90,7 +90,14 @@ def validate_builder(builder: Path) -> None:
     builder = _physical_path(builder, "builder")
     if not builder.is_dir() or builder.is_symlink():
         raise StoreError(f"builder is not a directory: {builder}")
-    memory = builder / "graphify-out" / "memory"
+    output = builder / "graphify-out"
+    try:
+        mode = output.lstat().st_mode
+    except FileNotFoundError:
+        return
+    if not stat.S_ISDIR(mode):
+        raise StoreError(f"refusing unmanaged graphify-out path: {output}")
+    memory = output / "memory"
     try:
         memory.lstat()
     except FileNotFoundError:

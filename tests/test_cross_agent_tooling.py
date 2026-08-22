@@ -205,6 +205,16 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "ignored and untracked",
     ):
         assert contract in routing, f"Graphify worktree routing lost {contract}"
+    recipe = routing.split("`GRAPHIFY-REFRESH-REQUIRED`", 1)[1].split("release/remove", 1)[0]
+    steps = (
+        "graphify-store.py seed",
+        "graphify-store.py validate-builder --builder .",
+        "graphify extract . --code-only --force",
+        "graphify cluster-only . --no-viz --no-label",
+        "graphify-store.py publish",
+    )
+    offsets = [recipe.index(step) for step in steps]
+    assert offsets == sorted(offsets), "Graphify refresh steps must remain in execution order"
     assert "graphify-out/views" not in routing
     assert "update_graphify_views.py" not in routing
 
