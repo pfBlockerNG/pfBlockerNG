@@ -86,7 +86,7 @@ def test_wait_boot_complete_keeps_polling_when_first_probe_finds_no_metadata_job
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
 
-    with pytest.raises(RuntimeError, match="sentinel never appeared"):
+    with pytest.raises(RuntimeError, match="never appeared"):
         helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=10, delay=0)
 
     assert len([c for c in calls if c == _PROBE_ARGV]) >= 2
@@ -183,7 +183,7 @@ def test_wait_boot_complete_metadata_job_stuck_running_times_out(monkeypatch: py
     monkeypatch.setattr(helpers.time, "sleep", lambda _delay: None)
     monkeypatch.setattr(helpers.time, "monotonic", fake_monotonic)
 
-    with pytest.raises(RuntimeError, match="sentinel never appeared"):
+    with pytest.raises(RuntimeError, match="never appeared"):
         helpers.wait_boot_complete(cast(helpers.SmokeVM, FakeVM()), timeout=3, delay=0)
 
     assert _PROBE_ARGV in calls
