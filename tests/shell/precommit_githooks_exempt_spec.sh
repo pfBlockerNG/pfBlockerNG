@@ -74,9 +74,11 @@ scripts/agent/check-agent-config-parity.sh'
     The stderr should include '[pre-commit] FAILED: composer vendor'
   End
 
-  It 'rejects a symlinked manifest even when its target lists the checkers'
-    printf '%s\n' "$ALL_CHECKERS" > "$stubdir/exempt-target"
-    ln -s "$stubdir/exempt-target" "$repo/.githooks-exempt"
+  It 'rejects a symlinked manifest whose target text names a checker'
+    # The discriminating construction for the index-mode guard: a staged symlink's
+    # blob IS its target path text, so this one reads back as exactly the composer
+    # checker's path and would exempt it if only blob content were graded.
+    ln -s scripts/check_composer_vendor.py "$repo/.githooks-exempt"
     gitc add .githooks-exempt
     When run sh -c "cd '$repo' && sh .githooks/pre-commit"
     The status should equal 1
