@@ -104,7 +104,7 @@ if ($_POST && isset($_POST['save'])) {
 			. 'certificate directory may be missing or empty -- try running `certctl rehash` '
 			. 'from the shell). pfBlockerNG will retry at the next boot or package check.'
 		),
-		PFB_PKG_CONF
+		pfb_pkgconf_ca_hook_is_login() ? '/etc/login.conf' : PFB_PKG_CONF
 	);
 }
 
@@ -211,7 +211,9 @@ $section->addInput(new Form_Checkbox(
 $form->add($section);
 
 // The installed repository hook owns pkg.conf; Plus is the only edition with the vendor pin.
-if (pfb_pkg_ca_is_plus()) {
+// Login-generation hooks apply on every edition (issue #2630); the pkg.conf
+// generation stays Plus-only as shipped.
+if (pfb_pkg_ca_is_plus() || pfb_pkgconf_ca_hook_is_login()) {
 	pfb_pkgconf_ca_add_form_controls($form, pfb_pkg_ca_consent_enabled());
 }
 
