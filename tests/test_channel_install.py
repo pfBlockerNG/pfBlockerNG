@@ -1561,22 +1561,14 @@ def test_directory_as_bundle_is_not_exported() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# webConfigurator restart on the login.conf change-gate (issue #2623).
-#
-# pfb_pkg_exec() drops its consent-gated putenv (issue #2617's per-call export): a
-# php-fpm worker that started with SSL_CA_CERT_PATH keeps it for its whole life, so
-# instead install.sh restarts the webConfigurator once, right after a run that just
-# changed /etc/login.conf (the JOB 2 CA carry) -- covering every later GUI-driven pkg
-# call, including pfSense's own Package Manager pages, which the old per-call putenv
-# never reached. The restart's own environment must carry SSL_CA_CERT_PATH so the
-# freshly-started php-fpm has it immediately, without waiting for the login.conf carry
-# to take effect at the NEXT boot.
+# webConfigurator restart on the login.conf change-gate (issue #2623): restart once
+# when an install run just changed /etc/login.conf, never on re-runs/upgrades.
 # --------------------------------------------------------------------------- #
 
 
-def _write_consent_config_xml(root: str, consent: str) -> Path:
+def _write_consent_config_xml(root: str, consent: str = "on") -> Path:
     """Stage a ROOT config.xml with pfb_pkg_ca_consent at config/0 (issue #2617's read
-    scope) -- mirrors test_root_staged_run_reconciles_the_root_login_conf_never_the_host.
+    scope); an empty token is the explicit opt-out.
     """
     cfg = _config_xml_path(root)
     cfg.parent.mkdir(parents=True, exist_ok=True)
@@ -1618,7 +1610,7 @@ def test_login_conf_change_restarts_the_webgui_with_the_ca_path(tmp_path: Path) 
     """
     root = str(tmp_path)
     ca_dir = _seed_ca_dir(root)
-    _write_consent_config_xml(root, "on")
+    _write_consent_config_xml(root)
     _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
     _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
     stub = _write_webgui_restart_stub(root)
@@ -1644,7 +1636,7 @@ def test_login_conf_unchanged_second_run_never_restarts_the_webgui(tmp_path: Pat
     """
     root = str(tmp_path)
     _seed_ca_dir(root)
-    _write_consent_config_xml(root, "on")
+    _write_consent_config_xml(root)
     _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
     _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
     stub = _write_webgui_restart_stub(root)
@@ -1656,7 +1648,6 @@ def test_login_conf_unchanged_second_run_never_restarts_the_webgui(tmp_path: Pat
     # Isolate the second run's own evidence: a leftover file from the first run cannot
     # be mistaken for a fresh invocation.
     _webgui_restart_called(root).unlink()
-    _webgui_restart_witness(root).unlink()
 
     second = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
     assert second.returncode == 0, second.stderr
@@ -1666,24 +1657,71 @@ def test_login_conf_unchanged_second_run_never_restarts_the_webgui(tmp_path: Pat
     )
 
 
-def test_no_root_config_xml_skips_login_conf_and_never_restarts_the_webgui(tmp_path: Path) -> None:
-    """(c) No readable ROOT config.xml: consent is unknowable, JOB 2 touches nothing
-    (test_root_staged_run_without_config_xml_touches_no_login_conf), so login.conf
-    cannot have changed and the restart stub must never run.
+def test_absent_login_conf_stays_absent_and_never_restarts_the_webgui(tmp_path: Path) -> None:
+    """(c) No ROOT login.conf and no config.xml at all (a bare staging root): the
+    change-gate must read absent-before == absent-after -- no spurious restart, no
+    file created.
     """
     root = str(tmp_path)
     _seed_ca_dir(root)
-    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
-    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
     assert not _config_xml_path(root).exists()
+    assert not _root_login_conf(root).exists()
     stub = _write_webgui_restart_stub(root)
 
     proc = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
     assert proc.returncode == 0, proc.stderr
 
-    assert _root_login_conf(root).read_text() == _STOCK_LOGIN_CONF, (
-        "fixture broken: login.conf must stay byte-identical with no config.xml to consult"
-    )
+    assert not _root_login_conf(root).exists(), "nothing may create login.conf"
     assert not _webgui_restart_called(root).exists(), (
-        "login.conf was untouched, but the webConfigurator restart stub ran anyway"
+        "login.conf was absent before and after, but the restart stub ran anyway"
+    )
+
+
+def test_revoke_run_restarts_the_webgui_without_the_ca_path(tmp_path: Path) -> None:
+    """(d) A run whose hook STRIPS the carry (explicit opt-out in config.xml) still
+    changed login.conf, so the restart fires -- but its environment must NOT carry
+    SSL_CA_CERT_PATH: the restarted daemon inherits what a future boot would deliver,
+    and after a strip that is nothing.
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    _write_consent_config_xml(root, "")
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(
+        _STOCK_LOGIN_CONF.replace(
+            ":setenv=BLOCKSIZE=K:",
+            f":setenv=BLOCKSIZE=K,SSL_CA_CERT_PATH={_ca_dir(root)}:",
+        )
+    )
+    stub = _write_webgui_restart_stub(root)
+
+    proc = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(stub)})
+    assert proc.returncode == 0, proc.stderr
+
+    assert "SSL_CA_CERT_PATH" not in _root_login_conf(root).read_text(), (
+        "fixture broken: the opt-out run did not strip the carry, so nothing is proven"
+    )
+    assert _webgui_restart_called(root).exists(), "login.conf changed (carry stripped) but the restart stub never ran"
+    witness = _webgui_restart_witness(root).read_text().splitlines()
+    hits = [ln for ln in witness if ln.startswith("SSL_CA_CERT_PATH=")]
+    assert not hits, f"the restart after an opt-out strip must not export the just-revoked variable, saw: {hits}"
+
+
+def test_non_executable_restart_knob_is_a_silent_skip(tmp_path: Path) -> None:
+    """(e) The knob pointing at a nonexistent path on a carry-landing run: the install
+    still succeeds and prints no restart message -- the silent-skip claim, pinned.
+    """
+    root = str(tmp_path)
+    _seed_ca_dir(root)
+    _write_consent_config_xml(root)
+    _root_login_conf(root).parent.mkdir(parents=True, exist_ok=True)
+    _root_login_conf(root).write_text(_STOCK_LOGIN_CONF)
+
+    proc = _run_install(root, "stable", extra_env={"PFB_WEBGUI_RESTART": str(Path(root) / "no-such-restart")})
+    assert proc.returncode == 0, proc.stderr
+    assert "SSL_CA_CERT_PATH=" in _root_login_conf(root).read_text(), (
+        "fixture broken: the carry did not land, so the skip is untested"
+    )
+    assert "restarting the webConfigurator" not in proc.stdout, (
+        "a non-executable restart knob must be a SILENT skip, not an announced failed exec"
     )
