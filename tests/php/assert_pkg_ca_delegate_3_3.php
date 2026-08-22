@@ -110,6 +110,8 @@ row('probe detects the login-generation hook, and old-generation before it', sta
 	check(pfb_pkgconf_ca_hook_is_login(), 'login marker in the hook body reads as the new generation');
 	file_put_contents($hook, "#!/bin/sh\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($log) . "\nexit 0\n");
 	check(!pfb_pkgconf_ca_hook_is_login(), 'no marker reads as the old generation');
+	unlink($hook);
+	check(!pfb_pkgconf_ca_hook_is_login(), 'an absent hook reads as the old generation');
 	file_put_contents($hook, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nprintf '%s\\n' \"\$1\" >> " . escapeshellarg($log) . "\nexit \${PFB_HOOK_STATUS:-0}\n");
 	chmod($hook, 0700);
 });

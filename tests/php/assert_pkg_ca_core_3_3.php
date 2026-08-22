@@ -200,6 +200,28 @@ row('old generation: consent stays opt-in', static function (): void {
 	check(!pfb_pkg_ca_consent_enabled(), 'absent key stays off under the old hook');
 });
 
+// issue #2631 review round: a save POST that lacks the rendered-section marker must
+// never manufacture an opt-out. Under the login hook an absent key means consented,
+// so the fallback has to answer 'on' -- returning '' here made pfb_pkgconf_ca_apply()
+// fire login-ca-revoke with no recorded opt-out.
+row('login generation: a marker-absent save never turns default consent into a revoke', static function (): void {
+	file_put_contents(PFB_REPO_GENERATE_HOOK, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nexit 0\n");
+	chmod(PFB_REPO_GENERATE_HOOK, 0700);
+	config_set_path('installedpackages/pfblockerng/config/0', []);
+	same('on', pfb_pkgconf_ca_save(['save' => '1']), 'absent key keeps the default-on consent');
+	config_set_path('installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent', '');
+	same('', pfb_pkgconf_ca_save(['save' => '1']), 'a recorded opt-out survives the marker-absent path');
+});
+
+row('login generation: consent token is case-insensitive like the hook', static function (): void {
+	file_put_contents(PFB_REPO_GENERATE_HOOK, "#!/bin/sh\n# verbs: login-ca-sync login-ca-revoke\nexit 0\n");
+	chmod(PFB_REPO_GENERATE_HOOK, 0700);
+	config_set_path('installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent', 'On');
+	check(pfb_pkg_ca_consent_enabled(), 'case-variant On reads as consented under the login hook');
+	file_put_contents(PFB_REPO_GENERATE_HOOK, "#!/bin/sh\nexit 0\n");
+	check(!pfb_pkg_ca_consent_enabled(), 'the old generation keeps its strict token');
+});
+
 @unlink(PFB_REPO_GENERATE_HOOK);
 @unlink($hook_log);
 

@@ -236,8 +236,10 @@ function pfb_pkg_ca_consent_enabled(): bool {
 	$token = PfbConfig::read('gen/pfb_pkg_ca_consent');
 	// Login generation defaults ON (absent key = consented; a present empty token is
 	// the explicit opt-out), matching the on-box hook's own boot reconcile semantics.
+	// The hook's own reconcile matches the token case-insensitively, so a restored
+	// backup's 'On' must not read here as an opt-out while boot keeps adding the carry.
 	if (pfb_pkgconf_ca_hook_is_login()) {
-		return $token === NULL || $token === 'on';
+		return $token === NULL || strtolower(trim((string) $token)) === 'on';
 	}
 	return $token === 'on';
 }
@@ -300,7 +302,7 @@ if (!defined('PFB_PKG_TIMEOUT')) {
  * the on-box hook actually has.
  */
 function pfb_pkgconf_ca_hook_is_login(): bool {
-	$body = @file_get_contents(PFB_REPO_GENERATE_HOOK);
+	$body = @file_get_contents(PFB_REPO_GENERATE_HOOK, FALSE, NULL, 0, 65536);
 	return $body !== FALSE && strpos($body, 'login-ca-sync') !== FALSE;
 }
 
@@ -438,7 +440,11 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 /* Persist consent only when the conditional Software-page section was rendered. */
 function pfb_pkgconf_ca_save(array $post): string {
 	if (!isset($post['pfb_pkg_ca_consent_shown'])) {
-		return (string) (PfbConfig::read('gen/pfb_pkg_ca_consent') ?? '');
+		// Login generation: an absent key means consented, so answering '' here would
+		// make pfb_pkgconf_ca_apply() revoke with no recorded opt-out. Old generation:
+		// enabled is exactly token === 'on', so this stays value-identical to the
+		// shipped raw-token fallback on every path apply() distinguishes.
+		return pfb_pkg_ca_consent_enabled() ? 'on' : '';
 	}
 	$token = pfb_filter($post['pfb_pkg_ca_consent'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
 	PfbConfig::write('gen/pfb_pkg_ca_consent', $token);
@@ -457,10 +463,10 @@ function pfb_pkgconf_ca_apply(
 	return !$was_consented || pfb_pkgconf_ca_command($login ? 'login-ca-revoke' : 'ca-revoke');
 }
 
-/* Add the Plus-only Software-page consent controls through the shipped Form API. */
+/* Add the Software-page consent controls for the installed hook generation. */
 function pfb_pkgconf_ca_add_form_controls($form, bool $consent): void {
 	if (pfb_pkgconf_ca_hook_is_login()) {
-		pfb_logincap_ca_add_form_controls($form, $consent);
+		pfb_login_ca_add_form_controls($form, $consent);
 		return;
 	}
 	$help = sprintf(
@@ -498,7 +504,7 @@ function pfb_pkgconf_ca_add_form_controls($form, bool $consent): void {
 
 /* Login-generation consent controls (issue #2630): the installed hook carries
  * SSL_CA_CERT_PATH in /etc/login.conf's default class setenv, on by default. */
-function pfb_logincap_ca_add_form_controls($form, bool $consent): void {
+function pfb_login_ca_add_form_controls($form, bool $consent): void {
 	$help = gettext(
 		'pfSense Plus pins pkg to a Netgate-only CA bundle, which blocks third-party '
 		. 'package repositories. When enabled, pfBlockerNG keeps '
