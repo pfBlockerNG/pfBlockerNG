@@ -121,12 +121,13 @@ def _canonical_files(payload: Path) -> tuple[Path, ...]:
 
 def _swap_payload(artifacts: tuple[Path, ...], target: Path) -> None:
     """Stage the canonical artifacts, then swap them in, keeping the old payload on failure."""
-    with tempfile.TemporaryDirectory(dir=target.parent, prefix=".graphify-swap-") as scratch:
-        staged = Path(scratch) / "graphify-out"
+    scratch = Path(tempfile.mkdtemp(dir=target.parent, prefix=".graphify-swap-"))
+    staged = scratch / "graphify-out"
+    previous = scratch / "previous"
+    try:
         staged.mkdir()
         for source_file in artifacts:
             shutil.copy2(source_file, staged / source_file.name)
-        previous = Path(scratch) / "previous"
         if target.exists():
             os.replace(target, previous)
         try:
@@ -135,6 +136,12 @@ def _swap_payload(artifacts: tuple[Path, ...], target: Path) -> None:
             if previous.exists():
                 os.replace(previous, target)
             raise
+    except OSError as error:
+        if previous.exists():
+            raise StoreError(f"the previous Graphify payload is kept at {previous}") from error
+        shutil.rmtree(scratch, ignore_errors=True)
+        raise
+    shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _replace_payload(source: Path, target_root: Path) -> None:
