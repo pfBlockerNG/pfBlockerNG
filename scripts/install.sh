@@ -160,6 +160,34 @@ _pkg() {
     fi
 }
 
+# Hard cap on the reader's polling below: 6 hours at one tick a second. An install that
+# has not finished by then is not one this script can still narrate.
+_PFB_DRAIN_MAX_TICKS=21600
+
+# _pkg_mutate_cleanup — reap the background reader and drop both capture files. Runs from
+# the EXIT trap and from every signal trap _pkg_mutate installs; safe to run twice, and
+# safe before either name is set.
+_pkg_mutate_cleanup() {
+    if [ -n "${_mut_reader:-}" ]; then
+        kill "${_mut_reader}" 2>/dev/null || true
+        wait "${_mut_reader}" 2>/dev/null || true
+    fi
+    rm -f "${_mut_log:-}" "${_mut_done:-}"
+}
+
+# _pfb_parent_gone PID — TRUE once PID can no longer be the running parent of this
+# reader: either it is gone, or it is a zombie. The zombie half matters because a killed
+# parent stays in the table until whatever started it reaps it, and `kill -0` succeeds
+# against a zombie the whole time — so `kill -0` alone would keep a reader polling long
+# after the run it belongs to died.
+_pfb_parent_gone() {
+    kill -0 "$1" 2>/dev/null || return 0
+    case "$(ps -o state= -p "$1" 2>/dev/null | tr -d ' ')" in
+        Z*) return 0 ;;
+    esac
+    return 1
+}
+
 # _pkg_mutate_drain FILE — print what FILE has grown by since this shell last drained
 # it, carrying the position in _drain_seen. Addressed by LINE, so a half-written line is
 # never split across two prints; a final line with no newline is left for the
@@ -181,11 +209,12 @@ _pkg_mutate_drain() {
 # pkg writes to a capture FILE and a reader prints what that file grows by, rather than
 # pkg writing down a pipe. A pipe outlives pkg: every process a package script leaves
 # running inherits the write end, and a reader sees no EOF until the last holder closes
-# it — the hazard pfblockerng.inc states as "LOG FILE, never a pipe" for its own
-# capture (issue #662). Our POST-INSTALL starts unbound, so that risk is not theoretical,
-# and a hang after a completed install is worse than the burst it would replace. A
-# regular file cannot stall the run, and the foreground pkg hands back its own status
-# with no side channel to read it out of (issue #2644).
+# it — the hazard pfblockerng.inc states as "LOG FILE, never a pipe" for its own capture
+# (issue #662), and solves the same way its own hook mirror does (issue #693). Our
+# POST-INSTALL starts unbound, so that risk is not theoretical, and a hang after a
+# completed install is worse than the burst it would replace. A regular file cannot stall
+# the run, and the foreground pkg hands back its own status with no side channel to read
+# it out of (issue #2644).
 #
 # What a reader can show is bounded by what pkg flushes and when; the package scripts
 # (PHP CLI writes unbuffered) appear as they print.
@@ -204,17 +233,38 @@ _pkg_mutate() {
     # first one and pre-create as a symlink, and this runs as root.
     _mut_log=$(mktemp "${_mut_dir}/pfb-install-pkg.XXXXXX") ||
         die "${_mut_code}" "mktemp failed while capturing pkg output"
+    # Armed before the SECOND mktemp, so its failure cannot leak the first file. Every
+    # path is read as `:-` because `set -u` makes an unset name in a trap fatal AND
+    # replaces the exit status the trap fired on; `rm -f ""` is a no-op. die() exits the
+    # script, so the EXIT trap runs on that path too. /tmp on pfSense is a small RAM disk.
+    #
+    # The signal traps exist because the reader below is a background job: a bare EXIT
+    # trap never runs on an untrapped INT/TERM/HUP, which would leave the reader
+    # reparented to PID 1 polling forever and both files behind. Each re-raises the
+    # conventional 128+signal status rather than swallowing the interrupt.
+    trap '_pkg_mutate_cleanup' EXIT
+    trap '_pkg_mutate_cleanup; exit 130' INT
+    trap '_pkg_mutate_cleanup; exit 143' TERM
+    trap '_pkg_mutate_cleanup; exit 129' HUP
     _mut_done=$(mktemp "${_mut_dir}/pfb-install-pkg.XXXXXX") ||
         die "${_mut_code}" "mktemp failed while capturing pkg output"
-    # die() exits the script; EXIT trap removes the files on that path too.
-    # /tmp on pfSense is a small RAM disk.
-    trap 'rm -f "${_mut_log}" "${_mut_done}"' EXIT
     # The reader runs in the background and stops when pkg is done: mktemp already
     # created the done-file, so the flag is CONTENT, not existence.
+    #
+    # It also dies with its task rather than only on being told to. `$$` stays the
+    # parent's pid inside a subshell, so the liveness test ends the loop even when the
+    # parent is killed outright and no trap can fire; the counter is the backstop for the
+    # case where the pid outlives the run some other way, i.e. a hard cap and a deadline
+    # on a wait nothing else is tracking (AGENTS.md "No orphaned waits").
+    _mut_parent=$$
     (
         _drain_seen=0
-        while [ ! -s "${_mut_done}" ]; do
+        _drain_ticks=0
+        while [ ! -s "${_mut_done}" ] &&
+            ! _pfb_parent_gone "${_mut_parent}" &&
+            [ "${_drain_ticks}" -lt "${_PFB_DRAIN_MAX_TICKS}" ]; do
             _pkg_mutate_drain "${_mut_log}"
+            _drain_ticks=$((_drain_ticks + 1))
             sleep 1
         done
         sed -n "$((_drain_seen + 1)),\$p" "${_mut_log}"
@@ -236,9 +286,9 @@ _pkg_mutate() {
                 ;;
         esac
     done < "${_mut_log}"
-    trap - EXIT
+    trap - EXIT INT TERM HUP
     rm -f "${_mut_log}" "${_mut_done}"
-    unset _mut_code _mut_msg _mut_dir _mut_log _mut_done _mut_reader _mut_rc _mut_line
+    unset _mut_code _mut_msg _mut_dir _mut_log _mut_done _mut_parent _mut_reader _mut_rc _mut_line
 }
 
 usage() {
