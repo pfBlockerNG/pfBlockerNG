@@ -10,6 +10,7 @@ use PHPUnit\Framework\TestCase;
  * ip_ph; a placeholder-only file is an empty feed and must show 0.
  */
 #[CoversFunction('pfb_widget_alias_display_count')]
+#[CoversFunction('pfb_ip_placeholder')]
 final class WidgetAliasDisplayCountTest extends TestCase
 {
 	private string $file;
@@ -22,6 +23,19 @@ final class WidgetAliasDisplayCountTest extends TestCase
 	protected function tearDown(): void
 	{
 		@unlink($this->file);
+	}
+
+	public function testPlaceholderReadsIpconfigNotApplyOnlyIpPh(): void
+	{
+		unset($GLOBALS['pfb']['ip_ph']);
+		$GLOBALS['pfb']['ipconfig']['ip_placeholder'] = '10.9.8.7';
+		$this->assertSame(
+			'10.9.8.7',
+			pfb_ip_placeholder(),
+			'expected: IP-tab ip_placeholder;\nactual: apply-only ip_ph fallback or default'
+		);
+		unset($GLOBALS['pfb']['ipconfig']['ip_placeholder']);
+		$this->assertSame('127.1.7.7', pfb_ip_placeholder());
 	}
 
 	public function testPlaceholderOnlyFile_ReturnsZero(): void

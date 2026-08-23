@@ -5879,6 +5879,11 @@
             }
         ]
     },
+    "pfb_ip_placeholder": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": []
+    },
     "pfb_ip_prefetch": {
         "returnsRef": false,
         "returnType": "void",

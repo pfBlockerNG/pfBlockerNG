@@ -57,6 +57,22 @@ final class PfctlTablesParseTest extends TestCase
 		$this->assertSame(25144, $parsed['bogons']['in_block_bytes']);
 	}
 
+	public function testEvaluationsMatchDoesNotReadNoMatch(): void
+	{
+		$lines = [
+			"-pa-r--\tpfB_PRI1_v4",
+			"\tAddresses:   1",
+			"\tEvaluations: [ NoMatch: 1569               Match: 0                  ]",
+		];
+		$parsed = pfb_pfctl_tables_parse($lines);
+		$this->assertSame(1569, $parsed['pfB_PRI1_v4']['evaluations_nomatch']);
+		$this->assertSame(
+			0,
+			$parsed['pfB_PRI1_v4']['evaluations_match'],
+			"expected: 0 (Match: after NoMatch:);\nactual: " . ($parsed['pfB_PRI1_v4']['evaluations_match'] ?? 'missing') . ' (NoMatch leaked into Match)'
+		);
+	}
+
 	public function testLiveFixture_KeepsFlagsAndCleared(): void
 	{
 		$parsed = pfb_pfctl_tables_parse($this->liveLines());
