@@ -278,27 +278,34 @@ final class DownloadSizeCeilingTest extends TestCase
 	 *
 	 * Given  every exec() pfb_download() makes
 	 * When   they are enumerated from the comment-free source
-	 * Then   each one either runs under pfb_extract_cmd() or is an allow-listed
-	 *        call that writes no archive output. A new extraction site added
+	 * Then   each one either runs under pfb_extract_cmd() or is one of the calls
+	 *        below, which write no archive output. A new extraction site added
 	 *        without the ceiling fails here.
+	 *
+	 * The allow-list holds each exempt call's WHOLE statement, terminator included,
+	 * not a prefix of it. A prefix would exempt everything that merely starts the
+	 * same way, so `exec("{$pfb['script']} xlsx" . $anything)` -- a genuinely
+	 * unguarded extraction wearing an exempt call's opening -- would pass. Changing
+	 * an exempt call means updating its entry here, which is the point: the
+	 * exemption is for that call as written, not for its first few characters.
 	 */
 	public function test_every_extraction_exec_runs_under_the_ceiling(): void
 	{
 		$allowed = [
 			// Fetches a feed body; writes no archive output. Its own fetch is bounded
 			// by neither ceiling (rsync is not a libcurl transfer) -- issue #2667.
-			'exec("/usr/local/bin/rsync',
+			'exec("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}", $rsync_output, $rsync_rc);',
 			// Helper-script calls that post-process an ALREADY-extracted text feed.
-			'exec("{$pfb[\'script\']} whoisconvert',
-			'exec("{$pfb[\'script\']} asn_table',
-			'exec("{$pfb[\'script\']} et ',
+			'exec("{$pfb[\'script\']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");',
+			'exec("{$pfb[\'script\']} asn_table {$elog}");',
+			'exec("{$pfb[\'script\']} et {$header_esc} x x x x x {$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}");',
 			// processxlsx() reports success by the output file existing rather than by
 			// an exit status, so a child killed at the ceiling would publish a
 			// truncated feed as a success. Capping it needs an exit gate first
 			// (issue #2666).
-			'exec("{$pfb[\'script\']} xlsx',
+			'exec("{$pfb[\'script\']} xlsx {$header_esc} {$elog}");',
 			// Lists an archive; extracts nothing.
-			'exec("/usr/bin/tar -tf',
+			'exec("/usr/bin/tar -tf {$file_dwn_esc}");',
 			// Capped.
 			'exec(pfb_extract_cmd(',
 		];
@@ -308,16 +315,23 @@ final class DownloadSizeCeilingTest extends TestCase
 		$this->assertNotFalse($found);
 		$this->assertNotSame(0, $found, 'the pfb_download() body must contain exec() calls');
 
+		$hits = array_fill_keys($allowed, 0);
 		foreach ($m[0] as [, $offset]) {
-			$call = substr(self::$downloadBody, $offset, 48);
-			$ok = FALSE;
-			foreach ($allowed as $prefix) {
-				if (str_starts_with($call, $prefix)) {
-					$ok = TRUE;
+			$call = substr(self::$downloadBody, $offset, 200);
+			$match = NULL;
+			foreach ($allowed as $entry) {
+				if (str_starts_with($call, $entry)) {
+					$match = $entry;
 					break;
 				}
 			}
-			$this->assertTrue($ok, "unguarded exec() in pfb_download(): {$call}");
+			$this->assertNotNull($match, 'unguarded exec() in pfb_download(): ' . substr($call, 0, 96));
+			$hits[$match]++;
+		}
+
+		// An entry that matches nothing is a stale exemption still granting cover.
+		foreach ($hits as $entry => $count) {
+			$this->assertGreaterThan(0, $count, "stale allow-list entry, no longer present: {$entry}");
 		}
 	}
 
