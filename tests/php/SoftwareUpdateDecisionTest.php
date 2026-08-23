@@ -24,7 +24,6 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_pkg_newest_version')]
 #[CoversFunction('pfb_software_cache_matches_install')]
 #[CoversFunction('pfb_software_is_our_build')]
-#[CoversFunction('pfb_software_pkgmgr_usable')]
 #[CoversFunction('pfb_software_update_href')]
 #[CoversFunction('pfb_software_uninstall_href')]
 #[CoversFunction('pfb_update_available')]
@@ -205,8 +204,18 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	/*
-	 * ---- Software-page action hrefs (issue #2380) ----
-	 * pkg_mgr_install.php only when %R is pfSense. Channel origins stay on '#'.
+	 * ---- Software-page action hrefs (issue #2653) ----
+	 * The deep link carries the package NAME, and pkg_mgr_install.php acts on that name:
+	 * it validates pkg_valid_name() and then runs pfSense-upgrade with -i <pkg> -f
+	 * (reinstall) or -r <pkg> (delete). The %R filter that hides a channel install lives
+	 * in get_pkg_info(), which drives only the listing pages -- so the origin never
+	 * decides the href. What gates it is what the operation itself needs: an update to
+	 * install, and a package name to name.
+	 *
+	 * #2380 gated both hrefs on %R === 'pfSense', on the premise that a Package Manager
+	 * reinstall would resolve against -r pfSense. The generated repo conf sets priority
+	 * 100 above the Netgate repo precisely so cross-repo resolution picks the
+	 * pfBlockerNG build.
 	 */
 	public static function updateHrefProvider(): array
 	{
@@ -215,11 +224,13 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		return [
 			'Netgate + update'            => [$pkg, 'pfSense', true, $pm],
 			'Netgate + no update'         => [$pkg, 'pfSense', false, '#'],
-			'channel-stable + update'     => [$pkg, 'pfblockerng-stable', true, '#'],
-			'channel-testing + update'    => [$pkg, 'pfblockerng-testing', true, '#'],
-			'legacy pfblockerng + update' => [$pkg, 'pfblockerng', true, '#'],
-			'empty repo + update'         => [$pkg, '', true, '#'],
+			'channel-stable + update'     => [$pkg, 'pfblockerng-stable', true, $pm],
+			'channel-testing + update'    => [$pkg, 'pfblockerng-testing', true, $pm],
+			'channel-stable + no update'  => [$pkg, 'pfblockerng-stable', false, '#'],
+			'legacy pfblockerng + update' => [$pkg, 'pfblockerng', true, $pm],
+			'sideload: empty repo'        => [$pkg, '', true, $pm],
 			'empty pkgname'               => ['', 'pfSense', true, '#'],
+			'empty pkgname, channel'      => ['', 'pfblockerng-stable', true, '#'],
 		];
 	}
 
@@ -234,11 +245,12 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		$pkg = 'pfSense-pkg-pfBlockerNG';
 		$pm = '/pkg_mgr_install.php?mode=delete&pkg=' . rawurlencode($pkg);
 		return [
-			'Netgate'         => [$pkg, 'pfSense', $pm],
-			'channel-stable'  => [$pkg, 'pfblockerng-stable', '#'],
-			'channel-edge'    => [$pkg, 'pfblockerng-edge', '#'],
-			'empty repo'      => [$pkg, '', '#'],
-			'empty pkgname'   => ['', 'pfSense', '#'],
+			'Netgate'                => [$pkg, 'pfSense', $pm],
+			'channel-stable'         => [$pkg, 'pfblockerng-stable', $pm],
+			'channel-edge'           => [$pkg, 'pfblockerng-edge', $pm],
+			'sideload: empty repo'   => [$pkg, '', $pm],
+			'empty pkgname'          => ['', 'pfSense', '#'],
+			'empty pkgname, channel' => ['', 'pfblockerng-stable', '#'],
 		];
 	}
 

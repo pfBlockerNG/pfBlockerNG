@@ -10771,19 +10771,6 @@
             }
         ]
     },
-    "pfb_software_pkgmgr_usable": {
-        "returnsRef": false,
-        "returnType": "bool",
-        "params": [
-            {
-                "name": "repo",
-                "byRef": false,
-                "variadic": false,
-                "type": "?string",
-                "default": null
-            }
-        ]
-    },
     "pfb_software_provenance_ok": {
         "returnsRef": false,
         "returnType": "bool",
