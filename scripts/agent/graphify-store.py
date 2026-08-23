@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
 import os
 import re
 import shutil
@@ -12,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -73,6 +76,30 @@ def _ensure_store(path: Path) -> Path:
     if not path.is_dir() or _run(path, "rev-parse", "--is-inside-work-tree", check=False).stdout.strip() != "true":
         raise StoreError(f"not a normal Git repository: {path}")
     return path
+
+
+@contextlib.contextmanager
+def _store_lock(store_root: Path) -> Iterator[None]:
+    """Serialise store mutation against every other caller of the same store.
+
+    The lock is the store root's sibling `<store-root>.lock`, which is the very
+    `.git/graphify-store.lock` that `work-branch.sh` takes, so a self-locking publish and
+    a locking caller exclude each other. Only the writer takes it: the read paths run
+    *under* a caller's own hold of that same lock, and flock(2) ties a lock to the open
+    file description, so a second one taken there would deadlock against its own caller.
+    """
+    lock = store_root.parent / f"{store_root.name}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    handle = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o644)
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"graphify-store: waiting for the store lock {lock}", file=sys.stderr)
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(handle)
 
 
 def _source_payload(builder: Path) -> Path:
@@ -248,20 +275,22 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
     head = _run(builder, "rev-parse", "HEAD").stdout.strip()
     if head != sha:
         raise StoreError(f"builder HEAD {head} does not match source SHA {sha}")
-    store = _ensure_store(store_root)
-    _valid_branch(store, branch)
-    if _branch_exists(store, branch):
-        _run(store, "switch", "--quiet", branch)
-    else:
-        _run(store, "switch", "--quiet", "--create", branch)
-    target = store / "graphify-out"
-    if target.is_symlink() or (target.exists() and not target.is_dir()):
-        raise StoreError(f"refusing unmanaged store payload: {target}")
-    _swap_payload(artifacts, target)
-    _run(store, "add", "-A", "--", "graphify-out")
-    if _run(store, "diff", "--cached", "--quiet", check=False).returncode:
-        _run(store, "commit", "--quiet", "-m", sha)
-    _run(store, "tag", "--force", _tag(branch, sha), branch)
+    store_root = _store_root(store_root)
+    with _store_lock(store_root):
+        store = _ensure_store(store_root)
+        _valid_branch(store, branch)
+        if _branch_exists(store, branch):
+            _run(store, "switch", "--quiet", branch)
+        else:
+            _run(store, "switch", "--quiet", "--create", branch)
+        target = store / "graphify-out"
+        if target.is_symlink() or (target.exists() and not target.is_dir()):
+            raise StoreError(f"refusing unmanaged store payload: {target}")
+        _swap_payload(artifacts, target)
+        _run(store, "add", "-A", "--", "graphify-out")
+        if _run(store, "diff", "--cached", "--quiet", check=False).returncode:
+            _run(store, "commit", "--quiet", "-m", sha)
+        _run(store, "tag", "--force", _tag(branch, sha), branch)
 
 
 def _parser() -> argparse.ArgumentParser:
