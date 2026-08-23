@@ -675,3 +675,21 @@ def test_scratch_removal_never_widens_the_directory_it_sits_in(tmp_path: Path) -
         parent.chmod(0o700)
 
     assert mode == 0o500
+    assert not (scratch / "graph.json").exists()  # the cleanup ran; it just could not remove the root
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the directory permissions this test revokes")
+def test_scratch_removal_never_follows_a_symlink_out_of_the_scratch(tmp_path: Path) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    external.chmod(0o755)
+    scratch = tmp_path / "scratch"
+    locked = scratch / "previous"
+    locked.mkdir(parents=True)
+    (locked / "link").symlink_to(external)
+    locked.chmod(0o500)
+
+    store._remove_scratch(scratch)
+
+    assert stat.S_IMODE(external.lstat().st_mode) == 0o755
+    assert not scratch.exists()

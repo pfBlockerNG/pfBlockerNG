@@ -129,7 +129,9 @@ def _remove_scratch(scratch: Path) -> None:
                 # An unwritable parent is what blocks the unlink -- but the scratch's own
                 # parent belongs to the caller, so leave residue rather than widen it.
                 os.chmod(os.path.dirname(path), stat.S_IRWXU)
-            os.chmod(path, stat.S_IRWXU)
+            if not os.path.islink(path):
+                # chmod follows symlinks, and a link inside the scratch can point anywhere.
+                os.chmod(path, stat.S_IRWXU)
             function(path)
         except OSError:
             pass
