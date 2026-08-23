@@ -315,6 +315,18 @@ final class AlertsUnlockedRowWhitelistIconTest extends TestCase
 			$html,
 			"issue #1526: Unlocked panel DNSBL row must show whitelist '+' next to Re-Lock, got:\n{$html}"
 		);
+	}
+
+	public function testUnlockedNonTldPanelRowOmitsTldExclusionIdField(): void
+	{
+		$domain = 'unlocked-panel.example.com';
+		$html = implode('', pfb_alerts_unlocked_entry_actions(
+			'dnsbl',
+			$domain,
+			'DNSBL',
+			$GLOBALS['clists']
+		));
+
 		$this->assertStringNotContainsString(
 			'|TLD"',
 			$html,
