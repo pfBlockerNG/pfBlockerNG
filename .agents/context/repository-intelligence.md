@@ -20,14 +20,14 @@ Load when: every agent session, from `AGENTS.md`.
   available—for exact symbols, definitions, references, implementations,
   call/type hierarchy, diagnostics, and diagnostic-aware refactoring.
 - `work-branch.sh --worktree` restores an exact source-SHA snapshot from the local
-  Graphify store. `GRAPHIFY-REFRESH-REQUIRED` means hold `.git/graphify-store.lock`
-  in one harness-tracked `lockf`/`flock` session; create a temporary detached builder
+  Graphify store. `GRAPHIFY-REFRESH-REQUIRED` means create a temporary detached builder
   at the reported source SHA; run `graphify-store.py seed`, then
   `graphify-store.py validate-builder --builder .`, then refresh with Graphify 0.9.48
   using `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify extract . --code-only --force`;
   run
-  `graphify cluster-only . --no-viz --no-label`, then run `graphify-store.py publish`;
-  release/remove the builder and retry. The store
+  `graphify cluster-only . --no-viz --no-label`, then run `graphify-store.py publish`,
+  which takes `.git/graphify-store.lock` itself for the store mutation, so the refresh
+  needs no hand-held lock; remove the builder and retry. The store
   archives exactly `graph.json` and `GRAPH_REPORT.md` and rejects a refresh when
   `graphify-out/memory` is present; other non-canonical roots are filtered out.
 - Canonical refreshes use `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify

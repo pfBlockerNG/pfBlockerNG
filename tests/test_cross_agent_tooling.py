@@ -188,6 +188,7 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "graphify-store.py seed",
         "graphify-store.py validate-builder --builder .",
         "graphify-store.py publish",
+        "takes `.git/graphify-store.lock` itself",
         "source SHA",
         "graphify-out/graph.json",
         "graphify-out/GRAPH_REPORT.md",
@@ -205,7 +206,7 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "ignored and untracked",
     ):
         assert contract in routing, f"Graphify worktree routing lost {contract}"
-    recipe = routing.split("`GRAPHIFY-REFRESH-REQUIRED`", 1)[1].split("release/remove", 1)[0]
+    recipe = routing.split("`GRAPHIFY-REFRESH-REQUIRED`", 1)[1].split("remove the builder", 1)[0]
     steps = (
         "graphify-store.py seed",
         "graphify-store.py validate-builder --builder .",

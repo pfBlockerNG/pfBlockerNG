@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import importlib.util
 import os
 import stat
@@ -109,6 +110,28 @@ def assert_previous_payload_intact(target_root: Path) -> None:
     assert (payload / "graph.json").read_text(encoding="utf-8") == '{"version":"previous"}\n'
     assert (payload / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "previous report\n"
     assert sorted(entry.name for entry in target_root.iterdir()) == ["graphify-out"]
+
+
+def lock_state(lock: Path) -> str:
+    """Report whether the Graphify store lock is free at this instant.
+
+    flock(2) ties the lock to the open file description, so a descriptor opened here
+    conflicts with a hold taken through another one even inside this same process --
+    the probe therefore reads the real extent of the critical section rather than
+    inferring it from one caller out-racing another.
+    """
+    if not lock.exists():
+        return "absent"
+    handle = os.open(lock, os.O_RDWR)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return "held"
+    else:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        return "free"
+    finally:
+        os.close(handle)
 
 
 def test_publish_and_restore_keep_only_canonical_artifacts_and_source_tag(tmp_path: Path) -> None:
@@ -731,3 +754,69 @@ def test_scratch_removal_survives_an_unreadable_directory(tmp_path: Path) -> Non
             unreadable.chmod(0o700)
 
     assert not scratch.exists()
+
+
+def test_publish_holds_the_store_lock_while_it_mutates_the_store(tmp_path: Path) -> None:
+    """Scenario: two agents publish into the one store a primary checkout shares.
+
+    Given the store lock is the sibling `.lock` file `work-branch.sh` already takes,
+    When publish swaps the new payload into the store,
+    Then the lock is held for that window, so the second agent waits instead of
+    racing the swap (issue #2657).
+    """
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / ".git" / "graphify-store"
+    lock = tmp_path / ".git" / "graphify-store.lock"
+    observed: list[str] = []
+    swap_payload = store._swap_payload
+
+    def probing_swap(artifacts: tuple[Path, ...], target: Path) -> None:
+        observed.append(lock_state(lock))
+        swap_payload(artifacts, target)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(store, "_swap_payload", probing_swap)
+        store.publish(store_root, source, "devel", sha)
+
+    assert observed == ["held"], f"store lock during the publish swap: {observed}"
+
+
+def test_reads_never_block_on_the_store_lock_their_caller_holds(tmp_path: Path) -> None:
+    """`work-branch.sh` holds the store lock across has-exact and restore-exact, so a
+    second flock(2) taken from inside those commands would deadlock against their own
+    caller. They must stay lock-free (issue #2657).
+    """
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / ".git" / "graphify-store"
+    publish(source, store_root, "devel", sha)
+    target = tmp_path / "worktree"
+    target.mkdir()
+
+    lock = tmp_path / ".git" / "graphify-store.lock"
+    handle = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        assert lock_state(lock) == "held", "the probe must see the caller's own hold"
+        common = ("--store-root", str(store_root), "--branch", "devel", "--sha", sha)
+        # The timeout is a salvage cap for a deadlock, never the assertion: a blocked
+        # read raises TimeoutExpired, which reads as "stuck", not as a wrong result.
+        has_exact = subprocess.run(
+            ["python3", str(SCRIPT), "has-exact", *common],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+        restore = subprocess.run(
+            ["python3", str(SCRIPT), "restore-exact", *common, "--target", str(target)],
+            text=True,
+            capture_output=True,
+            timeout=60,
+        )
+    finally:
+        os.close(handle)
+
+    assert has_exact.returncode == 0, has_exact.stderr
+    assert restore.returncode == 0, restore.stderr
+    assert (target / "graphify-out" / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "report\n"
