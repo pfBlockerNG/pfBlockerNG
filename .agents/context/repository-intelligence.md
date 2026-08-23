@@ -26,8 +26,10 @@ Load when: every agent session, from `AGENTS.md`.
   using `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify extract . --code-only --force`;
   run
   `graphify cluster-only . --no-viz --no-label`, then run `graphify-store.py publish`,
-  which takes `.git/graphify-store.lock` itself for the store mutation, so the refresh
-  needs no hand-held lock; remove the builder and retry. The store
+  which takes `.git/graphify-store.lock` itself, so the refresh needs no hand-held lock.
+  Only that mutation is serialised: a `work-branch.sh --worktree` started mid-refresh
+  reports `GRAPHIFY-REFRESH-REQUIRED` rather than waiting, and refreshes in parallel.
+  Remove the builder and retry. The store
   archives exactly `graph.json` and `GRAPH_REPORT.md` and rejects a refresh when
   `graphify-out/memory` is present; other non-canonical roots are filtered out.
 - Canonical refreshes use `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify

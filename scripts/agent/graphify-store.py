@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import fcntl
 import os
 import re
@@ -14,7 +13,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Iterator
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -64,7 +62,6 @@ def _store_root(path: Path) -> Path:
 
 
 def _ensure_store(path: Path) -> Path:
-    path = _store_root(path)
     if path.exists() and not path.is_dir():
         raise StoreError(f"Graphify store root is not a directory: {path}")
     if not path.exists():
@@ -76,30 +73,6 @@ def _ensure_store(path: Path) -> Path:
     if not path.is_dir() or _run(path, "rev-parse", "--is-inside-work-tree", check=False).stdout.strip() != "true":
         raise StoreError(f"not a normal Git repository: {path}")
     return path
-
-
-@contextlib.contextmanager
-def _store_lock(store_root: Path) -> Iterator[None]:
-    """Serialise store mutation against every other caller of the same store.
-
-    The lock is the store root's sibling `<store-root>.lock`, which is the very
-    `.git/graphify-store.lock` that `work-branch.sh` takes, so a self-locking publish and
-    a locking caller exclude each other. Only the writer takes it: the read paths run
-    *under* a caller's own hold of that same lock, and flock(2) ties a lock to the open
-    file description, so a second one taken there would deadlock against its own caller.
-    """
-    lock = store_root.parent / f"{store_root.name}.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
-    handle = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_CLOEXEC, 0o644)
-    try:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            print(f"graphify-store: waiting for the store lock {lock}", file=sys.stderr)
-            fcntl.flock(handle, fcntl.LOCK_EX)
-        yield
-    finally:
-        os.close(handle)
 
 
 def _source_payload(builder: Path) -> Path:
@@ -276,7 +249,25 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
     if head != sha:
         raise StoreError(f"builder HEAD {head} does not match source SHA {sha}")
     store_root = _store_root(store_root)
-    with _store_lock(store_root):
+    # Serialise the one command that mutates the store. The lock is the store root's sibling
+    # `<store-root>.lock`, which is the `.git/graphify-store.lock` that `work-branch.sh` takes,
+    # so a publish and a locking caller exclude each other. The read paths stay lock-free:
+    # `git archive <commit>` reads the object database, never the store's worktree or index.
+    # `has-exact` and `restore-exact` must also stay lock-free because `work-branch.sh` invokes
+    # them while holding this lock, and flock(2) binds a lock to the open file description, so
+    # a second one taken there would block against their own caller for ever.
+    lock = store_root.parent / f"{store_root.name}.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        handle = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
+    except OSError as error:
+        raise StoreError(f"cannot open the Graphify store lock: {lock}") from error
+    try:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            print(f"graphify-store: waiting for the store lock {lock}", file=sys.stderr)
+            fcntl.flock(handle, fcntl.LOCK_EX)
         store = _ensure_store(store_root)
         _valid_branch(store, branch)
         if _branch_exists(store, branch):
@@ -291,6 +282,8 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
         if _run(store, "diff", "--cached", "--quiet", check=False).returncode:
             _run(store, "commit", "--quiet", "-m", sha)
         _run(store, "tag", "--force", _tag(branch, sha), branch)
+    finally:
+        os.close(handle)
 
 
 def _parser() -> argparse.ArgumentParser:
