@@ -101,18 +101,30 @@ final class BlacklistLangFallbackTest extends TestCase
 	 */
 	public function testShippedUt1FeedUsesHttps(): void
 	{
-		$raw = file_get_contents(self::UT1_FILE);
+		$raw = file(self::UT1_FILE, FILE_SKIP_EMPTY_LINES | FILE_IGNORE_NEW_LINES);
 		$this->assertNotFalse($raw, 'test bootstrap: failed to read ut1_global_usage');
-		$this->assertSame(
-			1,
-			preg_match_all('/^FEED:\s*(\S+)$/m', $raw, $matches),
-			'ut1_global_usage must declare exactly one FEED line'
-		);
-		$matches = array(1 => $matches[1][0]);
+
+		// Read FEED exactly as the shipped discovery loop does
+		// (pfblockerng_blacklist.php): skip comments/blanks, split once on ':', trim,
+		// and take the FIRST match -- a later duplicate is ignored there, so this must
+		// not invent a uniqueness rule the parser does not have.
+		$feed = '';
+		foreach ($raw as $line) {
+			$line = trim($line);
+			if ($line === '' || str_starts_with($line, '#')) {
+				continue;
+			}
+			if (strpos($line, 'FEED:') !== FALSE) {
+				$feed = trim(explode(':', $line, 2)[1]);
+				break;
+			}
+		}
+
+		$this->assertNotSame('', $feed, 'ut1_global_usage must declare a FEED line');
 		$this->assertStringStartsWith(
 			'https://',
-			$matches[1],
-			"the shipped UT1 feed must be fetched over HTTPS; found: {$matches[1]}"
+			$feed,
+			"the shipped UT1 feed must be fetched over HTTPS; found: {$feed}"
 		);
 	}
 
