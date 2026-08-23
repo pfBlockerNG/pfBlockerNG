@@ -12,7 +12,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -122,21 +121,15 @@ def _canonical_files(payload: Path) -> tuple[Path, ...]:
 
 def _remove_scratch(scratch: Path) -> None:
     """Remove a swap scratch directory, never raising; residue would block `git worktree remove`."""
-
-    def retry(function: Callable[[str], object], path: str, _excinfo: object) -> None:
-        try:
-            if os.fspath(path) != os.fspath(scratch):
-                # An unwritable parent is what blocks the unlink -- but the scratch's own
-                # parent belongs to the caller, so leave residue rather than widen it.
-                os.chmod(os.path.dirname(path), stat.S_IRWXU)
-            if not os.path.islink(path):
-                # chmod follows symlinks, and a link inside the scratch can point anywhere.
-                os.chmod(path, stat.S_IRWXU)
-            function(path)
-        except OSError:
-            pass
-
-    shutil.rmtree(scratch, onerror=retry)
+    for directory, subdirectories, _files in os.walk(scratch):
+        for path in (directory, *(os.path.join(directory, name) for name in subdirectories)):
+            if os.path.islink(path):
+                continue  # chmod follows symlinks, and a link inside the scratch can point anywhere
+            try:
+                os.chmod(path, stat.S_IRWXU)  # an unwritable directory is what blocks the unlink
+            except OSError:
+                pass
+    shutil.rmtree(scratch, ignore_errors=True)
 
 
 def _swap_payload(artifacts: tuple[Path, ...], target: Path) -> None:

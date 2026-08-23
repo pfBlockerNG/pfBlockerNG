@@ -689,7 +689,44 @@ def test_scratch_removal_never_follows_a_symlink_out_of_the_scratch(tmp_path: Pa
     (locked / "link").symlink_to(external)
     locked.chmod(0o500)
 
+    enclosing = stat.S_IMODE(tmp_path.lstat().st_mode)
+
     store._remove_scratch(scratch)
 
     assert stat.S_IMODE(external.lstat().st_mode) == 0o755
+    assert stat.S_IMODE(tmp_path.lstat().st_mode) == enclosing  # nor anything above the link's target
+    assert not scratch.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the directory permissions this test revokes")
+def test_scratch_removal_never_chmods_a_hardlinked_file(tmp_path: Path) -> None:
+    external = tmp_path / "external.txt"
+    external.write_text("external\n", encoding="utf-8")
+    external.chmod(0o644)
+    scratch = tmp_path / "scratch"
+    locked = scratch / "previous"
+    locked.mkdir(parents=True)
+    os.link(external, locked / "link")
+    locked.chmod(0o500)
+
+    store._remove_scratch(scratch)
+
+    assert stat.S_IMODE(external.lstat().st_mode) == 0o644
+    assert not scratch.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the directory permissions this test revokes")
+def test_scratch_removal_survives_an_unreadable_directory(tmp_path: Path) -> None:
+    scratch = tmp_path / "scratch"
+    unreadable = scratch / "previous"
+    unreadable.mkdir(parents=True)
+    (unreadable / "graph.json").write_text("previous\n", encoding="utf-8")
+    unreadable.chmod(0o000)
+
+    try:
+        store._remove_scratch(scratch)
+    finally:
+        if unreadable.exists():
+            unreadable.chmod(0o700)
+
     assert not scratch.exists()
