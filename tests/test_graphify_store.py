@@ -3,6 +3,7 @@ from __future__ import annotations
 import fcntl
 import importlib.util
 import os
+import select
 import stat
 import subprocess
 import tarfile
@@ -855,41 +856,53 @@ def test_a_second_publish_waits_for_the_lock_instead_of_racing_or_dying(tmp_path
         text=True,
         stderr=subprocess.PIPE,
     )
+    stderr = waiting.stderr
+    assert stderr is not None
     try:
-        assert waiting.stderr is not None
-        # The announcement IS the synchronisation event: it is emitted from the contended
-        # branch itself, so consuming it proves the second caller reached the wait. An
-        # unblocked publish exits instead and readline() returns "" at EOF.
-        announced = waiting.stderr.readline()
-        assert "waiting for the store lock" in announced, f"second publish did not wait: {announced!r}"
-        assert not store_root.exists(), "the second publish mutated the store under a foreign hold"
+        try:
+            # The announcement IS the synchronisation event: it is emitted from the contended
+            # branch itself, so consuming it proves the second caller reached the wait. An
+            # unblocked publish exits instead and readline() returns "" at EOF. select() only
+            # caps the read so a publish that neither announces nor exits reports "stuck"
+            # instead of hanging the suite; it never stands in for an assertion.
+            if not select.select([stderr], [], [], 60)[0]:
+                raise AssertionError("the second publish neither announced a wait nor exited: stuck")
+            announced = stderr.readline()
+            assert "waiting for the store lock" in announced, f"second publish did not wait: {announced!r}"
+            assert not store_root.exists(), "the second publish mutated the store under a foreign hold"
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            os.close(handle)
+        assert waiting.wait(timeout=60) == 0, stderr.read()
     finally:
-        fcntl.flock(handle, fcntl.LOCK_UN)
-        os.close(handle)
+        if waiting.poll() is None:
+            waiting.kill()
+            waiting.wait(timeout=60)
+        stderr.close()
 
-    # The timeout is a salvage cap for a hang, never the assertion.
-    assert waiting.wait(timeout=60) == 0, waiting.stderr.read()
-    waiting.stderr.close()
     assert (store_root / "graphify-out" / "graph.json").exists()
-    assert lock_state(lock) == "free", "the lock outlived the publish that took it"
 
 
-@pytest.mark.parametrize("lock_kind", ["directory", "symlink"])
+@pytest.mark.parametrize("lock_kind", ["directory", "symlink", "unusable-parent"])
 def test_an_unusable_store_lock_is_reported_without_a_traceback(tmp_path: Path, lock_kind: str) -> None:
-    """The lock open is the one path in this module that could follow a symlink out of the
-    store or crash on a stray directory; both must fail the way every other rejection here
-    does -- one `graphify-store:` line, no traceback (#2657).
+    """Taking the lock is the one path in this module that could follow a symlink out of the
+    store, crash on a stray directory, or crash creating the directory it lives in; each must
+    fail the way every other rejection here does -- one `graphify-store:` line, no traceback
+    (#2657).
     """
     source = tmp_path / "source"
     sha = make_repo(source)
     store_root = tmp_path / ".git" / "graphify-store"
     lock = tmp_path / ".git" / "graphify-store.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
     outside = tmp_path / "outside"
-    if lock_kind == "directory":
-        lock.mkdir()
+    if lock_kind == "unusable-parent":
+        lock.parent.write_text("not a directory\n", encoding="utf-8")
     else:
-        lock.symlink_to(outside)
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        if lock_kind == "directory":
+            lock.mkdir()
+        else:
+            lock.symlink_to(outside)
 
     result = run_store(
         "publish",

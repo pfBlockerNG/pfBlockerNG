@@ -257,8 +257,8 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
     # them while holding this lock, and flock(2) binds a lock to the open file description, so
     # a second one taken there would block against their own caller for ever.
     lock = store_root.parent / f"{store_root.name}.lock"
-    lock.parent.mkdir(parents=True, exist_ok=True)
     try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
         handle = os.open(lock, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o644)
     except OSError as error:
         raise StoreError(f"cannot open the Graphify store lock: {lock}") from error
