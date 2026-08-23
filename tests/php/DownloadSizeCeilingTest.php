@@ -306,7 +306,12 @@ final class DownloadSizeCeilingTest extends TestCase
 			'exec("{$pfb[\'script\']} xlsx {$header_esc} {$elog}");',
 			// Lists an archive; extracts nothing.
 			'exec("/usr/bin/tar -tf {$file_dwn_esc}");',
-			// Capped.
+			// Capped. This one stays a prefix: it covers ten call sites with ten
+			// different argument lists. So a command concatenated onto a capped call
+			// is invisible HERE -- but not uncapped: ulimit is process-scoped, so the
+			// prefix pfb_extract_cmd() returns still bounds whatever follows it in the
+			// same exec(). Probed with a real over-ceiling tar appended to a wrapped
+			// call: the write was truncated at the ceiling anyway.
 			'exec(pfb_extract_cmd(',
 		];
 
