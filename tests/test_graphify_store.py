@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -613,7 +614,7 @@ def test_replace_keeps_the_previous_payload_recoverable_when_the_rollback_fails(
     with pytest.raises(store.StoreError, match="previous Graphify payload is kept at") as failure:
         store._replace_payload(source, target_root)
 
-    kept = Path(str(failure.value).rsplit(" ", 1)[-1])
+    kept = Path(str(failure.value).split("kept at ", 1)[1])
     assert (kept / "graph.json").read_text(encoding="utf-8") == '{"version":"previous"}\n'
     assert (kept / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "previous report\n"
 
@@ -638,3 +639,20 @@ def test_publish_keeps_previous_store_payload_when_a_canonical_copy_fails(
     assert (payload / "graph.json").read_text(encoding="utf-8") == '{"version":1}\n'
     assert (payload / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "report\n"
     assert git(store_root, "status", "--porcelain") == ""
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the directory permissions this test revokes")
+def test_scratch_removal_survives_an_unwritable_directory(tmp_path: Path) -> None:
+    scratch = tmp_path / "scratch"
+    locked = scratch / "previous"
+    locked.mkdir(parents=True)
+    (locked / "graph.json").write_text("previous\n", encoding="utf-8")
+    locked.chmod(0o500)
+
+    try:
+        store._remove_scratch(scratch)
+    finally:
+        if locked.exists():
+            locked.chmod(0o700)
+
+    assert not scratch.exists()
