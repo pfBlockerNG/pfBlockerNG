@@ -43,6 +43,9 @@ final class DownloadSizeRefusalTest extends TestCase
 	/** @var array<int,mixed> saved curl defaults entry (sentinel FALSE = was unset) */
 	private $savedCeiling = FALSE;
 
+	/** @var array<string,mixed> saved fixture globals (sentinel: absent key = was unset) */
+	private array $savedGlobals = [];
+
 	protected function setUp(): void
 	{
 		if (!extension_loaded('curl')) {
@@ -53,6 +56,12 @@ final class DownloadSizeRefusalTest extends TestCase
 		$this->assertTrue(unlink($workdir) && mkdir($workdir, 0700));
 		$this->workdir = $workdir;
 
+		// Save before replacing: a sibling test's fixture state must survive this one.
+		foreach (['config', 'pfb_test_configured_ips', 'pfb_test_resolve_map'] as $g) {
+			if (array_key_exists($g, $GLOBALS)) {
+				$this->savedGlobals[$g] = $GLOBALS[$g];
+			}
+		}
 		$GLOBALS['config'] = [];
 		$GLOBALS['pfb_test_configured_ips'] = [];
 		// Loopback first (the pinned connection address, admitted by the self-IP
@@ -98,7 +107,14 @@ final class DownloadSizeRefusalTest extends TestCase
 				$GLOBALS['pfb'][$k] = $prev;
 			}
 		}
-		unset($GLOBALS['config'], $GLOBALS['pfb_test_resolve_map'], $GLOBALS['pfb_test_configured_ips']);
+		foreach (['config', 'pfb_test_configured_ips', 'pfb_test_resolve_map'] as $g) {
+			if (array_key_exists($g, $this->savedGlobals)) {
+				$GLOBALS[$g] = $this->savedGlobals[$g];
+			} else {
+				unset($GLOBALS[$g]);
+			}
+		}
+		$this->savedGlobals = [];
 		if ($this->workdir !== '' && is_dir($this->workdir)) {
 			foreach ((array) glob("{$this->workdir}/*") as $f) {
 				@unlink((string) $f);

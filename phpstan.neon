@@ -16,7 +16,7 @@ parameters:
     # legacy debt at the current level — an acknowledged blind-spot list to
     # BURN DOWN, not grow. Next: burn down the level-2 baseline, then level 3.
     # No memory limit is configurable here (probed: 'Unexpected item') — run
-    # via `composer phpstan`, which carries the required --memory-limit=1G.
+    # via `composer phpstan`, which carries the required --memory-limit=2G.
     level: 2
     # Pulled forward from level 5 (issue #1144): checkFunctionArgumentTypes is a
     # plain parameter, not level-gated rule registration — probed clean at level
