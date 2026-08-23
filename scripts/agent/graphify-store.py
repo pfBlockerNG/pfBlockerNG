@@ -125,7 +125,10 @@ def _remove_scratch(scratch: Path) -> None:
 
     def retry(function: Callable[[str], object], path: str, _excinfo: object) -> None:
         try:
-            os.chmod(os.path.dirname(path), stat.S_IRWXU)  # an unwritable parent is what blocks the unlink
+            if os.fspath(path) != os.fspath(scratch):
+                # An unwritable parent is what blocks the unlink -- but the scratch's own
+                # parent belongs to the caller, so leave residue rather than widen it.
+                os.chmod(os.path.dirname(path), stat.S_IRWXU)
             os.chmod(path, stat.S_IRWXU)
             function(path)
         except OSError:

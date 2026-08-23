@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import stat
 import subprocess
 import tarfile
 from pathlib import Path
@@ -656,3 +657,21 @@ def test_scratch_removal_survives_an_unwritable_directory(tmp_path: Path) -> Non
             locked.chmod(0o700)
 
     assert not scratch.exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the directory permissions this test revokes")
+def test_scratch_removal_never_widens_the_directory_it_sits_in(tmp_path: Path) -> None:
+    parent = tmp_path / "worktree"
+    parent.mkdir()
+    scratch = parent / ".graphify-swap-probe"
+    scratch.mkdir()
+    (scratch / "graph.json").write_text("previous\n", encoding="utf-8")
+    parent.chmod(0o500)
+
+    try:
+        store._remove_scratch(scratch)
+        mode = stat.S_IMODE(parent.lstat().st_mode)
+    finally:
+        parent.chmod(0o700)
+
+    assert mode == 0o500
