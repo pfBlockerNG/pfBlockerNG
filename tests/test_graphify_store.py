@@ -820,3 +820,91 @@ def test_reads_never_block_on_the_store_lock_their_caller_holds(tmp_path: Path) 
     assert has_exact.returncode == 0, has_exact.stderr
     assert restore.returncode == 0, restore.stderr
     assert (target / "graphify-out" / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "report\n"
+
+
+def test_a_second_publish_waits_for_the_lock_instead_of_racing_or_dying(tmp_path: Path) -> None:
+    """Scenario: a publish starts while another caller already holds the store lock.
+
+    Given `work-branch.sh`'s own idiom -- an exclusive hold on `.git/graphify-store.lock` --
+    When a second caller publishes into that store,
+    Then it announces the wait and leaves the store untouched until the hold is released,
+    and only then completes; it neither races the holder nor dies on contention (#2657).
+    """
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / ".git" / "graphify-store"
+    lock = tmp_path / ".git" / "graphify-store.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+
+    handle = os.open(lock, os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(handle, fcntl.LOCK_EX)
+    waiting = subprocess.Popen(
+        [
+            "python3",
+            str(SCRIPT),
+            "publish",
+            "--store-root",
+            str(store_root),
+            "--builder",
+            str(source),
+            "--branch",
+            "devel",
+            "--sha",
+            sha,
+        ],
+        text=True,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        assert waiting.stderr is not None
+        # The announcement IS the synchronisation event: it is emitted from the contended
+        # branch itself, so consuming it proves the second caller reached the wait. An
+        # unblocked publish exits instead and readline() returns "" at EOF.
+        announced = waiting.stderr.readline()
+        assert "waiting for the store lock" in announced, f"second publish did not wait: {announced!r}"
+        assert not store_root.exists(), "the second publish mutated the store under a foreign hold"
+    finally:
+        fcntl.flock(handle, fcntl.LOCK_UN)
+        os.close(handle)
+
+    # The timeout is a salvage cap for a hang, never the assertion.
+    assert waiting.wait(timeout=60) == 0, waiting.stderr.read()
+    waiting.stderr.close()
+    assert (store_root / "graphify-out" / "graph.json").exists()
+    assert lock_state(lock) == "free", "the lock outlived the publish that took it"
+
+
+@pytest.mark.parametrize("lock_kind", ["directory", "symlink"])
+def test_an_unusable_store_lock_is_reported_without_a_traceback(tmp_path: Path, lock_kind: str) -> None:
+    """The lock open is the one path in this module that could follow a symlink out of the
+    store or crash on a stray directory; both must fail the way every other rejection here
+    does -- one `graphify-store:` line, no traceback (#2657).
+    """
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / ".git" / "graphify-store"
+    lock = tmp_path / ".git" / "graphify-store.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    outside = tmp_path / "outside"
+    if lock_kind == "directory":
+        lock.mkdir()
+    else:
+        lock.symlink_to(outside)
+
+    result = run_store(
+        "publish",
+        "--store-root",
+        str(store_root),
+        "--builder",
+        str(source),
+        "--branch",
+        "devel",
+        "--sha",
+        sha,
+    )
+
+    assert result.returncode == 1, result.stdout
+    assert result.stderr.startswith("graphify-store: "), result.stderr
+    assert "Traceback" not in result.stderr, result.stderr
+    assert not store_root.exists(), "a rejected publish must not create the store"
+    assert not outside.exists(), "the lock open must not follow a symlink out of the store"
