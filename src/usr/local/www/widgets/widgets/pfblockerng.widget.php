@@ -282,7 +282,7 @@ function pfBlockerNG_update_table() {
 		}
 		// ip_ph (default 127.1.7.7) is loaded into the pf table, so Addresses
 		// includes it. A padded-empty alias is placeholder-only: show 0.
-		$ip_ph = (string) ($pfb['ip_ph'] ?? '127.1.7.7');
+		$ip_ph = pfb_ip_placeholder();
 		$placeholder = str_ends_with($pfb_alias, '_v6') ? "::{$ip_ph}" : $ip_ph;
 		$count = pfb_widget_alias_display_count($info['addresses'], $alias_file, $placeholder);
 		$pfb_table[$pfb_alias] = array(

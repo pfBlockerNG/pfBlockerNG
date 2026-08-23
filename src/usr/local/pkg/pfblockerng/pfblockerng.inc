@@ -6705,6 +6705,18 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 }
 
 
+// Widget requests do not run apply.inc, so $pfb['ip_ph'] is unset —
+// read the IP-tab value pfb_global() loads (default 127.1.7.7).
+function pfb_ip_placeholder(): string {
+	global $pfb;
+	$raw = $pfb['ipconfig']['ip_placeholder'] ?? '';
+	if (!is_string($raw) || $raw === '') {
+		return '127.1.7.7';
+	}
+	return $raw;
+}
+
+
 // Widget/IP-table display count (issue #2645). Kernel Addresses includes
 // $placeholder when pf loaded the padded file. A placeholder-only file is an
 // empty feed — show 0. Mixed files keep Addresses (includes the one padded
@@ -7341,11 +7353,10 @@ function pfb_pfctl_tables_parse(array $lines): array {
 			continue;
 		}
 		if (str_starts_with($stripped, 'Evaluations:')) {
-			if (preg_match('/NoMatch:\s*(\d+)/', $stripped, $m)) {
+			// '/Match:/' also matches inside 'NoMatch:' — capture both in order.
+			if (preg_match('/NoMatch:\s*(\d+).*Match:\s*(\d+)/', $stripped, $m)) {
 				$tables[$current]['evaluations_nomatch'] = (int) $m[1];
-			}
-			if (preg_match('/Match:\s*(\d+)/', $stripped, $m)) {
-				$tables[$current]['evaluations_match'] = (int) $m[1];
+				$tables[$current]['evaluations_match'] = (int) $m[2];
 			}
 			continue;
 		}
