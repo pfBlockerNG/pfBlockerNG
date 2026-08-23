@@ -986,17 +986,6 @@ function pfb_dnsblip_action_value(mixed $action): string {
 	return pfb_group_action_valid($action, 'ipv4') ? (string) $action : 'Disabled';
 }
 
-// Entry count for a pfBlockerNG alias file from `grep -cv` output. $grep_lines[0]
-// is the count line. Returns 0 when missing or non-numeric.
-//
-// The widget historically grepped '^1.1.1.1$', which is NOT the placeholder —
-// $pfb['ip_ph'] defaults to 127.1.7.7 (v6: ::127.1.7.7). That hardcode is
-// retired; callers that need "real entries" use pfb_member_file_is_placeholder_only()
-// with ip_ph. This helper only unwraps grep -cv output.
-function pfb_alias_entry_count(array $grep_lines): int {
-	return is_numeric($grep_lines[0] ?? NULL) ? (int) $grep_lines[0] : 0;
-}
-
 // Reformat a stored timestamp string to ISO 8601 'YYYY-MM-DD HH:MM:SS' for display.
 // Accepts any date string parseable by strtotime() (e.g. the DNSBL SQLite timestamp
 // written as 'M j H:i:s' — 'Nov 31 14:30:45'). An already-ISO value round-trips
@@ -6668,7 +6657,7 @@ function pfb_aggregate_member_list($type, $family) {
 	// pfB_<Type>_Aggregated_<fam> would carry the fake IP. An empty union is already handled
 	// by the action's never-empty consumer, so skipping these here is safe.
 	$ip_ph = (string) ($pfb['ip_ph'] ?? '');
-	$placeholder = ($ip_ph === '') ? '' : (($family === 'v6') ? "::{$ip_ph}" : $ip_ph);
+	$placeholder = ($ip_ph === '') ? '' : pfb_placeholder_for_family($ip_ph, $family);
 	$kept = array();
 	foreach ($members as $member) {
 		if (!pfb_member_file_is_placeholder_only($member, $placeholder)) {
@@ -6688,6 +6677,13 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 	if ($placeholder === '') {
 		return FALSE;
 	}
+	$bare = str_starts_with($placeholder, '::') ? substr($placeholder, 2) : $placeholder;
+	$tokens = array($placeholder);
+	if ($bare !== '' && $bare !== $placeholder) {
+		$tokens[] = $bare;
+	} elseif ($bare !== '') {
+		$tokens[] = '::' . $bare;
+	}
 	$lines = @file($path, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 	if ($lines === FALSE || empty($lines)) {
 		return FALSE;
@@ -6697,7 +6693,7 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 		if ($line === '' || $line[0] === '#') {
 			continue;
 		}
-		if ($line !== $placeholder) {
+		if (!in_array($line, $tokens, TRUE)) {
 			return FALSE;
 		}
 	}
@@ -6706,22 +6702,35 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 
 
 // Widget requests do not run apply.inc, so $pfb['ip_ph'] is unset —
-// read the IP-tab value pfb_global() loads (default 127.1.7.7).
+// read and filter the IP-tab value pfb_global() loads (default 127.1.7.7).
 function pfb_ip_placeholder(): string {
 	global $pfb;
 	$raw = $pfb['ipconfig']['ip_placeholder'] ?? '';
-	if (!is_string($raw) || $raw === '') {
+	$filtered = pfb_filter($raw, PFB_FILTER_IPV4, 'Placeholder IP Address', '127.1.7.7');
+	if (!is_string($filtered) || $filtered === '') {
 		return '127.1.7.7';
 	}
-	return $raw;
+	return $filtered;
+}
+
+
+// v6 alias files are padded as ::<ip_ph>; v4 as the bare IPv4.
+function pfb_placeholder_for_family(string $ip_ph, string $family): string {
+	return ($family === 'v6') ? "::{$ip_ph}" : $ip_ph;
 }
 
 
 // Widget/IP-table display count (issue #2645). Kernel Addresses includes
-// $placeholder when pf loaded the padded file. A placeholder-only file is an
-// empty feed — show 0. Mixed files keep Addresses (includes the one padded
-// IP; persist-at-apply can record entries vs padded later).
+// the placeholder when pf loaded the padded file. A placeholder-only file
+// with Addresses==1 is an empty feed — show 0. Addresses>1 skips the file
+// slurp (deny lists can be 10^5–10^6 lines). Mixed files keep Addresses.
 function pfb_widget_alias_display_count(int $addresses, string $alias_file, string $placeholder): int {
+	if ($addresses > 1) {
+		return $addresses;
+	}
+	if ($addresses < 1) {
+		return 0;
+	}
 	if (pfb_member_file_is_placeholder_only($alias_file, $placeholder)) {
 		return 0;
 	}
@@ -7320,14 +7329,15 @@ function pfb_pfctl_tables_parse(array $lines): array {
 		if ($line === '') {
 			continue;
 		}
-		if ($line[0] === '-') {
-			$parts = preg_split('/\s+/', $line, 2);
-			if ($parts === FALSE || count($parts) < 2 || $parts[1] === '') {
-				$current = '';
-				continue;
-			}
-			$current = $parts[1];
-			$tables[$current] = $empty($parts[0]);
+		// Flags then name. Leading '-' misses const tables (`c…`) and
+		// would apply the next Addresses line to the previous table.
+		if (preg_match('/^([c-][p-][ai-][\w-]*)\s+(\S+)\s*$/', $line, $hm)) {
+			$current = $hm[2];
+			$tables[$current] = $empty($hm[1]);
+			continue;
+		}
+		if ($line[0] !== "\t") {
+			$current = '';
 			continue;
 		}
 		if ($current === '') {

@@ -333,19 +333,6 @@
             }
         ]
     },
-    "pfb_alias_entry_count": {
-        "returnsRef": false,
-        "returnType": "int",
-        "params": [
-            {
-                "name": "grep_lines",
-                "byRef": false,
-                "variadic": false,
-                "type": "array",
-                "default": null
-            }
-        ]
-    },
     "pfb_alias_field_type_ok": {
         "returnsRef": false,
         "returnType": "bool",
@@ -8944,6 +8931,26 @@
             },
             {
                 "name": "interface",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
+    "pfb_placeholder_for_family": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "ip_ph",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "family",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",

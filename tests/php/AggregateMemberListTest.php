@@ -359,5 +359,9 @@ final class AggregateMemberListTest extends TestCase
 
 		$this->assertSame([$realv6], pfb_aggregate_member_list('Deny', 'v6'),
 			'v6: ::-prefixed placeholder dropped; real kept');
+
+		$this->writeMember('denydir', 'emptyfeed_bare_v6.txt', "127.1.7.7\n");
+		$this->assertSame([$realv6], pfb_aggregate_member_list('Deny', 'v6'),
+			'v6: bare-IPv4 emptyfiles() pad is still placeholder-only');
 	}
 }

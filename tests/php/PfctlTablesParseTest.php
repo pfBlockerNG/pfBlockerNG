@@ -126,4 +126,22 @@ final class PfctlTablesParseTest extends TestCase
 		$this->assertSame(10, $parsed['pfB_Test_v4']['evaluations_nomatch']);
 		$this->assertSame(2, $parsed['pfB_Test_v4']['evaluations_match']);
 	}
+
+	public function testConstTableHeader_DoesNotOverwritePreviousAddresses(): void
+	{
+		$lines = [
+			"-pa-r--\tpfB_A_v4",
+			"\tAddresses:   5",
+			"cpa-r--\tpfB_CONST_v4",
+			"\tAddresses:   9",
+		];
+		$parsed = pfb_pfctl_tables_parse($lines);
+		$this->assertSame(
+			5,
+			$parsed['pfB_A_v4']['addresses'],
+			"expected: 5 on pfB_A_v4 (const header must not steal the next Addresses);\nactual: " . ($parsed['pfB_A_v4']['addresses'] ?? 'missing')
+		);
+		$this->assertSame(9, $parsed['pfB_CONST_v4']['addresses']);
+		$this->assertSame('cpa-r--', $parsed['pfB_CONST_v4']['flags']);
+	}
 }

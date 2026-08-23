@@ -412,7 +412,10 @@ dnsbl_cache() {
 emptyfiles() {
 	emptyfiles="$(find "${pfbdeny}"*.txt -size 0 2>/dev/null)"
 	for i in ${emptyfiles}; do
-		echo "${ip_placeholder}" > "${i}";
+		case "${i}" in
+		*_v6.txt) echo "::${ip_placeholder}" > "${i}" ;;
+		*) echo "${ip_placeholder}" > "${i}" ;;
+		esac
 	done
 }
 
