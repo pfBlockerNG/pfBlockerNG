@@ -3926,11 +3926,6 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
 def test_blacklist_download_name_keys_on_provider_id(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """issue #2636: the UT1 download name comes from the provider id, not from a literal feed URL.
 
-    The category files a Blacklist provider publishes are named after the DOWNLOAD file
-    name, so whatever decides that name decides the on-disk layout. Deriving it from a
-    hardcoded feed URL means the provider silently renames its whole category set the day
-    its URL changes; deriving it from the provider id keeps the layout stable.
-
     Given a UT1 provider whose feed URL is NOT the historical FTP one,
     When  the Blacklist download runs for it,
     Then  its archive is named for the provider and the categories land in the provider's
@@ -3941,18 +3936,23 @@ def test_blacklist_download_name_keys_on_provider_id(deployed_vm: SmokeVM, mock_
     feed_url = mock_feeds.register("blacklists.tar.gz", _blacklist_tar_gz("blacklists", "testcat", domain))
     provider_dir = f"{h.PFB_DBDIR}/ut1"
     stray_dir = f"{h.PFB_DBDIR}/blacklists"
+    # Snapshotted OUTSIDE the try so teardown restores what was there rather than deleting
+    # it, and so a failure here surfaces as itself instead of an undefined name in finally.
+    before = h.php_eval(
+        deployed_vm,
+        "echo base64_encode(serialize(config_get_path('installedpackages/pfblockerngblacklist', NULL)));",
+    ).stdout.strip()
     try:
         # Given -- a UT1 provider pointed at that URL, one category selected.
         deployed_vm.ssh(f"/bin/rm -rf {provider_dir} {stray_dir}")
+        provider = h._php_kv_array(  # noqa: SLF001
+            {"title": "UT1", "xml": "ut1", "feed": feed_url, "selected": "testcat"}
+        )
         h.php_eval(
             deployed_vm,
             "config_set_path('installedpackages/pfblockerngblacklist', array("
             "'blacklist_enable' => 'on', 'blacklist_selected' => 'ut1', "
-            "'item' => array(array("
-            "'title' => 'UT1', 'xml' => 'ut1', "
-            f"'feed' => {h._php_str(feed_url)}, "  # noqa: SLF001
-            "'size' => '8.5', 'selected' => 'testcat'"
-            "))));\n"
+            f"'item' => array({provider})));\n"
             "write_config('pfBlockerNG smoke: issue #2636 provider fixture');\n"
             "echo 'OK';",
         )
@@ -3972,7 +3972,10 @@ def test_blacklist_download_name_keys_on_provider_id(deployed_vm: SmokeVM, mock_
         deployed_vm.ssh(f"/bin/rm -rf {provider_dir} {stray_dir}")
         h.php_eval(
             deployed_vm,
-            "config_del_path('installedpackages/pfblockerngblacklist');\n"
+            f"$before = unserialize(base64_decode({h._php_str(before)}));\n"  # noqa: SLF001
+            "$before === NULL\n"
+            "    ? config_del_path('installedpackages/pfblockerngblacklist')\n"
+            "    : config_set_path('installedpackages/pfblockerngblacklist', $before);\n"
             "write_config('pfBlockerNG smoke: issue #2636 fixture teardown');\n"
             "echo 'OK';",
         )
