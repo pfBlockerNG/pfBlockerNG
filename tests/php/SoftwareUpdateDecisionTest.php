@@ -27,6 +27,8 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_software_pkgmgr_usable')]
 #[CoversFunction('pfb_software_update_href')]
 #[CoversFunction('pfb_software_uninstall_href')]
+#[CoversFunction('pfb_software_update_help')]
+#[CoversFunction('pfb_software_uninstall_help')]
 #[CoversFunction('pfb_update_available')]
 #[CoversFunction('pfb_software_check_enabled')]
 #[CoversFunction('pfb_should_notify')]
@@ -246,6 +248,93 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	public function testSoftwareUninstallHref(string $pkgname, string $repo, string $expected): void
 	{
 		$this->assertSame($expected, pfb_software_uninstall_href($pkgname, $repo));
+	}
+
+	/*
+	 * ---- pfb_software_update_help() / pfb_software_uninstall_help() (issue #2648) ----
+	 * The help under each control explains WHY the Package Manager is not offered. The
+	 * reason is the Package Manager UI's own scope -- it only manages packages whose %R
+	 * is Netgate's 'pfSense' (issue #2380) -- and NOT a broken repository or an
+	 * unreachable origin. The retired wording ("Package Manager cannot see this origin")
+	 * read as the latter, next to a sentence about a TLS error, and is pinned as gone.
+	 */
+	public function testUpdateHelpOnNetgateOriginPointsAtThePackageManager(): void
+	{
+		$help = pfb_software_update_help('pfSense-pkg-pfBlockerNG', 'pfSense');
+
+		$this->assertStringContainsString('pfSense Package Manager', $help);
+		$this->assertStringNotContainsString('pkg install', $help, 'a Netgate-origin box is never sent to the CLI');
+	}
+
+	public function testUpdateHelpOnChannelOriginGivesTheRepoQualifiedCommand(): void
+	{
+		$help = pfb_software_update_help('pfSense-pkg-pfBlockerNG', 'pfblockerng-nightly');
+
+		$this->assertStringContainsString(
+			'pkg install -y -r pfblockerng-nightly pfSense-pkg-pfBlockerNG',
+			$help,
+			'the CLI fallback must stay repository-qualified'
+		);
+		$this->assertStringContainsString(
+			"only manages packages from Netgate's own repository, so it does not check for pfBlockerNG updates",
+			$help,
+			'the help must name the Package Manager UI scope as the reason, in terms of the control it sits under'
+		);
+		$this->assertStringNotContainsString(
+			'cannot see this origin',
+			$help,
+			'retired wording: it reads as a broken or unreachable repository (issue #2648)'
+		);
+		$this->assertStringContainsString('Carry the system CA store into pkg', $help);
+	}
+
+	public function testUninstallHelpOnChannelOriginGivesThePkgDeleteCommand(): void
+	{
+		$help = pfb_software_uninstall_help('pfSense-pkg-pfBlockerNG', 'pfblockerng-stable');
+
+		$this->assertStringContainsString('pkg delete pfSense-pkg-pfBlockerNG', $help);
+		$this->assertStringContainsString(
+			"only manages packages from Netgate's own repository, so it cannot remove this install",
+			$help,
+			'the uninstall help states the consequence for uninstalling, not for update checks'
+		);
+		$this->assertStringNotContainsString(
+			'check for pfBlockerNG updates',
+			$help,
+			'update-check wording belongs under the Update control only'
+		);
+		$this->assertStringNotContainsString('cannot see this origin', $help);
+		$this->assertStringNotContainsString(
+			'Carry the system CA store into pkg',
+			$help,
+			'the CA consent caveat belongs to the fetch that update performs, not to a local delete'
+		);
+	}
+
+	public function testUninstallHelpOnNetgateOriginPointsAtThePackageManager(): void
+	{
+		$help = pfb_software_uninstall_help('pfSense-pkg-pfBlockerNG', 'pfSense');
+
+		$this->assertStringContainsString('pfSense Package Manager', $help);
+		$this->assertStringNotContainsString('pkg delete', $help);
+	}
+
+	public function testHelpFallsBackToPlaceholdersWhenTheInstallIsUnidentified(): void
+	{
+		// A sideload leaves %R empty and can leave the name unreadable; the command still
+		// has to render as something a reader can complete by hand.
+		$help = pfb_software_update_help('', '');
+
+		$this->assertStringContainsString('pkg install -y -r &lt;repo&gt; pfSense-pkg-pfBlockerNG', $help);
+	}
+
+	public function testHelpEscapesTheRepositoryAndPackageNames(): void
+	{
+		$help = pfb_software_update_help('pfSense-pkg-pfBlockerNG"<script>', 'pfblockerng-<b>');
+
+		$this->assertStringNotContainsString('<script>', $help);
+		$this->assertStringNotContainsString('pfblockerng-<b>', $help);
+		$this->assertStringContainsString('pfblockerng-&lt;b&gt;', $help);
 	}
 
 	public function testSoftwarePageDoesNotHardcodePkgMgrForAllOrigins(): void

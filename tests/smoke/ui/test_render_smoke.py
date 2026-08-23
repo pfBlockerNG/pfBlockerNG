@@ -2881,7 +2881,15 @@ def test_software_actions_link_to_package_manager(
             assert re.search(r'href=["\']#["\']', un_tag.group(0)), (
                 f"channel/sideload Uninstall href must be inert ('#'): {un_tag.group(0)!r}"
             )
-            assert "pkg_mgr_install.php" not in body or "Package Manager cannot see this origin" in body
+            # Why the controls are inert: the Package Manager UI only enumerates %R=pfSense
+            # packages (#2380). Asserted without the apostrophe so the check does not depend
+            # on how the form layer renders it (#2648).
+            assert "only manages packages from Netgate" in body, (
+                "channel/sideload Software page must say why the Package Manager controls are inert (issue #2648)"
+            )
+            assert "Package Manager cannot see this origin" not in body, (
+                "retired wording: it read as a broken or unreachable repository (issue #2648)"
+            )
         assert "?do=uninstall" not in un_tag.group(0), (
             "Uninstall must NOT route through the removed ?do=uninstall handler (#697)"
         )

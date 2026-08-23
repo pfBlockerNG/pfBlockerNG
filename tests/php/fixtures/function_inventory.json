@@ -10756,6 +10756,26 @@
         "returnType": "array",
         "params": []
     },
+    "pfb_software_uninstall_help": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pkgname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_software_uninstall_href": {
         "returnsRef": false,
         "returnType": "string",
@@ -10793,6 +10813,26 @@
                 "variadic": false,
                 "type": "?array",
                 "default": "NULL"
+            }
+        ]
+    },
+    "pfb_software_update_help": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "pkgname",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "repo",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
             }
         ]
     },

@@ -5103,6 +5103,43 @@ function pfb_software_uninstall_href(string $pkgname, string $repo): string {
 }
 
 /*
+ * Help text under the Update / Uninstall controls, escaped for direct rendering.
+ *
+ * On a non-Netgate origin the controls are inert, and the help says why. The reason is
+ * the scope of the Package Manager UI -- get_pkg_info() only enumerates packages whose
+ * %R is 'pfSense' (issue #2380) -- NOT a repository that is broken or unreachable. The
+ * retired wording ("Package Manager cannot see this origin") said the second thing, one
+ * sentence away from a note about a TLS error, and read as a failed install on a box
+ * where nothing had failed (issue #2648).
+ *
+ * An unidentified install (sideload: no readable %R, possibly no name) still gets a
+ * command a reader can complete by hand, so the placeholders are rendered, not omitted.
+ */
+function pfb_software_update_help(string $pkgname, string $repo): string {
+	if (pfb_software_pkgmgr_usable($repo)) {
+		return 'Install the latest version via the pfSense Package Manager. Available only when an update is found.';
+	}
+	return 'The pfSense Package Manager only manages packages from Netgate\'s own repository, '
+		. 'so it does not check for pfBlockerNG updates.'
+		. ' To update, run <code>pkg install -y -r '
+		. htmlspecialchars($repo !== '' ? $repo : '<repo>')
+		. ' ' . htmlspecialchars($pkgname !== '' ? $pkgname : 'pfSense-pkg-pfBlockerNG')
+		. '</code> from the shell. That command fetches from the repository, so on pfSense Plus it '
+		. 'can fail with a TLS error until "Carry the system CA store into pkg" above is enabled.';
+}
+
+function pfb_software_uninstall_help(string $pkgname, string $repo): string {
+	if (pfb_software_pkgmgr_usable($repo)) {
+		return 'Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).';
+	}
+	return 'The pfSense Package Manager only manages packages from Netgate\'s own repository, '
+		. 'so it cannot remove this install.'
+		. ' To uninstall, run <code>pkg delete '
+		. htmlspecialchars($pkgname !== '' ? $pkgname : 'pfSense-pkg-pfBlockerNG')
+		. '</code> from the shell.';
+}
+
+/*
  * TRUE when $latest is strictly newer than $installed, via pfSense pkg_version_compare()
  * (never a string compare — it returns '<' | '=' | '>'). Empty/invalid inputs -> FALSE
  * (no update): a missing installed or latest version is never "an update is available".

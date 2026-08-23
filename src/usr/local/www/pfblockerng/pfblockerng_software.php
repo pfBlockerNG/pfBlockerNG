@@ -266,11 +266,8 @@ $section->addInput(new Form_StaticText(null, $btn_check))
 // Update / Uninstall. Package Manager only sees %R=pfSense (issue #2380). A pfblockerng-*
 // origin is disabled here with the repo-qualified pkg CLI; never emit pkg_mgr_install.php
 // for that origin (those pages hide the package and a reinstall can resolve against -r pfSense).
-$pfb_sw_pkgmgr		= pfb_software_pkgmgr_usable($pfb_sw_repo);
 $pfb_sw_update_href	= pfb_software_update_href($pfb_sw_pkgname, $pfb_sw_repo, $update_available);
 $pfb_sw_uninstall_href	= pfb_software_uninstall_href($pfb_sw_pkgname, $pfb_sw_repo);
-$pfb_sw_cli_pkg		= ($pfb_sw_pkgname !== '') ? $pfb_sw_pkgname : 'pfSense-pkg-pfBlockerNG';
-$pfb_sw_cli_repo	= ($pfb_sw_repo !== '') ? $pfb_sw_repo : '<repo>';
 
 $btn_update = new Form_Button(
 	'pfb_sw_update',
@@ -282,16 +279,8 @@ $btn_update->removeClass('btn-primary')->addClass('btn-warning btn-xs')->setWidt
 if ($pfb_sw_update_href === '#') {
 	$btn_update->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
-if ($pfb_sw_pkgmgr) {
-	$pfb_sw_update_help = 'Install the latest version via the pfSense Package Manager. Available only when an update is found.';
-} else {
-	$pfb_sw_update_help = 'Package Manager cannot see this origin. To update, run <code>pkg install -y -r '
-		. htmlspecialchars($pfb_sw_cli_repo) . ' ' . htmlspecialchars($pfb_sw_cli_pkg)
-		. '</code> from the shell. On pfSense Plus, that can fail with a TLS error until '
-		. '"Carry the system CA store into pkg" above is enabled.';
-}
 $section->addInput(new Form_StaticText(null, $btn_update))
-	->setHelp($pfb_sw_update_help);
+	->setHelp(pfb_software_update_help($pfb_sw_pkgname, $pfb_sw_repo));
 
 // Uninstall. #697: a `pkg delete` is a removal (pre-deinstall tears down). Package Manager
 // delete is only offered for a Netgate-origin install.
@@ -305,14 +294,8 @@ $btn_uninstall->removeClass('btn-primary')->addClass('btn-danger btn-xs')->setWi
 if ($pfb_sw_uninstall_href === '#') {
 	$btn_uninstall->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
-if ($pfb_sw_pkgmgr) {
-	$pfb_sw_uninstall_help = 'Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).';
-} else {
-	$pfb_sw_uninstall_help = 'Package Manager cannot see this origin. To uninstall, run <code>pkg delete '
-		. htmlspecialchars($pfb_sw_cli_pkg) . '</code> from the shell.';
-}
 $section->addInput(new Form_StaticText(null, $btn_uninstall))
-	->setHelp($pfb_sw_uninstall_help);
+	->setHelp(pfb_software_uninstall_help($pfb_sw_pkgname, $pfb_sw_repo));
 $form->add($section);
 
 print($form);
