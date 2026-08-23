@@ -262,10 +262,9 @@ function pfBlockerNG_update_table() {
 					'type'		- Rule type - block|reject|pass|match
 					'id'		- Alias key value				*/
 
-	// Issue #2645: one pfctl -vvsTables parse. Addresses == Tshow on the
-	// 2026-08-23 pfb-testing probe, so count comes from Addresses (no per-alias
-	// -Tshow | wc). Update stays file mtime (Cleared diverged). Packets stay
-	// pfSense_get_pf_rules() below.
+	// Issue #2645: one pfctl -vvsTables parse. Count from Addresses.
+	// Update stays file mtime. Packets stay pfSense_get_pf_rules() below.
+	$ip_ph = pfb_ip_placeholder();
 	$pfb_saw = FALSE;
 	foreach (pfb_pfctl_tables_parse(pfb_pfctl_tables_raw()) as $pfb_alias => $info) {
 		if (!str_starts_with($pfb_alias, 'pfB_')) {
@@ -276,14 +275,12 @@ function pfBlockerNG_update_table() {
 			continue;
 		}
 		$alias_file = "{$pfb['aliasdir']}/{$pfb_alias}.txt";
-		$mtime = '';
-		if (is_file($alias_file)) {
-			$mtime = date('Y-m-d H:i:s', (int) filemtime($alias_file));
-		}
-		// ip_ph (default 127.1.7.7) is loaded into the pf table, so Addresses
-		// includes it. A padded-empty alias is placeholder-only: show 0.
-		$ip_ph = pfb_ip_placeholder();
-		$placeholder = str_ends_with($pfb_alias, '_v6') ? "::{$ip_ph}" : $ip_ph;
+		$mtime_raw = pfb_file_mtime($alias_file);
+		$mtime = ($mtime_raw !== FALSE) ? date('Y-m-d H:i:s', (int) $mtime_raw) : '';
+		// ip_ph is loaded into the pf table, so Addresses includes it.
+		// Padded-empty (Addresses==1, placeholder-only file) shows 0.
+		$family = str_ends_with($pfb_alias, '_v6') ? 'v6' : 'v4';
+		$placeholder = pfb_placeholder_for_family($ip_ph, $family);
 		$count = pfb_widget_alias_display_count($info['addresses'], $alias_file, $placeholder);
 		$pfb_table[$pfb_alias] = array(
 			'count'		=> $count,

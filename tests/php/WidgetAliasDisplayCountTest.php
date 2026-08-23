@@ -11,6 +11,7 @@ use PHPUnit\Framework\TestCase;
  */
 #[CoversFunction('pfb_widget_alias_display_count')]
 #[CoversFunction('pfb_ip_placeholder')]
+#[CoversFunction('pfb_placeholder_for_family')]
 final class WidgetAliasDisplayCountTest extends TestCase
 {
 	private string $file;
@@ -29,32 +30,57 @@ final class WidgetAliasDisplayCountTest extends TestCase
 	{
 		unset($GLOBALS['pfb']['ip_ph']);
 		$GLOBALS['pfb']['ipconfig']['ip_placeholder'] = '10.9.8.7';
+		$got = pfb_ip_placeholder();
 		$this->assertSame(
 			'10.9.8.7',
-			pfb_ip_placeholder(),
-			'expected: IP-tab ip_placeholder;\nactual: apply-only ip_ph fallback or default'
+			$got,
+			"expected: IP-tab ip_placeholder;\nactual: {$got}"
 		);
 		unset($GLOBALS['pfb']['ipconfig']['ip_placeholder']);
 		$this->assertSame('127.1.7.7', pfb_ip_placeholder());
 	}
 
+	public function testPlaceholderRejectsInvalidConfig(): void
+	{
+		$GLOBALS['pfb']['ipconfig']['ip_placeholder'] = 'not-an-ip';
+		$this->assertSame('127.1.7.7', pfb_ip_placeholder());
+	}
+
+	public function testPlaceholderForFamily_PrefixesV6Only(): void
+	{
+		$this->assertSame('127.1.7.7', pfb_placeholder_for_family('127.1.7.7', 'v4'));
+		$this->assertSame('::127.1.7.7', pfb_placeholder_for_family('127.1.7.7', 'v6'));
+	}
+
 	public function testPlaceholderOnlyFile_ReturnsZero(): void
 	{
 		$this->assertNotFalse(file_put_contents($this->file, "127.1.7.7\n"));
+		$got = pfb_widget_alias_display_count(1, $this->file, '127.1.7.7');
 		$this->assertSame(
 			0,
-			pfb_widget_alias_display_count(1, $this->file, '127.1.7.7'),
-			'expected: 0 for a padded-empty alias (Addresses=1 is the placeholder);\nactual: non-zero'
+			$got,
+			"expected: 0 for a padded-empty alias (Addresses=1 is the placeholder);\nactual: {$got}"
+		);
+	}
+
+	public function testAddressesGreaterThanOne_SkipsFileSlurp(): void
+	{
+		$got = pfb_widget_alias_display_count(16733, '/nonexistent/pfB_missing.txt', '127.1.7.7');
+		$this->assertSame(
+			16733,
+			$got,
+			"expected: Addresses kept without reading the file;\nactual: {$got}"
 		);
 	}
 
 	public function testMixedFile_KeepsAddresses(): void
 	{
 		$this->assertNotFalse(file_put_contents($this->file, "127.1.7.7\n1.2.3.4\n"));
+		$got = pfb_widget_alias_display_count(16733, $this->file, '127.1.7.7');
 		$this->assertSame(
 			16733,
-			pfb_widget_alias_display_count(16733, $this->file, '127.1.7.7'),
-			'expected: Addresses unchanged for a mixed alias;\nactual: diverged'
+			$got,
+			"expected: Addresses unchanged for a mixed alias;\nactual: {$got}"
 		);
 	}
 
@@ -62,5 +88,16 @@ final class WidgetAliasDisplayCountTest extends TestCase
 	{
 		$this->assertNotFalse(file_put_contents($this->file, "::127.1.7.7\n"));
 		$this->assertSame(0, pfb_widget_alias_display_count(1, $this->file, '::127.1.7.7'));
+	}
+
+	public function testV6BareEmptyfilesPad_ReturnsZero(): void
+	{
+		$this->assertNotFalse(file_put_contents($this->file, "127.1.7.7\n"));
+		$got = pfb_widget_alias_display_count(1, $this->file, '::127.1.7.7');
+		$this->assertSame(
+			0,
+			$got,
+			"expected: 0 for sh emptyfiles() bare-IPv4 pad on a v6 alias;\nactual: {$got}"
+		);
 	}
 }
