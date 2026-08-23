@@ -695,7 +695,12 @@ jobs:
         # phpstan.neon configures paths, level, stubs, and includes the
         # baseline (phpstan-baseline.neon) so existing legacy errors are
         # suppressed; new errors introduced by future changes will fail CI.
-        run: vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+        # 2G, not 1G: a parallel worker analysing pfblockerng.inc peaks around
+        # 700 MiB on its own, so 1G left single-digit-percent headroom and any
+        # growth in that one file crashed a worker with "reached configured PHP
+        # memory limit" — a resource ceiling, never an analysis result. The real
+        # fix is splitting the file (issue #1122).
+        run: vendor/bin/phpstan analyse --no-progress --memory-limit=2G
 
   php-codesniffer:
     name: PHPCS custom sniffs / PHP ${{ matrix.php-version }}
