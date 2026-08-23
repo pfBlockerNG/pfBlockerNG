@@ -15,8 +15,10 @@ logged line starting with ``install`` or ``delete``.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
+import signal
 import subprocess
 import tempfile
 import threading
@@ -1907,3 +1909,79 @@ def test_nonzero_pkg_delete_exit_is_fatal() -> None:
         assert proc.returncode == 5, proc.stdout + proc.stderr
         assert "Done" not in proc.stdout
         assert "pkg delete" in proc.stderr, proc.stderr
+
+
+# --------------------------------------------------------------------------- #
+# 23. the output reader dies with the run (issue #2647 review)
+# --------------------------------------------------------------------------- #
+
+
+def _install_sh_pids(pgid: int) -> list[str]:
+    """PIDs in process group ``pgid`` still running install.sh."""
+    found = subprocess.run(
+        ["pgrep", "-g", str(pgid), "-f", "install.sh"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line for line in found.stdout.split() if line]
+
+
+def test_output_reader_does_not_outlive_the_run() -> None:
+    """install.sh streams pkg's output from a background reader. A background reader is
+    an untracked wait, so it has to die with its task -- not reparent to PID 1 and poll
+    on. SIGKILL is the case no trap can cover, which is exactly why the reader tests its
+    parent itself (AGENTS.md "No orphaned waits")."""
+    with tempfile.TemporaryDirectory() as root:
+        sentinel = Path(root) / "unblock-pkg"
+        argv, env = _prepare_install(
+            root,
+            "stable",
+            extra_env={"PFB_STUB_STREAM_BLOCK": str(sentinel)},
+        )
+        # Own session, so the group holds this run and nothing else.
+        proc = subprocess.Popen(
+            argv,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            start_new_session=True,
+        )
+        pgid = os.getpgid(proc.pid)
+        try:
+            seen: list[str] = []
+            stream = proc.stdout
+            assert stream is not None
+            reader = threading.Thread(target=lambda: seen.extend(stream), daemon=True)
+            reader.start()
+
+            deadline = time.monotonic() + 15.0
+            while time.monotonic() < deadline and not any(_STREAM_MARKER in ln for ln in seen):
+                time.sleep(0.05)
+            assert any(_STREAM_MARKER in ln for ln in seen), (
+                f"fixture broken: the run never reached the streaming pkg call; got {seen!r}"
+            )
+            # The run is mid-install: install.sh itself plus its reader are both live.
+            assert len(_install_sh_pids(pgid)) >= 2, (
+                "fixture broken: no background reader was running, so killing the parent proves nothing about orphans"
+            )
+
+            os.kill(proc.pid, signal.SIGKILL)
+
+            deadline = time.monotonic() + 20.0
+            while time.monotonic() < deadline and _install_sh_pids(pgid):
+                time.sleep(0.25)
+            survivors = _install_sh_pids(pgid)
+            assert not survivors, (
+                f"the output reader outlived install.sh (pids {survivors}); it must stop when its parent is gone"
+            )
+        finally:
+            sentinel.write_text("")
+            for pid in _install_sh_pids(pgid):
+                with contextlib.suppress(ProcessLookupError, ValueError):
+                    os.kill(int(pid), signal.SIGKILL)
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=30)
