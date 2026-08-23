@@ -22,7 +22,6 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -119,6 +118,10 @@ query)
     exit 0
     ;;
 delete)
+    if [ -n "${PFB_STUB_MUTATE_RC:-}" ]; then
+        printf 'pkg: some transport failure\n' >&2
+        exit "${PFB_STUB_MUTATE_RC}"
+    fi
     _name="$3"
     rm -rf "${STATE:?}/${_name}"
     if [ -n "${PFB_STUB_DEINSTALL_FAIL:-}" ]; then
@@ -136,10 +139,14 @@ delete)
     exit 0
     ;;
 install)
+    if [ -n "${PFB_STUB_MUTATE_RC:-}" ]; then
+        printf 'pkg: some transport failure\n' >&2
+        exit "${PFB_STUB_MUTATE_RC}"
+    fi
     if [ -n "${PFB_STUB_STREAM_BLOCK:-}" ]; then
         # An external echo(1): a builtin's stdio buffer is not guaranteed to reach
         # the caller before this stub's own exit, which is exactly what is under test.
-        /bin/echo "${PFB_STUB_STREAM_MARKER:-pkg-stream-marker}"
+        /bin/echo "pfb-stream-marker-2644"
         _wait_i=0
         while [ ! -f "${PFB_STUB_STREAM_BLOCK}" ] && [ "${_wait_i}" -lt 300 ]; do
             sleep 0.1
@@ -389,9 +396,37 @@ def _prepare_install(
     return argv, env
 
 
-def _run_install(*a: Any, **kw: Any) -> subprocess.CompletedProcess[str]:
-    """Run install.sh to completion with the fixture _prepare_install builds."""
-    argv, env = _prepare_install(*a, **kw)
+def _run_install(
+    root: str,
+    channel: str,
+    *,
+    args: tuple[str, ...] = (),
+    channel_style: str = "space",
+    catalog: tuple[str, ...] = ("4.0.0",),
+    info_paths: tuple[str, ...] = (_DEFAULT_PAYLOAD_PATH,),
+    create_info_paths: bool = True,
+    update_fails: bool = False,
+    version_t_broken: bool = False,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run install.sh to completion with the fixture _prepare_install builds.
+
+    The parameters are spelled out rather than forwarded as ``*args, **kwargs``: every
+    call in this module goes through here, and ``Any`` would opt all of them out of the
+    ``mypy tests/`` gate.
+    """
+    argv, env = _prepare_install(
+        root,
+        channel,
+        args=args,
+        channel_style=channel_style,
+        catalog=catalog,
+        info_paths=info_paths,
+        create_info_paths=create_info_paths,
+        update_fails=update_fails,
+        version_t_broken=version_t_broken,
+        extra_env=extra_env,
+    )
     return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
 
@@ -1796,10 +1831,7 @@ def test_pkg_output_is_streamed_while_pkg_still_runs() -> None:
         argv, env = _prepare_install(
             root,
             "stable",
-            extra_env={
-                "PFB_STUB_STREAM_BLOCK": str(sentinel),
-                "PFB_STUB_STREAM_MARKER": _STREAM_MARKER,
-            },
+            extra_env={"PFB_STUB_STREAM_BLOCK": str(sentinel)},
         )
 
         proc = subprocess.Popen(
@@ -1820,7 +1852,7 @@ def test_pkg_output_is_streamed_while_pkg_still_runs() -> None:
             while time.monotonic() < deadline and not any(_STREAM_MARKER in ln for ln in seen):
                 time.sleep(0.05)
             streamed = any(_STREAM_MARKER in ln for ln in seen)
-            blocked_still = proc.poll() is None
+            still_running = proc.poll() is None
         finally:
             sentinel.write_text("")
             try:
@@ -1832,6 +1864,46 @@ def test_pkg_output_is_streamed_while_pkg_still_runs() -> None:
 
         output = "".join(seen)
         assert proc.returncode == 0, output
-        assert blocked_still, "fixture broken: pkg had already exited, so nothing about streaming was proven"
+        assert still_running, (
+            "fixture broken: install.sh had already finished, so a replay-at-the-end would "
+            "have satisfied the marker check too"
+        )
         assert streamed, f"pkg output was withheld until pkg exited; got:\n{output}"
         assert "Done" in output
+
+
+# --------------------------------------------------------------------------- #
+# 22. pkg's own non-zero exit is still fatal (issue #2647 review)
+# --------------------------------------------------------------------------- #
+
+
+def test_nonzero_pkg_install_exit_is_fatal() -> None:
+    """A mutating pkg call that exits non-zero must stop the run with the caller's
+    message and no ``==> Done``.
+
+    Distinct from the #2575 cases, which are pkg exiting ZERO after a package script
+    failed. Nothing else in this suite makes ``pkg install`` itself fail, so without
+    this the status hand-off out of the streaming reader could report success for a
+    failed install and every test would stay green."""
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "stable", extra_env={"PFB_STUB_MUTATE_RC": "7"})
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        assert "Done" not in proc.stdout
+        assert "pkg install -r pfblockerng-stable" in proc.stderr, proc.stderr
+        # The failing call's own output still reaches the operator.
+        assert "pkg: some transport failure" in proc.stdout + proc.stderr
+
+
+def test_nonzero_pkg_delete_exit_is_fatal() -> None:
+    """Same contract on the delete verb, which runs from step 9a when a legacy
+    identity has to go before the canonical package can be installed."""
+    with tempfile.TemporaryDirectory() as root:
+        _seed_installed(root, f"{_CANONICAL}-devel", "3.2.14_2", "pfblockerng")
+        _seed_conf_file(root, _LEGACY_CONF, "# legacy release conf\n")
+
+        proc = _run_install(root, "stable", extra_env={"PFB_STUB_MUTATE_RC": "7"})
+
+        assert proc.returncode == 5, proc.stdout + proc.stderr
+        assert "Done" not in proc.stdout
+        assert "pkg delete" in proc.stderr, proc.stderr

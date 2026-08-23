@@ -160,18 +160,35 @@ _pkg() {
     fi
 }
 
+# _pkg_mutate_drain FILE — print what FILE has grown by since this shell last drained
+# it, carrying the position in _drain_seen. Addressed by LINE, so a half-written line is
+# never split across two prints; a final line with no newline is left for the
+# read-to-end-of-file drain that runs once pkg has exited.
+_pkg_mutate_drain() {
+    _drain_lines=$(wc -l <"$1" 2>/dev/null || printf '0')
+    _drain_lines=$((_drain_lines + 0))
+    if [ "${_drain_lines}" -gt "${_drain_seen}" ]; then
+        sed -n "$((_drain_seen + 1)),${_drain_lines}p" "$1"
+        _drain_seen=${_drain_lines}
+    fi
+}
+
 # _pkg_mutate DIE_CODE DIE_MSG ARGS... — mutating pkg verbs (install/delete).
-# Stream output live, then die if pkg rc != 0 OR a line is
+# Stream output while pkg runs, then die if pkg rc != 0 OR a line is
 # `pkg: * script failed` (pkg(8) can exit 0 after POST-INSTALL/DEINSTALL
 # still failed — the files are already in place; issue #2575).
 #
-# The copy on disk exists only for that rescan, so it goes through tee(1) rather than
-# a plain redirect: the converge step is the last slow step in this script, so
-# replaying the capture after pkg exits delivered the whole install log — pkg's own
-# lines AND every package script's lines — in one burst immediately before
-# `==> Done`, with nothing on the terminal while the install ran (issue #2644).
-# pkg's own C-side stdout is block-buffered into a pipe, so its lines still arrive in
-# chunks; the package scripts (PHP CLI writes unbuffered) arrive as they are printed.
+# pkg writes to a capture FILE and a reader prints what that file grows by, rather than
+# pkg writing down a pipe. A pipe outlives pkg: every process a package script leaves
+# running inherits the write end, and a reader sees no EOF until the last holder closes
+# it — the hazard pfblockerng.inc states as "LOG FILE, never a pipe" for its own
+# capture (issue #662). Our POST-INSTALL starts unbound, so that risk is not theoretical,
+# and a hang after a completed install is worse than the burst it would replace. A
+# regular file cannot stall the run, and the foreground pkg hands back its own status
+# with no side channel to read it out of (issue #2644).
+#
+# What a reader can show is bounded by what pkg flushes and when; the package scripts
+# (PHP CLI writes unbuffered) appear as they print.
 _pkg_mutate() {
     _mut_code="$1"
     shift
@@ -179,26 +196,34 @@ _pkg_mutate() {
     shift
     if [ -n "${ROOT}" ]; then
         mkdir -p "${ROOT}/tmp" || die "${_mut_code}" "could not create ${ROOT}/tmp"
-        _mut_log=$(mktemp "${ROOT}/tmp/pfb-install-pkg.XXXXXX") ||
-            die "${_mut_code}" "mktemp failed while capturing pkg output"
+        _mut_dir="${ROOT}/tmp"
     else
-        _mut_log=$(mktemp "${TMPDIR:-/tmp}/pfb-install-pkg.XXXXXX") ||
-            die "${_mut_code}" "mktemp failed while capturing pkg output"
+        _mut_dir="${TMPDIR:-/tmp}"
     fi
+    # mktemp for BOTH files: a derived name is a name an attacker can predict from the
+    # first one and pre-create as a symlink, and this runs as root.
+    _mut_log=$(mktemp "${_mut_dir}/pfb-install-pkg.XXXXXX") ||
+        die "${_mut_code}" "mktemp failed while capturing pkg output"
+    _mut_done=$(mktemp "${_mut_dir}/pfb-install-pkg.XXXXXX") ||
+        die "${_mut_code}" "mktemp failed while capturing pkg output"
     # die() exits the script; EXIT trap removes the files on that path too.
     # /tmp on pfSense is a small RAM disk.
-    trap 'rm -f "${_mut_log}" "${_mut_log}.rc"' EXIT
-    # POSIX sh has no PIPESTATUS, so pkg's own status leaves the pipeline through a
-    # side file. `|| _mut_rc=$?` also keeps `set -e` from killing the subshell before
-    # that status is recorded.
-    { _mut_rc=0; _pkg "$@" || _mut_rc=$?; printf '%s\n' "${_mut_rc}" >"${_mut_log}.rc"; } 2>&1 |
-        tee "${_mut_log}"
-    _mut_rc="$(cat "${_mut_log}.rc" 2>/dev/null || true)"
-    case "${_mut_rc}" in
-        '' | *[!0-9]*)
-            die "${_mut_code}" "could not read the exit status of pkg — ${_mut_msg}"
-            ;;
-    esac
+    trap 'rm -f "${_mut_log}" "${_mut_done}"' EXIT
+    # The reader runs in the background and stops when pkg is done: mktemp already
+    # created the done-file, so the flag is CONTENT, not existence.
+    (
+        _drain_seen=0
+        while [ ! -s "${_mut_done}" ]; do
+            _pkg_mutate_drain "${_mut_log}"
+            sleep 1
+        done
+        sed -n "$((_drain_seen + 1)),\$p" "${_mut_log}"
+    ) &
+    _mut_reader=$!
+    _mut_rc=0
+    _pkg "$@" >"${_mut_log}" 2>&1 || _mut_rc=$?
+    printf 'done\n' >"${_mut_done}"
+    wait "${_mut_reader}" 2>/dev/null || true
     if [ "${_mut_rc}" -ne 0 ]; then
         die "${_mut_code}" "${_mut_msg}"
     fi
@@ -212,8 +237,8 @@ _pkg_mutate() {
         esac
     done < "${_mut_log}"
     trap - EXIT
-    rm -f "${_mut_log}" "${_mut_log}.rc"
-    unset _mut_code _mut_msg _mut_log _mut_rc _mut_line
+    rm -f "${_mut_log}" "${_mut_done}"
+    unset _mut_code _mut_msg _mut_dir _mut_log _mut_done _mut_reader _mut_rc _mut_line
 }
 
 usage() {
