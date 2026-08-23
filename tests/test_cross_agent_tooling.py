@@ -206,7 +206,11 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "ignored and untracked",
     ):
         assert contract in routing, f"Graphify worktree routing lost {contract}"
-    recipe = routing.split("`GRAPHIFY-REFRESH-REQUIRED`", 1)[1].split("remove the builder", 1)[0]
+    tail = routing.split("`GRAPHIFY-REFRESH-REQUIRED`", 1)[1]
+    # index(), not split(): a split on a terminator the doc no longer spells this way returns
+    # the whole tail and silently stops bounding the recipe, which is how the terminator
+    # drifted out of the assertion once already.
+    recipe = tail[: tail.index("Remove the builder")]
     steps = (
         "graphify-store.py seed",
         "graphify-store.py validate-builder --builder .",
