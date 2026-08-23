@@ -5078,17 +5078,17 @@ function pfb_software_is_our_build(?string $installed_repo): bool {
  * question: the generated conf sets priority 100 above the Netgate repo for exactly
  * that reason (ADR-17, ADR-39).
  *
- * $repo is still taken so callers keep passing the origin they read, and so the pair
- * stays one decision surface if origin ever does gate something here again.
+ * Neither function takes the origin, so #2380's gate is not merely off here: it cannot
+ * be expressed without re-adding a parameter and every call site that feeds it.
  */
-function pfb_software_update_href(string $pkgname, string $repo, bool $update_available): string {
+function pfb_software_update_href(string $pkgname, bool $update_available): string {
 	if (!$update_available || $pkgname === '') {
 		return '#';
 	}
 	return '/pkg_mgr_install.php?mode=reinstallpkg&pkg=' . rawurlencode($pkgname);
 }
 
-function pfb_software_uninstall_href(string $pkgname, string $repo): string {
+function pfb_software_uninstall_href(string $pkgname): string {
 	if ($pkgname === '') {
 		return '#';
 	}
