@@ -2204,8 +2204,25 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 
 
 /**
+ * `|alias…` suffix for PFBIPSUP / PFBIPWHITE ids from one family's `$clists` entry.
+ * Shared by the event-table suppression icon and the Unlocked panel.
+ */
+function pfb_alerts_permit_option_suffix($family): string
+{
+	if (!is_array($family) || empty($family['options']) || !is_array($family['options'])) {
+		return '';
+	}
+	return '|' . implode('|', $family['options']);
+}
+
+
+/**
  * Action icons for one Unlocked IPs/Domains panel row (Alerts tab).
  * Temporary unlock and permanent whitelist/suppression stay independent (issue #1526).
+ *
+ * Confirm-dialog titles shadow the event-table copies in convert_ip_log()
+ * `$supp_ip_txt` and dnsbl_whitelist_type() `$s_txt`, shortened for the panel
+ * (no feed/eval-IP, no Force-Update / CNAME parenthetical).
  *
  * @return array{alert: string, unlock: string, supp: string}
  */
@@ -2222,11 +2239,7 @@ function pfb_alerts_unlocked_entry_actions(string $kind, string $entry, string $
 			. ' href="/pfblockerng/pfblockerng_threats.php?host='
 			. $h_entry . '" title="Click for Threat source IP Lookup for [ ' . $h_entry . ' ]"></a>';
 		$vtype = (strpos($entry, ':') !== FALSE) ? '6' : '4';
-		$permit_option = '';
-		$wl = $clists['ipwhitelist' . $vtype] ?? NULL;
-		if (is_array($wl) && !empty($wl['options']) && is_array($wl['options'])) {
-			$permit_option = '|' . implode('|', $wl['options']);
-		}
+		$permit_option = pfb_alerts_permit_option_suffix($clists['ipwhitelist' . $vtype] ?? NULL);
 		$supp_txt = "Note:&emsp;The following IPv{$vtype} is temporarily unlocked:\n\n"
 			. "IP:&emsp;[ {$h_entry} ]\n"
 			. "IP Aliasname:&emsp;[ {$h_type} ]\n\n"
@@ -2249,8 +2262,9 @@ function pfb_alerts_unlocked_entry_actions(string $kind, string $entry, string $
 			. "Whitelisting Options:\n\n"
 			. "1) Wildcard whitelist [ .{$h_entry} ]\n"
 			. "2) Whitelist only [ {$h_entry} ]\n";
+		$tld_field = (strpos($type, 'TLD') !== FALSE) ? '|TLD' : '';
 		$supp = '<i class="fa-solid fa-plus icon-pointer" id="DNSBLWT|' . 'add|'
-			. $h_entry . '|' . $h_type . '" title="' . $supp_txt . '"></i>';
+			. $h_entry . '|' . $h_type . $tld_field . '" title="' . $supp_txt . '"></i>';
 	}
 
 	return array('alert' => $alert, 'unlock' => $unlock, 'supp' => $supp);
@@ -3037,10 +3051,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 
 			// Add Suppression/Whitelist Icon
 			if ($supp_ip_wl === NULL) {
-				$permit_option = '';
-				if ($clists['ipwhitelist' . $vtype]) {
-					$permit_option = '|' . implode('|', $clists['ipwhitelist' . $vtype]['options']);
-				}
+				$permit_option = pfb_alerts_permit_option_suffix($clists['ipwhitelist' . $vtype] ?? NULL);
 
 				$supp_ip_txt  = "Note:&emsp;The following IPv{$vtype} was blocked:\n\n"
 						. "Blocked IP:&emsp;&emsp;[ {$h_host} ]\n"
@@ -3130,7 +3141,7 @@ function convert_ip_log($mode, $fields, $p_query_port, $rtype) {
 						. "Click 'OK' to continue";
 
 				$supp_ip = '<i class="fa-solid fa-plus-circle icon-pointer" id="PFBIPWHITE|' . $h_host
-						. '|' . implode('|', $clists['ipwhitelist' . $vtype]['options'])
+						. pfb_alerts_permit_option_suffix($clists['ipwhitelist' . $vtype] ?? NULL)
 						. '" title="' . $supp_ip_txt . '"></i>';
 			}
 		}
