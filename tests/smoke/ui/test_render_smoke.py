@@ -2879,6 +2879,14 @@ def test_software_actions_link_to_package_manager(
         assert "cannot see this origin" not in body, (
             "retired #2380 copy: the controls are no longer disabled by origin (issue #2653)"
         )
+        # Pinned positively too: an emptied or rewritten help string would otherwise pass
+        # on the negative assertion alone. These are the pre-#2380 strings (#684).
+        assert "Install the latest version via the pfSense Package Manager" in body, (
+            "the Update control must carry its pre-#2380 help text (issue #2653)"
+        )
+        assert "Remove pfBlockerNG from this firewall via the pfSense Package Manager" in body, (
+            "the Uninstall control must carry its pre-#2380 help text (issue #2653)"
+        )
         assert "?do=uninstall" not in un_tag.group(0), (
             "Uninstall must NOT route through the removed ?do=uninstall handler (#697)"
         )

@@ -10791,13 +10791,6 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
-            },
-            {
-                "name": "repo",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
             }
         ]
     },
@@ -10827,13 +10820,6 @@
         "params": [
             {
                 "name": "pkgname",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "repo",
                 "byRef": false,
                 "variadic": false,
                 "type": "string",

@@ -267,8 +267,8 @@ $section->addInput(new Form_StaticText(null, $btn_check))
 
 // Update / Uninstall. Enabled by what the operation needs -- an update to install, and a
 // known package name -- never by the origin (issue #2653).
-$pfb_sw_update_href	= pfb_software_update_href($pfb_sw_pkgname, $pfb_sw_repo, $update_available);
-$pfb_sw_uninstall_href	= pfb_software_uninstall_href($pfb_sw_pkgname, $pfb_sw_repo);
+$pfb_sw_update_href	= pfb_software_update_href($pfb_sw_pkgname, $update_available);
+$pfb_sw_uninstall_href	= pfb_software_uninstall_href($pfb_sw_pkgname);
 
 $btn_update = new Form_Button(
 	'pfb_sw_update',
@@ -306,7 +306,7 @@ print($form);
 events.push(function() {
 
 	// Check now is the only in-page action — a cache refresh POSTed back to this page.
-	// Update / Uninstall are plain links to the Package Manager only when %R is pfSense.
+	// Update / Uninstall are plain links to the Package Manager (no JS, no POST).
 	$('#pfb_sw_check').click(function(e) {
 		e.preventDefault();
 		var f = document.forms[0];

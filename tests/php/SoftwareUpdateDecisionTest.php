@@ -222,22 +222,17 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		$pkg = 'pfSense-pkg-pfBlockerNG';
 		$pm = '/pkg_mgr_install.php?mode=reinstallpkg&pkg=' . rawurlencode($pkg);
 		return [
-			'Netgate + update'            => [$pkg, 'pfSense', true, $pm],
-			'Netgate + no update'         => [$pkg, 'pfSense', false, '#'],
-			'channel-stable + update'     => [$pkg, 'pfblockerng-stable', true, $pm],
-			'channel-testing + update'    => [$pkg, 'pfblockerng-testing', true, $pm],
-			'channel-stable + no update'  => [$pkg, 'pfblockerng-stable', false, '#'],
-			'legacy pfblockerng + update' => [$pkg, 'pfblockerng', true, $pm],
-			'sideload: empty repo'        => [$pkg, '', true, $pm],
-			'empty pkgname'               => ['', 'pfSense', true, '#'],
-			'empty pkgname, channel'      => ['', 'pfblockerng-stable', true, '#'],
+			'update available'    => [$pkg, true, $pm],
+			'no update'           => [$pkg, false, '#'],
+			'empty pkgname'       => ['', true, '#'],
+			'empty pkgname, none' => ['', false, '#'],
 		];
 	}
 
 	#[DataProvider('updateHrefProvider')]
-	public function testSoftwareUpdateHref(string $pkgname, string $repo, bool $available, string $expected): void
+	public function testSoftwareUpdateHref(string $pkgname, bool $available, string $expected): void
 	{
-		$this->assertSame($expected, pfb_software_update_href($pkgname, $repo, $available));
+		$this->assertSame($expected, pfb_software_update_href($pkgname, $available));
 	}
 
 	public static function uninstallHrefProvider(): array
@@ -245,19 +240,34 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		$pkg = 'pfSense-pkg-pfBlockerNG';
 		$pm = '/pkg_mgr_install.php?mode=delete&pkg=' . rawurlencode($pkg);
 		return [
-			'Netgate'                => [$pkg, 'pfSense', $pm],
-			'channel-stable'         => [$pkg, 'pfblockerng-stable', $pm],
-			'channel-edge'           => [$pkg, 'pfblockerng-edge', $pm],
-			'sideload: empty repo'   => [$pkg, '', $pm],
-			'empty pkgname'          => ['', 'pfSense', '#'],
-			'empty pkgname, channel' => ['', 'pfblockerng-stable', '#'],
+			'installed'     => [$pkg, $pm],
+			'empty pkgname' => ['', '#'],
 		];
 	}
 
 	#[DataProvider('uninstallHrefProvider')]
-	public function testSoftwareUninstallHref(string $pkgname, string $repo, string $expected): void
+	public function testSoftwareUninstallHref(string $pkgname, string $expected): void
 	{
-		$this->assertSame($expected, pfb_software_uninstall_href($pkgname, $repo));
+		$this->assertSame($expected, pfb_software_uninstall_href($pkgname));
+	}
+
+	/*
+	 * The origin cannot change either answer because neither function can see it: #2380's
+	 * gate is not merely off, it is unrepresentable without re-adding a parameter. That is
+	 * the regression oracle the per-origin data rows used to carry (issue #2653).
+	 */
+	public function testHrefsTakeNoOriginArgument(): void
+	{
+		$update = new ReflectionFunction('pfb_software_update_href');
+		$uninstall = new ReflectionFunction('pfb_software_uninstall_href');
+
+		$names = static fn (ReflectionFunction $f): array => array_map(
+			static fn (ReflectionParameter $p): string => $p->getName(),
+			$f->getParameters()
+		);
+
+		$this->assertSame(['pkgname', 'update_available'], $names($update));
+		$this->assertSame(['pkgname'], $names($uninstall));
 	}
 
 	public function testSoftwarePageDoesNotHardcodePkgMgrForAllOrigins(): void
@@ -270,12 +280,12 @@ final class SoftwareUpdateDecisionTest extends TestCase
 		$this->assertStringNotContainsString(
 			'mode=reinstallpkg&pkg={$pfb_pkg_arg}',
 			$src,
-			'channel-origin installs must not emit a hardcoded Package Manager reinstall href'
+			'the reinstall href must come from the tested decider, not be rebuilt inline on the page'
 		);
 		$this->assertStringNotContainsString(
 			'mode=delete&pkg={$pfb_pkg_arg}',
 			$src,
-			'channel-origin installs must not emit a hardcoded Package Manager delete href'
+			'the delete href must come from the tested decider, not be rebuilt inline on the page'
 		);
 	}
 
