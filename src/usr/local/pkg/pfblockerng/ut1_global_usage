@@ -39,7 +39,7 @@
 XML:	ut1
 TITLE:	UT1
 DESCR:	Universit&#xE9; Toulouse 1 Capitole - UT1
-FEED:	ftp://ftp.ut-capitole.fr/pub/reseau/cache/squidguard_contrib/blacklists.tar.gz
+FEED:	https://dsi.ut-capitole.fr/blacklists/download/blacklists.tar.gz
 SIZE:	8.5
 WEBSITE:https://dsi.ut-capitole.fr/blacklists/index_en.php
 LICENSE:https://creativecommons.org/licenses/by-sa/4.0/
