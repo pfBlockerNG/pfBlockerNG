@@ -19,7 +19,10 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -133,6 +136,16 @@ delete)
     exit 0
     ;;
 install)
+    if [ -n "${PFB_STUB_STREAM_BLOCK:-}" ]; then
+        # An external echo(1): a builtin's stdio buffer is not guaranteed to reach
+        # the caller before this stub's own exit, which is exactly what is under test.
+        /bin/echo "${PFB_STUB_STREAM_MARKER:-pkg-stream-marker}"
+        _wait_i=0
+        while [ ! -f "${PFB_STUB_STREAM_BLOCK}" ] && [ "${_wait_i}" -lt 300 ]; do
+            sleep 0.1
+            _wait_i=$((_wait_i + 1))
+        done
+    fi
     _repo=""
     _spec=""
     _prev=""
@@ -318,7 +331,7 @@ def _seed_info_manifest(root: str, paths: tuple[str, ...]) -> str:
     return manifest
 
 
-def _run_install(
+def _prepare_install(
     root: str,
     channel: str,
     *,
@@ -330,9 +343,9 @@ def _run_install(
     update_fails: bool = False,
     version_t_broken: bool = False,
     extra_env: dict[str, str] | None = None,
-) -> subprocess.CompletedProcess[str]:
-    """Run install.sh --channel <channel> with PFBLOCKERNG_ROOT=root and the fake pkg
-    stub.
+) -> tuple[list[str], dict[str, str]]:
+    """Build the argv + environment that runs install.sh --channel <channel> with
+    PFBLOCKERNG_ROOT=root and the fake pkg stub.
 
     Re-seeds the box fixture, catalogue, and info manifest on every call (idempotent
     to call twice), but never touches pkgstate/ or repo confs — those persist across
@@ -373,6 +386,12 @@ def _run_install(
 
     channel_args = [f"--channel={channel}"] if channel_style == "equals" else ["--channel", channel]
     argv = ["sh", str(_SCRIPT), *channel_args, *args]
+    return argv, env
+
+
+def _run_install(*a: Any, **kw: Any) -> subprocess.CompletedProcess[str]:
+    """Run install.sh to completion with the fixture _prepare_install builds."""
+    argv, env = _prepare_install(*a, **kw)
     return subprocess.run(argv, env=env, capture_output=True, text=True, check=False)
 
 
@@ -1752,3 +1771,67 @@ def test_non_executable_restart_knob_is_a_silent_skip(tmp_path: Path) -> None:
     assert "restarting the webConfigurator" not in proc.stdout, (
         "a non-executable restart knob must be a SILENT skip, not an announced failed exec"
     )
+
+
+# --------------------------------------------------------------------------- #
+# 21. pkg output reaches the terminal while pkg is still running (issue #2644)
+# --------------------------------------------------------------------------- #
+
+
+_STREAM_MARKER = "pfb-stream-marker-2644"
+
+
+def test_pkg_output_is_streamed_while_pkg_still_runs() -> None:
+    """The capture that lets install.sh rescan for ``pkg: <script> script failed``
+    (issue #2575) must not withhold pkg's output until pkg exits: on a real box the
+    converge step is the last slow step, so a replay-at-the-end lands the whole
+    install log — pkg's lines and every package script's lines — in one burst right
+    before ``==> Done`` (issue #2644).
+
+    The fake pkg prints a marker and then blocks on a sentinel file; the marker has
+    to be readable on install.sh's stdout while pkg is still blocked.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        sentinel = Path(root) / "unblock-pkg"
+        argv, env = _prepare_install(
+            root,
+            "stable",
+            extra_env={
+                "PFB_STUB_STREAM_BLOCK": str(sentinel),
+                "PFB_STUB_STREAM_MARKER": _STREAM_MARKER,
+            },
+        )
+
+        proc = subprocess.Popen(
+            argv,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        seen: list[str] = []
+        stream = proc.stdout
+        assert stream is not None
+        reader = threading.Thread(target=lambda: seen.extend(stream), daemon=True)
+        reader.start()
+        try:
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline and not any(_STREAM_MARKER in ln for ln in seen):
+                time.sleep(0.05)
+            streamed = any(_STREAM_MARKER in ln for ln in seen)
+            blocked_still = proc.poll() is None
+        finally:
+            sentinel.write_text("")
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=30)
+            reader.join(timeout=10)
+
+        output = "".join(seen)
+        assert proc.returncode == 0, output
+        assert blocked_still, "fixture broken: pkg had already exited, so nothing about streaming was proven"
+        assert streamed, f"pkg output was withheld until pkg exited; got:\n{output}"
+        assert "Done" in output

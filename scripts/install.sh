@@ -161,9 +161,17 @@ _pkg() {
 }
 
 # _pkg_mutate DIE_CODE DIE_MSG ARGS... — mutating pkg verbs (install/delete).
-# Stream captured output, then die if pkg rc != 0 OR a line is
+# Stream output live, then die if pkg rc != 0 OR a line is
 # `pkg: * script failed` (pkg(8) can exit 0 after POST-INSTALL/DEINSTALL
 # still failed — the files are already in place; issue #2575).
+#
+# The copy on disk exists only for that rescan, so it goes through tee(1) rather than
+# a plain redirect: the converge step is the last slow step in this script, so
+# replaying the capture after pkg exits delivered the whole install log — pkg's own
+# lines AND every package script's lines — in one burst immediately before
+# `==> Done`, with nothing on the terminal while the install ran (issue #2644).
+# pkg's own C-side stdout is block-buffered into a pipe, so its lines still arrive in
+# chunks; the package scripts (PHP CLI writes unbuffered) arrive as they are printed.
 _pkg_mutate() {
     _mut_code="$1"
     shift
@@ -177,12 +185,20 @@ _pkg_mutate() {
         _mut_log=$(mktemp "${TMPDIR:-/tmp}/pfb-install-pkg.XXXXXX") ||
             die "${_mut_code}" "mktemp failed while capturing pkg output"
     fi
-    # die() exits the script; EXIT trap removes the file on that path too.
+    # die() exits the script; EXIT trap removes the files on that path too.
     # /tmp on pfSense is a small RAM disk.
-    trap 'rm -f "${_mut_log}"' EXIT
-    _mut_rc=0
-    _pkg "$@" >"${_mut_log}" 2>&1 || _mut_rc=$?
-    cat "${_mut_log}"
+    trap 'rm -f "${_mut_log}" "${_mut_log}.rc"' EXIT
+    # POSIX sh has no PIPESTATUS, so pkg's own status leaves the pipeline through a
+    # side file. `|| _mut_rc=$?` also keeps `set -e` from killing the subshell before
+    # that status is recorded.
+    { _mut_rc=0; _pkg "$@" || _mut_rc=$?; printf '%s\n' "${_mut_rc}" >"${_mut_log}.rc"; } 2>&1 |
+        tee "${_mut_log}"
+    _mut_rc="$(cat "${_mut_log}.rc" 2>/dev/null || true)"
+    case "${_mut_rc}" in
+        '' | *[!0-9]*)
+            die "${_mut_code}" "could not read the exit status of pkg — ${_mut_msg}"
+            ;;
+    esac
     if [ "${_mut_rc}" -ne 0 ]; then
         die "${_mut_code}" "${_mut_msg}"
     fi
@@ -196,7 +212,7 @@ _pkg_mutate() {
         esac
     done < "${_mut_log}"
     trap - EXIT
-    rm -f "${_mut_log}"
+    rm -f "${_mut_log}" "${_mut_log}.rc"
     unset _mut_code _mut_msg _mut_log _mut_rc _mut_line
 }
 
