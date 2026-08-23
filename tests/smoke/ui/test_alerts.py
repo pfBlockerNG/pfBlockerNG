@@ -2448,3 +2448,93 @@ def test_ipv6_alert_external_host_attribution(
             f"Failed to restore {ip_block_log!r} to size={original_size!r}: "
             f"rc={truncate_result.returncode}, stderr={truncate_result.stderr!r}"
         )
+
+
+def _read_guest_file(vm: helpers.SmokeVM, path: str) -> str | None:
+    result = vm.ssh("cat", path)
+    if result.returncode == 0:
+        return result.stdout
+    if vm.ssh("test", "!", "-e", path).returncode == 0:
+        return None
+    raise RuntimeError(f"failed to read {path}: {result.stderr!r}")
+
+
+def _write_or_remove_guest_file(vm: helpers.SmokeVM, path: str, content: str | None) -> None:
+    if content is None:
+        result = vm.ssh("rm", "-f", path)
+        if result.returncode != 0:
+            raise RuntimeError(f"failed to remove {path}: {result.stderr!r}")
+        return
+    result = subprocess.run(
+        vm.ssh_argv("tee", path),
+        input=content,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"failed to write {path}: {result.stderr!r}")
+
+
+def _unlocked_panel_html(page_html: str) -> str:
+    """Slice the Unlocked IP(s) & Domain(s) panel out of an Alerts GET body.
+
+    The panel is the page-template print() this PR changed; helper-only PHPUnit
+    does not execute it. Missing heading means the panel did not render.
+    """
+    marker = "Unlocked IP(s) & Domain(s)"
+    idx = page_html.find(marker)
+    assert idx != -1, "Unlocked panel heading missing from Alerts GET"
+    return page_html[idx : idx + 8000]
+
+
+def test_unlocked_panel_renders_whitelist_plus_next_to_relock(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #1526: Unlocked panel rows show suppression/whitelist plus beside re-lock.
+
+    The panel reads only the unlock stores. Seed both stores (the state after a
+    successful unlock POST), GET Alerts so the page-template print() runs, isolate
+    that panel, and assert plus + re-lock ids for one IP and one domain.
+
+    Given: unlock stores do not list the test host/domain.
+    When: the stores record them and Alerts is GET-ted.
+    Then: the Unlocked panel HTML contains IPLCK + PFBIPSUP for the host and
+        DNSBL_LCK + DNSBLWT|add for the domain.
+    """
+    vm = smoke_vm
+    host = "198.51.100.77"
+    table = "pfB_Deny_v4"
+    domain = "ui1526panel.example.com"
+    dnsbl_type = "python"
+
+    ip_before = _read_guest_file(vm, IP_UNLOCK_STORE)
+    dnsbl_before = _read_guest_file(vm, DNSBL_UNLOCK_STORE)
+    try:
+        pre = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(pre.text), "alerts GET returned login form before seeding (session lost)"
+        assert f"PFBIPSUP|add|{host}|{table}" not in pre.text, (
+            f"Precondition failed: panel plus for {host} already present"
+        )
+        assert f"DNSBLWT|add|{domain}" not in pre.text, f"Precondition failed: panel plus for {domain} already present"
+
+        _write_or_remove_guest_file(vm, IP_UNLOCK_STORE, f"{host},{table}\n")
+        _write_or_remove_guest_file(vm, DNSBL_UNLOCK_STORE, f"{domain},{dnsbl_type}\n")
+
+        resp = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(resp.text), "alerts GET returned login form after seeding (session lost)"
+        panel = _unlocked_panel_html(resp.text)
+
+        assert f"IPLCK|{host}|{table}" in panel, f"Unlocked panel missing Re-Lock for {host}: {panel!r}"
+        assert f"PFBIPSUP|add|{host}|{table}" in panel, (
+            f"issue #1526: Unlocked panel missing suppression plus for {host}: {panel!r}"
+        )
+        assert f"DNSBL_LCK|{domain}|{dnsbl_type}" in panel, f"Unlocked panel missing Re-Lock for {domain}: {panel!r}"
+        assert f"DNSBLWT|add|{domain}|{dnsbl_type}" in panel, (
+            f"issue #1526: Unlocked panel missing whitelist plus for {domain}: {panel!r}"
+        )
+    finally:
+        _write_or_remove_guest_file(vm, IP_UNLOCK_STORE, ip_before)
+        _write_or_remove_guest_file(vm, DNSBL_UNLOCK_STORE, dnsbl_before)

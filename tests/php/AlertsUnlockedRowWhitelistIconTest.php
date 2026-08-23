@@ -20,6 +20,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('convert_dnsbl_log')]
 #[CoversFunction('dnsbl_whitelist_type')]
 #[CoversFunction('pfb_alerts_unlocked_entry_actions')]
+#[CoversFunction('pfb_alerts_permit_option_suffix')]
 final class AlertsUnlockedRowWhitelistIconTest extends TestCase
 {
 	private string $tmpDir;
@@ -313,6 +314,76 @@ final class AlertsUnlockedRowWhitelistIconTest extends TestCase
 			'DNSBLWT|add|' . $domain . '|DNSBL',
 			$html,
 			"issue #1526: Unlocked panel DNSBL row must show whitelist '+' next to Re-Lock, got:\n{$html}"
+		);
+		$this->assertStringNotContainsString(
+			'|TLD"',
+			$html,
+			"non-TLD unlock type must not add the TLD-exclusion id field, got:\n{$html}"
+		);
+	}
+
+	public function testUnlockedIpv6PanelRowUsesIpwhitelist6PermitOptions(): void
+	{
+		$GLOBALS['clists']['ipwhitelist6'] = [
+			'options' => ['Create new pfB_Whitelist_v6', 'pfB_Permit_v6'],
+		];
+		$host = '2001:db8::5';
+		$html = implode('', pfb_alerts_unlocked_entry_actions(
+			'ip',
+			$host,
+			'pfB_Deny_v6',
+			$GLOBALS['clists']
+		));
+
+		$this->assertStringContainsString(
+			'IPLCK|' . $host . '|pfB_Deny_v6',
+			$html,
+			"Unlocked panel v6 row must keep Re-Lock, got:\n{$html}"
+		);
+		$this->assertStringContainsString(
+			'PFBIPSUP|add|' . $host . '|pfB_Deny_v6|Create new pfB_Whitelist_v6|pfB_Permit_v6',
+			$html,
+			"v6 panel '+' must read ipwhitelist6 options (the live never-empty branch), got:\n{$html}"
+		);
+		$this->assertStringNotContainsString(
+			'ipwhitelist4',
+			$html,
+		);
+	}
+
+	public function testUnlockedIpv4PanelRowIncludesLivePermitOptions(): void
+	{
+		$GLOBALS['clists']['ipwhitelist4'] = [
+			'options' => ['Create new pfB_Whitelist_v4', 'pfB_Permit_v4'],
+		];
+		$html = implode('', pfb_alerts_unlocked_entry_actions(
+			'ip',
+			'192.0.2.11',
+			'pfB_Exact_v4',
+			$GLOBALS['clists']
+		));
+
+		$this->assertStringContainsString(
+			'PFBIPSUP|add|192.0.2.11|pfB_Exact_v4|Create new pfB_Whitelist_v4|pfB_Permit_v4',
+			$html,
+			"v4 panel '+' must carry the live permit-options suffix, got:\n{$html}"
+		);
+	}
+
+	public function testUnlockedTldPanelRowAddsTldExclusionIdField(): void
+	{
+		$domain = 'blocked.tld-unlock.example';
+		$html = implode('', pfb_alerts_unlocked_entry_actions(
+			'dnsbl',
+			$domain,
+			'DNSBL_TLD',
+			$GLOBALS['clists']
+		));
+
+		$this->assertStringContainsString(
+			'DNSBLWT|add|' . $domain . '|DNSBL_TLD|TLD',
+			$html,
+			"TLD unlock type must emit the 5th id field so JS offers TLD Exclusion, got:\n{$html}"
 		);
 	}
 }
