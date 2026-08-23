@@ -353,6 +353,27 @@ foreach (array('existing', 'actual') as $pftype) {
 	$pfb[$pftype]['dnsbl']	= array();
 }
 
+// issue #2658: ceilings on how much one feed may pull down and how much it may
+// expand to. Real feeds are tens to low hundreds of MB, so both sit far above
+// anything legitimate -- they exist to stop a pathological body or an expansion
+// bomb, never to tune ingest.
+define('PFB_DOWNLOAD_MAX_BYTES', 2147483648);
+
+// ulimit(1) takes a count of blocks whose size the shell defines -- 512 bytes in
+// a POSIX sh, 1024 in bash -- so the effective ceiling lands between 2 GiB and
+// 4 GiB depending on which /bin/sh runs the extraction. Either reading bounds an
+// expansion bomb and clears every real feed, so the ambiguity needs no resolving.
+// The limit is RLIMIT_FSIZE, which the kernel applies per file.
+define('PFB_EXTRACT_MAX_BLOCKS', 4194304);
+
+// Exit status a shell reports for a child killed by SIGXFSZ (128 + 25) -- what a
+// writer hitting the ceiling above produces.
+define('PFB_EXTRACT_SIGXFSZ_EXIT', 153);
+
+// A staging filesystem with less than this free refuses the extraction outright
+// rather than filling the disk part-way through.
+define('PFB_EXTRACT_MIN_FREE_BYTES', 67108864);
+
 // Default cURL options
 $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL download agent-' . system_get_uniqueid(),
 				CURLOPT_SSL_CIPHER_LIST	=> 'TLSv1.3, TLSv1.2',
@@ -376,6 +397,13 @@ $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL d
 				// rsync uses exec separately) — an independent backstop to the PFB_FILTER_URL scheme
 				// allowlist, since PHP parse_url and libcurl can disagree on crafted input.
 				CURLOPT_PROTOCOLS	=> CURLPROTO_HTTP | CURLPROTO_HTTPS | CURLPROTO_FTP,
+				// issue #2658: refuse an over-large body at the transport instead of writing
+				// it to disk in full. The _LARGE variant keeps the cap free of the 2 GiB
+				// ceiling a plain long imposes. Enforcement depends on the appliance's
+				// libcurl (a declared Content-Length is refused before any body arrives;
+				// mid-transfer enforcement is version-dependent), so the extraction
+				// ceiling below is the backstop that depends on nothing.
+				CURLOPT_MAXFILESIZE_LARGE => PFB_DOWNLOAD_MAX_BYTES,
 				);
 
 // RFC7231 HTTP response codes
@@ -4216,6 +4244,76 @@ function pfb_geoip_generation_publication_unlock($lock): void {
 
 function pfb_download_extraction_succeeded(int $retval): bool {
 	return $retval === 0;
+}
+
+/**
+ * issue #2658: wrap an extraction command so the child that writes cannot exceed
+ * PFB_EXTRACT_MAX_BLOCKS. RLIMIT_FSIZE is inherited by every descendant, so one
+ * prefix covers pipelines and the extractor's own children alike; a write past the
+ * ceiling kills the writer with SIGXFSZ and the caller's existing nonzero-exit gate
+ * rejects the extraction. `|| exit 1` keeps it fail-closed -- a shell that cannot
+ * set the limit runs no extractor at all. $blocks exists so a test can prove the
+ * ceiling fires without writing gigabytes.
+ *
+ * Known limit: RLIMIT_FSIZE bounds each file, not an archive's total output, so a
+ * multi-member archive is bounded per member plus the free-space precheck. Member
+ * counts are out of scope by the issue -- real feeds are multi-member.
+ */
+function pfb_extract_cmd(string $cmd, ?int $blocks = NULL): string {
+	return 'ulimit -f ' . ($blocks ?? PFB_EXTRACT_MAX_BLOCKS) . ' || exit 1; ' . $cmd;
+}
+
+/**
+ * issue #2658: name the ceiling when a nonzero extraction exit is the kernel
+ * killing the writer for exceeding it, so an operator reads "too large" instead of
+ * a bare exit code. Every other status keeps the caller's existing wording.
+ */
+function pfb_extract_cap_note(int $retval): string {
+	return $retval === PFB_EXTRACT_SIGXFSZ_EXIT
+		? ' -- output exceeded the extraction size ceiling'
+		: '';
+}
+
+/**
+ * issue #2658: the first staging directory without room for an extraction needing
+ * $need bytes, or NULL when every candidate has room. Only absolute paths are
+ * probed -- a caller's list carries feed names beside real directories, and a feed
+ * name must never make the guard measure the working directory's filesystem. A
+ * directory whose free space cannot be read is NOT a shortfall: a failed statfs is
+ * not evidence of a full disk and must not refuse a legitimate feed. $free is the
+ * free-space probe, injectable so the verdict is testable without a full disk.
+ *
+ * @param callable(string):(float|false)|null $free
+ */
+function pfb_extract_space_shortfall(array $dirs, int $need, ?callable $free = NULL): ?string {
+	if ($free === NULL) {
+		$free = static function (string $dir) {
+			return @disk_free_space($dir);
+		};
+	}
+	foreach ($dirs as $dir) {
+		if (!is_string($dir) || strpos($dir, '/') !== 0) {
+			continue;
+		}
+		$avail = $free($dir);
+		if ($avail === FALSE || $avail === NULL) {
+			continue;
+		}
+		if ((float) $avail < (float) $need) {
+			return $dir;
+		}
+	}
+	return NULL;
+}
+
+/**
+ * issue #2658: the refusal reason for a cURL error a retry can never fix, or NULL
+ * when the error is the retryable kind. Only "maximum file size exceeded" qualifies
+ * today: the body is over the ceiling, so re-fetching it twice more just re-reads
+ * the same over-large feed.
+ */
+function pfb_download_size_refusal(int $curl_errno): ?string {
+	return $curl_errno === CURLE_FILESIZE_EXCEEDED ? 'download_too_large' : NULL;
 }
 
 function pfb_download_initial_retval(): int {
@@ -13948,6 +14046,20 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 							pfb_logger(" {$header}\t\tcURL Error: {$curl_error}\n\n", 3);
 						}
 
+						// issue #2658: an over-large body is a permanent refusal, not a
+						// transient failure -- retrying re-fetches the same feed twice more,
+						// and the response code libcurl already collected can be a 200, which
+						// would hand the truncated body to MIME validation as if it were the
+						// whole feed. Refuse here, naming the reason.
+						$size_refusal = pfb_download_size_refusal($curl_error);
+						if ($size_refusal !== NULL) {
+							pfb_validate_log($header, 'size', $size_refusal, pfb_redact_url($list_download));
+							curl_close($ch);
+							@fclose($fhandle);
+							unlink_if_exists($file_download);
+							return PfbDownloadResult::failure();
+						}
+
 						/* 'Flex' Downgrade cURL errors -	[ 35 - GET_SERVER_HELLO:sslv3		]
 											[ 51 - NO alternative certificate	]
 											[ 60 - Local Issuer Certificate Subject	]	*/
@@ -14162,6 +14274,21 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			@touch("{$file_download}", $remote_stamp);
 		}
 
+		// issue #2658: refuse before writing anything when a staging filesystem cannot
+		// hold even the archive itself. A part-way extraction onto a full disk costs
+		// the operator the data already in service; a refused feed does not.
+		$extract_dirs = array(dirname($file_download), $pfb['dbdir'], dirname($head_download));
+		if ($type == 'geoip') {
+			$extract_dirs[] = $pfb['geoipshare'];
+		}
+		$extract_short = pfb_extract_space_shortfall($extract_dirs,
+			max(PFB_EXTRACT_MIN_FREE_BYTES, (int) @filesize($file_download)));
+		if ($extract_short !== NULL) {
+			pfb_validate_log($header, 'size', 'staging_space_low', $extract_short);
+			unlink_if_exists($file_download);
+			return PfbDownloadResult::failure();
+		}
+
 		// Decompress file if required
 		if ($file_type == 'application/x-gzip' || $file_type == 'application/gzip') {
 			if (!pfb_validate_archive($file_download, $file_type)) {
@@ -14179,10 +14306,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
-				exec("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1", $output, $retval);
+				exec(pfb_extract_cmd("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1"), $output, $retval);
 				unlink_if_exists($file_download);
 				if (!pfb_download_extraction_succeeded($retval)) {
-					pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})", 2);
+					pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					return PfbDownloadResult::failure();
 				}
 				return PfbDownloadResult::success();
@@ -14191,10 +14318,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				$retval = pfb_download_initial_retval();
 				if (!pfb_stage_publish($head_download,
 				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-					exec("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+					exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 					return $retval;
 				})) {
-					pfb_logger("\n[pfb_download] asn extraction failed (gunzip exit {$retval})", 2);
+					pfb_logger("\n[pfb_download] asn extraction failed (gunzip exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
@@ -14215,11 +14342,11 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					return PfbDownloadResult::failure();
 				}
 				$header_esc = escapeshellarg($top1m_stage);
-				exec("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}", $output, $retval);
+				exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
 					unlink_if_exists($file_download);
 					unlink_if_exists($top1m_stage);
-					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})", 2);
+					pfb_logger("\n[pfb_download] top1m extraction failed (gunzip exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					return PfbDownloadResult::failure();
 				}
 				if (!pfb_top1m_candidate_valid($top1m_stage, $top1m_provider)) {
@@ -14319,7 +14446,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					$retval = pfb_download_initial_retval();
 					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
 					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
-						exec("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1", $output, $retval);
+						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
 						if (!pfb_download_extraction_succeeded($retval)) {
 							return $retval;
 						}
@@ -14335,7 +14462,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						}
 						return $retval;
 					})) {
-						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})", 2);
+						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 						return PfbDownloadResult::failure();
 					}
 
@@ -14357,10 +14484,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				$retval = pfb_download_initial_retval();
 				if (!pfb_stage_publish($orig_download,
 				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-					exec("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+					exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 					return $retval;
 				})) {
-					pfb_logger("\n[pfb_download] gzip extraction failed (gunzip exit {$retval})", 2);
+					pfb_logger("\n[pfb_download] gzip extraction failed (gunzip exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
@@ -14381,10 +14508,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			$retval = pfb_download_initial_retval();
 			if (!pfb_stage_publish($orig_download,
 			    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-				exec("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+				exec(pfb_extract_cmd("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 				return $retval;
 			})) {
-				pfb_logger("\n[pfb_download] bzip2 extraction failed (bzip2 exit {$retval})", 2);
+				pfb_logger("\n[pfb_download] bzip2 extraction failed (bzip2 exit {$retval})" . pfb_extract_cap_note($retval), 2);
 				unlink_if_exists($file_download);
 				return PfbDownloadResult::failure();
 			}
@@ -14410,22 +14537,22 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
-					exec("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1", $output, $retval);
+					exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
 				} else {
 					// ADR-46: stdout extraction -- member names never reach the filesystem.
 					$retval = pfb_download_initial_retval();
 					if (!pfb_stage_publish($head_download,
 					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-						exec("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged), $output, $retval);
+						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
 						return $retval;
 					})) {
-						pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+						pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 						unlink_if_exists($file_download);
 						return PfbDownloadResult::failure();
 					}
 				}
 				if (!pfb_download_extraction_succeeded($retval)) {
-					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
 				}
@@ -14455,9 +14582,9 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				}
 				$header_esc = escapeshellarg($top1m_stage);
 				$strip = $top1m_target_dir ? ' --strip=1' : '';
-				exec("/usr/bin/tar -xf {$file_dwn_esc}{$strip} -C {$header_esc} >/dev/null 2>&1", $output, $retval);
+				exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc}{$strip} -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
-					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})", 2);
+					pfb_logger("\n[pfb_download] {$type} zip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					rmdir_recursive($top1m_stage);
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();
@@ -14590,7 +14717,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			$xlsxtest = exec("/usr/bin/tar -tf {$file_dwn_esc}");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
 				unlink_if_exists("{$orig_download}");
-				exec("{$pfb['script']} xlsx {$header_esc} {$elog}");
+				exec(pfb_extract_cmd("{$pfb['script']} xlsx {$header_esc} {$elog}"));
 				if (file_exists("{$orig_download}")) {
 					$retval = 0;
 				}
@@ -14608,7 +14735,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				if (!pfb_stage_publish($orig_download,
 				    static function (string $staged) use ($file_dwn_esc, $list_download,
 				        &$output, &$retval, &$reject_detail, &$inner_rejected): int {
-					exec("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged), $output, $retval);
+					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} | /usr/bin/sed 's/,[[:space:]]/; /g' | /usr/bin/tr ',' '\n' > " . escapeshellarg($staged)), $output, $retval);
 					if ($retval !== 0) {
 						return $retval;
 					}
@@ -14624,7 +14751,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					if ($inner_rejected) {
 						pfb_validate_log($header, 'inner', 'inner_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 					} else {
-						pfb_logger("\n[pfb_download] zip publish failed (tar exit {$retval})", 2);
+						pfb_logger("\n[pfb_download] zip publish failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 					}
 					unlink_if_exists($file_download);
 					return PfbDownloadResult::failure();

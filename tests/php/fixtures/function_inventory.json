@@ -3354,6 +3354,19 @@
             }
         ]
     },
+    "pfb_download_size_refusal": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "curl_errno",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_due_ledger_cache_valid": {
         "returnsRef": false,
         "returnType": "bool",
@@ -4071,6 +4084,66 @@
         "returnsRef": false,
         "returnType": "array",
         "params": []
+    },
+    "pfb_extract_cap_note": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "retval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
+    "pfb_extract_cmd": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "cmd",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "blocks",
+                "byRef": false,
+                "variadic": false,
+                "type": "?int",
+                "default": "NULL"
+            }
+        ]
+    },
+    "pfb_extract_space_shortfall": {
+        "returnsRef": false,
+        "returnType": "?string",
+        "params": [
+            {
+                "name": "dirs",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "need",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "free",
+                "byRef": false,
+                "variadic": false,
+                "type": "?callable",
+                "default": "NULL"
+            }
+        ]
     },
     "pfb_extras_credentials": {
         "returnsRef": false,

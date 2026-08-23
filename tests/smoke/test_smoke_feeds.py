@@ -2737,6 +2737,100 @@ def _recent_validate_lines(vm: SmokeVM, limit: int = 5) -> str:
     return "\n".join(lines[-limit:]) if lines else "(no 'pfb_validate:' line found in the log)"
 
 
+# --------------------------------------------------------------------------- #
+# issue #2658 — the ingest size ceilings, proved against the appliance itself.
+#
+# The shipped ceilings are deliberately generous (gigabytes), so tripping them
+# with real bytes is not something a smoke VM can afford. What the appliance —
+# and only the appliance — can answer is whether the two MECHANISMS the ceilings
+# rest on actually work there: does FreeBSD's /bin/sh honour the ulimit prefix and
+# surface the kill as a nonzero status, and does the appliance's libcurl enforce
+# its maximum-file-size option. Each case pairs that live probe with proof that
+# the deployed package is wired to the same mechanism.
+# --------------------------------------------------------------------------- #
+
+_PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
+
+
+@pytest.mark.timeout(120)
+def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> None:
+    """issue #2658: the extraction ceiling really stops a writing child on FreeBSD.
+
+    Every archive extraction now runs behind ``ulimit -f`` so a small archive that
+    expands to gigabytes is killed by the kernel instead of filling the staging
+    filesystem. Whether that holds is a property of the appliance's shell and
+    kernel, not of PHP: FreeBSD's /bin/sh must accept the prefix, the kernel must
+    raise SIGXFSZ at the limit, and the shell must report the kill as the nonzero
+    status the extraction gates already reject.
+
+    Given a two-block ceiling and a child asked to write one MiB
+    When the wrapped command runs on the appliance
+    Then the child is killed at the ceiling — the status is nonzero and the file on
+      disk is a couple of KiB, not the MiB that was requested — and the deployed
+      package wraps its extractions in that same construct.
+    """
+    target = "/tmp/pfb2658_extract_probe"
+    deployed_vm.ssh("rm", "-f", target)
+    probe = deployed_vm.ssh(
+        f"{{ ulimit -f 2 || exit 1; /bin/dd if=/dev/zero of={target} bs=1024 count=1024; }} 2>/dev/null; "
+        f"echo rc=$?; /usr/bin/stat -f %z {target}"
+    )
+    deployed_vm.ssh("rm", "-f", target)
+    out = probe.stdout
+
+    assert "rc=0" not in out, (
+        f"the ceiling did not stop the write on this appliance — probe output: {out!r} {probe.stderr!r}"
+    )
+    rc_line = next((ln for ln in out.splitlines() if ln.startswith("rc=")), "")
+    size_line = out.strip().splitlines()[-1] if out.strip() else ""
+    assert rc_line == "rc=153", (
+        f"expected the SIGXFSZ exit status (128+25) the cap note keys on, got {rc_line!r} — full probe output: {out!r}"
+    )
+    assert size_line.isdigit() and int(size_line) < 1024 * 1024, (
+        f"the ceiling must truncate the write, not merely report on it — wrote {size_line!r} bytes"
+    )
+
+    wiring = deployed_vm.ssh("grep", "-c", "exec(pfb_extract_cmd(", _PFB_INC)
+    assert wiring.stdout.strip().isdigit() and int(wiring.stdout.strip()) > 0, (
+        f"the deployed package runs no extraction under the ceiling — grep said {wiring.stdout!r}"
+    )
+
+
+@pytest.mark.timeout(120)
+def test_download_ceiling_refuses_an_oversized_body(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2658: the appliance's libcurl enforces the maximum-file-size option.
+
+    The download ceiling is only worth setting if the libcurl the appliance ships
+    acts on it; the option's documented behaviour differs by version, which is why
+    the ticket asks for it to be probed on the box rather than assumed. This drives
+    the appliance's own libcurl against the mock feed with the ceiling lowered to a
+    handful of bytes and asserts it refuses with error 63 — the code the reject
+    branch keys on and the code the shipped error table already names.
+
+    Given a real feed body served over HTTP and a ceiling far below it
+    When the appliance fetches it with that ceiling
+    Then libcurl refuses with "maximum file size exceeded" (63) rather than writing
+      the body out, and the deployed package sets that same option for every feed.
+    """
+    feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
+    out_path = "/tmp/pfb2658_download_probe"
+    deployed_vm.ssh("rm", "-f", out_path)
+    probe = deployed_vm.ssh(
+        f"/usr/local/bin/curl -s --max-filesize 16 -o {out_path} {shlex.quote(feed_url)}; echo rc=$?"
+    )
+    deployed_vm.ssh("rm", "-f", out_path)
+
+    assert "rc=63" in probe.stdout, (
+        "the appliance's libcurl did not refuse an over-large body with error 63 "
+        f"— probe output: {probe.stdout!r} {probe.stderr!r}"
+    )
+
+    wiring = deployed_vm.ssh("grep", "-c", "CURLOPT_MAXFILESIZE_LARGE", _PFB_INC)
+    assert wiring.stdout.strip().isdigit() and int(wiring.stdout.strip()) > 0, (
+        f"the deployed package sets no download ceiling — grep said {wiring.stdout!r}"
+    )
+
+
 @pytest.mark.timeout(120)
 def test_validate_log_structural_reject_line(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """ADR-48 P3: a structural-probe reject emits the canonical stage=structural line.
