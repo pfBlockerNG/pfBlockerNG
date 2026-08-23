@@ -269,23 +269,6 @@ final class DownloadSizeCeilingTest extends TestCase
 		$this->assertSame(PFB_DOWNLOAD_MAX_BYTES, $defaults[CURLOPT_MAXFILESIZE_LARGE]);
 	}
 
-	/**
-	 * Scenario: the over-large refusal is distinguishable from a transient error
-	 *
-	 * Given  a cURL error number
-	 * When   the download loop classifies it
-	 * Then   only "maximum file size exceeded" yields a refusal reason — every
-	 *        other error stays a retryable failure and must not be relabelled.
-	 */
-	public function test_download_size_refusal_only_fires_for_the_file_size_error(): void
-	{
-		$this->assertSame('download_too_large', pfb_download_size_refusal(CURLE_FILESIZE_EXCEEDED));
-		foreach ([0, 7, 22, 28, 35, 56, 60] as $errno) {
-			$this->assertNull(pfb_download_size_refusal($errno),
-				"cURL error {$errno} is not a size refusal");
-		}
-	}
-
 	// -----------------------------------------------------------------------
 	// Wiring inside pfb_download()
 	// -----------------------------------------------------------------------
@@ -295,38 +278,41 @@ final class DownloadSizeCeilingTest extends TestCase
 	 *
 	 * Given  every exec() pfb_download() makes
 	 * When   they are enumerated from the comment-free source
-	 * Then   each one either runs under pfb_extract_cmd() or is a known
-	 *        non-writing call (a listing probe, rsync, or a helper script that
-	 *        writes nothing of the archive's making). A new extraction site
-	 *        added without the ceiling fails here.
+	 * Then   each one either runs under pfb_extract_cmd() or is an allow-listed
+	 *        call that writes no archive output. A new extraction site added
+	 *        without the ceiling fails here.
 	 */
 	public function test_every_extraction_exec_runs_under_the_ceiling(): void
 	{
 		$allowed = [
+			// Fetches a feed body; writes no archive output. Its own fetch is bounded
+			// by neither ceiling (rsync is not a libcurl transfer) -- issue #2667.
 			'exec("/usr/local/bin/rsync',
+			// Helper-script calls that post-process an ALREADY-extracted text feed.
 			'exec("{$pfb[\'script\']} whoisconvert',
 			'exec("{$pfb[\'script\']} asn_table',
 			'exec("{$pfb[\'script\']} et ',
+			// processxlsx() reports success by the output file existing rather than by
+			// an exit status, so a child killed at the ceiling would publish a
+			// truncated feed as a success. Capping it needs an exit gate first
+			// (issue #2666).
+			'exec("{$pfb[\'script\']} xlsx',
+			// Lists an archive; extracts nothing.
 			'exec("/usr/bin/tar -tf',
+			// Capped.
 			'exec(pfb_extract_cmd(',
 		];
 
-		$offsets = [];
-		$at = 0;
-		while (($at = strpos(self::$downloadBody, 'exec(', $at)) !== FALSE) {
-			// curl_exec() is not a shell call.
-			if ($at === 0 || !preg_match('/[A-Za-z0-9_]/', self::$downloadBody[$at - 1])) {
-				$offsets[] = $at;
-			}
-			$at += 5;
-		}
-		$this->assertNotEmpty($offsets, 'the pfb_download() body must contain exec() calls');
+		// curl_exec() is not a shell call -- the lookbehind keeps it out.
+		$found = preg_match_all('/(?<![A-Za-z0-9_])exec\(/', self::$downloadBody, $m, PREG_OFFSET_CAPTURE);
+		$this->assertNotFalse($found);
+		$this->assertNotSame(0, $found, 'the pfb_download() body must contain exec() calls');
 
-		foreach ($offsets as $offset) {
+		foreach ($m[0] as [, $offset]) {
 			$call = substr(self::$downloadBody, $offset, 48);
 			$ok = FALSE;
 			foreach ($allowed as $prefix) {
-				if (strpos($call, $prefix) === 0) {
+				if (str_starts_with($call, $prefix)) {
 					$ok = TRUE;
 					break;
 				}
@@ -336,30 +322,42 @@ final class DownloadSizeCeilingTest extends TestCase
 	}
 
 	/**
-	 * Scenario: each shipped extraction site keeps its ceiling
+	 * Scenario: no extraction anywhere in the package escapes the ceiling
 	 *
-	 * Given  the extractor invocations pfb_download() runs per archive format
-	 * When   the comment-free source is read
-	 * Then   every one of them is wrapped, so no format — gzip, bzip2, zip or
-	 *        tar, on the staged and the direct paths alike — is left uncapped.
+	 * Given  every shipped PHP source file, not just pfb_download()
+	 * When   each exec() that drives an extraction tool is enumerated
+	 * Then   all of them run under pfb_extract_cmd(). The ingest reuse path in
+	 *        pfblockerng_apply.inc is the reason this sweep is tree-wide rather
+	 *        than scoped to pfb_download(): an expansion bomb does not care which
+	 *        function opened the archive.
 	 */
-	public function test_each_extraction_site_is_wrapped(): void
+	public function test_no_extraction_exec_anywhere_in_the_package_is_uncapped(): void
 	{
-		$sites = [
-			'exec(pfb_extract_cmd("/usr/bin/tar -xzf {$file_dwn_esc} --strip=1 -C {$pfb[\'geoipshare\']} >/dev/null 2>&1"), $output, $retval);',
-			'exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);',
-			'exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > {$header_esc}"), $output, $retval);',
-			'exec(pfb_extract_cmd("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);',
-			'exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1"), $output, $retval);',
-			'exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);',
-			'exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc}{$strip} -C {$header_esc} >/dev/null 2>&1"), $output, $retval);',
-			'exec(pfb_extract_cmd("set -o pipefail; /usr/bin/tar -xOf {$file_dwn_esc} |',
-			'exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C "',
-			'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx {$header_esc} {$elog}"));',
-		];
-		foreach ($sites as $site) {
-			$this->assertStringContainsString($site, self::$downloadBody);
+		$root = dirname(__DIR__, 2) . '/src';
+		$files = new RegexIterator(
+			new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)),
+			'/\.(inc|php)$/'
+		);
+
+		$seen = 0;
+		foreach ($files as $file) {
+			$path = $file->getPathname();
+			$source = php_strip_whitespace($path);
+			// -t/-tf only TEST or LIST an archive; they write nothing.
+			if (!preg_match_all(
+				'/(?<![A-Za-z0-9_])exec\(\s*(?:pfb_extract_cmd\()?[\'"][^\'"]*(?:gunzip|bzip2|\/tar) -(?!t)/',
+				$source, $m, PREG_OFFSET_CAPTURE
+			)) {
+				continue;
+			}
+			foreach ($m[0] as [$call, $offset]) {
+				$seen++;
+				$this->assertStringStartsWith('exec(pfb_extract_cmd(', $call,
+					'uncapped extraction in ' . basename($path) . ': ' . substr($source, $offset, 64));
+			}
 		}
+		$this->assertGreaterThan(1, $seen,
+			'the sweep must actually find extraction calls — a pattern that matches nothing proves nothing');
 	}
 
 	/**
@@ -373,8 +371,9 @@ final class DownloadSizeCeilingTest extends TestCase
 	 */
 	public function test_download_loop_refuses_an_over_large_body_without_retrying(): void
 	{
-		$this->assertStringContainsString('pfb_download_size_refusal($curl_error)', self::$downloadBody);
-		$this->assertStringContainsString("pfb_validate_log(\$header, 'size',", self::$downloadBody);
+		$this->assertStringContainsString('if ($curl_error === CURLE_FILESIZE_EXCEEDED) {', self::$downloadBody);
+		$this->assertStringContainsString(
+			"pfb_validate_log(\$header, 'size', 'download_too_large'", self::$downloadBody);
 	}
 
 	/**
@@ -392,5 +391,12 @@ final class DownloadSizeCeilingTest extends TestCase
 		$this->assertNotFalse($check, 'pfb_download() must run the free-space precheck');
 		$this->assertNotFalse($dispatch);
 		$this->assertLessThan($dispatch, $check);
+		// Archive types only: a plain text feed extracts nothing, so the guard must not
+		// stand between it and its publication.
+		$this->assertStringContainsString('if (pfb_archive_probe($file_type) !== NULL) {', self::$downloadBody);
+		// The requirement is the archive's own size and no fixed floor -- /var is a
+		// 60 MiB RAM disk on a default use_mfs_tmpvar install.
+		$this->assertStringContainsString(
+			'pfb_extract_space_shortfall($extract_dirs, (int) @filesize($file_download))', self::$downloadBody);
 	}
 }

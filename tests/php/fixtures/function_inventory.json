@@ -3354,19 +3354,6 @@
             }
         ]
     },
-    "pfb_download_size_refusal": {
-        "returnsRef": false,
-        "returnType": "?string",
-        "params": [
-            {
-                "name": "curl_errno",
-                "byRef": false,
-                "variadic": false,
-                "type": "int",
-                "default": null
-            }
-        ]
-    },
     "pfb_due_ledger_cache_valid": {
         "returnsRef": false,
         "returnType": "bool",
@@ -4113,8 +4100,8 @@
                 "name": "blocks",
                 "byRef": false,
                 "variadic": false,
-                "type": "?int",
-                "default": "NULL"
+                "type": "int",
+                "default": "4194304"
             }
         ]
     },
