@@ -8887,6 +8887,32 @@
             }
         ]
     },
+    "pfb_pfctl_tables_parse": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "lines",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_pfctl_tables_raw": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "pfctl_bin",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "''"
+            }
+        ]
+    },
     "pfb_pfctl_test_match_count": {
         "returnsRef": false,
         "returnType": "int",
@@ -13264,6 +13290,33 @@
                 "byRef": false,
                 "variadic": false,
                 "type": null,
+                "default": null
+            }
+        ]
+    },
+    "pfb_widget_alias_display_count": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "addresses",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "alias_file",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "placeholder",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
                 "default": null
             }
         ]
