@@ -2489,6 +2489,7 @@ def _unlocked_panel_html(page_html: str) -> str:
     return page_html[idx : idx + 8000]
 
 
+@pytest.mark.ui_render
 def test_unlocked_panel_renders_whitelist_plus_next_to_relock(
     webui: WebUI,
     smoke_vm: helpers.SmokeVM,
@@ -2505,8 +2506,8 @@ def test_unlocked_panel_renders_whitelist_plus_next_to_relock(
         DNSBL_LCK + DNSBLWT|add for the domain.
     """
     vm = smoke_vm
-    host = "198.51.100.77"
-    table = "pfB_Deny_v4"
+    host = "203.0.113.77"
+    table = "pfB_Exact_v4"
     domain = "ui1526panel.example.com"
     dnsbl_type = "python"
 
