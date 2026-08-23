@@ -76,8 +76,10 @@ check(
 	"the shipped UT1 feed is fetched over HTTPS (found: {$feed})"
 );
 
+/* Tolerant of quote style and of == vs ===, so a harmless reformat does not read as a
+   regression; still strict about WHAT is compared, which is the contract. */
 check(
-	preg_match("/if\s*\(\s*\\\$item\['xml'\]\s*==\s*'ut1'\s*\)/", $php_src) === 1,
+	preg_match('/\$item\[[\x27"]xml[\x27"]\]\s*===?\s*[\x27"]ut1[\x27"]/', $php_src) === 1,
 	'the ut1.tar.gz filename patch keys on the provider id'
 );
 check(
