@@ -330,6 +330,11 @@ final class DownloadSizeCeilingTest extends TestCase
 	 *        pfblockerng_apply.inc is the reason this sweep is tree-wide rather
 	 *        than scoped to pfb_download(): an expansion bomb does not care which
 	 *        function opened the archive.
+	 *
+	 * Blind spots, verified absent from src/ today rather than assumed: a command
+	 * held in a variable or built by a heredoc, a bare `tar` with no path, and the
+	 * other process launchers (passthru/shell_exec/system/proc_open/popen). Any of
+	 * those forms would need adding here.
 	 */
 	public function test_no_extraction_exec_anywhere_in_the_package_is_uncapped(): void
 	{
