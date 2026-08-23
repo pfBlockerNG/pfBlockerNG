@@ -7332,6 +7332,7 @@ function pfb_pfctl_tables_parse(array $lines): array {
 		// Flags then name. Leading '-' misses const tables (`c…`) and
 		// would apply the next Addresses line to the previous table.
 		if (preg_match('/^([c-][p-][ai-][\w-]*)\s+(\S+)\s*$/', $line, $hm)) {
+			// Duplicate names last-win; pfctl does not emit them.
 			$current = $hm[2];
 			$tables[$current] = $empty($hm[1]);
 			continue;

@@ -2,8 +2,9 @@
 
 ``pfblockerng.widget.php`` is not require()-able off-appliance, and the live
 GET in ``test_render_smoke.py``'s PAGE_TABLE cannot fail if count/update/
-pfctlerr go back to per-alias grep/Tshow. These markers pin the new path
-in the shipped source. No VM: same shape as ``test_render_oracle.py``.
+pfctlerr go back to per-alias grep/Tshow. This is a **source-text pin**:
+it catches a revert of those call sites, not the same calls moved into
+unreachable code. No VM: same shape as ``test_render_oracle.py``.
 """
 
 from __future__ import annotations

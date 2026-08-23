@@ -85,7 +85,8 @@ final class PfctlTablesParseTest extends TestCase
 
 	public function testTruncatedA4Dump_OmitsPacketLinesAsZero(): void
 	{
-		// What the widget's grep -A4 captured: name + Addresses/Cleared/References/Evaluations.
+		// Missing In/Block defaults to 0. This does not distinguish a truncated
+		// dump from a table that genuinely has zero packets.
 		$lines = [
 			"-pa-r--\tpfB_PRI1_v4",
 			"\tAddresses:   16733",
