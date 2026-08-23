@@ -680,21 +680,22 @@ def test_scratch_removal_never_widens_the_directory_it_sits_in(tmp_path: Path) -
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses the directory permissions this test revokes")
 def test_scratch_removal_never_follows_a_symlink_out_of_the_scratch(tmp_path: Path) -> None:
-    external = tmp_path / "external"
+    enclosing = tmp_path / "enclosing"  # a mode of its own, so widening it to S_IRWXU is visible
+    enclosing.mkdir()
+    external = enclosing / "external"
     external.mkdir()
     external.chmod(0o755)
+    enclosing.chmod(0o755)
     scratch = tmp_path / "scratch"
     locked = scratch / "previous"
     locked.mkdir(parents=True)
     (locked / "link").symlink_to(external)
     locked.chmod(0o500)
 
-    enclosing = stat.S_IMODE(tmp_path.lstat().st_mode)
-
     store._remove_scratch(scratch)
 
     assert stat.S_IMODE(external.lstat().st_mode) == 0o755
-    assert stat.S_IMODE(tmp_path.lstat().st_mode) == enclosing  # nor anything above the link's target
+    assert stat.S_IMODE(enclosing.lstat().st_mode) == 0o755  # nor anything above the link's target
     assert not scratch.exists()
 
 

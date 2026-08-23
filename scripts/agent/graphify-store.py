@@ -120,7 +120,11 @@ def _canonical_files(payload: Path) -> tuple[Path, ...]:
 
 
 def _remove_scratch(scratch: Path) -> None:
-    """Remove a swap scratch directory, never raising; residue would block `git worktree remove`."""
+    """Remove a swap scratch directory, never raising; residue would block `git worktree remove`.
+
+    A scratch whose own root is unreadable cannot be walked, so its contents stay; the callers
+    always mint the scratch themselves and never narrow its mode.
+    """
     for directory, subdirectories, _files in os.walk(scratch):
         for path in (directory, *(os.path.join(directory, name) for name in subdirectories)):
             if os.path.islink(path):
