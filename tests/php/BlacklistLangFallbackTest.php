@@ -91,6 +91,31 @@ final class BlacklistLangFallbackTest extends TestCase
 		}
 	}
 
+	/**
+	 * issue #2636: the shipped UT1 provider fetches over an authenticated transport.
+	 *
+	 * The feed URL decides how a blocklist archive reaches the firewall, and FTP
+	 * neither authenticates the server nor protects the payload. Nothing else in the
+	 * suite reads the shipped FEED line -- the live-VM case drives a mock origin -- so
+	 * a revert to ftp:// would otherwise pass every gate.
+	 */
+	public function testShippedUt1FeedUsesHttps(): void
+	{
+		$raw = file_get_contents(self::UT1_FILE);
+		$this->assertNotFalse($raw, 'test bootstrap: failed to read ut1_global_usage');
+		$this->assertSame(
+			1,
+			preg_match('/^FEED:\s*(\S+)$/m', $raw, $matches),
+			'ut1_global_usage must declare exactly one FEED line'
+		);
+		$this->assertStringStartsWith(
+			'https://',
+			$matches[1],
+			"the shipped UT1 feed must be fetched over HTTPS; found: {$matches[1]}"
+		);
+	}
+
+
 	public function testParseExtractionStartsAtExecutableCodeNotProductionComment(): void
 	{
 		$this->assertStringStartsWith('$data', self::$parseRegion);

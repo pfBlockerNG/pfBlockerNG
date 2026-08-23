@@ -3211,6 +3211,27 @@ def test_page_table_covers_every_pfblockerng_page() -> None:
     assert "dnsbl_vip_sinkhole_pages" in excluded_names
 
 
+def test_blacklist_download_name_keys_on_provider_id() -> None:
+    """Pin the CLI-only provider-naming contract that Tier-A HTTP rendering cannot execute.
+
+    A Blacklist provider's category filenames are derived from its download file name, so
+    keying that name on a feed URL literal renames the whole category set the day the URL
+    moves. Same reasoning as the sibling pins above: ``pfblockerng.php`` is the CLI
+    dispatcher and is never served, so the contract is asserted at the source rather than
+    through an HTTP render (issue #2636).
+    """
+    source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
+    source = source_path.read_text(encoding="utf-8")
+
+    assert re.search(r"if\s*\(\s*\$item\['xml'\]\s*==\s*'ut1'\s*\)", source), (
+        "the ut1.tar.gz filename patch must key on the provider id"
+    )
+    assert "ftp://ftp.ut-capitole.fr" not in source, (
+        "the filename patch must not key on a feed URL literal -- a URL change would "
+        "silently rename every UT1 category file"
+    )
+
+
 def test_pfblockerng_download_extras_uses_typed_download_result() -> None:
     """Pin the CLI-only download contract that Tier-A HTTP rendering cannot execute.
 
