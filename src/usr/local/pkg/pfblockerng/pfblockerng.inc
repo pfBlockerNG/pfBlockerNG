@@ -3901,7 +3901,9 @@ function pfb_download($list_url, $file_dwn, $pflex=FALSE, $header, $format, $log
 				curl_setopt_array($ch, $pfb['curl_defaults']);	// Load curl default settings
 				curl_setopt($ch, CURLOPT_FILE, $fhandle);	// Add $fhandle setting to cURL
 				curl_setopt($ch, CURLOPT_TIMEOUT, $timeout);	// Set cURL download timeout
-				curl_setopt($ch, CURLOPT_ENCODING, 'gzip');	// Request 'gzip' encoding from server if available
+				// No Accept-Encoding is offered: an origin that labels an archive
+				// 'Content-Encoding: gzip' would otherwise have libcurl decode it in
+				// flight, leaving the inner bytes on disk and the archive unextracted.
 				if ($srcint) {
 					curl_setopt($ch, CURLOPT_INTERFACE, $srcint);	// Use a specific interface when downloading lists
 					pfb_logger("\nList: {$header} will be downloaded via interface: {$srcint}\n", 1);
