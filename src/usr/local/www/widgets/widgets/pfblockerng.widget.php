@@ -262,48 +262,38 @@ function pfBlockerNG_update_table() {
 					'type'		- Rule type - block|reject|pass|match
 					'id'		- Alias key value				*/
 
-	exec("{$pfb['pfctl']} -vvsTables | {$pfb['grep']} -A4 'pfB_'", $pfb_pfctl);
-	if (!empty($pfb_pfctl)) {
-		foreach($pfb_pfctl as $line) {
-			$line = trim(str_replace(array( '[', ']' ), '', $line));
-			if (str_starts_with($line, '-')) {
-				$pfb_alias = trim(strstr($line, 'pfB', FALSE));
-				if (pfb_widget_alias_hidden($pfb_alias, $show_agg)) {
-					unset($pfb_alias);
-					continue;
-				}
-
-				$pfb_aliasdir_esc = escapeshellarg("{$pfb['aliasdir']}/{$pfb_alias}.txt");
-				exec("{$pfb['grep']} -cv '^1\.1\.1\.1\$' {$pfb_aliasdir_esc}", $match);
-				$pfb_table[$pfb_alias] = array('count' => pfb_alias_entry_count($match), 'img' => $pfb['down']);
-				exec("{$pfb['ls']} -l -D'%Y-%m-%d %T' {$pfb_aliasdir_esc} | {$pfb['awk']} '{ print \$6,\$7 }'", $update);
-
-				$pfb_table[$pfb_alias]['update']	= $update[0];
-				$pfb_table[$pfb_alias]['rule']		= 0;
-				$pfb_table[$pfb_alias]['packets']	= 0;
-				unset($match, $update);
-				continue;
-			}
-
-			if (isset($pfb_alias)) {
-				if (str_starts_with($line, 'Addresses')) {
-					$addr = trim(exec_command(implode(' ', [
-						$pfb['pfctl'], '-t',
-						escapeshellarg($pfb_alias),
-						'-Tshow', '|', $pfb['wc'], '-l'
-					])));
-					if (!is_numeric($addr)) {
-						$addr = 0;
-					}
-					$pfb_table[$pfb_alias]['count'] = $addr;
-					continue;
-				}
-				unset($pfb_alias);
-			}
+	// Issue #2645: one pfctl -vvsTables parse. Addresses == Tshow on the
+	// 2026-08-23 pfb-testing probe, so count comes from Addresses (no per-alias
+	// -Tshow | wc). Update stays file mtime (Cleared diverged). Packets stay
+	// pfSense_get_pf_rules() below.
+	$pfb_saw = FALSE;
+	foreach (pfb_pfctl_tables_parse(pfb_pfctl_tables_raw()) as $pfb_alias => $info) {
+		if (!str_starts_with($pfb_alias, 'pfB_')) {
+			continue;
 		}
+		$pfb_saw = TRUE;
+		if (pfb_widget_alias_hidden($pfb_alias, $show_agg)) {
+			continue;
+		}
+		$alias_file = "{$pfb['aliasdir']}/{$pfb_alias}.txt";
+		$mtime = '';
+		if (is_file($alias_file)) {
+			$mtime = date('Y-m-d H:i:s', (int) filemtime($alias_file));
+		}
+		// ip_ph (default 127.1.7.7) is loaded into the pf table, so Addresses
+		// includes it. A padded-empty alias is placeholder-only: show 0.
+		$ip_ph = (string) ($pfb['ip_ph'] ?? '127.1.7.7');
+		$placeholder = str_ends_with($pfb_alias, '_v6') ? "::{$ip_ph}" : $ip_ph;
+		$count = pfb_widget_alias_display_count($info['addresses'], $alias_file, $placeholder);
+		$pfb_table[$pfb_alias] = array(
+			'count'		=> $count,
+			'img'		=> $pfb['down'],
+			'update'	=> $mtime,
+			'rule'		=> 0,
+			'packets'	=> 0,
+		);
 	}
-	else {
-		// Error. No pf labels found.
+	if (!$pfb_saw) {
 		$pfb['pfctlerr'] = TRUE;
 	}
 

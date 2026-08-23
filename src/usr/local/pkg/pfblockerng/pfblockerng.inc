@@ -986,10 +986,13 @@ function pfb_dnsblip_action_value(mixed $action): string {
 	return pfb_group_action_valid($action, 'ipv4') ? (string) $action : 'Disabled';
 }
 
-// Entry count for a pfBlockerNG alias file, excluding the '1.1.1.1' placeholder
-// (used for an empty alias). $grep_lines is the output array of
-// `grep -cv '^1.1.1.1$' <file>` — a single line holding the count in element 0.
-// Returns 0 when the output is missing or non-numeric.
+// Entry count for a pfBlockerNG alias file from `grep -cv` output. $grep_lines[0]
+// is the count line. Returns 0 when missing or non-numeric.
+//
+// The widget historically grepped '^1.1.1.1$', which is NOT the placeholder —
+// $pfb['ip_ph'] defaults to 127.1.7.7 (v6: ::127.1.7.7). That hardcode is
+// retired; callers that need "real entries" use pfb_member_file_is_placeholder_only()
+// with ip_ph. This helper only unwraps grep -cv output.
 function pfb_alias_entry_count(array $grep_lines): int {
 	return is_numeric($grep_lines[0] ?? NULL) ? (int) $grep_lines[0] : 0;
 }
@@ -6702,6 +6705,18 @@ function pfb_member_file_is_placeholder_only($path, $placeholder) {
 }
 
 
+// Widget/IP-table display count (issue #2645). Kernel Addresses includes
+// $placeholder when pf loaded the padded file. A placeholder-only file is an
+// empty feed — show 0. Mixed files keep Addresses (includes the one padded
+// IP; persist-at-apply can record entries vs padded later).
+function pfb_widget_alias_display_count(int $addresses, string $alias_file, string $placeholder): int {
+	if (pfb_member_file_is_placeholder_only($alias_file, $placeholder)) {
+		return 0;
+	}
+	return $addresses;
+}
+
+
 /**
  * issue #1250: sweep matchgendir's machine-generated artifacts -- Reputation dMax's per-alias
  * 'pfB_Match_Rep_<header>_<fam>.txt', the ccwhite consolidated exempt file, and the ET/
@@ -7239,6 +7254,132 @@ function pfb_pfctl_table_count(string $table): int {
 // PURE -- no I/O, no globals, no side effects.
 function pfb_pfctl_test_match_count(string $output): int {
 	return (int) $output;
+}
+
+
+// ONE `pfctl -vvsTables` exec. Full dump — do not pipe through grep -A4 (that
+// truncation drops the In/Out packet lines the parser is meant to read).
+// Returns the line array exec() collected; never throws.
+function pfb_pfctl_tables_raw(string $pfctl_bin = ''): array {
+	global $pfb;
+	if ($pfctl_bin === '') {
+		$pfctl_bin = $pfb['pfctl'] ?? '/sbin/pfctl';
+	}
+	$out = [];
+	exec(escapeshellarg($pfctl_bin) . ' -vvsTables 2>/dev/null', $out);
+	return $out;
+}
+
+
+// Parse `pfctl -vvsTables` lines into per-table stats. PURE — no I/O, no
+// globals. Missing packet/eval fields default to 0 so callers never isset().
+//
+// Header is flags, then a tab (pfctl 8), then the table name. Body lines are
+// tab-indented `Key: value` / `In/Block: [ Packets: N Bytes: N ]`.
+function pfb_pfctl_tables_parse(array $lines): array {
+	$tables = [];
+	$current = '';
+
+	$empty = static function (string $flags = ''): array {
+		return [
+			'flags' => $flags,
+			'addresses' => 0,
+			'cleared' => '',
+			'references_anchors' => 0,
+			'references_rules' => 0,
+			'evaluations_nomatch' => 0,
+			'evaluations_match' => 0,
+			'in_block_packets' => 0,
+			'in_block_bytes' => 0,
+			'in_pass_packets' => 0,
+			'in_pass_bytes' => 0,
+			'in_xpass_packets' => 0,
+			'in_xpass_bytes' => 0,
+			'out_block_packets' => 0,
+			'out_block_bytes' => 0,
+			'out_pass_packets' => 0,
+			'out_pass_bytes' => 0,
+			'out_xpass_packets' => 0,
+			'out_xpass_bytes' => 0,
+		];
+	};
+
+	foreach ($lines as $line) {
+		if ($line === '') {
+			continue;
+		}
+		if ($line[0] === '-') {
+			$parts = preg_split('/\s+/', $line, 2);
+			if ($parts === FALSE || count($parts) < 2 || $parts[1] === '') {
+				$current = '';
+				continue;
+			}
+			$current = $parts[1];
+			$tables[$current] = $empty($parts[0]);
+			continue;
+		}
+		if ($current === '') {
+			continue;
+		}
+
+		$stripped = trim(str_replace(['[', ']'], '', $line));
+		if (str_starts_with($stripped, 'Addresses:')) {
+			$tables[$current]['addresses'] = (int) trim(substr($stripped, strlen('Addresses:')));
+			continue;
+		}
+		if (str_starts_with($stripped, 'Cleared:')) {
+			$tables[$current]['cleared'] = trim(substr($stripped, strlen('Cleared:')));
+			continue;
+		}
+		if (str_starts_with($stripped, 'References:')) {
+			if (preg_match('/Anchors:\s*(\d+)/', $stripped, $m)) {
+				$tables[$current]['references_anchors'] = (int) $m[1];
+			}
+			if (preg_match('/Rules:\s*(\d+)/', $stripped, $m)) {
+				$tables[$current]['references_rules'] = (int) $m[1];
+			}
+			continue;
+		}
+		if (str_starts_with($stripped, 'Evaluations:')) {
+			if (preg_match('/NoMatch:\s*(\d+)/', $stripped, $m)) {
+				$tables[$current]['evaluations_nomatch'] = (int) $m[1];
+			}
+			if (preg_match('/Match:\s*(\d+)/', $stripped, $m)) {
+				$tables[$current]['evaluations_match'] = (int) $m[1];
+			}
+			continue;
+		}
+
+		$dir_key = '';
+		if (str_starts_with($stripped, 'In/Block:')) {
+			$dir_key = 'in_block';
+		} elseif (str_starts_with($stripped, 'In/Pass:')) {
+			$dir_key = 'in_pass';
+		} elseif (str_starts_with($stripped, 'In/XPass:')) {
+			$dir_key = 'in_xpass';
+		} elseif (str_starts_with($stripped, 'Out/Block:')) {
+			$dir_key = 'out_block';
+		} elseif (str_starts_with($stripped, 'Out/Pass:')) {
+			$dir_key = 'out_pass';
+		} elseif (str_starts_with($stripped, 'Out/XPass:')) {
+			$dir_key = 'out_xpass';
+		}
+		if ($dir_key === '') {
+			continue;
+		}
+		$packets = 0;
+		$bytes = 0;
+		if (preg_match('/Packets:\s*(\d+)/', $stripped, $m)) {
+			$packets = (int) $m[1];
+		}
+		if (preg_match('/Bytes:\s*(\d+)/', $stripped, $m)) {
+			$bytes = (int) $m[1];
+		}
+		$tables[$current][$dir_key . '_packets'] = $packets;
+		$tables[$current][$dir_key . '_bytes'] = $bytes;
+	}
+
+	return $tables;
 }
 
 
