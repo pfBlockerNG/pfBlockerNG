@@ -3922,6 +3922,62 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
 
 
+@pytest.mark.timeout(180)
+def test_blacklist_download_name_keys_on_provider_id(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2636: the UT1 download name comes from the provider id, not from a literal feed URL.
+
+    The category files a Blacklist provider publishes are named after the DOWNLOAD file
+    name, so whatever decides that name decides the on-disk layout. Deriving it from a
+    hardcoded feed URL means the provider silently renames its whole category set the day
+    its URL changes; deriving it from the provider id keeps the layout stable.
+
+    Given a UT1 provider whose feed URL is NOT the historical FTP one,
+    When  the Blacklist download runs for it,
+    Then  its archive is named for the provider and the categories land in the provider's
+      own directory.
+    """
+    domain = h.unique_domain("pfb2636")
+    # The published basename, exactly as the origin serves it -- deliberately not 'ut1'.
+    feed_url = mock_feeds.register("blacklists.tar.gz", _blacklist_tar_gz("blacklists", "testcat", domain))
+    provider_dir = f"{h.PFB_DBDIR}/ut1"
+    stray_dir = f"{h.PFB_DBDIR}/blacklists"
+    try:
+        # Given -- a UT1 provider pointed at that URL, one category selected.
+        deployed_vm.ssh(f"/bin/rm -rf {provider_dir} {stray_dir}")
+        h.php_eval(
+            deployed_vm,
+            "config_set_path('installedpackages/pfblockerngblacklist', array("
+            "'blacklist_enable' => 'on', 'blacklist_selected' => 'ut1', "
+            "'item' => array(array("
+            "'title' => 'UT1', 'xml' => 'ut1', "
+            f"'feed' => {h._php_str(feed_url)}, "  # noqa: SLF001
+            "'size' => '8.5', 'selected' => 'testcat'"
+            "))));\n"
+            "write_config('pfBlockerNG smoke: issue #2636 provider fixture');\n"
+            "echo 'OK';",
+        )
+
+        # When -- the Blacklist download path runs.
+        deployed_vm.ssh(f"/usr/local/bin/php -f {h.PFB_CLI} bls ut1", timeout=180)
+
+        # Then -- named for the provider, not for the URL's basename.
+        listing = deployed_vm.ssh(f"/bin/ls -A {provider_dir} 2>&1").stdout
+        assert "ut1_testcat" in listing, (
+            f"expected the category file 'ut1_testcat' in {provider_dir}; got: {listing!r}\n"
+            f"{stray_dir} holds: {deployed_vm.ssh(f'/bin/ls -A {stray_dir} 2>&1').stdout!r}"
+        )
+        extracted = deployed_vm.ssh(f"/bin/cat {provider_dir}/ut1_testcat 2>&1").stdout
+        assert domain in extracted, f"expected {domain!r} in {provider_dir}/ut1_testcat; got: {extracted!r}"
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {provider_dir} {stray_dir}")
+        h.php_eval(
+            deployed_vm,
+            "config_del_path('installedpackages/pfblockerngblacklist');\n"
+            "write_config('pfBlockerNG smoke: issue #2636 fixture teardown');\n"
+            "echo 'OK';",
+        )
+
+
 # --------------------------------------------------------------------------- #
 # Structured-text feed shapes + the reject path (issue #2511)
 #
