@@ -119,6 +119,24 @@ def _canonical_files(payload: Path) -> tuple[Path, ...]:
     return tuple(files)
 
 
+def _swap_payload(artifacts: tuple[Path, ...], target: Path) -> None:
+    """Stage the canonical artifacts, then swap them in, keeping the old payload on failure."""
+    with tempfile.TemporaryDirectory(dir=target.parent, prefix=".graphify-swap-") as scratch:
+        staged = Path(scratch) / "graphify-out"
+        staged.mkdir()
+        for source_file in artifacts:
+            shutil.copy2(source_file, staged / source_file.name)
+        previous = Path(scratch) / "previous"
+        if target.exists():
+            os.replace(target, previous)
+        try:
+            os.replace(staged, target)
+        except OSError:
+            if previous.exists():
+                os.replace(previous, target)
+            raise
+
+
 def _replace_payload(source: Path, target_root: Path) -> None:
     target_root = _physical_path(target_root, "restore target")
     if not target_root.is_dir() or target_root.is_symlink():
@@ -128,11 +146,7 @@ def _replace_payload(source: Path, target_root: Path) -> None:
     target = target_root / "graphify-out"
     if target.is_symlink() or (target.exists() and not target.is_dir()):
         raise StoreError(f"refusing unmanaged graphify-out target: {target}")
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir()
-    for source_file in artifacts:
-        shutil.copy2(source_file, target / source_file.name)
+    _swap_payload(artifacts, target)
 
 
 def _branch_exists(store: Path, branch: str) -> bool:
@@ -219,11 +233,7 @@ def publish(store_root: Path, builder: Path, branch: str, sha: str) -> None:
     target = store / "graphify-out"
     if target.is_symlink() or (target.exists() and not target.is_dir()):
         raise StoreError(f"refusing unmanaged store payload: {target}")
-    if target.exists():
-        shutil.rmtree(target)
-    target.mkdir()
-    for source_file in artifacts:
-        shutil.copy2(source_file, target / source_file.name)
+    _swap_payload(artifacts, target)
     _run(store, "add", "-A", "--", "graphify-out")
     if _run(store, "diff", "--cached", "--quiet", check=False).returncode:
         _run(store, "commit", "--quiet", "-m", sha)

@@ -525,3 +525,99 @@ def test_store_accepts_branch_names_as_opaque_refs(tmp_path: Path, branch: str) 
     assert (
         run_store("has-exact", "--store-root", str(store_root), "--branch", graph_branch, "--sha", sha).returncode == 0
     )
+
+
+def make_target(root: Path) -> Path:
+    """A restore target whose graphify-out already holds a previous payload."""
+    root.mkdir()
+    payload = root / "graphify-out"
+    payload.mkdir()
+    (payload / "graph.json").write_text('{"version":"previous"}\n', encoding="utf-8")
+    (payload / "GRAPH_REPORT.md").write_text("previous report\n", encoding="utf-8")
+    return payload
+
+
+def make_payload(path: Path) -> Path:
+    """A canonical replacement payload."""
+    path.mkdir()
+    (path / "graph.json").write_text('{"version":"next"}\n', encoding="utf-8")
+    (path / "GRAPH_REPORT.md").write_text("next report\n", encoding="utf-8")
+    return path
+
+
+def assert_previous_payload_intact(target_root: Path) -> None:
+    payload = target_root / "graphify-out"
+    assert (payload / "graph.json").read_text(encoding="utf-8") == '{"version":"previous"}\n'
+    assert (payload / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "previous report\n"
+    assert sorted(entry.name for entry in target_root.iterdir()) == ["graphify-out"]
+
+
+def test_replace_keeps_previous_payload_when_a_canonical_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = make_payload(tmp_path / "payload")
+    target_root = tmp_path / "target"
+    make_target(target_root)
+    original_copy2 = store.shutil.copy2
+
+    def failing_copy2(src: object, dst: object, **kwargs: object) -> object:
+        if Path(str(dst)).name == "GRAPH_REPORT.md":
+            raise OSError("injected copy failure")
+        return original_copy2(src, dst, **kwargs)
+
+    monkeypatch.setattr(store.shutil, "copy2", failing_copy2)
+
+    with pytest.raises(OSError, match="injected copy failure"):
+        store._replace_payload(source, target_root)
+
+    assert_previous_payload_intact(target_root)
+
+
+def test_replace_keeps_previous_payload_when_the_swap_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = make_payload(tmp_path / "payload")
+    target_root = tmp_path / "target"
+    target = make_target(target_root)
+    original_replace = store.os.replace
+    pending = {"failure": True}
+
+    def failing_replace(src: object, dst: object, **kwargs: object) -> object:
+        if pending["failure"] and Path(str(dst)) == target:
+            pending["failure"] = False
+            raise OSError("injected replacement failure")
+        return original_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(store.os, "replace", failing_replace)
+
+    with pytest.raises(OSError, match="injected replacement failure"):
+        store._replace_payload(source, target_root)
+
+    assert_previous_payload_intact(target_root)
+
+
+def test_publish_keeps_previous_store_payload_when_a_canonical_copy_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source"
+    sha = make_repo(source)
+    store_root = tmp_path / "store"
+    publish(source, store_root, "devel", sha)
+    (source / "graphify-out" / "graph.json").write_text('{"version":"next"}\n', encoding="utf-8")
+    (source / "graphify-out" / "GRAPH_REPORT.md").write_text("next report\n", encoding="utf-8")
+    git(source, "commit", "-q", "-a", "-m", "next")
+    next_sha = git(source, "rev-parse", "HEAD")
+    original_copy2 = store.shutil.copy2
+
+    def failing_copy2(src: object, dst: object, **kwargs: object) -> object:
+        if Path(str(dst)).name == "GRAPH_REPORT.md":
+            raise OSError("injected copy failure")
+        return original_copy2(src, dst, **kwargs)
+
+    monkeypatch.setattr(store.shutil, "copy2", failing_copy2)
+
+    with pytest.raises(OSError, match="injected copy failure"):
+        store.publish(store_root, source, "devel", next_sha)
+
+    payload = store_root / "graphify-out"
+    assert (payload / "graph.json").read_text(encoding="utf-8") == '{"version":1}\n'
+    assert (payload / "GRAPH_REPORT.md").read_text(encoding="utf-8") == "report\n"
+    assert git(store_root, "status", "--porcelain") == ""
