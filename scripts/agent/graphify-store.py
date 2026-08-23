@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 SHA_RE = re.compile(r"^[0-9a-fA-F]{40,64}$")
@@ -119,6 +120,20 @@ def _canonical_files(payload: Path) -> tuple[Path, ...]:
     return tuple(files)
 
 
+def _remove_scratch(scratch: Path) -> None:
+    """Remove a swap scratch directory, never raising; residue would block `git worktree remove`."""
+
+    def retry(function: Callable[[str], object], path: str, _excinfo: object) -> None:
+        try:
+            os.chmod(os.path.dirname(path), stat.S_IRWXU)  # an unwritable parent is what blocks the unlink
+            os.chmod(path, stat.S_IRWXU)
+            function(path)
+        except OSError:
+            pass
+
+    shutil.rmtree(scratch, onerror=retry)
+
+
 def _swap_payload(artifacts: tuple[Path, ...], target: Path) -> None:
     """Stage the canonical artifacts, then swap them in, keeping the old payload on failure."""
     scratch = Path(tempfile.mkdtemp(dir=target.parent, prefix=".graphify-swap-"))
@@ -139,9 +154,9 @@ def _swap_payload(artifacts: tuple[Path, ...], target: Path) -> None:
     except OSError as error:
         if previous.exists():
             raise StoreError(f"the previous Graphify payload is kept at {previous}") from error
-        shutil.rmtree(scratch, ignore_errors=True)
+        _remove_scratch(scratch)
         raise
-    shutil.rmtree(scratch, ignore_errors=True)
+    _remove_scratch(scratch)
 
 
 def _replace_payload(source: Path, target_root: Path) -> None:
