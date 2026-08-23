@@ -65,7 +65,11 @@ final class WidgetAliasDisplayCountTest extends TestCase
 
 	public function testAddressesGreaterThanOne_SkipsFileSlurp(): void
 	{
-		$got = pfb_widget_alias_display_count(16733, '/nonexistent/pfB_missing.txt', '127.1.7.7');
+		// Placeholder-only content would return 0 if the file were read.
+		// Addresses>1 must keep 16733; a missing-file fixture cannot fail
+		// that, because an unreadable path is not placeholder-only.
+		$this->assertNotFalse(file_put_contents($this->file, "127.1.7.7\n"));
+		$got = pfb_widget_alias_display_count(16733, $this->file, '127.1.7.7');
 		$this->assertSame(
 			16733,
 			$got,
