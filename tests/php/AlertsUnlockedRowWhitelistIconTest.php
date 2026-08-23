@@ -336,6 +336,9 @@ final class AlertsUnlockedRowWhitelistIconTest extends TestCase
 
 	public function testUnlockedIpv6PanelRowUsesIpwhitelist6PermitOptions(): void
 	{
+		$GLOBALS['clists']['ipwhitelist4'] = [
+			'options' => ['wrong-family-v4-sentinel'],
+		];
 		$GLOBALS['clists']['ipwhitelist6'] = [
 			'options' => ['Create new pfB_Whitelist_v6', 'pfB_Permit_v6'],
 		];
@@ -358,8 +361,9 @@ final class AlertsUnlockedRowWhitelistIconTest extends TestCase
 			"v6 panel '+' must read ipwhitelist6 options (the live never-empty branch), got:\n{$html}"
 		);
 		$this->assertStringNotContainsString(
-			'ipwhitelist4',
+			'wrong-family-v4-sentinel',
 			$html,
+			"v6 panel '+' must not pick ipwhitelist4 options, got:\n{$html}"
 		);
 	}
 
