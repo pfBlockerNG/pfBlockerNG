@@ -218,7 +218,8 @@ function pfb_apply_gunzip_orig_pipeline(string $source, string $orig, ?callable 
 		// the last-good publication before gunzip's exit status can be read.
 		$staged = "{$orig}.tmp";
 		$output = array();
-		exec('/usr/bin/gunzip -c ' . escapeshellarg($source) . ' > ' . escapeshellarg($staged), $output, $retval);
+		// issue #2658: same expansion ceiling every pfb_download() extraction runs under.
+		exec(pfb_extract_cmd('/usr/bin/gunzip -c ' . escapeshellarg($source) . ' > ' . escapeshellarg($staged)), $output, $retval);
 		if ($retval === 0 && pfb_apply_trailing_newline_ok($staged)) {
 			$published = @rename($staged, $orig);
 		}

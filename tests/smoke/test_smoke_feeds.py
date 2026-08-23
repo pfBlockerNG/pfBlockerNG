@@ -52,6 +52,7 @@ import gzip
 import io
 import ipaddress
 import os
+import re
 import shlex
 import subprocess
 import tarfile
@@ -2752,6 +2753,19 @@ def _recent_validate_lines(vm: SmokeVM, limit: int = 5) -> str:
 _PFB_INC = "/usr/local/pkg/pfblockerng/pfblockerng.inc"
 
 
+def _shipped_define(name: str) -> str:
+    """The verbatim ``define('<name>', <value>);`` line from the repo's own source.
+
+    Asserting the box carries THIS line — rather than re-typing the number here —
+    proves the deployed package is the one under test without duplicating the
+    constant into the test.
+    """
+    source = (FIXTURES_DIR.parent.parent.parent / "src/usr/local/pkg/pfblockerng/pfblockerng.inc").read_text()
+    match = re.search(rf"^define\('{re.escape(name)}', \d+\);$", source, re.MULTILINE)
+    assert match is not None, f"{name} is not defined in the repo source"
+    return match.group(0)
+
+
 @pytest.mark.timeout(120)
 def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> None:
     """issue #2658: the extraction ceiling really stops a writing child on FreeBSD.
@@ -2767,7 +2781,7 @@ def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> No
     When the wrapped command runs on the appliance
     Then the child is killed at the ceiling — the status is nonzero and the file on
       disk is a couple of KiB, not the MiB that was requested — and the deployed
-      package wraps its extractions in that same construct.
+      package carries the shipped ceiling and runs its extractions under it.
     """
     target = "/tmp/pfb2658_extract_probe"
     deployed_vm.ssh("rm", "-f", target)
@@ -2778,19 +2792,22 @@ def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> No
     deployed_vm.ssh("rm", "-f", target)
     out = probe.stdout
 
-    assert "rc=0" not in out, (
-        f"the ceiling did not stop the write on this appliance — probe output: {out!r} {probe.stderr!r}"
-    )
     rc_line = next((ln for ln in out.splitlines() if ln.startswith("rc=")), "")
     size_line = out.strip().splitlines()[-1] if out.strip() else ""
     assert rc_line == "rc=153", (
-        f"expected the SIGXFSZ exit status (128+25) the cap note keys on, got {rc_line!r} — full probe output: {out!r}"
+        f"expected the SIGXFSZ exit status (128+25) the cap note keys on, got {rc_line!r} "
+        f"— full probe output: {out!r} {probe.stderr!r}"
     )
     assert size_line.isdigit() and int(size_line) < 1024 * 1024, (
         f"the ceiling must truncate the write, not merely report on it — wrote {size_line!r} bytes"
     )
 
-    wiring = deployed_vm.ssh("grep", "-c", "exec(pfb_extract_cmd(", _PFB_INC)
+    ceiling = _shipped_define("PFB_EXTRACT_MAX_BLOCKS")
+    shipped = deployed_vm.ssh("grep", "-F", "-c", ceiling, _PFB_INC)
+    assert shipped.stdout.strip() == "1", (
+        f"the deployed package does not carry {ceiling!r} — grep said {shipped.stdout!r}"
+    )
+    wiring = deployed_vm.ssh("grep", "-F", "-c", "exec(pfb_extract_cmd(", _PFB_INC)
     assert wiring.stdout.strip().isdigit() and int(wiring.stdout.strip()) > 0, (
         f"the deployed package runs no extraction under the ceiling — grep said {wiring.stdout!r}"
     )
@@ -2798,36 +2815,49 @@ def test_extraction_ceiling_stops_an_oversized_write(deployed_vm: SmokeVM) -> No
 
 @pytest.mark.timeout(120)
 def test_download_ceiling_refuses_an_oversized_body(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
-    """issue #2658: the appliance's libcurl enforces the maximum-file-size option.
+    """issue #2658: the appliance's own ext/curl enforces the maximum-file-size option.
 
     The download ceiling is only worth setting if the libcurl the appliance ships
     acts on it; the option's documented behaviour differs by version, which is why
     the ticket asks for it to be probed on the box rather than assumed. This drives
-    the appliance's own libcurl against the mock feed with the ceiling lowered to a
-    handful of bytes and asserts it refuses with error 63 — the code the reject
-    branch keys on and the code the shipped error table already names.
+    the appliance's ext/curl — the same extension pfb_download() uses — against the
+    mock feed with the ceiling lowered to a handful of bytes, and asserts it refuses
+    with error 63: the code the reject branch keys on and the code the shipped error
+    table already names.
+
+    The no-Content-Length (mid-transfer) shape is covered off-appliance by
+    ``tests/php/DownloadSizeRefusalTest``, which drives the real pfb_download()
+    against a streaming fixture server; the mock feed server here always declares a
+    length, so this case pins the appliance-specific half.
 
     Given a real feed body served over HTTP and a ceiling far below it
-    When the appliance fetches it with that ceiling
-    Then libcurl refuses with "maximum file size exceeded" (63) rather than writing
-      the body out, and the deployed package sets that same option for every feed.
+    When the appliance's ext/curl fetches it with that ceiling
+    Then it refuses with "maximum file size exceeded" (63) rather than writing the
+      body out, and the deployed package sets that same option for every feed.
     """
     feed_url = mock_feeds.feed_url("ip_plain_cidr.txt")
-    out_path = "/tmp/pfb2658_download_probe"
-    deployed_vm.ssh("rm", "-f", out_path)
-    probe = deployed_vm.ssh(
-        f"/usr/local/bin/curl -s --max-filesize 16 -o {out_path} {shlex.quote(feed_url)}; echo rc=$?"
+    snippet = (
+        f"$c = curl_init({feed_url!r});"
+        " curl_setopt($c, CURLOPT_MAXFILESIZE_LARGE, 16);"
+        " curl_setopt($c, CURLOPT_RETURNTRANSFER, TRUE);"
+        " curl_exec($c);"
+        ' echo "errno=" . curl_errno($c) . "\n";'
     )
-    deployed_vm.ssh("rm", "-f", out_path)
+    probe = deployed_vm.ssh("/usr/local/bin/php", "-r", snippet)
 
-    assert "rc=63" in probe.stdout, (
-        "the appliance's libcurl did not refuse an over-large body with error 63 "
+    assert "errno=63" in probe.stdout, (
+        "the appliance's ext/curl did not refuse an over-large body with error 63 "
         f"— probe output: {probe.stdout!r} {probe.stderr!r}"
     )
 
-    wiring = deployed_vm.ssh("grep", "-c", "CURLOPT_MAXFILESIZE_LARGE", _PFB_INC)
-    assert wiring.stdout.strip().isdigit() and int(wiring.stdout.strip()) > 0, (
-        f"the deployed package sets no download ceiling — grep said {wiring.stdout!r}"
+    ceiling = _shipped_define("PFB_DOWNLOAD_MAX_BYTES")
+    shipped = deployed_vm.ssh("grep", "-F", "-c", ceiling, _PFB_INC)
+    assert shipped.stdout.strip() == "1", (
+        f"the deployed package does not carry {ceiling!r} — grep said {shipped.stdout!r}"
+    )
+    wiring = deployed_vm.ssh("grep", "-F", "-c", "CURLOPT_MAXFILESIZE_LARGE => PFB_DOWNLOAD_MAX_BYTES", _PFB_INC)
+    assert wiring.stdout.strip() == "1", (
+        f"the deployed package does not set the download ceiling — grep said {wiring.stdout!r}"
     )
 
 

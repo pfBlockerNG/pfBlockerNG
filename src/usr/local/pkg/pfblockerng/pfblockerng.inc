@@ -370,10 +370,6 @@ define('PFB_EXTRACT_MAX_BLOCKS', 4194304);
 // writer hitting the ceiling above produces.
 define('PFB_EXTRACT_SIGXFSZ_EXIT', 153);
 
-// A staging filesystem with less than this free refuses the extraction outright
-// rather than filling the disk part-way through.
-define('PFB_EXTRACT_MIN_FREE_BYTES', 67108864);
-
 // Default cURL options
 $pfb['curl_defaults'] = array(  CURLOPT_USERAGENT	=> 'pfSense/pfBlockerNG cURL download agent-' . system_get_uniqueid(),
 				CURLOPT_SSL_CIPHER_LIST	=> 'TLSv1.3, TLSv1.2',
@@ -4259,8 +4255,8 @@ function pfb_download_extraction_succeeded(int $retval): bool {
  * multi-member archive is bounded per member plus the free-space precheck. Member
  * counts are out of scope by the issue -- real feeds are multi-member.
  */
-function pfb_extract_cmd(string $cmd, ?int $blocks = NULL): string {
-	return 'ulimit -f ' . ($blocks ?? PFB_EXTRACT_MAX_BLOCKS) . ' || exit 1; ' . $cmd;
+function pfb_extract_cmd(string $cmd, int $blocks = PFB_EXTRACT_MAX_BLOCKS): string {
+	return "ulimit -f {$blocks} || exit 1; {$cmd}";
 }
 
 /**
@@ -4286,34 +4282,17 @@ function pfb_extract_cap_note(int $retval): string {
  * @param callable(string):(float|false)|null $free
  */
 function pfb_extract_space_shortfall(array $dirs, int $need, ?callable $free = NULL): ?string {
-	if ($free === NULL) {
-		$free = static function (string $dir) {
-			return @disk_free_space($dir);
-		};
-	}
+	$free ??= static fn (string $dir) => @disk_free_space($dir);
 	foreach ($dirs as $dir) {
 		if (!is_string($dir) || strpos($dir, '/') !== 0) {
 			continue;
 		}
 		$avail = $free($dir);
-		if ($avail === FALSE || $avail === NULL) {
-			continue;
-		}
-		if ((float) $avail < (float) $need) {
+		if ($avail !== FALSE && $avail < $need) {
 			return $dir;
 		}
 	}
 	return NULL;
-}
-
-/**
- * issue #2658: the refusal reason for a cURL error a retry can never fix, or NULL
- * when the error is the retryable kind. Only "maximum file size exceeded" qualifies
- * today: the body is over the ceiling, so re-fetching it twice more just re-reads
- * the same over-large feed.
- */
-function pfb_download_size_refusal(int $curl_errno): ?string {
-	return $curl_errno === CURLE_FILESIZE_EXCEEDED ? 'download_too_large' : NULL;
 }
 
 function pfb_download_initial_retval(): int {
@@ -14051,10 +14030,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						// and the response code libcurl already collected can be a 200, which
 						// would hand the truncated body to MIME validation as if it were the
 						// whole feed. Refuse here, naming the reason.
-						$size_refusal = pfb_download_size_refusal($curl_error);
-						if ($size_refusal !== NULL) {
-							pfb_validate_log($header, 'size', $size_refusal, pfb_redact_url($list_download));
-							curl_close($ch);
+						if ($curl_error === CURLE_FILESIZE_EXCEEDED) {
+							pfb_validate_log($header, 'size', 'download_too_large', pfb_redact_url($list_download));
+							// No curl_close(): it is a no-op since PHP 8.0 and deprecated in 8.5
+							// (Plus ships php85); the handle frees when this frame returns.
 							@fclose($fhandle);
 							unlink_if_exists($file_download);
 							return PfbDownloadResult::failure();
@@ -14276,17 +14255,23 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 
 		// issue #2658: refuse before writing anything when a staging filesystem cannot
 		// hold even the archive itself. A part-way extraction onto a full disk costs
-		// the operator the data already in service; a refused feed does not.
-		$extract_dirs = array(dirname($file_download), $pfb['dbdir'], dirname($head_download));
-		if ($type == 'geoip') {
-			$extract_dirs[] = $pfb['geoipshare'];
-		}
-		$extract_short = pfb_extract_space_shortfall($extract_dirs,
-			max(PFB_EXTRACT_MIN_FREE_BYTES, (int) @filesize($file_download)));
-		if ($extract_short !== NULL) {
-			pfb_validate_log($header, 'size', 'staging_space_low', $extract_short);
-			unlink_if_exists($file_download);
-			return PfbDownloadResult::failure();
+		// the operator the data already in service; a refused feed does not. Only the
+		// archive types below extract, so pfb_archive_probe() -- which already answers
+		// "is this an archive" -- keeps a plain text feed out of the guard entirely.
+		// The requirement is the archive's own size and nothing more: /var is a 60 MiB
+		// RAM disk on a default use_mfs_tmpvar install, so any fixed floor would refuse
+		// every feed there forever.
+		if (pfb_archive_probe($file_type) !== NULL) {
+			$extract_dirs = array(dirname($file_download), $pfb['dbdir'], $head_download, dirname($head_download));
+			if ($type == 'geoip') {
+				$extract_dirs[] = $pfb['geoipshare'];
+			}
+			$extract_short = pfb_extract_space_shortfall($extract_dirs, (int) @filesize($file_download));
+			if ($extract_short !== NULL) {
+				pfb_validate_log($header, 'size', 'staging_space_low', $extract_short);
+				unlink_if_exists($file_download);
+				return PfbDownloadResult::failure();
+			}
 		}
 
 		// Decompress file if required
@@ -14717,7 +14702,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			$xlsxtest = exec("/usr/bin/tar -tf {$file_dwn_esc}");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
 				unlink_if_exists("{$orig_download}");
-				exec(pfb_extract_cmd("{$pfb['script']} xlsx {$header_esc} {$elog}"));
+				// issue #2658: deliberately NOT capped. processxlsx() decides success by the
+				// output file existing, never by an exit status, so a child killed at the
+				// ceiling would publish a truncated feed as a successful ingest -- strictly
+				// worse than no cap. Capping it needs an exit gate in the shell function
+				// first (issue #2666).
+				exec("{$pfb['script']} xlsx {$header_esc} {$elog}");
 				if (file_exists("{$orig_download}")) {
 					$retval = 0;
 				}
