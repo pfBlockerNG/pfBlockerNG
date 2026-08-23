@@ -2203,6 +2203,60 @@ function dnsbl_whitelist_type($fields, $clists, $isExclusion, $isTLD, $qdomain) 
 }
 
 
+/**
+ * Action icons for one Unlocked IPs/Domains panel row (Alerts tab).
+ * Temporary unlock and permanent whitelist/suppression stay independent (issue #1526).
+ *
+ * @return array{alert: string, unlock: string, supp: string}
+ */
+function pfb_alerts_unlocked_entry_actions(string $kind, string $entry, string $type, array $clists): array
+{
+	$h_entry = pfb_hsc($entry);
+	$h_type  = pfb_hsc($type);
+
+	if ($kind === 'ip') {
+		$unlock = '<i class="fa-solid fa-unlock text-primary" id="IPLCK|' . $h_entry . '|' . $h_type
+			. '" title="Re-Lock IP: [ ' . $h_entry . ' ] back into Aliastable [ '
+			. $h_type . ' ]? "></i>';
+		$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer"'
+			. ' href="/pfblockerng/pfblockerng_threats.php?host='
+			. $h_entry . '" title="Click for Threat source IP Lookup for [ ' . $h_entry . ' ]"></a>';
+		$vtype = (strpos($entry, ':') !== FALSE) ? '6' : '4';
+		$permit_option = '';
+		$wl = $clists['ipwhitelist' . $vtype] ?? NULL;
+		if (is_array($wl) && !empty($wl['options']) && is_array($wl['options'])) {
+			$permit_option = '|' . implode('|', $wl['options']);
+		}
+		$supp_txt = "Note:&emsp;The following IPv{$vtype} is temporarily unlocked:\n\n"
+			. "IP:&emsp;[ {$h_entry} ]\n"
+			. "IP Aliasname:&emsp;[ {$h_type} ]\n\n"
+			. "Whitelisting Options:\n\n"
+			. "1) Suppress the IP.\n"
+			. "2) Whitelist the IP to an existing 'Permit' Alias customlist.\n\n"
+			. "Click 'OK' to continue";
+		$supp = '<i class="fa-solid fa-plus icon-pointer" id="PFBIPSUP|' . 'add|' . $h_entry
+			. '|' . $h_type . $permit_option
+			. '" title="' . $supp_txt . '"></i>';
+	} else {
+		$unlock = '<i class="fa-solid fa-unlock text-primary" id="DNSBL_LCK|' . $h_entry . '|' . $h_type
+			. '" title="Re-Lock Domain: [ ' . $h_entry . ' ] back into DNSBL? "></i>';
+		$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer"'
+			. ' href="/pfblockerng/pfblockerng_threats.php?domain='
+			. $h_entry . '" title="Click for Threat source Domain Lookup for [ ' . $h_entry . ' ]"></a>';
+		$supp_txt = "Whitelist [ {$h_entry} ]\n\n"
+			. "Note:&emsp;This will immediately remove the blocked Domain\n"
+			. "&emsp;&emsp;&emsp;&nbsp;and associated CNAMES from DNSBL.\n\n"
+			. "Whitelisting Options:\n\n"
+			. "1) Wildcard whitelist [ .{$h_entry} ]\n"
+			. "2) Whitelist only [ {$h_entry} ]\n";
+		$supp = '<i class="fa-solid fa-plus icon-pointer" id="DNSBLWT|' . 'add|'
+			. $h_entry . '|' . $h_type . '" title="' . $supp_txt . '"></i>';
+	}
+
+	return array('alert' => $alert, 'unlock' => $unlock, 'supp' => $supp);
+}
+
+
 // Function to convert dnsbl.log -> Reports Tab
 function convert_dnsbl_log($mode, $fields) {
 	global $pfb, $local_hosts, $dnsbl_int, $filterfieldsarray, $clists, $dnsbl_unlock, $dup, $counter,
@@ -3990,24 +4044,13 @@ if (!$alert_summary):
 			<tbody>
 	<?php
 			foreach ($data[0] as $entry => $type) {
-				if ($key == 0) {
-					$unlock = '<i class="fa-solid fa-unlock text-primary" id="IPLCK|' . htmlspecialchars($entry) . '|' . $type
-							. '" title="Re-Lock ' . htmlspecialchars($data[1]) . ': [ ' . htmlspecialchars($entry) . ' ] back into Aliastable [ '
-							. htmlspecialchars($type) . ' ]? "></i>';
+				$kind = ($key == 0) ? 'ip' : 'dnsbl';
+				$actions = pfb_alerts_unlocked_entry_actions($kind, (string) $entry, (string) $type, $clists);
+				$alert = $actions['alert'];
+				$unlock = $actions['unlock'];
+				$supp = $actions['supp'];
 
-					$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer"'
-							. ' href="/pfblockerng/pfblockerng_threats.php?host='
-							. htmlspecialchars($entry) . '" title="Click for Threat source IP Lookup for [ ' . htmlspecialchars($entry) . ' ]"></a>';
-				} else {
-					$unlock = '<i class="fa-solid fa-unlock text-primary" id="DNSBL_LCK|' . htmlspecialchars($entry) . '|' . htmlspecialchars($type)
-							. '" title="Re-Lock ' . htmlspecialchars($data[1]) . ': [ ' . htmlspecialchars($entry) . ' ] back into DNSBL? "></i>';
-
-					$alert = '<a class="fa-solid fa-info icon-pointer" target="_blank" rel="noopener noreferrer"'
-							. ' href="/pfblockerng/pfblockerng_threats.php?domain='
-							. htmlspecialchars($entry) . '" title="Click for Threat source Domain Lookup for [ ' . htmlspecialchars($entry) . ' ]"></a>';
-				}
-
-				print ("<tr><td>&nbsp;{$alert}&emsp;{$unlock}&emsp;" . htmlspecialchars($entry) . "</td><td>" . htmlspecialchars($type) . "</td></tr>");
+				print ("<tr><td>&nbsp;{$alert}&emsp;{$unlock}&emsp;{$supp}&emsp;" . htmlspecialchars($entry) . "</td><td>" . htmlspecialchars($type) . "</td></tr>");
 			}
 	?>
 			</tbody>
