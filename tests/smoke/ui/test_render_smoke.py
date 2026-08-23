@@ -2819,19 +2819,21 @@ def test_software_check_checkbox_posts_a_token_the_save_path_accepts(
 def test_software_actions_link_to_package_manager(
     smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
 ) -> None:
-    """Update/Uninstall reach Package Manager only when ``%R`` is ``pfSense`` (issue #2380).
+    """Update/Uninstall reach Package Manager on EVERY origin (issue #2653).
 
-    pfSense ``get_pkg_info()`` skips any ``pfSense-pkg-*`` whose origin is not exactly
-    ``pfSense``. A ``pfblockerng-*`` (or empty sideload) origin therefore must not emit
-    ``pkg_mgr_install.php?mode=reinstallpkg|delete``. Netgate-origin installs keep the
-    #684 shortcuts.
+    The deep link carries the package name and ``pkg_mgr_install.php`` acts on that name.
+    ``get_pkg_info()``'s ``%R`` filter governs the listing pages, so it decides whether
+    Package Manager can show or announce a channel install — not whether these two
+    operations work. #2380 read it as the latter and disabled both controls on every
+    channel install; #684's shortcuts are restored for all of them.
 
     Scenario:
       Given the override sentinel set to 'on' (so the provenance gate passes),
       When the Software page is GET,
-      Then Update's href is inert ('#') when no update is cached;
-      And Uninstall / Update never point at ``pkg_mgr_install.php`` unless ``%R`` is
-          ``pfSense``;
+      Then Update's href is inert ('#') when no update is cached, whatever the origin;
+      And Uninstall points at ``pkg_mgr_install.php?mode=delete`` whatever the origin;
+      And Update points at ``pkg_mgr_install.php?mode=reinstallpkg`` once an update is
+          cached, whatever the origin;
       And the page carries NO in-page pkg machinery — no ``?ajax=tail`` poller, no
           ``pfb_output`` textarea;
       And the clean render oracle (200, no Fatal/Warning/Notice, marker present) holds.
@@ -2839,8 +2841,9 @@ def test_software_actions_link_to_package_manager(
     software_cache = "/var/db/pfblockerng/software_update.json"
     pkgname = pkg_identity.branch_pkg_name(os.environ.get("SMOKE_PKG"))
     repo_probe = smoke_vm.ssh("/usr/local/sbin/pkg", "query", "%R", pkgname)
+    # Recorded for failure messages only: the origin no longer changes any expectation
+    # here, and asserting the same thing for every origin is the point (issue #2653).
     installed_repo = repo_probe.stdout.strip() if repo_probe.returncode == 0 else ""
-    pkgmgr_ok = installed_repo == "pfSense"
 
     def _update_anchor(body: str) -> str:
         tag = re.search(r'<a\b[^>]*id=["\']pfb_sw_update["\'][^>]*>', body)
@@ -2869,19 +2872,13 @@ def test_software_actions_link_to_package_manager(
 
         un_tag = re.search(r'<a\b[^>]*id=["\']pfb_sw_uninstall["\'][^>]*>', body)
         assert un_tag is not None, f"Uninstall control is not an <a> link in {_SOFTWARE_PAGE} body"
-        if pkgmgr_ok:
-            assert _has_pkgmgr_href(un_tag.group(0), "delete"), (
-                f"Netgate-origin Uninstall must target pkg_mgr_install.php?mode=delete, got: {un_tag.group(0)!r}"
-            )
-        else:
-            assert not _has_pkgmgr_href(un_tag.group(0), "delete"), (
-                f"channel/sideload Uninstall must not emit pkg_mgr_install.php (issue #2380), "
-                f"%R={installed_repo!r}, got: {un_tag.group(0)!r}"
-            )
-            assert re.search(r'href=["\']#["\']', un_tag.group(0)), (
-                f"channel/sideload Uninstall href must be inert ('#'): {un_tag.group(0)!r}"
-            )
-            assert "pkg_mgr_install.php" not in body or "Package Manager cannot see this origin" in body
+        assert _has_pkgmgr_href(un_tag.group(0), "delete"), (
+            f"Uninstall must target pkg_mgr_install.php?mode=delete on any origin (issue #2653), "
+            f"%R={installed_repo!r}, got: {un_tag.group(0)!r}"
+        )
+        assert "cannot see this origin" not in body, (
+            "retired #2380 copy: the controls are no longer disabled by origin (issue #2653)"
+        )
         assert "?do=uninstall" not in un_tag.group(0), (
             "Uninstall must NOT route through the removed ?do=uninstall handler (#697)"
         )
@@ -2893,8 +2890,8 @@ def test_software_actions_link_to_package_manager(
         assert "?ajax=tail" not in body, "Software page must no longer host the ?ajax=tail poller"
         assert 'name="pfb_output"' not in body, "Software page must no longer render the pfb_output textarea"
 
-        # (B) Seed a newer cached 'latest' → update available. Package Manager reinstall is
-        #     only for %R=pfSense; a channel/sideload origin stays on '#' (issue #2380).
+        # (B) Seed a newer cached 'latest' → update available. The reinstall deep link is
+        #     emitted for every origin (issue #2653).
         try:
             smoke_vm.ssh("/bin/rm", "-f", software_cache)
             seed = json.dumps(
@@ -2906,16 +2903,10 @@ def test_software_actions_link_to_package_manager(
             )
             _seed_vm_file(smoke_vm, software_cache, seed)
             up_tag2 = _update_anchor(webui.get(_SOFTWARE_PAGE).text)
-            if pkgmgr_ok:
-                assert _has_pkgmgr_href(up_tag2, "reinstallpkg"), (
-                    f"Netgate-origin Update must target pkg_mgr_install.php?mode=reinstallpkg "
-                    f"when an update exists: {up_tag2!r}"
-                )
-            else:
-                assert not _has_pkgmgr_href(up_tag2, "reinstallpkg"), (
-                    f"channel/sideload Update must not emit pkg_mgr_install.php (issue #2380), "
-                    f"%R={installed_repo!r}, got: {up_tag2!r}"
-                )
+            assert _has_pkgmgr_href(up_tag2, "reinstallpkg"), (
+                f"Update must target pkg_mgr_install.php?mode=reinstallpkg once an update exists, "
+                f"on any origin (issue #2653), %R={installed_repo!r}, got: {up_tag2!r}"
+            )
         finally:
             smoke_vm.ssh("/bin/rm", "-f", software_cache)
 

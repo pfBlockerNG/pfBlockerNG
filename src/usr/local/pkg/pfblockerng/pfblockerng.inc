@@ -5064,31 +5064,32 @@ function pfb_software_is_our_build(?string $installed_repo): bool {
 }
 
 /*
- * TRUE only when pfSense Package Manager can see this origin (issue #2380).
- * get_pkg_info() skips any pfSense-pkg-* whose %R is not exactly 'pfSense', so
- * pkg_mgr_install.php reinstall/delete are dead on pfblockerng-* (and empty) origins.
- */
-function pfb_software_pkgmgr_usable(?string $repo): bool {
-	return $repo === 'pfSense';
-}
-
-/*
- * Update-now href. Package Manager only when %R is pfSense AND an update is available;
- * otherwise '#' (the Software page disables the control and prints the CLI instead).
+ * Update-now / Uninstall hrefs into pfSense's Package Manager, for every origin.
+ *
+ * The deep link carries the package NAME and pkg_mgr_install.php acts on that name: it
+ * validates pkg_valid_name() and runs pfSense-upgrade with -i <pkg> -f (reinstall) or
+ * -r <pkg> (delete). The %R filter that keeps a channel install out of the Package
+ * Manager tables lives in get_pkg_info(), which drives the LISTING pages only. So the
+ * origin decides whether Package Manager can show or announce the package -- it does not
+ * decide whether these two operations work (issue #2653; #2380 gated them on
+ * %R === 'pfSense' and disabled both controls on every channel install).
+ *
+ * Which repository the reinstall then resolves against is a repository-priority
+ * question: the generated conf sets priority 100 above the Netgate repo for exactly
+ * that reason (ADR-17, ADR-39).
+ *
+ * $repo is still taken so callers keep passing the origin they read, and so the pair
+ * stays one decision surface if origin ever does gate something here again.
  */
 function pfb_software_update_href(string $pkgname, string $repo, bool $update_available): string {
-	if (!$update_available || $pkgname === '' || !pfb_software_pkgmgr_usable($repo)) {
+	if (!$update_available || $pkgname === '') {
 		return '#';
 	}
 	return '/pkg_mgr_install.php?mode=reinstallpkg&pkg=' . rawurlencode($pkgname);
 }
 
-/*
- * Uninstall href. Same origin gate as Update: never send a pfblockerng-* install to
- * pkg_mgr_install.php?mode=delete (issue #2380).
- */
 function pfb_software_uninstall_href(string $pkgname, string $repo): string {
-	if ($pkgname === '' || !pfb_software_pkgmgr_usable($repo)) {
+	if ($pkgname === '') {
 		return '#';
 	}
 	return '/pkg_mgr_install.php?mode=delete&pkg=' . rawurlencode($pkgname);

@@ -22,9 +22,11 @@
 
 // ADR-19: the "Software" page — show the installed pfBlockerNG channel/version vs our-repo
 // latest (from the cron-maintained cache), toggle the "Check for new versions" setting, and
-// offer Check / Update / Uninstall. Update and Uninstall link to pfSense Package Manager
-// ONLY when %R is pfSense (Netgate). A pfblockerng-* origin is invisible there (issue #2380),
-// so those controls are disabled and the page prints the repo-qualified pkg CLI instead.
+// offer Check / Update / Uninstall. Update and Uninstall link to pfSense Package Manager for
+// every origin: those deep links carry the package name, which pkg_mgr_install.php acts on
+// directly. Package Manager cannot LIST a pfblockerng-* install or announce its updates
+// (get_pkg_info() skips a foreign %R, issue #2380) -- checking and announcing are this page's
+// own job, which is why it exists (issue #2653).
 
 require_once('guiconfig.inc');
 require_once('globals.inc');
@@ -263,14 +265,10 @@ $btn_check->removeClass('btn-primary')->addClass('btn-primary btn-xs')->setWidth
 $section->addInput(new Form_StaticText(null, $btn_check))
 	->setHelp('Check for a new version now.');
 
-// Update / Uninstall. Package Manager only sees %R=pfSense (issue #2380). A pfblockerng-*
-// origin is disabled here with the repo-qualified pkg CLI; never emit pkg_mgr_install.php
-// for that origin (those pages hide the package and a reinstall can resolve against -r pfSense).
-$pfb_sw_pkgmgr		= pfb_software_pkgmgr_usable($pfb_sw_repo);
+// Update / Uninstall. Enabled by what the operation needs -- an update to install, and a
+// known package name -- never by the origin (issue #2653).
 $pfb_sw_update_href	= pfb_software_update_href($pfb_sw_pkgname, $pfb_sw_repo, $update_available);
 $pfb_sw_uninstall_href	= pfb_software_uninstall_href($pfb_sw_pkgname, $pfb_sw_repo);
-$pfb_sw_cli_pkg		= ($pfb_sw_pkgname !== '') ? $pfb_sw_pkgname : 'pfSense-pkg-pfBlockerNG';
-$pfb_sw_cli_repo	= ($pfb_sw_repo !== '') ? $pfb_sw_repo : '<repo>';
 
 $btn_update = new Form_Button(
 	'pfb_sw_update',
@@ -282,19 +280,10 @@ $btn_update->removeClass('btn-primary')->addClass('btn-warning btn-xs')->setWidt
 if ($pfb_sw_update_href === '#') {
 	$btn_update->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
-if ($pfb_sw_pkgmgr) {
-	$pfb_sw_update_help = 'Install the latest version via the pfSense Package Manager. Available only when an update is found.';
-} else {
-	$pfb_sw_update_help = 'Package Manager cannot see this origin. To update, run <code>pkg install -y -r '
-		. htmlspecialchars($pfb_sw_cli_repo) . ' ' . htmlspecialchars($pfb_sw_cli_pkg)
-		. '</code> from the shell. On pfSense Plus, that can fail with a TLS error until '
-		. '"Carry the system CA store into pkg" above is enabled.';
-}
 $section->addInput(new Form_StaticText(null, $btn_update))
-	->setHelp($pfb_sw_update_help);
+	->setHelp('Install the latest version via the pfSense Package Manager. Available only when an update is found.');
 
-// Uninstall. #697: a `pkg delete` is a removal (pre-deinstall tears down). Package Manager
-// delete is only offered for a Netgate-origin install.
+// Uninstall. #697: a `pkg delete` is a removal (pre-deinstall tears down).
 $btn_uninstall = new Form_Button(
 	'pfb_sw_uninstall',
 	'Uninstall',
@@ -305,14 +294,8 @@ $btn_uninstall->removeClass('btn-primary')->addClass('btn-danger btn-xs')->setWi
 if ($pfb_sw_uninstall_href === '#') {
 	$btn_uninstall->addClass('disabled')->setAttribute('disabled', 'disabled')->setAttribute('aria-disabled', 'true');
 }
-if ($pfb_sw_pkgmgr) {
-	$pfb_sw_uninstall_help = 'Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).';
-} else {
-	$pfb_sw_uninstall_help = 'Package Manager cannot see this origin. To uninstall, run <code>pkg delete '
-		. htmlspecialchars($pfb_sw_cli_pkg) . '</code> from the shell.';
-}
 $section->addInput(new Form_StaticText(null, $btn_uninstall))
-	->setHelp($pfb_sw_uninstall_help);
+	->setHelp('Remove pfBlockerNG from this firewall via the pfSense Package Manager (it will ask you to confirm).');
 $form->add($section);
 
 print($form);
