@@ -232,8 +232,10 @@ if (isset($argv[1]) && ($argv[1] == 'bl' || $argv[1] == 'bls')) {
 					$pfb['extras'][$next_key]['password'] = $item['password'];
 				}
 
-				// Patch UT1 filename
-				if ($item['feed'] == 'ftp://ftp.ut-capitole.fr/pub/reseau/cache/squidguard_contrib/blacklists.tar.gz') {
+				// Patch UT1 filename. Keyed on the provider id, never its feed URL: the
+				// download name decides the category filenames, so a URL change would
+				// otherwise rename the whole category set (issue #2636).
+				if ($item['xml'] == 'ut1') {
 					$pfb['extras'][$next_key]['file_dwn'] = $pfb['extras'][$next_key]['file'] = 'ut1.tar.gz';
 				}
 				$next_key++;
