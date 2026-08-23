@@ -15,7 +15,7 @@ Describe 'emptyfiles() pads v6 with a ::-prefixed placeholder'
   After 'cleanup'
 
   It 'writes the bare placeholder into a zero-byte v4 deny file'
-    : > "${pfbdeny}Feed_v4.txt"
+    true > "${pfbdeny}Feed_v4.txt"
     When call emptyfiles
     The status should be success
     The contents of file "${pfbdeny}Feed_v4.txt" should include "${ip_placeholder}"
@@ -23,7 +23,7 @@ Describe 'emptyfiles() pads v6 with a ::-prefixed placeholder'
   End
 
   It 'writes a ::-prefixed placeholder into a zero-byte v6 deny file'
-    : > "${pfbdeny}Feed_v6.txt"
+    true > "${pfbdeny}Feed_v6.txt"
     When call emptyfiles
     The status should be success
     The contents of file "${pfbdeny}Feed_v6.txt" should include "::${ip_placeholder}"

@@ -8938,26 +8938,6 @@
             }
         ]
     },
-    "pfb_placeholder_for_family": {
-        "returnsRef": false,
-        "returnType": "string",
-        "params": [
-            {
-                "name": "ip_ph",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            },
-            {
-                "name": "family",
-                "byRef": false,
-                "variadic": false,
-                "type": "string",
-                "default": null
-            }
-        ]
-    },
     "pfb_pkg_annotation": {
         "returnsRef": false,
         "returnType": "string",
@@ -9117,6 +9097,26 @@
         "returnsRef": false,
         "returnType": null,
         "params": []
+    },
+    "pfb_placeholder_for_family": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "ip_ph",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "family",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_port_alias_types": {
         "returnsRef": false,
