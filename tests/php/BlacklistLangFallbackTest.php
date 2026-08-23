@@ -105,9 +105,10 @@ final class BlacklistLangFallbackTest extends TestCase
 		$this->assertNotFalse($raw, 'test bootstrap: failed to read ut1_global_usage');
 		$this->assertSame(
 			1,
-			preg_match('/^FEED:\s*(\S+)$/m', $raw, $matches),
+			preg_match_all('/^FEED:\s*(\S+)$/m', $raw, $matches),
 			'ut1_global_usage must declare exactly one FEED line'
 		);
+		$matches = array(1 => $matches[1][0]);
 		$this->assertStringStartsWith(
 			'https://',
 			$matches[1],

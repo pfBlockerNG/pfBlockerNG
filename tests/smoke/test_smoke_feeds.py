@@ -3966,6 +3966,10 @@ def test_blacklist_download_name_keys_on_provider_id(deployed_vm: SmokeVM, mock_
             f"expected the category file 'ut1_testcat' in {provider_dir}; got: {listing!r}\n"
             f"{stray_dir} holds: {deployed_vm.ssh(f'/bin/ls -A {stray_dir} 2>&1').stdout!r}"
         )
+        archive = deployed_vm.ssh(f"/bin/ls -A {h.PFB_DBDIR}/ut1.tar.gz 2>&1").stdout.strip()
+        assert archive.endswith("ut1.tar.gz"), (
+            f"expected the download itself to be named for the provider at {h.PFB_DBDIR}/ut1.tar.gz; got: {archive!r}"
+        )
         extracted = deployed_vm.ssh(f"/bin/cat {provider_dir}/ut1_testcat 2>&1").stdout
         assert domain in extracted, f"expected {domain!r} in {provider_dir}/ut1_testcat; got: {extracted!r}"
     finally:
