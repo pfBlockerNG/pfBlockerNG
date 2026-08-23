@@ -252,22 +252,50 @@ final class SoftwareUpdateDecisionTest extends TestCase
 	}
 
 	/*
-	 * The origin cannot change either answer because neither function can see it: #2380's
-	 * gate is not merely off, it is unrepresentable without re-adding a parameter. That is
-	 * the regression oracle the per-origin data rows used to carry (issue #2653).
+	 * The origin must not gate either href (issue #2653). The per-origin data rows that
+	 * used to carry that oracle are gone with the $repo parameter, so it is pinned at both
+	 * doors an origin could come back through: the signature, and a read from inside the
+	 * body. A parameter is the obvious one; a global or a fresh pfb_pkg_installed_repo()
+	 * call inside the function would restore #2380 with every behavioural assertion still
+	 * green, which is exactly what a reviewer demonstrated against the signature check
+	 * alone.
 	 */
-	public function testHrefsTakeNoOriginArgument(): void
+	public static function originFreeHrefProvider(): array
 	{
-		$update = new ReflectionFunction('pfb_software_update_href');
-		$uninstall = new ReflectionFunction('pfb_software_uninstall_href');
+		return [
+			'update'    => ['pfb_software_update_href', ['pkgname', 'update_available']],
+			'uninstall' => ['pfb_software_uninstall_href', ['pkgname']],
+		];
+	}
 
-		$names = static fn (ReflectionFunction $f): array => array_map(
-			static fn (ReflectionParameter $p): string => $p->getName(),
-			$f->getParameters()
+	#[DataProvider('originFreeHrefProvider')]
+	public function testHrefIsBlindToTheInstallOrigin(string $function, array $expected_params): void
+	{
+		$reflected = new ReflectionFunction($function);
+
+		$this->assertSame(
+			$expected_params,
+			array_map(
+				static fn (ReflectionParameter $p): string => $p->getName(),
+				$reflected->getParameters()
+			),
+			"{$function}() must take no origin argument"
 		);
 
-		$this->assertSame(['pkgname', 'update_available'], $names($update));
-		$this->assertSame(['pkgname'], $names($uninstall));
+		$file = (array) file((string) $reflected->getFileName());
+		$body = implode('', array_slice(
+			$file,
+			(int) $reflected->getStartLine() - 1,
+			(int) $reflected->getEndLine() - (int) $reflected->getStartLine() + 1
+		));
+
+		foreach (['global', 'pfb_pkg_installed_repo', 'pfb_software_pkgmgr_usable', '%R'] as $side_channel) {
+			$this->assertStringNotContainsString(
+				$side_channel,
+				$body,
+				"{$function}() must not reach for the origin from inside its body ({$side_channel})"
+			);
+		}
 	}
 
 	public function testSoftwarePageDoesNotHardcodePkgMgrForAllOrigins(): void
