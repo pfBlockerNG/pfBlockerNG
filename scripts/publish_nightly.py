@@ -431,6 +431,8 @@ def publish(
             changed = True
         if not changed and not pr._catalogue_descriptor_complete(dest_dir, engine):
             changed = True
+        if not changed and sign_key is not None and not pr._catalogue_carries_key(dest_dir, engine, sign_key):
+            changed = True
         # issue #2468: only the canonical asset feeds the fan-out identity index —
         # see publish_release.publish's own comment on this same exclusion.
         source_index.setdefault(target.canonical.work_path.resolve(), []).append((_CHANNEL, varver))

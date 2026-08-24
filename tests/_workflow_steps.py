@@ -32,3 +32,22 @@ def extract_step(workflow: str, step_name: str) -> str:
     next_match = sibling.search(workflow, start)
     end = next_match.start() if next_match else len(workflow)
     return workflow[start:end]
+
+
+def extract_job(workflow: str, job_name: str) -> str:
+    """Return the body of a top-level ``  <job_name>:`` job block, bounded to the
+    next sibling job at the same (2-space) indentation, or end-of-file.
+
+    ``extract_step``'s sibling-boundary idea, one indentation level up (job keys,
+    not ``- name:`` step items). A workflow with more than one job that runs the
+    same script needs this: a file-global index comparison can otherwise pair a
+    step in one job with a step in another.
+    """
+    marker = re.compile(rf"^  {re.escape(job_name)}:\n", re.MULTILINE)
+    match = marker.search(workflow)
+    assert match is not None, f"job {job_name!r} not found in workflow"
+    start = match.end()
+    sibling = re.compile(r"^  [A-Za-z0-9_-]+:\n", re.MULTILINE)
+    next_match = sibling.search(workflow, start)
+    end = next_match.start() if next_match else len(workflow)
+    return workflow[start:end]

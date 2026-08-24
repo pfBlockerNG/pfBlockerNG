@@ -46,6 +46,7 @@ import nightly_provenance as np
 import publish_catalogues as pc
 import publish_nightly as pn
 import publish_release as pr
+import test_build_repo_portable as tbrp
 from _srcrepo import SourceRepoError, resolve_src_root
 
 try:
@@ -1172,32 +1173,6 @@ class SignKeyThreadingTests(_TempDirTestCase):
         return mock.patch.object(pn.ca, "regenerate_catalogue", side_effect=capturing_regenerate), seen
 
     @_requires_engine
-    def test_run_with_sign_key_reaches_regenerate_catalogue(self) -> None:
-        results_dir = self.new_results_dir()
-        snapshot = _snapshot()
-        handoff = _build_handoff(
-            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
-        )
-        key = self.tmp / "repo.key"
-        key.write_text("not-a-real-key", encoding="utf-8")
-        patcher, seen = self._capture_sign_key()
-        with patcher:
-            _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo, sign_key=key)
-        self.assertEqual(seen, [key])
-
-    @_requires_engine
-    def test_run_without_sign_key_passes_none(self) -> None:
-        results_dir = self.new_results_dir()
-        snapshot = _snapshot()
-        handoff = _build_handoff(
-            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
-        )
-        patcher, seen = self._capture_sign_key()
-        with patcher:
-            _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
-        self.assertEqual(seen, [None])
-
-    @_requires_engine
     def test_main_sign_key_flag_reaches_regenerate_catalogue(self) -> None:
         results_dir = self.new_results_dir()
         snapshot = _snapshot()
@@ -1474,6 +1449,42 @@ class SameMajorDestScopeTests(_TempDirTestCase):
         source = inspect.getsource(pn._route_targets)
         self.assertIn("_row_declares_dep", source)
         self.assertIn("continue", source)
+
+
+class ResignUnsignedCatalogueTests(_TempDirTestCase):
+    """Nightly's mirror of publish_release's re-sign gate (issue #2675).
+
+    Nightly rebuilds daily, so the unsigned-catalogue window is short here — but the
+    gate lives in both publishers because a varver whose package set does not move
+    (a retired FreeBSD major still being served) would otherwise never be re-signed.
+    """
+
+    def _publish(self, key: Path | None = None) -> pr.PublishReport:
+        results_dir = self.new_results_dir()
+        snapshot = _snapshot()
+        handoff = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+        )
+        return _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo, sign_key=key)
+
+    @_requires_engine
+    def test_republish_with_a_key_signs_a_catalogue_that_has_no_signature(self) -> None:
+        self.assertEqual(self._publish().touched, (("nightly", "ce-2.8"),))
+        catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self.assertEqual(tbrp._sig_members(catalogue_dir / "packagesite.pkg"), {})
+
+        key = tbrp._gen_key(self.tmp / "repo.key")
+        self.assertEqual(self._publish(key).touched, (("nightly", "ce-2.8"),))
+        self.assertEqual(
+            sorted(tbrp._sig_members(catalogue_dir / "packagesite.pkg")),
+            ["packagesite.yaml.pub", "packagesite.yaml.sig"],
+        )
+
+    @_requires_engine
+    def test_republish_with_the_same_key_is_a_noop(self) -> None:
+        key = tbrp._gen_key(self.tmp / "repo.key")
+        self.assertEqual(self._publish(key).touched, (("nightly", "ce-2.8"),))
+        self.assertEqual(self._publish(key).touched, ())
 
 
 if __name__ == "__main__":

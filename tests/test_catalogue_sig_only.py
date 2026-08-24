@@ -53,6 +53,101 @@ def _write_raw_tar(path: Path, members: dict[str, bytes]) -> None:
     path.write_bytes(pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable"))
 
 
+def _write_tar_with_entries(path: Path, entries: list[tarfile.TarInfo], payloads: dict[str, bytes]) -> None:
+    """A zstd-tar built from explicit TarInfo entries, so a test can place a
+    directory, a symlink, or two members of the same name."""
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        for info in entries:
+            if info.isfile():
+                data = payloads[info.name]
+                info.size = len(data)
+                tf.addfile(info, io.BytesIO(data))
+            else:
+                tf.addfile(info)
+    path.write_bytes(pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable"))
+
+
+def _file_entry(name: str) -> tarfile.TarInfo:
+    return tarfile.TarInfo(name=name)
+
+
+def _dir_entry(name: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name=name)
+    info.type = tarfile.DIRTYPE
+    return info
+
+
+def _symlink_entry(name: str, target: str) -> tarfile.TarInfo:
+    info = tarfile.TarInfo(name=name)
+    info.type = tarfile.SYMTYPE
+    info.linkname = target
+    return info
+
+
+# --------------------------------------------------------------------------- #
+# Non-regular and duplicate members — invisible to a regular-files-only read
+# --------------------------------------------------------------------------- #
+
+
+def test_a_directory_member_present_on_one_side_only_is_not_signature_only(tmp_path: Path) -> None:
+    """A member the two archives do not share is a real difference whatever its type.
+    Reading only regular files would drop it from both name sets and report None."""
+    payloads = {"packagesite.yaml": b"payload", "packagesite.yaml.sig": b"sig-a"}
+    old = tmp_path / "old.pkg"
+    new = tmp_path / "new.pkg"
+    _write_tar_with_entries(old, [_file_entry("packagesite.yaml"), _file_entry("packagesite.yaml.sig")], payloads)
+    _write_tar_with_entries(
+        new,
+        [_file_entry("packagesite.yaml"), _file_entry("packagesite.yaml.sig"), _dir_entry("extra/")],
+        {**payloads, "packagesite.yaml.sig": b"sig-b"},
+    )
+    assert cso.sig_only_reason(old, new) is not None
+
+
+def test_a_symlink_member_retargeted_is_not_signature_only(tmp_path: Path) -> None:
+    """Same name, same (empty) data, different link target — a real change."""
+    payloads = {"packagesite.yaml": b"payload", "packagesite.yaml.sig": b"sig-a"}
+    old = tmp_path / "old.pkg"
+    new = tmp_path / "new.pkg"
+    _write_tar_with_entries(
+        old,
+        [_file_entry("packagesite.yaml"), _file_entry("packagesite.yaml.sig"), _symlink_entry("link", "here")],
+        payloads,
+    )
+    _write_tar_with_entries(
+        new,
+        [_file_entry("packagesite.yaml"), _file_entry("packagesite.yaml.sig"), _symlink_entry("link", "elsewhere")],
+        {**payloads, "packagesite.yaml.sig": b"sig-b"},
+    )
+    assert cso.sig_only_reason(old, new) is not None
+
+
+def test_a_duplicate_member_name_is_rejected(tmp_path: Path) -> None:
+    """Two members of one name: the later would mask the earlier, so the comparison
+    cannot claim to have compared the archive. Rejected as unreadable, which
+    publishes the target rather than dropping it."""
+    old = tmp_path / "old.pkg"
+    new = tmp_path / "new.pkg"
+    _write_tar_with_entries(
+        old,
+        [_file_entry("packagesite.yaml"), _file_entry("packagesite.yaml.sig")],
+        {"packagesite.yaml": b"payload", "packagesite.yaml.sig": b"sig-a"},
+    )
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tf:
+        for name, data in (
+            ("packagesite.yaml", b"payload-shadowed"),
+            ("packagesite.yaml", b"payload"),
+            ("packagesite.yaml.sig", b"sig-b"),
+        ):
+            info = tarfile.TarInfo(name=name)
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+    new.write_bytes(pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable"))
+    assert cso.sig_only_reason(old, new) is not None
+
+
 # --------------------------------------------------------------------------- #
 # Row 1 — same payload, re-signed with the SAME key -> signature-only (exit 0)
 # --------------------------------------------------------------------------- #
@@ -180,3 +275,23 @@ def test_cli_reports_a_diagnostic_never_a_traceback(tmp_path: Path, capsys: pyte
     assert rc == 1
     assert "Traceback" not in captured.err
     assert captured.err.strip() != ""
+
+
+# --------------------------------------------------------------------------- #
+# Drift pin — the shell filter names the catalogue archives literally
+# --------------------------------------------------------------------------- #
+
+
+def test_the_shell_filter_names_exactly_the_builders_catalogue_archives() -> None:
+    """`filter_signature_only_touched` in publish-pkg-repo.sh matches the two
+    catalogue archives by name. Renaming one in the builder without renaming it
+    there fails nothing else: the match simply stops firing, every republish
+    resumes committing a fresh randomised signature, and the #2389 stage gate
+    starts booting live VMs for it again."""
+    script = (Path(__file__).resolve().parents[1] / "scripts" / "publish-pkg-repo.sh").read_text(encoding="utf-8")
+    body = script[script.index("filter_signature_only_touched() {") :]
+    body = body[: body.index("\n}\n")]
+    archives = tbrp.brp._CATALOG_PKG_FILES
+    assert archives == {"packagesite.pkg", "data.pkg"}, "teach the shell filter about the new set"
+    for name in archives:
+        assert name in body, f"{name} is a catalogue archive the shell filter does not name"

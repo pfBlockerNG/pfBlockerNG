@@ -342,18 +342,23 @@ def zstd_decompress(data: bytes) -> bytes:
         return data
     try:
         import zstandard
-
-        return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
     except ImportError:
-        zstd = shutil.which("zstd")
-        if not zstd:
-            raise PkgError(
-                "a .pkg is zstd-compressed; install the `zstd` binary or the python `zstandard` module"
-            ) from None
+        pass
+    else:
         try:
-            return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
-        except subprocess.CalledProcessError as exc:
+            return zstandard.ZstdDecompressor().stream_reader(io.BytesIO(data)).read()
+        except Exception as exc:  # zstandard.ZstdError, and whatever it wraps
+            # Normalised to PkgError exactly as the binary path's failure below is:
+            # a caller that turns a read failure into a verdict must not answer
+            # differently depending on which decoder the host happens to carry.
             raise PkgError(f"zstd decompression failed: {exc}") from None
+    zstd = shutil.which("zstd")
+    if not zstd:
+        raise PkgError("a .pkg is zstd-compressed; install the `zstd` binary or the python `zstandard` module")
+    try:
+        return subprocess.run([zstd, "-dc"], input=data, stdout=subprocess.PIPE, check=True).stdout
+    except subprocess.CalledProcessError as exc:
+        raise PkgError(f"zstd decompression failed: {exc}") from None
 
 
 def zstd_compress(data: bytes, err_cls: type[Exception], err_msg: str) -> bytes:

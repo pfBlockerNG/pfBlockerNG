@@ -280,33 +280,31 @@ filter_signature_only_touched() {
     real_touched=""
     for target in $touched; do
         status_file=$(mktemp)
-        git -C "$PKG_REPO" status --porcelain -- "docs/${target}" >"$status_file"
         sig_only_candidate=true
-        sig_only_archives=""
-        if [ -s "$status_file" ]; then
-            while IFS= read -r status_line; do
-                status_code=$(printf '%s' "$status_line" | cut -c1-2)
-                status_path=$(printf '%s' "$status_line" | cut -c4-)
-                status_basename="${status_path##*/}"
-                if [ "$status_code" = " M" ]; then
-                    case "$status_basename" in
-                        packagesite.pkg | data.pkg)
-                            sig_only_archives="${sig_only_archives}${sig_only_archives:+ }${status_basename}"
-                            ;;
-                        *)
-                            sig_only_candidate=false
-                            ;;
-                    esac
-                else
-                    sig_only_candidate=false
-                fi
-            done <"$status_file"
-        else
+        git -C "$PKG_REPO" status --porcelain -- "docs/${target}" >"$status_file" 2>/dev/null ||
             sig_only_candidate=false
-        fi
+        sig_only_archives=""
+        # Whole-line equality, never a basename: docs/<target>/sub/packagesite.pkg
+        # carries the same basename, and the comparison below rebuilds the path
+        # from the TOP-LEVEL name — so a basename match would compare the
+        # untouched top-level archive against itself and discard a real change.
+        # A porcelain path git chose to quote equals neither string, which fails
+        # in the safe direction: the target publishes.
+        expect_packagesite=" M docs/${target}/packagesite.pkg"
+        expect_data=" M docs/${target}/data.pkg"
+        while IFS= read -r status_line; do
+            if [ "$status_line" = "$expect_packagesite" ]; then
+                sig_only_archives="${sig_only_archives}${sig_only_archives:+ }packagesite.pkg"
+            elif [ "$status_line" = "$expect_data" ]; then
+                sig_only_archives="${sig_only_archives}${sig_only_archives:+ }data.pkg"
+            else
+                sig_only_candidate=false
+            fi
+        done <"$status_file"
         rm -f "$status_file"
+        [ -n "$sig_only_archives" ] || sig_only_candidate=false
 
-        if [ "$sig_only_candidate" = true ] && [ -n "$sig_only_archives" ]; then
+        if [ "$sig_only_candidate" = true ]; then
             for archive in $sig_only_archives; do
                 old_tmp=$(mktemp)
                 if git -C "$PKG_REPO" show "HEAD:docs/${target}/${archive}" >"$old_tmp" 2>/dev/null \
@@ -319,8 +317,6 @@ filter_signature_only_touched() {
                 rm -f "$old_tmp"
                 [ "$sig_only_candidate" = true ] || break
             done
-        else
-            sig_only_candidate=false
         fi
 
         if [ "$sig_only_candidate" = true ]; then
@@ -513,8 +509,6 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                         --source-run-id "$SOURCE_RUN_ID"
                     ;;
             esac
-            # "$@" (not string interpolation) so a key path carrying a space or a
-            # single quote still reaches the publisher as ONE argument.
             if [ -n "${PFB_SIGN_KEY:-}" ]; then
                 set -- "$@" --sign-key "$PFB_SIGN_KEY"
             fi

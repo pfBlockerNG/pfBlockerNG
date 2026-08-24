@@ -641,6 +641,35 @@ def test_zstd_decompress_errors_when_no_decoder(monkeypatch: pytest.MonkeyPatch)
         pfb_pkg.zstd_decompress(frame)
 
 
+def test_zstd_decompress_wraps_a_module_decoder_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A decoder failure raised by the `zstandard` module becomes PkgError, exactly as the
+    `zstd` binary path's does. Callers that convert read failures into a verdict — the
+    signature-only comparison of issue #2675 is one — would otherwise behave differently
+    depending on which of the two decoders the runner happens to have installed."""
+    frame = _zstd_frame(b"payload")
+
+    class _ZstdError(Exception):
+        pass
+
+    class _FakeZstandard:
+        ZstdError = _ZstdError
+
+        class ZstdDecompressor:
+            def stream_reader(self, _fileobj: object) -> object:
+                raise _ZstdError("zstd decompress error: Restored data doesn't match checksum")
+
+    real_import = builtins.__import__
+
+    def _fake_zstandard(name: str, *a: object, **k: object) -> object:
+        if name == "zstandard":
+            return _FakeZstandard
+        return real_import(name, *a, **k)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(builtins, "__import__", _fake_zstandard)
+    with pytest.raises(pfb_pkg.PkgError, match="zstd"):
+        pfb_pkg.zstd_decompress(frame)
+
+
 def test_read_compact_manifest_roundtrip(tmp_path: Path) -> None:
     """The +COMPACT_MANIFEST (first tar member) is returned as a dict."""
     man = {"name": "pfSense-pkg-pfBlockerNG-devel", "version": "9.9.9", "abi": "FreeBSD:16:amd64"}
