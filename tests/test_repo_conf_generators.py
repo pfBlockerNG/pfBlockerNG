@@ -52,6 +52,10 @@ _BUILD_REPO_PORTABLE = _SCRIPTS / "build-repo-portable.py"
 _HOOK = _ROOT / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
 
 _PAGES_BASE = "https://pkg.pfblockerng.com"
+# What the generators emit for that base: plain HTTP, because pkg's CA store is
+# Netgate-pinned on Plus and cannot be reached from the GUI (issue #2675).
+_PAGES_HTTP_BASE = "http://pkg.pfblockerng.com"
+_FINGERPRINT_DIR = "/usr/local/etc/pkg/fingerprints/pfblockerng"
 
 # Representative catalog paths for byte-identity and URL-shape tests.
 _CE_28 = "ce-2.8"
@@ -348,7 +352,10 @@ def test_four_channel_url_path_segment_and_repo_name(channel: str) -> None:
     """The resolved url:'s path segment is the channel name; the stanza is keyed by its repo name."""
     conf = _print_conf_sh(_BUILD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
     repo_name = _CHANNEL_REPO_NAMES[channel]
-    expected_url = f"{_PAGES_BASE}/{channel}/{_CE_28}"
+    # http, not the https base handed in: pkg fetches the catalogue with a CA store
+    # pfSense Plus pins to Netgate, so TLS is not a trust anchor we can rely on.
+    # Authenticity comes from the catalogue signature instead (issue #2675).
+    expected_url = f"{_PAGES_HTTP_BASE}/{channel}/{_CE_28}"
 
     assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), (
         f"repo name {repo_name!r} not found in conf:\n{conf}"
@@ -363,9 +370,29 @@ def test_four_channel_priority_and_signature_type(channel: str) -> None:
     """Every channel carries the SAME priority 100 (equal project priority above Netgate's 0)."""
     conf = _print_conf_sh(_BUILD_REPO, _CE_28, _PAGES_BASE, "--channel", channel)
     assert _field(conf, "priority") == "100"
-    assert _field(conf, "signature_type") == "none"
+    assert _field(conf, "signature_type") == "fingerprints"
+    assert _field(conf, "fingerprints").strip('"') == _FINGERPRINT_DIR
     assert _field(conf, "mirror_type") == "none"
     assert _field(conf, "enabled") == "yes"
+
+
+@pytest.mark.parametrize("channel", _CHANNELS)
+def test_file_base_stays_unsigned_and_byte_identical(channel: str) -> None:
+    """A ``file://`` catalogue keeps today's bytes: no scheme rewrite, signature_type none.
+
+    Such a catalogue is built locally and carries no signature, and there is no TLS in
+    the path to distrust — the live smoke fleet serves one this way. Emitting a
+    signature-requiring conf for it would make `pkg update` fail against a catalogue that
+    is fine.
+    """
+    base = "file:///srv/pfb-catalog"
+    build = _print_conf_sh(_BUILD_REPO, _CE_28, base, "--channel", channel)
+    portable = _print_conf_portable(_CE_28, base, channel=channel)
+
+    assert build == portable, f"file:// drift ({channel}):\nbuild:\n{build}\nportable:\n{portable}"
+    assert _field(build, "signature_type") == "none"
+    assert _field(build, "url").strip('"') == f"{base}/{channel}/{_CE_28}"
+    assert "fingerprints" not in build
 
 
 @pytest.mark.parametrize("channel", _CHANNELS)

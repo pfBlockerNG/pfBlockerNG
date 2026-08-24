@@ -87,14 +87,19 @@ _make_box() {
     PFB_PRODUCT_LABEL="${_mb_dir}/product_label"
     PFB_VERSION_FILE="${_mb_dir}/version"
     PKG_STUB_LOG="${_mb_dir}/pkg_calls.log"
+    # Staged like every other on-box path: an unstaged run would write the HOST's
+    # real fingerprint store (issue #2675).
+    PFB_FINGERPRINT_DIR="${_mb_dir}/fingerprints/pfblockerng"
     PATH="${_mb_dir}/bin:${PATH}"
     export PFB_RELEASE_CONF PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF \
-           PFB_NIGHTLY_CONF PFB_PRODUCT_LABEL PFB_VERSION_FILE PKG_STUB_LOG PATH
+           PFB_NIGHTLY_CONF PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_FINGERPRINT_DIR \
+           PKG_STUB_LOG PATH
 }
 
 _unset_box() {
     unset PFB_RELEASE_CONF PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF \
-          PFB_NIGHTLY_CONF PFB_PRODUCT_LABEL PFB_VERSION_FILE PKG_STUB_LOG
+          PFB_NIGHTLY_CONF PFB_PRODUCT_LABEL PFB_VERSION_FILE PFB_FINGERPRINT_DIR \
+          PKG_STUB_LOG
 }
 
 # How many conf files the box currently carries — the single-subscription oracle.
@@ -152,7 +157,7 @@ Describe 'generate hook — regenerate the stable conf (CE)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pkg.pfblockerng.com/stable/ce-2.8"'
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "http://pkg.pfblockerng.com/stable/ce-2.8"'
       The contents of file "${PFB_STABLE_CONF}" should include "pfblockerng-stable: {"
       The contents of file "${PFB_STABLE_CONF}" should include "stable channel"
       The contents of file "${PFB_STABLE_CONF}" should not include "pending"
@@ -179,7 +184,7 @@ Describe 'generate hook — regenerate the testing conf (Plus)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://pkg.pfblockerng.com/testing/plus-26.03"'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "http://pkg.pfblockerng.com/testing/plus-26.03"'
       The contents of file "${PFB_TESTING_CONF}" should include "pfblockerng-testing: {"
       The value "$(_conf_count "${_te_dir}")" should equal 1
     End
@@ -213,7 +218,7 @@ STALE
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pkg.pfblockerng.com/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "http://pkg.pfblockerng.com/edge/ce-2.8"'
       The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.7"
       The path "${PKG_STUB_LOG}" should not be exist
     End
@@ -306,7 +311,7 @@ Describe 'generate hook — regenerate nightly conf (Plus)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "https://pkg.pfblockerng.com/nightly/plus-26.03"'
+      The contents of file "${PFB_NIGHTLY_CONF}" should include 'url: "http://pkg.pfblockerng.com/nightly/plus-26.03"'
       The contents of file "${PFB_NIGHTLY_CONF}" should include "pfblockerng-nightly: {"
       The contents of file "${PFB_NIGHTLY_CONF}" should include "nightly channel"
       The path "${PFB_RELEASE_CONF}" should not be exist
@@ -334,7 +339,7 @@ Describe 'generate hook — pre-release suffix strip (Plus BETA)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_STABLE_CONF}" should include 'url: "https://pkg.pfblockerng.com/stable/plus-26.07"'
+      The contents of file "${PFB_STABLE_CONF}" should include 'url: "http://pkg.pfblockerng.com/stable/plus-26.07"'
       The contents of file "${PFB_STABLE_CONF}" should not include "plus-26.07-BETA"
     End
 End
@@ -357,7 +362,7 @@ Describe 'generate hook — pre-release suffix strip (CE RC)'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://pkg.pfblockerng.com/edge/ce-2.9"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "http://pkg.pfblockerng.com/edge/ce-2.9"'
       The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.9-RC"
     End
 End
@@ -491,7 +496,7 @@ STAGEURL
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/staging/pr-7/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "http://fork.example.org/pkg/staging/pr-7/edge/ce-2.8"'
       The contents of file "${PFB_EDGE_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
@@ -559,7 +564,7 @@ OLDBASE
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://override.example/pkg/testing/ce-2.8"'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "http://override.example/pkg/testing/ce-2.8"'
       The contents of file "${PFB_TESTING_CONF}" should not include "file:///root/pfb_repo"
     End
 End
@@ -715,7 +720,7 @@ Describe 'generate hook — an env base with a trailing slash does not double it
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "http://fork.example.org/pkg/edge/ce-2.8"'
       The contents of file "${PFB_EDGE_CONF}" should not include "pkg//edge"
     End
 End
@@ -747,7 +752,7 @@ CONFSLASH
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://fork.example.org/pkg/testing/ce-2.8"'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "http://fork.example.org/pkg/testing/ce-2.8"'
       The contents of file "${PFB_TESTING_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
@@ -859,5 +864,77 @@ ONESLASH
       The contents of file "${PFB_STABLE_CONF}" should include "mycustomdir"
       The contents of file "${PFB_EDGE_CONF}" should include "ce-2.7"
       The contents of file "${PFB_EDGE_CONF}" should not include "ce-2.8"
+    End
+End
+
+# ── TRUSTED FINGERPRINT (issue #2675) ─────────────────────────────────────────
+#
+# The conf the hook emits for a network catalogue says `signature_type:
+# fingerprints`, so pkg refuses the catalogue unless the signing key's fingerprint
+# is installed. The hook writes it, before any conf, at every run.
+
+Describe 'generate hook — installs the trusted fingerprint'
+    setup() {
+        _fp_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_fp.XXXXXX")"
+        _make_box "${_fp_dir}" "pfSense" "2.8.1"
+        printf '# stub pending\n' > "${PFB_STABLE_CONF}"
+    }
+    cleanup() { rm -rf "${_fp_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'before-state: no fingerprint is installed'
+      The path "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com" should not be exist
+    End
+
+    It 'writes the trusted fingerprint and the revoked dir beside it'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include 'regenerated'
+      The path "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com" should be file
+      The path "${PFB_FINGERPRINT_DIR}/revoked" should be directory
+      fingerprint="$(cat "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com")"
+      # The exact two-line UCL pkg_repo_check_fingerprint() parses, carrying the
+      # SHA256 of the DER public key the catalogues embed.
+      The variable fingerprint should equal 'function: "sha256"
+fingerprint: "081df5476f84d8d20417c400f576c355069a4a9979d170bcaae1c9da32778915"'
+    End
+
+    It 'is idempotent — a second run leaves the same bytes'
+      sh "${HOOK}" onestart >/dev/null 2>&1
+      before="$(cat "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com")"
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include 'regenerated'
+      after="$(cat "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com")"
+      The variable after should equal "${before}"
+    End
+End
+
+Describe 'generate hook — a fingerprint store it cannot write never wedges boot'
+    setup() {
+        _fpf_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_fpfail.XXXXXX")"
+        _make_box "${_fpf_dir}" "pfSense" "2.8.1"
+        printf '# stub pending\n' > "${PFB_STABLE_CONF}"
+        # A FILE where the store's parent directory must be: mkdir -p cannot
+        # proceed, which is the shape a hostile or corrupted /usr/local/etc/pkg
+        # would present.
+        printf 'not a directory\n' > "${_fpf_dir}/blocked"
+        PFB_FINGERPRINT_DIR="${_fpf_dir}/blocked/pfblockerng"
+        export PFB_FINGERPRINT_DIR
+    }
+    cleanup() { rm -rf "${_fpf_dir}"; _unset_box; }
+    Before 'setup'
+    After  'cleanup'
+
+    It 'warns, still regenerates the conf, and exits 0'
+      When run sh "${HOOK}" onestart
+      The status should be success
+      The stderr should include 'WARNING'
+      The stderr should include 'regenerated'
+      # Fail-closed on the box: pkg reads an absent trusted dir as "no trusted key"
+      # and refuses the catalogue rather than trusting it.
+      The path "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com" should not be exist
+      The contents of file "${PFB_STABLE_CONF}" should include 'signature_type: fingerprints'
     End
 End

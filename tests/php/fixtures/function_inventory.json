@@ -9612,6 +9612,26 @@
             }
         ]
     },
+    "pfb_repo_conf_regenerate": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "hook",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/local/etc/rc.d/pfblockerng_repo_generate.sh'"
+            },
+            {
+                "name": "timeout",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/usr/bin/timeout -s TERM -k 5 60'"
+            }
+        ]
+    },
     "pfb_req_to_hook_trigger": {
         "returnsRef": false,
         "returnType": null,

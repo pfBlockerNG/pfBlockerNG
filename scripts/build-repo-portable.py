@@ -1533,6 +1533,43 @@ def build_repo_matrix(
     return {"built": built}
 
 
+def _catalogue_url(base_url: str) -> str:
+    """The URL a client conf points at, for a resolved catalogue *base_url*.
+
+    HTTPS is downgraded to plain HTTP on purpose: `pkg` on pfSense Plus runs against a
+    Netgate-pinned CA bundle that cannot be widened from anywhere our package can reach,
+    so TLS to our host is not a trust anchor we are able to rely on. Authenticity comes
+    from the catalogue signature instead (issue #2675), and the package payloads are
+    checksummed by that signed catalogue. Any other scheme is left alone — a `file://`
+    catalogue has no network in its path at all.
+    """
+    if base_url.startswith("https://"):
+        return "http://" + base_url[len("https://") :]
+    return base_url
+
+
+# Where the client keeps the trusted fingerprint(s) of the catalogue signing key. The
+# rc.d hook writes `<dir>/trusted/<name>`; `pkg` also reads `<dir>/revoked/`.
+CONF_FINGERPRINT_DIR = "/usr/local/etc/pkg/fingerprints/pfblockerng"
+
+
+def _conf_signature_lines(url: str) -> str:
+    """The signature fields for *url*: a `file://` catalogue is local and unsigned."""
+    if url.startswith("file://"):
+        return "  signature_type: none,\n"
+    return f'  signature_type: fingerprints,\n  fingerprints: "{CONF_FINGERPRINT_DIR}",\n'
+
+
+def _conf_trust_comment(url: str) -> str:
+    if url.startswith("file://"):
+        return "# Local catalogue: served from this filesystem, unsigned — no network and no\n# CA store in the path.\n"
+    return (
+        "# Signed catalogue (issue #2675): the trust anchor is our own ECDSA key, whose\n"
+        "# fingerprint the boot rc.d hook installs; the fetch is plain HTTP because pkg's CA\n"
+        "# store is Netgate-pinned on pfSense Plus and cannot be widened from the GUI.\n"
+    )
+
+
 def print_conf(resolved_url: str, *, channel: str = "release") -> None:
     """Emit the repo-conf stanza for ``channel`` (default: the legacy release channel).
 
@@ -1541,7 +1578,7 @@ def print_conf(resolved_url: str, *, channel: str = "release") -> None:
     ``<base>/<channel>/<varver>`` — no ``${ABI}`` token.
     Supply ``--catalog-path <varver>`` so tests can pin the exact bytes.
     """
-    url = resolved_url.rstrip("/")
+    url = _catalogue_url(resolved_url.rstrip("/"))
     repo_name = _CHANNEL_REPO_NAMES[channel]
     # install.sh --channel rejects "release" (issue #2384) — the legacy release
     # default's hint keeps a literal <channel> placeholder instead of naming a
@@ -1551,16 +1588,14 @@ def print_conf(resolved_url: str, *, channel: str = "release") -> None:
         f"# Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit;"
         f" re-run install.sh --channel {channel_hint} to change.\n"
         f"# pfBlockerNG ({channel} channel) — self-hosted pkg repository (ADR-17).\n"
-        "# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is\n"
-        "# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"
+        + _conf_trust_comment(url)
+        + "# The URL is fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,\n"
         "# issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.\n"
         f"# priority {CONF_PRIORITY} sits above the base Netgate `pfSense` repo so cross-repo\n"
         "# resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.\n"
         f"{repo_name}: {{\n"
         f'  url: "{url}",\n'
-        "  mirror_type: none,\n"
-        "  signature_type: none,\n"
-        f"  priority: {CONF_PRIORITY},\n"
+        "  mirror_type: none,\n" + _conf_signature_lines(url) + f"  priority: {CONF_PRIORITY},\n"
         "  enabled: yes\n"
         "}\n"
     )

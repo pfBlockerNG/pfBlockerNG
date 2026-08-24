@@ -43,6 +43,17 @@ _SCRIPTS_DIR = _ROOT_DIR / "scripts"
 _PKG_SITE_DIR = _ROOT_DIR / "pkg-site"
 _HOOK = _ROOT_DIR / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
 
+
+def _conf_url(base: str) -> str:
+    """The URL the generators emit for *base*: https is downgraded to plain http.
+
+    pkg on pfSense Plus runs against a Netgate-pinned CA bundle, so TLS to the catalogue
+    host is not a usable trust anchor; the catalogue signature is (issue #2675). Any
+    other scheme is emitted unchanged.
+    """
+    return "http://" + base[len("https://") :] if base.startswith("https://") else base
+
+
 _CANON = gl.CANONICAL_EMITTED_IDENTITY  # "pfSense-pkg-pfBlockerNG" — the ONE channel-agnostic identity
 
 
@@ -2285,7 +2296,7 @@ def test_conf_via_portable_matches_real_build_repo_portable_contract() -> None:
         conf: str = gl._conf_via_portable(base, channel)
         assert conf, f"{channel} conf must be non-empty"
         assert f"pfblockerng-{channel}: {{" in conf
-        assert f"{base}/{channel}/<varver>" in conf
+        assert f"{_conf_url(base)}/{channel}/<varver>" in conf
 
 
 # ── _embed_hook: splice the boot hook into install.sh's stub body ─────────────
@@ -2428,7 +2439,7 @@ def test_published_installer_runs_piped_with_embedded_hook(tmp_path: Path, monke
     assert conf_path.exists(), f"conf not written\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     conf_text = conf_path.read_text()
     assert "Generated at boot by pfblockerng_repo_generate" in conf_text
-    assert f'url: "{base}/stable/ce-2.8"' in conf_text
+    assert f'url: "{_conf_url(base)}/stable/ce-2.8"' in conf_text
 
 
 def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source(
@@ -2644,7 +2655,7 @@ def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_pa
     )
     conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
     conf_text = conf_path.read_text()
-    assert f'url: "{fork_base}/stable/ce-2.8"' in conf_text, conf_text
+    assert f'url: "{_conf_url(fork_base)}/stable/ce-2.8"' in conf_text, conf_text
 
 
 def test_write_site_bakes_a_base_url_containing_shell_metacharacters_as_inert_data(
@@ -2712,7 +2723,7 @@ def test_write_site_bakes_a_base_url_containing_shell_metacharacters_as_inert_da
 
     conf_path = root / "usr" / "local" / "etc" / "pkg" / "repos" / "pfblockerng-stable.conf"
     conf_text = conf_path.read_text()
-    assert f'url: "{evil_base}/stable/ce-2.8"' in conf_text, (
+    assert f'url: "{_conf_url(evil_base)}/stable/ce-2.8"' in conf_text, (
         f"the conf must carry the LITERAL base string, unexpanded:\n{conf_text}"
     )
 

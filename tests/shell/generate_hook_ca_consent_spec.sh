@@ -48,14 +48,17 @@ _cc_box() {
     PFB_SSL_CA_CERT_PATH="${_ccb_dir}/ca-certs"
     _cc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
     PFB_CAP_MKDB="$(command -v cap_mkdb 2>/dev/null || printf '%s' /usr/bin/cap_mkdb)"
+    # Staged: an unstaged run writes the HOST's real fingerprint store (issue #2675).
+    PFB_FINGERPRINT_DIR="${_ccb_dir}/fingerprints/pfblockerng"
     export PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
-           PFB_CONFIG_XML PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB
+           PFB_CONFIG_XML PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB \
+           PFB_FINGERPRINT_DIR
     unset _ccb_dir
 }
 
 _cc_unset_box() {
     unset PFB_STABLE_CONF PFB_TESTING_CONF PFB_EDGE_CONF PFB_NIGHTLY_CONF \
-          PFB_CONFIG_XML PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB
+          PFB_CONFIG_XML PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB PFB_FINGERPRINT_DIR
 }
 
 # A CA hash dir with exactly one entry, at $1.
