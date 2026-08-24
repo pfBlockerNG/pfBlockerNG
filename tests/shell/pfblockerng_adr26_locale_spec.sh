@@ -74,8 +74,11 @@ Describe 'ADR-26 — pfblockerng.sh locale/portability source invariants (Phases
   # ONLY in duplicate()'s single-alias-masterfile check -- issue #1084 deleted the whole
   # function (the batch recompute verb owns cross-feed dedup now), so the call site the
   # LC_ALL=C prefix protected is gone, not reverted. Nothing left to pin here.
+  # issue #2666 staged this sink: the addresses are sorted onto "${xlsxstage}" and
+  # only moved onto "${pfborig}${alias}.orig" once every extraction step reported
+  # success. Same sink, same collation requirement, one filename earlier.
   It 'prefixes the extracted-IP .orig sink with LC_ALL=C'
-    When call has 'LC_ALL=C sort -u > "${pfborig}${alias}.orig"'
+    When call has 'LC_ALL=C sort -u > "${xlsxstage}"'
     The status should be success
   End
   It 'prefixes the masterfile order (sort -o) with LC_ALL=C'
