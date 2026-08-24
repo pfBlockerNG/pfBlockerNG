@@ -666,7 +666,10 @@ def test_zstd_decompress_wraps_a_module_decoder_failure(monkeypatch: pytest.Monk
         return real_import(name, *a, **k)  # type: ignore[arg-type]
 
     monkeypatch.setattr(builtins, "__import__", _fake_zstandard)
-    with pytest.raises(pfb_pkg.PkgError, match="zstd"):
+    # The injected text, not just "zstd": the no-decoder message carries that word too,
+    # so a code path that swallowed the module's error and fell through to a missing
+    # binary would satisfy a looser pattern without normalising anything.
+    with pytest.raises(pfb_pkg.PkgError, match=r"zstd decompression failed: .*Restored data"):
         pfb_pkg.zstd_decompress(frame)
 
 
