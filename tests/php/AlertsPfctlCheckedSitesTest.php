@@ -1034,6 +1034,25 @@ SH
 		$this->assertContains('alias.example.net', $tokens);
 	}
 
+	public function testWhitelistUnlockTokensExclusionPostedWwwDoesNotDropWww(): void
+	{
+		$tokens = pfb_alerts_whitelist_unlock_tokens(
+			'www.example.com',
+			'example.com',
+			FALSE,
+			TRUE,
+			['alias.example.net']
+		);
+		$this->assertNotContains(
+			'www.example.com',
+			$tokens,
+			'exclusion writes foo.com only; a www.foo.com POST must not revoke the www. unlock row'
+		);
+		$this->assertContains('example.com', $tokens);
+		$this->assertContains('alias.example.net', $tokens);
+		$this->assertNotContains('www.alias.example.net', $tokens);
+	}
+
 	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void
 	{
 		// Top-level POST dispatch has no off-appliance callable seam; this retained
