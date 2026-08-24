@@ -27,7 +27,7 @@
 #
 # Tip: run with `shellspec --shell "$(command -v dash)" tests/shell/generate_hook_login_conf_spec.sh`.
 
-HOOK="${PFB_ROOT}/scripts/rc.d/pfblockerng_repo_generate.sh"
+HOOK="${PFB_ROOT}/src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 FIX="${PFB_ROOT}/tests/fixtures/login_conf"
 
 # ── helpers ───────────────────────────────────────────────────────────────────

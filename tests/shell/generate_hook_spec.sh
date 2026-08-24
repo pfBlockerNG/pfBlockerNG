@@ -44,7 +44,7 @@
 #
 # Tip: run with `shellspec tests/shell/generate_hook_spec.sh` from the repo root.
 
-HOOK="${PFB_ROOT}/scripts/rc.d/pfblockerng_repo_generate.sh"
+HOOK="${PFB_ROOT}/src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 

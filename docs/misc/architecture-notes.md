@@ -1039,7 +1039,8 @@ transaction where nested `pkg` is impossible; libpkg pins every version at solve
 on a version change and can only be corrected by a **separate, later** pkg run — a structural
 one-pkg-run lag. The boot-time generator hook below closes that lag.
 
-**`rc.d` generator hook (`scripts/rc.d/pfblockerng_repo_generate.sh`).** Installed on-box by
+**`rc.d` generator hook (`src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh`, issue #2675: moved
+into the shipped tree so the package can install/refresh it).** Installed on-box by
 `install.sh` (issue #2416 follow-up: one script, `--channel` parameterized) into
 `/usr/local/etc/rc.d/`; runs at every boot. It is a pure conf **regenerator**: for each of the four channel conf files that
 exists, it detects the box's `<varver>` (arch-less, issue #1806) and overwrites the conf with
@@ -1101,8 +1102,9 @@ strictly simpler than diffing and patching one in place, and never wrong. Key pr
 entry point.** One script, `--channel <stable|testing|edge|nightly>` parameterized — the
 predecessor four `install-<channel>.sh` wrappers + shared `install-common.sh` split is
 retired; unifying them was an owner ruling (2026-08). The repository copy
-(`scripts/install.sh`) shells out to the sibling `scripts/rc.d/pfblockerng_repo_generate.sh`,
-resolved via `dirname "$0"`, which fails when **piped** into `sh` (`$0` is then `sh`, not the
+(`scripts/install.sh`) shells out to the shipped
+`src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh`, resolved via `dirname "$0"`, which
+fails when **piped** into `sh` (`$0` is then `sh`, not the
 script path). `gen_landing.py`'s `build_site_tree()` — the generic pkg-site/ tree-build
 pass (issue #2450) — applies TWO splices to install.sh's site-tree copy: `_bake_base_url`
 points install.sh's own `PFB_BASE_URL` default at the site's own base first (issue #2416

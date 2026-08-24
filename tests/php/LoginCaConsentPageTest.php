@@ -9,6 +9,7 @@ use PHPUnit\Framework\TestCase;
 final class LoginCaConsentPageTest extends TestCase
 {
 	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_software.php';
+	private const HOOK = __DIR__ . '/../../src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh';
 	private const CRON = __DIR__ . '/../../src/usr/local/pkg/pfblockerng/pfblockerng_cron.inc';
 	private bool $hadConfig;
 	private mixed $originalConfig;
@@ -82,13 +83,14 @@ final class LoginCaConsentPageTest extends TestCase
 		$this->assertStringNotContainsString('login.conf', $source);
 	}
 
-	// issue #2617: the login.conf editor lives in the installed rc.d hook (outside src/,
-	// so out of this sweep's reach) and its consent-write path is the Software page above
-	// -- nothing else under src/ should reference the literal path.
+	// issue #2617: exactly two files may name the literal path -- the rc.d hook, which IS
+	// the login.conf editor (it ships from src/ since issue #2675, so it is inside this
+	// sweep now), and the Software page, which writes the consent field the hook reads.
+	// A third reference means a second writer of a file nothing else on the box rewrites.
 	public function testNothingOutsideTheSoftwarePageReferencesTheLoginConfPath(): void
 	{
 		$root = dirname(__DIR__, 2) . '/src';
-		$page = realpath(self::PAGE);
+		$exempt = [realpath(self::PAGE), realpath(self::HOOK)];
 		$hits = [];
 		$iterator = new RecursiveIteratorIterator(
 			new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS)
@@ -98,7 +100,7 @@ final class LoginCaConsentPageTest extends TestCase
 				continue;
 			}
 			$path = (string) $file->getPathname();
-			if ($path === $page) {
+			if (in_array($path, $exempt, TRUE)) {
 				continue;
 			}
 			$text = (string) file_get_contents($path);

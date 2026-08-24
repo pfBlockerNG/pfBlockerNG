@@ -38,8 +38,10 @@ _SPEC.loader.exec_module(gl)
 
 # Paths to the real scripts/site tree — used wherever tests exercise the live
 # integration (write_site + build_site_tree) rather than fake fixtures.
-_SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
-_PKG_SITE_DIR = Path(__file__).resolve().parent.parent / "pkg-site"
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+_SCRIPTS_DIR = _ROOT_DIR / "scripts"
+_PKG_SITE_DIR = _ROOT_DIR / "pkg-site"
+_HOOK = _ROOT_DIR / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
 
 _CANON = gl.CANONICAL_EMITTED_IDENTITY  # "pfSense-pkg-pfBlockerNG" — the ONE channel-agnostic identity
 
@@ -2499,7 +2501,7 @@ def test_published_installer_never_treats_the_on_box_hook_as_its_checkout_source
     assert result.returncode == 0, (
         f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    real_hook = (_SCRIPTS_DIR / "rc.d" / "pfblockerng_repo_generate.sh").read_text()
+    real_hook = _HOOK.read_text()
     assert hook_path.read_text() == real_hook, (
         "the stale on-box hook must be replaced by the embedded copy, never mistaken for a checkout sibling\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
@@ -2571,7 +2573,7 @@ def test_published_installer_saved_to_disk_still_replaces_a_stale_on_box_hook(tm
     assert result.returncode == 0, (
         f"install.sh failed (exit {result.returncode}):\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
-    real_hook = (_SCRIPTS_DIR / "rc.d" / "pfblockerng_repo_generate.sh").read_text()
+    real_hook = _HOOK.read_text()
     assert hook_path.read_text() == real_hook, (
         "the stale on-box hook must be replaced by the embedded copy, even when install.sh is saved to disk\n"
         f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"

@@ -30,7 +30,7 @@ import pytest
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 _SCRIPTS_DIR = _ROOT_DIR / "scripts"
 _SCRIPT = _SCRIPTS_DIR / "install.sh"
-_HOOK = _ROOT_DIR / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
+_HOOK = _ROOT_DIR / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
 
 _CHANNELS = ("stable", "testing", "edge", "nightly")
 _CANONICAL = "pfSense-pkg-pfBlockerNG"
