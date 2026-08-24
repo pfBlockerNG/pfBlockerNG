@@ -1164,13 +1164,9 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 		}
 		// issue #2670: durable whitelist/TLD exclusion replaces the temporary unlock row.
-		// pfb_unlock('lock') does not update the in-memory array; unset between tokens
-		// so a www. strip cannot write the first key back.
-		pfb_unlock('lock', 'dnsbl', $dnsbl_unlock, $domain_unlock, '');
-		unset($dnsbl_unlock[$domain_unlock]);
-		if ($domain !== $domain_unlock) {
-			pfb_unlock('lock', 'dnsbl', $dnsbl_unlock, $domain, '');
-		}
+		// Posted token, www.-stripped form, and www.<stripped> (the non-wildcard
+		// whitelist writes both domain and www.domain).
+		$dnsbl_unlock = pfb_alerts_unlock_drop('dnsbl', $dnsbl_unlock, array($domain_unlock, $domain, 'www.'.$domain));
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
 	}

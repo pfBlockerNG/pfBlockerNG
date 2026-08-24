@@ -115,7 +115,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		// issue #1666: save every $pfb key this test overrides below, before
 		// overriding them, so tearDown() can restore them once $this->tmp (which
 		// most of them point inside) is deleted.
-		foreach (['pfctl', 'aliasdir', 'dbdir', 'permitdir', 'ip_unlock', 'supptxt',
+		foreach (['pfctl', 'aliasdir', 'dbdir', 'permitdir', 'ip_unlock', 'dnsbl_unlock', 'supptxt',
 			  'supptxt_v6', 'ipconfig', 'logdir', 'log', 'errlog'] as $k) {
 			$this->hadPfb[$k]   = array_key_exists($k, $GLOBALS['pfb'] ?? []);
 			$this->savedPfb[$k] = $GLOBALS['pfb'][$k] ?? NULL;
@@ -128,6 +128,7 @@ final class AlertsPfctlCheckedSitesTest extends TestCase
 		$pfb['dbdir']     = "{$this->tmp}/db";
 		$pfb['permitdir'] = "{$this->tmp}/permit";
 		$pfb['ip_unlock'] = "{$this->tmp}/ip_unlock.txt";
+		$pfb['dnsbl_unlock'] = "{$this->tmp}/dnsbl_unlock.txt";
 		$pfb['supptxt']    = "{$this->tmp}/pfbsuppression.txt";
 		$pfb['supptxt_v6'] = "{$this->tmp}/pfbsuppression_v6.txt";
 		$pfb['ipconfig']   = ['v4suppression' => '', 'v6suppression' => ''];
@@ -921,10 +922,43 @@ SH
 		$this->assertNotFalse($end, 'entry_delete must follow addwhitelistdom');
 		$region = substr($src, $start, $end - $start);
 		$this->assertStringContainsString(
-			"pfb_unlock('lock', 'dnsbl'",
+			"pfb_alerts_unlock_drop('dnsbl', \$dnsbl_unlock, array(\$domain_unlock, \$domain, 'www.'.\$domain))",
 			$region,
-			'issue #2670: addwhitelistdom success must pfb_unlock lock the matching DNSBL unlock-store token'
+			'issue #2670: addwhitelistdom must drop posted, stripped, and www.<stripped> unlock tokens'
 		);
+	}
+
+	public function testUnlockDropBareDomainAlsoClearsWwwUnlockRow(): void
+	{
+		$store = ['www.example.com' => 'TLD', 'keepme.example' => 'python'];
+		file_put_contents($GLOBALS['pfb']['dnsbl_unlock'], "www.example.com,TLD\nkeepme.example,python\n");
+
+		$store = pfb_alerts_unlock_drop('dnsbl', $store, ['example.com', 'example.com', 'www.example.com']);
+
+		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
+		$this->assertStringContainsString('keepme.example', $content, 'unrelated unlock rows must survive');
+		$this->assertStringNotContainsString(
+			'www.example.com',
+			$content,
+			'issue #2670: locking the bare domain must also drop the www.<domain> unlock row'
+		);
+		$this->assertArrayNotHasKey('www.example.com', $store);
+		$this->assertArrayNotHasKey('example.com', $store);
+	}
+
+	public function testUnlockDropUnsetsBetweenTokensSoTheFirstKeyCannotReturn(): void
+	{
+		$store = ['example.com' => 'python', 'www.example.com' => 'python'];
+		file_put_contents(
+			$GLOBALS['pfb']['dnsbl_unlock'],
+			"example.com,python\nwww.example.com,python\n"
+		);
+
+		$store = pfb_alerts_unlock_drop('dnsbl', $store, ['example.com', 'www.example.com']);
+
+		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
+		$this->assertSame('', trim($content), 'both tokens must be gone after sequential lock+unset');
+		$this->assertSame([], $store);
 	}
 
 	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void

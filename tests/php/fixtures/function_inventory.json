@@ -294,6 +294,33 @@
             }
         ]
     },
+    "pfb_alerts_unlock_drop": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "type",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "store",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "tokens",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_alias_autocomplete_lists": {
         "returnsRef": false,
         "returnType": "array",
