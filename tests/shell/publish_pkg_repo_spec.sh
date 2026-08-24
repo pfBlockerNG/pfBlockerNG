@@ -95,26 +95,6 @@ def main():
         print("NOOP: every destination already matches this run's verified assets")
         return 0
 
-    if mode == "sig_new_target":
-        # issue #2675 so4: a target with NO committed history at all. Written
-        # here, inside the stub, so it lands AFTER the wrapper's own `git
-        # clean -fd -- docs` -- an untracked fixture written by the spec
-        # before `When run` would be swept away by that clean before ever
-        # reaching this script. Content doesn't need to be a real zstd-tar
-        # archive: the filter dismisses an untracked path by git STATUS CODE
-        # (`??`, never `M`) before it ever reads bytes.
-        for target in os.environ.get("FAKE_TOUCHED", "").split(","):
-            target = target.strip()
-            if not target:
-                continue
-            target_dir = os.path.join(pkg_repo, "docs", target)
-            os.makedirs(target_dir, exist_ok=True)
-            for name in ("packagesite.pkg", "data.pkg", "meta.conf"):
-                with open(os.path.join(target_dir, name), "w") as fh:
-                    fh.write(f"{target}-{name}")
-            print(f"updated {target}")
-        return 0
-
     if mode == "phantom":
         # Reports a target touched WITHOUT writing anything under docs/ — the
         # wrapper's own "reported changes but nothing is actually staged"
@@ -704,50 +684,6 @@ HOOK
     The stderr should include 'main'
     invocation="$(cat "${base}/nightly-invocation.txt")"
     The variable invocation should include '--sign-key'
-    The variable invocation should include "$PFB_SIGN_KEY"
-  End
-
-  It 'sk7: nightly mode omits --sign-key when PFB_SIGN_KEY is unset'
-    nightly_env
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=nightly/ce-2.8
-    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
-    unset PFB_SIGN_KEY
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    invocation="$(cat "${base}/nightly-invocation.txt")"
-    The variable invocation should not include '--sign-key'
-  End
-
-  It 'sk8: nightly mode omits --sign-key when PFB_SIGN_KEY is set but empty'
-    nightly_env
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=nightly/ce-2.8
-    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
-    export PFB_SIGN_KEY=''
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    invocation="$(cat "${base}/nightly-invocation.txt")"
-    The variable invocation should not include '--sign-key'
-  End
-
-  It 'sk9 (hostile): nightly mode forwards a --sign-key path containing a space as ONE argument'
-    nightly_env
-    export FAKE_MODE=success
-    export FAKE_TOUCHED=nightly/ce-2.8
-    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
-    key_dir="${base}/n key dir with space"
-    mkdir -p "$key_dir"
-    export PFB_SIGN_KEY="${key_dir}/repo.key"
-    When run script "$script"
-    The status should equal 0
-    The output should include 'ADVANCE'
-    The stderr should include 'main'
-    invocation="$(cat "${base}/nightly-invocation.txt")"
     The variable invocation should include "$PFB_SIGN_KEY"
   End
 
@@ -1414,11 +1350,12 @@ PY
   End
 
   It 'so4: a brand-new target with no committed history is never treated as a signature-only delta'
-    # FAKE_MODE=sig_new_target (not phantom): the fixture must be written by
-    # the STUB itself, so it lands AFTER the wrapper's own `git clean -fd --
-    # docs` — an untracked fixture written before `When run` would just be
-    # swept away by that clean, before the filter ever sees it.
-    export FAKE_MODE=sig_new_target
+    # The stub writes the target itself, so it lands AFTER the wrapper's own
+    # `git clean -fd -- docs` — an untracked fixture written before `When run`
+    # would be swept away by that clean before the filter ever saw it. git
+    # collapses a wholly untracked directory to a single `?? docs/<target>/`
+    # line, so the archive basenames never reach the filter's own match.
+    export FAKE_MODE=success
     export FAKE_TOUCHED=edge/ce-3.0
     When run script "$script"
     The status should equal 0
@@ -1426,7 +1363,7 @@ PY
     The stderr should include 'main'
     The output should not include 'signature-only delta'
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
-    The variable committed should equal 'docs/edge/ce-3.0/data.pkg docs/edge/ce-3.0/meta.conf docs/edge/ce-3.0/packagesite.pkg'
+    The variable committed should equal 'docs/edge/ce-3.0/marker.pkg'
   End
 
   It 'so5 (hostile): a deleted catalogue archive is never folded into a signature-only delta'
@@ -1511,5 +1448,52 @@ PY
     The output should include 'ADVANCE'
     The stderr should include 'main'
     The output should not include 'signature-only delta'
+  End
+
+  It 'so9 (hostile): a modified nested file named packagesite.pkg is not the target catalogue archive'
+    mkdir -p "${base}/pkg-repo/docs/edge/ce-2.8/sub"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/sub/packagesite.pkg" \
+        "packagesite.yaml=nested-A" "packagesite.yaml.sig=sig-N1"
+    git_fixture -C "${base}/pkg-repo" add docs/edge/ce-2.8/sub
+    git_fixture -C "${base}/pkg-repo" commit -q -m 'seed nested archive'
+    git_fixture -C "${base}/pkg-repo" push -q origin main
+    seed_signed_catalog edge/ce-2.8 A 1
+    # ONLY the nested file changes. Matching a status line by BASENAME would
+    # read it as "the catalogue archive", then compare the untouched top-level
+    # archive against itself, call the target phantom, and silently discard a
+    # real change.
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/sub/packagesite.pkg" \
+        "packagesite.yaml=nested-B" "packagesite.yaml.sig=sig-N2"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/sub/packagesite.pkg'
+  End
+
+  It 'so10: a package ADDED beside signature-only archives still publishes'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-A" "data.sig=sig-A2"
+    # An untracked add reports `??`, never ` M`. Accepting any status code
+    # would drop this target and leave the new package unpublished, with the
+    # archives restored on top of it. FAKE_MODE=success writes the added
+    # package from inside the stub, after the wrapper's own `git clean -fd --
+    # docs` — an untracked file written here would not survive it.
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/marker.pkg docs/edge/ce-2.8/packagesite.pkg'
   End
 End

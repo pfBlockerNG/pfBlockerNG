@@ -36,19 +36,44 @@ except ImportError:  # script directory is also a direct import root
 _READ_ERRORS = (OSError, PkgError, tarfile.TarError, EOFError, ValueError)
 
 
-def _read_members(path: Path) -> dict[str, bytes]:
-    """Every regular-file member of the zstd tar at ``path``, by member name."""
+def _read_members(path: Path) -> dict[str, tuple[bytes, bytes]]:
+    """Every member of the zstd tar at ``path`` as ``name -> (type, content)``.
+
+    A non-regular member (directory, symlink, hardlink, device) contributes its
+    link target in place of file data: dropping such members instead would let an
+    archive that gained or lost one compare equal to one that did not. A duplicate
+    name is rejected outright — keeping the last of them leaves a shadowed member
+    that could differ unseen.
+    """
     tar_bytes = zstd_decompress(path.read_bytes())
     with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
-        members: dict[str, bytes] = {}
+        members: dict[str, tuple[bytes, bytes]] = {}
         for ti in tf.getmembers():
+            if ti.name in members:
+                raise PkgError(f"{path}: duplicate archive member {ti.name!r}")
             if not ti.isfile():
+                members[ti.name] = (ti.type, ti.linkname.encode())
                 continue
             extracted = tf.extractfile(ti)
             if extracted is None:
                 raise PkgError(f"{path}: member {ti.name!r} carries no data")
-            members[ti.name] = extracted.read()
+            members[ti.name] = (ti.type, extracted.read())
         return members
+
+
+def public_key_members(archive: str | Path) -> list[bytes] | None:
+    """The bytes of every member whose name ends `.pub`, or None if ``archive``
+    cannot be read as a zstd catalogue archive.
+
+    Returned verbatim, `$PKGSIGN:` header included, because that is what the
+    archive holds: the publishers compare this against a freshly derived member
+    to decide whether a destination already carries the key they sign with.
+    """
+    try:
+        members = _read_members(Path(archive))
+    except _READ_ERRORS:
+        return None
+    return [data for name, (_kind, data) in sorted(members.items()) if name.endswith(".pub")]
 
 
 def sig_only_reason(old_archive: str | Path, new_archive: str | Path) -> str | None:

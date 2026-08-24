@@ -11,7 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _workflow_steps import extract_step
+from _workflow_steps import extract_job, extract_step
 
 REPUBLISH = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
 PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
@@ -23,6 +23,13 @@ PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encodin
 # forwarded from the WRONG source. release-published.yml renamed its step
 # "Stage the pkg catalogue" (issue #2389: gate-before-announce); pkg-republish.yml's
 # is untouched and stays "Publish the pkg catalogue".
+# The job each workflow runs publish-pkg-repo.sh from. release-published.yml
+# also runs it from `promote-pkg-repo`, which never invokes the publisher and
+# must therefore never see the signing key.
+_SIGN_KEY_JOBS = {
+    PUBLISHED: "publish-pkg-repo",
+    REPUBLISH: "publish",
+}
 _STEP_NAMES = {
     PUBLISHED: "Stage the pkg catalogue",
     REPUBLISH: "Publish the pkg catalogue",
@@ -68,21 +75,32 @@ def test_republish_and_published_callbacks_forward_exact_run_identity() -> None:
 
 
 def test_publish_step_wires_pfb_sign_key_from_materialised_secret() -> None:
-    """issue #2675 step 1: both workflows materialise PFB_PKG_SIGNING_KEY to a
-    file BEFORE the publish/stage step, and that step exports PFB_SIGN_KEY at
-    the same path so publish-pkg-repo.sh signs the catalogue it (re)generates."""
-    for workflow, step_name in _STEP_NAMES.items():
-        assert "secrets.PFB_PKG_SIGNING_KEY" in workflow
-        materialise_index = workflow.index("secrets.PFB_PKG_SIGNING_KEY")
-        assert f'> "{_SIGN_KEY_PATH}"' in workflow
+    """issue #2675: both workflows materialise PFB_PKG_SIGNING_KEY to a file
+    BEFORE the publish/stage step, and that step exports PFB_SIGN_KEY at the
+    same path so publish-pkg-repo.sh signs the catalogue it (re)generates.
 
-        step = extract_step(workflow, step_name)
+    Scoped to the job that runs the step, never the whole file:
+    release-published.yml runs publish-pkg-repo.sh from two jobs, so a
+    file-global index could pair the key with the promote job that must never
+    receive it. The `umask` is asserted with the redirect because the key is a
+    private half — a default-umask file would be world-readable.
+    """
+    for workflow, job_name in _SIGN_KEY_JOBS.items():
+        step_name = _STEP_NAMES[workflow]
+        job = extract_job(workflow, job_name)
+        assert "secrets.PFB_PKG_SIGNING_KEY" in job
+        materialise_index = job.index("secrets.PFB_PKG_SIGNING_KEY")
+        assert "umask 077" in job
+        assert f'> "{_SIGN_KEY_PATH}"' in job
+
+        step = extract_step(job, step_name)
         assert f'export PFB_SIGN_KEY="{_SIGN_KEY_PATH}"' in step
 
-        publish_step_index = workflow.index(f"- name: {step_name}")
+        publish_step_index = job.index(f"- name: {step_name}")
         assert materialise_index < publish_step_index, (
             f"{step_name}: the signing key must be materialised before this step runs"
         )
+        assert "secrets.PFB_PKG_SIGNING_KEY" not in extract_job(workflow, "render-site")
 
 
 def test_manual_republish_rejects_release_selector_before_api(tmp_path: Path) -> None:

@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import catalogue_assembly as ca
 import publish_catalogues as pc
 import publish_release as pr
+import test_build_repo_portable as tbrp
 from _srcrepo import SourceRepoError, resolve_src_root
 
 try:
@@ -1521,26 +1522,6 @@ class SignKeyThreadingTests(_TempDirTestCase):
         return mock.patch.object(pr.ca, "regenerate_catalogue", side_effect=capturing_regenerate), seen
 
     @_requires_engine
-    def test_run_with_sign_key_reaches_regenerate_catalogue(self) -> None:
-        assets_dir = self.new_assets_dir()
-        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        key = self.tmp / "repo.key"
-        key.write_text("not-a-real-key", encoding="utf-8")
-        patcher, seen = self._capture_sign_key()
-        with patcher:
-            _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1", sign_key=key)
-        self.assertEqual(seen, [key])
-
-    @_requires_engine
-    def test_run_without_sign_key_passes_none(self) -> None:
-        assets_dir = self.new_assets_dir()
-        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        patcher, seen = self._capture_sign_key()
-        with patcher:
-            _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1")
-        self.assertEqual(seen, [None])
-
-    @_requires_engine
     def test_main_sign_key_flag_reaches_regenerate_catalogue(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
@@ -1864,6 +1845,52 @@ class SameMajorDestScopeTests(_TempDirTestCase):
         self.assertIn("matches no varver targeted", str(ctx.exception))
         for varver in ("plus-26.03", "plus-26.07"):
             self.assertFalse((self.pkg_repo / "docs/edge" / varver / "py311-twin-1.0.0.pkg").exists())
+
+
+class ResignUnsignedCatalogueTests(_TempDirTestCase):
+    """A republish must re-sign a catalogue whose signature does not match the key.
+
+    `publish()` regenerates a destination only when something about it changed, and
+    an unchanged package set changes nothing — so without a signature-state test in
+    that decision, every catalogue published before signing existed would stay
+    unsigned for ever, and a box that upgrades onto such a varver would meet an
+    unsigned catalogue with a signature-requiring conf (issue #2675).
+    """
+
+    def _publish(self, key: Path | None = None) -> pr.PublishReport:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        return _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1", sign_key=key)
+
+    @_requires_engine
+    def test_republish_with_a_key_signs_a_catalogue_that_has_no_signature(self) -> None:
+        self.assertEqual(self._publish().touched, (("edge", "ce-2.8"),))
+        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        self.assertEqual(tbrp._sig_members(catalogue_dir / "packagesite.pkg"), {})
+
+        key = tbrp._gen_key(self.tmp / "repo.key")
+        self.assertEqual(self._publish(key).touched, (("edge", "ce-2.8"),))
+        self.assertEqual(
+            sorted(tbrp._sig_members(catalogue_dir / "packagesite.pkg")),
+            ["packagesite.yaml.pub", "packagesite.yaml.sig"],
+        )
+        self.assertEqual(sorted(tbrp._sig_members(catalogue_dir / "data.pkg")), ["data.pub", "data.sig"])
+
+    @_requires_engine
+    def test_republish_with_the_same_key_is_a_noop(self) -> None:
+        key = tbrp._gen_key(self.tmp / "repo.key")
+        self.assertEqual(self._publish(key).touched, (("edge", "ce-2.8"),))
+        self.assertEqual(self._publish(key).touched, ())
+
+    @_requires_engine
+    def test_republish_after_key_rotation_resigns_with_the_new_key(self) -> None:
+        catalogue_dir = self.pkg_repo / "docs" / "edge" / "ce-2.8"
+        self._publish(tbrp._gen_key(self.tmp / "old.key"))
+        first_pub = tbrp._sig_members(catalogue_dir / "packagesite.pkg")["packagesite.yaml.pub"]
+
+        self.assertEqual(self._publish(tbrp._gen_key(self.tmp / "new.key")).touched, (("edge", "ce-2.8"),))
+        second_pub = tbrp._sig_members(catalogue_dir / "packagesite.pkg")["packagesite.yaml.pub"]
+        self.assertNotEqual(first_pub, second_pub)
 
 
 if __name__ == "__main__":

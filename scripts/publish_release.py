@@ -77,6 +77,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(_SCRIPTS_DIR))
 
 import catalogue_assembly as ca
+import catalogue_sig_only as cso
 import publish_catalogues as pc
 
 _SITE_SUBDIR = "docs"
@@ -311,6 +312,22 @@ def _catalogue_descriptor_complete(dest_dir: Path, engine: pc.Engine) -> bool:
     return all((dest_dir / name).is_file() for name in (*brp._CATALOG_PKG_FILES, "meta.conf"))
 
 
+def _catalogue_carries_key(dest_dir: Path, engine: pc.Engine, sign_key: Path) -> bool:
+    """True when every catalogue archive under ``dest_dir`` already embeds the
+    public half of ``sign_key``.
+
+    Nothing else in the `changed` decision can see a signature, and a destination
+    whose package set has not moved is skipped — so a catalogue published before
+    signing existed, or one still carrying a retired key, would never be
+    re-signed, and a box landing on that varver would meet an unsigned catalogue
+    with a signature-requiring conf (issue #2675). An unreadable archive answers
+    False: republishing it is the recoverable direction.
+    """
+    brp = engine.build_repo_portable
+    expected = [brp.PKGSIGN_ECDSA_HEAD + brp.signing_public_der(sign_key)]
+    return all(cso.public_key_members(dest_dir / name) == expected for name in brp._CATALOG_PKG_FILES)
+
+
 @dataclass(frozen=True)
 class PublishReport:
     touched: tuple[tuple[str, str], ...]
@@ -351,6 +368,8 @@ def publish(
             if _drop_assets(dest_dir, asset_map):
                 changed = True
             if not changed and not _catalogue_descriptor_complete(dest_dir, engine):
+                changed = True
+            if not changed and sign_key is not None and not _catalogue_carries_key(dest_dir, engine, sign_key):
                 changed = True
             # Heal historical holes before prune: copy every canonical version
             # still on a slower tagged channel (never nightly) onto this dest.
