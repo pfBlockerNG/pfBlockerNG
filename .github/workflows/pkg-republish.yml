@@ -159,6 +159,13 @@ jobs:
           ROUTE_MATRIX=$(sh scripts/read-version-matrix.sh --print-route | jq -c .)
           echo "route_matrix=${ROUTE_MATRIX}" >> "$GITHUB_OUTPUT"
 
+      - name: Materialise the catalogue signing key
+        env:
+          PFB_PKG_SIGNING_KEY: ${{ secrets.PFB_PKG_SIGNING_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$PFB_PKG_SIGNING_KEY" > "${RUNNER_TEMP}/pfb-pkg-signing.key"
+
       - name: Publish the pkg catalogue
         env:
           SOURCE_REPOSITORY: ${{ github.repository }}
@@ -176,6 +183,7 @@ jobs:
           export PFB_SRC="$GITHUB_WORKSPACE"
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           export ASSETS_DIR="$RUNNER_TEMP/assets"
+          export PFB_SIGN_KEY="${RUNNER_TEMP}/pfb-pkg-signing.key"
           sh scripts/publish-pkg-repo.sh
 
   render-site:

@@ -75,6 +75,10 @@
 #                        anything else is a usage error. Only "direct" is valid
 #                        when PUBLISH_KIND=nightly.
 #   MAX_PUSH_ATTEMPTS      bounded retry count (default 5)
+#   PFB_SIGN_KEY           path to an ECDSA private key (PEM); when set and
+#                        non-empty, passed to the publisher as --sign-key so the
+#                        catalogue it (re)generates is signed (issue #2675).
+#                        Unset or empty = unsigned, exactly today's behaviour.
 # Optional — PUBLISH_STAGE=stage only, when GITHUB_ACTIONS-style outputs are
 # wanted:
 #   GITHUB_OUTPUT           when set and non-empty, this run appends
@@ -410,7 +414,7 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             esac
             case "$PUBLISH_KIND" in
                 tagged)
-                    python3 "${PFB_SRC}/scripts/${publisher_script}" \
+                    set -- \
                         --source-repository "$SOURCE_REPOSITORY" \
                         --release-id "$RELEASE_ID" \
                         --release-tag "$RELEASE_TAG" \
@@ -418,16 +422,22 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                         --source-run-id "$SOURCE_RUN_ID" \
                         --assets-dir "$ASSETS_DIR" \
                         --pkg-repo "$PKG_REPO" \
-                        --route-matrix "$ROUTE_MATRIX" >"$out_file" 2>&1 || publish_rc=$?
+                        --route-matrix "$ROUTE_MATRIX"
                     ;;
                 nightly)
-                    python3 "${PFB_SRC}/scripts/${publisher_script}" \
+                    set -- \
                         --handoff "$HANDOFF_FILE" \
                         --results-dir "$RESULTS_DIR" \
                         --pkg-repo "$PKG_REPO" \
-                        --source-run-id "$SOURCE_RUN_ID" >"$out_file" 2>&1 || publish_rc=$?
+                        --source-run-id "$SOURCE_RUN_ID"
                     ;;
             esac
+            # "$@" (not string interpolation) so a key path carrying a space or a
+            # single quote still reaches the publisher as ONE argument.
+            if [ -n "${PFB_SIGN_KEY:-}" ]; then
+                set -- "$@" --sign-key "$PFB_SIGN_KEY"
+            fi
+            python3 "${PFB_SRC}/scripts/${publisher_script}" "$@" >"$out_file" 2>&1 || publish_rc=$?
             if [ "$publish_rc" -ne 0 ]; then
                 echo "::error::${publisher_script} failed — aborting before any git mutation" >&2
                 cat "$out_file" >&2

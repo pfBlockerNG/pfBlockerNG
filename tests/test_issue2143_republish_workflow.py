@@ -41,6 +41,11 @@ _IDENTITY_VALUES = {
 }
 _SOURCE_RUN_ID_VALUE = "${{ github.run_id }}:${{ github.run_attempt }}"
 
+# issue #2675 step 1: PFB_PKG_SIGNING_KEY (the Actions secret) is materialised to
+# this exact path, then handed to publish-pkg-repo.sh as PFB_SIGN_KEY — never
+# echoed, never passed on a command line.
+_SIGN_KEY_PATH = "${RUNNER_TEMP}/pfb-pkg-signing.key"
+
 
 def test_manual_republish_requires_exact_release_identity() -> None:
     assert "release_id:" in REPUBLISH
@@ -60,6 +65,24 @@ def test_republish_and_published_callbacks_forward_exact_run_identity() -> None:
             assert f"{key}: {value}" in step
         assert f"SOURCE_RUN_ID: {_SOURCE_RUN_ID_VALUE}" in step
         assert "gh release list" not in workflow
+
+
+def test_publish_step_wires_pfb_sign_key_from_materialised_secret() -> None:
+    """issue #2675 step 1: both workflows materialise PFB_PKG_SIGNING_KEY to a
+    file BEFORE the publish/stage step, and that step exports PFB_SIGN_KEY at
+    the same path so publish-pkg-repo.sh signs the catalogue it (re)generates."""
+    for workflow, step_name in _STEP_NAMES.items():
+        assert "secrets.PFB_PKG_SIGNING_KEY" in workflow
+        materialise_index = workflow.index("secrets.PFB_PKG_SIGNING_KEY")
+        assert f'> "{_SIGN_KEY_PATH}"' in workflow
+
+        step = extract_step(workflow, step_name)
+        assert f'export PFB_SIGN_KEY="{_SIGN_KEY_PATH}"' in step
+
+        publish_step_index = workflow.index(f"- name: {step_name}")
+        assert materialise_index < publish_step_index, (
+            f"{step_name}: the signing key must be materialised before this step runs"
+        )
 
 
 def test_manual_republish_rejects_release_selector_before_api(tmp_path: Path) -> None:
