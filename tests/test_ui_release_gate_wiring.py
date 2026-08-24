@@ -29,6 +29,7 @@ UI_WORKFLOW = ROOT / ".github/workflows/ui-tests.yml"
 SMOKE_WORKFLOW = ROOT / ".github/workflows/smoke.yml"
 SMOKE_SINGLE_WORKFLOW = ROOT / ".github/workflows/smoke-single.yml"
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+PUBLISHED_WORKFLOW = ROOT / ".github/workflows/release-published.yml"
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 _STEP_HEADER_RE = re.compile(r"^      - ")
@@ -979,7 +980,7 @@ def test_release_side_artifact_name_matches_both_consumer_sides(tmp_path: Path) 
 
 def test_release_channel_metadata_and_edge_following_do_not_start_a_second_release() -> None:
     release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    published = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
+    published = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
     assert "pfBlockerNG-Release-Channel" in release, release
     assert "pfBlockerNG-Release-Channel" in published, published
     assert "workflow_dispatch" not in published, published
@@ -988,10 +989,10 @@ def test_release_channel_metadata_and_edge_following_do_not_start_a_second_relea
 
 
 def test_tagged_release_recipe_never_mutates_the_nightly_port() -> None:
-    release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    sync = release.split("sync-ports-fork:", 1)[1]
+    published = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
+    sync = published.split("sync-ports-fork:", 1)[1]
     assert "pfSense-pkg-pfBlockerNG-nightly" not in sync, sync
-    assert 'PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"' not in release
+    assert 'PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"' not in published
 
 
 def test_smoke_single_nightly_fixture_uses_utc_timestamp_and_source_sha() -> None:

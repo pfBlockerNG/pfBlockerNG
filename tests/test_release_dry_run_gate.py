@@ -1,4 +1,4 @@
-"""Pin fail-closed `dry_run` handling for the current release mutation jobs."""
+"""Pin fail-closed `dry_run` handling for draft-workflow mutation jobs."""
 
 from __future__ import annotations
 
@@ -13,18 +13,14 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/release.yml"
 
-# Current jobs that create or publish release artifacts. The pkg catalogue publish
-# is not among them: it consumes the PUBLISHED Release's assets, so it lives in
-# release-published.yml (`publish-pkg-repo`) on the real `release: published` event. The ports
-# bump stayed -- when a release run finishes, the only things left are "write the
-# changelog" and "publish".
+# Current jobs that create or mutate draft-workflow artifacts. Published-release
+# effects are not among them: `release-published.yml` has no dispatch dry-run mode.
 MUTATION_JOBS = {
     "prepare-release",
     "tag-release",
     "release",
     "attach-pkgs",
     "draft-healthcheck",
-    "sync-ports-fork",
 }
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
