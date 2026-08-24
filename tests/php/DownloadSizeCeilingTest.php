@@ -284,7 +284,7 @@ final class DownloadSizeCeilingTest extends TestCase
 	 *
 	 * The allow-list holds each exempt call's WHOLE statement, terminator included,
 	 * not a prefix of it. A prefix would exempt everything that merely starts the
-	 * same way, so `exec("{$pfb['script']} xlsx" . $anything)` -- a genuinely
+	 * same way, so `exec("{$pfb['script']} et" . $anything)` -- a genuinely
 	 * unguarded extraction wearing an exempt call's opening -- would pass. Changing
 	 * an exempt call means updating its entry here, which is the point: the
 	 * exemption is for that call as written, not for its first few characters.
@@ -299,11 +299,6 @@ final class DownloadSizeCeilingTest extends TestCase
 			'exec("{$pfb[\'script\']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");',
 			'exec("{$pfb[\'script\']} asn_table {$elog}");',
 			'exec("{$pfb[\'script\']} et {$header_esc} x x x x x {$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}");',
-			// processxlsx() reports success by the output file existing rather than by
-			// an exit status, so a child killed at the ceiling would publish a
-			// truncated feed as a success. Capping it needs an exit gate first
-			// (issue #2666).
-			'exec("{$pfb[\'script\']} xlsx {$header_esc} {$elog}");',
 			// Lists an archive; extracts nothing.
 			'exec("/usr/bin/tar -tf {$file_dwn_esc}");',
 			// Capped. This one stays a prefix: it covers ten call sites with ten
@@ -382,6 +377,34 @@ final class DownloadSizeCeilingTest extends TestCase
 		}
 		$this->assertGreaterThan(1, $seen,
 			'the sweep must actually find extraction calls — a pattern that matches nothing proves nothing');
+	}
+
+	/**
+	 * Scenario: the XLSX ingest is decided by an exit status
+	 *
+	 * Given  the XLSX branch of pfb_download()
+	 * When   the source is read
+	 * Then   the helper script runs under the extraction ceiling and its own exit
+	 *        status decides the ingest, instead of the output file's existence
+	 *        deciding it (issue #2666) -- a helper killed at the ceiling has to
+	 *        refuse the feed, not publish the truncated remains of one. And with
+	 *        the status deciding, the live publication is no longer unlinked up
+	 *        front, so a refused refresh leaves the feed already in service.
+	 */
+	public function test_xlsx_ingest_gates_on_the_helper_exit_status(): void
+	{
+		$start = strpos(self::$downloadBody, "if (strpos(\$xlsxtest, '.xlsx') !== FALSE) {");
+		$this->assertNotFalse($start, 'the XLSX branch must still be in pfb_download()');
+		$end = strpos(self::$downloadBody, '} else {', $start);
+		$this->assertNotFalse($end);
+		$branch = substr(self::$downloadBody, $start, $end - $start);
+
+		$this->assertStringContainsString(
+			'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx {$header_esc} {$elog}"), $output, $retval);',
+			$branch);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $branch);
+		$this->assertStringNotContainsString('file_exists("{$orig_download}")', $branch);
+		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}")', $branch);
 	}
 
 	/**

@@ -2012,25 +2012,69 @@ processet() {
 
 
 # Function to extract IP addresses from XLSX files.
+#
+# issue #2666: every step reports, and the publication is staged. Neither tar's
+# status was read before, and the writing pipeline's status was read by nobody at
+# all, so the function's own status was its closing `echo`'s -- always 0 -- and
+# the caller had nothing to gate on but the output file existing. The two
+# extractions are therefore run one per step with the status carried forward, and
+# the addresses land on a staged path that only replaces the live ".orig" once
+# every step has succeeded. A failing status is returned verbatim (rather than
+# collapsed to 1) so a child killed at issue #2658's extraction ceiling still
+# reaches the caller as the 153 that names that ceiling.
 processxlsx() {
 	if [ ! -x "${pathtar}" ]; then
 		log='Application [ TAR ] Not found, cannot proceed.'
 		echo "${log}" | tee -a "${errorlog}"
-		return
+		return 1
 	fi
 
-	if [ -s "${pfborig}${alias}.raw" ]; then
-		"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}"
-		"${pathtar}" -xOf "${tmpxlsx}"*.[xX][lL][sS][xX] "xl/sharedStrings.xml" | \
-			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" | LC_ALL=C sort -u > "${pfborig}${alias}.orig"
-		rm -r "${tmpxlsx}"*
-
-		countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
-		echo; echo "Final count [ ${countf} ]"
-	else
+	if [ ! -s "${pfborig}${alias}.raw" ]; then
 		echo 'XLSX download file missing'
 		echo " [ ${alias} ] XLSX download file missing [ ${now} ]" >> "${errorlog}"
+		return 1
 	fi
+
+	xlsxshared="${tmpxlsx}sharedStrings.xml"
+	xlsxstage="${pfborig}${alias}.orig.tmp"
+
+	# The container holds the workbook; the workbook holds the shared-strings
+	# part the addresses are read out of. `tar -xOf` writes that part to its own
+	# file instead of straight into the pipe: POSIX sh has no pipefail, so piped
+	# it would report only the trailing `sort`'s status and a workbook that could
+	# not be read at all would still "succeed" with an empty publication.
+	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}"
+	xlsxrc=$?
+	if [ "${xlsxrc}" -eq 0 ]; then
+		"${pathtar}" -xOf "${tmpxlsx}"*.[xX][lL][sS][xX] "xl/sharedStrings.xml" > "${xlsxshared}"
+		xlsxrc=$?
+	fi
+	if [ "${xlsxrc}" -eq 0 ]; then
+		grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" "${xlsxshared}" | LC_ALL=C sort -u > "${xlsxstage}"
+		# `sort` is the stage that writes the publication, so its status is the
+		# one the ceiling shows up in; `grep`'s 1 for a workbook carrying no
+		# address is not a failure and never was.
+		xlsxrc=$?
+	fi
+	rm -rf "${tmpxlsx}"*
+
+	if [ "${xlsxrc}" -ne 0 ]; then
+		rm -f "${xlsxstage}"
+		echo 'XLSX extraction failed'
+		echo " [ ${alias} ] XLSX extraction failed, exit ${xlsxrc}; keeping existing [ ${now} ]" >> "${errorlog}"
+		return "${xlsxrc}"
+	fi
+
+	if ! mv -f "${xlsxstage}" "${pfborig}${alias}.orig"; then
+		rm -f "${xlsxstage}"
+		echo 'XLSX publish failed'
+		echo " [ ${alias} ] XLSX publish failed; keeping existing [ ${now} ]" >> "${errorlog}"
+		return 1
+	fi
+
+	countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
+	echo; echo "Final count [ ${countf} ]"
+	return 0
 }
 
 
@@ -2195,7 +2239,11 @@ case "${1}" in
 		processet
 		;;
 	xlsx)
+		# issue #2666: the tail's bare `exitnow` defaults to 0, so processxlsx()'s
+		# status has to be threaded through here (as `recompute` does) or the
+		# caller's exit gate reads success for every run.
 		processxlsx
+		exitnow "$?"
 		;;
 	remove)
 		remove
