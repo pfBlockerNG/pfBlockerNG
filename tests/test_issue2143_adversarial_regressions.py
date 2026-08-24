@@ -11,7 +11,7 @@ from scripts.release_version import derive_destinations, derive_destinations_fro
 from tests.gitenv import scrubbed_git_env
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
 DOCS = (ROOT / "docs/misc/release-channels.md").read_text(encoding="utf-8")
 
 
@@ -82,7 +82,7 @@ def test_other_tags_ordered_or_branch_mapped_never_change_current_tag_destinatio
 
 
 def test_sync_ports_uses_only_exact_channel_recipe_paths() -> None:
-    sync = RELEASE.split("sync-ports-fork:", 1)[1]
+    sync = PUBLISHED.split("sync-ports-fork:", 1)[1]
     assert '"stable") PORT_PATH="net/pfSense-pkg-pfBlockerNG"' in sync
     assert '"testing") PORT_PATH="net/pfSense-pkg-pfBlockerNG-testing"' in sync
     assert '"edge") PORT_PATH="net/pfSense-pkg-pfBlockerNG-edge"' in sync
