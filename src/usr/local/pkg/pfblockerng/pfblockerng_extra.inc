@@ -7530,6 +7530,8 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 			$pfb['ipconfig'][$cfg_key] = $clists[$supp_key]['base64'] ?? '';
 			pfb_create_suppression_file();
 		}
+		// issue #2670: durable suppress replaces the temporary unlock row
+		pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
 		return $result;
 	}
 
@@ -7574,6 +7576,8 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 		}
 		$data = isset($metadata['data']) && is_array($metadata['data']) ? $metadata['data'] : [];
 		if (isset($data[$ip])) {
+			// issue #2670: already permitted — still drop the stale unlock row
+			pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
 			$result['redirect'] = FALSE;
 			return $result;
 		}
@@ -7599,6 +7603,8 @@ function pfb_alerts_ip_action($action, string $ip, string $table, string $descr,
 		$aname = substr(substr($table, 4), 0, -3);
 		touch("{$pfb['permitdir']}/{$aname}_custom_v{$vtype}.update");
 		$result['savemsg'] = "The IP [ {$ip} ] has been added to the [ {$table} ] Permit Alias customlist.";
+		// issue #2670: durable permit replaces the temporary unlock row
+		pfb_unlock('lock', 'ip', $ip_unlock, $ip, $table);
 		return $result;
 	}
 

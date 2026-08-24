@@ -2539,3 +2539,63 @@ def test_unlocked_panel_renders_whitelist_plus_next_to_relock(
     finally:
         _write_or_remove_guest_file(vm, IP_UNLOCK_STORE, ip_before)
         _write_or_remove_guest_file(vm, DNSBL_UNLOCK_STORE, dnsbl_before)
+
+
+@pytest.mark.ui_render
+def test_addwhitelistdom_clears_unlock_store_and_drops_unlocked_panel_row(
+    webui: WebUI,
+    smoke_vm: helpers.SmokeVM,
+) -> None:
+    """issue #2670: whitelisting an unlocked domain must drop the unlock-store row.
+
+    Given: the DNSBL unlock store lists a unique domain (Unlocked-panel state).
+    When: addwhitelistdom POSTs that same domain (the panel plus click).
+    Then: the domain is in the DNSBL whitelist, gone from the unlock store, and
+        absent from the Unlocked panel on the next GET.
+    """
+    vm = smoke_vm
+    domain = helpers.unique_domain("ui2670")
+    dnsbl_type = "python"
+    original = helpers.config_get(vm, CFG_WHITELIST)
+    dnsbl_before = _read_guest_file(vm, DNSBL_UNLOCK_STORE)
+    try:
+        assert domain not in _suppression_entries(vm, CFG_WHITELIST), (
+            f"Precondition failed: {domain} already in the DNSBL whitelist"
+        )
+        _write_or_remove_guest_file(vm, DNSBL_UNLOCK_STORE, f"{domain},{dnsbl_type}\n")
+
+        pre = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(pre.text), "alerts GET returned login form before whitelist (session lost)"
+        panel = _unlocked_panel_html(pre.text)
+        assert f"DNSBLWT|add|{domain}|{dnsbl_type}" in panel, (
+            f"Precondition failed: Unlocked panel missing plus for {domain}: {panel!r}"
+        )
+
+        resp = _post_action(
+            webui,
+            {
+                "addwhitelistdom": "true",
+                "domain": domain,
+                "table": dnsbl_type,
+                "dnsbl_wildcard": "false",
+                "dnsbl_exclude": "false",
+            },
+        )
+        assert not looks_like_login_page(resp.text), "addwhitelistdom POST returned the login form (session lost)"
+        assert domain in _suppression_entries(vm, CFG_WHITELIST), (
+            f"{domain} not written to the DNSBL whitelist after addwhitelistdom"
+        )
+
+        store_after = _read_guest_file(vm, DNSBL_UNLOCK_STORE) or ""
+        assert domain not in store_after, (
+            f"issue #2670: {domain} still in dnsbl_unlock after whitelist: {store_after!r}"
+        )
+
+        after = webui.get(ALERTS_PAGE)
+        assert not looks_like_login_page(after.text), "alerts GET returned login form after whitelist (session lost)"
+        assert f"DNSBL_LCK|{domain}" not in after.text, (
+            f"issue #2670: Unlocked panel still shows {domain} after whitelist"
+        )
+    finally:
+        helpers.config_set(vm, CFG_WHITELIST, original if original is not None else "")
+        _write_or_remove_guest_file(vm, DNSBL_UNLOCK_STORE, dnsbl_before)
