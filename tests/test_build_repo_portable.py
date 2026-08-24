@@ -34,6 +34,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 import sys
 import tarfile
 from pathlib import Path
@@ -4278,8 +4279,6 @@ _PKGSIGN_ECDSA_HEAD = b"$PKGSIGN:ecdsa$"
 
 def _gen_key(path: Path, curve: str = "secp384r1") -> Path:
     """An EC private key in PEM, via openssl (what the publisher will use)."""
-    import subprocess
-
     subprocess.run(
         ["openssl", "ecparam", "-name", curve, "-genkey", "-noout", "-out", str(path)],
         check=True,
@@ -4288,10 +4287,19 @@ def _gen_key(path: Path, curve: str = "secp384r1") -> Path:
     return path
 
 
-def _openssl_verify(digest: bytes, sig: bytes, pub_der: bytes, tmp_path: Path) -> bool:
-    """Reproduce pkg's ECDSA check: ECDSA-SHA256 over the BLAKE2b-512 digest."""
-    import subprocess
+def _pkg_signed_message(catalog: bytes) -> bytes:
+    """What pkg's FINGERPRINTS path actually signs: the SHA256 HEX string, 64 ASCII bytes.
 
+    `ecc_verify_cert_cb()` does `pkg_checksum_fd(fd, PKG_HASH_TYPE_SHA256_HEX)` and passes
+    it with `strlen()`, so the message is the hex text with NO NUL terminator. The
+    BLAKE2b-512 convention belongs to `ecc_verify_file()`, which serves PUBKEY mode — a
+    different signature_type than ours.
+    """
+    return hashlib.sha256(catalog).hexdigest().encode()
+
+
+def _openssl_verify(digest: bytes, sig: bytes, pub_der: bytes, tmp_path: Path) -> bool:
+    """Reproduce pkg's ECDSA cert check: ECDSA-SHA256 over the SHA256-hex message."""
     d = tmp_path / "verify.msg"
     s = tmp_path / "verify.sig"
     p = tmp_path / "verify.pub.der"
@@ -4380,11 +4388,14 @@ def test_signature_carries_the_pkgsign_ecdsa_header(tmp_path: Path) -> None:
         assert _sig_members(archive)[member].startswith(_PKGSIGN_ECDSA_HEAD)
 
 
-def test_signature_verifies_over_the_blake2b_digest(tmp_path: Path) -> None:
-    """The real cryptographic check, exactly as libpkg does it.
+def test_signature_verifies_over_the_sha256_hex_message(tmp_path: Path) -> None:
+    """The real cryptographic check, exactly as libpkg's FINGERPRINTS path does it.
 
-    BLAKE2b-512 over the UNCOMPRESSED catalogue member, then ECDSA-SHA256 over
-    that 64-byte digest, verified with the embedded public key.
+    Proven against a real libpkg (freebsd/pkg 13f9f98) built on a Linux box: the
+    signed message is the 64-character ASCII SHA256 HEX of the uncompressed catalogue
+    member, ECDSA-SHA256 over that. Signing the BLAKE2b-512 digest instead — the
+    convention `ecc_verify_file()` uses for PUBKEY mode — makes a real `pkg update`
+    fail with "ecc signature verification failure".
     """
     out, _ = _build_signed(tmp_path)
 
@@ -4394,10 +4405,10 @@ def test_signature_verifies_over_the_blake2b_digest(tmp_path: Path) -> None:
     ):
         sigs = _sig_members(archive)
         sig = sigs[f"{member}.sig"][len(_PKGSIGN_ECDSA_HEAD) :]
-        pub = sigs[f"{member}.pub"]
-        digest = hashlib.blake2b(_read_member(archive, member), digest_size=64).digest()
-        assert len(digest) == 64
-        assert _openssl_verify(digest, sig, pub, tmp_path), f"{member} signature did not verify"
+        pub = sigs[f"{member}.pub"][len(_PKGSIGN_ECDSA_HEAD) :]
+        message = _pkg_signed_message(_read_member(archive, member))
+        assert len(message) == 64, "the signed message is the hex text, not a raw digest"
+        assert _openssl_verify(message, sig, pub, tmp_path), f"{member} signature did not verify"
 
 
 def test_signature_does_not_verify_for_a_tampered_catalog(tmp_path: Path) -> None:
@@ -4409,10 +4420,9 @@ def test_signature_does_not_verify_for_a_tampered_catalog(tmp_path: Path) -> Non
     out, _ = _build_signed(tmp_path)
     sigs = _sig_members(out / "packagesite.pkg")
     sig = sigs["packagesite.yaml.sig"][len(_PKGSIGN_ECDSA_HEAD) :]
-    pub = sigs["packagesite.yaml.pub"]
+    pub = sigs["packagesite.yaml.pub"][len(_PKGSIGN_ECDSA_HEAD) :]
     tampered = _read_member(out / "packagesite.pkg", "packagesite.yaml") + b"x"
-    digest = hashlib.blake2b(tampered, digest_size=64).digest()
-    assert not _openssl_verify(digest, sig, pub, tmp_path)
+    assert not _openssl_verify(_pkg_signed_message(tampered), sig, pub, tmp_path)
 
 
 def test_public_member_is_der_on_the_signing_curve(tmp_path: Path) -> None:
@@ -4422,10 +4432,10 @@ def test_public_member_is_der_on_the_signing_curve(tmp_path: Path) -> None:
     trusted fingerprint is the SHA256 of these exact bytes, so any re-encoding
     silently invalidates every deployed fingerprint file.
     """
-    import subprocess
-
     out, key = _build_signed(tmp_path)
-    pub = _sig_members(out / "packagesite.pkg")["packagesite.yaml.pub"]
+    # The member carries the `$PKGSIGN:ecdsa$` header ahead of the key; the fingerprint is
+    # computed over what remains, which must be the DER byte-for-byte.
+    pub = _sig_members(out / "packagesite.pkg")["packagesite.yaml.pub"][len(_PKGSIGN_ECDSA_HEAD) :]
 
     assert not pub.startswith(b"-----BEGIN"), "the .pub member must be DER, not PEM"
     expected = subprocess.run(
@@ -4449,7 +4459,7 @@ def test_signing_refuses_a_curve_pkg_cannot_verify(tmp_path: Path) -> None:
     make_pkg(in_dir / "demo-1.0_1.pkg")
     key = _gen_key(tmp_path / "p256.key", "prime256v1")
 
-    with pytest.raises(brp.BuildRepoError, match="curve"):
+    with pytest.raises(brp.BuildRepoError, match="cannot verify signatures on curve"):
         brp.build_repo(in_dir, tmp_path / "out", sign_key=key)
 
 
@@ -4485,3 +4495,37 @@ def test_cli_sign_key_flag_signs_the_catalog(tmp_path: Path) -> None:
         "packagesite.yaml.pub",
         "packagesite.yaml.sig",
     ]
+
+
+def test_public_member_also_carries_the_pkgsign_header(tmp_path: Path) -> None:
+    """The `.pub` member needs the `$PKGSIGN:ecdsa$` prefix too, not just `.sig`.
+
+    Proven against a real libpkg (built from freebsd/pkg 13f9f98) before this test
+    existed: with the header on `.sig` only, `pkg update` fails with
+
+        pkg: error reading public key: error:1E08010C:DECODER routines::unsupported
+        pkg: No trusted certificate has been used to sign the repository
+
+    Cause: `pkg_repo_parse_sigkeys()` assigns `s->type` for EVERY member it parses,
+    keyed by basename. The `.pub` entry is parsed after `.sig`, and with no header it
+    defaults to "rsa", overwriting the "ecdsa" the `.sig` established. Verification
+    then runs the RSA/ossl signer, whose `_load_public_key_buf()` uses
+    `PEM_read_bio_PUBKEY` and cannot read our DER key.
+
+    Upstream avoids this by accident of implementation: `pack_command_sign()` never
+    resets `offset` between appends, so `iov[0]` still holds the header when it writes
+    the `.pub` member — i.e. real `pkg repo` prefixes BOTH members for non-RSA.
+    """
+    out, _ = _build_signed(tmp_path)
+
+    for archive, member in (
+        (out / "packagesite.pkg", "packagesite.yaml"),
+        (out / "data.pkg", "data"),
+    ):
+        sigs = _sig_members(archive)
+        assert sigs[f"{member}.pub"].startswith(_PKGSIGN_ECDSA_HEAD), (
+            f"{member}.pub lacks the header, so libpkg resets the signer type to rsa"
+        )
+        # The fingerprint is the sha256 of the cert bytes AFTER the header is stripped,
+        # so the DER must still be recoverable exactly.
+        assert sigs[f"{member}.pub"][len(_PKGSIGN_ECDSA_HEAD) :].startswith(b"\x30")
