@@ -32,7 +32,11 @@ def test_every_nightly_invocation_builds_without_durable_state() -> None:
     assert "needs.prepare.outputs.outcome" not in workflow
 
 
-def test_actionlint_exception_is_narrowly_scoped_to_the_queue_key() -> None:
+def test_actionlint_exception_is_narrowly_scoped_to_workflows_using_queue_max() -> None:
+    queue_error = 'unexpected key "queue" for "concurrency" section'
     assert yaml.safe_load(ACTIONLINT_CONFIG.read_text(encoding="utf-8")) == {
-        "paths": {".github/workflows/nightly.yml": {"ignore": ['unexpected key "queue" for "concurrency" section']}}
+        "paths": {
+            ".github/workflows/nightly.yml": {"ignore": [queue_error]},
+            ".github/workflows/release-published.yml": {"ignore": [queue_error]},
+        }
     }
