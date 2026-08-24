@@ -247,11 +247,14 @@ def _data_blob(objs: list[dict]) -> bytes:
 #
 # Every byte below follows freebsd/pkg (13f9f98); the details are unforgiving
 # because a mismatch fails only at verification, on the box:
-#   * ECDSA signs the BLAKE2b-512 RAW digest of the UNCOMPRESSED catalogue
-#     member, with SHA256 as the inner hash — `ecc_new()` pins sig_hash =
-#     SHA256 for ecdsa regardless of curve, and `ecc_sign_file()` hashes with
-#     PKG_HASH_TYPE_BLAKE2_RAW (BLAKE2B_OUTBYTES = 64). RSA, by contrast, signs
-#     the SHA256 HEX STRING; do not carry that convention over.
+#   * the signed message is the 64-character ASCII SHA256 HEX of the
+#     UNCOMPRESSED catalogue member, signed ECDSA-SHA256 (`ecc_new()` pins
+#     sig_hash = SHA256 for ecdsa regardless of curve). It is the CERT path —
+#     `ecc_verify_cert_cb()` — that FINGERPRINTS mode runs, and it hashes with
+#     PKG_HASH_TYPE_SHA256_HEX passed at `strlen()`, so no NUL terminator.
+#     The BLAKE2b-512 chain in `ecc_sign_file()`/`ecc_verify_file()` belongs to
+#     PUBKEY mode (single `signature` member) — signing that instead yields a
+#     catalogue a real pkg rejects with "ecc signature verification failure".
 #   * a non-RSA signature is prefixed `$PKGSIGN:<type>$` (PKGSIGN_HEAD,
 #     libpkg/private/pkgsign.h), which is how the client selects the signer.
 #   * the public half is DER for ECDSA (exported as PKCS#8 "for interoperability
@@ -294,8 +297,11 @@ def _openssl(args: list[str], *, stdin: bytes | None = None) -> bytes:
             capture_output=True,
             check=False,
         )
-    except FileNotFoundError as exc:  # pragma: no cover - environment-dependent
-        raise BuildRepoError("catalogue signing needs the `openssl` binary on PATH") from exc
+    except OSError as exc:  # pragma: no cover - environment-dependent
+        # OSError, not FileNotFoundError: an `openssl` that exists on PATH but is not
+        # executable raises PermissionError, which would otherwise escape this wrapper
+        # as a bare traceback instead of a BuildRepoError.
+        raise BuildRepoError(f"cannot run `openssl` for catalogue signing: {exc}") from exc
     if proc.returncode != 0:
         detail = proc.stderr.decode(errors="replace").strip() or f"exit {proc.returncode}"
         raise BuildRepoError(f"openssl {args[0]} failed: {detail}")
@@ -303,7 +309,14 @@ def _openssl(args: list[str], *, stdin: bytes | None = None) -> bytes:
 
 
 def signing_public_der(sign_key: Path) -> bytes:
-    """The signing key's public half as DER, after checking pkg accepts its curve."""
+    """The signing key's public half as RAW DER, after checking pkg accepts its curve.
+
+    Raw, with no `$PKGSIGN:` header, because these exact bytes are what the client hashes
+    for the trusted fingerprint (`pkg_repo_check_fingerprint` hashes the cert AFTER the
+    extractor strips any header). The header belongs to the archive MEMBER, and
+    write_zstd_tar() adds it there — keeping it out of here means a fingerprint file can
+    never be generated over the wrong bytes.
+    """
     text = _openssl(["ec", "-in", str(sign_key), "-noout", "-text"]).decode(errors="replace")
     # `openssl ec -text` names the curve on an "ASN1 OID:" line. Keying on that
     # rather than the "NIST CURVE:" line keeps brainpool curves (which have no
@@ -321,9 +334,22 @@ def signing_public_der(sign_key: Path) -> bytes:
 
 
 def catalog_signature(data: bytes, sign_key: Path) -> bytes:
-    """The `.sig` member body for ``data``: header + ECDSA over its BLAKE2b-512 digest."""
-    digest = hashlib.blake2b(data, digest_size=64).digest()
-    return PKGSIGN_ECDSA_HEAD + _openssl(["dgst", "-sha256", "-sign", str(sign_key)], stdin=digest)
+    """The `.sig` member body for ``data``: header + ECDSA-SHA256 over its SHA256 HEX text.
+
+    The signed message is the 64-character ASCII hex of the catalogue's SHA256 — not a raw
+    digest, and not BLAKE2b. `ecc_verify_cert_cb()`, which is what FINGERPRINTS mode runs,
+    does `pkg_checksum_fd(fd, PKG_HASH_TYPE_SHA256_HEX)` and passes the result with
+    `strlen()`, so there is no NUL terminator either. libecc then hashes that text with
+    SHA256 internally, which is what `openssl dgst -sha256 -sign` reproduces.
+
+    Do not reach for the BLAKE2b-512 chain in `ecc_sign_file()`/`ecc_verify_file()`: those
+    serve PUBKEY mode, whose catalogue carries a single `signature` member instead of our
+    `.sig`/`.pub` pair. Signing the wrong one still produces a well-formed catalogue that a
+    real `pkg update` rejects with "ecc signature verification failure" — verified on a
+    box, which is the only place the difference shows up.
+    """
+    message = hashlib.sha256(data).hexdigest().encode()
+    return PKGSIGN_ECDSA_HEAD + _openssl(["dgst", "-sha256", "-sign", str(sign_key)], stdin=message)
 
 
 # Archive emission (zstd tar) — same framing contract as build-pkg-portable.py:
@@ -339,7 +365,7 @@ def catalog_signature(data: bytes, sign_key: Path) -> bytes:
 # --------------------------------------------------------------------------- #
 
 
-def _tar_one(*members: tuple[str, bytes]) -> bytes:
+def _tar_one(members: list[tuple[str, bytes]]) -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tf:
         for member_name, data in members:
@@ -365,12 +391,19 @@ def write_zstd_tar(member_name: str, data: bytes, out_path: Path, *, sign_key: P
     """
     members: list[tuple[str, bytes]] = []
     if sign_key is not None:
+        # BOTH members carry the `$PKGSIGN:ecdsa$` header. Not symmetry for its own sake:
+        # pkg_repo_parse_sigkeys() sets the signer type from EVERY member it parses, keyed
+        # by basename, so a bare `.pub` (parsed after `.sig`) resets the type to its "rsa"
+        # default. Verification then runs the RSA signer, whose _load_public_key_buf() is
+        # PEM_read_bio_PUBKEY, and a real `pkg update` dies with "error reading public key
+        # ... DECODER routines::unsupported". Real `pkg repo` prefixes both too, because
+        # pack_command_sign() never resets its iovec offset between the two appends.
         members.append((f"{member_name}.sig", catalog_signature(data, sign_key)))
-        members.append((f"{member_name}.pub", signing_public_der(sign_key)))
+        members.append((f"{member_name}.pub", PKGSIGN_ECDSA_HEAD + signing_public_der(sign_key)))
     members.append((member_name, data))
     out_path.write_bytes(
         zstd_compress(
-            _tar_one(*members),
+            _tar_one(members),
             BuildRepoError,
             "zstd compression needs the `zstd` binary or the python `zstandard` module "
             "(brew install zstd / apt install zstd)",
