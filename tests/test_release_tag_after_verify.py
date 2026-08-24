@@ -13,10 +13,6 @@ files in this repository at all -- nothing here reads, writes or commits a
 `docs/release-notes/<tag>.md`, and the pipeline pushes NOTHING to the channel
 branch.
 
-Both downstream effects that used to hang off the in-pipeline publish flip now
-live in `release-published.yml` on the real `release: published` event: the
-pkg-repo republish consumes PUBLISHED Release assets, and the FreeBSD-ports
-PORTVERSION bump must not run until the complete draft is actually published.
 
 Two other parts ride along:
 
@@ -51,10 +47,7 @@ _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 _JOB_KEY_RE = re.compile(r"^    [A-Za-z_-]+:")
 _STEP_HEADER_RE = re.compile(r"^      - ")
 
-# Every job in release.yml that changes something outside this workflow run: the
-# tag, the Release, and its assets. Each MUST be downstream of the build and (when
-# it runs) of both live suites. The pkg-repo republish and FreeBSD-ports bump are
-# not here -- both hang off the real `release: published` event instead.
+# Draft-workflow jobs that change state outside the workflow run.
 IRREVERSIBLE_JOBS = (
     "tag-release",
     "release",
@@ -354,8 +347,6 @@ def test_every_job_that_touches_a_release_can_actually_see_a_draft() -> None:
 
 
 def test_the_complete_draft_is_the_last_thing_the_release_run_produces() -> None:
-    """The dispatch workflow stops after proving the draft is complete; publishing
-    owns every downstream mutation."""
     jobs = _jobs()
     assert "draft-healthcheck" in jobs, "release.yml must health-check the finished draft"
     assert "sync-ports-fork" not in jobs, "the ports bump must wait for release: published"
@@ -365,17 +356,7 @@ def test_the_complete_draft_is_the_last_thing_the_release_run_produces() -> None
 
 @pytest.mark.parametrize("job", IRREVERSIBLE_JOBS)
 def test_a_cancelled_run_never_tags_or_drafts(job: str) -> None:
-    """Cancel must abort draft-workflow mutations, not merely stop scheduling them.
-
-    GitHub still STARTS a queued job whose `if:` contains `always()` on a CANCELLED run.
-    Scenario: an operator dispatches the wrong tag and hits Cancel once
-    `build-pkgs-portable` is through -- for an alpha/beta there are no live suites left
-    to absorb the cancel -- and the tag is pushed or the draft created on an explicitly
-    aborted run, which is the exact invariant issue #1855 exists to establish.
-    `!cancelled()` carries identical skip tolerance (ANY status function suppresses the
-    implicit `success()`) and honours the cancel; the live suites at
-    `ui-suite`/`smoke-suite` already use it.
-    """
+    """Cancellation must prevent every external mutation in release.yml."""
     if_block = _job_if_block(_jobs()[job])
     assert "always()" not in if_block, f"{job} would still start on a CANCELLED run -- use !cancelled(): {if_block}"
     assert "!cancelled()" in if_block, f"{job} lost its skip tolerance: {if_block}"
@@ -406,8 +387,6 @@ def test_the_draft_job_never_runs_without_the_tag() -> None:
 
 
 def test_downstream_publish_effects_do_not_run_in_the_draft_workflow() -> None:
-    """The draft workflow must neither publish the pkg catalogue nor bump FreeBSD
-    ports; both effects belong to the published-release workflow."""
     jobs = _jobs()
     release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
     assert "publish-pkg-repo" not in jobs, "the pkg catalogue publish must wait for release: published"
@@ -424,7 +403,6 @@ def test_the_published_workflow_triggers_on_a_published_release() -> None:
 
 
 def test_the_published_workflow_carries_both_downstream_effects() -> None:
-    """Publishing refreshes both the pkg repo and the matching FreeBSD port."""
     jobs = _jobs(PUBLISHED_WORKFLOW)
     assert "publish-pkg-repo" in jobs, sorted(jobs)
     assert "sync-ports-fork" in jobs, sorted(jobs)
@@ -432,19 +410,7 @@ def test_the_published_workflow_carries_both_downstream_effects() -> None:
 
 @pytest.mark.parametrize("workflow", [RELEASE_WORKFLOW, PUBLISHED_WORKFLOW], ids=lambda p: p.name)
 def test_no_job_declares_an_output_nobody_reads(workflow: Path) -> None:
-    """A job output nobody reads states a contract that no longer exists.
-
-    Both files have accumulated outputs after pipeline rearrangements. Whoever reads
-    either file next should not have to re-prove dead contracts. Covering BOTH
-    workflows is the point: pinning one and not its sibling is the asymmetry that let
-    stale outputs survive.
-
-    Detection is a substring scan of the WHOLE file, which is deliberately biased safe: a
-    mention in a comment counts as a reader, so the failure mode is "keeps a dead output",
-    never "deletes a live one". Both accepted prefixes are covered -- `needs.` (a
-    downstream job) and `jobs.` (the shape a `workflow_call` callee uses to re-export an
-    output). The guard below pins the one assumption the scan makes.
-    """
+    """Every declared job output must have a dotted ``needs`` or ``jobs`` consumer."""
     text = workflow.read_text(encoding="utf-8")
     unconsumed = sorted(
         f"{job}.{out}"
@@ -457,47 +423,40 @@ def test_no_job_declares_an_output_nobody_reads(workflow: Path) -> None:
 
 @pytest.mark.parametrize("workflow", [RELEASE_WORKFLOW, PUBLISHED_WORKFLOW], ids=lambda p: p.name)
 def test_no_job_output_is_read_through_index_syntax(workflow: Path) -> None:
-    """Guards the one assumption the dead-output scan above makes.
-
-    `needs['prepare-release'].outputs.branch` is legal GitHub and spells the same
-    reference without the dotted form the scan looks for, so it would read as unconsumed
-    and the output would be deleted out from under a live consumer -- breaking a real cut.
-    No such reference exists today; if one is ever added, this fails and the scan has to
-    learn the shape before it can be trusted again. Scoped to `${{ … }}` bodies, because
-    prose like "attach-pkgs needs [prepare-release, release, …]" is not a reference.
-    """
+    """Reject indexed output references that the dead-output scan cannot detect."""
     expressions = re.findall(r"\$\{\{(.*?)\}\}", workflow.read_text(encoding="utf-8"), re.DOTALL)
     indexed = [expr.strip() for expr in expressions if re.search(r"\b(?:needs|jobs)\s*\[", expr)]
     assert not indexed, f"{workflow.name}: index-syntax job reference(s) the dead-output scan cannot see: {indexed}"
 
 
 def test_published_downstream_effects_resolve_the_release_independently() -> None:
-    """Both published effects consume the classified release identity; neither waits
-    on the other, so one failure cannot hide the other's result."""
     graph = {name: _needs(lines) for name, lines in _jobs(PUBLISHED_WORKFLOW).items()}
     assert graph["sync-ports-fork"] == {"resolve"}, graph
     assert graph["publish-pkg-repo"] == {"resolve"}, graph
 
 
 # Jobs that hold a credential worth stealing AND execute a repository script as shell.
+_TRUSTED_HELPER_ROOT = "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/"
 CREDENTIALLED_JOBS = (
-    (RELEASE_WORKFLOW, "prepare-release"),
-    (RELEASE_WORKFLOW, "release"),
-    (PUBLISHED_WORKFLOW, "sync-ports-fork"),
+    (RELEASE_WORKFLOW, "prepare-release", _TRUSTED_HELPER_ROOT),
+    (RELEASE_WORKFLOW, "release", _TRUSTED_HELPER_ROOT),
+    (PUBLISHED_WORKFLOW, "sync-ports-fork", _TRUSTED_HELPER_ROOT),
+    (PUBLISHED_WORKFLOW, "publish-pkg-repo", "scripts/"),
 )
 
 _HELPER_CALL_RE = re.compile(r"\bsh\s+(\S*scripts/[A-Za-z0-9._-]+)")
-_TRUSTED_HELPER_ROOT = "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/"
 
 
 @pytest.mark.parametrize(
-    ("workflow", "job"), CREDENTIALLED_JOBS, ids=lambda item: item.name if isinstance(item, Path) else item
+    ("workflow", "job", "helper_root"),
+    CREDENTIALLED_JOBS,
+    ids=lambda item: item.name if isinstance(item, Path) else item,
 )
-def test_a_credentialled_job_runs_every_helper_from_a_trusted_checkout(workflow: Path, job: str) -> None:
-    """A helper executed while a push-capable credential is live must come from the
-    trusted workflow revision, never from the released tree."""
+def test_a_credentialled_job_runs_every_helper_from_a_trusted_checkout(
+    workflow: Path, job: str, helper_root: str
+) -> None:
     lines = _jobs(workflow)[job]
-    checkout = _step(lines, "path: pfblockerng-src")
+    checkout = _step(lines, "ref: ${{ github.workflow_sha }}")
     ref_line = next(line for line in checkout if line.strip().startswith("ref:"))
     assert "github.workflow_sha" in ref_line, f"{job}: the helper checkout must pin the trusted ref, got: {ref_line}"
     for untrusted in ("needs.release.outputs.tag", "needs.resolve.outputs.release_tag", "github.event"):
@@ -505,20 +464,17 @@ def test_a_credentialled_job_runs_every_helper_from_a_trusted_checkout(workflow:
 
     calls = _HELPER_CALL_RE.findall("\n".join(lines))
     assert calls, f"{job} executes no repository helper at all -- has the job shape changed?"
-    untrusted_calls = [c for c in calls if not c.lstrip('"').startswith(_TRUSTED_HELPER_ROOT)]
-    assert not untrusted_calls, (
-        f"{job} executes {untrusted_calls} out of the tree it is releasing, "
-        f"not out of the {_TRUSTED_HELPER_ROOT} checkout pinned to github.workflow_sha"
-    )
+    untrusted_calls = [call for call in calls if not call.lstrip('"').startswith(helper_root)]
+    assert not untrusted_calls, f"{job} executes helpers outside its trusted checkout: {untrusted_calls}"
 
 
 @pytest.mark.parametrize(
-    ("workflow", "job"), CREDENTIALLED_JOBS, ids=lambda item: item.name if isinstance(item, Path) else item
+    ("workflow", "job", "_helper_root"),
+    CREDENTIALLED_JOBS,
+    ids=lambda item: item.name if isinstance(item, Path) else item,
 )
-def test_the_helper_checkout_never_persists_credentials(workflow: Path, job: str) -> None:
-    """The push checkout deliberately persists its token; the trusted helper checkout
-    must not add another credential beside executable scripts."""
-    checkout = _step(_jobs(workflow)[job], "path: pfblockerng-src")
+def test_the_helper_checkout_never_persists_credentials(workflow: Path, job: str, _helper_root: str) -> None:
+    checkout = _step(_jobs(workflow)[job], "ref: ${{ github.workflow_sha }}")
     assert any("persist-credentials: false" in line for line in checkout), "\n".join(checkout)
 
 
@@ -633,7 +589,6 @@ def _run_classify_with_source_line(tmp_path: Path, tag: str, source_line: str) -
 
 
 def _run_port_sync_validation(portversion: str) -> subprocess.CompletedProcess[str]:
-    """Execute only the published port-version guard from sync-ports-fork."""
     script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
     marker = 'case "$CHANNEL" in'
     validation, _after = script.split(marker, 1)

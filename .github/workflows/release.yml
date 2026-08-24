@@ -740,7 +740,7 @@ jobs:
       - name: Check out the release helpers (TRUSTED ref, sparse)
         uses: actions/checkout@v6
         with:
-          # SECURITY: same rule as prepare-release and sync-ports-fork. This job holds
+          # SECURITY: same rule as prepare-release. This job holds
           # contents:write and executes release-version.sh AS SHELL (the metadata step
           # and the prev_tag classification loop), while the checkout above is the tree
           # being RELEASED. Anything executed as shell comes from the revision this
@@ -1384,7 +1384,7 @@ jobs:
       # releases -- and that listing returns drafts only to a token with push access.
       # Under `contents: read` the call printed "release not found" and exited 1 (0
       # drafts listed); under `contents: write` it returned `{"isDraft":true,...}`.
-      # Read-scoped, this job would fail EVERY real cut and skip the ports bump.
+      # Read-scoped, this job would fail every real cut before the publish handoff.
       contents: write
     steps:
       - name: Health-check the draft release is complete
