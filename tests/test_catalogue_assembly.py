@@ -69,6 +69,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import catalogue_assembly as ca
 import publish_catalogues as pc
+import test_build_repo_portable as tbrp
 from _srcrepo import SourceRepoError, resolve_src_root
 
 try:
@@ -532,6 +533,59 @@ class BasicRegenerateTests(_TempDirTestCase):
         _drop(catalogue_dir, pkg)
         ca.regenerate_catalogue(out, "stable", varver, engine=_ENGINE)
         self.assertTrue((catalogue_dir / "pfSense-pkg-pfBlockerNG-4.0.0.pkg").is_file())
+
+
+# --------------------------------------------------------------------------- #
+# Catalogue signing (issue #2675 step 1): sign_key threads straight through to
+# build_repo — the wire format itself is test_build_repo_portable.py's own
+# concern; these tests only pin that regenerate_catalogue actually reaches it
+# and that omitting sign_key stays byte-identical to today.
+# --------------------------------------------------------------------------- #
+
+
+class SigningTests(_TempDirTestCase):
+    @_requires_engine
+    def test_sign_key_reaches_build_repo_and_verifies(self) -> None:
+        out = self.tmp / "out"
+        catalogue_dir = out / "stable" / "ce-2.8"
+        pkg = _canonical_pkg(self.tmp, version="4.0.0")
+        _drop(catalogue_dir, pkg)
+        key = tbrp._gen_key(self.tmp / "repo.key")
+
+        ca.regenerate_catalogue(out, "stable", "ce-2.8", engine=_ENGINE, sign_key=key)
+
+        self.assertEqual(
+            sorted(tbrp._sig_members(catalogue_dir / "packagesite.pkg")),
+            ["packagesite.yaml.pub", "packagesite.yaml.sig"],
+        )
+        self.assertEqual(
+            sorted(tbrp._sig_members(catalogue_dir / "data.pkg")),
+            ["data.pub", "data.sig"],
+        )
+        for archive, member in (
+            (catalogue_dir / "packagesite.pkg", "packagesite.yaml"),
+            (catalogue_dir / "data.pkg", "data"),
+        ):
+            sigs = tbrp._sig_members(archive)
+            sig = sigs[f"{member}.sig"][len(tbrp._PKGSIGN_ECDSA_HEAD) :]
+            pub = sigs[f"{member}.pub"][len(tbrp._PKGSIGN_ECDSA_HEAD) :]
+            message = tbrp._pkg_signed_message(tbrp._read_member(archive, member))
+            self.assertTrue(
+                tbrp._openssl_verify(message, sig, pub, self.tmp),
+                f"{member} signature did not verify",
+            )
+
+    @_requires_engine
+    def test_no_sign_key_leaves_archives_unsigned(self) -> None:
+        out = self.tmp / "out"
+        catalogue_dir = out / "stable" / "ce-2.8"
+        pkg = _canonical_pkg(self.tmp, version="4.0.0")
+        _drop(catalogue_dir, pkg)
+
+        ca.regenerate_catalogue(out, "stable", "ce-2.8", engine=_ENGINE)
+
+        self.assertEqual(tbrp._sig_members(catalogue_dir / "packagesite.pkg"), {})
+        self.assertEqual(tbrp._sig_members(catalogue_dir / "data.pkg"), {})
 
 
 # --------------------------------------------------------------------------- #

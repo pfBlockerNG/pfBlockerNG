@@ -130,10 +130,21 @@ def _stage(paths: Sequence[Path], stage_dir: Path) -> None:
             shutil.copy2(path, target)
 
 
-def regenerate_catalogue(site_root: str | Path, channel: str, varver: str, *, engine: Engine) -> None:
+def regenerate_catalogue(
+    site_root: str | Path,
+    channel: str,
+    varver: str,
+    *,
+    engine: Engine,
+    sign_key: Path | None = None,
+) -> None:
     """Rebuild ``site_root/channel/varver`` from whatever ``.pkg`` files already
     sit in that directory — canonical and dependency alike, no distinction made
     here (that distinction only matters to ``prune_retained``).
+
+    ``sign_key`` is passed straight through to ``build_repo`` (issue #2675):
+    ``None`` (the default) leaves the catalogue unsigned, byte-identical to
+    before this parameter existed.
 
     The trap this function exists to dodge: ``build_repo`` globs ``*.pkg`` in its
     input directory, so a second regeneration pass over the SAME directory would
@@ -170,7 +181,7 @@ def regenerate_catalogue(site_root: str | Path, channel: str, varver: str, *, en
     with tempfile.TemporaryDirectory(prefix="catalogue-assembly-") as stage_str:
         stage_dir = Path(stage_str)
         _stage(pool, stage_dir)
-        brp.build_repo(stage_dir, site_root, catalog_name=f"{channel}/{varver}")
+        brp.build_repo(stage_dir, site_root, catalog_name=f"{channel}/{varver}", sign_key=sign_key)
 
 
 def retention_keep_count(channel: str, varver: str) -> int:

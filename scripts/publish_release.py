@@ -325,7 +325,13 @@ class PublishReport:
         return [f"updated {channel}/{varver}" for channel, varver in self.touched]
 
 
-def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -> PublishReport:
+def publish(
+    engine: pc.Engine,
+    run_result: pc.RunResult,
+    pkg_repo: str | Path,
+    *,
+    sign_key: Path | None = None,
+) -> PublishReport:
     intake = run_result.intake
     site_root = Path(pkg_repo) / _SITE_SUBDIR
     targets = _build_targets(engine, run_result)
@@ -362,7 +368,7 @@ def publish(engine: pc.Engine, run_result: pc.RunResult, pkg_repo: str | Path) -
             source_index.setdefault(target.canonical.work_path.resolve(), []).append((channel, varver))
             if changed:
                 ca.prune_retained(site_root, channel, varver, engine=engine)
-                ca.regenerate_catalogue(site_root, channel, varver, engine=engine)
+                ca.regenerate_catalogue(site_root, channel, varver, engine=engine, sign_key=sign_key)
                 touched.append((channel, varver))
 
     if source_index:
@@ -382,6 +388,7 @@ def run(
     pkg_repo: str | Path,
     route_matrix: str,
     engine: pc.Engine | None = None,
+    sign_key: Path | None = None,
 ) -> PublishReport:
     intake = pc.parse_intake(source_repository, release_id, release_tag, destinations, source_run_id)
     if intake.kind != "tagged":
@@ -405,7 +412,7 @@ def run(
     with tempfile.TemporaryDirectory(prefix="publish-release-verify-") as work_dir:
         verified_assets = _verify_all_assets(engine, intake, assets_dir, digests, Path(work_dir))
         run_result = pc.verify_run(engine, intake, verified_assets, route_matrix_rows)
-        return publish(engine, run_result, pkg_repo)
+        return publish(engine, run_result, pkg_repo, sign_key=sign_key)
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -431,6 +438,15 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="the checked-out pfBlockerNG/pkg working tree (site is <pkg-repo>/docs)",
     )
     parser.add_argument("--route-matrix", required=True, help="compact JSON array")
+    parser.add_argument(
+        "--sign-key",
+        default="",
+        dest="sign_key",
+        help=(
+            "ECDSA private key (PEM) to sign the regenerated catalogue with (issue #2675). "
+            "Omitted = unsigned, today's behaviour."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -454,6 +470,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             pkg_repo=args.pkg_repo,
             route_matrix=args.route_matrix,
             engine=engine,
+            sign_key=Path(args.sign_key) if args.sign_key else None,
         )
     except (
         PublishReleaseError,

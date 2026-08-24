@@ -66,6 +66,15 @@ def main():
     pkg_repo = _arg("--pkg-repo", argv)
     mode = os.environ.get("FAKE_MODE", "success")
 
+    # Records the exact argv this invocation received, for the spec's own
+    # assertions -- proves the wrapper forwards --sign-key (or omits it) rather
+    # than just that SOME python3 call happened. Mirrors publish_nightly.py's
+    # own stub below.
+    record_path = os.environ.get("FAKE_INVOCATION_RECORD")
+    if record_path:
+        with open(record_path, "w") as fh:
+            fh.write("\n".join(argv))
+
     if mode == "fail":
         # Mirrors catalogue_assembly.py's own documented third outcome (a
         # write-back fault after the wipe): wipe the catalog descriptors and
@@ -578,6 +587,153 @@ HOOK
     The stderr should not include 'push rejected'
     The output should not include 'sync attempt 2/'
     The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  # --- PFB_SIGN_KEY threading (issue #2675 step 1) --------------------------
+
+  It 'sk1: tagged mode passes --sign-key to the publisher when PFB_SIGN_KEY is set and non-empty'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/tagged-invocation.txt"
+    export PFB_SIGN_KEY="${base}/pfb-pkg-signing.key"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/tagged-invocation.txt")"
+    The variable invocation should include '--sign-key'
+    The variable invocation should include "$PFB_SIGN_KEY"
+  End
+
+  It 'sk2: tagged mode omits --sign-key when PFB_SIGN_KEY is unset'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/tagged-invocation.txt"
+    unset PFB_SIGN_KEY
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/tagged-invocation.txt")"
+    The variable invocation should not include '--sign-key'
+  End
+
+  It 'sk3: tagged mode omits --sign-key when PFB_SIGN_KEY is set but empty'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/tagged-invocation.txt"
+    export PFB_SIGN_KEY=''
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/tagged-invocation.txt")"
+    The variable invocation should not include '--sign-key'
+  End
+
+  It 'sk4 (hostile): tagged mode forwards a --sign-key path containing a space as ONE argument'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/tagged-invocation.txt"
+    key_dir="${base}/key dir with space"
+    mkdir -p "$key_dir"
+    export PFB_SIGN_KEY="${key_dir}/repo.key"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/tagged-invocation.txt")"
+    The variable invocation should include "$PFB_SIGN_KEY"
+  End
+
+  It "sk5 (hostile): tagged mode forwards a --sign-key path containing a single quote as ONE argument"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/tagged-invocation.txt"
+    key_dir="${base}/key'quote'dir"
+    mkdir -p "$key_dir"
+    export PFB_SIGN_KEY="${key_dir}/repo.key"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/tagged-invocation.txt")"
+    The variable invocation should include "$PFB_SIGN_KEY"
+  End
+
+  It 'sk6: nightly mode passes --sign-key to the publisher when PFB_SIGN_KEY is set and non-empty'
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
+    export PFB_SIGN_KEY="${base}/pfb-pkg-signing.key"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/nightly-invocation.txt")"
+    The variable invocation should include '--sign-key'
+    The variable invocation should include "$PFB_SIGN_KEY"
+  End
+
+  It 'sk7: nightly mode omits --sign-key when PFB_SIGN_KEY is unset'
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
+    unset PFB_SIGN_KEY
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/nightly-invocation.txt")"
+    The variable invocation should not include '--sign-key'
+  End
+
+  It 'sk8: nightly mode omits --sign-key when PFB_SIGN_KEY is set but empty'
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
+    export PFB_SIGN_KEY=''
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/nightly-invocation.txt")"
+    The variable invocation should not include '--sign-key'
+  End
+
+  It 'sk9 (hostile): nightly mode forwards a --sign-key path containing a space as ONE argument'
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
+    key_dir="${base}/n key dir with space"
+    mkdir -p "$key_dir"
+    export PFB_SIGN_KEY="${key_dir}/repo.key"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/nightly-invocation.txt")"
+    The variable invocation should include "$PFB_SIGN_KEY"
+  End
+
+  It "sk10 (hostile): nightly mode forwards a --sign-key path containing a single quote as ONE argument"
+    nightly_env
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=nightly/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/nightly-invocation.txt"
+    key_dir="${base}/n key'quote'dir"
+    mkdir -p "$key_dir"
+    export PFB_SIGN_KEY="${key_dir}/repo.key"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/nightly-invocation.txt")"
+    The variable invocation should include "$PFB_SIGN_KEY"
   End
 
   # --- PUBLISH_KIND=nightly (issue #2146 S3) --------------------------------

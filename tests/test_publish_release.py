@@ -390,6 +390,7 @@ def _run(
     tag: str,
     release_id: str = "1",
     source_run_id: str = "10:1",
+    sign_key: Path | None = None,
 ) -> pr.PublishReport:
     return pr.run(
         source_repository=_REPO,
@@ -401,6 +402,7 @@ def _run(
         pkg_repo=pkg_repo,
         route_matrix=json.dumps(list(rows)),
         engine=_ENGINE,
+        sign_key=sign_key,
     )
 
 
@@ -1474,7 +1476,9 @@ class IdentityPostConditionTests(_TempDirTestCase):
 
         real_regenerate = pr.ca.regenerate_catalogue
 
-        def corrupting_regenerate(site_root: str | Path, channel: str, varver: str, *, engine: pc.Engine) -> None:
+        def corrupting_regenerate(
+            site_root: str | Path, channel: str, varver: str, *, engine: pc.Engine, sign_key: Path | None = None
+        ) -> None:
             real_regenerate(site_root, channel, varver, engine=engine)
             if channel == "edge":
                 target = Path(site_root) / channel / varver / "pfSense-pkg-pfBlockerNG-4.0.1.b1.pkg"
@@ -1493,6 +1497,108 @@ class IdentityPostConditionTests(_TempDirTestCase):
                 tag="v4.0.1.b1",
             )
         self.assertIn("multi-destination identity violation", str(ctx.exception))
+
+
+# --------------------------------------------------------------------------- #
+# --sign-key threading (issue #2675 step 1): run()/main() must reach
+# catalogue_assembly.regenerate_catalogue with the caller's key, or with none at
+# all when omitted. The signed wire format itself is test_catalogue_assembly.py's
+# and test_build_repo_portable.py's own coverage — never re-derived here.
+# --------------------------------------------------------------------------- #
+
+
+class SignKeyThreadingTests(_TempDirTestCase):
+    def _capture_sign_key(self) -> tuple[mock._patch, list[Path | None]]:
+        seen: list[Path | None] = []
+        real_regenerate = pr.ca.regenerate_catalogue
+
+        def capturing_regenerate(
+            site_root: str | Path, channel: str, varver: str, *, engine: pc.Engine, sign_key: Path | None = None
+        ) -> None:
+            seen.append(sign_key)
+            real_regenerate(site_root, channel, varver, engine=engine)
+
+        return mock.patch.object(pr.ca, "regenerate_catalogue", side_effect=capturing_regenerate), seen
+
+    @_requires_engine
+    def test_run_with_sign_key_reaches_regenerate_catalogue(self) -> None:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        key = self.tmp / "repo.key"
+        key.write_text("not-a-real-key", encoding="utf-8")
+        patcher, seen = self._capture_sign_key()
+        with patcher:
+            _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1", sign_key=key)
+        self.assertEqual(seen, [key])
+
+    @_requires_engine
+    def test_run_without_sign_key_passes_none(self) -> None:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        patcher, seen = self._capture_sign_key()
+        with patcher:
+            _run(pkg_repo=self.pkg_repo, assets_dir=assets_dir, rows=(ROW_CE,), tag="v4.0.0.b1")
+        self.assertEqual(seen, [None])
+
+    @_requires_engine
+    def test_main_sign_key_flag_reaches_regenerate_catalogue(self) -> None:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        key = self.tmp / "repo.key"
+        key.write_text("not-a-real-key", encoding="utf-8")
+        argv = [
+            "--source-repository",
+            _REPO,
+            "--release-id",
+            "1",
+            "--release-tag",
+            "v4.0.0.b1",
+            "--destinations",
+            '["edge"]',
+            "--source-run-id",
+            "10:1",
+            "--assets-dir",
+            str(assets_dir),
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--route-matrix",
+            json.dumps([ROW_CE]),
+            "--sign-key",
+            str(key),
+        ]
+        patcher, seen = self._capture_sign_key()
+        with patcher, mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}):
+            code = pr.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [key])
+
+    @_requires_engine
+    def test_main_without_sign_key_flag_passes_none(self) -> None:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        argv = [
+            "--source-repository",
+            _REPO,
+            "--release-id",
+            "1",
+            "--release-tag",
+            "v4.0.0.b1",
+            "--destinations",
+            '["edge"]',
+            "--source-run-id",
+            "10:1",
+            "--assets-dir",
+            str(assets_dir),
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--route-matrix",
+            json.dumps([ROW_CE]),
+        ]
+        patcher, seen = self._capture_sign_key()
+        with patcher, mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}):
+            code = pr.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [None])
 
 
 # --------------------------------------------------------------------------- #

@@ -451,6 +451,13 @@ jobs:
           path: results
           merge-multiple: false
 
+      - name: Materialise the catalogue signing key
+        env:
+          PFB_PKG_SIGNING_KEY: ${{ secrets.PFB_PKG_SIGNING_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$PFB_PKG_SIGNING_KEY" > "${RUNNER_TEMP}/pfb-pkg-signing.key"
+
       - name: Publish the pkg catalogue
         run: |
           set -eu
@@ -459,6 +466,7 @@ jobs:
           export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
           export RESULTS_DIR="$GITHUB_WORKSPACE/results"
           export PUBLISH_KIND=nightly
+          export PFB_SIGN_KEY="${RUNNER_TEMP}/pfb-pkg-signing.key"
           # Failed Nightly? Dispatch another one. No durable allocation exists to
           # recover or replay; each invocation gets its own timestamped version.
           export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"

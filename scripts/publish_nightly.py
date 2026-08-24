@@ -409,6 +409,8 @@ def publish(
     pkg_repo: str | Path,
     targets: Mapping[str, pr._Target],
     incoming_version: str,
+    *,
+    sign_key: Path | None = None,
 ) -> pr.PublishReport:
     site_root = Path(pkg_repo) / pr._SITE_SUBDIR
 
@@ -434,7 +436,7 @@ def publish(
         source_index.setdefault(target.canonical.work_path.resolve(), []).append((_CHANNEL, varver))
         if changed:
             ca.prune_retained(site_root, _CHANNEL, varver, engine=engine)
-            ca.regenerate_catalogue(site_root, _CHANNEL, varver, engine=engine)
+            ca.regenerate_catalogue(site_root, _CHANNEL, varver, engine=engine, sign_key=sign_key)
             touched.append((_CHANNEL, varver))
 
     if source_index:
@@ -455,6 +457,7 @@ def run(
     pkg_repo: str | Path,
     source_run_id: str,
     engine: pc.Engine | None = None,
+    sign_key: Path | None = None,
 ) -> pr.PublishReport:
     engine = engine if engine is not None else pc.load_engine()
 
@@ -476,7 +479,7 @@ def run(
         targets = _route_targets(engine, validated.route_matrix, legs)
         # publish() reads VerifiedAsset.work_path, which lives under work_dir — must
         # run to completion BEFORE this context manager tears work_dir down.
-        return publish(engine, pkg_repo, targets, validated.pkg_version)
+        return publish(engine, pkg_repo, targets, validated.pkg_version, sign_key=sign_key)
 
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
@@ -494,6 +497,15 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         help="the checked-out pfBlockerNG/pkg working tree (site is <pkg-repo>/docs)",
     )
     parser.add_argument("--source-run-id", required=True, help="must equal the handoff's own run_id")
+    parser.add_argument(
+        "--sign-key",
+        default="",
+        dest="sign_key",
+        help=(
+            "ECDSA private key (PEM) to sign the regenerated catalogue with (issue #2675). "
+            "Omitted = unsigned, today's behaviour."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -513,6 +525,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             pkg_repo=args.pkg_repo,
             source_run_id=args.source_run_id,
             engine=engine,
+            sign_key=Path(args.sign_key) if args.sign_key else None,
         )
     except (
         PublishNightlyError,

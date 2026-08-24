@@ -333,3 +333,22 @@ def test_publish_pkg_repo_job_documents_new_dispatch_after_failure() -> None:
     job = _extract_job(text, "publish-pkg-repo")
     assert "Failed Nightly? Dispatch another one." in job
     assert "No durable allocation exists" in job
+
+
+def test_publish_pkg_repo_job_wires_pfb_sign_key_from_materialised_secret() -> None:
+    """issue #2675 step 1: the job materialises PFB_PKG_SIGNING_KEY to a file
+    BEFORE "Publish the pkg catalogue" runs, and that step exports PFB_SIGN_KEY
+    at the same path so publish-pkg-repo.sh signs the catalogue it (re)generates."""
+    text = WORKFLOW.read_text(encoding="utf-8")
+    job = _extract_job(text, "publish-pkg-repo")
+    sign_key_path = "${RUNNER_TEMP}/pfb-pkg-signing.key"
+
+    assert "secrets.PFB_PKG_SIGNING_KEY" in job
+    materialise_index = job.index("secrets.PFB_PKG_SIGNING_KEY")
+    assert f'> "{sign_key_path}"' in job
+
+    publish_step_index = job.index("- name: Publish the pkg catalogue")
+    step = job[publish_step_index:]
+    assert f'export PFB_SIGN_KEY="{sign_key_path}"' in step
+
+    assert materialise_index < publish_step_index, "the signing key must be materialised before this step runs"

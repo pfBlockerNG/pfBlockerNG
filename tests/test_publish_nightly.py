@@ -341,6 +341,7 @@ def _run(
     results_dir: Path,
     pkg_repo: Path,
     source_run_id: str = _RUN_ID,
+    sign_key: Path | None = None,
 ) -> pr.PublishReport:
     handoff_path = results_dir.parent / f"handoff-{next(_pkg_counter)}.json"
     handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
@@ -350,6 +351,7 @@ def _run(
         pkg_repo=pkg_repo,
         source_run_id=source_run_id,
         engine=_ENGINE,
+        sign_key=sign_key,
     )
 
 
@@ -1149,6 +1151,108 @@ class MainCliTests(_TempDirTestCase):
 
 
 # --------------------------------------------------------------------------- #
+# --sign-key threading (issue #2675 step 1): run()/main() must reach
+# catalogue_assembly.regenerate_catalogue with the caller's key, or with none at
+# all when omitted. The signed wire format itself is test_catalogue_assembly.py's
+# and test_build_repo_portable.py's own coverage — never re-derived here.
+# --------------------------------------------------------------------------- #
+
+
+class SignKeyThreadingTests(_TempDirTestCase):
+    def _capture_sign_key(self) -> tuple[mock._patch, list[Path | None]]:
+        seen: list[Path | None] = []
+        real_regenerate = pn.ca.regenerate_catalogue
+
+        def capturing_regenerate(
+            site_root: str | Path, channel: str, varver: str, *, engine: pc.Engine, sign_key: Path | None = None
+        ) -> None:
+            seen.append(sign_key)
+            real_regenerate(site_root, channel, varver, engine=engine)
+
+        return mock.patch.object(pn.ca, "regenerate_catalogue", side_effect=capturing_regenerate), seen
+
+    @_requires_engine
+    def test_run_with_sign_key_reaches_regenerate_catalogue(self) -> None:
+        results_dir = self.new_results_dir()
+        snapshot = _snapshot()
+        handoff = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+        )
+        key = self.tmp / "repo.key"
+        key.write_text("not-a-real-key", encoding="utf-8")
+        patcher, seen = self._capture_sign_key()
+        with patcher:
+            _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo, sign_key=key)
+        self.assertEqual(seen, [key])
+
+    @_requires_engine
+    def test_run_without_sign_key_passes_none(self) -> None:
+        results_dir = self.new_results_dir()
+        snapshot = _snapshot()
+        handoff = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+        )
+        patcher, seen = self._capture_sign_key()
+        with patcher:
+            _run(handoff=handoff, results_dir=results_dir, pkg_repo=self.pkg_repo)
+        self.assertEqual(seen, [None])
+
+    @_requires_engine
+    def test_main_sign_key_flag_reaches_regenerate_catalogue(self) -> None:
+        results_dir = self.new_results_dir()
+        snapshot = _snapshot()
+        handoff = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+        )
+        handoff_path = self.tmp / "handoff.json"
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        key = self.tmp / "repo.key"
+        key.write_text("not-a-real-key", encoding="utf-8")
+        argv = [
+            "--handoff",
+            str(handoff_path),
+            "--results-dir",
+            str(results_dir),
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--source-run-id",
+            _RUN_ID,
+            "--sign-key",
+            str(key),
+        ]
+        patcher, seen = self._capture_sign_key()
+        with patcher, mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}):
+            code = pn.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [key])
+
+    @_requires_engine
+    def test_main_without_sign_key_flag_passes_none(self) -> None:
+        results_dir = self.new_results_dir()
+        snapshot = _snapshot()
+        handoff = _build_handoff(
+            snapshot, legs=[_LegSpec(row=ROW_CE15)], route_rows=[ROW_CE15], assets_root=results_dir
+        )
+        handoff_path = self.tmp / "handoff.json"
+        handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
+        argv = [
+            "--handoff",
+            str(handoff_path),
+            "--results-dir",
+            str(results_dir),
+            "--pkg-repo",
+            str(self.pkg_repo),
+            "--source-run-id",
+            _RUN_ID,
+        ]
+        patcher, seen = self._capture_sign_key()
+        with patcher, mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}):
+            code = pn.main(argv)
+        self.assertEqual(code, 0)
+        self.assertEqual(seen, [None])
+
+
+# --------------------------------------------------------------------------- #
 # T14 — publish() must actually WIRE catalogue_assembly.verify_multi_destination_
 # identity over a genuine Plus fan-out (plus-26.03 + plus-26.07, same canonical
 # bytes), not merely have access to a function that works in isolation.
@@ -1176,7 +1280,9 @@ class IdentityPostConditionTests(_TempDirTestCase):
 
         real_regenerate = pn.ca.regenerate_catalogue
 
-        def corrupting_regenerate(site_root: str | Path, channel: str, varver: str, *, engine: pc.Engine) -> None:
+        def corrupting_regenerate(
+            site_root: str | Path, channel: str, varver: str, *, engine: pc.Engine, sign_key: Path | None = None
+        ) -> None:
             real_regenerate(site_root, channel, varver, engine=engine)
             if varver == "plus-26.07":
                 target = Path(site_root) / channel / varver / canonical_name
