@@ -3126,8 +3126,8 @@ def test_channel_installer_fresh_box_installs_from_the_channel(
       identity at the version this channel's catalogue serves, from this channel's
       repository, subscribed to EXACTLY this channel's conf, and the boot-time
       generator hook is present, byte-identical to the shipped
-      scripts/rc.d/pfblockerng_repo_generate.sh (the executed proof the embedded
-      heredoc survives ash when piped);
+      src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh (the executed proof the
+      embedded heredoc survives ash when piped);
     And   a second run reports ``==> Already up to date``, performs no mutating step,
       and leaves the conf, the hook, and the installed version unchanged.
     """

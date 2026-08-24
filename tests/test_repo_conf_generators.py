@@ -45,10 +45,11 @@ from pathlib import Path
 
 import pytest
 
-_SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"
+_ROOT = Path(__file__).resolve().parent.parent
+_SCRIPTS = _ROOT / "scripts"
 _BUILD_REPO = _SCRIPTS / "build-repo.sh"
 _BUILD_REPO_PORTABLE = _SCRIPTS / "build-repo-portable.py"
-_HOOK = _SCRIPTS / "rc.d" / "pfblockerng_repo_generate.sh"
+_HOOK = _ROOT / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
 
 _PAGES_BASE = "https://pkg.pfblockerng.com"
 
@@ -464,3 +465,32 @@ def test_print_conf_channel_still_requires_catalog_path(argv: list[str]) -> None
     proc = subprocess.run(argv, capture_output=True, text=True, check=False)
     assert proc.returncode != 0, proc.stderr
     assert "catalog-path" in proc.stderr.lower(), proc.stderr
+
+
+def test_no_stale_dev_tooling_hook_path_reference() -> None:
+    """Issue #2675: the hook moved out of the dev-tooling ``scripts/`` tree's
+    ``rc.d`` directory into ``_HOOK`` (the shipped tree) so the package can install
+    it. Guard against a stale reference to the old dev-tooling path creeping back
+    into the live tree (``legacy/`` is an immutable historical corpus, exempt).
+
+    The needle is assembled at runtime, not written as a literal in this file's own
+    source (which would self-match and make the guard permanently red)."""
+    stale_needle = "/".join(["scripts", r"rc\.d"])
+    proc = subprocess.run(
+        [
+            "grep",
+            "-rl",
+            stale_needle,
+            str(_ROOT),
+            "--exclude-dir=.git",
+            "--exclude-dir=legacy",
+            "--exclude-dir=.codegraph",
+            "--exclude-dir=graphify-out",
+            "--exclude-dir=__pycache__",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    hits = [line for line in proc.stdout.splitlines() if line and "__pycache__" not in line]
+    assert not hits, f"stale dev-tooling hook-path reference(s) found outside legacy/: {hits}"

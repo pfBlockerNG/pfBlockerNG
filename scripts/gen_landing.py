@@ -1274,8 +1274,8 @@ def build_site_tree(tree: str, base: str) -> dict[str, tuple[bytes, int]]:
     nothing else in the tree carries the token, so this is a no-op elsewhere).
     The source file's permission bits (the exec bit) are preserved.
     """
-    scripts_dir = os.path.dirname(os.path.abspath(__file__))
-    hook_path = os.path.join(scripts_dir, "rc.d", "pfblockerng_repo_generate.sh")
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    hook_path = os.path.join(repo_root, "src", "usr", "local", "etc", "rc.d", "pfblockerng_repo_generate.sh")
     out: dict[str, tuple[bytes, int]] = {}
     for dirpath, _dirs, files in os.walk(tree, followlinks=True):
         for fname in files:

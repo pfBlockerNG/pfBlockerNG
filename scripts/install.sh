@@ -44,11 +44,12 @@
 
 set -eu
 
-# The hook source lives next to this file's sibling scripts/rc.d/ in a checkout.
+# The hook source lives at the shipped path, under a checkout's src/usr/local/etc/rc.d/
+# sibling of this file's own scripts/ directory (issue #2675).
 # Resolved once at source time — CDPATH='' guard used throughout scripts/, see
 # tests/shell/cdpath_spec.sh.
 SCRIPT_DIR="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
-HOOK_SRC="${SCRIPT_DIR}/rc.d/pfblockerng_repo_generate.sh"
+HOOK_SRC="${SCRIPT_DIR}/../src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
@@ -319,8 +320,9 @@ USAGE
 }
 
 # pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository
-# copy this is a STUB that fails loud: the standalone scripts/rc.d/pfblockerng_repo_generate.sh
-# is the source of truth, used directly from a checkout via HOOK_SRC. The website build
+# copy this is a STUB that fails loud: the standalone
+# src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh is the source of truth, used
+# directly from a checkout via HOOK_SRC. The website build
 # (gen_landing.py) replaces the body between the PFB_EMBED markers with the hook in a
 # single-quoted heredoc, producing the self-contained install.sh served at
 # <base>/install.sh for `fetch | sh`.
