@@ -78,7 +78,9 @@ RUNNER
 			When run sh "${runner}"
 			The status should be success
 			The contents of file "${orig}${alias}.orig" should equal "${expected}"
-			# The staged path is an artifact of the publish, never left as debris.
+			# The one context where this can fail: the staged file really was
+			# written here, so a publish that copied instead of renaming, or
+			# forgot to clean up, would leave it behind.
 			The path "${orig}${alias}.orig.tmp" should not be exist
 			The output should include 'Final count'
 		End
@@ -96,8 +98,28 @@ RUNNER
 			When run sh "${runner}"
 			The status should be failure
 			The contents of file "${orig}${alias}.orig" should equal "${prior}"
-			The path "${orig}${alias}.orig.tmp" should not be exist
-			The stdout should be present
+			The output should include 'XLSX processing failed'
+			The contents of file "${errorlog}" should include 'keeping existing'
+			The stderr should be present
+		End
+	End
+
+	Context 'when the container is truncated mid-stream'
+		# The shape a child killed at the extraction ceiling leaves behind, and the
+		# one issue #2666 names by hand: a container whose bytes simply stop.
+		plant_truncated_raw() {
+			plant_healthy_raw
+			dd if="${orig}${alias}.raw" of="${work}/cut" bs=1 count=600 2>/dev/null
+			mv -f "${work}/cut" "${orig}${alias}.raw"
+		}
+		Before 'plant_prior_publication'
+		Before 'plant_truncated_raw'
+
+		It 'fails and keeps the live publication byte-unchanged'
+			When run sh "${runner}"
+			The status should be failure
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The output should include 'XLSX processing failed'
 			The stderr should be present
 		End
 	End
@@ -117,8 +139,26 @@ RUNNER
 			When run sh "${runner}"
 			The status should be failure
 			The contents of file "${orig}${alias}.orig" should equal "${prior}"
-			The path "${orig}${alias}.orig.tmp" should not be exist
-			The stdout should be present
+			The output should include 'XLSX processing failed'
+			The stderr should be present
+		End
+	End
+
+	Context 'when the publication cannot be staged'
+		# Crash-leftover DIRECTORY at the staged path, the issue #1172 fixture
+		# class. This is the only example whose failure lands on the pipeline that
+		# WRITES the publication -- the stage the extraction ceiling would kill --
+		# rather than on one of the two tars ahead of it.
+		plant_stage_debris() { mkdir "${orig}${alias}.orig.tmp"; }
+		Before 'plant_healthy_raw'
+		Before 'plant_prior_publication'
+		Before 'plant_stage_debris'
+
+		It 'fails and keeps the live publication byte-unchanged'
+			When run sh "${runner}"
+			The status should be failure
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The output should include 'XLSX processing failed'
 			The stderr should be present
 		End
 	End
@@ -147,6 +187,45 @@ RUNNER
 		End
 	End
 
+	Context 'on a container holding more than one workbook'
+		# The glob splats into tar's argument list, where every match after the
+		# first is read as a MEMBER selector rather than a second archive -- so tar
+		# reports "not found in archive" and exits non-zero while still writing the
+		# first workbook's part correctly. Harmless while the status was discarded;
+		# once it is read, only reading the first workbook keeps such a feed
+		# ingesting exactly as it did before.
+		plant_two_workbooks() {
+			plant_healthy_raw
+			cp "${work}/build/${alias}.xlsx" "${work}/build/second.xlsx"
+			( cd "${work}/build" && tar -cf "${orig}${alias}.raw" "${alias}.xlsx" second.xlsx )
+		}
+		Before 'plant_two_workbooks'
+
+		It 'publishes the first workbook rather than refusing the feed'
+			When run sh "${runner}"
+			The status should be success
+			The contents of file "${orig}${alias}.orig" should equal "${expected}"
+			The output should include 'Final count'
+			# Naming one archive also silences tar's "not found in archive" complaint
+			# about the workbooks it was reading as member selectors.
+			The stderr should equal ''
+		End
+	End
+
+	Context 'under a restrictive umask'
+		# Published feeds have unprivileged readers. Truncating the live file in
+		# place used to keep its mode; replacing it by rename hands it whatever the
+		# run's umask allows, so the publish sets the mode explicitly (the reason
+		# pfb_stage_publish() chmods its staged file too).
+		Before 'plant_healthy_raw'
+
+		It 'publishes a world-readable file regardless of the run umask'
+			When run sh -c "umask 077; sh '${runner}' >/dev/null 2>&1; ls -l '${orig}${alias}.orig' | cut -c1-10"
+			The status should be success
+			The output should equal '-rw-r--r--'
+		End
+	End
+
 	Context 'when the extraction ceiling fires'
 		# issue #2658's ceiling (pfb_extract_cmd() -> `ulimit -f`) is what the
 		# caller wraps this helper in: RLIMIT_FSIZE is inherited by every
@@ -162,7 +241,6 @@ RUNNER
 			When run sh -c "ulimit -f 1 || exit 1; sh '${runner}' >/dev/null 2>&1"
 			The status should be failure
 			The contents of file "${orig}${alias}.orig" should equal "${prior}"
-			The path "${orig}${alias}.orig.tmp" should not be exist
 		End
 	End
 End

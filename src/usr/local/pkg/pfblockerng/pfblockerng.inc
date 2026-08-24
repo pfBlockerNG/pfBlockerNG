@@ -14701,12 +14701,10 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// Check if ZIP archive contains xlsx files
 			$xlsxtest = exec("/usr/bin/tar -tf {$file_dwn_esc}");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
-				// issue #2666: processxlsx() now carries an exit contract and stages its
-				// own publication, so the ingest is decided by its status rather than by
-				// the output file existing -- which is what lets issue #2658's ceiling
-				// ride along here like it does on every other extraction. A child killed
-				// at the ceiling exits non-zero, this refuses the feed, and the '.orig'
-				// already in service is left untouched (hence no unlink up front).
+				// issue #2666: processxlsx() carries an exit contract and stages its own
+				// publication, so the ingest is decided by its status -- which is what
+				// lets issue #2658's ceiling ride along here. No unlink up front: the
+				// '.orig' already in service must survive a refused refresh.
 				exec(pfb_extract_cmd("{$pfb['script']} xlsx {$header_esc} {$elog}"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] xlsx extraction failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
