@@ -7466,6 +7466,31 @@ function pfb_live_punch_run(string $pfctl, string $aliasdir, string $dbdir, stri
 }
 
 /**
+ * Drop Alerts unlock-store tokens.
+ *
+ * pfb_unlock('lock') rewrites the file from the in-memory array and does not
+ * unset; a later lock of another token would restore an earlier one unless
+ * this unsets between writes (issue #2670 www. sibling).
+ *
+ * @param array<string, string> $store
+ * @param list<string> $tokens
+ * @return array<string, string>
+ */
+function pfb_alerts_unlock_drop(string $type, array $store, array $tokens): array
+{
+	$seen = array();
+	foreach ($tokens as $token) {
+		if ($token === '' || isset($seen[$token])) {
+			continue;
+		}
+		$seen[$token] = TRUE;
+		pfb_unlock('lock', $type, $store, $token, '');
+		unset($store[$token]);
+	}
+	return $store;
+}
+
+/**
  * Apply an Alerts IP mutation after the page has filtered its inputs.
  *
  * @return array{redirect: bool, savemsg: string}
