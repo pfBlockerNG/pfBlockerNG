@@ -95,6 +95,26 @@ def main():
         print("NOOP: every destination already matches this run's verified assets")
         return 0
 
+    if mode == "sig_new_target":
+        # issue #2675 so4: a target with NO committed history at all. Written
+        # here, inside the stub, so it lands AFTER the wrapper's own `git
+        # clean -fd -- docs` -- an untracked fixture written by the spec
+        # before `When run` would be swept away by that clean before ever
+        # reaching this script. Content doesn't need to be a real zstd-tar
+        # archive: the filter dismisses an untracked path by git STATUS CODE
+        # (`??`, never `M`) before it ever reads bytes.
+        for target in os.environ.get("FAKE_TOUCHED", "").split(","):
+            target = target.strip()
+            if not target:
+                continue
+            target_dir = os.path.join(pkg_repo, "docs", target)
+            os.makedirs(target_dir, exist_ok=True)
+            for name in ("packagesite.pkg", "data.pkg", "meta.conf"):
+                with open(os.path.join(target_dir, name), "w") as fh:
+                    fh.write(f"{target}-{name}")
+            print(f"updated {target}")
+        return 0
+
     if mode == "phantom":
         # Reports a target touched WITHOUT writing anything under docs/ — the
         # wrapper's own "reported changes but nothing is actually staged"
@@ -211,6 +231,17 @@ def main():
 
 sys.exit(main())
 PY
+
+    # scripts/catalogue_sig_only.py is NOT stubbed like the publishers above
+    # (issue #2675 so*: it's the wrapper's own signature-only-delta check, not
+    # something under test doubling for a slow/networked dependency) — the
+    # wrapper invokes it via "${PFB_SRC}/scripts/catalogue_sig_only.py", so
+    # the fake PFB_SRC checkout needs the REAL file, plus its own real
+    # pfb_pkg.py/release_version.py dependencies, alongside the stub
+    # publishers above.
+    cp "${PFB_ROOT}/scripts/catalogue_sig_only.py" "${base}/fake-src/scripts/catalogue_sig_only.py"
+    cp "${PFB_ROOT}/scripts/pfb_pkg.py" "${base}/fake-src/scripts/pfb_pkg.py"
+    cp "${PFB_ROOT}/scripts/release_version.py" "${base}/fake-src/scripts/release_version.py"
 
     common_env() {
         PFB_SRC="${base}/fake-src"
@@ -1265,5 +1296,220 @@ PY
     msg="$(git_fixture -C "${base}/pkg-repo" log -1 --format=%B)"
     The variable msg should include 'pfBlockerNG-Release-Tag: v4.0.0.b1'
     The variable msg should not include 'pfBlockerNG-Staging-Prefix'
+  End
+
+  # --- so*: the signature-only delta filter (issue #2675 step 2) ------------
+  # ECDSA signing is randomised, so re-signing an unchanged catalogue payload
+  # with the same key still rewrites the `.sig` member on every republish.
+  # scripts/catalogue_sig_only.py (unit-tested on its own, tests/test_
+  # catalogue_sig_only.py) makes that call; these examples exercise the SHELL
+  # orchestration around it: parsing `git status --porcelain`, restoring the
+  # archive(s), and dropping the target from $touched. Fixtures are minimal
+  # synthetic zstd-tar archives (no real ECDSA signing — the shell filter
+  # never looks at signature validity, only at which member names differ), so
+  # each example controls exactly which member changes. FAKE_MODE=phantom is
+  # reused verbatim here: it reports a target touched without writing
+  # anything itself, which is exactly "the tree already carries this test's
+  # own pre-arranged change" — the same reason s9 above reuses it.
+
+  write_min_catalog_archive() {
+    # $1 output path; remaining args "name=value" (value = literal ASCII
+    # member bytes, no '=' in value). Mirrors tests/test_catalogue_sig_only.py's
+    # _write_raw_tar — this is the shell suite's own copy, no pytest.
+    out_path="$1"
+    shift
+    PYTHONPATH="${PFB_ROOT}/scripts" python3 - "$out_path" "$@" <<'PY'
+import io
+import sys
+import tarfile
+
+import pfb_pkg
+
+out_path = sys.argv[1]
+raw = io.BytesIO()
+with tarfile.open(fileobj=raw, mode="w") as tf:
+    for pair in sys.argv[2:]:
+        name, value = pair.split("=", 1)
+        data = value.encode()
+        info = tarfile.TarInfo(name=name)
+        info.size = len(data)
+        tf.addfile(info, io.BytesIO(data))
+with open(out_path, "wb") as fh:
+    fh.write(pfb_pkg.zstd_compress(raw.getvalue(), RuntimeError, "zstd unavailable"))
+PY
+  }
+
+  # Replaces docs/<target>'s packagesite.pkg/data.pkg with a signed pair
+  # carrying $2 as the payload and $3 as the signature tag, then commits +
+  # pushes it as the new HEAD — setup()'s own "seed" placeholder text files
+  # are not valid archives, so every so* example needs a realistic baseline
+  # of its own before it writes the "next republish" on top.
+  seed_signed_catalog() {
+    target="$1"
+    payload_tag="$2"
+    sig_tag="$3"
+    mkdir -p "${base}/pkg-repo/docs/${target}"
+    write_min_catalog_archive "${base}/pkg-repo/docs/${target}/packagesite.pkg" \
+        "packagesite.yaml=payload-${payload_tag}" "packagesite.yaml.sig=sig-${sig_tag}"
+    write_min_catalog_archive "${base}/pkg-repo/docs/${target}/data.pkg" \
+        "data=payload-${payload_tag}" "data.sig=sig-${sig_tag}"
+    git_fixture -C "${base}/pkg-repo" add "docs/${target}"
+    git_fixture -C "${base}/pkg-repo" commit -q -m "seed signed catalog ${target}"
+    git_fixture -C "${base}/pkg-repo" push -q origin main
+  }
+
+  It 'so1: a re-signed but otherwise unchanged catalogue is dropped from touched and restored (direct mode)'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-A" "data.sig=sig-A2"
+    head_before="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    remote_before="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'publish-pkg-repo: edge/ce-2.8 — signature-only delta; not published'
+    The output should include 'NOOP'
+    The result of function local_head_now should equal "$head_before"
+    The result of function remote_head_now should equal "$remote_before"
+    porcelain="$(git_fixture -C "${base}/pkg-repo" status --porcelain)"
+    The variable porcelain should equal ''
+  End
+
+  It 'so2: one archive signature-only, the other genuinely changed -> the whole target still publishes'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-B" "data.sig=sig-B2"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/packagesite.pkg'
+  End
+
+  It 'so3: signature-only archives but another file in the target changed -> the whole target still publishes'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-A" "data.sig=sig-A2"
+    echo changed > "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/meta.conf docs/edge/ce-2.8/packagesite.pkg'
+  End
+
+  It 'so4: a brand-new target with no committed history is never treated as a signature-only delta'
+    # FAKE_MODE=sig_new_target (not phantom): the fixture must be written by
+    # the STUB itself, so it lands AFTER the wrapper's own `git clean -fd --
+    # docs` — an untracked fixture written before `When run` would just be
+    # swept away by that clean, before the filter ever sees it.
+    export FAKE_MODE=sig_new_target
+    export FAKE_TOUCHED=edge/ce-3.0
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-3.0/data.pkg docs/edge/ce-3.0/meta.conf docs/edge/ce-3.0/packagesite.pkg'
+  End
+
+  It 'so5 (hostile): a deleted catalogue archive is never folded into a signature-only delta'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    rm -f "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/packagesite.pkg'
+  End
+
+  It 'so6: a re-signed but otherwise unchanged catalogue is dropped from touched before staging (stage mode)'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-A" "data.sig=sig-A2"
+    head_before="$(git_fixture -C "${base}/pkg-repo" rev-parse main)"
+    remote_before="$(git_fixture -C "${base}/remote.git" rev-parse refs/heads/main)"
+    export PUBLISH_STAGE=stage
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    export GITHUB_OUTPUT="${base}/github_output.txt"
+    true >"$GITHUB_OUTPUT"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'publish-pkg-repo: edge/ce-2.8 — signature-only delta; not published'
+    The output should include 'STAGE NOOP'
+    The result of function local_head_now should equal "$head_before"
+    The result of function remote_head_now should equal "$remote_before"
+    The path "${base}/pkg-repo/docs/staging" should not be exist
+    out="$(cat "$GITHUB_OUTPUT")"
+    The variable out should include 'touched=[]'
+    The variable out should include 'noop=true'
+  End
+
+  It 'so7: unsigned catalogues with a real change still publish (the filter is a no-op without a key in play)'
+    mkdir -p "${base}/pkg-repo/docs/edge/ce-2.8"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" "packagesite.yaml=payload-A"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" "data=payload-A"
+    echo seed > "${base}/pkg-repo/docs/edge/ce-2.8/meta.conf"
+    git_fixture -C "${base}/pkg-repo" add docs/edge/ce-2.8
+    git_fixture -C "${base}/pkg-repo" commit -q -m 'seed unsigned catalog'
+    git_fixture -C "${base}/pkg-repo" push -q origin main
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" "packagesite.yaml=payload-B"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" "data=payload-B"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/packagesite.pkg'
+  End
+
+  It 'so8 (hostile): a git show failure reading the committed archive is treated as not phantom, never crashes'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-A" "data.sig=sig-A2"
+    # Corrupt the loose object backing HEAD's packagesite.pkg blob, so `git
+    # show HEAD:docs/edge/ce-2.8/packagesite.pkg` itself fails — the filter
+    # must treat that as "not phantom", never crash the whole run.
+    blob_sha="$(git_fixture -C "${base}/pkg-repo" rev-parse HEAD:docs/edge/ce-2.8/packagesite.pkg)"
+    obj_dir="$(printf '%s' "$blob_sha" | cut -c1-2)"
+    obj_file="$(printf '%s' "$blob_sha" | cut -c3-)"
+    rm -f "${base}/pkg-repo/.git/objects/${obj_dir}/${obj_file}"
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
   End
 End

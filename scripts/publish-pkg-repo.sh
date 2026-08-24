@@ -79,6 +79,12 @@
 #                        non-empty, passed to the publisher as --sign-key so the
 #                        catalogue it (re)generates is signed (issue #2675).
 #                        Unset or empty = unsigned, exactly today's behaviour.
+#                        Because ECDSA signing is randomised, a target whose
+#                        only reported changes are its catalogue archives
+#                        (packagesite.pkg/data.pkg) — and whose archives, per
+#                        scripts/catalogue_sig_only.py, differ from HEAD only in
+#                        `.sig` members — is restored and dropped as a NOOP
+#                        instead of publishing a re-signature of nothing.
 # Optional — PUBLISH_STAGE=stage only, when GITHUB_ACTIONS-style outputs are
 # wanted:
 #   GITHUB_OUTPUT           when set and non-empty, this run appends
@@ -253,6 +259,81 @@ stage_touched_targets() {
     for target in $touched; do
         git -C "$PKG_REPO" add -- "docs/${target}"
     done
+}
+
+# EVERY mode, called right after the publisher runs, before either downstream
+# NOOP decision (the stage-only phantom filter directly below, and the
+# direct/nightly `git add` + `git diff --cached --quiet` further down) can see
+# $touched. ECDSA signatures are randomised (issue #2675): re-signing an
+# UNCHANGED catalogue payload with the SAME key still rewrites every `.sig`
+# member, so a byte-for-byte republish would otherwise look like a real
+# change. A target qualifies only when git reports EXACTLY its catalogue
+# archives (packagesite.pkg/data.pkg) as modified — never an add, delete, or
+# any other path — and scripts/catalogue_sig_only.py confirms every one of
+# those archives differs from its committed HEAD bytes ONLY in `.sig`
+# members; a `.pub` difference (key rotation) or any other change still
+# publishes. Restoring the archive(s) here — rather than teaching either
+# downstream NOOP check its own "is it phantom" logic — is what lets both see
+# an ordinary clean target.
+filter_signature_only_touched() {
+    [ -n "$touched" ] || return 0
+    real_touched=""
+    for target in $touched; do
+        status_file=$(mktemp)
+        git -C "$PKG_REPO" status --porcelain -- "docs/${target}" >"$status_file"
+        sig_only_candidate=true
+        sig_only_archives=""
+        if [ -s "$status_file" ]; then
+            while IFS= read -r status_line; do
+                status_code=$(printf '%s' "$status_line" | cut -c1-2)
+                status_path=$(printf '%s' "$status_line" | cut -c4-)
+                status_basename="${status_path##*/}"
+                if [ "$status_code" = " M" ]; then
+                    case "$status_basename" in
+                        packagesite.pkg | data.pkg)
+                            sig_only_archives="${sig_only_archives}${sig_only_archives:+ }${status_basename}"
+                            ;;
+                        *)
+                            sig_only_candidate=false
+                            ;;
+                    esac
+                else
+                    sig_only_candidate=false
+                fi
+            done <"$status_file"
+        else
+            sig_only_candidate=false
+        fi
+        rm -f "$status_file"
+
+        if [ "$sig_only_candidate" = true ] && [ -n "$sig_only_archives" ]; then
+            for archive in $sig_only_archives; do
+                old_tmp=$(mktemp)
+                if git -C "$PKG_REPO" show "HEAD:docs/${target}/${archive}" >"$old_tmp" 2>/dev/null \
+                    && python3 "${PFB_SRC}/scripts/catalogue_sig_only.py" "$old_tmp" "${PKG_REPO}/docs/${target}/${archive}" >/dev/null 2>&1
+                then
+                    :
+                else
+                    sig_only_candidate=false
+                fi
+                rm -f "$old_tmp"
+                [ "$sig_only_candidate" = true ] || break
+            done
+        else
+            sig_only_candidate=false
+        fi
+
+        if [ "$sig_only_candidate" = true ]; then
+            for archive in $sig_only_archives; do
+                git -C "$PKG_REPO" checkout --quiet -- "docs/${target}/${archive}"
+            done
+            echo "publish-pkg-repo: ${target} — signature-only delta; not published"
+        else
+            real_touched="${real_touched}${real_touched:+"
+"}${target}"
+        fi
+    done
+    touched="$real_touched"
 }
 
 # GUARD, called right before every `git commit` below, in every mode: the
@@ -447,6 +528,8 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
             touched=$(grep '^updated ' "$out_file" | sed 's/^updated //') || true
             trap - EXIT
             rm -f "$out_file"
+
+            filter_signature_only_touched
 
             # --- stage: drop a phantom-touched target BEFORE it can be staged -----
             # The publisher's own "updated <target>" report and the tree's real
