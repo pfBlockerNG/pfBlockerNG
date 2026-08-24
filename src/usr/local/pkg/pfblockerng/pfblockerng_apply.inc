@@ -389,7 +389,7 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 	if ($vtype == '_v4' && $pftype == 'auto') {
 		if (strpos($line, '-') !== FALSE) {
 			$matches = explode('-', $line);
-			if (count($matches) == 2) {
+			if (count($matches) == 2 && validate_ipv4($matches[0]) && validate_ipv4($matches[1])) {
 				$a_cidr = ip_range_to_subnet_array($matches[0], $matches[1]);
 				if (!empty($a_cidr)) {
 					foreach ($a_cidr as $cidr) {

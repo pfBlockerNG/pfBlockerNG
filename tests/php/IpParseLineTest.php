@@ -283,6 +283,21 @@ final class IpParseLineTest extends TestCase
 		));
 	}
 
+	public function testIpv4AutoNulRangeEndpointsFallThroughToRegex(): void
+	{
+		$config = $this->config('_v4', 'auto', FALSE);
+		$lines = [
+			"5.61.209.0\0-5.61.209.255",
+			"5.61.209.0-" . "\0" . "5.61.209.255",
+		];
+		foreach ($lines as $line) {
+			$this->assertLine($line, $config, $this->expectedResult(
+				$line,
+				['entries' => ['5.61.209.0', '5.61.209.255']]
+			));
+		}
+	}
+
 	public function testIpv6EmptyAndInvalidRangesDoNotEmitEntries(): void
 	{
 		$config = $this->config('_v6');
