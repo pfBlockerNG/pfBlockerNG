@@ -11949,6 +11949,9 @@ function pfb_sanitize_ipaddr_v6($ipaddr, $custom, $pfbcidr, PfbToggle $supp): ar
 
 // Validate IPv4 IP addresses
 function validate_ipv4($ipaddr) {
+	if (str_contains($ipaddr, "\0")) {
+		return FALSE;
+	}
 	if (strpos($ipaddr, '/') !== FALSE) {
 		return is_subnetv4($ipaddr);
 	}

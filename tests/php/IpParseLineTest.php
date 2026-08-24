@@ -392,6 +392,17 @@ final class IpParseLineTest extends TestCase
 		$this->assertLine($ipTabText, $config, $this->expectedResult($ipTabText, ['entries' => ['8.8.8.8']]));
 	}
 
+	public function testIpv4AutoDshieldTabNulEndpointsFallThrough(): void
+	{
+		$config = $this->config('_v4', 'auto', FALSE);
+		foreach (["5.61.209.0\0\t5.61.209.255\t24", "5.61.209.0\t5.61.209.255\0\t24"] as $line) {
+			$this->assertLine($line, $config, $this->expectedResult(
+				$line,
+				['entries' => ['5.61.209.0', '5.61.209.255']]
+			));
+		}
+	}
+
 	/**
 	 * Scenario: a tab-delimited source contains rows from both address families.
 	 *   Given matching IPv4 and IPv6 alias passes over the same rows
