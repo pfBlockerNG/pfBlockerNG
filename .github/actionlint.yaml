@@ -3,3 +3,6 @@ paths:
     ignore:
       # GitHub added lossless concurrency queues before actionlint 1.7.12.
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/release-published.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

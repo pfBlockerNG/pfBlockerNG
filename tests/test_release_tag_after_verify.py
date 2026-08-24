@@ -666,10 +666,13 @@ def test_sync_ports_rejects_long_prerelease_versions(stage: str) -> None:
 
 def test_sync_ports_preserves_rebuild_and_push_retry_contract() -> None:
     script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
+    assert 'OLD_PORTVERSION="$(grep -m1 \'^PORTVERSION=\' "$MAKEFILE"' in script
+    assert 'OLD_PORTREVISION="$(grep -m1 \'^PORTREVISION=\' "$MAKEFILE"' in script
 
     assert '"${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}"' in script
     assert 'if [ "${NEW_PORTREVISION}" -gt 0 ]; then' in script
     assert "n=0" in script
+    assert "n=$((n + 1))" in script
     assert "until git push origin HEAD:pfblockerng/use-github; do" in script
     assert 'if [ "$n" -ge 3 ]; then' in script
     assert "git pull --rebase origin pfblockerng/use-github" in script
