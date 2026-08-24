@@ -664,6 +664,17 @@ def test_sync_ports_rejects_long_prerelease_versions(stage: str) -> None:
     assert result.returncode != 0, result.stdout + result.stderr
 
 
+def test_sync_ports_preserves_rebuild_and_push_retry_contract() -> None:
+    script = _step_run_script(_step(_jobs(PUBLISHED_WORKFLOW)["sync-ports-fork"], "Bump PORTVERSION and push"))
+
+    assert '"${OLD_PORTVERSION}" "${OLD_PORTREVISION}" "${PORTVERSION}"' in script
+    assert 'if [ "${NEW_PORTREVISION}" -gt 0 ]; then' in script
+    assert "n=0" in script
+    assert "until git push origin HEAD:pfblockerng/use-github; do" in script
+    assert 'if [ "$n" -ge 3 ]; then' in script
+    assert "git pull --rebase origin pfblockerng/use-github" in script
+
+
 def test_published_classifier_rejects_tag_outside_derived_release_line(tmp_path: Path) -> None:
     result = _run_classify_with_source_line(tmp_path, "v4.0.0.a1", "release/5.0")
     assert result.returncode != 0, result.stdout + result.stderr

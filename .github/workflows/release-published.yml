@@ -24,12 +24,12 @@ permissions:
 # issue #2389 / #2391: two publishes racing would both stage under docs/staging
 # and stomp each other's promote/discard — serialize the whole pipeline (stage
 # through promote) rather than just the push at the end.
-# cancel-in-progress: false never cancels the CURRENTLY-running publish, but a
-# third run queuing behind an already-queued (not yet started) second run still
-# cancels that pending second one — its own re-dispatch (re-run the workflow)
-# is what carries that release through, not this run.
+# Keep every published release queued: the default single pending run replaces an
+# earlier pending release when a third arrives. queue:max retains up to 100 pending
+# runs; cancel-in-progress:false preserves the one already running.
 concurrency:
   group: release-published-pkg-repo
+  queue: max
   cancel-in-progress: false
 
 jobs:
@@ -139,7 +139,7 @@ jobs:
   # Bump the matching port's PORTVERSION directly on our own fork's build-input branch
   # (pfblockerng/use-github) — the SAME branch every build reads — so the fork changes
   # only after the Release is actually published. Direct push: it is our branch, no PR.
-  # A no-op bump (version unchanged) just exits.
+  # Re-publishing the same PORTVERSION is a rebuild and increments PORTREVISION.
   sync-ports-fork:
     name: Sync port on FreeBSD-ports fork
     runs-on: ubuntu-latest

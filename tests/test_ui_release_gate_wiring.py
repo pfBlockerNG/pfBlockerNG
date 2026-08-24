@@ -990,7 +990,7 @@ def test_release_channel_metadata_and_edge_following_do_not_start_a_second_relea
 
 def test_tagged_release_recipe_never_mutates_the_nightly_port() -> None:
     published = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
-    sync = published.split("sync-ports-fork:", 1)[1]
+    sync = published.split("\n  sync-ports-fork:\n", 1)[1].split("\n  publish-pkg-repo:\n", 1)[0]
     assert "pfSense-pkg-pfBlockerNG-nightly" not in sync, sync
     assert 'PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"' not in published
 
