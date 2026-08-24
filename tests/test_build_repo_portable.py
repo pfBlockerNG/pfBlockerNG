@@ -4264,11 +4264,16 @@ def test_dep_pkgs_category_mismatch_is_undeclared(tmp_path: Path) -> None:
 #     and pairs them by basename (pkg_repo_meta_extract_signature_fingerprints);
 #     `pkg repo` names them after the MEMBER, so `packagesite.yaml.{sig,pub}`
 #     inside packagesite.pkg and `data.{sig,pub}` inside data.pkg;
-#   * ECDSA signs the BLAKE2b-512 RAW digest of the uncompressed catalogue,
-#     with SHA256 as the inner hash (pkgsign_ecc.c: ecc_new sets sig_hash =
-#     SHA256; ecc_sign_file hashes with PKG_HASH_TYPE_BLAKE2_RAW);
-#   * a non-RSA signature carries a `$PKGSIGN:<type>$` prefix
-#     (PKGSIGN_HEAD in libpkg/private/pkgsign.h, written by pack_sign);
+#   * the signed message is the 64-character ASCII SHA256 HEX of the
+#     uncompressed catalogue member, ECDSA-SHA256 over it (pkgsign_ecc.c:
+#     ecc_new pins sig_hash = SHA256; ecc_verify_cert_cb hashes with
+#     PKG_HASH_TYPE_SHA256_HEX and passes it at strlen(), so no NUL). The
+#     BLAKE2b-512 chain in ecc_sign_file/ecc_verify_file serves PUBKEY mode,
+#     whose catalogue carries a single `signature` member instead;
+#   * BOTH the `.sig` and `.pub` members carry the `$PKGSIGN:<type>$` prefix
+#     (PKGSIGN_HEAD in libpkg/private/pkgsign.h): pkg_repo_parse_sigkeys()
+#     sets the signer type from every member it parses, so a bare `.pub`
+#     resets it to the "rsa" default;
 #   * the public half is DER PKCS#8 for ECDSA — the loader calls libder_read()
 #     and understands no PEM — and the trusted fingerprint is the SHA256 of
 #     exactly those bytes (pkg_repo_check_fingerprint).
