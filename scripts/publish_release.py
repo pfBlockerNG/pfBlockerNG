@@ -312,9 +312,24 @@ def _catalogue_descriptor_complete(dest_dir: Path, engine: pc.Engine) -> bool:
     return all((dest_dir / name).is_file() for name in (*brp._CATALOG_PKG_FILES, "meta.conf"))
 
 
-def _catalogue_carries_key(dest_dir: Path, engine: pc.Engine, sign_key: Path) -> bool:
-    """True when every catalogue archive under ``dest_dir`` already embeds the
-    public half of ``sign_key``.
+def _expected_public_member(engine: pc.Engine, sign_key: Path | None) -> bytes | None:
+    """The `.pub` member a catalogue signed with ``sign_key`` carries, or None when
+    there is no key.
+
+    Derived ONCE per publish, before any destination is touched: ``signing_public_der``
+    runs two openssl subprocesses and raises on a key pkg could not verify, so deriving
+    it per destination would both pay that per destination and turn a bad key into a
+    failure whose timing depends on iteration order — after earlier destinations had
+    already been healed and rewritten.
+    """
+    if sign_key is None:
+        return None
+    brp = engine.build_repo_portable
+    return brp.PKGSIGN_ECDSA_HEAD + brp.signing_public_der(sign_key)
+
+
+def _catalogue_carries_key(dest_dir: Path, engine: pc.Engine, expected_public: bytes) -> bool:
+    """True when every catalogue archive under ``dest_dir`` already embeds ``expected_public``.
 
     Nothing else in the `changed` decision can see a signature, and a destination
     whose package set has not moved is skipped — so a catalogue published before
@@ -324,8 +339,7 @@ def _catalogue_carries_key(dest_dir: Path, engine: pc.Engine, sign_key: Path) ->
     False: republishing it is the recoverable direction.
     """
     brp = engine.build_repo_portable
-    expected = [brp.PKGSIGN_ECDSA_HEAD + brp.signing_public_der(sign_key)]
-    return all(cso.public_key_members(dest_dir / name) == expected for name in brp._CATALOG_PKG_FILES)
+    return all(cso.public_key_members(dest_dir / name) == [expected_public] for name in brp._CATALOG_PKG_FILES)
 
 
 @dataclass(frozen=True)
@@ -353,6 +367,7 @@ def publish(
     site_root = Path(pkg_repo) / _SITE_SUBDIR
     targets = _build_targets(engine, run_result)
 
+    expected_public = _expected_public_member(engine, sign_key)
     touched: list[tuple[str, str]] = []
     source_index: dict[Path, list[tuple[str, str]]] = {}
     for varver in sorted(targets):
@@ -369,7 +384,11 @@ def publish(
                 changed = True
             if not changed and not _catalogue_descriptor_complete(dest_dir, engine):
                 changed = True
-            if not changed and sign_key is not None and not _catalogue_carries_key(dest_dir, engine, sign_key):
+            if (
+                not changed
+                and expected_public is not None
+                and not _catalogue_carries_key(dest_dir, engine, expected_public)
+            ):
                 changed = True
             # Heal historical holes before prune: copy every canonical version
             # still on a slower tagged channel (never nightly) onto this dest.

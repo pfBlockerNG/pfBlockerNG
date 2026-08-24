@@ -1525,8 +1525,9 @@ class SignKeyThreadingTests(_TempDirTestCase):
     def test_main_sign_key_flag_reaches_regenerate_catalogue(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        key = self.tmp / "repo.key"
-        key.write_text("not-a-real-key", encoding="utf-8")
+        # A REAL key: publish() derives its public half up front, so a placeholder
+        # would abort the run before the threading this test is about.
+        key = tbrp._gen_key(self.tmp / "repo.key")
         argv = [
             "--source-repository",
             _REPO,
@@ -1881,6 +1882,45 @@ class ResignUnsignedCatalogueTests(_TempDirTestCase):
         key = tbrp._gen_key(self.tmp / "repo.key")
         self.assertEqual(self._publish(key).touched, (("edge", "ce-2.8"),))
         self.assertEqual(self._publish(key).touched, ())
+
+    def _publish_two_destinations(self, key: Path) -> pr.PublishReport:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(
+            assets_dir, channel="testing", rows=(ROW_CE,), source_tag="v4.0.1.b1", include_dependency=False
+        )
+        return _run(
+            pkg_repo=self.pkg_repo,
+            assets_dir=assets_dir,
+            rows=(ROW_CE,),
+            channel="testing",
+            destinations='["testing","edge"]',
+            tag="v4.0.1.b1",
+            sign_key=key,
+        )
+
+    @_requires_engine
+    def test_the_signing_keys_public_half_is_derived_once_per_publish(self) -> None:
+        """`signing_public_der` runs two openssl subprocesses and raises on a key pkg
+        cannot verify, so deriving it inside the per-destination loop pays that per
+        destination and makes a bad key fail at whichever destination sort order reaches
+        first — after earlier destinations have already been healed and rewritten."""
+        key = tbrp._gen_key(self.tmp / "repo.key")
+        self.assertEqual(set(self._publish_two_destinations(key).touched), {("testing", "ce-2.8"), ("edge", "ce-2.8")})
+
+        brp = _ENGINE.build_repo_portable
+        calls: list[Path] = []
+        real_der = brp.signing_public_der
+
+        def counting_der(path: Path) -> bytes:
+            calls.append(path)
+            return real_der(path)
+
+        # Nothing moved, so both destinations reach the signature gate — the only
+        # place the public half is needed, and where the per-destination form
+        # derived it twice.
+        with mock.patch.object(brp, "signing_public_der", side_effect=counting_der):
+            self.assertEqual(self._publish_two_destinations(key).touched, ())
+        self.assertEqual(calls, [key])
 
     @_requires_engine
     def test_republish_after_key_rotation_resigns_with_the_new_key(self) -> None:

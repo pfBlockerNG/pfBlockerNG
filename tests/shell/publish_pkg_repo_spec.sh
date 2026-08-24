@@ -1496,4 +1496,27 @@ PY
     committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
     The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/marker.pkg docs/edge/ce-2.8/packagesite.pkg'
   End
+
+  It 'so11 (hostile): a STAGED signature-only archive is not dropped'
+    seed_signed_catalog edge/ce-2.8 A 1
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/packagesite.pkg" \
+        "packagesite.yaml=payload-A" "packagesite.yaml.sig=sig-A2"
+    write_min_catalog_archive "${base}/pkg-repo/docs/edge/ce-2.8/data.pkg" \
+        "data=payload-A" "data.sig=sig-A2"
+    # Staging moves the status code from ` M` to `M ` — index and worktree no
+    # longer agree, so `git checkout --` would restore the worktree and leave the
+    # staged bytes to be committed anyway. Only the worktree-modified code may be
+    # dropped; this is what the status-code half of the match is for, and it is
+    # the sole shape that distinguishes it from a path-only match.
+    git_fixture -C "${base}/pkg-repo" add docs/edge/ce-2.8/packagesite.pkg
+    export FAKE_MODE=phantom
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    The output should not include 'signature-only delta'
+    committed="$(git_fixture -C "${base}/pkg-repo" show --name-only --format= HEAD | sort | xargs)"
+    The variable committed should equal 'docs/edge/ce-2.8/data.pkg docs/edge/ce-2.8/packagesite.pkg'
+  End
 End
