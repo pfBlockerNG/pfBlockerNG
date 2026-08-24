@@ -236,32 +236,141 @@ def _data_blob(objs: list[dict]) -> bytes:
 
 
 # --------------------------------------------------------------------------- #
+# Catalogue signing (issue #2675) — `signature_type: fingerprints`, ECDSA.
+#
+# Authenticity used to rest on HTTPS to the host, which is exactly what breaks
+# on pfSense Plus: `pfSense-repo-setup` pins pkg to a Netgate-only CA bundle,
+# and no environment-based workaround can reach the GUI (php-fpm scrubs the
+# worker environment, and pfSense's own pkg_call() replaces it outright). A
+# signed catalogue moves the trust anchor onto our own key, so the fetch itself
+# no longer has to be TLS.
+#
+# Every byte below follows freebsd/pkg (13f9f98); the details are unforgiving
+# because a mismatch fails only at verification, on the box:
+#   * ECDSA signs the BLAKE2b-512 RAW digest of the UNCOMPRESSED catalogue
+#     member, with SHA256 as the inner hash — `ecc_new()` pins sig_hash =
+#     SHA256 for ecdsa regardless of curve, and `ecc_sign_file()` hashes with
+#     PKG_HASH_TYPE_BLAKE2_RAW (BLAKE2B_OUTBYTES = 64). RSA, by contrast, signs
+#     the SHA256 HEX STRING; do not carry that convention over.
+#   * a non-RSA signature is prefixed `$PKGSIGN:<type>$` (PKGSIGN_HEAD,
+#     libpkg/private/pkgsign.h), which is how the client selects the signer.
+#   * the public half is DER for ECDSA (exported as PKCS#8 "for interoperability
+#     with OpenSSL"); the ECC loader calls libder_read() and knows no PEM.
+#   * the trusted fingerprint is the SHA256 of exactly those DER bytes, so any
+#     re-encoding invalidates every fingerprint file already deployed.
+# --------------------------------------------------------------------------- #
+
+# The signature member carries this before the raw DER signature.
+PKGSIGN_ECDSA_HEAD = b"$PKGSIGN:ecdsa$"
+
+# pkg accepts far fewer curves than OpenSSL offers: `ecc_read_pkgkey()` matches
+# the curve OID against this set and nothing else. prime256v1/secp256r1 — the
+# curve almost every tool defaults to — is NOT among them, which is why signing
+# validates the curve up front rather than shipping a catalogue no box can
+# verify.
+PKG_ACCEPTED_CURVES = frozenset(
+    {
+        "secp256k1",
+        "secp384r1",
+        "secp521r1",
+        "brainpoolP256r1",
+        "brainpoolP256t1",
+        "brainpoolP320r1",
+        "brainpoolP320t1",
+        "brainpoolP384r1",
+        "brainpoolP384t1",
+        "brainpoolP512r1",
+        "brainpoolP512t1",
+    }
+)
+
+
+def _openssl(args: list[str], *, stdin: bytes | None = None) -> bytes:
+    """Run `openssl` and return stdout; every failure becomes a BuildRepoError."""
+    try:
+        proc = subprocess.run(
+            ["openssl", *args],
+            input=stdin,
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError as exc:  # pragma: no cover - environment-dependent
+        raise BuildRepoError("catalogue signing needs the `openssl` binary on PATH") from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip() or f"exit {proc.returncode}"
+        raise BuildRepoError(f"openssl {args[0]} failed: {detail}")
+    return proc.stdout
+
+
+def signing_public_der(sign_key: Path) -> bytes:
+    """The signing key's public half as DER, after checking pkg accepts its curve."""
+    text = _openssl(["ec", "-in", str(sign_key), "-noout", "-text"]).decode(errors="replace")
+    # `openssl ec -text` names the curve on an "ASN1 OID:" line. Keying on that
+    # rather than the "NIST CURVE:" line keeps brainpool curves (which have no
+    # NIST name) readable by the same parse.
+    match = re.search(r"^\s*ASN1 OID:\s*(\S+)\s*$", text, re.MULTILINE)
+    if match is None:
+        raise BuildRepoError(f"{sign_key}: cannot determine the EC curve (is it an EC private key?)")
+    curve = match.group(1)
+    if curve not in PKG_ACCEPTED_CURVES:
+        raise BuildRepoError(
+            f"{sign_key}: pkg cannot verify signatures on curve {curve!r} — "
+            f"choose one of {', '.join(sorted(PKG_ACCEPTED_CURVES))} (secp384r1 recommended)"
+        )
+    return _openssl(["ec", "-in", str(sign_key), "-pubout", "-outform", "DER"])
+
+
+def catalog_signature(data: bytes, sign_key: Path) -> bytes:
+    """The `.sig` member body for ``data``: header + ECDSA over its BLAKE2b-512 digest."""
+    digest = hashlib.blake2b(data, digest_size=64).digest()
+    return PKGSIGN_ECDSA_HEAD + _openssl(["dgst", "-sha256", "-sign", str(sign_key)], stdin=digest)
+
+
 # Archive emission (zstd tar) — same framing contract as build-pkg-portable.py:
 # USTAR, leading-slash-free member name, root:wheel, mode 0644, deterministic
 # mtime 0 (the install/index clock is irrelevant to clients; 0 keeps re-runs
 # byte-identical). USTAR is the proven-accepted framing (build-pkg-portable.py's
 # .pkg uses it and a real pfSense box installs it).
+#
+# Byte-identical re-runs hold for UNSIGNED output only: ECDSA signatures are
+# randomised (OpenSSL does not implement deterministic RFC 6979), so a signed
+# catalogue differs between builds even when the package set does not — see
+# issue #2675 for what that costs the publisher's NOOP detection.
 # --------------------------------------------------------------------------- #
 
 
-def _tar_one(member_name: str, data: bytes) -> bytes:
+def _tar_one(*members: tuple[str, bytes]) -> bytes:
     raw = io.BytesIO()
     with tarfile.open(fileobj=raw, mode="w", format=tarfile.USTAR_FORMAT) as tf:
-        ti = tarfile.TarInfo(name=member_name)
-        ti.size = len(data)
-        ti.mode = 0o644
-        ti.uid = ti.gid = 0
-        ti.uname, ti.gname = "root", "wheel"
-        ti.mtime = 0
-        ti.type = tarfile.REGTYPE
-        tf.addfile(ti, io.BytesIO(data))
+        for member_name, data in members:
+            ti = tarfile.TarInfo(name=member_name)
+            ti.size = len(data)
+            ti.mode = 0o644
+            ti.uid = ti.gid = 0
+            ti.uname, ti.gname = "root", "wheel"
+            ti.mtime = 0
+            ti.type = tarfile.REGTYPE
+            tf.addfile(ti, io.BytesIO(data))
     return raw.getvalue()
 
 
-def write_zstd_tar(member_name: str, data: bytes, out_path: Path) -> None:
+def write_zstd_tar(member_name: str, data: bytes, out_path: Path, *, sign_key: Path | None = None) -> None:
+    """Write ``data`` as a one-member zstd tar, signed when ``sign_key`` is given.
+
+    With a key, the archive gains ``<member_name>.sig`` and ``<member_name>.pub``
+    AHEAD of the catalogue member — the order real `pkg repo` writes (pack_sign()
+    runs before packing_append_file_attr()), and the names it derives from the
+    MEMBER rather than the archive. Without a key the output is unchanged, so
+    local and offline catalogues stay exactly as they were.
+    """
+    members: list[tuple[str, bytes]] = []
+    if sign_key is not None:
+        members.append((f"{member_name}.sig", catalog_signature(data, sign_key)))
+        members.append((f"{member_name}.pub", signing_public_der(sign_key)))
+    members.append((member_name, data))
     out_path.write_bytes(
         zstd_compress(
-            _tar_one(member_name, data),
+            _tar_one(*members),
             BuildRepoError,
             "zstd compression needs the `zstd` binary or the python `zstandard` module "
             "(brew install zstd / apt install zstd)",
@@ -464,7 +573,13 @@ def _validate_catalog_name(name: str, *, single_segment: bool = False) -> None:
         )
 
 
-def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) -> list[str]:
+def build_repo(
+    in_dir: Path,
+    out_dir: Path,
+    *,
+    catalog_name: str | None = None,
+    sign_key: Path | None = None,
+) -> list[str]:
     """Build the arch-less (NO_ARCH-only) catalog from a directory of .pkg files.
 
     Every pfBlockerNG .pkg is NO_ARCH (issue #1806): its manifest ABI is
@@ -508,12 +623,18 @@ def build_repo(in_dir: Path, out_dir: Path, *, catalog_name: str | None = None) 
         )
 
     catalog_root = out_dir / catalog_name if catalog_name else out_dir
-    n = _emit_catalog_from_paths(catalog_root, pkgs, root=out_dir)
+    n = _emit_catalog_from_paths(catalog_root, pkgs, root=out_dir, sign_key=sign_key)
     sys.stderr.write(f"==> built catalog {catalog_root} ({n} package(s))\n")
     return sorted(abis)
 
 
-def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict]], *, root: Path) -> int:
+def _write_catalog_dir(
+    dest: Path,
+    items: dict[tuple[str, str], tuple[Path, dict]],
+    *,
+    root: Path,
+    sign_key: Path | None = None,
+) -> int:
     """Write one pkg catalog at ``dest`` from a ``{(name, version): (path, manifest)}`` map.
 
     Wipes + rebuilds ``dest`` for determinism (a removed .pkg never lingers), copies each
@@ -559,8 +680,8 @@ def _write_catalog_dir(dest: Path, items: dict[tuple[str, str], tuple[Path, dict
     (dest / "meta.conf").write_text(META_CONF)
     (dest / "meta").write_text(META_CONF)
     # packagesite.pkg (packagesite.yaml = NDJSON) + data.pkg (data = one JSON object).
-    write_zstd_tar("packagesite.yaml", _ndjson(catalog_objs), dest / "packagesite.pkg")
-    write_zstd_tar("data", _data_blob(catalog_objs), dest / "data.pkg")
+    write_zstd_tar("packagesite.yaml", _ndjson(catalog_objs), dest / "packagesite.pkg", sign_key=sign_key)
+    write_zstd_tar("data", _data_blob(catalog_objs), dest / "data.pkg", sign_key=sign_key)
     return len(catalog_objs)
 
 
@@ -651,7 +772,14 @@ def _require_contained(root: Path, dest: Path) -> Path:
     return dest
 
 
-def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path, route_only: bool = False) -> int:
+def _emit_catalog_from_paths(
+    dest: Path,
+    pkg_paths: list[Path],
+    *,
+    root: Path,
+    route_only: bool = False,
+    sign_key: Path | None = None,
+) -> int:
     """Read each .pkg's manifest, dedup by (name, version), collision-check, emit at dest.
 
     Every package here MUST carry a NO_ARCH (wildcard) ABI (``_is_wildcard_abi``,
@@ -681,7 +809,7 @@ def _emit_catalog_from_paths(dest: Path, pkg_paths: list[Path], *, root: Path, r
             sys.stderr.write(f"==> dedup: {path.name} duplicates {items[nv][0].name} ({nv[0]}-{nv[1]})\n")
             continue
         items[nv] = (path, manifest)
-    return _write_catalog_dir(dest, items, root=root)
+    return _write_catalog_dir(dest, items, root=root, sign_key=sign_key)
 
 
 def _retain_newest(pkg_paths: list[Path], keep: int) -> list[Path]:
@@ -1024,6 +1152,7 @@ def build_repo_matrix(
     release_pkgs: dict[str, list[Path]] | None = None,
     dep_pkgs: list[Path] | None = None,
     build_records: list[BuildRecordInput] | None = None,
+    sign_key: Path | None = None,
     **builder_kwargs: object,
 ) -> dict:
     """Build the full variant repository tree from the version matrix.
@@ -1191,7 +1320,7 @@ def build_repo_matrix(
                     f"frozen .pkg, but none match ABI {abi!r} — supply a frozen .pkg for this ABI."
                 )
             release_dir = out_dir / "release" / varver
-            n_release = _emit_catalog_from_paths(release_dir, frozen, root=out_dir, route_only=True)
+            n_release = _emit_catalog_from_paths(release_dir, frozen, root=out_dir, route_only=True, sign_key=sign_key)
             built.append(str(release_dir))
             sys.stderr.write(f"==> route-only release catalog {release_dir} ({n_release} package(s), frozen)\n")
             # No nightly subtree — route-only entries never get a nightly build.
@@ -1227,7 +1356,9 @@ def build_repo_matrix(
                 )
                 if kept_release:
                     # dep_for_abi folds in AFTER retention (never competes for a slot).
-                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi, root=out_dir)
+                    n_release = _emit_catalog_from_paths(
+                        release_dir, kept_release + dep_for_abi, root=out_dir, sign_key=sign_key
+                    )
                     built.append(str(release_dir))
                     sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s), consumed)\n")
                     dep_pkgs_matched.update(dep_for_abi)
@@ -1304,7 +1435,9 @@ def build_repo_matrix(
                         keep_stable=release_keep_stable,
                     )
                     # dep_for_abi folds in AFTER retention (never competes for a slot).
-                    n_release = _emit_catalog_from_paths(release_dir, kept_release + dep_for_abi, root=out_dir)
+                    n_release = _emit_catalog_from_paths(
+                        release_dir, kept_release + dep_for_abi, root=out_dir, sign_key=sign_key
+                    )
                 built.append(str(release_dir))
                 sys.stderr.write(f"==> release catalog {release_dir} ({n_release} package(s))\n")
                 dep_pkgs_matched.update(dep_for_abi)
@@ -1345,7 +1478,7 @@ def build_repo_matrix(
                     kept = _retain_newest([*existing, new_nightly], nightly_keep)
                     # dep_for_abi folds in AFTER retention here too — the SAME dep pkg
                     # belongs in both the release and nightly catalogs of this ABI train.
-                    n = _emit_catalog_from_paths(nightly_dir, kept + dep_for_abi, root=out_dir)
+                    n = _emit_catalog_from_paths(nightly_dir, kept + dep_for_abi, root=out_dir, sign_key=sign_key)
                 built.append(str(nightly_dir))
                 sys.stderr.write(f"==> nightly catalog {nightly_dir} ({n} package(s), kept ≤{nightly_keep})\n")
                 dep_pkgs_matched.update(dep_for_abi)
@@ -1418,6 +1551,17 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--in", dest="in_dir", help="directory holding the input .pkg files (searched, non-recursive)")
     ap.add_argument("--out", dest="out_dir", help="output root; the flat, arch-less catalog is written directly here")
     ap.add_argument("--print-conf", action="store_true", help="print the client repo-conf template to stdout and exit")
+    ap.add_argument(
+        "--sign-key",
+        default="",
+        dest="sign_key",
+        help=(
+            "ECDSA private key (PEM) to sign each catalogue with, for a client conf using "
+            "signature_type: fingerprints (issue #2675). Omitted = unsigned catalogues, "
+            "which is what local and offline (file://) catalogues want. pkg accepts only "
+            "secp256k1/secp384r1/secp521r1 and the brainpool curves — NOT prime256v1."
+        ),
+    )
     ap.add_argument(
         "--base-url",
         default=DEFAULT_BASE_URL,
@@ -1664,6 +1808,7 @@ def main(argv: list[str]) -> int:
                 route_only_pkgs=route_only,
                 release_pkgs=release_pkgs_arg,
                 annotate=annotate or None,
+                sign_key=Path(args.sign_key) if args.sign_key else None,
             )
         except (BuildRepoError, PkgError, subprocess.CalledProcessError) as e:
             sys.stderr.write(f"build-repo-portable: {e}\n")
@@ -1678,7 +1823,12 @@ def main(argv: list[str]) -> int:
         return 1
 
     try:
-        abis = build_repo(in_dir, Path(args.out_dir), catalog_name=args.catalog_name)
+        abis = build_repo(
+            in_dir,
+            Path(args.out_dir),
+            catalog_name=args.catalog_name,
+            sign_key=Path(args.sign_key) if args.sign_key else None,
+        )
     except (BuildRepoError, PkgError) as e:
         sys.stderr.write(f"build-repo-portable: {e}\n")
         return 1

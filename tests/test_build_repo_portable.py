@@ -4251,3 +4251,237 @@ def test_dep_pkgs_category_mismatch_is_undeclared(tmp_path: Path) -> None:
             build_nightly=False,
             dep_pkgs=[dep_pkg],
         )
+
+
+# --------------------------------------------------------------------------- #
+# Catalogue signing (issue #2675) — `signature_type: fingerprints` with an
+# ECDSA key, so authenticity stops depending on TLS (and therefore on the CA
+# store `pkg` was pinned to on pfSense Plus).
+#
+# The wire contract is read off freebsd/pkg (13f9f98), not inferred:
+#   * the client scans a catalogue archive for members ending `.sig` / `.pub`
+#     and pairs them by basename (pkg_repo_meta_extract_signature_fingerprints);
+#     `pkg repo` names them after the MEMBER, so `packagesite.yaml.{sig,pub}`
+#     inside packagesite.pkg and `data.{sig,pub}` inside data.pkg;
+#   * ECDSA signs the BLAKE2b-512 RAW digest of the uncompressed catalogue,
+#     with SHA256 as the inner hash (pkgsign_ecc.c: ecc_new sets sig_hash =
+#     SHA256; ecc_sign_file hashes with PKG_HASH_TYPE_BLAKE2_RAW);
+#   * a non-RSA signature carries a `$PKGSIGN:<type>$` prefix
+#     (PKGSIGN_HEAD in libpkg/private/pkgsign.h, written by pack_sign);
+#   * the public half is DER PKCS#8 for ECDSA — the loader calls libder_read()
+#     and understands no PEM — and the trusted fingerprint is the SHA256 of
+#     exactly those bytes (pkg_repo_check_fingerprint).
+# --------------------------------------------------------------------------- #
+
+_PKGSIGN_ECDSA_HEAD = b"$PKGSIGN:ecdsa$"
+
+
+def _gen_key(path: Path, curve: str = "secp384r1") -> Path:
+    """An EC private key in PEM, via openssl (what the publisher will use)."""
+    import subprocess
+
+    subprocess.run(
+        ["openssl", "ecparam", "-name", curve, "-genkey", "-noout", "-out", str(path)],
+        check=True,
+        capture_output=True,
+    )
+    return path
+
+
+def _openssl_verify(digest: bytes, sig: bytes, pub_der: bytes, tmp_path: Path) -> bool:
+    """Reproduce pkg's ECDSA check: ECDSA-SHA256 over the BLAKE2b-512 digest."""
+    import subprocess
+
+    d = tmp_path / "verify.msg"
+    s = tmp_path / "verify.sig"
+    p = tmp_path / "verify.pub.der"
+    d.write_bytes(digest)
+    s.write_bytes(sig)
+    p.write_bytes(pub_der)
+    proc = subprocess.run(
+        [
+            "openssl",
+            "dgst",
+            "-sha256",
+            "-verify",
+            str(p),
+            "-keyform",
+            "DER",
+            "-signature",
+            str(s),
+            str(d),
+        ],
+        capture_output=True,
+    )
+    return proc.returncode == 0
+
+
+def _sig_members(archive: Path) -> dict[str, bytes]:
+    """Every `.sig`/`.pub` member of a catalogue archive, by member name."""
+    data = pfb_pkg.zstd_decompress(archive.read_bytes())
+    out: dict[str, bytes] = {}
+    with tarfile.open(fileobj=io.BytesIO(data)) as tf:
+        for ti in tf.getmembers():
+            if ti.name.endswith((".sig", ".pub")):
+                f = tf.extractfile(ti)
+                assert f is not None
+                out[ti.name] = f.read()
+    return out
+
+
+def _build_signed(tmp_path: Path, curve: str = "secp384r1") -> tuple[Path, Path]:
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg")
+    key = _gen_key(tmp_path / "repo.key", curve)
+    out = tmp_path / "out"
+    brp.build_repo(in_dir, out, sign_key=key)
+    return out, key
+
+
+def test_catalog_is_unsigned_without_a_key(tmp_path: Path) -> None:
+    """No key, no signature members — signing must stay opt-in.
+
+    Local and offline catalogues (the smoke guests' file:// repos) are built with
+    no key at all, and a stray unverifiable signature member would make a
+    `signature_type: none` client's catalogue differ for no reason.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg")
+    out = tmp_path / "out"
+    brp.build_repo(in_dir, out)
+
+    assert _sig_members(out / "packagesite.pkg") == {}
+    assert _sig_members(out / "data.pkg") == {}
+
+
+def test_signed_catalog_carries_the_member_names_pkg_repo_emits(tmp_path: Path) -> None:
+    """`<member>.sig` + `<member>.pub`, named after the catalogue MEMBER.
+
+    pkg_repo_pack_db() is called with meta->manifests ("packagesite.yaml") and
+    meta->data ("data"), and pack_command_sign() derives "%s.sig"/"%s.pub" from
+    that — NOT from the archive name. Getting this wrong leaves the client with
+    an unpaired signature and a fatal "No signature found".
+    """
+    out, _ = _build_signed(tmp_path)
+
+    assert sorted(_sig_members(out / "packagesite.pkg")) == [
+        "packagesite.yaml.pub",
+        "packagesite.yaml.sig",
+    ]
+    assert sorted(_sig_members(out / "data.pkg")) == ["data.pub", "data.sig"]
+
+
+def test_signature_carries_the_pkgsign_ecdsa_header(tmp_path: Path) -> None:
+    """A non-RSA signature is prefixed `$PKGSIGN:ecdsa$`; the client parses it to pick the signer."""
+    out, _ = _build_signed(tmp_path)
+    for archive, member in ((out / "packagesite.pkg", "packagesite.yaml.sig"), (out / "data.pkg", "data.sig")):
+        assert _sig_members(archive)[member].startswith(_PKGSIGN_ECDSA_HEAD)
+
+
+def test_signature_verifies_over_the_blake2b_digest(tmp_path: Path) -> None:
+    """The real cryptographic check, exactly as libpkg does it.
+
+    BLAKE2b-512 over the UNCOMPRESSED catalogue member, then ECDSA-SHA256 over
+    that 64-byte digest, verified with the embedded public key.
+    """
+    out, _ = _build_signed(tmp_path)
+
+    for archive, member in (
+        (out / "packagesite.pkg", "packagesite.yaml"),
+        (out / "data.pkg", "data"),
+    ):
+        sigs = _sig_members(archive)
+        sig = sigs[f"{member}.sig"][len(_PKGSIGN_ECDSA_HEAD) :]
+        pub = sigs[f"{member}.pub"]
+        digest = hashlib.blake2b(_read_member(archive, member), digest_size=64).digest()
+        assert len(digest) == 64
+        assert _openssl_verify(digest, sig, pub, tmp_path), f"{member} signature did not verify"
+
+
+def test_signature_does_not_verify_for_a_tampered_catalog(tmp_path: Path) -> None:
+    """Flip one byte of the catalogue and the signature must stop verifying.
+
+    Without this, the test above would pass just as happily against a signature
+    over the wrong bytes.
+    """
+    out, _ = _build_signed(tmp_path)
+    sigs = _sig_members(out / "packagesite.pkg")
+    sig = sigs["packagesite.yaml.sig"][len(_PKGSIGN_ECDSA_HEAD) :]
+    pub = sigs["packagesite.yaml.pub"]
+    tampered = _read_member(out / "packagesite.pkg", "packagesite.yaml") + b"x"
+    digest = hashlib.blake2b(tampered, digest_size=64).digest()
+    assert not _openssl_verify(digest, sig, pub, tmp_path)
+
+
+def test_public_member_is_der_on_the_signing_curve(tmp_path: Path) -> None:
+    """The `.pub` member is DER (no PEM armour) and matches the key we signed with.
+
+    The loader calls libder_read() directly, so PEM would be unparseable; and the
+    trusted fingerprint is the SHA256 of these exact bytes, so any re-encoding
+    silently invalidates every deployed fingerprint file.
+    """
+    import subprocess
+
+    out, key = _build_signed(tmp_path)
+    pub = _sig_members(out / "packagesite.pkg")["packagesite.yaml.pub"]
+
+    assert not pub.startswith(b"-----BEGIN"), "the .pub member must be DER, not PEM"
+    expected = subprocess.run(
+        ["openssl", "ec", "-in", str(key), "-pubout", "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    assert pub == expected
+
+
+def test_signing_refuses_a_curve_pkg_cannot_verify(tmp_path: Path) -> None:
+    """prime256v1 must be refused at build time, loudly.
+
+    P-256 is the curve nearly every tool defaults to, and pkg's OID switch
+    (ecc_read_pkgkey) does not accept it — only secp256k1/secp384r1/secp521r1 and
+    the brainpool set. Signing with it would publish a catalogue that every box
+    rejects, so this has to fail where we can see it: in the build.
+    """
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg")
+    key = _gen_key(tmp_path / "p256.key", "prime256v1")
+
+    with pytest.raises(brp.BuildRepoError, match="curve"):
+        brp.build_repo(in_dir, tmp_path / "out", sign_key=key)
+
+
+def test_build_matrix_signs_every_catalog_it_emits(tmp_path: Path) -> None:
+    """The matrix path is what the publisher runs, so the key has to reach it.
+
+    Threading `sign_key` only as far as build_repo() would leave every published
+    catalogue unsigned while the unit tests stayed green.
+    """
+    key = _gen_key(tmp_path / "repo.key")
+    out = tmp_path / "site"
+    brp.build_repo_matrix([_CE], out, builder=_stub_builder, sign_key=key)
+
+    for catalog in (out / "release" / "ce-2.8", out / "nightly" / "ce-2.8"):
+        assert sorted(_sig_members(catalog / "packagesite.pkg")) == [
+            "packagesite.yaml.pub",
+            "packagesite.yaml.sig",
+        ], f"{catalog} packagesite.pkg is unsigned"
+        assert sorted(_sig_members(catalog / "data.pkg")) == ["data.pub", "data.sig"]
+
+
+def test_cli_sign_key_flag_signs_the_catalog(tmp_path: Path) -> None:
+    """`--sign-key` is the publisher's entry point; without it nothing is signed."""
+    in_dir = tmp_path / "in"
+    in_dir.mkdir()
+    make_pkg(in_dir / "demo-1.0_1.pkg")
+    key = _gen_key(tmp_path / "repo.key")
+    out = tmp_path / "out"
+
+    rc = brp.main(["--in", str(in_dir), "--out", str(out), "--sign-key", str(key)])
+    assert rc == 0
+    assert sorted(_sig_members(out / "packagesite.pkg")) == [
+        "packagesite.yaml.pub",
+        "packagesite.yaml.sig",
+    ]
