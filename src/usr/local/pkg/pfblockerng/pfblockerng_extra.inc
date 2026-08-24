@@ -7493,11 +7493,10 @@ function pfb_alerts_unlock_drop(string $type, array $store, array $tokens): arra
 /**
  * Unlock-store tokens that match what addwhitelistdom actually wrote.
  *
- * Non-wildcard whitelist writes domain + www.domain (+ each CNAME). Wildcard
- * writes .domain; the matcher covers www.domain, so that unlock row must drop.
- * TLD exclusion writes the exact domain/CNAME only — classify is exact-string,
- * so dropping www.domain there would re-lock an unlocked name the exclusion
- * does not cover.
+ * For every written token, also drop www.<token> — the whitelist matcher
+ * strips a leading www. unconditionally. TLD exclusion is the exception:
+ * classify is exact-string, so dropping www.<token> would re-lock an unlocked
+ * name the exclusion does not cover.
  *
  * @param array<int, string> $cnames
  * @return list<string>
@@ -7505,15 +7504,20 @@ function pfb_alerts_unlock_drop(string $type, array $store, array $tokens): arra
 function pfb_alerts_whitelist_unlock_tokens(string $posted, string $stripped, bool $wildcard, bool $exclude, array $cnames): array
 {
 	$tokens = array($posted, $stripped);
-	if (!$exclude) {
-		$tokens[] = 'www.'.$stripped;
-	}
 	foreach (array_values($cnames) as $cname) {
 		$cname = trim((string) $cname);
 		if ($cname === '') {
 			continue;
 		}
 		$tokens[] = $cname;
+	}
+	if (!$exclude) {
+		foreach ($tokens as $token) {
+			if ($token === '' || str_starts_with($token, 'www.')) {
+				continue;
+			}
+			$tokens[] = 'www.'.$token;
+		}
 	}
 	return $tokens;
 }

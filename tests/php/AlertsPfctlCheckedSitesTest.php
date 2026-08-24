@@ -1000,12 +1000,12 @@ SH
 			['alias.example.net', '', 'alias.example.net']
 		);
 		$this->assertSame(
-			['www.example.com', 'example.com', 'alias.example.net'],
+			['www.example.com', 'example.com', 'alias.example.net', 'www.alias.example.net'],
 			array_values(array_unique($tokens)),
-			'non-wildcard whitelist writes domain, www.domain, and each CNAME — not www.<CNAME>'
+			'whitelist matcher www-strips unconditionally, so every token also drops www.<token>'
 		);
 		$this->assertContains('www.example.com', $tokens);
-		$this->assertNotContains('www.alias.example.net', $tokens);
+		$this->assertContains('www.alias.example.net', $tokens);
 	}
 
 	public function testWhitelistUnlockTokensWildcardDropsWwwBecauseDotDomainCoversIt(): void
@@ -1018,6 +1018,7 @@ SH
 		);
 		$this->assertContains('example.com', $tokens);
 		$this->assertContains('alias.example.net', $tokens);
+		$this->assertContains('www.alias.example.net', $tokens);
 	}
 
 	public function testWhitelistUnlockTokensExclusionOmitsWwwKeepsCname(): void
@@ -1026,8 +1027,9 @@ SH
 		$this->assertNotContains(
 			'www.example.com',
 			$tokens,
-			'round-2 blocking: TLD exclusion writes example.com only; dropping www.example.com would re-lock an unlocked name the exclusion does not cover'
+			'TLD exclusion classify is exact-string; dropping www.example.com would re-lock an unlocked name the exclusion does not cover'
 		);
+		$this->assertNotContains('www.alias.example.net', $tokens);
 		$this->assertContains('example.com', $tokens);
 		$this->assertContains('alias.example.net', $tokens);
 	}
