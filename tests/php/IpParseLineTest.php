@@ -298,6 +298,33 @@ final class IpParseLineTest extends TestCase
 		}
 	}
 
+	public function testIpv6AutoNulFirstRangeEndpointFallsThroughToRegex(): void
+	{
+		$line = "2001:4860:4860::\0-2001:4860:4860::3";
+		$this->assertLine($line, $this->config('_v6', 'auto', FALSE), $this->expectedResult(
+			$line,
+			['entries' => ['2001:4860:4860::', '2001:4860:4860::3']]
+		));
+	}
+
+	public function testIpv6AutoNulSecondRangeEndpointFallsThroughToRegex(): void
+	{
+		$line = "2001:4860:4860::-" . "\0" . "2001:4860:4860::3";
+		$this->assertLine($line, $this->config('_v6', 'auto', FALSE), $this->expectedResult(
+			$line,
+			['entries' => ['2001:4860:4860::', '2001:4860:4860::3']]
+		));
+	}
+
+	public function testIpv6AutoMixedNulRangeSafelyExtractsIpv6(): void
+	{
+		$line = "192.0.2.1-" . "\0" . "2001:4860:4860::3";
+		$this->assertLine($line, $this->config('_v6', 'auto', FALSE), $this->expectedResult(
+			$line,
+			['entries' => ['2001:4860:4860::3']]
+		));
+	}
+
 	public function testIpv6EmptyAndInvalidRangesDoNotEmitEntries(): void
 	{
 		$config = $this->config('_v6');
