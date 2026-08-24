@@ -781,6 +781,152 @@ SH
 		$this->assertSame([], $GLOBALS['pfb_test_write_config_calls'] ?? []);
 	}
 
+	// =====================================================================
+	// issue #2670: successful suppress / whitelist must drop the unlock store
+	// =====================================================================
+
+	public function testAddSuppressNotBlockedClearsMatchingUnlockStoreKeepsOthers(): void
+	{
+		$ip = '198.51.100.40';
+		$table = 'pfB_Deny_v4';
+		$ip_unlock = [$ip => $table, 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], "{$ip},{$table}\nkeepme.example,pfB_Keep_v4\n");
+
+		$result = pfb_alerts_ip_action('addsuppress', $ip, $table, 'note', ['ipsuppression' => ['data' => []]], $ip_unlock);
+
+		$this->assertStringContainsString('Not currently blocked', $result['savemsg']);
+		$content = (string) file_get_contents($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('keepme.example', $content, 'unrelated unlock entries must survive suppress');
+		$this->assertStringNotContainsString($ip, $content, 'issue #2670: suppress must drop the matching unlock-store row');
+	}
+
+	public function testAddSuppressAlreadyExistsStillClearsUnlockStore(): void
+	{
+		$ip = '198.51.100.41';
+		$table = 'pfB_Deny_v4';
+		$host_line = "{$ip}/32";
+		$ip_unlock = [$ip => $table, 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], "{$ip},{$table}\nkeepme.example,pfB_Keep_v4\n");
+
+		$result = pfb_alerts_ip_action(
+			'addsuppress',
+			$ip,
+			$table,
+			'',
+			['ipsuppression' => ['data' => [$host_line => "{$host_line}\r\n"], 'base64' => base64_encode("{$host_line}\r\n")]],
+			$ip_unlock
+		);
+
+		$this->assertStringContainsString('already exists', $result['savemsg']);
+		$content = (string) file_get_contents($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('keepme.example', $content);
+		$this->assertStringNotContainsString($ip, $content, 'issue #2670: already-suppressed still drops the unlock-store row');
+	}
+
+	public function testAddSuppressAlreadyCoveredClearsUnlockStore(): void
+	{
+		$ip = '198.51.100.41';
+		$table = 'pfB_Deny_v4';
+		$ip_unlock = [$ip => $table, 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], "{$ip},{$table}\nkeepme.example,pfB_Keep_v4\n");
+		$line = "198.51.100.0/24\r\n";
+
+		$result = pfb_alerts_ip_action(
+			'addsuppress',
+			$ip,
+			$table,
+			'',
+			['ipsuppression' => ['data' => ['198.51.100.0/24' => $line], 'base64' => base64_encode($line)]],
+			$ip_unlock
+		);
+
+		$this->assertStringContainsString('already covered', $result['savemsg']);
+		$content = (string) file_get_contents($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('keepme.example', $content);
+		$this->assertStringNotContainsString($ip, $content, 'issue #2670: already-covered still drops the unlock-store row');
+	}
+
+	public function testIpWhiteSuccessClearsMatchingUnlockStore(): void
+	{
+		$ip = '198.51.100.31';
+		$table = 'pfB_Whitelist_v4';
+		$ip_unlock = [$ip => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], "{$ip},pfB_Deny_v4\nkeepme.example,pfB_Keep_v4\n");
+
+		$result = pfb_alerts_ip_action(
+			'ip_white',
+			$ip,
+			$table,
+			'',
+			['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]],
+			$ip_unlock
+		);
+
+		$this->assertStringContainsString('added', $result['savemsg']);
+		$content = (string) file_get_contents($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('keepme.example', $content);
+		$this->assertStringNotContainsString($ip, $content, 'issue #2670: permit whitelist must drop the matching unlock-store row');
+	}
+
+	public function testIpWhiteDuplicateStillClearsUnlockStore(): void
+	{
+		$ip = '198.51.100.32';
+		$table = 'pfB_Whitelist_v4';
+		$ip_unlock = [$ip => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], "{$ip},pfB_Deny_v4\nkeepme.example,pfB_Keep_v4\n");
+
+		$result = pfb_alerts_ip_action(
+			'ip_white',
+			$ip,
+			$table,
+			'',
+			['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => [$ip => "{$ip}\r\n"]]]],
+			$ip_unlock
+		);
+
+		$this->assertFalse($result['redirect']);
+		$content = (string) file_get_contents($GLOBALS['pfb']['ip_unlock']);
+		$this->assertStringContainsString('keepme.example', $content);
+		$this->assertStringNotContainsString($ip, $content, 'issue #2670: already-whitelisted still drops the unlock-store row');
+	}
+
+	public function testIpWhiteFailureLeavesUnlockStoreUnchanged(): void
+	{
+		$ip = '198.51.100.30';
+		$table = 'pfB_Whitelist_v4';
+		$before = "{$ip},pfB_Deny_v4\nkeepme.example,pfB_Keep_v4\n";
+		$ip_unlock = [$ip => 'pfB_Deny_v4', 'keepme.example' => 'pfB_Keep_v4'];
+		file_put_contents($GLOBALS['pfb']['ip_unlock'], $before);
+		$this->scriptFailure('add', $ip);
+
+		$result = pfb_alerts_ip_action(
+			'ip_white',
+			$ip,
+			$table,
+			'',
+			['ipwhitelist4' => [$table => ['base64_idx' => 0, 'data' => []]]],
+			$ip_unlock
+		);
+
+		$this->assertStringContainsString('failed', $result['savemsg']);
+		$this->assertSame($before, file_get_contents($GLOBALS['pfb']['ip_unlock']), 'a failed permit add must not touch the unlock store');
+	}
+
+	public function testAddwhitelistdomDispatchClearsUnlockStore(): void
+	{
+		$src = php_strip_whitespace(dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_alerts.php');
+		$start = strpos($src, "elseif (isset(\$_POST['addwhitelistdom'])");
+		$end = strpos($src, "elseif (isset(\$_POST['entry_delete'])", $start === FALSE ? 0 : $start);
+		$this->assertNotFalse($start, 'addwhitelistdom handler must exist');
+		$this->assertNotFalse($end, 'entry_delete must follow addwhitelistdom');
+		$region = substr($src, $start, $end - $start);
+		$this->assertStringContainsString(
+			"pfb_unlock('lock', 'dnsbl'",
+			$region,
+			'issue #2670: addwhitelistdom success must pfb_unlock lock the matching DNSBL unlock-store token'
+		);
+	}
+
 	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void
 	{
 		// Top-level POST dispatch has no off-appliance callable seam; this retained

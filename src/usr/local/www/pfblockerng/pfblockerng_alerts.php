@@ -936,6 +936,8 @@ if (isset($_POST) && !empty($_POST)) {
 			header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 			exit;
 		}
+		// issue #2670: unlock store is keyed by the posted token; www. is stripped below
+		$domain_unlock = $domain;
 
 		$descr = '';
 		if (isset($_POST['descr']) && !empty($_POST['descr'])) {
@@ -1160,6 +1162,14 @@ if (isset($_POST) && !empty($_POST)) {
 				PfbConfig::write('dnsbl/tld_wildcard_exclusion', $clists['tld_wildcard_exclusion']['base64']);
 				write_config("pfBlockerNG: Added [ {$domain} ] to DNSBL TLD Exclusion customlist.", FALSE);
 			}
+		}
+		// issue #2670: durable whitelist/TLD exclusion replaces the temporary unlock row.
+		// pfb_unlock('lock') does not update the in-memory array; unset between tokens
+		// so a www. strip cannot write the first key back.
+		pfb_unlock('lock', 'dnsbl', $dnsbl_unlock, $domain_unlock, '');
+		unset($dnsbl_unlock[$domain_unlock]);
+		if ($domain !== $domain_unlock) {
+			pfb_unlock('lock', 'dnsbl', $dnsbl_unlock, $domain, '');
 		}
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;
