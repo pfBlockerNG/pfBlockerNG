@@ -8,6 +8,7 @@ use PHPUnit\Framework\TestCase;
 #[CoversFunction('pfb_login_ca_command')]
 #[CoversFunction('pfb_pkg_exec')]
 #[CoversFunction('pfb_login_ca_apply')]
+#[CoversFunction('pfb_repo_conf_regenerate')]
 final class PkgCaHookDelegateTest extends TestCase
 {
 	private string $root;
@@ -60,6 +61,35 @@ final class PkgCaHookDelegateTest extends TestCase
 		$this->assertSame("login-ca-sync\nlogin-ca-revoke\n", file_get_contents($this->log));
 		putenv('PFB_HOOK_STATUS=7');
 		$this->assertFalse(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
+	}
+
+	public function testRepoConfRegenerateRunsTheHooksStartVerb(): void
+	{
+		// issue #2675: an upgrade must correct a conf written before the flip. The
+		// package ships the hook, so POST-INSTALL runs it rather than waiting for the
+		// next boot -- the fingerprint and the signed-repo conf land together.
+		$this->assertTrue(pfb_repo_conf_regenerate($this->hook, $this->timeout));
+		$this->assertSame("onestart\n", file_get_contents($this->log));
+	}
+
+	public function testRepoConfRegenerateReportsAFailingHook(): void
+	{
+		putenv('PFB_HOOK_STATUS=3');
+		$this->assertFalse(pfb_repo_conf_regenerate($this->hook, $this->timeout));
+	}
+
+	public function testRepoConfRegenerateSkipsAnAbsentHook(): void
+	{
+		// A box whose package predates hook delivery has no hook to run; that is not
+		// an install failure.
+		$this->assertFalse(pfb_repo_conf_regenerate($this->root . '/missing', $this->timeout));
+		$this->assertFileDoesNotExist($this->log);
+	}
+
+	public function testRepoConfRegenerateBoundsAHangingHook(): void
+	{
+		putenv('PFB_HOOK_SLEEP=1');
+		$this->assertFalse(pfb_repo_conf_regenerate($this->hook, $this->timeout));
 	}
 
 	public function testCommandRefusesRetiredVerbsWithoutRunningTheHook(): void

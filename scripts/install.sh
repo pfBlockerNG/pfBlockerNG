@@ -58,6 +58,9 @@ PFB_BASE_URL="${PFB_BASE_URL:-https://pkg.pfblockerng.com}"
 
 CANONICAL_PKG="pfSense-pkg-pfBlockerNG"
 REPOS_DIR="${ROOT}/usr/local/etc/pkg/repos"
+# Staged like every other on-box path: a ROOT-staged run (the test harnesses, a
+# chroot install) must never write the host's real fingerprint store.
+FINGERPRINT_DIR="${ROOT}/usr/local/etc/pkg/fingerprints/pfblockerng"
 ON_BOX_HOOK="${ROOT}/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 CONFIG_XML="${ROOT}/cf/conf/config.xml"
 CONF_MARKER="Generated at boot by pfblockerng_repo_generate"
@@ -319,6 +322,16 @@ Exit codes:
 USAGE
 }
 
+# The scheme the emitted conf carries, for a given catalogue base. The hook downgrades
+# https to plain http (issue #2675 — pkg's CA store is Netgate-pinned on Plus), so the
+# conf this script verifies never carries the https base it was given.
+pfb_conf_url() {
+    case "$1" in
+        https://*) printf 'http://%s' "${1#https://}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository
 # copy this is a STUB that fails loud: the standalone
 # src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh is the source of truth, used
@@ -454,6 +467,7 @@ pfb_channel_install() {
         PFB_NIGHTLY_CONF="${_no_conf}" \
         "${_own_conf_var}=${CONF_PATH}" \
         PFB_BASE_URL="${PFB_BASE_URL}" \
+        PFB_FINGERPRINT_DIR="${FINGERPRINT_DIR}" \
         PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
         PFB_VERSION_FILE="${ROOT}/etc/version" \
         PFB_CONFIG_XML="${ROOT}/cf/conf/config.xml" \
@@ -485,10 +499,10 @@ pfb_channel_install() {
     # when detection fails, so a pre-existing conf carrying the marker but
     # resolving to ANOTHER base/channel (a stale conf from a fork, a staged
     # prefix, or a restored config backup) must be rejected too.
-    _expect_url_prefix="url: \"${PFB_BASE_URL%/}/${PFB_CHANNEL}/"
+    _expect_url_prefix="url: \"$(pfb_conf_url "${PFB_BASE_URL%/}")/${PFB_CHANNEL}/"
     if ! grep -qF "${_expect_url_prefix}" "${CONF_PATH}" 2>/dev/null; then
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
-        die 4 "${CONF_PATH} does not resolve to ${PFB_BASE_URL%/}/${PFB_CHANNEL}/ — a stale or foreign conf; inspect: sh ${ON_BOX_HOOK} onestart"
+        die 4 "${CONF_PATH} does not resolve to $(pfb_conf_url "${PFB_BASE_URL%/}")/${PFB_CHANNEL}/ — a stale or foreign conf; inspect: sh ${ON_BOX_HOOK} onestart"
     fi
     printf '==> Conf resolved:\n'
     sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}"

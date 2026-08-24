@@ -44,7 +44,8 @@ _lc_box() {
     PFB_SSL_CA_CERT_PATH="${_lcb_dir}/ca-certs"
     _lc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
     PFB_CAP_MKDB="$(command -v cap_mkdb 2>/dev/null || printf '%s' /usr/bin/cap_mkdb)"
-    export PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB
+    PFB_FINGERPRINT_DIR="${TMPDIR:-/tmp}/pfb-fp-$$/pfblockerng"
+    export PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB PFB_FINGERPRINT_DIR
     unset _lcb_dir
 }
 
@@ -324,7 +325,8 @@ Describe 'login-ca-sync — 10: PFB_SSL_CA_CERT_PATH containing a space refuses'
         PFB_SSL_CA_CERT_PATH="${_a10_dir}/bad path"
         _lc_ca_dir_with_entry "${PFB_SSL_CA_CERT_PATH}"
         PFB_CAP_MKDB="$(command -v cap_mkdb 2>/dev/null || printf '%s' /usr/bin/cap_mkdb)"
-        export PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB
+        PFB_FINGERPRINT_DIR="${TMPDIR:-/tmp}/pfb-fp-$$/pfblockerng"
+    export PFB_LOGIN_CONF PFB_SSL_CA_CERT_PATH PFB_CAP_MKDB PFB_FINGERPRINT_DIR
         sed "s#/etc/ssl/certs#${PFB_SSL_CA_CERT_PATH}#g" "${FIX}/stock.conf" > "${PFB_LOGIN_CONF}"
         cp "${PFB_LOGIN_CONF}" "${_a10_dir}/before.conf"
     }

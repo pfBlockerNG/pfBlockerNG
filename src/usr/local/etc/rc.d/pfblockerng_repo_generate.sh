@@ -83,6 +83,7 @@ name="pfblockerng_repo_generate"
 : "${PFB_TESTING_CONF:=/usr/local/etc/pkg/repos/pfblockerng-testing.conf}"
 : "${PFB_EDGE_CONF:=/usr/local/etc/pkg/repos/pfblockerng-edge.conf}"
 : "${PFB_NIGHTLY_CONF:=/usr/local/etc/pkg/repos/pfblockerng-nightly.conf}"
+: "${PFB_FINGERPRINT_DIR:=/usr/local/etc/pkg/fingerprints/pfblockerng}"
 : "${PFB_PRODUCT_LABEL:=/etc/product_label}"
 : "${PFB_VERSION_FILE:=/etc/version}"
 
@@ -197,24 +198,93 @@ _base_from_conf() {
     printf '%s' "${_bc_base}"
 }
 
+# The catalogue signing key's public half, as the fingerprint pkg checks: the SHA256 of
+# the DER public key exactly as the catalogue embeds it (issue #2675). Shipped as the
+# hex rather than the key itself because that is all `signature_type: fingerprints`
+# needs on the box -- the key travels inside each signed catalogue.
+CONF_FINGERPRINT_DIR="${PFB_FINGERPRINT_DIR}"
+CONF_FINGERPRINT_NAME='pkg.pfblockerng.com'
+CONF_FINGERPRINT_SHA256='081df5476f84d8d20417c400f576c355069a4a9979d170bcaae1c9da32778915'
+
+# Install the trusted fingerprint. Runs BEFORE any conf is rewritten: a box that reached
+# a signature-requiring conf without the key that validates it could no longer reach the
+# repository that would fix it. Every failure is non-fatal -- this hook must never wedge
+# boot -- and a conf rewrite that follows a failed write is still safe, because pkg
+# treats an unreadable fingerprint dir as "no trusted key" and refuses the catalogue
+# rather than trusting it.
+_write_fingerprint() {
+    _wf_trusted="${CONF_FINGERPRINT_DIR}/trusted"
+    _wf_file="${_wf_trusted}/${CONF_FINGERPRINT_NAME}"
+    mkdir -p "${_wf_trusted}" "${CONF_FINGERPRINT_DIR}/revoked" 2>/dev/null || {
+        printf '[%s] WARNING: could not create %s\n' "${name}" "${CONF_FINGERPRINT_DIR}" >&2
+        return 1
+    }
+    if printf 'function: "sha256"\nfingerprint: "%s"\n' "${CONF_FINGERPRINT_SHA256}" >"${_wf_file}.tmp" 2>/dev/null; then
+        if mv "${_wf_file}.tmp" "${_wf_file}" 2>/dev/null; then
+            return 0
+        fi
+    fi
+    rm -f "${_wf_file}.tmp" 2>/dev/null
+    printf '[%s] WARNING: could not write %s\n' "${name}" "${_wf_file}" >&2
+    return 1
+}
+
+# The URL a conf points at, for a resolved catalogue base. HTTPS is downgraded to plain
+# HTTP deliberately: pkg on pfSense Plus runs against a Netgate-pinned CA bundle that
+# nothing we ship can widen, so TLS to our host is not a trust anchor we can rely on --
+# authenticity comes from the catalogue signature instead, and package payloads are
+# checksummed by that signed catalogue. Any other scheme is left alone; a file://
+# catalogue has no network in its path at all.
+_conf_url() {
+    case "$1" in
+        https://*) printf 'http://%s' "${1#https://}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# Trust comment + signature fields, keyed on the URL: a file:// catalogue is built
+# locally and carries no signature, so requiring one would fail a catalogue that is fine.
+_conf_trust_comment() {
+    case "$1" in
+        file://*)
+            printf '%s\n%s\n' \
+                '# Local catalogue: served from this filesystem, unsigned — no network and no' \
+                '# CA store in the path.'
+            ;;
+        *)
+            printf '%s\n%s\n%s\n' \
+                '# Signed catalogue (issue #2675): the trust anchor is our own ECDSA key, whose' \
+                "# fingerprint the boot rc.d hook installs; the fetch is plain HTTP because pkg's CA" \
+                '# store is Netgate-pinned on pfSense Plus and cannot be widened from the GUI.'
+            ;;
+    esac
+}
+
+_conf_signature_lines() {
+    case "$1" in
+        file://*) printf '  signature_type: none,' ;;
+        *) printf '  signature_type: fingerprints,\n  fingerprints: "%s",' "${CONF_FINGERPRINT_DIR}" ;;
+    esac
+}
+
 # Emit the canonical conf body. $1 = channel word, $2 = repo name, $3 = url.
 # Kept byte-identical to the *_print_conf generators (drift-pinned by tests).
 _emit_conf() {
     _ec_channel="$1"
     _ec_repo="$2"
-    _ec_url="$3"
+    _ec_url="$(_conf_url "$3")"
     cat <<EOF
 # Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install.sh --channel ${_ec_channel} to change.
 # pfBlockerNG (${_ec_channel} channel) — self-hosted pkg repository (ADR-17).
-# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
+$(_conf_trust_comment "${_ec_url}")
+# The URL is fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
 # issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 ${_ec_repo}: {
   url: "${_ec_url}",
   mirror_type: none,
-  signature_type: none,
+$(_conf_signature_lines "${_ec_url}")
   priority: ${CONF_PRIORITY},
   enabled: yes
 }
@@ -709,6 +779,8 @@ _logincap_setenv_remove() {
 # orphan guard skips every absent conf, so a box on one channel stays on that one
 # channel across a reboot (single-repository subscription, issue #2148).
 pfblockerng_repo_generate_start() {
+    # FIRST, before any conf: the fingerprint must exist before a conf can require one.
+    _write_fingerprint || :
     _regen_one "${PFB_STABLE_CONF}"  'stable'  'pfblockerng-stable'
     _regen_one "${PFB_TESTING_CONF}" 'testing' 'pfblockerng-testing'
     _regen_one "${PFB_EDGE_CONF}"    'edge'    'pfblockerng-edge'

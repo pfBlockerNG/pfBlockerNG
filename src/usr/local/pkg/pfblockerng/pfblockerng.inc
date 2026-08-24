@@ -5259,6 +5259,29 @@ function pfb_login_ca_command(
 }
 
 /*
+ * Regenerate this box's pkg repo conf (and install the catalogue signing key's trusted
+ * fingerprint) by running the installed rc.d hook's start verb, bounded by timeout(1).
+ *
+ * Called from the package's POST-INSTALL path: the hook ships with the package, so an
+ * upgrade is the moment a box carrying a conf written before issue #2675 -- plain
+ * `signature_type: none` over HTTPS -- gets corrected, rather than at the next boot.
+ * An absent or non-executable hook is FALSE, not a failure to install: a box whose
+ * previous package predates hook delivery simply has none yet.
+ */
+function pfb_repo_conf_regenerate(
+	string $hook = PFB_REPO_GENERATE_HOOK,
+	string $timeout = PFB_PKG_TIMEOUT
+): bool {
+	if (!is_executable($hook)) {
+		return FALSE;
+	}
+	$out = [];
+	$ret = -1;
+	exec($timeout . ' ' . escapeshellarg($hook) . ' onestart 2>/dev/null', $out, $ret);
+	return $ret === 0;
+}
+
+/*
  * Run a pkg(8) shell command directly. Carries no CA environment itself (issue #2623) --
  * SSL_CA_CERT_PATH reaches every pkg call through process inheritance instead: login.conf's
  * setenv at boot, and install.sh's one-time webConfigurator restart right after that carry

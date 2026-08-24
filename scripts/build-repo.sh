@@ -66,6 +66,46 @@ print_conf() {
     # The URL is a STATIC, directly-resolved string for the box's edition/version —
     # no ${ABI} token (ADR-39), arch-less since issue #1806 (NO_ARCH). Supply
     # --catalog-path <varver> (e.g. "ce-2.8") so the test can pin the exact
+# The URL a client conf points at, for a resolved catalogue base. HTTPS is downgraded
+# to plain HTTP deliberately: pkg on pfSense Plus runs against a Netgate-pinned CA
+# bundle that nothing we ship can widen, so TLS to our host is not a trust anchor we
+# can rely on -- authenticity comes from the catalogue signature instead (issue #2675),
+# and package payloads are checksummed by that signed catalogue. Any other scheme is
+# left alone; a file:// catalogue has no network in its path at all.
+_conf_url() {
+    case "$1" in
+        https://*) printf 'http://%s' "${1#https://}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+# Trust comment + signature fields, keyed on the URL: a file:// catalogue is built
+# locally and carries no signature, so requiring one would fail a catalogue that is fine.
+CONF_FINGERPRINT_DIR='/usr/local/etc/pkg/fingerprints/pfblockerng'
+
+_conf_trust_comment() {
+    case "$1" in
+        file://*)
+            printf '%s\n%s\n' \
+                '# Local catalogue: served from this filesystem, unsigned — no network and no' \
+                '# CA store in the path.'
+            ;;
+        *)
+            printf '%s\n%s\n%s\n' \
+                '# Signed catalogue (issue #2675): the trust anchor is our own ECDSA key, whose' \
+                "# fingerprint the boot rc.d hook installs; the fetch is plain HTTP because pkg's CA" \
+                '# store is Netgate-pinned on pfSense Plus and cannot be widened from the GUI.'
+            ;;
+    esac
+}
+
+_conf_signature_lines() {
+    case "$1" in
+        file://*) printf '  signature_type: none,' ;;
+        *) printf '  signature_type: fingerprints,\n  fingerprints: "%s",' "${CONF_FINGERPRINT_DIR}" ;;
+    esac
+}
+
     # resolved conf; the url is then base/<channel>/<varver>.
     base="$1"
     channel="${2:-release}"
@@ -75,18 +115,19 @@ print_conf() {
     # channel install.sh refuses.
     channel_hint="${channel}"
     [ "${channel}" = "release" ] && channel_hint='<channel>'
+    url="$(_conf_url "${base}")"
     cat <<EOF
 # Generated at boot by pfblockerng_repo_generate (ADR-39) — do not edit; re-run install.sh --channel ${channel_hint} to change.
 # pfBlockerNG (${channel} channel) — self-hosted pkg repository (ADR-17).
-# NONE-signed: trust anchor is HTTPS to the host (no signing key). The URL is
-# fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
+$(_conf_trust_comment "${url}")
+# The URL is fully resolved for this box's edition/version (ADR-39; arch-less/NO_ARCH,
 # issue #1806); the boot rc.d hook updates it on a pfSense OS upgrade.
 # priority ${CONF_PRIORITY} sits above the base Netgate \`pfSense\` repo so cross-repo
 # resolution (pkg install/upgrade, GUI Install) selects the pfBlockerNG build.
 ${repo}: {
-  url: "${base}",
+  url: "${url}",
   mirror_type: none,
-  signature_type: none,
+$(_conf_signature_lines "${url}")
   priority: ${CONF_PRIORITY},
   enabled: yes
 }

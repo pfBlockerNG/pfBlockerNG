@@ -964,6 +964,14 @@ update_status(" done.\n");
 pfb_install_psl_feed_policy_seed($pfb_psl_feed_policy_fresh_install);
 unset($pfb_psl_feed_policy_fresh_install);
 
+// issue #2675: correct this box's repo conf now rather than at the next boot. The
+// package ships the rc.d hook, so an upgrade from a pre-signing conf (plain
+// signature_type: none over HTTPS, which pkg cannot fetch on Plus during a system
+// upgrade) is the moment the trusted fingerprint and the signed-repo conf land.
+update_status("Refreshing the pkg repository configuration...");
+pfb_repo_conf_regenerate();
+update_status(" done.\n");
+
 unset($g['pfblockerng_install']);	// Remove 'Install flag'
 update_status("Upgrading... done\n\nCustom commands completed ... ");
 
