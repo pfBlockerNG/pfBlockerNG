@@ -146,8 +146,7 @@ RUNNER
 
 	Context 'when the publication cannot be staged'
 		# Crash-leftover DIRECTORY at the staged path, the issue #1172 fixture
-		# class. This is the only example whose failure lands on the pipeline that
-		# WRITES the publication -- the stage the extraction ceiling would kill --
+		# class: the failure lands on the pipeline that WRITES the publication
 		# rather than on one of the two tars ahead of it.
 		plant_stage_debris() { mkdir "${orig}${alias}.orig.tmp"; }
 		Before 'plant_healthy_raw'
@@ -160,6 +159,43 @@ RUNNER
 			The contents of file "${orig}${alias}.orig" should equal "${prior}"
 			The output should include 'XLSX processing failed'
 			The stderr should be present
+		End
+
+		It 'clears the debris, so the next healthy run is not refused too'
+			# The cleanup has to remove a directory, not just a file. Leaving it
+			# makes every later run fail against the same leftover: one crash mid
+			# publish would take the feed down until someone cleaned up by hand.
+			When run sh -c "sh '${runner}' >/dev/null 2>&1; sh '${runner}'"
+			The status should be success
+			The contents of file "${orig}${alias}.orig" should equal "${expected}"
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'Final count'
+		End
+	End
+
+	Context 'when the stage that writes the publication is killed'
+		# What the extraction ceiling does, modelled at the one stage the two tars
+		# ahead of it cannot mask: SIGXFSZ kills whichever child writes past the
+		# limit, and the shell reports that as 128 + 25. The status has to come
+		# back verbatim, because pfb_extract_cap_note() reads exactly 153 to tell
+		# the operator "too large" instead of printing a bare exit code.
+		plant_killed_sort() {
+			mkdir -p "${work}/shim"
+			printf '#!/bin/sh\nhead -c 32 > "%s"\nexit 153\n' "${orig}${alias}.orig.tmp" \
+				> "${work}/shim/sort"
+			chmod +x "${work}/shim/sort"
+		}
+		Before 'plant_healthy_raw'
+		Before 'plant_prior_publication'
+		Before 'plant_killed_sort'
+
+		It 'returns the kill status verbatim and keeps the live publication'
+			When run sh -c "PATH='${work}/shim:${PATH}' sh '${runner}'"
+			The status should equal 153
+			The contents of file "${orig}${alias}.orig" should equal "${prior}"
+			The path "${orig}${alias}.orig.tmp" should not be exist
+			The output should include 'XLSX processing failed'
+			The contents of file "${errorlog}" should include 'exit 153'
 		End
 	End
 

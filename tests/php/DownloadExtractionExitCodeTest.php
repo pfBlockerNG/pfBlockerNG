@@ -6,7 +6,7 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * The helper assertions below exercise the pure exit-code decision directly.
- * The six outer pins retain the destructive/live orchestration coverage:
+ * The eight outer pins retain the destructive/live orchestration coverage:
  * pfb_download() executes archive tools and writes appliance paths, so driving
  * those branches here would mutate real state. php_strip_whitespace() bounds
  * each code branch; comments and docblocks are never extraction boundaries.

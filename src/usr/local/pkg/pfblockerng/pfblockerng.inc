@@ -14701,9 +14701,8 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// Check if ZIP archive contains xlsx files
 			$xlsxtest = exec("/usr/bin/tar -tf {$file_dwn_esc}");
 			if (strpos($xlsxtest, '.xlsx') !== FALSE) {
-				// issue #2666: processxlsx() carries an exit contract and stages its own
-				// publication, so the ingest is decided by its status -- which is what
-				// lets issue #2658's ceiling ride along here. No unlink up front: the
+				// issue #2666: the helper's exit status decides the ingest, which is what
+				// lets issue #2658's ceiling ride along. No unlink up front -- the
 				// '.orig' already in service must survive a refused refresh.
 				exec(pfb_extract_cmd("{$pfb['script']} xlsx {$header_esc} {$elog}"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
