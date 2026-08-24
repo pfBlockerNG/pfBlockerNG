@@ -480,8 +480,7 @@ function pfb_ip_parse_line(string $raw_line, array $config): array {
 
 		if (strpos($line, '-') !== FALSE && strpos($line, ':') !== FALSE) {
 			$matches = explode('-', $line);
-			if (count($matches) == 2 &&
-				!str_contains($matches[0], "\0") && !str_contains($matches[1], "\0")) {
+			if (count($matches) == 2 && !str_contains($raw_line, "\0")) {
 				$a_cidr = ip_range_to_subnet_array($matches[0], $matches[1]);
 				if (!empty($a_cidr)) {
 					foreach ($a_cidr as $cidr) {
