@@ -124,9 +124,11 @@ def test_release_published_promote_env_never_supplies_assets_dir() -> None:
     assert not re.search(r"^\s+BASE_URL:\s*", job, re.MULTILINE)
 
 
-def test_release_published_serialises_publishes() -> None:
+def test_release_published_serialises_and_queues_publishes() -> None:
     text = _workflow("release-published.yml")
-    assert re.search(r"^concurrency:\n  group: \S+\n  cancel-in-progress: false\n", text, re.MULTILINE), text
+    assert re.search(r"^concurrency:\n  group: \S+\n  queue: max\n  cancel-in-progress: false\n", text, re.MULTILINE), (
+        text
+    )
 
 
 def test_release_published_prepare_live_gate_fails_on_untestable_target() -> None:

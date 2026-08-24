@@ -82,7 +82,7 @@ def test_other_tags_ordered_or_branch_mapped_never_change_current_tag_destinatio
 
 
 def test_sync_ports_uses_only_exact_channel_recipe_paths() -> None:
-    sync = PUBLISHED.split("sync-ports-fork:", 1)[1]
+    sync = PUBLISHED.split("\n  sync-ports-fork:\n", 1)[1].split("\n  publish-pkg-repo:\n", 1)[0]
     assert '"stable") PORT_PATH="net/pfSense-pkg-pfBlockerNG"' in sync
     assert '"testing") PORT_PATH="net/pfSense-pkg-pfBlockerNG-testing"' in sync
     assert '"edge") PORT_PATH="net/pfSense-pkg-pfBlockerNG-edge"' in sync

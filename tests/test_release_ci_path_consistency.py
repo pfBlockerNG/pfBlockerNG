@@ -78,13 +78,16 @@ def test_release_fallback_exclusions_match_both_workflow_triggers() -> None:
 
 
 def test_issue_2388_ports_sync_runs_only_after_published_release_resolution() -> None:
+    published_path = ROOT / ".github/workflows/release-published.yml"
+    published = published_path.read_text(encoding="utf-8")
     release_jobs = _workflow_jobs(ROOT / ".github/workflows/release.yml")
-    published_jobs = _workflow_jobs(ROOT / ".github/workflows/release-published.yml")
-
+    published_jobs = _workflow_jobs(published_path)
     assert "sync-ports-fork" not in release_jobs, "the draft workflow must stop at the complete draft"
     assert "sync-ports-fork" in published_jobs, "publishing must trigger the FreeBSD-ports bump"
     job_names = list(published_jobs)
     assert job_names.index("sync-ports-fork") == job_names.index("resolve") + 1
+    concurrency = published.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
+    assert "  queue: max" in concurrency, "every published release must keep its queued ports bump"
 
     sync = "\n".join(published_jobs["sync-ports-fork"])
     assert re.search(r"^    needs: \[resolve\]$", sync, re.MULTILINE), sync
