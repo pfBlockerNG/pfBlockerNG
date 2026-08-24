@@ -922,9 +922,19 @@ SH
 		$this->assertNotFalse($end, 'entry_delete must follow addwhitelistdom');
 		$region = substr($src, $start, $end - $start);
 		$this->assertStringContainsString(
-			"pfb_alerts_unlock_drop('dnsbl', \$dnsbl_unlock, array(\$domain_unlock, \$domain, 'www.'.\$domain))",
+			"pfb_alerts_unlock_drop('dnsbl', \$dnsbl_unlock, \$unlock_drop)",
 			$region,
-			'issue #2670: addwhitelistdom must drop posted, stripped, and www.<stripped> unlock tokens'
+			'issue #2670: addwhitelistdom must drop unlock tokens via \$unlock_drop'
+		);
+		$this->assertStringContainsString(
+			"\$unlock_drop[] = \$cname",
+			$region,
+			'issue #2670: CNAME whitelist entries must be unlock-drop tokens'
+		);
+		$this->assertStringContainsString(
+			"\$unlock_drop[] = 'www.'.\$cname",
+			$region,
+			'issue #2670: www.<CNAME> must be unlock-drop tokens too'
 		);
 	}
 
@@ -959,6 +969,30 @@ SH
 		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
 		$this->assertSame('', trim($content), 'both tokens must be gone after sequential lock+unset');
 		$this->assertSame([], $store);
+	}
+
+	public function testUnlockDropClearsWhitelistedCnameAndWwwSibling(): void
+	{
+		$store = [
+			'alias.example.net' => 'python',
+			'www.alias.example.net' => 'python',
+			'keepme.example' => 'python',
+		];
+		file_put_contents(
+			$GLOBALS['pfb']['dnsbl_unlock'],
+			"alias.example.net,python\nwww.alias.example.net,python\nkeepme.example,python\n"
+		);
+
+		$store = pfb_alerts_unlock_drop('dnsbl', $store, [
+			'example.com', 'www.example.com',
+			'alias.example.net', 'www.alias.example.net',
+		]);
+
+		$content = (string) file_get_contents($GLOBALS['pfb']['dnsbl_unlock']);
+		$this->assertStringContainsString('keepme.example', $content);
+		$this->assertStringNotContainsString('alias.example.net', $content, 'issue #2670: a CNAME written to the whitelist must leave the unlock store');
+		$this->assertStringNotContainsString('www.alias.example.net', $content);
+		$this->assertArrayNotHasKey('alias.example.net', $store);
 	}
 
 	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void
