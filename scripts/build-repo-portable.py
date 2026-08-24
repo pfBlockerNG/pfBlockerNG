@@ -323,7 +323,12 @@ def signing_public_der(sign_key: Path) -> bytes:
     # NIST name) readable by the same parse.
     match = re.search(r"^\s*ASN1 OID:\s*(\S+)\s*$", text, re.MULTILINE)
     if match is None:
-        raise BuildRepoError(f"{sign_key}: cannot determine the EC curve (is it an EC private key?)")
+        raise BuildRepoError(
+            f"{sign_key}: cannot determine the EC curve — `openssl ec -text` printed no "
+            "`ASN1 OID:` line. Either this is not an EC private key, or it carries explicit "
+            "curve parameters (`-param_enc explicit`) rather than naming a curve; pkg matches "
+            "curves by OID, so the key must name one."
+        )
     curve = match.group(1)
     if curve not in PKG_ACCEPTED_CURVES:
         raise BuildRepoError(
@@ -345,8 +350,7 @@ def catalog_signature(data: bytes, sign_key: Path) -> bytes:
     Do not reach for the BLAKE2b-512 chain in `ecc_sign_file()`/`ecc_verify_file()`: those
     serve PUBKEY mode, whose catalogue carries a single `signature` member instead of our
     `.sig`/`.pub` pair. Signing the wrong one still produces a well-formed catalogue that a
-    real `pkg update` rejects with "ecc signature verification failure" — verified on a
-    box, which is the only place the difference shows up.
+    real `pkg update` rejects with "ecc signature verification failure".
     """
     message = hashlib.sha256(data).hexdigest().encode()
     return PKGSIGN_ECDSA_HEAD + _openssl(["dgst", "-sha256", "-sign", str(sign_key)], stdin=message)

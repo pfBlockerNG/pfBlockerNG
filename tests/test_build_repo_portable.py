@@ -4391,11 +4391,10 @@ def test_signature_carries_the_pkgsign_ecdsa_header(tmp_path: Path) -> None:
 def test_signature_verifies_over_the_sha256_hex_message(tmp_path: Path) -> None:
     """The real cryptographic check, exactly as libpkg's FINGERPRINTS path does it.
 
-    Proven against a real libpkg (freebsd/pkg 13f9f98) built on a Linux box: the
-    signed message is the 64-character ASCII SHA256 HEX of the uncompressed catalogue
-    member, ECDSA-SHA256 over that. Signing the BLAKE2b-512 digest instead — the
-    convention `ecc_verify_file()` uses for PUBKEY mode — makes a real `pkg update`
-    fail with "ecc signature verification failure".
+    The signed message is the 64-character ASCII SHA256 HEX of the uncompressed
+    catalogue member, ECDSA-SHA256 over that. The BLAKE2b-512 digest is the PUBKEY-mode
+    convention (`ecc_verify_file()`); signing it here yields a catalogue that a real
+    `pkg update` rejects with "ecc signature verification failure".
     """
     out, _ = _build_signed(tmp_path)
 
@@ -4500,8 +4499,7 @@ def test_cli_sign_key_flag_signs_the_catalog(tmp_path: Path) -> None:
 def test_public_member_also_carries_the_pkgsign_header(tmp_path: Path) -> None:
     """The `.pub` member needs the `$PKGSIGN:ecdsa$` prefix too, not just `.sig`.
 
-    Proven against a real libpkg (built from freebsd/pkg 13f9f98) before this test
-    existed: with the header on `.sig` only, `pkg update` fails with
+    With the header on `.sig` only, a real `pkg update` fails with
 
         pkg: error reading public key: error:1E08010C:DECODER routines::unsupported
         pkg: No trusted certificate has been used to sign the repository
@@ -4529,3 +4527,21 @@ def test_public_member_also_carries_the_pkgsign_header(tmp_path: Path) -> None:
         # The fingerprint is the sha256 of the cert bytes AFTER the header is stripped,
         # so the DER must still be recoverable exactly.
         assert sigs[f"{member}.pub"][len(_PKGSIGN_ECDSA_HEAD) :].startswith(b"\x30")
+
+
+def test_openssl_that_cannot_be_executed_raises_build_error(tmp_path: Path, monkeypatch: Any) -> None:
+    """An `openssl` on PATH that is not executable must still surface as BuildRepoError.
+
+    `subprocess.run` raises PermissionError, not FileNotFoundError, for this case, so
+    catching only the latter let a bare traceback escape the wrapper. Shadow PATH with a
+    directory holding a non-executable `openssl` to exercise it.
+    """
+    shadow = tmp_path / "bin"
+    shadow.mkdir()
+    fake = shadow / "openssl"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o644)  # present, findable, NOT executable
+    monkeypatch.setenv("PATH", str(shadow))
+
+    with pytest.raises(brp.BuildRepoError, match="cannot run `openssl`"):
+        brp.catalog_signature(b"payload", tmp_path / "irrelevant.key")
