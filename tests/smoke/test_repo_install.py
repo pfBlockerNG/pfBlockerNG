@@ -146,7 +146,7 @@ PORTABLE_REPO_ROOT = f"{GUEST_SPIKE_DIR}/portable_catalog"  # where the flat por
 # The repository copy of the boot-time generator hook — the executed-proof oracle
 # for "the embedded heredoc survives ash when piped": a fresh-box install.sh
 # run's on-guest hook must be byte-identical to THIS file.
-RC_D_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
+RC_D_HOOK_SRC = Path(__file__).resolve().parents[2] / "src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 # The caller supplies a selected channel root beneath the project Pages URL through
 # SMOKE_REPO_LIVE_URL; when unset, the live HTTPS check is skipped.
@@ -1377,6 +1377,46 @@ def write_live_repo_conf(
     )
     if written.returncode != 0:
         raise RuntimeError(f"write_live_repo_conf failed: rc={written.returncode} {written.stderr!r}")
+    if "signature_type: fingerprints" in conf:
+        _install_trusted_fingerprint(vm, timeout=timeout)
+
+
+def _install_trusted_fingerprint(vm: SmokeVM, *, timeout: float = 60.0) -> None:
+    """Install the catalogue signing key's trusted fingerprint on the guest.
+
+    A conf written straight from ``--print-conf`` requires a signature (issue #2675), and
+    on this path nothing has run the rc.d hook that normally installs the key — so without
+    this the guest refuses the catalogue with "No trusted public keys found", whatever the
+    catalogue actually contains. Read out of the shipped hook rather than restated here, so
+    a rotated key cannot leave the smoke fleet pinning the retired one.
+    """
+    hook_text = GENERATE_HOOK_SRC.read_text()
+    name = re.search(r"^CONF_FINGERPRINT_NAME=\"\$\{REPO_HOST\}\"", hook_text, re.M)
+    host = re.search(r"^REPO_HOST='([^']+)'", hook_text, re.M)
+    sha = re.search(r"^CONF_FINGERPRINT_SHA256='([0-9a-f]{64})'", hook_text, re.M)
+    if not (name and host and sha):
+        raise RuntimeError("cannot read the trusted fingerprint out of the shipped rc.d hook")
+    trusted_dir = "/usr/local/etc/pkg/fingerprints/pfblockerng/trusted"
+    body = f'function: "sha256"\nfingerprint: "{sha.group(1)}"\n'
+    made = subprocess.run(
+        vm.ssh_argv("/bin/mkdir", "-p", trusted_dir),
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if made.returncode != 0:
+        raise RuntimeError(f"could not create {trusted_dir}: {made.stderr!r}")
+    put = subprocess.run(
+        vm.ssh_argv("tee", f"{trusted_dir}/{host.group(1)}"),
+        input=body,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+    if put.returncode != 0:
+        raise RuntimeError(f"could not install the trusted fingerprint: {put.stderr!r}")
 
 
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
@@ -2170,7 +2210,7 @@ GENERATE_DIR = "/tmp/pfb_generate_test"
 GUEST_HOOK_PATH = "/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 # Source path for the hook (runner side).
-GENERATE_HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
+GENERATE_HOOK_SRC = Path(__file__).resolve().parents[2] / "src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 
 
 def _stage_generate_hook(vm: SmokeVM, *, guest_hook: str) -> None:

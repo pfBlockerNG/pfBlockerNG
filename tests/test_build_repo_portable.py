@@ -675,7 +675,7 @@ def test_print_conf_base_url_override(capsys: pytest.CaptureFixture[str]) -> Non
     rc = brp.main(["--print-conf", "--base-url", "https://fork.example.io/p/", "--catalog-path", "ce-2.8/amd64"])
     assert rc == 0
     out = capsys.readouterr().out
-    assert 'url: "http://fork.example.io/p/release/ce-2.8/amd64"' in out
+    assert 'url: "https://fork.example.io/p/release/ce-2.8/amd64"' in out
     assert "${ABI}" not in out
 
 
@@ -685,7 +685,7 @@ def test_print_conf_accepts_selected_channel_root(capsys: pytest.CaptureFixture[
         [
             "--print-conf",
             "--base-url",
-            "https://pkg.pfblockerng.com/docs/edge",
+            "http://pkg.pfblockerng.com/docs/edge",
             "--channel",
             "edge",
             "--catalog-path",
@@ -704,7 +704,7 @@ def test_print_conf_infers_selected_channel_root(capsys: pytest.CaptureFixture[s
         [
             "--print-conf",
             "--base-url",
-            "https://pkg.pfblockerng.com/docs/edge",
+            "http://pkg.pfblockerng.com/docs/edge",
             "--catalog-path",
             "ce-2.8",
         ]
@@ -721,7 +721,7 @@ def test_print_conf_does_not_treat_host_as_channel(capsys: pytest.CaptureFixture
     assert rc == 0
     out = capsys.readouterr().out
     assert "pfblockerng: {" in out
-    assert 'url: "http://edge/release/ce-2.8"' in out
+    assert 'url: "https://edge/release/ce-2.8"' in out
 
 
 def test_cli_requires_in_and_out(capsys: pytest.CaptureFixture[str]) -> None:

@@ -66,7 +66,12 @@ META_CONF = (
 # base Netgate `pfSense` repo (priority 0) because priority — not version —
 # decides cross-repo resolution. Base URL is this repo's GitHub Pages root
 # (ADR-39; the Cloudflare Worker has been retired).
-DEFAULT_BASE_URL = "https://pkg.pfblockerng.com"
+# The pkg repository domain. Scheme is chosen per use: the catalogue is fetched over
+# plain HTTP (pkg's CA store is Netgate-pinned on pfSense Plus, so TLS is not a trust
+# anchor we can rely on — the catalogue signature is, issue #2675), while anything a
+# human or a root shell fetches from the same host stays HTTPS.
+REPO_HOST = "pkg.pfblockerng.com"
+DEFAULT_BASE_URL = f"http://{REPO_HOST}"
 CONF_PRIORITY = 100
 
 # Per-channel repo-conf stanza key (issue #2147 step B): the four channels
@@ -1533,19 +1538,17 @@ def build_repo_matrix(
     return {"built": built}
 
 
-def _catalogue_url(base_url: str) -> str:
-    """The URL a client conf points at, for a resolved catalogue *base_url*.
+def _is_signed_host(base_url: str) -> bool:
+    """Whether *base_url* is the host whose catalogues our signing key signs.
 
-    HTTPS is downgraded to plain HTTP on purpose: `pkg` on pfSense Plus runs against a
-    Netgate-pinned CA bundle that cannot be widened from anywhere our package can reach,
-    so TLS to our host is not a trust anchor we are able to rely on. Authenticity comes
-    from the catalogue signature instead (issue #2675), and the package payloads are
-    checksummed by that signed catalogue. Any other scheme is left alone — a `file://`
-    catalogue has no network in its path at all.
+    A fork base (gen_landing.write_site bakes one) serves a catalogue our key never
+    touched, so pinning our fingerprint to it would leave that fork unusable.
     """
-    if base_url.startswith("https://"):
-        return "http://" + base_url[len("https://") :]
-    return base_url
+    for scheme in ("https://", "http://"):
+        prefix = scheme + REPO_HOST
+        if base_url == prefix or base_url.startswith(prefix + "/"):
+            return True
+    return False
 
 
 # Where the client keeps the trusted fingerprint(s) of the catalogue signing key. The
@@ -1554,19 +1557,19 @@ CONF_FINGERPRINT_DIR = "/usr/local/etc/pkg/fingerprints/pfblockerng"
 
 
 def _conf_signature_lines(url: str) -> str:
-    """The signature fields for *url*: a `file://` catalogue is local and unsigned."""
-    if url.startswith("file://"):
+    """The signature fields for *url*. Only our own host's catalogues are signed."""
+    if not _is_signed_host(url):
         return "  signature_type: none,\n"
     return f'  signature_type: fingerprints,\n  fingerprints: "{CONF_FINGERPRINT_DIR}",\n'
 
 
 def _conf_trust_comment(url: str) -> str:
-    if url.startswith("file://"):
-        return "# Local catalogue: served from this filesystem, unsigned — no network and no\n# CA store in the path.\n"
+    if not _is_signed_host(url):
+        return "# Unsigned catalogue: this base is not the signed project host.\n"
     return (
         "# Signed catalogue (issue #2675): the trust anchor is our own ECDSA key, whose\n"
-        "# fingerprint the boot rc.d hook installs; the fetch is plain HTTP because pkg's CA\n"
-        "# store is Netgate-pinned on pfSense Plus and cannot be widened from the GUI.\n"
+        "# fingerprint the boot rc.d hook installs; the fetch is plain HTTP because pkg's\n"
+        "# CA store is Netgate-pinned on pfSense Plus and unreachable from the GUI.\n"
     )
 
 
@@ -1578,7 +1581,7 @@ def print_conf(resolved_url: str, *, channel: str = "release") -> None:
     ``<base>/<channel>/<varver>`` — no ``${ABI}`` token.
     Supply ``--catalog-path <varver>`` so tests can pin the exact bytes.
     """
-    url = _catalogue_url(resolved_url.rstrip("/"))
+    url = resolved_url.rstrip("/")
     repo_name = _CHANNEL_REPO_NAMES[channel]
     # install.sh --channel rejects "release" (issue #2384) — the legacy release
     # default's hint keeps a literal <channel> placeholder instead of naming a

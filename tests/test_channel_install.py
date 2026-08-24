@@ -472,6 +472,32 @@ def _assert_idempotent_second_run(root: str, channel: str) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def test_project_host_bootstrap_installs_the_fingerprint_and_a_signed_conf() -> None:
+    """The whole suite runs against a ``file://`` base, where the flip is a no-op — so
+    nothing here exercised the shape a real box gets (issue #2675).
+
+    Three things have to hold together for a bootstrap against the project host: the
+    conf requires a signature, the trusted fingerprint exists to satisfy it, and the
+    path the conf names is the ON-BOX one even though this run is staged under a root.
+    A conf naming the staging directory would find no key once the box booted as /.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        proc = _run_install(root, "stable", extra_env={"PFB_BASE_URL": "https://pkg.pfblockerng.com"})
+        assert proc.returncode == 0, proc.stdout + proc.stderr
+
+        conf = _conf_path(root, "stable").read_text()
+        assert 'url: "http://pkg.pfblockerng.com/stable/' in conf, conf
+        assert "signature_type: fingerprints," in conf, conf
+        assert 'fingerprints: "/usr/local/etc/pkg/fingerprints/pfblockerng",' in conf, conf
+
+        trusted = Path(root) / "usr/local/etc/pkg/fingerprints/pfblockerng/trusted/pkg.pfblockerng.com"
+        assert trusted.is_file(), f"no trusted fingerprint under the staged root:\n{proc.stdout}"
+        assert trusted.read_text() == (
+            'function: "sha256"\nfingerprint: "081df5476f84d8d20417c400f576c355069a4a9979d170bcaae1c9da32778915"\n'
+        )
+        assert (Path(root) / "usr/local/etc/pkg/fingerprints/pfblockerng/revoked").is_dir()
+
+
 @pytest.mark.parametrize("channel", _CHANNELS)
 def test_fresh_box_bootstraps_hook_conf_and_installs(channel: str) -> None:
     """Scenario: given a box with nothing configured, when install.sh --channel <ch>

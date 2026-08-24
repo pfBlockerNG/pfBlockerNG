@@ -66,8 +66,10 @@ final class PkgCaHookDelegateTest extends TestCase
 	public function testRepoConfRegenerateRunsTheHooksStartVerb(): void
 	{
 		// issue #2675: an upgrade must correct a conf written before the flip. The
-		// package ships the hook, so POST-INSTALL runs it rather than waiting for the
-		// next boot -- the fingerprint and the signed-repo conf land together.
+		// hook ships from src/, so once the ports install it (follow-up) POST-INSTALL
+		// runs it rather than waiting for the next boot -- the fingerprint and the
+		// signed-repo conf land together. Until then this is a no-op on a box whose
+		// package predates hook delivery, which is why an absent hook is not an error.
 		$this->assertTrue(pfb_repo_conf_regenerate($this->hook, $this->timeout));
 		$this->assertSame("onestart\n", file_get_contents($this->log));
 	}
