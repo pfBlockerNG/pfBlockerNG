@@ -434,9 +434,14 @@ is installing a retained older version rather than re-deploying a site.
   time — there is no `${ABI}` pkg(8) variable any more; a boot-time `rc.d` hook
   (`pfblockerng_repo_generate.sh`, ADR-39) rewrites the conf on a pfSense OS upgrade that
   moves the box to a different varver.
-- **NONE-signed, TLS-anchored.** No signing key in CI; trust is HTTPS to the Pages host. The
-  catalog is served at the project's GitHub Pages URL, e.g.
-  **`https://pkg.pfblockerng.com/stable/ce-2.8`**.
+- **Signed, key-anchored.** The catalogues are signed with an ECDSA key (`secp384r1`, private
+  half in the `PFB_PKG_SIGNING_KEY` Actions secret) and clients verify against a trusted
+  fingerprint the boot `rc.d` hook installs (issue #2675). The catalogue is fetched over plain
+  **HTTP** — `pkg` on pfSense Plus runs against a Netgate-pinned CA bundle nothing we ship can
+  widen, so TLS there is not a trust anchor we can rely on; the signature is. The catalogue is
+  served at the project's GitHub Pages host, e.g. **`http://pkg.pfblockerng.com/stable/ce-2.8`**,
+  and everything a human or a root shell fetches from that host (the site, `install.sh`) stays
+  HTTPS.
 - **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
   `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
   in a FreeBSD VM) is the fidelity fallback, and both share the exact `--print-conf` shape

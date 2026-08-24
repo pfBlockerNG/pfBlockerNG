@@ -76,7 +76,7 @@ VAR_WIPE_SENTINEL = "/var/PFB_SMOKE_WIPE_SENTINEL"
 #   ramdisk  — login-ca-sync first (carry compiled BEFORE the reboot), reboot: nginx
 #     MUST now carry it — the daemon-inheritance proof, one boot after the write.
 GUEST_HOOK_PATH = "/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
-HOOK_SRC = Path(__file__).resolve().parents[2] / "scripts" / "rc.d" / "pfblockerng_repo_generate.sh"
+HOOK_SRC = Path(__file__).resolve().parents[2] / "src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 LOGIN_CONF = "/etc/login.conf"
 LOGIN_CA_ENTRY = "SSL_CA_CERT_PATH=/etc/ssl/certs"
 CA_DIR = "/etc/ssl/certs"

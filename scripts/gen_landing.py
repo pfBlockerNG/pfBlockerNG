@@ -1179,7 +1179,8 @@ def _render_catalogue_browse_page(docs: str, full_rel: str) -> str:
 # carries — replaced with the SITE's own base at render time (issues #2416 /
 # B3/F3) so a fork or staged prefix ships an installer that resolves against
 # itself without requiring every user to override PFB_BASE_URL by hand.
-_BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-https://pkg.pfblockerng.com}"'
+_BASE_URL_DEFAULT_LINE = 'PFB_BASE_URL="${PFB_BASE_URL:-http://${PFB_REPO_HOST}}"'
+_REPO_HOST_DEFAULT_LINE = 'PFB_REPO_HOST="${PFB_REPO_HOST:-pkg.pfblockerng.com}"'
 
 
 def _shell_single_quote(value: str) -> str:
@@ -1190,6 +1191,21 @@ def _shell_single_quote(value: str) -> str:
     source text without risking it being read back as executable syntax.
     """
     return "'" + value.replace("'", "'\\''") + "'"
+
+
+# The site is browsed over HTTPS; the CATALOGUE is fetched over plain HTTP, because pkg
+# on pfSense Plus runs against a Netgate-pinned CA bundle nothing we ship can widen
+# (issue #2675). The published installer therefore carries the base its confs should
+# name — no generator and no box rewrites a scheme — while the host it prints for the
+# bootstrap `fetch | sh` stays HTTPS: a script piped to a root shell has no signature.
+def _catalogue_base(base: str) -> str:
+    return "http://" + base[len("https://") :] if base.startswith("https://") else base
+
+
+def _repo_host(base: str) -> str:
+    """The bare host of *base*, for the installer's own published-at URL."""
+    without_scheme = base.split("://", 1)[-1]
+    return without_scheme.split("/", 1)[0]
 
 
 def _bake_base_url(script_text: str, base: str) -> str:
@@ -1219,6 +1235,15 @@ def _bake_base_url(script_text: str, base: str) -> str:
         raise ValueError(
             f"expected exactly one PFB_BASE_URL default line in install.sh, found {count}: {_BASE_URL_DEFAULT_LINE!r}"
         )
+    host_count = script_text.count(_REPO_HOST_DEFAULT_LINE)
+    if host_count != 1:
+        raise ValueError(f"expected exactly one PFB_REPO_HOST default line in install.sh, found {host_count}")
+    script_text = script_text.replace(
+        _REPO_HOST_DEFAULT_LINE,
+        f'PFB_REPO_HOST="${{PFB_REPO_HOST:-{_repo_host(base)}}}"',
+        1,
+    )
+    base = _catalogue_base(base)
     replacement = (
         f'PFB_DEFAULT_BASE_URL={_shell_single_quote(base)}\nPFB_BASE_URL="${{PFB_BASE_URL:-${{PFB_DEFAULT_BASE_URL}}}}"'
     )

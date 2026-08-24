@@ -20,13 +20,13 @@
 #   install.sh --channel <stable|testing|edge|nightly>   subscribe + install/converge
 #   install.sh -h|--help                                  this text
 #
-# Published at ${PFB_BASE_URL}/install.sh; run ON the box:
-#   fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
+# Published at https://${PFB_REPO_HOST}/install.sh; run ON the box:
+#   fetch -qo - https://${PFB_REPO_HOST}/install.sh | sh -s -- --channel stable
 #
 # Env (all overridable; forks/staging/tests set these):
 #   PKG_BIN           pkg(8) binary path (default: /usr/local/sbin/pkg)
 #   PFBLOCKERNG_ROOT  filesystem root prefix (default: /)
-#   PFB_BASE_URL      catalog base (default: https://pkg.pfblockerng.com)
+#   PFB_BASE_URL      catalog base (default: http://<PFB_REPO_HOST>)
 #   PFB_SSL_CA_CERT_PATH  CA hash dir exported to pkg (default: <root>/etc/ssl/certs)
 #   PFB_SSL_CA_CERT_FILE  CA bundle exported to pkg (default: <root>/etc/ssl/cert.pem)
 #                         Each half is guarded independently and exported on its own: the
@@ -54,7 +54,21 @@ HOOK_SRC="${SCRIPT_DIR}/../src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh"
 PKG_BIN="${PKG_BIN:-/usr/local/sbin/pkg}"
 PFBLOCKERNG_ROOT="${PFBLOCKERNG_ROOT:-/}"
 ROOT="${PFBLOCKERNG_ROOT%/}"
-PFB_BASE_URL="${PFB_BASE_URL:-https://pkg.pfblockerng.com}"
+# The pkg repository domain, once. The scheme is chosen per use: the CATALOGUE is fetched
+# over plain HTTP, because pkg on pfSense Plus runs against a Netgate-pinned CA bundle
+# nothing we ship can widen — authenticity rides the catalogue signature instead (issue
+# #2675). Fetching THIS script has no signature to fall back on, so that stays HTTPS.
+PFB_REPO_HOST="${PFB_REPO_HOST:-pkg.pfblockerng.com}"
+PFB_BASE_URL="${PFB_BASE_URL:-http://${PFB_REPO_HOST}}"
+# Normalised once, here at the input boundary, so nothing downstream rewrites a scheme:
+# an operator (or an older doc) handing us https for OUR host would otherwise produce a
+# conf pairing TLS with signature_type: fingerprints — the one combination pkg cannot
+# fetch on Plus. Any other host is left exactly as given.
+case "${PFB_BASE_URL}" in
+    "https://${PFB_REPO_HOST}" | "https://${PFB_REPO_HOST}/"*)
+        PFB_BASE_URL="http://${PFB_BASE_URL#https://}"
+        ;;
+esac
 
 CANONICAL_PKG="pfSense-pkg-pfBlockerNG"
 REPOS_DIR="${ROOT}/usr/local/etc/pkg/repos"
@@ -303,8 +317,8 @@ Usage:
   install.sh --channel <stable|testing|edge|nightly>   subscribe + install/converge (idempotent)
   install.sh -h|--help                                  this text
 
-Published at ${PFB_BASE_URL}/install.sh; run ON the box:
-  fetch -qo - ${PFB_BASE_URL}/install.sh | sh -s -- --channel <stable|testing|edge|nightly>
+Published at https://${PFB_REPO_HOST}/install.sh; run ON the box:
+  fetch -qo - https://${PFB_REPO_HOST}/install.sh | sh -s -- --channel <stable|testing|edge|nightly>
 
 Installs the boot-time repo-conf generator hook (ADR-39), subscribes this box to the
 named channel ALONE (retiring any other pfBlockerNG channel conf), then installs or
@@ -322,16 +336,6 @@ Exit codes:
 USAGE
 }
 
-# The scheme the emitted conf carries, for a given catalogue base. The hook downgrades
-# https to plain http (issue #2675 — pkg's CA store is Netgate-pinned on Plus), so the
-# conf this script verifies never carries the https base it was given.
-pfb_conf_url() {
-    case "$1" in
-        https://*) printf 'http://%s' "${1#https://}" ;;
-        *) printf '%s' "$1" ;;
-    esac
-}
-
 # pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository
 # copy this is a STUB that fails loud: the standalone
 # src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh is the source of truth, used
@@ -341,7 +345,7 @@ pfb_conf_url() {
 # <base>/install.sh for `fetch | sh`.
 pfb_emit_embedded_hook() {
     # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by gen_landing.py at website-build time.
-    printf 'install.sh: no embedded hook in this copy — run from a checkout, or use the published %s/install.sh\n' "${PFB_BASE_URL}" >&2
+    printf 'install.sh: no embedded hook in this copy — run from a checkout, or use the published %s/install.sh\n' "https://${PFB_REPO_HOST}" >&2
     return 1
     # PFB_EMBED_HOOK_END
 }
@@ -401,14 +405,9 @@ pfb_channel_install() {
         die 1 "'${PKG_BIN}' not found — run this ON a pfSense box, or set PKG_BIN"
 
     # 2. Boot-time generator hook: install/refresh only if missing or different.
-    #    Try the EMBEDDED hook first: the published artifact's own filename IS
-    #    install.sh, so a downloaded copy saved beside a stale on-box hook (in
-    #    /usr/local/etc, where ROOT="") would make "-f SCRIPT_DIR/install.sh"
-    #    true for a non-checkout copy too — trusting that check first would then
-    #    `cmp` the on-box hook against HOOK_SRC, its own collided path, and never
-    #    refresh a stale one. HOOK_SRC (the checkout sibling) is consulted only
-    #    when the embedded hook is the repository stub (pfb_emit_embedded_hook
-    #    fails); die if neither source is available.
+    #    Try the EMBEDDED hook first; HOOK_SRC (the checkout copy under src/) is
+    #    consulted only when the embedded hook is the repository stub
+    #    (pfb_emit_embedded_hook fails). Die if neither source is available.
     _hook_tmp="$(mktemp "${TMPDIR:-/tmp}/pfb-hook.XXXXXX")" || die 1 "mktemp failed while staging the boot hook"
     if pfb_emit_embedded_hook >"${_hook_tmp}" 2>/dev/null; then
         :
@@ -499,10 +498,10 @@ pfb_channel_install() {
     # when detection fails, so a pre-existing conf carrying the marker but
     # resolving to ANOTHER base/channel (a stale conf from a fork, a staged
     # prefix, or a restored config backup) must be rejected too.
-    _expect_url_prefix="url: \"$(pfb_conf_url "${PFB_BASE_URL%/}")/${PFB_CHANNEL}/"
+    _expect_url_prefix="url: \"${PFB_BASE_URL%/}/${PFB_CHANNEL}/"
     if ! grep -qF "${_expect_url_prefix}" "${CONF_PATH}" 2>/dev/null; then
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"
-        die 4 "${CONF_PATH} does not resolve to $(pfb_conf_url "${PFB_BASE_URL%/}")/${PFB_CHANNEL}/ — a stale or foreign conf; inspect: sh ${ON_BOX_HOOK} onestart"
+        die 4 "${CONF_PATH} does not resolve to ${PFB_BASE_URL%/}/${PFB_CHANNEL}/ — a stale or foreign conf; inspect: sh ${ON_BOX_HOOK} onestart"
     fi
     printf '==> Conf resolved:\n'
     sed -n 's/^[[:space:]]*url:[[:space:]]*/    url: /p' "${CONF_PATH}"

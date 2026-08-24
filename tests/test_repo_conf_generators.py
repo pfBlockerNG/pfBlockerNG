@@ -36,6 +36,7 @@ install.sh --channel <channel>.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import subprocess
@@ -51,10 +52,11 @@ _BUILD_REPO = _SCRIPTS / "build-repo.sh"
 _BUILD_REPO_PORTABLE = _SCRIPTS / "build-repo-portable.py"
 _HOOK = _ROOT / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
 
-_PAGES_BASE = "https://pkg.pfblockerng.com"
-# What the generators emit for that base: plain HTTP, because pkg's CA store is
-# Netgate-pinned on Plus and cannot be reached from the GUI (issue #2675).
-_PAGES_HTTP_BASE = "http://pkg.pfblockerng.com"
+# The catalogue base a box is given: plain HTTP, because pkg's CA store is Netgate-pinned
+# on Plus and unreachable from the GUI (issue #2675). Authenticity rides the signature.
+# gen_landing derives this from the site's HTTPS base when it bakes install.sh; nothing
+# downstream rewrites a scheme, so a conf carries the base verbatim.
+_PAGES_BASE = "http://pkg.pfblockerng.com"
 _FINGERPRINT_DIR = "/usr/local/etc/pkg/fingerprints/pfblockerng"
 
 # Representative catalog paths for byte-identity and URL-shape tests.
@@ -194,7 +196,7 @@ def _hook_conf_env(repos: str) -> dict[str, str]:
     return {f"PFB_{channel.upper()}_CONF": os.path.join(repos, name) for channel, name in _CHANNEL_CONF_NAMES.items()}
 
 
-def _run_hook(root: str, *, edition_label: str, version: str, channel: str) -> str:
+def _run_hook(root: str, *, edition_label: str, version: str, channel: str, base_url: str | None = None) -> str:
     """Run the generator hook off-box against a stubbed box; return the conf it wrote.
 
     ``channel`` selects which conf the hook regenerates: we stage only that one so
@@ -221,7 +223,13 @@ def _run_hook(root: str, *, edition_label: str, version: str, channel: str) -> s
         **_hook_conf_env(repos),
         "PFB_PRODUCT_LABEL": label,
         "PFB_VERSION_FILE": ver,
+        # Staged, like every other on-box path this harness overrides: without it the
+        # hook writes the HOST's real /usr/local/etc/pkg/fingerprints — silent only
+        # where that path happens not to be writable.
+        "PFB_FINGERPRINT_DIR": os.path.join(root, "fingerprints", "pfblockerng"),
     }
+    if base_url is not None:
+        env["PFB_BASE_URL"] = base_url
     subprocess.run(["sh", str(_HOOK), "onestart"], env=env, capture_output=True, text=True, check=False)
     return Path(conf_path).read_text()
 
@@ -234,6 +242,24 @@ def test_hook_leaves_legacy_release_conf_untouched() -> None:
     with tempfile.TemporaryDirectory() as root:
         hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", channel="release")
     assert hook_conf == "# stub pending\n", f"legacy release conf must be left untouched by the hook:\n{hook_conf}"
+
+
+@pytest.mark.parametrize("base", ["file:///srv/pfb-catalog", "https://fork.example.org/pkg"])
+def test_hook_matches_print_conf_for_a_base_that_is_not_the_project_host(base: str) -> None:
+    """The hook's unsigned arm is pinned too, not just the producers'.
+
+    Only ``pkg.pfblockerng.com`` carries catalogues our key signs, so every other base —
+    a local ``file://`` tree, a fork site — keeps its scheme and ``signature_type: none``.
+    The three generators have to agree on that shape as exactly as they agree on the
+    signed one, and until now nothing compared the hook against them for it.
+    """
+    with tempfile.TemporaryDirectory() as root:
+        hook_conf = _run_hook(root, edition_label="pfSense", version="2.8.1", channel="stable", base_url=base)
+    print_conf = _print_conf_portable(_CE_28, base, channel="stable")
+    assert hook_conf == print_conf, (
+        f"hook vs --print-conf drift for {base}:\nhook:\n{hook_conf}\nprint-conf:\n{print_conf}"
+    )
+    assert _field(hook_conf, "signature_type") == "none"
 
 
 def test_hook_output_byte_identical_to_print_conf_nightly_plus() -> None:
@@ -355,7 +381,7 @@ def test_four_channel_url_path_segment_and_repo_name(channel: str) -> None:
     # http, not the https base handed in: pkg fetches the catalogue with a CA store
     # pfSense Plus pins to Netgate, so TLS is not a trust anchor we can rely on.
     # Authenticity comes from the catalogue signature instead (issue #2675).
-    expected_url = f"{_PAGES_HTTP_BASE}/{channel}/{_CE_28}"
+    expected_url = f"{_PAGES_BASE}/{channel}/{_CE_28}"
 
     assert re.search(rf"^{re.escape(repo_name)}:\s*\{{", conf, re.MULTILINE), (
         f"repo name {repo_name!r} not found in conf:\n{conf}"
@@ -494,6 +520,22 @@ def test_print_conf_channel_still_requires_catalog_path(argv: list[str]) -> None
     assert "catalog-path" in proc.stderr.lower(), proc.stderr
 
 
+def test_the_hooks_trusted_fingerprint_is_the_sha256_of_the_committed_public_key() -> None:
+    """The hex the hook installs must be the SHA256 of the DER public key the catalogues
+    embed — nothing else in the tree can tell a correct fingerprint from a plausible one.
+
+    The public half is committed beside this test (it is public by construction: every
+    signed catalogue carries it in a `.pub` member). A typo in the hook, or a key rotated
+    on one side only, fails here instead of on every box at once with "No trusted public
+    keys found".
+    """
+    der = (_ROOT / "tests" / "fixtures" / "pkg-signing" / "pfblockerng-repo.pub.der").read_bytes()
+    hook = _HOOK.read_text()
+    match = re.search(r"^CONF_FINGERPRINT_SHA256='([0-9a-f]{64})'", hook, re.MULTILINE)
+    assert match is not None, "the hook no longer carries a CONF_FINGERPRINT_SHA256 literal"
+    assert match.group(1) == hashlib.sha256(der).hexdigest()
+
+
 def test_no_stale_dev_tooling_hook_path_reference() -> None:
     """Issue #2675: the hook moved out of the dev-tooling ``scripts/`` tree's
     ``rc.d`` directory into ``_HOOK`` (the shipped tree) so the package can install
@@ -502,11 +544,23 @@ def test_no_stale_dev_tooling_hook_path_reference() -> None:
 
     The needle is assembled at runtime, not written as a literal in this file's own
     source (which would self-match and make the guard permanently red)."""
-    stale_needle = "/".join(["scripts", r"rc\.d"])
+    # Two spellings. Both are assembled at runtime, never written as literals here:
+    # a literal self-matches and pins the guard permanently red. The second spelling
+    # exists because the first shipped blind to it — a path built from one quoted
+    # directory segment per component carries no contiguous form of the old path,
+    # and three live smoke references survived the relocation that way.
+    _quote = "[\"']"
+    _seg = _quote + "%s" + _quote
+    stale_needle = "|".join(
+        [
+            "/".join(["scripts", r"rc\.d"]),
+            (_seg % "scripts") + r",? */? *" + (_seg % r"rc\.d"),
+        ]
+    )
     proc = subprocess.run(
         [
             "grep",
-            "-rl",
+            "-rlE",
             stale_needle,
             str(_ROOT),
             "--exclude-dir=.git",

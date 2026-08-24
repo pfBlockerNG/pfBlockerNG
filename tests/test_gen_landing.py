@@ -2296,7 +2296,7 @@ def test_conf_via_portable_matches_real_build_repo_portable_contract() -> None:
         conf: str = gl._conf_via_portable(base, channel)
         assert conf, f"{channel} conf must be non-empty"
         assert f"pfblockerng-{channel}: {{" in conf
-        assert f"{_conf_url(base)}/{channel}/<varver>" in conf
+        assert f"{base}/{channel}/<varver>" in conf
 
 
 # ── _embed_hook: splice the boot hook into install.sh's stub body ─────────────
@@ -2610,7 +2610,7 @@ def test_write_site_bakes_the_sites_base_url_into_the_published_installer(tmp_pa
     gl.write_site(str(site), fork_base, str(_PKG_SITE_DIR))
 
     text = (site / "install.sh").read_text()
-    assert f"PFB_DEFAULT_BASE_URL='{fork_base}'" in text, (
+    assert f"PFB_DEFAULT_BASE_URL='{_conf_url(fork_base)}'" in text, (
         "install.sh must default PFB_BASE_URL to the site's own base, not upstream's"
     )
     assert 'PFB_BASE_URL="${PFB_BASE_URL:-${PFB_DEFAULT_BASE_URL}}"' in text, (
@@ -2768,7 +2768,7 @@ def test_build_site_tree_bakes_and_embeds_install_sh(tmp_path: Path) -> None:
 
     data, mode = built["install.sh"]
     text = data.decode()
-    assert "PFB_DEFAULT_BASE_URL='https://fork.example/pkg'" in text
+    assert "PFB_DEFAULT_BASE_URL='http://fork.example/pkg'" in text
     assert f"cat <<'{gl._HOOK_HEREDOC}'" in text
     assert stat.S_IMODE(mode) == 0o755  # the real install.sh is executable
 

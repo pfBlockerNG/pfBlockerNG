@@ -496,7 +496,7 @@ STAGEURL
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "http://fork.example.org/pkg/staging/pr-7/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/staging/pr-7/edge/ce-2.8"'
       The contents of file "${PFB_EDGE_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
@@ -564,7 +564,7 @@ OLDBASE
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_TESTING_CONF}" should include 'url: "http://override.example/pkg/testing/ce-2.8"'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://override.example/pkg/testing/ce-2.8"'
       The contents of file "${PFB_TESTING_CONF}" should not include "file:///root/pfb_repo"
     End
 End
@@ -720,7 +720,7 @@ Describe 'generate hook — an env base with a trailing slash does not double it
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_EDGE_CONF}" should include 'url: "http://fork.example.org/pkg/edge/ce-2.8"'
+      The contents of file "${PFB_EDGE_CONF}" should include 'url: "https://fork.example.org/pkg/edge/ce-2.8"'
       The contents of file "${PFB_EDGE_CONF}" should not include "pkg//edge"
     End
 End
@@ -752,7 +752,7 @@ CONFSLASH
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include "regenerated"
-      The contents of file "${PFB_TESTING_CONF}" should include 'url: "http://fork.example.org/pkg/testing/ce-2.8"'
+      The contents of file "${PFB_TESTING_CONF}" should include 'url: "https://fork.example.org/pkg/testing/ce-2.8"'
       The contents of file "${PFB_TESTING_CONF}" should not include "pkg.pfblockerng.com"
     End
 End
@@ -911,7 +911,7 @@ fingerprint: "081df5476f84d8d20417c400f576c355069a4a9979d170bcaae1c9da32778915"'
     End
 End
 
-Describe 'generate hook — a fingerprint store it cannot write never wedges boot'
+Describe 'generate hook — a fingerprint store it cannot write gates the rewrite'
     setup() {
         _fpf_dir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gen_fpfail.XXXXXX")"
         _make_box "${_fpf_dir}" "pfSense" "2.8.1"
@@ -927,14 +927,15 @@ Describe 'generate hook — a fingerprint store it cannot write never wedges boo
     Before 'setup'
     After  'cleanup'
 
-    It 'warns, still regenerates the conf, and exits 0'
+    It 'warns, leaves every conf untouched, and exits 0'
       When run sh "${HOOK}" onestart
       The status should be success
       The stderr should include 'WARNING'
-      The stderr should include 'regenerated'
-      # Fail-closed on the box: pkg reads an absent trusted dir as "no trusted key"
-      # and refuses the catalogue rather than trusting it.
+      The stderr should not include 'regenerated'
       The path "${PFB_FINGERPRINT_DIR}/trusted/pkg.pfblockerng.com" should not be exist
-      The contents of file "${PFB_STABLE_CONF}" should include 'signature_type: fingerprints'
+      # The ordering oracle: the conf is untouched because the fingerprint write runs
+      # FIRST and gates it. Move that call after the regeneration and this example goes
+      # red -- a box would be holding a signature-requiring conf and no key.
+      The contents of file "${PFB_STABLE_CONF}" should equal '# stub pending'
     End
 End
