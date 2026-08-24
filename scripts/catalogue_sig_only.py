@@ -15,7 +15,7 @@ signature_type: a `.pub` difference (key rotation) or any payload/member-set
 change already fails one of those two conditions.
 
 stdlib-only. Reuses pfb_pkg.zstd_decompress — never shells out to `tar`
-(bsdtar and GNU tar diverge on zstd; see .agents/context/lang-shell.md).
+(bsdtar and GNU tar diverge on zstd; see .agents/policy/testing.md).
 """
 
 from __future__ import annotations
