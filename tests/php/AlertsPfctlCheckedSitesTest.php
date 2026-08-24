@@ -1008,10 +1008,14 @@ SH
 		$this->assertNotContains('www.alias.example.net', $tokens);
 	}
 
-	public function testWhitelistUnlockTokensWildcardOmitsWww(): void
+	public function testWhitelistUnlockTokensWildcardDropsWwwBecauseDotDomainCoversIt(): void
 	{
 		$tokens = pfb_alerts_whitelist_unlock_tokens('example.com', 'example.com', TRUE, FALSE, ['alias.example.net']);
-		$this->assertNotContains('www.example.com', $tokens, 'wildcard writes .domain which already covers www');
+		$this->assertContains(
+			'www.example.com',
+			$tokens,
+			'wildcard writes .domain; the matcher covers www.domain, so the unlock row must drop or the Unlocked panel stays stale'
+		);
 		$this->assertContains('example.com', $tokens);
 		$this->assertContains('alias.example.net', $tokens);
 	}
