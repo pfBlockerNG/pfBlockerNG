@@ -340,13 +340,6 @@
                 "default": null
             },
             {
-                "name": "wildcard",
-                "byRef": false,
-                "variadic": false,
-                "type": "bool",
-                "default": null
-            },
-            {
                 "name": "exclude",
                 "byRef": false,
                 "variadic": false,

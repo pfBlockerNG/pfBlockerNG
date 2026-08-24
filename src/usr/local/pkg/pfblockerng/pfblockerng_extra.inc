@@ -7495,13 +7495,13 @@ function pfb_alerts_unlock_drop(string $type, array $store, array $tokens): arra
  *
  * For every written token, also drop www.<token> — the whitelist matcher
  * strips a leading www. unconditionally. TLD exclusion is the exception:
- * classify is exact-string, so the drop-set is stripped + cnames only
- * (posted is included only when it equals stripped).
+ * classify is exact-string, so the drop-set starts as stripped + cnames
+ * (the pre-strip posted form is not added).
  *
  * @param array<int, string> $cnames
  * @return list<string>
  */
-function pfb_alerts_whitelist_unlock_tokens(string $posted, string $stripped, bool $wildcard, bool $exclude, array $cnames): array
+function pfb_alerts_whitelist_unlock_tokens(string $posted, string $stripped, bool $exclude, array $cnames): array
 {
 	$tokens = $exclude ? array($stripped) : array($posted, $stripped);
 	foreach (array_values($cnames) as $cname) {
