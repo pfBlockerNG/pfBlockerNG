@@ -316,6 +316,24 @@ final class IpParseLineTest extends TestCase
 		));
 	}
 
+	public function testIpv6RegexNulFirstRangeEndpointFallsThrough(): void
+	{
+		$line = "2001:4860:4860::\0-2001:4860:4860::3";
+		$this->assertLine($line, $this->config('_v6', 'regex', FALSE), $this->expectedResult(
+			$line,
+			['entries' => ['2001:4860:4860::', '2001:4860:4860::3']]
+		));
+	}
+
+	public function testIpv6RegexNulSecondRangeEndpointFallsThrough(): void
+	{
+		$line = "2001:4860:4860::-" . "\0" . "2001:4860:4860::3";
+		$this->assertLine($line, $this->config('_v6', 'regex', FALSE), $this->expectedResult(
+			$line,
+			['entries' => ['2001:4860:4860::', '2001:4860:4860::3']]
+		));
+	}
+
 	public function testIpv6AutoMixedNulRangeSafelyExtractsIpv6(): void
 	{
 		$line = "192.0.2.1-" . "\0" . "2001:4860:4860::3";
@@ -323,6 +341,23 @@ final class IpParseLineTest extends TestCase
 			$line,
 			['entries' => ['2001:4860:4860::3']]
 		));
+	}
+
+	public function testIpv6AutoOuterNulMixedRangesFallThroughToRegex(): void
+	{
+		$config = $this->config('_v6', 'auto', FALSE);
+		$rows = [
+			["\0" . "2001:4860:4860::3-192.0.2.1", '2001:4860:4860::3'],
+			["2001:4860:4860::3-192.0.2.1" . "\0", '2001:4860:4860::3'],
+			["\0" . "192.0.2.1-2001:4860:4860::3", '2001:4860:4860::3'],
+			["192.0.2.1-2001:4860:4860::3" . "\0", '2001:4860:4860::3'],
+		];
+		foreach ($rows as [$line, $entry]) {
+			$this->assertLine($line, $config, $this->expectedResult(
+				trim($line),
+				['entries' => [$entry]]
+			));
+		}
 	}
 
 	public function testIpv6EmptyAndInvalidRangesDoNotEmitEntries(): void
