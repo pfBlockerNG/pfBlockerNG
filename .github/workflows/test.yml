@@ -61,6 +61,12 @@ permissions:
   contents: read
   packages: read
 
+# Cancel superseded Tests runs of the same PR. Do not cancel devel pushes:
+# a merge landing must not kill the run that tells us devel is green (#2673).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Derive the pytest + PHP test matrices from the single-source-of-truth
   # supported-versions matrix (ci-metadata orphan branch). The pytest matrix is
@@ -93,6 +99,7 @@ jobs:
     name: pytest / Python ${{ matrix.python-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     strategy:
       fail-fast: false
@@ -420,6 +427,7 @@ jobs:
   shell-tests:
     name: shellspec (POSIX sh)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     # kcov v43 — the commit that tag pointed at when the pin was taken. Job-level so the
     # cache keys below can carry it: a tag is a moving reference, so re-pinning kcov has
@@ -653,6 +661,7 @@ jobs:
     name: PHPStan static analysis / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     strategy:
       fail-fast: false
@@ -753,6 +762,7 @@ jobs:
     name: PHPUnit unit tests / PHP ${{ matrix.php-version }}
     needs: read-matrix
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     strategy:
       fail-fast: false
