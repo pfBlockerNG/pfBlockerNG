@@ -1164,16 +1164,7 @@ if (isset($_POST) && !empty($_POST)) {
 			}
 		}
 		// issue #2670: durable whitelist/TLD exclusion replaces the temporary unlock row.
-		// Posted token, www.-stripped form, www.<stripped>, and every CNAME the
-		// same POST writes into the whitelist / TLD exclusion (plus www.<CNAME>).
-		$unlock_drop = array($domain_unlock, $domain, 'www.'.$domain);
-		foreach ($cname_list as $cname) {
-			if ($cname === '') {
-				continue;
-			}
-			$unlock_drop[] = $cname;
-			$unlock_drop[] = 'www.'.$cname;
-		}
+		$unlock_drop = pfb_alerts_whitelist_unlock_tokens($domain_unlock, $domain, $wildcard, $dnsbl_exclude, $cname_list);
 		$dnsbl_unlock = pfb_alerts_unlock_drop('dnsbl', $dnsbl_unlock, $unlock_drop);
 		header("Location: /pfblockerng/pfblockerng_alerts.php?savemsg={$savemsg}");
 		exit;

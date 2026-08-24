@@ -922,19 +922,14 @@ SH
 		$this->assertNotFalse($end, 'entry_delete must follow addwhitelistdom');
 		$region = substr($src, $start, $end - $start);
 		$this->assertStringContainsString(
+			"pfb_alerts_whitelist_unlock_tokens(\$domain_unlock, \$domain, \$wildcard, \$dnsbl_exclude, \$cname_list)",
+			$region,
+			'issue #2670: addwhitelistdom token list must follow the write-set (www. only on non-wildcard whitelist)'
+		);
+		$this->assertStringContainsString(
 			"pfb_alerts_unlock_drop('dnsbl', \$dnsbl_unlock, \$unlock_drop)",
 			$region,
 			'issue #2670: addwhitelistdom must drop unlock tokens via \$unlock_drop'
-		);
-		$this->assertStringContainsString(
-			"\$unlock_drop[] = \$cname",
-			$region,
-			'issue #2670: CNAME whitelist entries must be unlock-drop tokens'
-		);
-		$this->assertStringContainsString(
-			"\$unlock_drop[] = 'www.'.\$cname",
-			$region,
-			'issue #2670: www.<CNAME> must be unlock-drop tokens too'
 		);
 	}
 
@@ -993,6 +988,44 @@ SH
 		$this->assertStringNotContainsString('alias.example.net', $content, 'issue #2670: a CNAME written to the whitelist must leave the unlock store');
 		$this->assertStringNotContainsString('www.alias.example.net', $content);
 		$this->assertArrayNotHasKey('alias.example.net', $store);
+	}
+
+	public function testWhitelistUnlockTokensNonWildcardIncludesWwwAndCnames(): void
+	{
+		$tokens = pfb_alerts_whitelist_unlock_tokens(
+			'www.example.com',
+			'example.com',
+			FALSE,
+			FALSE,
+			['alias.example.net', '', 'alias.example.net']
+		);
+		$this->assertSame(
+			['www.example.com', 'example.com', 'alias.example.net'],
+			array_values(array_unique($tokens)),
+			'non-wildcard whitelist writes domain, www.domain, and each CNAME — not www.<CNAME>'
+		);
+		$this->assertContains('www.example.com', $tokens);
+		$this->assertNotContains('www.alias.example.net', $tokens);
+	}
+
+	public function testWhitelistUnlockTokensWildcardOmitsWww(): void
+	{
+		$tokens = pfb_alerts_whitelist_unlock_tokens('example.com', 'example.com', TRUE, FALSE, ['alias.example.net']);
+		$this->assertNotContains('www.example.com', $tokens, 'wildcard writes .domain which already covers www');
+		$this->assertContains('example.com', $tokens);
+		$this->assertContains('alias.example.net', $tokens);
+	}
+
+	public function testWhitelistUnlockTokensExclusionOmitsWwwKeepsCname(): void
+	{
+		$tokens = pfb_alerts_whitelist_unlock_tokens('example.com', 'example.com', FALSE, TRUE, ['alias.example.net']);
+		$this->assertNotContains(
+			'www.example.com',
+			$tokens,
+			'round-2 blocking: TLD exclusion writes example.com only; dropping www.example.com would re-lock an unlocked name the exclusion does not cover'
+		);
+		$this->assertContains('example.com', $tokens);
+		$this->assertContains('alias.example.net', $tokens);
 	}
 
 	public function testAlertsPageDispatchKeepsFiltersNavigationAndStrictIpActions(): void

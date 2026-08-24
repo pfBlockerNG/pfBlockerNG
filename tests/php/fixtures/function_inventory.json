@@ -321,6 +321,47 @@
             }
         ]
     },
+    "pfb_alerts_whitelist_unlock_tokens": {
+        "returnsRef": false,
+        "returnType": "array",
+        "params": [
+            {
+                "name": "posted",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "stripped",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "wildcard",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "exclude",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "cnames",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_alias_autocomplete_lists": {
         "returnsRef": false,
         "returnType": "array",
