@@ -175,4 +175,27 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 	}
+
+	/**
+	 * pfb_download() hands the XLSX container to the shell helper, which extracts
+	 * it; issue #2666 gave that helper an exit contract, so this branch is pinned
+	 * like its siblings — captured exec, nonzero-exit gate, and the ceiling wrap
+	 * that only an exit gate makes safe. The absent assertions matter as much as
+	 * the present ones: deciding the ingest by the output file existing, or
+	 * unlinking the live publication before the helper runs, both republish a
+	 * truncated feed as a success.
+	 */
+	public function testXlsxBodyCapturesAndChecksHelperExit(): void
+	{
+		$xlsx = strpos(self::$source, "if (strpos(\$xlsxtest, '.xlsx') !== FALSE) {");
+		$this->assertNotFalse($xlsx);
+		$zipBranch = strpos(self::$source, '} else {', $xlsx);
+		$this->assertNotFalse($zipBranch);
+		$scope = substr(self::$source, $xlsx, $zipBranch - $xlsx);
+		$this->assertStringContainsString(
+			'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx {$header_esc} {$elog}"), $output, $retval);', $scope);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+		$this->assertStringNotContainsString('file_exists("{$orig_download}")', $scope);
+		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}")', $scope);
+	}
 }

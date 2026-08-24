@@ -380,34 +380,6 @@ final class DownloadSizeCeilingTest extends TestCase
 	}
 
 	/**
-	 * Scenario: the XLSX ingest is decided by an exit status
-	 *
-	 * Given  the XLSX branch of pfb_download()
-	 * When   the source is read
-	 * Then   the helper script runs under the extraction ceiling and its own exit
-	 *        status decides the ingest, instead of the output file's existence
-	 *        deciding it (issue #2666) -- a helper killed at the ceiling has to
-	 *        refuse the feed, not publish the truncated remains of one. And with
-	 *        the status deciding, the live publication is no longer unlinked up
-	 *        front, so a refused refresh leaves the feed already in service.
-	 */
-	public function test_xlsx_ingest_gates_on_the_helper_exit_status(): void
-	{
-		$start = strpos(self::$downloadBody, "if (strpos(\$xlsxtest, '.xlsx') !== FALSE) {");
-		$this->assertNotFalse($start, 'the XLSX branch must still be in pfb_download()');
-		$end = strpos(self::$downloadBody, '} else {', $start);
-		$this->assertNotFalse($end);
-		$branch = substr(self::$downloadBody, $start, $end - $start);
-
-		$this->assertStringContainsString(
-			'exec(pfb_extract_cmd("{$pfb[\'script\']} xlsx {$header_esc} {$elog}"), $output, $retval);',
-			$branch);
-		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $branch);
-		$this->assertStringNotContainsString('file_exists("{$orig_download}")', $branch);
-		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}")', $branch);
-	}
-
-	/**
 	 * Scenario: an over-large body is refused, not retried
 	 *
 	 * Given  the download retry loop
