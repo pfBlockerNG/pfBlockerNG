@@ -417,6 +417,7 @@ def publish(
     for varver in sorted(targets):
         _reject_stale(site_root, varver, engine, incoming_version)
 
+    expected_public = pr._expected_public_member(engine, sign_key)
     touched: list[tuple[str, str]] = []
     source_index: dict[Path, list[tuple[str, str]]] = {}
     for varver in sorted(targets):
@@ -431,7 +432,11 @@ def publish(
             changed = True
         if not changed and not pr._catalogue_descriptor_complete(dest_dir, engine):
             changed = True
-        if not changed and sign_key is not None and not pr._catalogue_carries_key(dest_dir, engine, sign_key):
+        if (
+            not changed
+            and expected_public is not None
+            and not pr._catalogue_carries_key(dest_dir, engine, expected_public)
+        ):
             changed = True
         # issue #2468: only the canonical asset feeds the fan-out identity index —
         # see publish_release.publish's own comment on this same exclusion.

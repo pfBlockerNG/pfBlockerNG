@@ -1181,8 +1181,9 @@ class SignKeyThreadingTests(_TempDirTestCase):
         )
         handoff_path = self.tmp / "handoff.json"
         handoff_path.write_text(json.dumps(handoff), encoding="utf-8")
-        key = self.tmp / "repo.key"
-        key.write_text("not-a-real-key", encoding="utf-8")
+        # A REAL key: publish() derives its public half up front, so a placeholder
+        # would abort the run before the threading this test is about.
+        key = tbrp._gen_key(self.tmp / "repo.key")
         argv = [
             "--handoff",
             str(handoff_path),
@@ -1485,6 +1486,16 @@ class ResignUnsignedCatalogueTests(_TempDirTestCase):
         key = tbrp._gen_key(self.tmp / "repo.key")
         self.assertEqual(self._publish(key).touched, (("nightly", "ce-2.8"),))
         self.assertEqual(self._publish(key).touched, ())
+
+    @_requires_engine
+    def test_republish_after_key_rotation_resigns_with_the_new_key(self) -> None:
+        catalogue_dir = self.pkg_repo / "docs" / "nightly" / "ce-2.8"
+        self._publish(tbrp._gen_key(self.tmp / "old.key"))
+        first_pub = tbrp._sig_members(catalogue_dir / "packagesite.pkg")["packagesite.yaml.pub"]
+
+        self.assertEqual(self._publish(tbrp._gen_key(self.tmp / "new.key")).touched, (("nightly", "ce-2.8"),))
+        second_pub = tbrp._sig_members(catalogue_dir / "packagesite.pkg")["packagesite.yaml.pub"]
+        self.assertNotEqual(first_pub, second_pub)
 
 
 if __name__ == "__main__":
