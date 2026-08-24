@@ -2032,34 +2032,25 @@ processxlsx() {
 	xlsxshared="${tmpxlsx}sharedStrings.xml"
 	xlsxstage="${pfborig}${alias}.orig.tmp"
 
-	# `tar -xOf` writes the shared-strings part to its own file instead of into
-	# the pipe: POSIX sh has no pipefail, so piped it would report only the
-	# trailing `sort`'s status and an unreadable workbook would still publish an
-	# empty feed.
-	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}"
-	xlsxrc=$?
-	if [ "${xlsxrc}" -eq 0 ]; then
-		# Only the FIRST workbook. The glob splats into tar's argument list, where
-		# every match after the first is read as a member selector rather than a
-		# second archive -- so a multi-workbook container extracts correctly but
-		# exits non-zero, which was invisible while the status was discarded.
-		set -- "${tmpxlsx}"*.[xX][lL][sS][xX]
+	# `tar -xOf` writes to a file, not into the pipe: POSIX sh has no pipefail, so
+	# piped it would report only the trailing `sort`'s status.
+	# `set --` names ONE workbook: the glob splats into tar's argument list, where
+	# every match after the first is a member selector, not a second archive.
+	# `chmod` before the rename because published feeds have unprivileged readers
+	# and a rename would hand the file the run's umask (as pfb_stage_publish()).
+	"${pathtar}" -xf "${pfborig}${alias}.raw" -C "${tmpxlsx}" &&
+		set -- "${tmpxlsx}"*.[xX][lL][sS][xX] &&
 		"${pathtar}" -xOf "$1" "xl/sharedStrings.xml" > "${xlsxshared}" &&
-			grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" "${xlsxshared}" | LC_ALL=C sort -u > "${xlsxstage}"
-		xlsxrc=$?
-	fi
+		grep -aoEw "(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)" "${xlsxshared}" | LC_ALL=C sort -u > "${xlsxstage}" &&
+		chmod 644 "${xlsxstage}" &&
+		mv -f "${xlsxstage}" "${pfborig}${alias}.orig"
+	xlsxrc=$?
 	rm -rf "${tmpxlsx}"*
 
-	if [ "${xlsxrc}" -eq 0 ]; then
-		# Published feeds have unprivileged readers, and replacing the live file by
-		# rename hands it the run's umask instead of the mode it replaces -- the
-		# reason pfb_stage_publish() chmods its staged file too.
-		chmod 644 "${xlsxstage}" && mv -f "${xlsxstage}" "${pfborig}${alias}.orig"
-		xlsxrc=$?
-	fi
-
 	if [ "${xlsxrc}" -ne 0 ]; then
-		rm -f "${xlsxstage}"
+		# -rf, not -f: crash-leftover DIRECTORY debris here would otherwise survive
+		# every later run and keep refusing the feed.
+		rm -rf "${xlsxstage}"
 		echo 'XLSX processing failed'
 		echo " [ ${alias} ] XLSX processing failed, exit ${xlsxrc}; keeping existing [ ${now} ]" >> "${errorlog}"
 		return "${xlsxrc}"
