@@ -88,7 +88,6 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
     assert payload["ci_metadata_sha"] == CI_METADATA_SHA
     assert payload["ports_sha"] == PORTS_SHA
     assert payload["route_matrix"] == [ROW]
-    assert len(payload["route_matrix_sha256"]) == 64
 
 
 def test_load_accepts_exact_release_and_source(tmp_path: Path) -> None:
@@ -106,10 +105,11 @@ def test_load_accepts_exact_release_and_source(tmp_path: Path) -> None:
     [
         ("missing", "cannot read"),
         ("malformed", "valid JSON"),
+        ("schema-bool", "schema"),
+        ("schema-float", "schema"),
         ("wrong-release", "release_tag"),
         ("wrong-source", "source_sha"),
         ("wrong-ci-shape", "ci_metadata_sha"),
-        ("inconsistent-route-digest", "route_matrix_sha256"),
         ("extra-field", "unexpected fields"),
     ],
 )
@@ -124,14 +124,16 @@ def test_load_fails_closed_on_invalid_handoff(tmp_path: Path, case: str, message
         path.write_text("not json", encoding="utf-8")
     else:
         payload = _payload()
-        if case == "wrong-release":
+        if case == "schema-bool":
+            payload["schema"] = True
+        elif case == "schema-float":
+            payload["schema"] = 1.0
+        elif case == "wrong-release":
             expected_tag = "v4.0.0.b2"
         elif case == "wrong-source":
             expected_source = "d" * 40
         elif case == "wrong-ci-shape":
             payload["ci_metadata_sha"] = "not-a-sha"
-        elif case == "inconsistent-route-digest":
-            payload["route_matrix_sha256"] = "0" * 64
         elif case == "extra-field":
             payload["live_route"] = []
         _write(path, payload)

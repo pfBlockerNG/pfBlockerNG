@@ -40,6 +40,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import catalogue_assembly as ca
 import publish_catalogues as pc
 import publish_release as pr
+import tagged_release_handoff as trh
 import test_build_repo_portable as tbrp
 from _srcrepo import SourceRepoError, resolve_src_root
 
@@ -389,18 +390,13 @@ def _write_handoff(
     source_sha: str = "a" * 40,
     ports_sha: str = "b" * 64,
 ) -> Path:
-    route_matrix = list(rows)
-    canonical_route = json.dumps(route_matrix, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    payload = {
-        "schema": 1,
-        "kind": "tagged-release-handoff",
-        "release_tag": tag,
-        "source_sha": source_sha,
-        "ci_metadata_sha": "c" * 40,
-        "ports_sha": ports_sha,
-        "route_matrix_sha256": hashlib.sha256(canonical_route.encode()).hexdigest(),
-        "route_matrix": route_matrix,
-    }
+    payload = trh.build_handoff(
+        release_tag=tag,
+        source_sha=source_sha,
+        ci_metadata_sha="c" * 40,
+        ports_sha=ports_sha,
+        route_matrix=list(rows),
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
@@ -628,9 +624,12 @@ class IntakeAndHandoffTests(_TempDirTestCase):
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
         handoff = _write_handoff(
             assets_dir / "pfblockerng-release-handoff.json",
-            rows=(),
+            rows=(ROW_CE,),
             tag="v4.0.0.b1",
         )
+        payload = json.loads(handoff.read_text(encoding="utf-8"))
+        payload["route_matrix"] = []
+        handoff.write_text(json.dumps(payload), encoding="utf-8")
         with self.assertRaises(ValueError) as ctx:
             pr.run(
                 source_repository=_REPO,

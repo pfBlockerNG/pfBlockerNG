@@ -209,6 +209,8 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
     assert f"ports_sha={ports_sha}" in emitted
     assert '"pfsense_version":"2.8"' in emitted
     commands = git_log.read_text(encoding="utf-8")
+    assert "fetch --no-tags origin +refs/heads/ci-metadata:refs/remotes/origin/ci-metadata" in commands
+    assert "rev-parse refs/remotes/origin/ci-metadata^{commit}" in commands
     assert f"show {ci_sha}:supported-versions.json" in commands
     assert commands.count("ls-remote ") == 1
 
