@@ -1778,8 +1778,12 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
         workflow_pins = {(candidate.job, candidate.output) for candidate in pins if candidate.workflow == pin.workflow}
         identity = False
         for _, path, value in consumers:
-            members = _pin_expression_members(value)
-            if _ref_binding(path) and (pin.job, pin.output) in members and members <= workflow_pins:
+            expression_members = _pin_expression_members(value)
+            if (
+                _ref_binding(path)
+                and (pin.job, pin.output) in expression_members
+                and expression_members <= workflow_pins
+            ):
                 identity = True
                 break
         for job_name in sorted(descendants):
