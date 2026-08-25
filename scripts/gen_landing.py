@@ -361,7 +361,7 @@ _CSS = """
 .pkg-section>h2{margin:0 0 1.6rem;font-size:clamp(1.9rem,4vw,3.2rem);letter-spacing:-.04em;line-height:1.05}
 .pkg-section h3{margin:2rem 0 .6rem;font-size:1.25rem}
 .pkg-section h4{margin:1.4rem 0 .45rem;color:var(--muted);font-size:.82rem;letter-spacing:.1em;text-transform:uppercase}
-.cards{display:grid;gap:1rem;grid-template-columns:repeat(2,minmax(0,1fr))}
+.cards{display:grid;gap:1rem;grid-template-columns:1fr}
 .card{--channel:var(--line);min-width:0;padding:clamp(1.25rem,3vw,2rem);border:1px solid var(--line);
   border-top:4px solid var(--channel);border-radius:var(--radius);background:var(--bg-elevated);
   box-shadow:0 1px 0 rgb(255 255 255 / 70%) inset}
@@ -403,7 +403,7 @@ table.autoindex td.num{white-space:nowrap}
   padding:.3rem .5rem;cursor:pointer}
 .copy:hover{color:white;border-color:white}
 .copy.copied{color:#56d364;border-color:#56d364}
-@media(max-width:820px){.cards{grid-template-columns:1fr}.pkg-shell{padding-bottom:4rem}}
+@media(max-width:820px){.pkg-shell{padding-bottom:4rem}}
 @media(prefers-color-scheme:dark){.card{background:rgb(27 26 30 / 72%);box-shadow:none}}
 """
 
