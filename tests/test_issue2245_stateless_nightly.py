@@ -294,3 +294,194 @@ jobs:
     assert hygiene._pin_offences({"fake-output.yml": source}) == [
         "fake-output.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink"
     ]
+
+
+def test_workflow_hygiene_accepts_semver_refs_in_uncalled_reusable_workflows() -> None:
+    source = """\
+on: workflow_call
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7.1.2
+        with: {name: pkg}
+"""
+    assert hygiene._artifact_chain_offences({"reusable.yml": source}) == []
+
+
+def test_workflow_hygiene_rejects_main_refs_in_uncalled_reusable_workflows() -> None:
+    source = """\
+on: workflow_call
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@main
+        with: {name: pkg}
+"""
+    with pytest.raises(
+        AssertionError, match=r"reusable.yml:upload:step-0: rule=artifact-major: unclassified action ref"
+    ):
+        hygiene._artifact_chain_offences({"reusable.yml": source})
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "refs/heads/${{ needs.prepare.outputs.source_sha }}",
+        "${{ needs.prepare.outputs.source_sha || github.sha }}",
+    ),
+)
+def test_workflow_hygiene_rejects_derived_and_fallback_job_env_aliases(value: str) -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      SOURCE_SHA: VALUE
+    steps:
+      - run: git checkout "$SOURCE_SHA"
+""".replace("VALUE", value)
+    assert hygiene._pin_offences({"job-env.yml": source}) == [
+        "job-env.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink"
+    ]
+
+
+def test_workflow_hygiene_step_env_shadow_overrides_exact_job_env_alias() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+    steps:
+      - env:
+          SOURCE_SHA: main
+        run: git checkout "$SOURCE_SHA"
+"""
+    assert hygiene._pin_offences({"shadow.yml": source}) == [
+        "shadow.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink"
+    ]
+
+
+@pytest.mark.parametrize(
+    "identity_command",
+    (
+        'git checkout "$PORTS_SHA"',
+        'git show "$PORTS_SHA:Makefile"',
+        'git switch "$PORTS_SHA"',
+        'git reset "$PORTS_SHA"',
+    ),
+)
+def test_workflow_hygiene_reports_readonly_live_replacement_at_git_identity_sinks(
+    identity_command: str,
+) -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          readonly PORTS_SHA=$(git ls-remote origin main)
+          IDENTITY_COMMAND
+""".replace("IDENTITY_COMMAND", identity_command)
+    offences = hygiene._pin_offences({"readonly.yml": source})
+    command = identity_command.split()[1]
+    assert (
+        "readonly.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        f"prepare.ports_sha at identity sink git {command}"
+    ) in offences
+
+
+def test_workflow_hygiene_reports_readonly_live_identity_aliases() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          readonly CHECKOUT_REF=$(git ls-remote origin main)
+          git checkout "$CHECKOUT_REF"
+"""
+    offences = hygiene._pin_offences({"readonly-alias.yml": source})
+    assert (
+        "readonly-alias.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink git checkout"
+    ) in offences
+
+
+def test_workflow_hygiene_consumes_docker_global_short_option_values_before_run() -> None:
+    source = """\
+docker -c remote run --init alpine
+docker -c remote run alpine
+docker -l debug run --init alpine
+docker -l debug run alpine
+"""
+    assert hygiene._docker_run_offences({"scripts/global-short.sh": source}) == [
+        "scripts/global-short.sh:2: rule=docker-init: docker run must include exact token --init",
+        "scripts/global-short.sh:4: rule=docker-init: docker run must include exact token --init",
+    ]
+
+
+def test_workflow_hygiene_duplicate_display_name_diagnostics_pin_both_producers() -> None:
+    sources = {
+        "one.yml": """\
+name: Producer
+on: workflow_dispatch
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: pkg}
+""",
+        "two.yml": """\
+name: Producer
+on: workflow_dispatch
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v8
+        with: {name: pkg}
+""",
+        "callback.yml": """\
+on:
+  workflow_run:
+    workflows: [Producer]
+jobs:
+  consume:
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: pkg}
+""",
+    }
+    assert hygiene._artifact_chain_offences(sources) == [
+        "callback.yml:consume:step-0: rule=artifact-major: ambiguous producers for 'pkg': "
+        "[('one.yml', 'upload'), ('two.yml', 'upload')]",
+        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('one.yml', 'upload', 7)]",
+    ]
