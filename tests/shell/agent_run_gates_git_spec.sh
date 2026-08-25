@@ -18,11 +18,13 @@ Describe 'run-gates.sh over a C-quoted path'
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungateshostile.XXXXXX")"
     git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
-    mkdir -p "$repo/scripts"
+    mkdir -p "$repo/scripts" "$repo/tests"
+    cp "$PFB_ROOT/scripts/check_coverage_pairing.py" "$repo/scripts/"
     printf 'base\n' > "$repo/README.md"
-    gitc add README.md
+    gitc add -A
     gitc commit -q -m base
     gitc branch -f base HEAD
+    printf 'paired\n' > "$repo/tests/coverage-pairing.fixture"
   }
   cleanup() { rm -rf "$repo"; }
   Before 'make_repo'
@@ -46,6 +48,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m hostile
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
+      The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
       The output should include 'uv run --locked pytest'
       The output should include 'uv run --locked ruff check .'
       The stderr should equal ''
@@ -107,9 +110,9 @@ Describe 'run-gates.sh over a C-quoted path'
 
   # ── the planned command text is what actually runs ────────────────────────── #
   #
-  # gates_for() stays a pure file-type -> canonical-command mapping (pinned by the
-  # sibling agent_run_gates_spec.sh); these examples cover main() handing those exact
-  # commands to the shell, which is the half the AGENT_SOURCE_ONLY seam bypasses.
+  # gates_for() keeps the unconditional coverage checker first, followed by the
+  # file-type -> canonical-command mapping pinned by agent_run_gates_spec.sh.
+  # These examples cover main() handing those exact commands to the shell.
   Describe 'planned commands reach the shell verbatim'
     It 'plans the canonical Python gate commands in order'
       printf 'x = 1\n' > "$repo/scripts/mod.py"
@@ -117,8 +120,9 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m python
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      The line 1 of output should equal 'uv run --locked pytest'
-      The line 2 of output should equal 'uv run --locked ruff check .'
+      The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
+      The line 2 of output should equal 'uv run --locked pytest'
+      The line 3 of output should equal 'uv run --locked ruff check .'
     End
 
     It 'leaves the shellspec command substitution unexpanded for the gate shell to resolve'
@@ -145,6 +149,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m python
       When run sh -c "PATH='$stub:$PATH' sh '$SCRIPT' --worktree '$repo' --diff base"
       The status should equal 0
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py'
       The output should include 'GATES: PASS'
       The output should not include 'TOOL-MISSING'
       The contents of file "$repo/uv.log" should include 'UV run --locked pytest'
