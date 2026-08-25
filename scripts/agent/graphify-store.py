@@ -23,11 +23,28 @@ class StoreError(RuntimeError):
     """A caller-actionable Graphify store failure."""
 
 
+def _git_env() -> dict[str, str]:
+    """The environment for every store `git` call: no inherited config, no inherited GIT_*.
+
+    The store pins its own identity at init, so an inherited scope only adds hazard —
+    `tag.gpgsign` promotes a snapshot tag to annotated and it aborts with `fatal: no tag
+    message?` (issue #2700). `GIT_DIR` and friends outrank `git -C` and would point the
+    whole store at whatever repository the caller happened to be inside.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env["GIT_CONFIG_GLOBAL"] = os.devnull
+    env["GIT_CONFIG_SYSTEM"] = os.devnull
+    return env
+
+
 def _run(root: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
-        ["git", "-C", str(root), *args],
+        # `safe.directory` is readable from the scopes above and nowhere else, so name the
+        # path this call was asked to work on rather than lose the exemption with them.
+        ["git", "-c", f"safe.directory={root}", "-C", str(root), *args],
         text=True,
         capture_output=True,
+        env=_git_env(),
     )
     if check and result.returncode:
         detail = result.stderr.strip() or result.stdout.strip() or "git failed"
