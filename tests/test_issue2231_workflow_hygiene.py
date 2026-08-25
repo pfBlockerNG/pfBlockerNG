@@ -641,19 +641,6 @@ def _selectors_match(name: str, selector: str) -> bool:
 
 def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
     documents = {name: _workflow_document(source, name) for name, source in sources.items()}
-    for workflow, document in documents.items():
-        jobs = document.get("jobs")
-        if not isinstance(jobs, dict):
-            continue
-        for job_name, job in jobs.items():
-            if not isinstance(job_name, str) or not isinstance(job, dict):
-                continue
-            steps = job.get("steps", [])
-            if not isinstance(steps, list):
-                continue
-            for step_index, step in enumerate(steps):
-                if isinstance(step, dict):
-                    _artifact_action_match(step.get("uses"), f"{workflow}:{job_name}:step-{step_index}")
     offences: set[str] = set()
     download_matches: dict[_DownloadKey, bool] = {}
     download_selectors: dict[_DownloadKey, set[str]] = {}
