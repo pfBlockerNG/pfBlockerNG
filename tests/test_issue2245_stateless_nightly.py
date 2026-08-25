@@ -943,6 +943,65 @@ jobs:
     ]
 
 
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "export OTHER=1 PORTS_SHA=main",
+        "readonly OTHER=1 PORTS_SHA=main",
+    ),
+)
+def test_workflow_hygiene_tracks_every_exported_pin_alias(declaration: str) -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+    steps:
+      - run: |
+          sh scripts/build-leg.sh --ports-ref "$PORTS_SHA"
+          DECLARATION
+          sh scripts/build-leg.sh --ports-ref "$PORTS_SHA"
+""".replace("DECLARATION", declaration)
+    assert hygiene._pin_offences({"multi-assignment.yml": source}) == [
+        "multi-assignment.yml:build: rule=pin-consumer: alias overwrites prepare.ports_sha at identity sink --ports-ref"
+    ]
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    (
+        "export OTHER=1 EXTRA=main",
+        "readonly OTHER=1 EXTRA=main",
+    ),
+)
+def test_workflow_hygiene_keeps_exact_pin_after_unrelated_exported_assignments(declaration: str) -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+    steps:
+      - run: |
+          DECLARATION
+          sh scripts/build-leg.sh --ports-ref "$PORTS_SHA"
+""".replace("DECLARATION", declaration)
+    assert hygiene._pin_offences({"unrelated-multi-assignment.yml": source}) == []
+
+
 def test_workflow_hygiene_scopes_flag_identity_sinks_to_matching_prepared_pins() -> None:
     sources = {
         "exact-and-unrelated.yml": """\
