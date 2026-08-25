@@ -82,6 +82,15 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
 
     assert completed.returncode == 0, completed.stderr
     payload = json.loads(output.read_text(encoding="utf-8"))
+    assert set(payload) == {
+        "schema",
+        "kind",
+        "release_tag",
+        "source_sha",
+        "ci_metadata_sha",
+        "ports_sha",
+        "route_matrix",
+    }
     assert payload["kind"] == "tagged-release-handoff"
     assert payload["release_tag"] == TAG
     assert payload["source_sha"] == SOURCE_SHA
