@@ -164,7 +164,8 @@ permissions:
   packages: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ inputs.checkout_ref || github.ref }}
+  group: smoke-${{ github.workflow }}-${{ inputs.checkout_ref || github.ref }}
+  queue: max
   cancel-in-progress: false
 
 jobs:

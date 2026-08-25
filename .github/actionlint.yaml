@@ -21,3 +21,9 @@ paths:
   .github/workflows/nightly-failure-alert.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/smoke.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/ui-tests.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

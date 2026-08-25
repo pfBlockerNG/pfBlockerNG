@@ -45,6 +45,8 @@ def test_actionlint_exception_is_narrowly_scoped_to_workflows_using_queue_max() 
             ".github/workflows/release.yml": {"ignore": [queue_error]},
             ".github/workflows/image-refresh.yml": {"ignore": [queue_error]},
             ".github/workflows/nightly-failure-alert.yml": {"ignore": [queue_error]},
+            ".github/workflows/smoke.yml": {"ignore": [queue_error]},
+            ".github/workflows/ui-tests.yml": {"ignore": [queue_error]},
         }
     }
 
@@ -491,12 +493,18 @@ def outer():
         return ["docker", "run", "alpine"]
     return inner()
 
+def local():
+    argv = ["docker", "run", "alpine"]
+    return argv
+
 subprocess.run(chain())
 subprocess.run(outer())
+subprocess.run(local())
 """
     assert hygiene._docker_run_offences({"tests/smoke/factories.py": source}) == [
-        "tests/smoke/factories.py:14: rule=docker-init: docker run must include exact token --init",
-        "tests/smoke/factories.py:15: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/factories.py:18: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/factories.py:19: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/factories.py:20: rule=docker-init: docker run must include exact token --init",
     ]
 
 
@@ -648,3 +656,98 @@ jobs:
         "direct-live.yml:build: rule=pin-consumer: live git ls-remote replaces "
         "prepare.ports_sha at identity sink git reset",
     ]
+
+
+def test_workflow_hygiene_rejects_invalid_pin_sink_beside_exact_sink() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha || github.ref }}
+"""
+    assert hygiene._pin_offences({"mixed-sinks.yml": source}) == [
+        "mixed-sinks.yml:build: rule=pin-consumer: derived or untrusted ref sink references prepare.source_sha"
+    ]
+
+
+def test_workflow_hygiene_rejects_unrelated_sha_key_as_identity_sink() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: return 0
+          sha: ${{ needs.prepare.outputs.source_sha }}
+"""
+    assert hygiene._pin_offences({"fake-sha.yml": source}) == [
+        "fake-sha.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink"
+    ]
+
+
+def test_workflow_hygiene_rejects_shell_operator_alias_overwrite() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+    steps:
+      - run: 'true; SOURCE_SHA=main; git checkout "$SOURCE_SHA"'
+"""
+    assert hygiene._pin_offences({"operator-shadow.yml": source}) == [
+        "operator-shadow.yml:build: rule=pin-consumer: alias overwrites "
+        "prepare.source_sha at identity sink git checkout",
+        "operator-shadow.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink",
+    ]
+
+
+def test_workflow_hygiene_resolves_static_shell_and_php_docker_aliases() -> None:
+    sources = {
+        "scripts/command-v.sh": 'runtime="$(command -v docker)"\n"$runtime" run alpine\n',
+        "scripts/concat.php": '<?php\n$cmd = "docker " . "run alpine";\nsystem($cmd);\n',
+    }
+    assert hygiene._docker_run_offences(sources) == [
+        "scripts/command-v.sh:2: rule=docker-init: docker run must include exact token --init",
+        "scripts/concat.php:3: rule=docker-init: docker run must include exact token --init",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("workflow", "prefix"),
+    (("smoke.yml", "smoke-"), ("ui-tests.yml", "ui-tests-")),
+)
+def test_reusable_release_gates_have_distinct_lossless_concurrency(workflow: str, prefix: str) -> None:
+    source = (ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+    document = hygiene._workflow_document(source, workflow)
+    concurrency = document["concurrency"]
+    assert isinstance(concurrency, dict)
+    group = concurrency.get("group")
+    assert isinstance(group, str) and group.startswith(prefix)
+    assert concurrency.get("queue") == "max"
+    assert concurrency.get("cancel-in-progress") is False
