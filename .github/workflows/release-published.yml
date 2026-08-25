@@ -634,6 +634,7 @@ jobs:
     uses: ./.github/workflows/pkg-render-site.yml
     with:
       source_ref: "${{ github.workflow_sha }}"
+      caller_holds_pkg_lock: true
     secrets:
       PKG_GITHUB_APP_ID: ${{ secrets.PKG_GITHUB_APP_ID }}
       PKG_GITHUB_APP_PRIVATE_KEY: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}

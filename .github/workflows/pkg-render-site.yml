@@ -15,6 +15,10 @@ on:
         description: pfBlockerNG ref providing scripts/gen_landing.py + pkg-site/
         required: true
         type: string
+      caller_holds_pkg_lock:
+        description: Caller already owns the shared pfBlockerNG/pkg mutation lock
+        required: true
+        type: boolean
     secrets:
       PKG_GITHUB_APP_ID:
         required: true
@@ -32,13 +36,17 @@ permissions:
   packages: read
   contents: read
 
+# Direct dispatches take the repository lock. Reusable callers already hold it,
+# so their callee gets a run-unique group rather than deadlocking behind itself.
+concurrency:
+  group: ${{ inputs.caller_holds_pkg_lock && format('pkg-render-site-{0}', github.run_id) || 'pkg-repository-mutation' }}
+  queue: max
+  cancel-in-progress: false
+
 jobs:
   render:
     name: Render the pkg website
     runs-on: ubuntu-latest
-    concurrency:
-      group: pkg-render-site
-      cancel-in-progress: false
     steps:
       - name: Checkout pfBlockerNG (the engine + orchestration scripts)
         uses: actions/checkout@v6

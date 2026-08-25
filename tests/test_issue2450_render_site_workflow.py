@@ -14,6 +14,8 @@ import importlib.util
 import re
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
@@ -72,9 +74,18 @@ def test_render_site_job_pins_source_ref_and_credentials() -> None:
     assert "persist-credentials: true" in job
 
 
-def test_render_site_job_serialises_via_job_level_concurrency() -> None:
-    job = _extract_job(RENDER, "render")
-    assert re.search(r"^\s+concurrency:\n\s+group: \S+\n\s+cancel-in-progress: false\s*$", job, re.MULTILINE), job
+def test_render_site_workflow_serialises_without_deadlocking_reusable_callers() -> None:
+    workflow = yaml.safe_load(RENDER)
+    concurrency = workflow["concurrency"]
+    assert concurrency == {
+        "group": (
+            "${{ inputs.caller_holds_pkg_lock "
+            "&& format('pkg-render-site-{0}', github.run_id) || 'pkg-repository-mutation' }}"
+        ),
+        "queue": "max",
+        "cancel-in-progress": False,
+    }
+    assert "concurrency:" not in _extract_job(RENDER, "render")
 
 
 def test_render_site_workflow_declares_an_explicit_secrets_contract() -> None:

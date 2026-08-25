@@ -8,8 +8,10 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from typing import cast
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -276,41 +278,70 @@ _RELEASE_GROUP = (
     "&& format('dry-run-{0}', github.run_id) || github.event.inputs.channel }}"
 )
 _PKG_REPO_MUTATION_GROUP = "pkg-repository-mutation"
+_RENDER_GROUP = (
+    "${{ inputs.caller_holds_pkg_lock && format('pkg-render-site-{0}', github.run_id) || 'pkg-repository-mutation' }}"
+)
+_RENDER_WORKFLOW = "./.github/workflows/pkg-render-site.yml"
 
 
-def _top_level_concurrency(source: str) -> dict[str, str]:
-    lines = source.splitlines()
-    try:
-        start = lines.index("concurrency:")
-    except ValueError as exc:
-        raise AssertionError("missing top-level concurrency block") from exc
-    end = next(
-        (index for index in range(start + 1, len(lines)) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*:", lines[index])),
-        len(lines),
-    )
-    values: dict[str, str] = {}
-    for line in lines[start + 1 : end]:
-        if not line or line.lstrip().startswith("#"):
-            continue
-        match = re.fullmatch(r"  ([A-Za-z][A-Za-z0-9_-]*):[ \t]+(.+)", line)
-        assert match is not None, f"unparsed top-level concurrency entry: {line!r}"
-        key, value = match.groups()
-        assert key not in values, f"duplicate top-level concurrency key: {key}"
-        values[key] = value
-    return values
+def _workflow_document(source: str) -> dict[object, object]:
+    document: object = yaml.safe_load(source)
+    assert isinstance(document, dict), "workflow must be a YAML mapping"
+    return document
+
+
+def _contains_mapping_value(value: object, key: str, expected: str) -> bool:
+    if isinstance(value, dict):
+        return any(
+            (item_key == key and item_value == expected) or _contains_mapping_value(item_value, key, expected)
+            for item_key, item_value in value.items()
+        )
+    if isinstance(value, list):
+        return any(_contains_mapping_value(item, key, expected) for item in value)
+    return False
+
+
+def _external_workflow(document: dict[object, object]) -> bool:
+    triggers = document.get(True)  # PyYAML 1.1 resolves the plain `on` key to True.
+    assert isinstance(triggers, dict), "workflow must declare an on mapping"
+    return any(trigger != "workflow_call" for trigger in triggers)
+
+
+def _render_call(document: dict[object, object]) -> dict[object, object] | None:
+    jobs = document.get("jobs")
+    assert isinstance(jobs, dict)
+    for job in jobs.values():
+        if isinstance(job, dict) and job.get("uses") == _RENDER_WORKFLOW:
+            return job
+    return None
+
+
+def _workflow_sources(directory: Path) -> dict[str, str]:
+    paths = {path.name: path for pattern in ("*.yml", "*.yaml") for path in directory.glob(pattern)}
+    return {name: paths[name].read_text(encoding="utf-8") for name in sorted(paths)}
+
+
+def _top_level_concurrency(source: str) -> dict[str, object]:
+    concurrency = _workflow_document(source).get("concurrency")
+    assert isinstance(concurrency, dict), "missing top-level concurrency block"
+    assert all(isinstance(key, str) for key in concurrency)
+    return cast(dict[str, object], concurrency)
 
 
 def _assert_release_concurrency(source: str) -> None:
     concurrency = _top_level_concurrency(source)
     assert concurrency.get("queue") == "max", "real cuts must retain every queued dispatch"
-    assert concurrency.get("cancel-in-progress") == "false", "a running cut must never be cancelled"
+    assert concurrency.get("cancel-in-progress") is False, "a running cut must never be cancelled"
     group = concurrency.get("group", "")
+    assert isinstance(group, str)
     assert _RELEASE_GROUP_RE.fullmatch(group), f"release concurrency group has the wrong ownership: {group!r}"
 
 
 def _release_group(source: str, *, dry_run: str, channel: str, run_id: int) -> str:
     _assert_release_concurrency(source)
-    match = _RELEASE_GROUP_RE.fullmatch(_top_level_concurrency(source)["group"])
+    group = _top_level_concurrency(source)["group"]
+    assert isinstance(group, str)
+    match = _RELEASE_GROUP_RE.fullmatch(group)
     assert match is not None
     suffix = match.group("template").format(run_id) if dry_run == match.group("dry") else channel
     return f"release-{suffix}"
@@ -320,7 +351,19 @@ def _assert_pkg_repository_concurrency(source: str) -> None:
     concurrency = _top_level_concurrency(source)
     assert concurrency.get("group") == _PKG_REPO_MUTATION_GROUP
     assert concurrency.get("queue") == "max"
-    assert concurrency.get("cancel-in-progress") == "false"
+    assert concurrency.get("cancel-in-progress") is False
+
+
+def _assert_render_site_concurrency(source: str) -> None:
+    concurrency = _top_level_concurrency(source)
+    assert concurrency.get("group") == _RENDER_GROUP
+    assert concurrency.get("queue") == "max"
+    assert concurrency.get("cancel-in-progress") is False
+
+
+def _render_group(source: str, *, caller_holds_pkg_lock: bool, run_id: int) -> str:
+    _assert_render_site_concurrency(source)
+    return f"pkg-render-site-{run_id}" if caller_holds_pkg_lock else _PKG_REPO_MUTATION_GROUP
 
 
 def test_issue_2391_real_release_cuts_are_channel_serialized_and_dry_runs_are_unique() -> None:
@@ -373,18 +416,57 @@ def test_issue_2391_release_concurrency_planted_offences_go_red(offence: str) ->
 
 
 def test_issue_2391_every_external_pkg_repository_mutator_shares_one_queue() -> None:
-    workflows = ROOT / ".github/workflows"
-    mutators: dict[str, str] = {}
-    for path in workflows.glob("*.yml"):
-        source = path.read_text(encoding="utf-8")
-        if (
-            re.search(r"^\s+repository: pfBlockerNG/pkg$", source, re.MULTILINE)
-            and "\n  workflow_call:" not in source.split("\njobs:\n", 1)[0]
-        ):
-            mutators[path.name] = source
-    assert set(mutators) == {"nightly.yml", "release-published.yml", "pkg-republish.yml"}
-    for source in mutators.values():
+    sources = _workflow_sources(ROOT / ".github/workflows")
+    mutators = {
+        name: source
+        for name, source in sources.items()
+        if _contains_mapping_value(_workflow_document(source), "repository", "pfBlockerNG/pkg")
+        and _external_workflow(_workflow_document(source))
+    }
+    assert set(mutators) == {
+        "nightly.yml",
+        "pkg-render-site.yml",
+        "pkg-republish.yml",
+        "release-published.yml",
+    }
+    for name, source in mutators.items():
+        if name == "pkg-render-site.yml":
+            _assert_render_site_concurrency(source)
+        else:
+            _assert_pkg_repository_concurrency(source)
+
+
+def test_issue_2391_render_callers_own_the_pkg_lock_without_deadlocking_the_callee() -> None:
+    sources = _workflow_sources(ROOT / ".github/workflows")
+    callers = {
+        name: (source, call)
+        for name, source in sources.items()
+        if (call := _render_call(_workflow_document(source))) is not None
+    }
+    assert set(callers) == {"nightly.yml", "pkg-republish.yml", "release-published.yml"}
+    for source, call in callers.values():
         _assert_pkg_repository_concurrency(source)
+        inputs = call.get("with")
+        assert isinstance(inputs, dict)
+        assert inputs.get("caller_holds_pkg_lock") is True
+
+    render = sources["pkg-render-site.yml"]
+    assert _render_group(render, caller_holds_pkg_lock=False, run_id=101) == _PKG_REPO_MUTATION_GROUP
+    assert _render_group(render, caller_holds_pkg_lock=True, run_id=101) == "pkg-render-site-101"
+
+
+@pytest.mark.parametrize(
+    "repository",
+    (
+        "repository: pfBlockerNG/pkg # valid inline YAML comment",
+        'repository: "pfBlockerNG/pkg"',
+    ),
+)
+def test_issue_2391_pkg_mutator_inventory_uses_yaml_values(repository: str) -> None:
+    source = f"on:\n  workflow_dispatch:\njobs:\n  mutate:\n    steps:\n      - with:\n          {repository}\n"
+    document = _workflow_document(source)
+    assert _external_workflow(document)
+    assert _contains_mapping_value(document, "repository", "pfBlockerNG/pkg")
 
 
 @pytest.mark.parametrize(
@@ -406,7 +488,11 @@ jobs:
   publish:
 """
     _assert_pkg_repository_concurrency(valid)
-    current_value = _top_level_concurrency(valid)[key]
+    current_value = {
+        "group": _PKG_REPO_MUTATION_GROUP,
+        "queue": "max",
+        "cancel-in-progress": "false",
+    }[key]
     mutated = valid.replace(f"  {key}: {current_value}\n", f"  {key}: {wrong_value}\n")
     with pytest.raises(AssertionError):
         _assert_pkg_repository_concurrency(mutated)
