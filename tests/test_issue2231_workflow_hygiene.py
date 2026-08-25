@@ -1230,7 +1230,10 @@ def _logical_shell_lines(source: str) -> list[tuple[int, str]]:
 def _shell_words(source: str, where: str) -> list[tuple[int, list[str]]]:
     commands: list[tuple[int, list[str]]] = []
     bindings: dict[str, str] = {}
+    command_v = re.compile(r'(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?\$\(\s*command\s+-v\s+docker\s*\)["\']?')
     for line_no, logical in _logical_shell_lines(source):
+        for match in command_v.finditer(logical):
+            bindings[match.group("name")] = "docker"
         bound_reference = any(
             re.search(rf"\$(?:{re.escape(name)}\b|\{{{re.escape(name)}\}})", logical) for name in bindings
         )
@@ -1490,11 +1493,19 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
             if id(function) in seen:
                 return argument
             returns = [
-                statement.value
+                statement
                 for statement in function.body
                 if isinstance(statement, ast.Return) and statement.value is not None
             ]
-            return resolve_factory(returns[0], seen | {id(function)}) if len(returns) == 1 else argument
+            if len(returns) != 1:
+                return argument
+            result = cast(ast.expr, returns[0].value)
+            if isinstance(result, ast.Name):
+                bindings = bound_argv.get(function, {}).get(result.id, [])
+                candidates = [(line, value) for line, value in bindings if line < returns[0].lineno]
+                if candidates:
+                    result = max(candidates, key=lambda candidate: candidate[0])[1]
+            return resolve_factory(result, seen | {id(function)})
         return argument
 
     def resolve_argument(argument: ast.expr, call: ast.Call) -> ast.expr:
@@ -1557,6 +1568,12 @@ _PHP_STRING_ASSIGN = re.compile(
     r"\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<quote>['\"])(?P<body>.*?)(?P=quote)\s*;",
     re.DOTALL,
 )
+_PHP_CONCAT_ASSIGN = re.compile(
+    r"\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*"
+    r"(?P<body>(?:'[^']*'|\"[^\"]*\")(?:\s*\.\s*(?:'[^']*'|\"[^\"]*\"))+)\s*;",
+    re.DOTALL,
+)
+_PHP_STRING_LITERAL = re.compile(r"'([^']*)'|\"([^\"]*)\"")
 _PHP_SHELL_CALL = re.compile(
     r"\b(?:exec|passthru|shell_exec|system)\s*\(\s*"
     r"(?:(?P<quote>['\"])(?P<body>.*?)(?P=quote)|\$(?P<variable>[A-Za-z_][A-Za-z0-9_]*))",
@@ -1570,6 +1587,11 @@ def _php_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         line_start = source.rfind("\n", 0, match.start()) + 1
         if not source[line_start : match.start()].lstrip().startswith(("//", "#", "*")):
             variables[match.group("name")] = match.group("body")
+    for match in _PHP_CONCAT_ASSIGN.finditer(source):
+        variables[match.group("name")] = "".join(
+            next((value for value in literal if value), "")
+            for literal in _PHP_STRING_LITERAL.findall(match.group("body"))
+        )
     invocations: list[tuple[int, list[str]]] = []
     for match in _PHP_SHELL_CALL.finditer(source):
         line_start = source.rfind("\n", 0, match.start()) + 1
@@ -1843,7 +1865,6 @@ def _ref_binding(path: tuple[str, ...]) -> bool:
         return False
     return path[-1].lower() in {
         "ref",
-        "sha",
         "checkout_ref",
         "source_ref",
         "ports_ref",
@@ -1879,15 +1900,21 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
 
         workflow_pins = {(candidate.job, candidate.output) for candidate in pins if candidate.workflow == pin.workflow}
         identity = False
-        for _, path, value in consumers:
+        invalid_ref_jobs: set[str] = set()
+        for job_name, path, value in consumers:
+            if not _ref_binding(path):
+                continue
             expression_members = _pin_expression_members(value)
-            if (
-                _ref_binding(path)
-                and (pin.job, pin.output) in expression_members
-                and expression_members <= workflow_pins
-            ):
+            if (pin.job, pin.output) in expression_members and expression_members <= workflow_pins:
                 identity = True
-                break
+            else:
+                invalid_ref_jobs.add(job_name)
+        if identity:
+            for job_name in invalid_ref_jobs:
+                offences.append(
+                    f"{pin.workflow}:{job_name}: rule=pin-consumer: derived or untrusted ref sink "
+                    f"references {pin.job}.{pin.output}"
+                )
         exact_member = frozenset({(pin.job, pin.output)})
         for job_name in sorted(descendants):
             job = jobs[job_name]
@@ -1916,11 +1943,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 run = step.get("run")
                 if not isinstance(run, str):
                     continue
-                overridden = {
-                    name
-                    for name in step_aliases
-                    if re.search(rf"(?m)^\s*(?:(?:export|readonly)\s+)?{re.escape(name)}\s*=", run)
-                }
+                overridden: set[str] = set()
                 live_vars = set(
                     re.findall(
                         r'(?ms)^\s*(?:(?:export|readonly)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?'
@@ -1936,6 +1959,12 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 )
                 base = _pin_base(pin.output)
                 for words in _shell_commands(normalized_run):
+                    overridden.update(
+                        assignment.group("name")
+                        for word in words
+                        if (assignment := re.fullmatch(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)=.*", word))
+                        and assignment.group("name") in step_aliases
+                    )
                     for index, word in enumerate(words[:-1]):
                         flag = word.removeprefix("--")
                         relevant_flag = (
