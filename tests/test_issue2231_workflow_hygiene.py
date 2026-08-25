@@ -1864,15 +1864,26 @@ _SHELL_VARIABLE = re.compile(r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)(?:[^}]*
 _SHELL_EXACT_VARIABLE = re.compile(r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))")
 
 
-def _shell_assignment(words: list[str]) -> tuple[str, str] | None:
-    index = 1 if words and words[0] in {"export", "readonly"} else 0
-    if index >= len(words):
-        return None
-    assignment = re.fullmatch(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)", words[index])
-    if assignment is None:
-        return None
-    value = " ".join([assignment.group("value"), *words[index + 1 :]])
-    return assignment.group("name"), value
+def _shell_assignments(words: list[str]) -> list[tuple[str, str]]:
+    declarations = bool(words) and words[0] in {"export", "readonly"}
+    assignments: list[tuple[str, str]] = []
+    index = 1 if declarations else 0
+    while index < len(words):
+        assignment = re.fullmatch(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)", words[index])
+        if assignment is None:
+            if not declarations:
+                break
+            index += 1
+            continue
+        value = assignment.group("value")
+        depth = value.count("$(") - value.count(")")
+        while depth > 0 and index + 1 < len(words):
+            index += 1
+            value += f" {words[index]}"
+            depth += words[index].count("$(") - words[index].count(")")
+        assignments.append((assignment.group("name"), value))
+        index += 1
+    return assignments
 
 
 def _shell_alias_provenance(value: str, aliases: Mapping[str, str]) -> str | None:
@@ -2012,9 +2023,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 commands = _shell_commands(normalized_run)
                 base = _pin_base(pin.output)
                 for words in commands:
-                    assignment = _shell_assignment(words)
-                    if assignment is not None:
-                        name, value = assignment
+                    for name, value in _shell_assignments(words):
                         provenance = _shell_alias_provenance(value, aliases)
                         if provenance is not None or name in aliases:
                             aliases[name] = provenance or "overwritten"
