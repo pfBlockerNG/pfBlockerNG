@@ -159,9 +159,16 @@ $cmd = "docker run alpine";
 system($cmd);
 """,
     }
-    offences = hygiene._docker_run_offences(sources)
-    assert len(offences) == 8, offences
-    assert not any(f"scripts/global.sh:{line}:" in offence for offence in offences for line in (2, 4, 6))
+    assert hygiene._docker_run_offences(sources) == [
+        "scripts/global.sh:1: rule=docker-init: docker run must include exact token --init",
+        "scripts/global.sh:3: rule=docker-init: docker run must include exact token --init",
+        "scripts/global.sh:5: rule=docker-init: docker run must include exact token --init",
+        "scripts/global.sh:7: rule=docker-init: docker run must include exact token --init",
+        "scripts/global.sh:9: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/local.py:8: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/local.py:9: rule=docker-init: docker run must include exact token --init",
+        "scripts/variable.php:3: rule=docker-init: docker run must include exact token --init",
+    ]
 
 
 def test_workflow_hygiene_rejects_derived_fake_multiline_and_readonly_sinks() -> None:
@@ -323,6 +330,26 @@ jobs:
         hygiene._artifact_chain_offences({"reusable.yml": source})
 
 
+def test_workflow_hygiene_checks_uncalled_reusable_artifact_chains() -> None:
+    source = """\
+on: workflow_call
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: pkg}
+  download:
+    needs: upload
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: pkg}
+"""
+    assert hygiene._artifact_chain_offences({"reusable.yml": source}) == [
+        "reusable.yml:download:step-0: rule=artifact-major: "
+        "download v8 mismatches producers [('reusable.yml', 'upload', 7)]"
+    ]
+
+
 @pytest.mark.parametrize(
     "value",
     (
@@ -449,6 +476,30 @@ docker -l debug run alpine
     ]
 
 
+def test_workflow_hygiene_resolves_nested_and_chained_python_factories() -> None:
+    source = """\
+import subprocess
+
+def leaf():
+    return ["docker", "run", "alpine"]
+
+def chain():
+    return leaf()
+
+def outer():
+    def inner():
+        return ["docker", "run", "alpine"]
+    return inner()
+
+subprocess.run(chain())
+subprocess.run(outer())
+"""
+    assert hygiene._docker_run_offences({"tests/smoke/factories.py": source}) == [
+        "tests/smoke/factories.py:14: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/factories.py:15: rule=docker-init: docker run must include exact token --init",
+    ]
+
+
 def test_workflow_hygiene_duplicate_display_name_diagnostics_pin_both_producers() -> None:
     sources = {
         "one.yml": """\
@@ -484,4 +535,116 @@ jobs:
         "callback.yml:consume:step-0: rule=artifact-major: ambiguous producers for 'pkg': "
         "[('one.yml', 'upload'), ('two.yml', 'upload')]",
         "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('one.yml', 'upload', 7)]",
+    ]
+
+
+def test_workflow_hygiene_scans_merge_group_artifact_graphs() -> None:
+    source = """\
+on: merge_group
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: pkg}
+  download:
+    needs: upload
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: pkg}
+"""
+    assert hygiene._artifact_chain_offences({"merge.yml": source}) == [
+        "merge.yml:download:step-0: rule=artifact-major: download v8 mismatches producers [('merge.yml', 'upload', 7)]"
+    ]
+
+
+def test_workflow_hygiene_rejects_init_after_docker_option_terminator() -> None:
+    assert hygiene._docker_run_offences({"scripts/boundary.sh": "docker run -- --init\n"}) == [
+        "scripts/boundary.sh:1: rule=docker-init: docker run must include exact token --init"
+    ]
+
+
+def test_workflow_hygiene_scans_python_subprocess_args_keywords() -> None:
+    source = """\
+import subprocess
+from subprocess import run
+
+subprocess.run(args=["docker", "run", "alpine"])
+run(args=["docker", "run", "alpine"])
+"""
+    assert hygiene._docker_run_offences({"tests/smoke/keyword.py": source}) == [
+        "tests/smoke/keyword.py:4: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/keyword.py:5: rule=docker-init: docker run must include exact token --init",
+    ]
+
+
+def test_workflow_hygiene_resolves_python_argv_in_its_lexical_scope() -> None:
+    source = """\
+import subprocess
+argv = ["docker", "run", "alpine"]
+def unrelated():
+    argv = ["printf", "safe"]
+
+def invoke():
+    subprocess.run(argv)
+"""
+    assert hygiene._docker_run_offences({"tests/smoke/lexical.py": source}) == [
+        "tests/smoke/lexical.py:7: rule=docker-init: docker run must include exact token --init"
+    ]
+
+
+def test_workflow_hygiene_parses_git_global_options_before_identity_commands() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show "$PORTS_SHA:Makefile"
+          readonly CHECKOUT_REF=$(git ls-remote origin main)
+          git -C ports checkout "$CHECKOUT_REF"
+          readonly RESET_REF=$(git ls-remote origin main)
+          git -Cports reset "$RESET_REF"
+"""
+    assert hygiene._pin_offences({"git-options.yml": source}) == [
+        "git-options.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink git checkout",
+        "git-options.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink git reset",
+    ]
+
+
+def test_workflow_hygiene_rejects_direct_live_git_identity_substitutions() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show "$PORTS_SHA:Makefile"
+          git checkout "$(git ls-remote origin main)"
+          git -C ports reset "$(
+            git ls-remote origin main
+          )"
+"""
+    assert hygiene._pin_offences({"direct-live.yml": source}) == [
+        "direct-live.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink git checkout",
+        "direct-live.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink git reset",
     ]

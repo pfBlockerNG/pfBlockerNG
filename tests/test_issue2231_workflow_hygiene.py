@@ -439,6 +439,7 @@ def test_lossless_operational_workflows_keep_every_pending_event(workflow: str) 
     concurrency = _workflow_document(_workflow_sources()[workflow], workflow)["concurrency"]
     assert isinstance(concurrency, dict)
     assert concurrency.get("queue") == "max"
+    assert concurrency.get("cancel-in-progress") is False
 
 
 # --------------------------------------------------------------------------- #
@@ -822,16 +823,16 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
         triggers = _trigger_names(document)
         if "workflow_run" in triggers:
             workflow_run_roots.append(workflow)
-        if triggers & (_EXTERNAL_TRIGGERS | {"pull_request"}):
+        if triggers != {"workflow_run"}:
             root_produced, _ = scan_instance(
                 workflow,
                 {},
                 (),
                 (("<direct>", workflow),),
-                "workflow_run" not in triggers,
+                "workflow_run" not in triggers and triggers != {"workflow_call"},
             )
             name = document.get("name")
-            if isinstance(name, str):
+            if isinstance(name, str) and triggers != {"workflow_call"}:
                 direct_names[name] = tuple(dict.fromkeys((*direct_names.get(name, ()), *root_produced)))
     for workflow in workflow_run_roots:
         names = _trigger_config(documents[workflow], "workflow_run").get("workflows", [])
@@ -1086,8 +1087,11 @@ jobs:
         with: {name: pkg}
 """,
     }
-    offences = _artifact_chain_offences(sources)
-    assert offences, "duplicate workflow display names must retain every producer"
+    assert _artifact_chain_offences(sources) == [
+        "callback.yml:consume:step-0: rule=artifact-major: ambiguous producers for 'pkg': "
+        "[('one.yml', 'upload'), ('two.yml', 'upload')]",
+        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers [('one.yml', 'upload', 7)]",
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -1420,7 +1424,7 @@ def _docker_has_init_before_image(argv: list[str]) -> bool:
         word = argv[index]
         if word == "--init":
             return True
-        if not word.startswith("-"):
+        if word == "--" or not word.startswith("-"):
             return False
         index += 2 if word in _DOCKER_VALUE_OPTIONS and "=" not in word else 1
     return False
@@ -1445,23 +1449,69 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         for alias in node.names
         if alias.name == "subprocess"
     }
-    bound_argv: dict[str, list[tuple[int, ast.expr]]] = {}
+    scope_types = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+
+    def scope_chain(node: ast.AST) -> list[ast.AST]:
+        scopes: list[ast.AST] = []
+        current = node
+        while not isinstance(current, ast.Module):
+            current = parents[current]
+            if isinstance(current, scope_types):
+                scopes.append(current)
+        if not scopes or not isinstance(scopes[-1], ast.Module):
+            scopes.append(tree)
+        return scopes
+
+    bound_argv: dict[ast.AST, dict[str, list[tuple[int, ast.expr]]]] = {}
+    functions: dict[ast.AST, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, (ast.List, ast.Tuple)):
-            continue
-        for target in node.targets:
-            if isinstance(target, ast.Name):
-                bound_argv.setdefault(target.id, []).append((node.lineno, node.value))
-    returned_argv = {
-        node.name: statement.value
-        for node in tree.body
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        for statement in node.body
-        if isinstance(statement, ast.Return) and isinstance(statement.value, (ast.List, ast.Tuple))
-    }
+        scope = scope_chain(node)[0] if not isinstance(node, ast.Module) else tree
+        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple)):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    bound_argv.setdefault(scope, {}).setdefault(target.id, []).append((node.lineno, node.value))
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            parent_scope = scope_chain(node)[0]
+            functions.setdefault(parent_scope, {})[node.name] = node
+
+    def resolve_factory(argument: ast.expr, seen: frozenset[int] = frozenset()) -> ast.expr:
+        if not (
+            isinstance(argument, ast.Call)
+            and isinstance(argument.func, ast.Name)
+            and not argument.args
+            and not argument.keywords
+        ):
+            return argument
+        for scope in scope_chain(argument):
+            function = functions.get(scope, {}).get(argument.func.id)
+            if function is None:
+                continue
+            if id(function) in seen:
+                return argument
+            returns = [
+                statement.value
+                for statement in function.body
+                if isinstance(statement, ast.Return) and statement.value is not None
+            ]
+            return resolve_factory(returns[0], seen | {id(function)}) if len(returns) == 1 else argument
+        return argument
+
+    def resolve_argument(argument: ast.expr, call: ast.Call) -> ast.expr:
+        if isinstance(argument, ast.Name):
+            for scope in scope_chain(call):
+                bindings = bound_argv.get(scope, {}).get(argument.id)
+                if bindings is None:
+                    continue
+                candidates = [(line, value) for line, value in bindings if line < call.lineno]
+                return max(candidates, key=lambda candidate: candidate[0])[1] if candidates else argument
+        if isinstance(argument, ast.Call):
+            return resolve_factory(argument)
+        return argument
+
     invocations: list[tuple[int, list[str]]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not node.args:
+        if not isinstance(node, ast.Call):
             continue
         function = node.func
         is_subprocess = (
@@ -1479,18 +1529,17 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         is_imported_subprocess = isinstance(function, ast.Name) and function.id in imported_calls
         if not (is_subprocess or is_imported_subprocess or is_os_system):
             continue
-        argument = node.args[0]
-        if isinstance(argument, ast.Name) and argument.id in bound_argv:
-            candidates = [(line, candidate) for line, candidate in bound_argv[argument.id] if line < node.lineno]
-            if candidates:
-                argument = max(candidates, key=lambda candidate: candidate[0])[1]
-        elif (
-            isinstance(argument, ast.Call)
-            and isinstance(argument.func, ast.Name)
-            and not argument.args
-            and argument.func.id in returned_argv
-        ):
-            argument = returned_argv[argument.func.id]
+        keyword_arguments = [keyword.value for keyword in node.keywords if keyword.arg == "args"]
+        assert len(keyword_arguments) <= 1 and not (node.args and keyword_arguments), (
+            f"{where}:{node.lineno}: rule=docker-init: subprocess argv must have one source"
+        )
+        if node.args:
+            argument = node.args[0]
+        elif keyword_arguments and not is_os_system:
+            argument = keyword_arguments[0]
+        else:
+            continue
+        argument = resolve_argument(argument, node)
         words: list[str] | None = None
         if isinstance(argument, (ast.List, ast.Tuple)):
             words = [
@@ -1625,9 +1674,17 @@ run(command)
 sp.run(command)
 """,
     }
-    offences = _docker_run_offences(sources)
-    assert len(offences) == 9, offences
-    assert all("rule=docker-init" in offence for offence in offences)
+    assert _docker_run_offences(sources) == [
+        "scripts/wrappers.sh:1: rule=docker-init: docker run must include exact token --init",
+        "scripts/wrappers.sh:2: rule=docker-init: docker run must include exact token --init",
+        "scripts/wrappers.sh:3: rule=docker-init: docker run must include exact token --init",
+        "scripts/wrappers.sh:5: rule=docker-init: docker run must include exact token --init",
+        "scripts/wrappers.sh:6: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/imported.py:6: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/imported.py:7: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/imported.py:8: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/imported.py:9: rule=docker-init: docker run must include exact token --init",
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -1754,6 +1811,33 @@ def _pin_expression_members(value: str) -> frozenset[tuple[str, str]]:
     return frozenset(members)
 
 
+_GIT_IDENTITY_COMMANDS = {"show", "checkout", "switch", "reset"}
+_GIT_GLOBAL_VALUE_OPTIONS = {
+    "-C",
+    "-c",
+    "--config-env",
+    "--exec-path",
+    "--git-dir",
+    "--namespace",
+    "--super-prefix",
+    "--work-tree",
+}
+
+
+def _git_identity_command(words: list[str]) -> tuple[str, list[str]] | None:
+    if not words or words[0] != "git":
+        return None
+    index = 1
+    while index < len(words) and words[index].startswith("-"):
+        option = words[index]
+        index += 1
+        if option in _GIT_GLOBAL_VALUE_OPTIONS and "=" not in option and index < len(words):
+            index += 1
+    if index >= len(words) or words[index] not in _GIT_IDENTITY_COMMANDS:
+        return None
+    return words[index], words[index + 1 :]
+
+
 def _ref_binding(path: tuple[str, ...]) -> bool:
     if not path or "env" in path or "outputs" in path:
         return False
@@ -1844,8 +1928,14 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                         run,
                     )
                 )
+                normalized_run = re.sub(
+                    r"\$\((.*?)\)",
+                    lambda match: "$(" + " ".join(match.group(1).split()) + ")",
+                    run,
+                    flags=re.DOTALL,
+                )
                 base = _pin_base(pin.output)
-                for words in _shell_commands(run):
+                for words in _shell_commands(normalized_run):
                     for index, word in enumerate(words[:-1]):
                         flag = word.removeprefix("--")
                         relevant_flag = (
@@ -1874,20 +1964,12 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
                                 f"{pin.job}.{pin.output} at identity sink {word}"
                             )
-                    if (
-                        len(words) > 1
-                        and words[0] == "git"
-                        and words[1]
-                        in {
-                            "show",
-                            "checkout",
-                            "switch",
-                            "reset",
-                        }
-                    ):
+                    identity_command = _git_identity_command(words)
+                    if identity_command is not None:
+                        command, arguments = identity_command
                         used_git = {
                             name
-                            for argument in words[2:]
+                            for argument in arguments
                             for name in step_aliases
                             if argument == f"${name}"
                             or argument == f"${{{name}}}"
@@ -1896,22 +1978,23 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                         }
                         used_git_live = {
                             name
-                            for argument in words[2:]
+                            for argument in arguments
                             for name in live_vars
                             if argument == f"${name}"
                             or argument == f"${{{name}}}"
                             or argument.startswith(f"${name}:")
                             or argument.startswith(f"${{{name}}}:")
                         }
-                        if used_git_live and step_aliases:
+                        direct_live = any(re.search(r"\$\(\s*git\s+ls-remote\b", argument) for argument in arguments)
+                        if (used_git_live or direct_live) and step_aliases:
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
-                                f"replaces {pin.job}.{pin.output} at identity sink git {words[1]}"
+                                f"replaces {pin.job}.{pin.output} at identity sink git {command}"
                             )
                         elif used_git & overridden:
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
-                                f"{pin.job}.{pin.output} at identity sink git {words[1]}"
+                                f"{pin.job}.{pin.output} at identity sink git {command}"
                             )
                         elif used_git:
                             identity = True
