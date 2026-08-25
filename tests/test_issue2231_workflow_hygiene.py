@@ -2036,12 +2036,10 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                                 _pin_expression_members(argument),
                             )
                         )
-                    has_prepared_argument = any(
-                        reference == argument
-                        or provenance in {"exact", "prepared"}
-                        or bool(argument_members)
-                        and argument_members <= workflow_pins
-                        for _, argument, _, provenance, argument_members in flag_arguments
+                    has_exact_sha_argument = any(
+                        flag.endswith("-sha")
+                        and (reference == argument or argument_members == exact_member or provenance == "exact")
+                        for flag, argument, _, provenance, argument_members in flag_arguments
                     )
                     for flag, argument, argument_var, provenance, argument_members in flag_arguments:
                         if provenance == "derived":
@@ -2061,7 +2059,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
                                 f"{pin.job}.{pin.output} at identity sink {flag}"
                             )
-                        elif not has_prepared_argument:
+                        elif not (flag.endswith("-ref") and has_exact_sha_argument):
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: identity flag {flag} uses "
                                 f"a derived, untrusted, or unknown value instead of {pin.job}.{pin.output}"
