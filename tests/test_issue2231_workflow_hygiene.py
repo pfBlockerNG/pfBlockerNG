@@ -452,6 +452,7 @@ class _ArtifactJob(NamedTuple):
 
 _ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)$")
 _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+_UNRESOLVED_EXPRESSION = re.compile(r"<unresolved:(?P<expression>[^>]+)>")
 
 
 def _expression_parts(source: str, separator: str) -> list[str]:
@@ -575,6 +576,37 @@ def _workflow_call_path(value: object) -> str | None:
     return match.group("name") if match else None
 
 
+def _glob_patterns_overlap(left: str, right: str) -> bool:
+    pending = {(0, 0)}
+    seen: set[tuple[int, int]] = set()
+    while pending:
+        left_index, right_index = pending.pop()
+        if (left_index, right_index) in seen:
+            continue
+        seen.add((left_index, right_index))
+        if left_index == len(left) and right_index == len(right):
+            return True
+        if left_index < len(left) and left[left_index] == "*":
+            pending.add((left_index + 1, right_index))
+        if right_index < len(right) and right[right_index] == "*":
+            pending.add((left_index, right_index + 1))
+        if left_index == len(left) or right_index == len(right):
+            continue
+        left_token = left[left_index]
+        right_token = right[right_index]
+        if left_token == "*" and right_token == "*":
+            continue
+        if left_token not in "*?" and right_token not in "*?" and left_token != right_token:
+            continue
+        pending.add(
+            (
+                left_index if left_token == "*" else left_index + 1,
+                right_index if right_token == "*" else right_index + 1,
+            )
+        )
+    return False
+
+
 def _selectors_match(name: str, selector: str) -> bool:
     import fnmatch
 
@@ -582,9 +614,7 @@ def _selectors_match(name: str, selector: str) -> bool:
         return True
     dynamic_name = _GH_EXPRESSION.sub("*", name)
     dynamic_selector = _GH_EXPRESSION.sub("*", selector)
-    name_sample = dynamic_name.replace("*", "x").replace("?", "x")
-    selector_sample = dynamic_selector.replace("*", "x").replace("?", "x")
-    return fnmatch.fnmatchcase(name_sample, dynamic_selector) or fnmatch.fnmatchcase(selector_sample, dynamic_name)
+    return _glob_patterns_overlap(dynamic_name, dynamic_selector)
 
 
 def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
@@ -672,6 +702,19 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                     selector_value = action_inputs.get("name", action_inputs.get("pattern", "*"))
                     selectors = _scalar_values(selector_value, context)
                     assert selectors, f"{workflow}:{job_name}: rule=artifact-major: empty artifact selector"
+                    unresolved = sorted(
+                        {
+                            match.group("expression")
+                            for selector in selectors
+                            for match in _UNRESOLVED_EXPRESSION.finditer(selector)
+                        }
+                    )
+                    if unresolved:
+                        offences.add(
+                            f"{workflow}:{job_name}:step-{step_index}: rule=artifact-major: "
+                            f"unresolved artifact selector {unresolved!r}"
+                        )
+                        continue
                     major = int(match.group("major"))
                     if match.group("kind") == "upload":
                         produced.extend(_Artifact(workflow, job_name, selector, major) for selector in selectors)
@@ -881,10 +924,51 @@ jobs:
     assert any(
         "root.yaml:ambiguous:step-0: rule=artifact-major: ambiguous producers for 'pkg'" in item for item in offences
     )
-    assert any("root.yaml:wrong-output:step-0: rule=artifact-major: no producer matches" in item for item in offences)
+    assert any(
+        "root.yaml:wrong-output:step-0: rule=artifact-major: "
+        "unresolved artifact selector ['needs.make.outputs.missing']" in item
+        for item in offences
+    )
     assert any(
         "root.yaml:pattern:step-0: rule=artifact-major: download v7 mismatches producers" in item
         and "('producer.yml', 'duplicate', 8)" in item
+        for item in offences
+    )
+
+
+def test_artifact_scanner_resolves_workflow_run_display_name_through_local_reusable_producer() -> None:
+    sources = {
+        "producer.yml": """\
+on: workflow_call
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: "diagnostics-${{ inputs.kind }}"}
+""",
+        "root.yaml": """\
+name: Root display name
+"on": workflow_dispatch
+jobs:
+  make:
+    uses: ./.github/workflows/producer.yml
+    with: {kind: "${{ matrix.kind }}"}
+""",
+        "callback.yml": """\
+on:
+  workflow_run:
+    workflows: ["Root display name"]
+jobs:
+  consume:
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {pattern: "diagnostics-pfsense-ce-*"}
+""",
+    }
+    offences = _artifact_chain_offences(sources)
+    assert any(
+        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers "
+        "[('producer.yml', 'upload', 7)]" in item
         for item in offences
     )
 
