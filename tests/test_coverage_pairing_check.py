@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import os
+import shutil
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -420,14 +423,75 @@ def test_comment_only_release_change_uses_existing_no_test_needed_escape(tmp_pat
     assert ccp.main(["--warn-only", "--pr-body-file", str(body), _RELEASE_SCRIPT]) == 0
 
 
-def test_ci_wiring_carries_body_and_executes_both_release_plane_red_canaries() -> None:
+def _coverage_run_block() -> str:
     workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/test.yml").read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+    step = next(i for i, line in enumerate(lines) if line.strip().startswith("- name: Enforce "))
+    run = next(i for i in range(step + 1, len(lines)) if lines[i].strip() == "run: |")
+    body: list[str] = []
+    for line in lines[run + 1 :]:
+        if line and len(line) - len(line.lstrip()) <= len(lines[run]) - len(lines[run].lstrip()):
+            break
+        body.append(line)
+    return textwrap.dedent("\n".join(body))
 
-    assert 'printf "scripts/canary.py\\0"' in workflow, "CI must execute the missing-test release-plane offence"
-    assert "frozen-red-canary-body.txt" in workflow, "CI must execute the mismatched-hash release-plane offence"
-    assert (
-        "python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} --pr-body-file pr_body.txt < changed.txt"
-    ) in workflow, "the real strict run must always carry the live PR body"
+
+def test_ci_wiring_executes_ordered_red_canaries_and_real_status_stream(tmp_path: Path) -> None:
+    block = _coverage_run_block()
+    commands = [line.strip() for line in block.splitlines() if "scripts/check_coverage_pairing.py" in line]
+    assert block.splitlines()[0] == "set -euo pipefail"
+    assert len(commands) == 3, commands
+    assert all("| tee " in command for command in commands)
+    assert all("--name-status-z" in command for command in commands)
+    assert commands[0].startswith('if printf "M\\0scripts/canary.py\\0"')
+    assert "frozen-red-canary-body.txt" in commands[1]
+    assert commands[2].endswith('< changed.txt | tee -a "$GITHUB_STEP_SUMMARY"')
+
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "tests").mkdir()
+    shutil.copy2(_TOOL, tmp_path / "scripts/check_coverage_pairing.py")
+    shutil.copy2(Path(__file__), tmp_path / _RELEASE_TEST)
+    digest = subprocess.check_output(
+        ["git", "hash-object", "--", _RELEASE_TEST],
+        cwd=tmp_path,
+        text=True,
+    ).strip()
+    body = tmp_path / "live-body.md"
+    body.write_text(_frozen_red_body(_RELEASE_TEST, digest), encoding="utf-8")
+    (tmp_path / "changed.txt").write_bytes(b"M\0.github/workflows/test.yml\0M\0tests/test_coverage_pairing_check.py\0")
+    stub = tmp_path / "bin"
+    stub.mkdir()
+    gh = stub / "gh"
+    gh.write_text(
+        '#!/bin/sh\ncase "$*" in\n'
+        "*issues/*/labels*) exit 0 ;;\n"
+        '*pulls/*) cat "$PR_BODY_FIXTURE" ;;\n'
+        "*) exit 1 ;;\nesac\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    env = {
+        **os.environ,
+        "PATH": f"{stub}:{os.environ['PATH']}",
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GITHUB_STEP_SUMMARY": str(tmp_path / "summary"),
+        "GH_TOKEN": "token",
+        "PR_BODY_FIXTURE": str(body),
+        "PR_NUM": "1",
+    }
+    proc = subprocess.run(
+        ["bash", "-c", block],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    missing = proc.stdout.index("release-plane<->tests coverage pairing violated")
+    mismatch = proc.stdout.index("Frozen RED hash mismatch")
+    success = proc.stdout.index("Coverage pairing OK")
+    assert missing < mismatch < success
 
 
 def test_run_gates_plan_includes_coverage_pairing() -> None:
@@ -441,4 +505,108 @@ def test_run_gates_plan_includes_coverage_pairing() -> None:
     )
 
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.splitlines().count("python3 scripts/check_coverage_pairing.py") == 1, proc.stdout
+    assert proc.stdout.splitlines().count("python3 scripts/check_coverage_pairing.py --name-status-z") == 1, proc.stdout
+
+
+def _run_status_stream(data: bytes, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        [sys.executable, str(_TOOL), "--name-status-z", *args],
+        cwd=cwd or Path(__file__).resolve().parent.parent,
+        input=data,
+        capture_output=True,
+        check=False,
+    )
+
+
+def test_status_stream_retains_deleted_release_paths_but_not_deleted_tests() -> None:
+    deleted_release = _run_status_stream(b"D\0scripts/removed.py\0")
+    assert deleted_release.returncode == 1, deleted_release.stdout
+
+    deleted_test = _run_status_stream(b"M\0scripts/publish_release.py\0D\0tests/test_removed.py\0")
+    assert deleted_test.returncode == 1, deleted_test.stdout
+
+
+def test_status_stream_retains_release_side_of_rename_to_neutral() -> None:
+    renamed = _run_status_stream(b"R100\0scripts/publish_release.py\0scripts/README.md\0")
+    assert renamed.returncode == 1, renamed.stdout
+
+
+def test_status_stream_added_or_modified_test_satisfies_pairing() -> None:
+    for status in (b"A", b"M"):
+        proc = _run_status_stream(b"M\0scripts/publish_release.py\0" + status + b"\0tests/test_release.py\0")
+        assert proc.returncode == 0, proc.stdout
+
+
+def test_nul_paths_are_not_stripped_or_decoded_lossily(tmp_path: Path) -> None:
+    body = tmp_path / "body.md"
+    body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
+    for impostor in (
+        b"tests/test_coverage_pairing_check.py ",
+        b"tests/test_coverage_pairing_check.py\t",
+    ):
+        proc = _run_status_stream(
+            b"M\0scripts/publish_release.py\0M\0" + impostor + b"\0",
+            "--pr-body-file",
+            str(body),
+        )
+        assert proc.returncode == 1, proc.stdout
+        assert b"not changed by this PR" in proc.stdout
+
+    for unrepresentable in (b"tests/test_bad\nname.py", b"tests/test_\xff.py"):
+        proc = _run_status_stream(b"M\0scripts/publish_release.py\0M\0" + unrepresentable + b"\0")
+        assert proc.returncode == 2, proc.stdout
+        assert b"cannot be represented in Markdown" in proc.stdout
+
+
+def test_frozen_red_table_must_be_one_visible_unindented_delimited_table(tmp_path: Path) -> None:
+    digest = _working_tree_hash(_RELEASE_TEST)
+    table = _frozen_red_body(_RELEASE_TEST, digest)
+    invalid_bodies = (
+        f"```\n{table}```\n",
+        f"<!--\n{table}-->\n",
+        textwrap.indent(table, "  "),
+        table.replace("| --- | --- | --- |\n", ""),
+        f"{table}\n{table}",
+    )
+    for body_text in invalid_bodies:
+        body = tmp_path / "body.md"
+        body.write_text(body_text, encoding="utf-8")
+        assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 1
+
+    body = tmp_path / "visible.md"
+    body.write_text(f"```text\nnot evidence\n```\n\n{table}", encoding="utf-8")
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 0
+
+
+def test_every_changed_test_side_file_requires_its_own_frozen_row(tmp_path: Path, capsys: Any) -> None:
+    second = "tests/test_check_skip_allowlist.py"
+    body = tmp_path / "body.md"
+    body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST, second]) == 1
+    assert second in capsys.readouterr().out
+
+
+def test_frozen_hash_uses_repository_native_git_object_format(tmp_path: Path, monkeypatch: Any) -> None:
+    repo = tmp_path / "sha256"
+    repo.mkdir()
+    init = subprocess.run(
+        ["git", "init", "-q", "--object-format=sha256"],
+        cwd=repo,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert init.returncode == 0, init.stderr
+    (repo / "tests").mkdir()
+    (repo / "target").write_text("target\n", encoding="utf-8")
+    (repo / "tests/native-link.py").symlink_to("../target")
+    digest = subprocess.check_output(
+        ["git", "hash-object", "--", "tests/native-link.py"],
+        cwd=repo,
+        text=True,
+    ).strip()
+    assert len(digest) == 64
+    body = repo / "body.md"
+    body.write_text(_frozen_red_body("tests/native-link.py", digest), encoding="utf-8")
+    monkeypatch.chdir(repo)
+    assert ccp.main(["--pr-body-file", str(body), "scripts/release.py", "tests/native-link.py"]) == 0

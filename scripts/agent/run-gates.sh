@@ -39,36 +39,34 @@ usage() {
 	exit 2
 }
 
-# Emit one real path per line from a `git ... -z` listing. The newline form C-quotes
-# any path holding a quote, backslash, control byte or non-ASCII byte, and the quoted
-# form matches no extension in gates_for() -- that file would select no gate at all
-# and the run would report a clean pass (issue #2228). A shell variable cannot hold a
-# NUL, so the listing lands in a temp file first: that keeps the caller's `|| exit 2`
-# watching GIT's status rather than tr's, which a pipeline would swallow (POSIX sh has
-# no pipefail), turning a bad --diff ref into an empty file list instead of an error.
-git_paths() {
-	git -C "$worktree" "$@" > "$paths_tmp" || return 1
-	# A literal newline in a path cannot survive a line-based list: split on NUL it
-	# tears into fragments, so the tail gates a path that does not exist while the
-	# real file loses its `scripts/` prefix and is never shellchecked. -z output
-	# holds a newline byte ONLY in that case, so refuse it here and let the caller
-	# exit rather than act on a fabricated path. (No in-band sentinel: every byte
-	# but NUL and `/` is legal in a path, so a substituted marker would collide --
-	# a name containing \1 is exactly such a case.)
+# Refuse names the line-based lint mapper cannot represent. The status stream
+# itself stays byte-exact and NUL-delimited for coverage pairing.
+reject_newline_path() {
 	if tr -cd '\n' < "$paths_tmp" | grep -q ''; then
 		printf 'run-gates.sh: a changed path contains a newline; cannot map it to gates\n' >&2
 		return 1
 	fi
+}
+
+git_paths() {
+	git -C "$worktree" "$@" > "$paths_tmp" || return 1
+	reject_newline_path || return 1
 	tr '\0' '\n' < "$paths_tmp"
+}
+
+git_statuses() {
+	git -C "$worktree" "$@" > "$paths_tmp" || return 1
+	reject_newline_path || return 1
+	cat "$paths_tmp" >> "$status_tmp"
 }
 
 # Map a touched-file list (stdin, one path per line) to gate commands (stdout, one per
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
 gates_for() {
 	files=$(grep -v '^legacy/' || true)
+	out=''
 	nl='
 '
-	out="python3 scripts/check_coverage_pairing.py${nl}"
 	# Per-file commands (php -l / sh -n / shellcheck) are re-parsed by run_gate's
 	# `sh -c`; a diff filename carrying shell metacharacters would inject there.
 	# The guard applies ONLY to those buckets -- aggregate gates (.py/.md suites)
@@ -132,11 +130,11 @@ run_gate() {
 		return 0
 	fi
 	# issue #1194: ordinary gates read </dev/null so a stdin-reading gate cannot
-	# consume the command loop. Coverage pairing is the one aggregate exception:
-	# it receives the already-normalized changed-path list.
+	# consume the command loop. Coverage pairing receives the exact name-status
+	# stream assembled by main().
 	gate_input=/dev/null
 	case "$1" in
-	'python3 scripts/check_coverage_pairing.py') gate_input=$paths_tmp ;;
+	'python3 scripts/check_coverage_pairing.py --name-status-z') gate_input=$status_tmp ;;
 	esac
 	# issue #1865: capture combined stdout+stderr so a failing gate's own output
 	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed.
@@ -177,36 +175,48 @@ main() {
 	# never `: >`: a redirection error on the SPECIAL builtin `:` exits the shell
 	# outright instead of yielding to `||` (issues #1172, #1850).
 	paths_tmp="${TMPDIR:-/tmp}/pfb-run-gates-paths.$$"
+	status_tmp="${TMPDIR:-/tmp}/pfb-run-gates-status.$$"
 	( set -C; true > "$paths_tmp" ) || exit 2
-	trap 'rm -f "$paths_tmp"' EXIT
+	( set -C; true > "$status_tmp" ) || {
+		rm -f "$paths_tmp"
+		exit 2
+	}
+	trap 'rm -f "$paths_tmp" "$status_tmp"' EXIT
 	# dash runs no EXIT trap on an untrapped signal, so reap explicitly there too.
-	trap 'rm -f "$paths_tmp"; trap - EXIT; exit 130' INT
-	trap 'rm -f "$paths_tmp"; trap - EXIT; exit 143' TERM
+	trap 'rm -f "$paths_tmp" "$status_tmp"; trap - EXIT; exit 130' INT
+	trap 'rm -f "$paths_tmp" "$status_tmp"; trap - EXIT; exit 143' TERM
 
-	# --diff-filter=ACMR: a pure deletion stages nothing to lint (same rule as the
-	# pre-commit hook) -- per-file gates against ghost paths would always fail.
-	committed=$(git_paths diff --name-only -z --diff-filter=ACMR "$base...HEAD") || exit 2
-	# issue #1293: union with uncommitted changes, else gates see nothing pre-commit.
-	# staged/unstaged unioned SEPARATELY, not via one `diff HEAD` -- `diff <commit>`
-	# reads the WORKING TREE, so a staged-then-worktree-reverted file is invisible.
-	staged=$(git_paths diff --name-only -z --diff-filter=ACMR --cached) || exit 2
-	unstaged=$(git_paths diff --name-only -z --diff-filter=ACMR) || exit 2
-	# neither diff form surfaces a brand-new file never `git add`ed.
+	# Coverage pairing consumes status-aware records: deletions and rename sources
+	# still trigger production rules, while only live destinations can satisfy tests.
+	git_statuses diff --name-status -z --find-renames --diff-filter=ACDMRT "$base...HEAD" || exit 2
+	git_statuses diff --name-status -z --find-renames --diff-filter=ACDMRT --cached || exit 2
+	git_statuses diff --name-status -z --find-renames --diff-filter=ACDMRT || exit 2
+	git -C "$worktree" ls-files -z --others --exclude-standard > "$paths_tmp" || exit 2
+	reject_newline_path || exit 2
+	tr '\0' '\n' < "$paths_tmp" | while IFS= read -r path; do
+		printf 'A\0%s\0' "$path"
+	done >> "$status_tmp"
+
+	# Lint/type/test mapping remains live-file-only: deleted ghosts cannot be
+	# passed to per-file tools.
+	committed=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT "$base...HEAD") || exit 2
+	staged=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT --cached) || exit 2
+	unstaged=$(git_paths diff --name-only -z --find-renames --diff-filter=ACMRT) || exit 2
 	untracked=$(git_paths ls-files -z --others --exclude-standard) || exit 2
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
-	printf '%s\n' "$files" > "$paths_tmp"
-	# The shellspec gate must also fire when only spec files changed (cross-language
-	# consumers rule): specs are .sh files, so the extension mapping already covers it.
 	cmds=$(printf '%s\n' "$files" | gates_for)
+	pairing_cmd='python3 scripts/check_coverage_pairing.py --name-status-z'
+	all_cmds="$pairing_cmd
+$cmds"
 
 	if [ "$plan" -eq 1 ]; then
-		printf '%s' "$cmds"
+		printf '%s' "$all_cmds"
 		exit 0
 	fi
 
 	# Pipelines run in subshells under POSIX sh, so `overall` cannot propagate out of a
 	# `| while` loop -- run the loop in one subshell and carry the flag in its output.
-	report=$(printf '%s\n' "$cmds" | {
+	report=$(printf '%s\n' "$all_cmds" | {
 		overall=0
 		while IFS= read -r c; do
 			[ -n "$c" ] || continue
