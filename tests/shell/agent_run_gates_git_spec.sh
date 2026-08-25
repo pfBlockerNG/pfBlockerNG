@@ -169,6 +169,57 @@ Describe 'run-gates.sh over a C-quoted path'
       actual=$(tr '\0' '\n' < "$pairing_raw")
       The variable actual should equal "$expected"
     End
+
+    It 'orders a committed test before its unstaged deletion'
+      layered_base=$(gitc rev-parse HEAD)
+      printf 'release\n' > "$repo/scripts/release.fixture"
+      mkdir -p "$repo/tests"
+      printf 'paired\n' > "$repo/tests/pair.fixture"
+      gitc add -A
+      gitc commit -q -m paired
+      rm "$repo/tests/pair.fixture"
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$layered_base"
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'A\nscripts/release.fixture\nA\ntests/pair.fixture\nD\ntests/pair.fixture')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
+
+    It 'orders a committed test before its unstaged rename-away destination'
+      layered_base=$(gitc rev-parse HEAD)
+      printf 'release\n' > "$repo/scripts/release.fixture"
+      mkdir -p "$repo/tests"
+      printf 'paired\n' > "$repo/tests/pair.fixture"
+      gitc add -A
+      gitc commit -q -m paired
+      mkdir -p "$repo/docs"
+      mv "$repo/tests/pair.fixture" "$repo/docs/renamed.fixture"
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$layered_base"
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'A\nscripts/release.fixture\nA\ntests/pair.fixture\nD\ntests/pair.fixture\nA\ndocs/renamed.fixture')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
+
+    It 'orders an untracked recreation after a staged deletion'
+      layered_base=$(gitc rev-parse HEAD)
+      printf 'release\n' > "$repo/scripts/release.fixture"
+      mkdir -p "$repo/tests"
+      printf 'paired\n' > "$repo/tests/pair.fixture"
+      gitc add -A
+      gitc commit -q -m paired
+      gitc rm -q tests/pair.fixture
+      mkdir -p "$repo/tests"
+      printf 'recreated\n' > "$repo/tests/pair.fixture"
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$layered_base"
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'A\nscripts/release.fixture\nA\ntests/pair.fixture\nD\ntests/pair.fixture\nA\ntests/pair.fixture')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
   End
 
   # ── the planned command text is what actually runs ────────────────────────── #
