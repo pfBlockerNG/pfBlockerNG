@@ -88,7 +88,8 @@ def test_entity_heavy_short_values_render_without_an_ellipsis(
     guard.snapshot()
 
     resp = webui.get(CATEGORY_PAGE)
-    result = evaluate_render(CATEGORY_PAGE, resp.status_code, resp.text, ("Category",))
+    # ?type=ipv4 never renders "Category" — the word reaches the body only from the DNSBL branch.
+    result = evaluate_render(CATEGORY_PAGE, resp.status_code, resp.text, ("IPv4 Summary",))
     assert result.ok, f"Tier-A render oracle failed for the Category page: {result.detail}"
 
     body = resp.text
