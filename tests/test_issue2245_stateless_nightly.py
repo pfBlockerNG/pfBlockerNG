@@ -910,6 +910,39 @@ jobs:
     ]
 
 
+@pytest.mark.parametrize(
+    "identity_invocation",
+    (
+        'sh scripts/build-leg.sh --ports-ref "$PORTS_SHA" --ports-ref main',
+        'sh scripts/build-leg.sh --ports-ref="$PORTS_SHA" --ports-ref=main',
+    ),
+)
+def test_workflow_hygiene_validates_each_identity_flag_argument(
+    identity_invocation: str,
+) -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+    steps:
+      - run: |
+          git show "$PORTS_SHA:Makefile"
+          IDENTITY_INVOCATION
+""".replace("IDENTITY_INVOCATION", identity_invocation)
+    assert hygiene._pin_offences({"sibling-identity-flags.yml": source}) == [
+        "sibling-identity-flags.yml:build: rule=pin-consumer: identity flag --ports-ref uses "
+        "a derived, untrusted, or unknown value instead of prepare.ports_sha"
+    ]
+
+
 def test_workflow_hygiene_scopes_flag_identity_sinks_to_matching_prepared_pins() -> None:
     sources = {
         "exact-and-unrelated.yml": """\
@@ -929,6 +962,7 @@ jobs:
           git show "$PORTS_SHA:Makefile"
           sh scripts/build-leg.sh --ports-ref "$PORTS_SHA"
           sh scripts/build-leg.sh --ports-sha "${{ needs.prepare.outputs.ports_sha }}"
+          sh scripts/build-leg.sh --ports-sha "$PORTS_SHA" --ports-ref main
           sh scripts/build-leg.sh --cache-ref main
 """,
         "no-prepared-pin.yml": """\
