@@ -104,6 +104,7 @@ permissions:
 
 concurrency:
   group: image-refresh
+  queue: max
   cancel-in-progress: false
 
 jobs:
