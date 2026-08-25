@@ -1934,7 +1934,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 step_aliases = {
                     name
                     for name in pin_aliases
-                    if isinstance(value := effective_env[name], str) and _pin_expression_members(value) == exact_member
+                    if _pin_expression_members(cast(str, effective_env[name])) == exact_member
                 }
                 invalid_aliases = pin_aliases - step_aliases
                 run = step.get("run")
@@ -1979,6 +1979,9 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                         if argument.startswith("$") and not argument.startswith("${"):
                             argument_var = argument[1:]
                         used = {name for name in step_aliases if argument_var == name}
+                        used_invalid = {name for name in invalid_aliases if argument_var == name}
+                        if used_invalid:
+                            invalid_alias_sinks.update((job_name, name, word) for name in used_invalid)
                         if argument_var in live_vars:
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
@@ -2024,7 +2027,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                             or argument.startswith(f"${{{name}}}:")
                         }
                         if used_git_invalid:
-                            invalid_alias_sinks.update((job_name, name, command) for name in used_git_invalid)
+                            invalid_alias_sinks.update((job_name, name, f"git {command}") for name in used_git_invalid)
                         direct_live = any(re.search(r"\$\(\s*git\s+ls-remote\b", argument) for argument in arguments)
                         if (used_git_live or direct_live) and step_aliases:
                             offences.append(
@@ -2041,8 +2044,8 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
         if identity:
             offences.extend(
                 f"{pin.workflow}:{job_name}: rule=pin-consumer: derived or untrusted env alias "
-                f"{name} references {pin.job}.{pin.output} at identity sink git {command}"
-                for job_name, name, command in invalid_alias_sinks
+                f"{name} references {pin.job}.{pin.output} at identity sink {sink}"
+                for job_name, name, sink in invalid_alias_sinks
             )
         else:
             offences.append(
