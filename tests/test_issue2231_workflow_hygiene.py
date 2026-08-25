@@ -798,7 +798,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
             root_produced, _ = scan_instance(workflow, {}, (), (), "workflow_run" not in triggers)
             name = document.get("name")
             if isinstance(name, str):
-                direct_names[name] = root_produced
+                direct_names[name] = tuple(dict.fromkeys((*direct_names.get(name, ()), *root_produced)))
     for workflow in workflow_run_roots:
         names = _trigger_config(documents[workflow], "workflow_run").get("workflows", [])
         assert isinstance(names, list), f"{workflow}: rule=artifact-major: workflow_run.workflows must be a list"
@@ -956,60 +956,102 @@ on: workflow_dispatch
 jobs:
   upload:
     steps:
-      - uses: actions/upload-artifact@v8
+      - uses: "actions/upload-artifact@v8"
         with: {name: expected}
 """,
         "callback.yaml": """\
 on:
   workflow_run:
-    workflows: [Root]
+    workflows: [Root, Missing]
 jobs:
   consume:
     steps:
-      - uses: actions/download-artifact@v8
+      - uses: "actions/download-artifact@v8"
         with: {name: typo}
 """,
     }
     assert _artifact_chain_offences(sources) == [
-        "callback.yaml:consume:step-0: rule=artifact-major: no producer matches ['typo']"
+        "callback.yaml: rule=artifact-major: workflow_run names missing producers ['Missing']",
+        "callback.yaml:consume:step-0: rule=artifact-major: no producer matches ['typo']",
     ]
 
 
-def test_artifact_scanner_resolves_workflow_run_display_name_through_local_reusable_producer() -> None:
-    sources = {
-        "producer.yml": """\
+def test_artifact_scanner_fails_closed_on_broken_job_and_reusable_graphs() -> None:
+    with pytest.raises(AssertionError, match=r"missing-needs.yml: rule=artifact-major: cyclic or missing needs"):
+        _artifact_chain_offences(
+            {
+                "missing-needs.yml": """\
+on: workflow_dispatch
+jobs:
+  consume:
+    needs: absent
+    steps: []
+"""
+            }
+        )
+    with pytest.raises(AssertionError, match=r"local workflow 'missing.yml' does not exist"):
+        _artifact_chain_offences(
+            {
+                "missing-local.yml": """\
+on: workflow_dispatch
+jobs:
+  call:
+    uses: ./.github/workflows/missing.yml
+"""
+            }
+        )
+    with pytest.raises(AssertionError, match=r"recursive reusable workflow"):
+        _artifact_chain_offences(
+            {
+                "a.yml": """\
+on: workflow_dispatch
+jobs:
+  call:
+    uses: ./.github/workflows/b.yml
+""",
+                "b.yml": """\
 on: workflow_call
+jobs:
+  call:
+    uses: ./.github/workflows/a.yml
+""",
+            }
+        )
+
+
+def test_artifact_scanner_accumulates_duplicate_workflow_display_names() -> None:
+    sources = {
+        "one.yml": """\
+name: Producer
+on: workflow_dispatch
 jobs:
   upload:
     steps:
       - uses: actions/upload-artifact@v7
-        with: {name: "diagnostics-${{ inputs.kind }}"}
+        with: {name: pkg}
 """,
-        "root.yaml": """\
-name: Root display name
-"on": workflow_dispatch
+        "two.yml": """\
+name: Producer
+on: workflow_dispatch
 jobs:
-  make:
-    uses: ./.github/workflows/producer.yml
-    with: {kind: "${{ matrix.kind }}"}
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v8
+        with: {name: pkg}
 """,
         "callback.yml": """\
 on:
   workflow_run:
-    workflows: ["Root display name"]
+    workflows: [Producer]
 jobs:
   consume:
     steps:
       - uses: actions/download-artifact@v8
-        with: {pattern: "diagnostics-pfsense-ce-*"}
+        with: {name: pkg}
 """,
     }
     offences = _artifact_chain_offences(sources)
-    assert any(
-        "callback.yml:consume:step-0: rule=artifact-major: download v8 mismatches producers "
-        "[('producer.yml', 'upload', 7)]" in item
-        for item in offences
-    )
+    assert offences, "duplicate workflow display names must retain every producer"
 
 
 # --------------------------------------------------------------------------- #
@@ -1173,13 +1215,23 @@ def _docker_argv(words: list[str]) -> list[str] | None:
     while index < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[index]):
         index += 1
     while index < len(words) and words[index] in {"command", "exec", "sudo"}:
+        wrapper = words[index]
         index += 1
+        if wrapper == "sudo":
+            while index < len(words) and words[index].startswith("-"):
+                option = words[index]
+                index += 1
+                if option in {"-C", "-g", "-h", "-p", "-u"} and index < len(words):
+                    index += 1
     if index < len(words) and words[index] == "env":
         index += 1
         while index < len(words) and (
             words[index].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[index])
         ):
+            option = words[index]
             index += 1
+            if option in {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"} and index < len(words):
+                index += 1
     docker = words[index] if index < len(words) else ""
     if (
         index + 1 >= len(words)
@@ -1225,7 +1277,6 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         tree = ast.parse(source, filename=where)
     except SyntaxError as exc:
         raise AssertionError(f"{where}:{exc.lineno}: rule=docker-init: invalid Python: {exc.msg}") from exc
-    invocations: list[tuple[int, list[str]]] = []
     imported_calls = {
         alias.asname or alias.name
         for node in tree.body
@@ -1233,6 +1284,21 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         for alias in node.names
         if alias.name in {"call", "check_call", "check_output", "Popen", "run"}
     }
+    subprocess_modules = {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "subprocess"
+    }
+    bound_argv = {
+        target.id: node.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple))
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    invocations: list[tuple[int, list[str]]] = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not node.args:
             continue
@@ -1240,7 +1306,7 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         is_subprocess = (
             isinstance(function, ast.Attribute)
             and isinstance(function.value, ast.Name)
-            and function.value.id == "subprocess"
+            and function.value.id in subprocess_modules
             and function.attr in {"call", "check_call", "check_output", "Popen", "run"}
         )
         is_os_system = (
@@ -1253,6 +1319,8 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         if not (is_subprocess or is_imported_subprocess or is_os_system):
             continue
         argument = node.args[0]
+        if isinstance(argument, ast.Name) and argument.id in bound_argv:
+            argument = bound_argv[argument.id]
         words: list[str] | None = None
         if isinstance(argument, (ast.List, ast.Tuple)):
             words = [
@@ -1354,20 +1422,26 @@ def test_docker_scanner_rejects_wrappers_dynamic_argv_and_late_init() -> None:
     sources = {
         "scripts/wrappers.sh": """\
 sudo docker run alpine
+sudo -u root docker run alpine
 docker run alpine --init
 DOCKER=docker
 "$DOCKER" run --rm alpine
+env -u HOME docker run alpine
 """,
         "tests/smoke/imported.py": """\
+import subprocess as sp
 from subprocess import run
 
 opts = ["--rm", "alpine"]
+command = ["docker", "run", "alpine"]
 run(["docker", "run", "alpine"])
 run(["docker", "run", *opts])
+run(command)
+sp.run(command)
 """,
     }
     offences = _docker_run_offences(sources)
-    assert len(offences) == 5, offences
+    assert len(offences) == 9, offences
     assert all("rule=docker-init" in offence for offence in offences)
 
 
