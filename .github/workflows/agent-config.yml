@@ -45,6 +45,10 @@ permissions:
   packages: read
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   agent-config:
     name: Agent config (role registry + skill/workflow parity)

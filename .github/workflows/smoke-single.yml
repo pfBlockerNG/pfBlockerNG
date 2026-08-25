@@ -277,6 +277,10 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-${{ inputs.shard }}-${{ inputs.checkout_ref || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Build the branch's .pkg on a PLAIN Linux runner via the portable builder
   # (scripts/build-pkg-portable.py) and publish it as the `pfBlockerNG-pkg`
@@ -846,7 +850,7 @@ jobs:
       # the release gate (#1662).
       - name: Upload shard selection-status marker (leg-level empty-selection gate, issue #1767)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           name: smoke-shard-status-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
           path: smoke-diag/shard-selection-status
@@ -869,7 +873,7 @@ jobs:
 
       - name: Upload smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           # Per-leg-per-shard name (issue #797) — also fixes the pre-existing
           # wart where every leg of a fan-out run uploaded the SAME bare

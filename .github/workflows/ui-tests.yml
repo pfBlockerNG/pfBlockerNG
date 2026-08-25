@@ -181,6 +181,10 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.checkout_ref || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # Build the branch's .pkg on a plain Linux runner (same builder the smoke gate
   # consumes). ONE build PER ci:true leg (version/ABI), not one global build:

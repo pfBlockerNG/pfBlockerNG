@@ -163,6 +163,10 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.checkout_ref || github.ref }}
+  cancel-in-progress: false
+
 jobs:
   # ── 1. Read CI matrix (every ci:true entry, CE and Plus) ─────────────────────
   #
