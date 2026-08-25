@@ -361,11 +361,6 @@ def _assert_render_site_concurrency(source: str) -> None:
     assert concurrency.get("cancel-in-progress") is False
 
 
-def _render_group(source: str, *, caller_holds_pkg_lock: bool, run_id: int) -> str:
-    _assert_render_site_concurrency(source)
-    return f"pkg-render-site-{run_id}" if caller_holds_pkg_lock else _PKG_REPO_MUTATION_GROUP
-
-
 def test_issue_2391_real_release_cuts_are_channel_serialized_and_dry_runs_are_unique() -> None:
     source = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 
@@ -450,9 +445,17 @@ def test_issue_2391_render_callers_own_the_pkg_lock_without_deadlocking_the_call
         assert isinstance(inputs, dict)
         assert inputs.get("caller_holds_pkg_lock") is True
 
-    render = sources["pkg-render-site.yml"]
-    assert _render_group(render, caller_holds_pkg_lock=False, run_id=101) == _PKG_REPO_MUTATION_GROUP
-    assert _render_group(render, caller_holds_pkg_lock=True, run_id=101) == "pkg-render-site-101"
+    render = _workflow_document(sources["pkg-render-site.yml"])
+    triggers = render.get(True)
+    assert isinstance(triggers, dict)
+    workflow_call = triggers.get("workflow_call")
+    assert isinstance(workflow_call, dict)
+    call_inputs = workflow_call.get("inputs")
+    assert isinstance(call_inputs, dict)
+    lock_input = call_inputs.get("caller_holds_pkg_lock")
+    assert isinstance(lock_input, dict)
+    assert lock_input.get("required") is True
+    assert lock_input.get("type") == "boolean"
 
 
 @pytest.mark.parametrize(
