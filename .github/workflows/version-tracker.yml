@@ -60,6 +60,10 @@ permissions:
   packages: read
   contents: read
 
+concurrency:
+  group: version-tracker
+  cancel-in-progress: false
+
 jobs:
   # ── 1. Read the curated matrix ───────────────────────────────────────────────
   read-matrix:

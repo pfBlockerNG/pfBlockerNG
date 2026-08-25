@@ -39,6 +39,10 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   gate:
     name: Gate (skip nightly if devel unchanged)

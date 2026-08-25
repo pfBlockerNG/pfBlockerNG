@@ -102,6 +102,10 @@ permissions:
   packages: read
   contents: read
 
+concurrency:
+  group: image-refresh
+  cancel-in-progress: false
+
 jobs:
   # ── Resolve refresh matrix (CE + Plus) ─────────────────────────────────────
   # Validate the direct_leg input (the reconcile loop's dispatch), or derive the

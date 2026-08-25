@@ -35,6 +35,10 @@ permissions:
   packages: read
   contents: read
 
+concurrency:
+  group: nightly-failure-alert
+  cancel-in-progress: false
+
 jobs:
   recovery:
     name: Close the recovered nightly-red tracking issue

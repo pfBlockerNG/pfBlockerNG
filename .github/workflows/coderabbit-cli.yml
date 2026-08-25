@@ -16,6 +16,10 @@ permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pr }}
+  cancel-in-progress: false
+
 jobs:
   cli-review:
     name: CLI review of one PR

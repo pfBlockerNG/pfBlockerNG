@@ -86,6 +86,10 @@ permissions:
   contents: read
   packages: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.pfsense_ce_version }}
+  cancel-in-progress: false
+
 jobs:
   # ── 0. Map the target CE version to its FreeBSD base + PHP runtime ────────
   # The branch .pkg MUST be built against the FreeBSD ABI + PHP runtime of the

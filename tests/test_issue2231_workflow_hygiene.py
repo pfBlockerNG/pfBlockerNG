@@ -16,12 +16,23 @@ disables silently. These gates cover what actionlint cannot:
    proves it usable before the suite runs (issue #2261).
 3. The ``actionlint`` job keeps its embedded ShellCheck pass over ``run:``
    bodies, and no config filters that pass's findings away (issue #2241).
+4. Dispatchable workflows own top-level concurrency; artifact chains keep one
+   upload/download action major; container invocations pass ``--init``; and
+   downstream jobs consume prepared SHA pins (issue #2413).
 """
 
 from __future__ import annotations
 
+import ast
 import re
+import shlex
+import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from typing import NamedTuple, cast
+
+import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -309,3 +320,1240 @@ def test_pass_silencer_scanner_catches_every_spelling() -> None:
     assert _pass_silencers("# actionlint runs shellcheck --norc; see .shellcheckrc") == []
     assert _pass_silencers("      paths-ignore:\n        - '**.md'") == []
     assert _pass_silencers('> "$RUNNER_TEMP/canary-shellcheck.yml"') == []
+
+
+# --------------------------------------------------------------------------- #
+# 4. Dispatchable workflows own top-level concurrency.
+# --------------------------------------------------------------------------- #
+
+
+_EXTERNAL_TRIGGERS = {"workflow_dispatch", "push", "schedule", "release"}
+
+
+def _workflow_sources() -> dict[str, str]:
+    directory = ROOT / ".github/workflows"
+    paths = {path.name: path for pattern in ("*.yml", "*.yaml") for path in directory.glob(pattern)}
+    return {name: paths[name].read_text(encoding="utf-8") for name in sorted(paths)}
+
+
+def _workflow_document(source: str, where: str) -> dict[object, object]:
+    try:
+        document: object = yaml.safe_load(source)
+    except yaml.YAMLError as exc:
+        raise AssertionError(f"{where}: rule=yaml: invalid workflow YAML: {exc}") from exc
+    assert isinstance(document, dict), f"{where}: rule=yaml: workflow must be a non-empty YAML mapping"
+    return document
+
+
+def _trigger_names(document: dict[object, object]) -> set[str]:
+    triggers = document.get(True, document.get("on"))  # PyYAML 1.1 resolves a plain `on` key to True.
+    if isinstance(triggers, str):
+        return {triggers}
+    if isinstance(triggers, list):
+        return {trigger for trigger in triggers if isinstance(trigger, str)}
+    if isinstance(triggers, dict):
+        return {trigger for trigger in triggers if isinstance(trigger, str)}
+    return set()
+
+
+def _concurrency_scan(sources: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    classifications: dict[str, str] = {}
+    offences: list[str] = []
+    for where, source in sources.items():
+        document = _workflow_document(source, where)
+        triggers = _trigger_names(document)
+        if triggers & _EXTERNAL_TRIGGERS:
+            classifications[where] = "dispatchable"
+            concurrency = document.get("concurrency")
+            valid = (
+                isinstance(concurrency, dict)
+                and isinstance(concurrency.get("group"), str)
+                and bool(concurrency["group"].strip())
+            )
+            if not valid:
+                offences.append(
+                    f"{where}: rule=concurrency: dispatchable triggers {sorted(triggers & _EXTERNAL_TRIGGERS)!r} "
+                    "require top-level concurrency"
+                )
+        elif triggers == {"workflow_call"}:
+            classifications[where] = "reusable-only"
+        else:
+            classifications[where] = "internal-only"
+    return classifications, offences
+
+
+def test_dispatchable_workflows_have_top_level_concurrency() -> None:
+    sources = _workflow_sources()
+    classifications, offences = _concurrency_scan(sources)
+    assert set(classifications) == set(sources)
+    assert not offences, "workflow concurrency hygiene failed:\n  " + "\n  ".join(offences)
+
+
+def test_concurrency_scanner_handles_yaml_trigger_shapes_and_planted_offences() -> None:
+    sources = {
+        "quoted.yaml": (
+            '"on":\n  "workflow_dispatch":\n'
+            "concurrency:\n  group: >-\n    quoted-${{ github.ref }} # parsed as data\n"
+            "jobs: {}\n"
+        ),
+        "mixed.yml": (
+            "on:\n  workflow_call:\n  schedule:\n    - cron: '0 1 * * *'\n"
+            "concurrency:\n  group: mixed-${{ github.ref }} # inline comment\njobs: {}\n"
+        ),
+        "internal.yml": "on:\n  workflow_run:\n  pull_request:\njobs: {}\n",
+        "missing.yml": "on:\n  push:\njobs: {}\n",
+        "empty.yaml": "on:\n  release:\nconcurrency:\n  group: '' # empty after YAML decoding\njobs: {}\n",
+        "scalar.yml": "on:\n  workflow_dispatch:\nconcurrency: text-decoy\njobs: {}\n",
+        "nested-only.yml": (
+            "# concurrency: comments cannot satisfy the rule\n"
+            "on:\n  push:\njobs:\n  test:\n    concurrency:\n      group: nested\n"
+        ),
+    }
+    classifications, offences = _concurrency_scan(sources)
+    assert classifications == {
+        "quoted.yaml": "dispatchable",
+        "mixed.yml": "dispatchable",
+        "internal.yml": "internal-only",
+        "missing.yml": "dispatchable",
+        "empty.yaml": "dispatchable",
+        "scalar.yml": "dispatchable",
+        "nested-only.yml": "dispatchable",
+    }
+    assert offences == [
+        "missing.yml: rule=concurrency: dispatchable triggers ['push'] require top-level concurrency",
+        "empty.yaml: rule=concurrency: dispatchable triggers ['release'] require top-level concurrency",
+        "scalar.yml: rule=concurrency: dispatchable triggers ['workflow_dispatch'] require top-level concurrency",
+        "nested-only.yml: rule=concurrency: dispatchable triggers ['push'] require top-level concurrency",
+    ]
+
+
+@pytest.mark.parametrize(("where", "source"), (("empty.yaml", ""), ("invalid.yml", "on: [\n")))
+def test_workflow_parser_fails_closed_with_file_and_rule_diagnostics(where: str, source: str) -> None:
+    with pytest.raises(AssertionError, match=rf"^{re.escape(where)}: rule=yaml:"):
+        _workflow_document(source, where)
+
+
+# --------------------------------------------------------------------------- #
+# 5. Artifact producer/consumer chains keep one action major.
+# --------------------------------------------------------------------------- #
+
+
+class _Artifact(NamedTuple):
+    workflow: str
+    job: str
+    name: str
+    major: int
+
+
+class _ArtifactJob(NamedTuple):
+    produced: tuple[_Artifact, ...]
+    outputs: Mapping[str, frozenset[str]]
+
+
+_ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)$")
+_GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
+
+
+def _expression_parts(source: str, separator: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    depth = 0
+    quote = ""
+    index = 0
+    while index < len(source):
+        char = source[index]
+        if quote:
+            if char == quote and (index == 0 or source[index - 1] != "\\"):
+                quote = ""
+        elif char in {"'", '"'}:
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and source.startswith(separator, index):
+            parts.append(source[start:index].strip())
+            start = index + len(separator)
+            index += len(separator) - 1
+        index += 1
+    parts.append(source[start:].strip())
+    return parts
+
+
+def _expression_values(expression: str, context: Mapping[str, frozenset[str]]) -> frozenset[str]:
+    expression = expression.strip()
+    alternatives = _expression_parts(expression, "||")
+    if len(alternatives) > 1:
+        return frozenset().union(*(_expression_values(part, context) for part in alternatives))
+    conditions = _expression_parts(expression, "&&")
+    if len(conditions) > 1:
+        return _expression_values(conditions[-1], context)
+    if expression.startswith("format(") and expression.endswith(")"):
+        arguments = _expression_parts(expression[7:-1], ",")
+        try:
+            template = ast.literal_eval(arguments[0])
+        except (SyntaxError, ValueError):
+            template = None
+        if isinstance(template, str):
+            values = [_expression_values(argument, context) for argument in arguments[1:]]
+            rendered = {template}
+            for position, candidates in enumerate(values):
+                rendered = {
+                    value.replace(f"{{{position}}}", candidate) for value in rendered for candidate in candidates
+                }
+            return frozenset(rendered)
+    if expression in context:
+        return context[expression]
+    step_output = re.fullmatch(r"steps\.[A-Za-z0-9_-]+\.outputs\.([A-Za-z0-9_-]+)", expression)
+    if step_output is not None and f"inputs.{step_output.group(1)}" in context:
+        return context[f"inputs.{step_output.group(1)}"]
+    if expression.startswith(("needs.", "jobs.")):
+        return frozenset({f"<unresolved:{expression}>"})
+    try:
+        literal = ast.literal_eval(expression)
+    except (SyntaxError, ValueError):
+        literal = None
+    if isinstance(literal, (str, int, bool)):
+        return frozenset({str(literal)})
+    return frozenset({f"${{{{ {expression} }}}}"})
+
+
+def _scalar_values(value: object, context: Mapping[str, frozenset[str]]) -> frozenset[str]:
+    if not isinstance(value, str):
+        return frozenset()
+    matches = list(_GH_EXPRESSION.finditer(value))
+    if not matches:
+        return frozenset({value})
+    if len(matches) == 1 and matches[0].span() == (0, len(value)):
+        return _expression_values(matches[0].group(1), context)
+    rendered = {value}
+    for match in matches:
+        token = match.group(0)
+        rendered = {
+            candidate.replace(token, replacement, 1)
+            for candidate in rendered
+            for replacement in _expression_values(match.group(1), context)
+        }
+    return frozenset(rendered)
+
+
+def _trigger_config(document: Mapping[object, object], trigger: str) -> Mapping[object, object]:
+    triggers = document.get(True, document.get("on"))
+    if not isinstance(triggers, dict):
+        return {}
+    config = triggers.get(trigger)
+    return config if isinstance(config, dict) else {}
+
+
+def _default_inputs(document: Mapping[object, object]) -> dict[str, frozenset[str]]:
+    result: dict[str, frozenset[str]] = {}
+    for trigger in ("workflow_call", "workflow_dispatch"):
+        inputs = _trigger_config(document, trigger).get("inputs", {})
+        if not isinstance(inputs, dict):
+            continue
+        for name, config in inputs.items():
+            if not isinstance(name, str) or name in result:
+                continue
+            default = config.get("default", "") if isinstance(config, dict) else ""
+            result[name] = frozenset({str(default)})
+    return result
+
+
+def _needs(job: Mapping[object, object]) -> tuple[str, ...]:
+    value = job.get("needs", ())
+    if isinstance(value, str):
+        return (value,)
+    if isinstance(value, list):
+        return tuple(item for item in value if isinstance(item, str))
+    return ()
+
+
+def _workflow_call_path(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    match = re.fullmatch(r"\./\.github/workflows/(?P<name>[^/]+\.ya?ml)", value)
+    return match.group("name") if match else None
+
+
+def _selectors_match(name: str, selector: str) -> bool:
+    import fnmatch
+
+    if fnmatch.fnmatchcase(name, selector):
+        return True
+    dynamic_name = _GH_EXPRESSION.sub("*", name)
+    dynamic_selector = _GH_EXPRESSION.sub("*", selector)
+    name_sample = dynamic_name.replace("*", "x").replace("?", "x")
+    selector_sample = dynamic_selector.replace("*", "x").replace("?", "x")
+    return fnmatch.fnmatchcase(name_sample, dynamic_selector) or fnmatch.fnmatchcase(selector_sample, dynamic_name)
+
+
+def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
+    documents = {name: _workflow_document(source, name) for name, source in sources.items()}
+    offences: set[str] = set()
+    download_matches: dict[tuple[str, str, int, int], bool] = {}
+    download_selectors: dict[tuple[str, str, int, int], set[str]] = {}
+    major_mismatches: dict[tuple[str, str, int, int], set[tuple[str, str, int]]] = {}
+
+    def scan_instance(
+        workflow: str,
+        supplied_inputs: Mapping[str, frozenset[str]],
+        inherited: tuple[_Artifact, ...],
+        stack: tuple[str, ...],
+    ) -> tuple[tuple[_Artifact, ...], Mapping[str, frozenset[str]]]:
+        assert workflow not in stack, f"{workflow}: rule=artifact-major: recursive reusable workflow"
+        document = documents[workflow]
+        inputs = _default_inputs(document)
+        inputs.update(supplied_inputs)
+        base_context = {f"inputs.{name}": values for name, values in inputs.items()}
+        jobs = document.get("jobs")
+        assert isinstance(jobs, dict), f"{workflow}: rule=artifact-major: jobs must be a mapping"
+        states: dict[str, _ArtifactJob] = {}
+        pending = {name for name, job in jobs.items() if isinstance(name, str) and isinstance(job, dict)}
+        while pending:
+            ready = [
+                name
+                for name in sorted(pending)
+                if all(dependency in states for dependency in _needs(cast(Mapping[object, object], jobs[name])))
+            ]
+            assert ready, f"{workflow}: rule=artifact-major: cyclic or missing needs {sorted(pending)!r}"
+            for job_name in ready:
+                job = cast(Mapping[object, object], jobs[job_name])
+                dependencies = _needs(job)
+                upstream = tuple(
+                    [*inherited, *(artifact for dependency in dependencies for artifact in states[dependency].produced)]
+                )
+                context = dict(base_context)
+                for dependency in dependencies:
+                    for output, values in states[dependency].outputs.items():
+                        context[f"needs.{dependency}.outputs.{output}"] = values
+                call_path = _workflow_call_path(job.get("uses"))
+                if call_path is not None:
+                    assert call_path in documents, (
+                        f"{workflow}:{job_name}: rule=artifact-major: local workflow {call_path!r} does not exist"
+                    )
+                    with_values = job.get("with", {})
+                    assert isinstance(with_values, dict), (
+                        f"{workflow}:{job_name}: rule=artifact-major: reusable with: must be a mapping"
+                    )
+                    called_inputs = {
+                        name: _scalar_values(value, context)
+                        for name, value in with_values.items()
+                        if isinstance(name, str)
+                    }
+                    called_produced, called_outputs = scan_instance(
+                        call_path, called_inputs, upstream, (*stack, workflow)
+                    )
+                    lineage = tuple(
+                        dict.fromkeys(
+                            [
+                                *(artifact for dependency in dependencies for artifact in states[dependency].produced),
+                                *called_produced,
+                            ]
+                        )
+                    )
+                    states[job_name] = _ArtifactJob(lineage, called_outputs)
+                    pending.remove(job_name)
+                    continue
+
+                produced: list[_Artifact] = []
+                steps = job.get("steps", [])
+                assert isinstance(steps, list), f"{workflow}:{job_name}: rule=artifact-major: steps must be a list"
+                for step_index, step in enumerate(steps):
+                    if not isinstance(step, dict):
+                        continue
+                    uses = step.get("uses")
+                    match = _ARTIFACT_ACTION.fullmatch(uses) if isinstance(uses, str) else None
+                    if match is None:
+                        continue
+                    action_inputs = step.get("with", {})
+                    assert isinstance(action_inputs, dict), (
+                        f"{workflow}:{job_name}: rule=artifact-major: artifact action with: must be a mapping"
+                    )
+                    selector_value = action_inputs.get("name", action_inputs.get("pattern", "*"))
+                    selectors = _scalar_values(selector_value, context)
+                    assert selectors, f"{workflow}:{job_name}: rule=artifact-major: empty artifact selector"
+                    major = int(match.group("major"))
+                    if match.group("kind") == "upload":
+                        produced.extend(_Artifact(workflow, job_name, selector, major) for selector in selectors)
+                        continue
+                    key = (workflow, job_name, step_index, major)
+                    download_selectors.setdefault(key, set()).update(selectors)
+                    download_matches.setdefault(key, False)
+                    available = (*upstream, *produced)
+                    matched = {
+                        artifact
+                        for selector in selectors
+                        for artifact in available
+                        if _selectors_match(artifact.name, selector)
+                    }
+                    if not matched:
+                        continue
+                    download_matches[key] = True
+                    by_name: dict[str, set[tuple[str, str]]] = {}
+                    for artifact in matched:
+                        by_name.setdefault(artifact.name, set()).add((artifact.workflow, artifact.job))
+                        if artifact.major != major:
+                            major_mismatches.setdefault(key, set()).add(
+                                (artifact.workflow, artifact.job, artifact.major)
+                            )
+                    for name, owners in by_name.items():
+                        if len(owners) > 1:
+                            offences.add(
+                                f"{workflow}:{job_name}:step-{step_index}: rule=artifact-major: "
+                                f"ambiguous producers for {name!r}: {sorted(owners)!r}"
+                            )
+                job_outputs: dict[str, frozenset[str]] = {}
+                configured_outputs = job.get("outputs", {})
+                if isinstance(configured_outputs, dict):
+                    job_outputs = {
+                        name: _scalar_values(value, context)
+                        for name, value in configured_outputs.items()
+                        if isinstance(name, str)
+                    }
+                lineage = tuple(
+                    dict.fromkeys(
+                        [
+                            *(artifact for dependency in dependencies for artifact in states[dependency].produced),
+                            *produced,
+                        ]
+                    )
+                )
+                states[job_name] = _ArtifactJob(lineage, job_outputs)
+                pending.remove(job_name)
+
+        all_produced = tuple(dict.fromkeys(artifact for state in states.values() for artifact in state.produced))
+        output_context = dict(base_context)
+        for job_name, state in states.items():
+            for output, values in state.outputs.items():
+                output_context[f"jobs.{job_name}.outputs.{output}"] = values
+        call_outputs = _trigger_config(document, "workflow_call").get("outputs", {})
+        workflow_outputs: dict[str, frozenset[str]] = {}
+        if isinstance(call_outputs, dict):
+            for name, config in call_outputs.items():
+                if isinstance(name, str) and isinstance(config, dict):
+                    workflow_outputs[name] = _scalar_values(config.get("value"), output_context)
+        return all_produced, workflow_outputs
+
+    direct_names: dict[str, tuple[_Artifact, ...]] = {}
+    workflow_run_roots: list[str] = []
+    for workflow, document in documents.items():
+        triggers = _trigger_names(document)
+        if "workflow_run" in triggers:
+            workflow_run_roots.append(workflow)
+        if triggers & (_EXTERNAL_TRIGGERS | {"pull_request"}):
+            root_produced, _ = scan_instance(workflow, {}, (), ())
+            name = document.get("name")
+            if isinstance(name, str):
+                direct_names[name] = root_produced
+    for workflow in workflow_run_roots:
+        names = _trigger_config(documents[workflow], "workflow_run").get("workflows", [])
+        assert isinstance(names, list), f"{workflow}: rule=artifact-major: workflow_run.workflows must be a list"
+        inherited = tuple(
+            artifact for name in names if isinstance(name, str) for artifact in direct_names.get(name, ())
+        )
+        missing = [name for name in names if isinstance(name, str) and name not in direct_names]
+        if missing:
+            offences.add(f"{workflow}: rule=artifact-major: workflow_run names missing producers {missing!r}")
+        scan_instance(workflow, {}, inherited, ())
+    for (workflow, job, step, major), matched in sorted(download_matches.items()):
+        if not matched and "workflow_run" not in _trigger_names(documents[workflow]):
+            offences.add(
+                f"{workflow}:{job}:step-{step}: rule=artifact-major: no producer matches "
+                f"{sorted(download_selectors[(workflow, job, step, major)])!r}"
+            )
+    for (workflow, job, step, major), producers in sorted(major_mismatches.items()):
+        offences.add(
+            f"{workflow}:{job}:step-{step}: rule=artifact-major: download v{major} "
+            f"mismatches producers {sorted(producers)!r}"
+        )
+    return sorted(offences)
+
+
+def test_artifact_action_majors_match_per_producer_consumer_chain() -> None:
+    offences = _artifact_chain_offences(_workflow_sources())
+    assert not offences, "artifact chain hygiene failed:\n  " + "\n  ".join(offences)
+
+
+def test_artifact_scanner_follows_needs_reusable_inputs_outputs_and_workflow_run() -> None:
+    sources = {
+        "producer.yml": """\
+name: Producer
+on:
+  workflow_call:
+    inputs:
+      artifact: {type: string, default: pkg}
+    outputs:
+      artifact:
+        value: ${{ inputs.artifact }}
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: "${{ inputs.artifact }}"}
+""",
+        "root.yaml": """\
+name: Root
+"on": workflow_dispatch
+jobs:
+  make:
+    uses: ./.github/workflows/producer.yml
+    with: {artifact: pkg}
+  bridge:
+    needs: make
+    steps:
+      - run: "true"
+  consume-output:
+    needs: make
+    steps:
+      - uses: actions/download-artifact@v7
+        with: {name: "${{ needs.make.outputs.artifact }}"}
+  consume:
+    needs: bridge
+    steps:
+      - uses: actions/download-artifact@v7
+        with: {name: pkg}
+      - uses: actions/upload-artifact@v8
+        with: {name: status-v8}
+  consume-v8:
+    needs: consume
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: status-v8}
+""",
+        "callback.yml": """\
+on:
+  workflow_run:
+    workflows: [Root]
+jobs:
+  consume:
+    steps:
+      - uses: actions/download-artifact@v7
+        with: {pattern: "p*"}
+""",
+    }
+    assert _artifact_chain_offences(sources) == []
+
+
+def test_artifact_scanner_reports_direct_ambiguous_wrong_output_and_pattern_majors() -> None:
+    sources = {
+        "producer.yml": """\
+on:
+  workflow_call:
+    outputs:
+      artifact: {value: pkg}
+jobs:
+  first:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: pkg}
+      - uses: actions/upload-artifact@v7
+        with: {name: family-one}
+  duplicate:
+    steps:
+      - uses: actions/upload-artifact@v7
+        with: {name: pkg}
+      - uses: actions/upload-artifact@v8
+        with: {name: family-two}
+""",
+        "root.yaml": """\
+on: workflow_dispatch
+jobs:
+  make:
+    uses: ./.github/workflows/producer.yml
+  ambiguous:
+    needs: make
+    steps:
+      - uses: actions/download-artifact@v7
+        with: {name: pkg}
+  wrong-output:
+    needs: make
+    steps:
+      - uses: actions/download-artifact@v7
+        with: {name: "${{ needs.make.outputs.missing }}"}
+  pattern:
+    needs: make
+    steps:
+      - uses: actions/download-artifact@v7
+        with: {pattern: "family-*"}
+""",
+    }
+    offences = _artifact_chain_offences(sources)
+    assert any(
+        "root.yaml:ambiguous:step-0: rule=artifact-major: ambiguous producers for 'pkg'" in item for item in offences
+    )
+    assert any("root.yaml:wrong-output:step-0: rule=artifact-major: no producer matches" in item for item in offences)
+    assert any(
+        "root.yaml:pattern:step-0: rule=artifact-major: download v7 mismatches producers" in item
+        and "('producer.yml', 'duplicate', 8)" in item
+        for item in offences
+    )
+
+
+# --------------------------------------------------------------------------- #
+# 6. Every container invocation passes --init.
+# --------------------------------------------------------------------------- #
+
+
+def _option_words(options: str, where: str, rule: str) -> list[str]:
+    try:
+        return shlex.split(options, comments=False, posix=True)
+    except ValueError as exc:
+        raise AssertionError(f"{where}: rule={rule}: invalid option quoting: {exc}") from exc
+
+
+def _container_offences(sources: dict[str, str]) -> list[str]:
+    offences: list[str] = []
+    for workflow, source in sources.items():
+        jobs = _workflow_document(source, workflow).get("jobs")
+        assert isinstance(jobs, dict), f"{workflow}: rule=container-init: jobs must be a mapping"
+        for job_name, job in jobs.items():
+            if not isinstance(job_name, str) or not isinstance(job, dict) or "container" not in job:
+                continue
+            container = job["container"]
+            options = container.get("options") if isinstance(container, dict) else None
+            if not isinstance(options, str) or "--init" not in _option_words(
+                options, f"{workflow}:{job_name}", "container-init"
+            ):
+                offences.append(
+                    f"{workflow}:{job_name}: rule=container-init: container.options must include exact token --init"
+                )
+    return offences
+
+
+def test_workflow_container_blocks_pass_init_in_block_local_options() -> None:
+    offences = _container_offences(_workflow_sources())
+    assert not offences, "workflow container hygiene failed:\n  " + "\n  ".join(offences)
+
+
+def test_container_scanner_decodes_only_job_container_options() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  quoted:
+    container:
+      image: example/valid
+      options: '--label "odd=a & b"   --init' # inline comment
+  folded:
+    container:
+      image: example/folded
+      options: >-
+        --rm
+        --init
+  scalar:
+    container: example/scalar
+  null-options:
+    container: {image: example/null, options: null}
+  empty-options:
+    container: {image: example/empty, options: ""}
+  expression-only:
+    container:
+      image: example/expression
+      options: ${{ inputs.options }}
+  comment-only:
+    container:
+      image: example/comment
+      options: --rm # --init
+    steps:
+      - run: echo --init
+  decoy:
+    strategy:
+      matrix:
+        options: [--init]
+    steps:
+      - run: |
+          printf '%s\\n' 'container: {options: --init}'
+"""
+    assert _container_offences({"containers.yaml": source}) == [
+        "containers.yaml:scalar: rule=container-init: container.options must include exact token --init",
+        "containers.yaml:null-options: rule=container-init: container.options must include exact token --init",
+        "containers.yaml:empty-options: rule=container-init: container.options must include exact token --init",
+        "containers.yaml:expression-only: rule=container-init: container.options must include exact token --init",
+        "containers.yaml:comment-only: rule=container-init: container.options must include exact token --init",
+    ]
+
+
+_SHELL_OPERATORS = {";", ";;", "&", "&&", "|", "||", "(", ")"}
+
+
+def _tracked_text_sources() -> dict[str, str]:
+    tracked = subprocess.run(
+        ["git", "ls-files", "scripts", "tests/smoke"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    sources: dict[str, str] = {}
+    for name in tracked:
+        path = ROOT / name
+        if not path.is_file():
+            continue
+        try:
+            sources[name] = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+    return sources
+
+
+def _logical_shell_lines(source: str) -> list[tuple[int, str]]:
+    logical: list[tuple[int, str]] = []
+    start = 1
+    parts: list[str] = []
+    heredoc: str | None = None
+    for line_no, line in enumerate(source.splitlines(), 1):
+        if heredoc is not None:
+            if line.strip() == heredoc:
+                heredoc = None
+            continue
+        if not parts:
+            start = line_no
+        if line.endswith("\\"):
+            parts.append(line[:-1])
+            continue
+        parts.append(line)
+        command = " ".join(parts)
+        logical.append((start, command))
+        match = re.search(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1", command)
+        if match is not None:
+            heredoc = match.group(2)
+        parts = []
+    if parts:
+        logical.append((start, " ".join(parts)))
+    return logical
+
+
+def _shell_words(source: str, where: str) -> list[tuple[int, list[str]]]:
+    commands: list[tuple[int, list[str]]] = []
+    for line_no, logical in _logical_shell_lines(source):
+        if "docker" not in logical or "run" not in logical:
+            continue
+        lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        try:
+            words = list(lexer)
+        except ValueError as exc:
+            raise AssertionError(f"{where}:{line_no}: rule=docker-init: invalid shell quoting: {exc}") from exc
+        segment: list[str] = []
+        for word in [*words, ";"]:
+            if word in _SHELL_OPERATORS:
+                if segment:
+                    commands.append((line_no, segment))
+                    segment = []
+            else:
+                segment.append(word)
+    return commands
+
+
+def _docker_argv(words: list[str]) -> list[str] | None:
+    index = 0
+    while index < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[index]):
+        index += 1
+    while index < len(words) and words[index] in {"command", "exec"}:
+        index += 1
+    if index < len(words) and words[index] == "env":
+        index += 1
+        while index < len(words) and (
+            words[index].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[index])
+        ):
+            index += 1
+    if index + 1 >= len(words) or Path(words[index]).name != "docker" or words[index + 1] != "run":
+        return None
+    return words[index + 2 :]
+
+
+def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
+    try:
+        tree = ast.parse(source, filename=where)
+    except SyntaxError as exc:
+        raise AssertionError(f"{where}:{exc.lineno}: rule=docker-init: invalid Python: {exc.msg}") from exc
+    invocations: list[tuple[int, list[str]]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        function = node.func
+        is_subprocess = (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "subprocess"
+            and function.attr in {"call", "check_call", "check_output", "Popen", "run"}
+        )
+        is_os_system = (
+            isinstance(function, ast.Attribute)
+            and isinstance(function.value, ast.Name)
+            and function.value.id == "os"
+            and function.attr == "system"
+        )
+        if not (is_subprocess or is_os_system):
+            continue
+        argument = node.args[0]
+        words: list[str] | None = None
+        if isinstance(argument, (ast.List, ast.Tuple)) and all(
+            isinstance(item, ast.Constant) and isinstance(item.value, str) for item in argument.elts
+        ):
+            words = [cast(str, item.value) for item in argument.elts if isinstance(item, ast.Constant)]
+        elif isinstance(argument, ast.Constant) and isinstance(argument.value, str):
+            words = _option_words(argument.value, f"{where}:{node.lineno}", "docker-init")
+        if words is not None and _docker_argv(words) is not None:
+            invocations.append((node.lineno, words))
+    return invocations
+
+
+_PHP_SHELL_CALL = re.compile(
+    r"\b(?:exec|passthru|shell_exec|system)\s*\(\s*(?P<quote>['\"])(?P<body>.*?)(?P=quote)",
+    re.DOTALL,
+)
+
+
+def _php_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
+    invocations: list[tuple[int, list[str]]] = []
+    for match in _PHP_SHELL_CALL.finditer(source):
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        if source[line_start : match.start()].lstrip().startswith(("//", "#", "*")):
+            continue
+        line_no = source.count("\n", 0, match.start()) + 1
+        words = _option_words(match.group("body"), f"{where}:{line_no}", "docker-init")
+        if _docker_argv(words) is not None:
+            invocations.append((line_no, words))
+    return invocations
+
+
+def _docker_run_offences(sources: dict[str, str]) -> list[str]:
+    offences: list[str] = []
+    for where, source in sources.items():
+        suffix = Path(where).suffix
+        if suffix == ".py":
+            invocations = _python_docker_runs(source, where)
+        elif suffix == ".php":
+            invocations = _php_docker_runs(source, where)
+        else:
+            invocations = _shell_words(source, where)
+        for line_no, words in invocations:
+            argv = _docker_argv(words)
+            if argv is not None and "--init" not in argv:
+                offences.append(f"{where}:{line_no}: rule=docker-init: docker run must include exact token --init")
+    return offences
+
+
+def test_tracked_docker_run_invocations_pass_init() -> None:
+    sources = _tracked_text_sources()
+    assert sources, "no tracked text files found under scripts/ or tests/smoke/"
+    offences = _docker_run_offences(sources)
+    assert not offences, "docker invocation hygiene failed:\n  " + "\n  ".join(offences)
+
+
+def test_docker_scanner_handles_commands_continuations_comments_and_metacharacters() -> None:
+    sources = {
+        "scripts/case.sh": """\
+# docker run --rm -- misleading comment
+echo "docker run --rm"
+exec /usr/bin/docker   run --label 'odd=a&b' '--init'
+"docker" \\
+  "run" --rm # --init in a comment is not an option
+docker run --rm; echo --init
+docker run --rm | cat --init
+printf '%s\\n' docker run --rm
+cat <<'TEXT'
+docker run --rm
+TEXT
+command docker run --rm --init && echo done
+""",
+        "tests/smoke/case.py": """\
+import subprocess
+TEXT = "docker run --rm"
+# subprocess.run(["docker", "run", "--rm"])
+subprocess.run(["docker", "run", "--rm", "--init"], check=True)
+subprocess.run(["/usr/bin/docker", "run", "--rm"], check=True)
+""",
+        "scripts/case.php": """\
+<?php
+$text = 'docker run --rm';
+// system('docker run --rm');
+exec('/usr/bin/docker run --rm --init');
+system('docker run --rm');
+""",
+        "scripts/case.txt": "env MODE=test docker run --rm --init || echo failed\n",
+    }
+    assert _docker_run_offences(sources) == [
+        "scripts/case.sh:4: rule=docker-init: docker run must include exact token --init",
+        "scripts/case.sh:6: rule=docker-init: docker run must include exact token --init",
+        "scripts/case.sh:7: rule=docker-init: docker run must include exact token --init",
+        "tests/smoke/case.py:5: rule=docker-init: docker run must include exact token --init",
+        "scripts/case.php:5: rule=docker-init: docker run must include exact token --init",
+    ]
+
+
+# --------------------------------------------------------------------------- #
+# 7. Prepared SHA pins are the exact values consumed downstream.
+# --------------------------------------------------------------------------- #
+
+
+class _ShaPin(NamedTuple):
+    workflow: str
+    job: str
+    output: str
+    step_id: str
+
+
+_PIN_JOB = re.compile(r"(?:^|-)(?:prepare|read|resolve)(?:-|$)")
+_PIN_OUTPUT = re.compile(r"(?:^|_)sha$")
+_PIN_BRIDGE = re.compile(r"^\$\{\{\s*steps\.(?P<step>[A-Za-z0-9_-]+)\.outputs\.(?P<output>[A-Za-z0-9_-]+)\s*\}\}$")
+_NEEDS_OUTPUT = re.compile(
+    r"(?<![A-Za-z0-9_-])needs\.(?P<job>[A-Za-z0-9_-]+)\.outputs\."
+    r"(?P<output>[A-Za-z0-9_-]+)(?![A-Za-z0-9_-])"
+)
+
+
+def _walk_scalars(node: object, path: tuple[str, ...] = ()) -> list[tuple[tuple[str, ...], str]]:
+    scalars: list[tuple[tuple[str, ...], str]] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if isinstance(key, str):
+                scalars.extend(_walk_scalars(value, (*path, key)))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            scalars.extend(_walk_scalars(value, (*path, str(index))))
+    elif isinstance(node, str):
+        scalars.append((path, node))
+    return scalars
+
+
+def _job_descendants(document: Mapping[object, object], producer: str) -> set[str]:
+    jobs = document.get("jobs")
+    assert isinstance(jobs, dict)
+    descendants: set[str] = set()
+    while True:
+        discovered = {
+            name
+            for name, job in jobs.items()
+            if isinstance(name, str)
+            and isinstance(job, dict)
+            and name not in descendants
+            and any(need == producer or need in descendants for need in _needs(job))
+        }
+        if not discovered:
+            return descendants
+        descendants.update(discovered)
+
+
+def _sha_inventory(
+    documents: Mapping[str, Mapping[object, object]],
+) -> tuple[list[_ShaPin], list[str]]:
+    pins: list[_ShaPin] = []
+    offences: list[str] = []
+    for workflow, document in documents.items():
+        jobs = document.get("jobs")
+        assert isinstance(jobs, dict), f"{workflow}: rule=pin-consumer: jobs must be a mapping"
+        for job_name, job in jobs.items():
+            if not isinstance(job_name, str) or not isinstance(job, dict) or _PIN_JOB.search(job_name) is None:
+                continue
+            outputs = job.get("outputs", {})
+            if not isinstance(outputs, dict):
+                continue
+            steps = job.get("steps", [])
+            step_ids = (
+                {step["id"] for step in steps if isinstance(step, dict) and isinstance(step.get("id"), str)}
+                if isinstance(steps, list)
+                else set()
+            )
+            for output, value in outputs.items():
+                if not isinstance(output, str) or _PIN_OUTPUT.search(output) is None:
+                    continue
+                match = _PIN_BRIDGE.fullmatch(value) if isinstance(value, str) else None
+                if match is None or match.group("output") != output or match.group("step") not in step_ids:
+                    offences.append(
+                        f"{workflow}:{job_name}.{output}: rule=pin-consumer: output must bridge "
+                        f"steps.<real-id>.outputs.{output}"
+                    )
+                    continue
+                pins.append(_ShaPin(workflow, job_name, output, match.group("step")))
+    return pins, offences
+
+
+def _shell_commands(source: str) -> list[list[str]]:
+    commands: list[list[str]] = []
+    for _, logical in _logical_shell_lines(source):
+        lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()")
+        lexer.whitespace_split = True
+        lexer.commenters = "#"
+        try:
+            words = list(lexer)
+        except ValueError:
+            continue
+        segment: list[str] = []
+        for word in [*words, ";"]:
+            if word in _SHELL_OPERATORS:
+                if segment:
+                    commands.append(segment)
+                    segment = []
+            else:
+                segment.append(word)
+    return commands
+
+
+def _pin_base(output: str) -> str:
+    return output.removesuffix("_sha").replace("_", "-")
+
+
+def _ref_binding(path: tuple[str, ...]) -> bool:
+    if not path or "env" in path:
+        return False
+    key = path[-1].lower()
+    return key == "ref" or key.endswith("_ref") or key == "sha" or key.endswith("_sha")
+
+
+def _pin_offences(sources: dict[str, str]) -> list[str]:
+    documents = {workflow: _workflow_document(source, workflow) for workflow, source in sources.items()}
+    pins, offences = _sha_inventory(documents)
+    for pin in pins:
+        document = documents[pin.workflow]
+        jobs = document["jobs"]
+        assert isinstance(jobs, dict)
+        descendants = _job_descendants(document, pin.job)
+        reference = f"needs.{pin.job}.outputs.{pin.output}"
+        consumers: list[tuple[str, tuple[str, ...], str]] = []
+        for job_name in sorted(descendants):
+            job = jobs[job_name]
+            if not isinstance(job, dict):
+                continue
+            for path, value in _walk_scalars(job):
+                members = {(match.group("job"), match.group("output")) for match in _NEEDS_OUTPUT.finditer(value)}
+                if (pin.job, pin.output) in members:
+                    consumers.append((job_name, path, value))
+        if not consumers:
+            offences.append(
+                f"{pin.workflow}:{pin.job}.{pin.output}: rule=pin-consumer: "
+                "no dependent consumer references the exact output"
+            )
+            continue
+
+        identity = any(_ref_binding(path) for _, path, _ in consumers)
+        for job_name in sorted(descendants):
+            job = jobs[job_name]
+            if not isinstance(job, dict):
+                continue
+            job_env = job.get("env", {})
+            aliases: set[str] = set()
+            if isinstance(job_env, dict):
+                aliases.update(
+                    name
+                    for name, value in job_env.items()
+                    if isinstance(name, str)
+                    and isinstance(value, str)
+                    and (pin.job, pin.output)
+                    in {(match.group("job"), match.group("output")) for match in _NEEDS_OUTPUT.finditer(value)}
+                )
+            steps = job.get("steps", [])
+            if not isinstance(steps, list):
+                continue
+            for step in steps:
+                if not isinstance(step, dict):
+                    continue
+                step_aliases = set(aliases)
+                env = step.get("env", {})
+                if isinstance(env, dict):
+                    step_aliases.update(
+                        name
+                        for name, value in env.items()
+                        if isinstance(name, str)
+                        and isinstance(value, str)
+                        and (pin.job, pin.output)
+                        in {(match.group("job"), match.group("output")) for match in _NEEDS_OUTPUT.finditer(value)}
+                    )
+                run = step.get("run")
+                if not isinstance(run, str):
+                    continue
+                overridden = {
+                    name
+                    for name in step_aliases
+                    if re.search(
+                        rf"(?m)^\s*(?:export\s+)?{re.escape(name)}=.*\bgit\s+ls-remote\b",
+                        run,
+                    )
+                }
+                base = _pin_base(pin.output)
+                for words in _shell_commands(run):
+                    for index, word in enumerate(words[:-1]):
+                        flag = word.removeprefix("--")
+                        relevant_flag = (
+                            word.startswith("--")
+                            and (flag.endswith("-ref") or flag.endswith("-sha"))
+                            and (not base or flag.startswith(base))
+                        )
+                        if not relevant_flag:
+                            continue
+                        argument = words[index + 1]
+                        used = {name for name in step_aliases if argument == f"${name}" or argument == f"${{{name}}}"}
+                        if reference in argument:
+                            identity = True
+                        elif used - overridden:
+                            identity = True
+                        elif used & overridden:
+                            offences.append(
+                                f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
+                                f"replaces {pin.job}.{pin.output} at identity sink {word}"
+                            )
+                    if (
+                        len(words) > 1
+                        and words[0] == "git"
+                        and words[1] in {"show", "checkout", "switch", "reset"}
+                        and any(
+                            argument == f"${name}"
+                            or argument == f"${{{name}}}"
+                            or argument.startswith(f"${name}:")
+                            or argument.startswith(f"${{{name}}}:")
+                            for argument in words[2:]
+                            for name in step_aliases - overridden
+                        )
+                    ):
+                        identity = True
+        if not identity:
+            offences.append(
+                f"{pin.workflow}:{pin.job}.{pin.output}: rule=pin-consumer: pin is not consumed by a ref/identity sink"
+            )
+    return sorted(set(offences))
+
+
+def test_prepare_read_resolve_sha_pins_feed_exact_downstream_consumers() -> None:
+    offences = _pin_offences(_workflow_sources())
+    assert not offences, "SHA pin hygiene failed:\n  " + "\n  ".join(offences)
+
+
+def test_pin_scanner_supports_fallbacks_aliases_exact_reads_and_both_extensions() -> None:
+    sources = {
+        "first.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+        run: echo "ports_sha=$VALUE" >> "$GITHUB_OUTPUT"
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git fetch origin main
+          git show "$PORTS_SHA:Makefile"
+          build-leg.sh --ports-ref "$PORTS_SHA"
+""",
+        "second.yaml": """\
+"on": workflow_dispatch
+jobs:
+  resolve:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+        run: echo "source_sha=$VALUE" >> "$GITHUB_OUTPUT"
+  prepare-release:
+    outputs:
+      sha: ${{ steps.pin.outputs.sha }}
+    steps:
+      - id: pin
+        run: echo "sha=$VALUE" >> "$GITHUB_OUTPUT"
+  consume:
+    needs: [resolve, prepare-release]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare-release.outputs.sha || needs.resolve.outputs.source_sha }}
+""",
+    }
+    assert _pin_offences(sources) == []
+
+
+def test_pin_scanner_reports_wrong_bridges_boundaries_moving_refs_and_live_reresolution() -> None:
+    sources = {
+        "wrong.yaml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.wrong_sha }}
+    steps:
+      - id: pin
+  read-matrix:
+    outputs:
+      matrix_sha: ${{ steps.matrix.outputs.matrix_sha }}
+    steps:
+      - id: matrix
+  build:
+    needs: [prepare, read-matrix]
+    env:
+      WRONG: ${{ needs.read-matrix.outputs.matrix_sha_extra }}
+    steps:
+      - run: echo "$WRONG"
+""",
+        "moving-ref.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+          PORTS_REF: pfblockerng/use-github
+        run: |
+          test "$ACTUAL_PORTS_SHA" = "$PORTS_SHA"
+          build-leg.sh --ports-ref "$PORTS_REF"
+""",
+        "live.yml": """\
+on: workflow_dispatch
+jobs:
+  resolve:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  consume:
+    needs: resolve
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.resolve.outputs.ports_sha }}
+        run: |
+          PORTS_SHA="$(git ls-remote origin main)"
+          build-leg.sh --ports-ref "$PORTS_SHA"
+""",
+        "unrelated.yaml": """\
+on: workflow_dispatch
+env:
+  WORKFLOW_SHA: ${{ github.workflow_sha }}
+  HEAD_SHA: mutable
+  DIGEST: sha256:abcdef
+jobs:
+  build:
+    steps:
+      - run: |
+          git fetch origin main
+          git tag --contains HEAD
+          printf '%s\\n' metadata-only-ref
+""",
+    }
+    offences = _pin_offences(sources)
+    assert any(
+        item
+        == ("wrong.yaml:prepare.ports_sha: rule=pin-consumer: output must bridge steps.<real-id>.outputs.ports_sha")
+        for item in offences
+    )
+    assert any(
+        item
+        == ("wrong.yaml:read-matrix.matrix_sha: rule=pin-consumer: no dependent consumer references the exact output")
+        for item in offences
+    )
+    assert any(
+        item == ("moving-ref.yml:prepare.ports_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink")
+        for item in offences
+    )
+    assert any(
+        "live git ls-remote replaces resolve.ports_sha at identity sink --ports-ref" in item for item in offences
+    )
+    assert not any("unrelated.yaml" in item for item in offences)
