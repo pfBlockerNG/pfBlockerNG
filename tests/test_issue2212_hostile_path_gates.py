@@ -120,7 +120,7 @@ def _step_body(step_name: str) -> str:
 
 def _compute_command() -> str:
     text = WORKFLOW.read_text(encoding="utf-8")
-    matches = [line.strip() for line in text.splitlines() if "diff --name-only" in line and "changed.txt" in line]
+    matches = [line.strip() for line in text.splitlines() if "diff --name-status" in line and "changed.txt" in line]
     assert len(matches) == 1, f"expected exactly one changed-file computation, got {matches}"
     return matches[0]
 
@@ -134,7 +134,7 @@ def _run_coverage_pairing(repo: Path) -> subprocess.CompletedProcess[bytes]:
         capture_output=True,
     )
     return subprocess.run(
-        [sys.executable, str(ROOT / "scripts" / "check_coverage_pairing.py")],
+        [sys.executable, str(ROOT / "scripts" / "check_coverage_pairing.py"), "--name-status-z"],
         input=(repo / "changed.txt").read_bytes(),
         capture_output=True,
     )
@@ -145,10 +145,12 @@ def test_an_unpaired_src_change_fails_the_coverage_pairing_gate(tmp_path: Path, 
     """A src/ change shipping no test fails the gate whatever bytes its path carries."""
     rel = f"src/usr/local/pkg/pfblockerng/{HOSTILE_STEMS[klass]}.inc"
     result = _run_coverage_pairing(_scratch_repo(tmp_path, {rel: "x\n"}))
-    assert result.returncode == 1, (
+    expected_rc = 2 if klass == "newline" else 1
+    assert result.returncode == expected_rc, (
         f"{klass}: unpaired {rel!r} passed the coverage-pairing gate (rc={result.returncode}); stdout={result.stdout!r}"
     )
-    assert b"coverage pairing violated" in result.stdout.lower()
+    expected = b"cannot be represented in Markdown" if klass == "newline" else b"coverage pairing violated"
+    assert expected.lower() in result.stdout.lower()
 
 
 # ── bash-shebang gate (tracked-file listing) ─────────────────────────────────
@@ -248,6 +250,6 @@ def test_every_changed_file_gate_reads_a_nul_separated_listing() -> None:
     Pins the cause, not just the symptom: a rewrite that drops -z and goes back
     to newline-separated output re-opens every row above at once.
     """
-    assert re.search(r"\bgit\s+diff\s+--name-only\s+-z\b", _compute_command()), _compute_command()
+    assert re.search(r"\bgit\s+diff\s+--name-status\s+-z\b", _compute_command()), _compute_command()
     shebang = _step_body("Forbid bash shebangs")
     assert re.search(r"\bgit\s+ls-files\s+-z\b", shebang), shebang

@@ -1,8 +1,8 @@
 """The coverage-pairing gate must see real paths, not git's quoted escapes.
 
 ``.github/workflows/test.yml``'s ``coverage-pairing`` job computes the PR's
-changed-file list with ``git diff --name-only`` and pipes it into
-``scripts/check_coverage_pairing.py``, which classifies a path by
+changed-file list with NUL-delimited ``git diff --name-status`` records and
+pipes it into ``scripts/check_coverage_pairing.py``, which classifies paths by
 ``str.startswith("src/")``. Under git's default ``core.quotePath=true`` a path
 carrying any non-ASCII byte comes back wrapped in double quotes and
 octal-escaped (``"src/.../caf\\303\\251.inc"``), so it starts with ``"`` and
@@ -43,7 +43,7 @@ def _compute_command() -> str:
     while both stayed green, so the line is extracted instead.
     """
     text = WORKFLOW.read_text(encoding="utf-8")
-    matches = [line.strip() for line in text.splitlines() if "diff --name-only" in line and "changed.txt" in line]
+    matches = [line.strip() for line in text.splitlines() if "diff --name-status" in line and "changed.txt" in line]
     assert matches, "no changed-file computation found in test.yml"
     assert len(matches) == 1, f"expected exactly one changed-file computation, got {matches}"
     return matches[0]
@@ -91,7 +91,7 @@ def _scratch_repo(tmp_path: Path, changed: str) -> Path:
     return repo
 
 
-def _run_gate(repo: Path) -> subprocess.CompletedProcess[str]:
+def _run_gate(repo: Path) -> subprocess.CompletedProcess[bytes]:
     """Run the workflow's compute step, then the gate, exactly as CI chains them."""
     subprocess.run(
         ["sh", "-euc", _compute_command()],
@@ -103,10 +103,9 @@ def _run_gate(repo: Path) -> subprocess.CompletedProcess[str]:
     )
     changed_txt = (repo / "changed.txt").read_bytes()
     return subprocess.run(
-        [sys.executable, str(CHECKER)],
-        input=changed_txt.decode("utf-8", "surrogateescape"),
+        [sys.executable, str(CHECKER), "--name-status-z"],
+        input=changed_txt,
         capture_output=True,
-        text=True,
     )
 
 
@@ -125,7 +124,7 @@ def test_an_unpaired_src_change_fails_the_gate(tmp_path: Path, changed: str, lab
         f"{label}: unpaired {changed} passed the coverage-pairing gate "
         f"(rc={result.returncode}); stdout={result.stdout!r}"
     )
-    assert "coverage pairing violated" in result.stdout.lower()
+    assert b"coverage pairing violated" in result.stdout.lower()
 
 
 def test_the_changed_file_list_holds_the_real_path(tmp_path: Path) -> None:
@@ -136,10 +135,9 @@ def test_the_changed_file_list_holds_the_real_path(tmp_path: Path) -> None:
     """
     repo = _scratch_repo(tmp_path, NON_ASCII_SRC)
     _run_gate(repo)
-    listed = (repo / "changed.txt").read_text(encoding="utf-8").strip("\0\n")
-    assert listed == NON_ASCII_SRC, f"changed.txt holds {listed!r}, not the real path"
-    assert not listed.startswith('"'), "path is quoted: the listing is not NUL-separated"
-    assert "\\303" not in listed, "path is octal-escaped: the listing is not NUL-separated"
+    fields = (repo / "changed.txt").read_bytes().split(b"\0")
+    assert fields == [b"A", NON_ASCII_SRC.encode(), b""], f"unexpected name-status fields: {fields!r}"
+    assert b"\\303" not in fields[1], "path is octal-escaped: the listing is not NUL-separated"
 
 
 def test_the_workflow_emits_a_nul_separated_listing() -> None:
@@ -150,6 +148,6 @@ def test_the_workflow_emits_a_nul_separated_listing() -> None:
     in a path quoted anyway (issue #2212).
     """
     command = _compute_command()
-    assert re.search(r"\bgit\s+diff\s+--name-only\s+-z\b", command), (
-        f"changed-file computation must emit NUL-separated paths: {command!r}"
+    assert re.search(r"\bgit\s+diff\s+--name-status\s+-z\b", command), (
+        f"changed-file computation must emit NUL-separated status/path records: {command!r}"
     )
