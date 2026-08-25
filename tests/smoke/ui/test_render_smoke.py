@@ -2722,6 +2722,11 @@ def test_software_page_renders_when_override_forces_on(
         resp = webui.get(_SOFTWARE_PAGE)
         result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
         assert result.ok, f"forced-on Software page render failed: {result.detail}"
+        # issue #2691: the CA-consent surface (checkbox + section) is retired — signing
+        # makes the login.conf CA carry obsolete. A reappearance here is a regression.
+        assert "pfb_pkg_ca_consent" not in resp.text, (
+            "the retired CA-consent checkbox must not render on the Software page (issue #2691)"
+        )
         # The tab is injected everywhere on an enabled build — the positive of the tab-absent test.
         general = webui.get(_GENERAL_PAGE)
         assert _SOFTWARE_TAB_HREF in general.text, "the Software tab must be PRESENT when the gate is forced on"
@@ -3002,40 +3007,7 @@ def test_software_page_hidden_when_override_forces_off(
         assert _SOFTWARE_PANEL_MARKER not in resp.text, "forced-off must NOT render the Software panel"
 
 
-# --------------------------------------------------------------------------- #
-# issue #2617 — the login.conf CA-carry consent section on the Software page.
-# #2518's Plus-only pkg.conf PKG_ENV gate (and its seeding helper below) was
-# retired: the section is now a plain, edition-independent Software-page
-# control that always renders, with no "_shown" marker and no pkg.conf pin to
-# simulate.
-# --------------------------------------------------------------------------- #
-
 _PKG_CONF_PATH = "/usr/local/etc/pkg.conf"
-_CONSENT_FIELD_MARKER = "pfb_pkg_ca_consent"
-
-
-def test_software_page_login_ca_consent_section_always_renders(
-    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
-) -> None:
-    """The login.conf CA-consent section renders unconditionally on the Software page (#2617).
-
-    #2617 replaced the retired #2518 Plus-only pkg.conf PKG_ENV gate (and its two
-    present-on-Plus / absent-on-CE tests) with a plain control that always renders,
-    regardless of edition or any pkg.conf state — so this single case, with no seeding
-    of any kind, is now the section's whole render coverage.
-
-    Scenario:
-      Given the override sentinel set to 'on' (so the Software page's OWN provenance
-        gate passes — unrelated to the CA-consent section under test),
-      When the Software page is GET,
-      Then it renders clean (200, no Fatal/Warning/Notice/Uncaught — the render oracle) AND
-        the pfb_pkg_ca_consent control is present in the body.
-    """
-    with software_panel_forced(smoke_vm, "on"):
-        resp = webui.get(_SOFTWARE_PAGE)
-        result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
-        assert result.ok, f"Software page render oracle failed: {result.detail}"
-        assert _CONSENT_FIELD_MARKER in resp.text, "the login.conf CA-consent section must always render"
 
 
 def test_log_settings_section_redesign_render(webui: WebUI, php_error_log_guard: PhpErrorLogGuard) -> None:  # noqa: ARG001

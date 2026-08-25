@@ -474,36 +474,6 @@ def test_software_page_toggle_post_roundtrip(
     )
 
 
-def test_software_page_login_ca_consent_toggle_post_roundtrip(
-    webui: WebUI,
-    smoke_vm: helpers.SmokeVM,
-) -> None:
-    """The login.conf CA-consent checkbox (issue #2617) persists ``on``/``''`` tokens.
-
-    UI persistence only, deliberately: smoke guests never run ``pkg``, so proving
-    the variable lands in the guest's ``/etc/login.conf`` buys nothing here — the
-    editor's byte-level behaviour (append/insert/remove, first-setenv-only,
-    refusal shapes, cap_mkdb) is pinned exhaustively by
-    tests/shell/generate_hook_login_conf_spec.sh and
-    tests/shell/generate_hook_ca_consent_spec.sh. The save handler still invokes
-    the installed hook on the guest (login-ca-sync/login-ca-revoke); config.xml
-    stays the oracle either way — the field is registered default-ON, and an
-    apply refusal (e.g. an unpopulated /etc/ssl/certs) re-renders with a notice
-    while the token is already persisted.
-    """
-    _software_page_checkbox_roundtrip(
-        webui,
-        smoke_vm,
-        ToggleFlow(
-            name="login_ca_consent",
-            page="/pfblockerng/pfblockerng_software.php",
-            field="pfb_pkg_ca_consent",
-            config_path="installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent",
-            absent="on",
-        ),
-    )
-
-
 # --------------------------------------------------------------------------- #
 # VALIDATOR / SELECT-COERCION FLOWS (Batch 1)
 #

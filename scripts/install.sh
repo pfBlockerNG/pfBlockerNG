@@ -33,12 +33,6 @@
 #                         path when it is a directory, the bundle when it is a non-empty
 #                         regular file. A box failing one guard still gets the other. Set
 #                         either to "" to opt that half out.
-#   PFB_WEBGUI_RESTART    webConfigurator restart script (default: /etc/rc.restart_webgui),
-#                         run once when this install run just changed login.conf (issue
-#                         #2623); a missing/non-executable path is a silent skip (no-op
-#                         off-box), and setting it to the empty string opts out (`-`, not
-#                         `:-`, like the CA knobs). Never runs on an idempotent re-run or
-#                         an upgrade — those never touch login.conf again.
 #
 # Exit codes: see usage() below (kept in sync — the header is the interface doc).
 
@@ -128,10 +122,6 @@ die() {
 # exists to avoid, so that half is for boxes whose bundle is known bad.
 PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH-${ROOT}/etc/ssl/certs}"
 PFB_SSL_CA_CERT_FILE="${PFB_SSL_CA_CERT_FILE-${ROOT}/etc/ssl/cert.pem}"
-
-# webConfigurator restart knob (issue #2623) -- semantics in the header above; the
-# change-gate lives at the hook invocation below.
-PFB_WEBGUI_RESTART="${PFB_WEBGUI_RESTART-${ROOT}/etc/rc.restart_webgui}"
 
 # Spelled out per combination so every path stays quoted: a single accumulated string
 # would have to be word-split to become separate env(1) operands, which breaks the moment
@@ -446,17 +436,6 @@ pfb_channel_install() {
     # path, so every peer conf is aimed at a path that cannot exist: a run against
     # another base (fork, staged prefix) that fails before verify must not have
     # re-pointed a working peer subscription — peers are only ever retired, after.
-    # JOB 2's paths are ROOT-prefixed too (issue #2617): without them a ROOT-staged
-    # run would reconcile the HOST's /etc/login.conf against the HOST's config.xml.
-    # login.conf change-gate (issue #2623): captured around the hook run, never around
-    # the whole script, so an idempotent re-run or a channel move on an already-carried
-    # box (JOB 2 is a no-op the second time) sees no change and never bounces the GUI --
-    # restart on install only. `cksum` reads from stdin so an absent file (a fresh box,
-    # nothing to reconcile yet) never trips `set -e`; it gets its own placeholder so
-    # "absent before, absent after" reads as unchanged rather than a spurious diff.
-    _login_conf="${ROOT}/etc/login.conf"
-    _login_conf_before="$(cksum 2>/dev/null <"${_login_conf}" || printf 'absent\n')"
-
     printf '==> Running the generator hook to resolve the conf now\n'
     _no_conf="${REPOS_DIR}/.pfb-no-such-conf"
     _own_conf_var="PFB_$(printf '%s' "${PFB_CHANNEL}" | tr '[:lower:]' '[:upper:]')_CONF"
@@ -469,26 +448,7 @@ pfb_channel_install() {
         PFB_FINGERPRINT_DIR="${FINGERPRINT_DIR}" \
         PFB_PRODUCT_LABEL="${ROOT}/etc/product_label" \
         PFB_VERSION_FILE="${ROOT}/etc/version" \
-        PFB_CONFIG_XML="${ROOT}/cf/conf/config.xml" \
-        PFB_LOGIN_CONF="${ROOT}/etc/login.conf" \
-        PFB_SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" \
         sh "${ON_BOX_HOOK}" onestart </dev/null || true
-
-    _login_conf_after="$(cksum 2>/dev/null <"${_login_conf}" || printf 'absent\n')"
-    if [ "${_login_conf_before}" != "${_login_conf_after}" ] && [ -x "${PFB_WEBGUI_RESTART}" ]; then
-        printf '==> login.conf changed -- restarting the webConfigurator\n'
-        # Export only what a future boot would deliver: the value must actually be in
-        # the post-hook login.conf (a strip run restarts CLEAN -- never re-arm the
-        # variable the admin just revoked) and the CA dir must be populated.
-        # Delimiter-anchored: a capability entry is always followed by `,` or `:`,
-        # so a foreign value merely sharing our path as a prefix never matches.
-        if grep -F -q -e "SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}," -e "SSL_CA_CERT_PATH=${PFB_SSL_CA_CERT_PATH}:" "${_login_conf}" 2>/dev/null \
-            && _ca_path_populated "${PFB_SSL_CA_CERT_PATH}"; then
-            env SSL_CA_CERT_PATH="${PFB_SSL_CA_CERT_PATH}" "${PFB_WEBGUI_RESTART}" </dev/null || true
-        else
-            "${PFB_WEBGUI_RESTART}" </dev/null || true
-        fi
-    fi
 
     if ! grep -q "${CONF_MARKER}" "${CONF_PATH}" 2>/dev/null; then
         [ "${CONF_CREATED}" -eq 1 ] && rm -f "${CONF_PATH}"

@@ -148,8 +148,6 @@ class RequireConfigGatewaySniff implements Sniff
 		'installedpackages/pfblockerng/config/0/log_max_days_dnsreplylog',
 		'installedpackages/pfblockerng/config/0/log_max_days_unilog',
 		'installedpackages/pfblockerng/config/0/pfb_software_check',
-		// issue #2617: consented login.conf CA-carry toggle (supersedes the retired #2518 pkg.conf patch)
-		'installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent',
 		'installedpackages/pfblockerng/config/0/pfb_feed_internal_filter',
 		'installedpackages/pfblockerng/config/0/pfb_feed_internal_allowlist',
 		// ADR-49: opt-in plain-text feed sanity scan toggle
