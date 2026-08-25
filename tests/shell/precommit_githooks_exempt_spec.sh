@@ -137,4 +137,51 @@ scripts/agent/check-agent-config-parity.sh'
     The output should not include 'listed in .githooks-exempt): composer vendor'
     The stderr should include '[pre-commit] FAILED: composer vendor'
   End
+
+  It 'skips a tool gate this branch declines, and says so'
+    # issue #2696: a maintenance line runs a narrower CI contract than devel (3.3 is
+    # pytest-only), but every worktree runs the PRIMARY checkout's hook. Without a way
+    # to decline a TOOL gate, that line is graded by rules it never adopted -- and the
+    # only escapes are --no-verify or adopting the gate with an allowlist for its
+    # pre-existing findings.
+    printf '%s\ngate:shellcheck\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    printf '#!/bin/sh\nif [ "$x" == 1 ]; then :; fi\n' > "$repo/src/bad.sh"
+    gitc add src/bad.sh
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 0
+    The output should include 'gate not adopted on this branch; listed in .githooks-exempt): shellcheck'
+    The stderr should not include 'FAILED'
+  End
+
+  It 'still runs a tool gate the manifest does not decline'
+    # The same tree, the same bad script, without the gate line: the sweep runs and the
+    # commit fails. This is what makes the example above evidence rather than decoration.
+    printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    printf '#!/bin/sh\nif [ "$x" == 1 ]; then :; fi\n' > "$repo/src/bad.sh"
+    gitc add src/bad.sh
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should include '[pre-commit] shellcheck'
+    The stderr should include 'FAILED'
+  End
+
+  It 'ignores a gate line that is only in the working tree'
+    # Keyed on the STAGED blob like every other entry: an unstaged edit exempts nothing,
+    # so a gate cannot be dropped by a change reviewers never see.
+    printf '%s\ngate:shellcheck\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    gitc commit -q -m seed --no-verify
+    printf '%s\n' "$ALL_CHECKERS" > "$repo/.githooks-exempt"
+    gitc add .githooks-exempt
+    printf 'gate:shellcheck\n' >> "$repo/.githooks-exempt"
+    printf '#!/bin/sh\nif [ "$x" == 1 ]; then :; fi\n' > "$repo/src/bad.sh"
+    gitc add src/bad.sh
+    When run sh -c "cd '$repo' && sh .githooks/pre-commit"
+    The status should equal 1
+    The output should include '[pre-commit] shellcheck'
+    The output should not include 'gate not adopted'
+    The stderr should include 'FAILED'
+  End
 End
