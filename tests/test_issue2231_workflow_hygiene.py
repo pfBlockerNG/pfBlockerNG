@@ -333,6 +333,7 @@ _EXTERNAL_TRIGGERS = {"workflow_dispatch", "push", "schedule", "release"}
 def _workflow_sources() -> dict[str, str]:
     directory = ROOT / ".github/workflows"
     paths = {path.name: path for pattern in ("*.yml", "*.yaml") for path in directory.glob(pattern)}
+    assert paths, f"no workflow files discovered under {directory}"
     return {name: paths[name].read_text(encoding="utf-8") for name in sorted(paths)}
 
 
@@ -457,7 +458,11 @@ class _ArtifactJob(NamedTuple):
     outputs: Mapping[str, frozenset[str]]
 
 
-_ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)$")
+_DownloadKey = tuple[str, str, int, int, tuple[tuple[str, str], ...], tuple[str, ...]]
+
+
+_ARTIFACT_ACTION_REF = re.compile(r"^actions/(?P<kind>upload|download)-artifact@.+$")
+_ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)(?:\.[0-9]+){0,2}$")
 _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 _UNRESOLVED_EXPRESSION = re.compile(r"<unresolved:(?P<expression>[^>]+)>")
 
@@ -627,19 +632,21 @@ def _selectors_match(name: str, selector: str) -> bool:
 def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
     documents = {name: _workflow_document(source, name) for name, source in sources.items()}
     offences: set[str] = set()
-    download_matches: dict[tuple[str, str, int, int], bool] = {}
-    download_selectors: dict[tuple[str, str, int, int], set[str]] = {}
-    major_mismatches: dict[tuple[str, str, int, int], set[tuple[str, str, int]]] = {}
-    required_downloads: set[tuple[str, str, int, int]] = set()
+    download_matches: dict[_DownloadKey, bool] = {}
+    download_selectors: dict[_DownloadKey, set[str]] = {}
+    major_mismatches: dict[_DownloadKey, set[tuple[str, str, int]]] = {}
+    required_downloads: set[_DownloadKey] = set()
 
     def scan_instance(
         workflow: str,
         supplied_inputs: Mapping[str, frozenset[str]],
         inherited: tuple[_Artifact, ...],
-        stack: tuple[str, ...],
+        stack: tuple[tuple[str, str], ...],
         require_matches: bool,
     ) -> tuple[tuple[_Artifact, ...], Mapping[str, frozenset[str]]]:
-        assert workflow not in stack, f"{workflow}: rule=artifact-major: recursive reusable workflow"
+        assert workflow not in {caller for caller, _ in stack}, (
+            f"{workflow}: rule=artifact-major: recursive reusable workflow"
+        )
         document = documents[workflow]
         inputs = _default_inputs(document)
         inputs.update(supplied_inputs)
@@ -680,7 +687,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                         if isinstance(name, str)
                     }
                     called_produced, called_outputs = scan_instance(
-                        call_path, called_inputs, upstream, (*stack, workflow), require_matches
+                        call_path, called_inputs, upstream, (*stack, (workflow, job_name)), require_matches
                     )
                     lineage = tuple(
                         dict.fromkeys(
@@ -702,6 +709,11 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                         continue
                     uses = step.get("uses")
                     match = _ARTIFACT_ACTION.fullmatch(uses) if isinstance(uses, str) else None
+                    if isinstance(uses, str) and _ARTIFACT_ACTION_REF.fullmatch(uses) and match is None:
+                        raise AssertionError(
+                            f"{workflow}:{job_name}:step-{step_index}: rule=artifact-major: "
+                            f"unclassified action ref {uses!r}"
+                        )
                     if match is None:
                         continue
                     action_inputs = step.get("with", {})
@@ -728,7 +740,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                     if match.group("kind") == "upload":
                         produced.extend(_Artifact(workflow, job_name, selector, major) for selector in selectors)
                         continue
-                    key = (workflow, job_name, step_index, major)
+                    key = (workflow, job_name, step_index, major, stack, tuple(sorted(selectors)))
                     download_selectors.setdefault(key, set()).update(selectors)
                     download_matches.setdefault(key, False)
                     if require_matches:
@@ -795,7 +807,13 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
         if "workflow_run" in triggers:
             workflow_run_roots.append(workflow)
         if triggers & (_EXTERNAL_TRIGGERS | {"pull_request"}):
-            root_produced, _ = scan_instance(workflow, {}, (), (), "workflow_run" not in triggers)
+            root_produced, _ = scan_instance(
+                workflow,
+                {},
+                (),
+                (("<direct>", workflow),),
+                "workflow_run" not in triggers,
+            )
             name = document.get("name")
             if isinstance(name, str):
                 direct_names[name] = tuple(dict.fromkeys((*direct_names.get(name, ()), *root_produced)))
@@ -808,14 +826,16 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
         missing = [name for name in names if isinstance(name, str) and name not in direct_names]
         if missing:
             offences.add(f"{workflow}: rule=artifact-major: workflow_run names missing producers {missing!r}")
-        scan_instance(workflow, {}, inherited, (), True)
-    for (workflow, job, step, major), matched in sorted(download_matches.items()):
-        if not matched and (workflow, job, step, major) in required_downloads:
+        scan_instance(workflow, {}, inherited, (("<workflow_run>", workflow),), True)
+    for key, matched in sorted(download_matches.items()):
+        workflow, job, step, major, _, _ = key
+        if not matched and key in required_downloads:
             offences.add(
                 f"{workflow}:{job}:step-{step}: rule=artifact-major: no producer matches "
-                f"{sorted(download_selectors[(workflow, job, step, major)])!r}"
+                f"{sorted(download_selectors[key])!r}"
             )
-    for (workflow, job, step, major), producers in sorted(major_mismatches.items()):
+    for key, producers in sorted(major_mismatches.items()):
+        workflow, job, step, major, _, _ = key
         offences.add(
             f"{workflow}:{job}:step-{step}: rule=artifact-major: download v{major} "
             f"mismatches producers {sorted(producers)!r}"
@@ -1189,8 +1209,12 @@ def _logical_shell_lines(source: str) -> list[tuple[int, str]]:
 
 def _shell_words(source: str, where: str) -> list[tuple[int, list[str]]]:
     commands: list[tuple[int, list[str]]] = []
+    bindings: dict[str, str] = {}
     for line_no, logical in _logical_shell_lines(source):
-        if "docker" not in logical.lower() or "run" not in logical:
+        bound_reference = any(
+            re.search(rf"\$(?:{re.escape(name)}\b|\{{{re.escape(name)}\}})", logical) for name in bindings
+        )
+        if "docker" not in logical.lower() and not ("run" in logical and bound_reference):
             continue
         lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()")
         lexer.whitespace_split = True
@@ -1203,11 +1227,35 @@ def _shell_words(source: str, where: str) -> list[tuple[int, list[str]]]:
         for word in [*words, ";"]:
             if word in _SHELL_OPERATORS:
                 if segment:
-                    commands.append((line_no, segment))
+                    for candidate in segment:
+                        assignment = re.fullmatch(r"([A-Za-z_][A-Za-z0-9_]*)=(.*)", candidate)
+                        if assignment is not None and Path(assignment.group(2)).name == "docker":
+                            bindings[assignment.group(1)] = assignment.group(2)
+                    resolved: list[str] = []
+                    for candidate in segment:
+                        variable = re.fullmatch(
+                            r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})",
+                            candidate,
+                        )
+                        name = next((group for group in variable.groups() if group), "") if variable else ""
+                        resolved.append(bindings.get(name, candidate))
+                    commands.append((line_no, resolved))
                     segment = []
             else:
                 segment.append(word)
     return commands
+
+
+_DOCKER_GLOBAL_VALUE_OPTIONS = {
+    "--config",
+    "--context",
+    "--host",
+    "--log-level",
+    "--tlscacert",
+    "--tlscert",
+    "--tlskey",
+    "-H",
+}
 
 
 def _docker_argv(words: list[str]) -> list[str] | None:
@@ -1233,30 +1281,118 @@ def _docker_argv(words: list[str]) -> list[str] | None:
             if option in {"-C", "--chdir", "-S", "--split-string", "-u", "--unset"} and index < len(words):
                 index += 1
     docker = words[index] if index < len(words) else ""
-    if (
-        index + 1 >= len(words)
-        or (Path(docker).name != "docker" and "DOCKER" not in docker)
-        or words[index + 1] != "run"
-    ):
+    if Path(docker).name != "docker" and "DOCKER" not in docker:
         return None
-    return words[index + 2 :]
+    index += 1
+    while index < len(words) and words[index] != "run":
+        option = words[index]
+        if not option.startswith("-"):
+            return None
+        index += 1
+        if option in _DOCKER_GLOBAL_VALUE_OPTIONS and "=" not in option and index < len(words):
+            index += 1
+    if index >= len(words):
+        return None
+    return words[index + 1 :]
 
 
 _DOCKER_VALUE_OPTIONS = {
     "--add-host",
+    "--annotation",
+    "--attach",
+    "--blkio-weight",
+    "--blkio-weight-device",
     "--cap-add",
+    "--cap-drop",
+    "--cgroup-parent",
+    "--cgroupns",
+    "--cidfile",
+    "--cpu-count",
+    "--cpu-percent",
+    "--cpu-period",
+    "--cpu-quota",
+    "--cpu-rt-period",
+    "--cpu-rt-runtime",
+    "--cpu-shares",
+    "--cpus",
+    "--cpuset-cpus",
+    "--cpuset-mems",
     "--device",
+    "--device-cgroup-rule",
+    "--device-read-bps",
+    "--device-read-iops",
+    "--device-write-bps",
+    "--device-write-iops",
+    "--dns",
+    "--dns-option",
+    "--dns-search",
+    "--domainname",
+    "--entrypoint",
     "--env",
+    "--env-file",
+    "--expose",
+    "--gpus",
+    "--group-add",
+    "--health-cmd",
+    "--health-interval",
+    "--health-retries",
+    "--health-start-interval",
+    "--health-start-period",
+    "--health-timeout",
+    "--hostname",
+    "--ip",
+    "--ip6",
+    "--ipc",
+    "--isolation",
+    "--kernel-memory",
     "--label",
+    "--label-file",
+    "--link",
+    "--link-local-ip",
+    "--log-driver",
+    "--log-opt",
+    "--mac-address",
+    "--memory",
+    "--memory-reservation",
+    "--memory-swap",
+    "--memory-swappiness",
+    "--mount",
     "--name",
     "--network",
+    "--network-alias",
+    "--oom-score-adj",
+    "--pid",
+    "--pids-limit",
+    "--platform",
     "--publish",
+    "--pull",
+    "--restart",
+    "--runtime",
+    "--security-opt",
+    "--shm-size",
+    "--stop-signal",
+    "--stop-timeout",
+    "--storage-opt",
     "--sysctl",
     "--tmpfs",
+    "--ulimit",
+    "--user",
+    "--userns",
+    "--uts",
     "--volume",
+    "--volume-driver",
+    "--volumes-from",
+    "--workdir",
+    "-a",
+    "-c",
     "-e",
+    "-h",
+    "-l",
+    "-m",
     "-p",
+    "-u",
     "-v",
+    "-w",
 }
 
 
@@ -1291,12 +1427,19 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         for alias in node.names
         if alias.name == "subprocess"
     }
-    bound_argv = {
-        target.id: node.value
+    bound_argv: dict[str, list[tuple[int, ast.expr]]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign) or not isinstance(node.value, (ast.List, ast.Tuple)):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                bound_argv.setdefault(target.id, []).append((node.lineno, node.value))
+    returned_argv = {
+        node.name: statement.value
         for node in tree.body
-        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple))
-        for target in node.targets
-        if isinstance(target, ast.Name)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for statement in node.body
+        if isinstance(statement, ast.Return) and isinstance(statement.value, (ast.List, ast.Tuple))
     }
     invocations: list[tuple[int, list[str]]] = []
     for node in ast.walk(tree):
@@ -1320,7 +1463,16 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
             continue
         argument = node.args[0]
         if isinstance(argument, ast.Name) and argument.id in bound_argv:
-            argument = bound_argv[argument.id]
+            candidates = [(line, candidate) for line, candidate in bound_argv[argument.id] if line < node.lineno]
+            if candidates:
+                argument = max(candidates, key=lambda candidate: candidate[0])[1]
+        elif (
+            isinstance(argument, ast.Call)
+            and isinstance(argument.func, ast.Name)
+            and not argument.args
+            and argument.func.id in returned_argv
+        ):
+            argument = returned_argv[argument.func.id]
         words: list[str] | None = None
         if isinstance(argument, (ast.List, ast.Tuple)):
             words = [
@@ -1334,20 +1486,35 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
     return invocations
 
 
+_PHP_STRING_ASSIGN = re.compile(
+    r"\$(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<quote>['\"])(?P<body>.*?)(?P=quote)\s*;",
+    re.DOTALL,
+)
 _PHP_SHELL_CALL = re.compile(
-    r"\b(?:exec|passthru|shell_exec|system)\s*\(\s*(?P<quote>['\"])(?P<body>.*?)(?P=quote)",
+    r"\b(?:exec|passthru|shell_exec|system)\s*\(\s*"
+    r"(?:(?P<quote>['\"])(?P<body>.*?)(?P=quote)|\$(?P<variable>[A-Za-z_][A-Za-z0-9_]*))",
     re.DOTALL,
 )
 
 
 def _php_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
+    variables: dict[str, str] = {}
+    for match in _PHP_STRING_ASSIGN.finditer(source):
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        if not source[line_start : match.start()].lstrip().startswith(("//", "#", "*")):
+            variables[match.group("name")] = match.group("body")
     invocations: list[tuple[int, list[str]]] = []
     for match in _PHP_SHELL_CALL.finditer(source):
         line_start = source.rfind("\n", 0, match.start()) + 1
         if source[line_start : match.start()].lstrip().startswith(("//", "#", "*")):
             continue
+        body = match.group("body")
+        if body is None:
+            body = variables.get(match.group("variable"))
+        if body is None:
+            continue
         line_no = source.count("\n", 0, match.start()) + 1
-        words = _option_words(match.group("body"), f"{where}:{line_no}", "docker-init")
+        words = _option_words(body, f"{where}:{line_no}", "docker-init")
         if _docker_argv(words) is not None:
             invocations.append((line_no, words))
     return invocations
@@ -1454,7 +1621,6 @@ class _ShaPin(NamedTuple):
     workflow: str
     job: str
     output: str
-    step_id: str
 
 
 _PIN_JOB = re.compile(r"(?:^|-)(?:prepare|read|resolve)(?:-|$)")
@@ -1528,7 +1694,7 @@ def _sha_inventory(
                         f"steps.<real-id>.outputs.{output}"
                     )
                     continue
-                pins.append(_ShaPin(workflow, job_name, output, match.group("step")))
+                pins.append(_ShaPin(workflow, job_name, output))
     return pins, offences
 
 
@@ -1557,8 +1723,21 @@ def _pin_base(output: str) -> str:
     return output.removesuffix("_sha").replace("_", "-")
 
 
+def _pin_expression_members(value: str) -> frozenset[tuple[str, str]]:
+    expression = _GH_EXPRESSION.fullmatch(value.strip())
+    if expression is None:
+        return frozenset()
+    members: set[tuple[str, str]] = set()
+    for alternative in _expression_parts(expression.group(1), "||"):
+        member = _NEEDS_OUTPUT.fullmatch(alternative)
+        if member is None:
+            return frozenset()
+        members.add((member.group("job"), member.group("output")))
+    return frozenset(members)
+
+
 def _ref_binding(path: tuple[str, ...]) -> bool:
-    if not path or "env" in path:
+    if not path or "env" in path or "outputs" in path:
         return False
     return path[-1].lower() in {
         "ref",
@@ -1596,10 +1775,13 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
             )
             continue
 
-        identity = any(
-            _ref_binding(path) and value.strip().startswith("${{") and value.strip().endswith("}}")
-            for _, path, value in consumers
-        )
+        workflow_pins = {(candidate.job, candidate.output) for candidate in pins if candidate.workflow == pin.workflow}
+        identity = False
+        for _, path, value in consumers:
+            members = _pin_expression_members(value)
+            if _ref_binding(path) and (pin.job, pin.output) in members and members <= workflow_pins:
+                identity = True
+                break
         for job_name in sorted(descendants):
             job = jobs[job_name]
             if not isinstance(job, dict):
@@ -1636,11 +1818,14 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 if not isinstance(run, str):
                     continue
                 overridden = {
-                    name for name in step_aliases if re.search(rf"(?m)^\s*(?:export\s+)?{re.escape(name)}=", run)
+                    name
+                    for name in step_aliases
+                    if re.search(rf"(?m)^\s*(?:(?:export|readonly)\s+)?{re.escape(name)}\s*=", run)
                 }
                 live_vars = set(
                     re.findall(
-                        r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=.*\bgit\s+ls-remote\b",
+                        r'(?ms)^\s*(?:(?:export|readonly)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?'
+                        r"\$\(\s*git\s+ls-remote\b",
                         run,
                     )
                 )
@@ -1677,17 +1862,35 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                     if (
                         len(words) > 1
                         and words[0] == "git"
-                        and words[1] in {"show", "checkout", "switch", "reset"}
-                        and any(
-                            argument == f"${name}"
+                        and words[1]
+                        in {
+                            "show",
+                            "checkout",
+                            "switch",
+                            "reset",
+                        }
+                    ):
+                        used_git = {
+                            name
+                            for argument in words[2:]
+                            for name in step_aliases
+                            if argument == f"${name}"
                             or argument == f"${{{name}}}"
                             or argument.startswith(f"${name}:")
                             or argument.startswith(f"${{{name}}}:")
-                            for argument in words[2:]
-                            for name in step_aliases - overridden
-                        )
-                    ):
-                        identity = True
+                        }
+                        if used_git & live_vars:
+                            offences.append(
+                                f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
+                                f"replaces {pin.job}.{pin.output} at identity sink git {words[1]}"
+                            )
+                        elif used_git & overridden:
+                            offences.append(
+                                f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
+                                f"{pin.job}.{pin.output} at identity sink git {words[1]}"
+                            )
+                        elif used_git:
+                            identity = True
         if not identity:
             offences.append(
                 f"{pin.workflow}:{pin.job}.{pin.output}: rule=pin-consumer: pin is not consumed by a ref/identity sink"

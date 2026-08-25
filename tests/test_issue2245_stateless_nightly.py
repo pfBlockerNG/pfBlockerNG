@@ -2,9 +2,11 @@
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 from scripts import release_version as rv
+from tests import test_issue2231_workflow_hygiene as hygiene
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = ROOT / ".github" / "workflows" / "nightly.yml"
@@ -45,3 +47,250 @@ def test_actionlint_exception_is_narrowly_scoped_to_workflows_using_queue_max() 
             ".github/workflows/nightly-failure-alert.yml": {"ignore": [queue_error]},
         }
     }
+
+
+def test_workflow_hygiene_discovery_fails_closed_when_no_files_are_found(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(hygiene, "ROOT", tmp_path)
+    with pytest.raises(AssertionError, match=r"no workflow files discovered under"):
+        hygiene._workflow_sources()
+
+
+def test_workflow_hygiene_tracks_each_reusable_call_instance() -> None:
+    sources = {
+        "consumer.yml": """\
+on: workflow_call
+inputs:
+  selector: {type: string}
+jobs:
+  download:
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: "${{ inputs.selector }}"}
+""",
+        "root.yml": """\
+name: Root
+on: workflow_dispatch
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v8
+        with: {name: present}
+  good:
+    needs: upload
+    uses: ./.github/workflows/consumer.yml
+    with: {selector: present}
+  bad:
+    needs: upload
+    uses: ./.github/workflows/consumer.yml
+    with: {selector: missing}
+""",
+    }
+    assert hygiene._artifact_chain_offences(sources) == [
+        "consumer.yml:download:step-0: rule=artifact-major: no producer matches ['missing']"
+    ]
+
+
+def test_workflow_hygiene_parses_semver_and_rejects_unclassified_action_refs() -> None:
+    sources = {
+        "semver.yml": """\
+on: workflow_dispatch
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v7.1.2
+        with: {name: pkg}
+  download:
+    needs: upload
+    steps:
+      - uses: actions/download-artifact@v8.0.0
+        with: {name: pkg}
+""",
+    }
+    assert hygiene._artifact_chain_offences(sources) == [
+        "semver.yml:download:step-0: rule=artifact-major: download v8 mismatches producers "
+        "[('semver.yml', 'upload', 7)]"
+    ]
+    with pytest.raises(
+        AssertionError, match=r"unknown.yml:upload:step-0: rule=artifact-major: unclassified action ref"
+    ):
+        hygiene._artifact_chain_offences(
+            {
+                "unknown.yml": """\
+on: workflow_dispatch
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@main
+        with: {name: pkg}
+"""
+            }
+        )
+
+
+def test_workflow_hygiene_handles_docker_globals_local_values_and_image_boundary() -> None:
+    sources = {
+        "scripts/global.sh": """\
+docker --context remote run alpine
+docker run --workdir /tmp --init alpine
+docker run --workdir /tmp alpine
+docker run --user 1000 --init alpine
+docker run --user 1000 alpine
+docker run --mount type=tmpfs,dst=/tmp --init alpine
+docker run --mount type=tmpfs,dst=/tmp alpine
+runtime=docker
+"$runtime" run alpine
+""",
+        "tests/smoke/local.py": """\
+import subprocess
+
+def command():
+    return ["docker", "run", "alpine"]
+
+def invoke():
+    argv = ["docker", "run", "alpine"]
+    subprocess.run(argv)
+    subprocess.run(command())
+""",
+        "scripts/variable.php": """\
+<?php
+$cmd = "docker run alpine";
+system($cmd);
+""",
+    }
+    offences = hygiene._docker_run_offences(sources)
+    assert len(offences) == 8, offences
+    assert not any(f"scripts/global.sh:{line}:" in offence for offence in offences for line in (2, 4, 6))
+
+
+def test_workflow_hygiene_rejects_derived_fake_multiline_and_readonly_sinks() -> None:
+    sources = {
+        "derived.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    outputs:
+      sha: ${{ needs.prepare.outputs.source_sha }}
+    with:
+      ref: ${{ needs.prepare.outputs.source_sha || github.ref }}
+""",
+        "untrusted.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    with:
+      ref: ${{ needs.prepare.outputs.source_sha || needs.untrusted.outputs.sha }}
+""",
+        "readonly.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          readonly PORTS_SHA=$(git ls-remote origin main)
+          git checkout \"$PORTS_SHA\"
+""",
+        "multiline.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show \"$PORTS_SHA:Makefile\"
+          FRESH=\"$(
+            git ls-remote origin main
+          )\"
+          build-leg.sh --ports-ref \"$FRESH\"
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          readonly PORTS_SHA=$(git ls-remote origin main)
+          git checkout \"$PORTS_SHA\"
+""",
+    }
+    offences = hygiene._pin_offences(sources)
+    assert any("derived.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed" in item for item in offences)
+    assert any("untrusted.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed" in item for item in offences)
+    assert any(
+        "readonly.yml:build: rule=pin-consumer: live git ls-remote replaces prepare.ports_sha" in item
+        for item in offences
+    )
+    assert any(
+        "multiline.yml:build: rule=pin-consumer: live git ls-remote replaces prepare.ports_sha" in item
+        for item in offences
+    )
+
+
+@pytest.mark.parametrize(
+    "sink",
+    (
+        '${{ format("refs/heads/{0}", needs.prepare.outputs.source_sha) }}',
+        "${{ needs.prepare.outputs.source_sha }}${{ '' }}",
+        "${{ needs.prepare.outputs.source_sha || 'main' }}",
+    ),
+)
+def test_workflow_hygiene_rejects_derived_pin_expressions(sink: str) -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    with:
+      ref: PIN_SINK
+""".replace("PIN_SINK", sink)
+    assert hygiene._pin_offences({"derived.yml": source}) == [
+        "derived.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink"
+    ]
+
+
+def test_workflow_hygiene_rejects_job_output_as_fake_identity_sink() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    outputs:
+      sha: ${{ needs.prepare.outputs.source_sha }}
+"""
+    assert hygiene._pin_offences({"fake-output.yml": source}) == [
+        "fake-output.yml:prepare.source_sha: rule=pin-consumer: pin is not consumed by a ref/identity sink"
+    ]
