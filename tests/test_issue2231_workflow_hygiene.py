@@ -1860,6 +1860,57 @@ def _ref_binding(path: tuple[str, ...]) -> bool:
     }
 
 
+_SHELL_VARIABLE = re.compile(r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)(?:[^}]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))")
+_SHELL_EXACT_VARIABLE = re.compile(r"\$(?:\{(?P<braced>[A-Za-z_][A-Za-z0-9_]*)\}|(?P<plain>[A-Za-z_][A-Za-z0-9_]*))")
+
+
+def _shell_assignment(words: list[str]) -> tuple[str, str] | None:
+    index = 1 if words and words[0] in {"export", "readonly"} else 0
+    if index >= len(words):
+        return None
+    assignment = re.fullmatch(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)=(?P<value>.*)", words[index])
+    if assignment is None:
+        return None
+    value = " ".join([assignment.group("value"), *words[index + 1 :]])
+    return assignment.group("name"), value
+
+
+def _shell_alias_provenance(value: str, aliases: Mapping[str, str]) -> str | None:
+    if re.search(r"\$\(\s*git\s+ls-remote\b", value):
+        return "live"
+    variables = [match.group("braced") or match.group("plain") for match in _SHELL_VARIABLE.finditer(value)]
+    inherited = [aliases[name] for name in variables if name in aliases]
+    if not inherited:
+        return None
+    if "live" in inherited:
+        return "live"
+    exact = _SHELL_EXACT_VARIABLE.fullmatch(value)
+    if exact is not None and aliases[exact.group("braced") or exact.group("plain")] == "exact":
+        return "exact"
+    return "derived"
+
+
+def _pin_flag_arguments(words: list[str], base: str) -> list[tuple[str, str]]:
+    arguments: list[tuple[str, str]] = []
+    for index, word in enumerate(words):
+        match = re.fullmatch(
+            r"(?P<flag>--[A-Za-z0-9][A-Za-z0-9_-]*-(?:ref|sha))(?:=(?P<argument>.*))?",
+            word,
+        )
+        if match is None:
+            continue
+        flag = match.group("flag")
+        if base and not flag.removeprefix("--").startswith(base):
+            continue
+        argument = match.group("argument")
+        if argument is None:
+            if index + 1 >= len(words):
+                continue
+            argument = words[index + 1]
+        arguments.append((flag, argument))
+    return arguments
+
+
 def _pin_offences(sources: dict[str, str]) -> list[str]:
     documents = {workflow: _workflow_document(source, workflow) for workflow, source in sources.items()}
     pins, offences = _sha_inventory(documents)
@@ -1888,6 +1939,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
         workflow_pins = {(candidate.job, candidate.output) for candidate in pins if candidate.workflow == pin.workflow}
         identity = False
         invalid_alias_sinks: set[tuple[str, str, str]] = set()
+        derived_alias_sinks: set[tuple[str, str, str]] = set()
         invalid_ref_jobs: set[str] = set()
         for job_name, path, value in consumers:
             if not _ref_binding(path):
@@ -1940,7 +1992,8 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 run = step.get("run")
                 if not isinstance(run, str):
                     continue
-                overridden: set[str] = set()
+                aliases = {name: "exact" for name in step_aliases}
+                aliases.update({name: "derived" for name in invalid_aliases})
                 normalized_run = re.sub(
                     r"\$\((.*?)\)",
                     lambda match: "$(" + " ".join(match.group(1).split()) + ")",
@@ -1948,104 +2001,82 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                     flags=re.DOTALL,
                 )
                 commands = _shell_commands(normalized_run)
-                live_vars: set[str] = set()
-                for words in commands:
-                    assignment = re.match(
-                        r'(?:(?:export|readonly)\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?'
-                        r"\$\(\s*git\s+ls-remote\b",
-                        " ".join(words),
-                    )
-                    if assignment is not None:
-                        live_vars.add(assignment.group("name"))
                 base = _pin_base(pin.output)
                 for words in commands:
-                    overridden.update(
-                        assignment.group("name")
-                        for word in words
-                        if (assignment := re.fullmatch(r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)=.*", word))
-                        and assignment.group("name") in step_aliases
-                    )
-                    for index, word in enumerate(words[:-1]):
-                        flag = word.removeprefix("--")
-                        relevant_flag = (
-                            word.startswith("--")
-                            and (flag.endswith("-ref") or flag.endswith("-sha"))
-                            and (not base or flag.startswith(base))
+                    assignment = _shell_assignment(words)
+                    if assignment is not None:
+                        name, value = assignment
+                        provenance = _shell_alias_provenance(value, aliases)
+                        if provenance is not None or name in aliases:
+                            aliases[name] = provenance or "overwritten"
+
+                    for flag, argument in _pin_flag_arguments(words, base):
+                        argument_match = _SHELL_EXACT_VARIABLE.fullmatch(argument)
+                        argument_var = (
+                            argument_match.group("braced") or argument_match.group("plain")
+                            if argument_match is not None
+                            else None
                         )
-                        if not relevant_flag:
-                            continue
-                        argument = words[index + 1]
-                        argument_var = argument.removeprefix("${").removesuffix("}")
-                        if argument.startswith("$") and not argument.startswith("${"):
-                            argument_var = argument[1:]
-                        used = {name for name in step_aliases if argument_var == name}
-                        used_invalid = {name for name in invalid_aliases if argument_var == name}
-                        if used_invalid:
-                            invalid_alias_sinks.update((job_name, name, word) for name in used_invalid)
-                        if argument_var in live_vars:
+                        provenance = aliases.get(argument_var or "")
+                        if provenance == "derived":
+                            sinks = invalid_alias_sinks if argument_var in invalid_aliases else derived_alias_sinks
+                            sinks.add((job_name, cast(str, argument_var), flag))
+                        elif provenance == "live":
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
-                                f"replaces {pin.job}.{pin.output} at identity sink {word}"
+                                f"replaces {pin.job}.{pin.output} at identity sink {flag}"
                             )
-                        elif reference == argument:
+                        elif reference == argument or provenance == "exact":
                             identity = True
-                        elif used - overridden:
-                            identity = True
-                        elif used & overridden:
+                        elif provenance == "overwritten":
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
-                                f"{pin.job}.{pin.output} at identity sink {word}"
+                                f"{pin.job}.{pin.output} at identity sink {flag}"
                             )
+
                     identity_command = _git_identity_command(words)
-                    if identity_command is not None:
-                        command, arguments = identity_command
-                        used_git = {
-                            name
-                            for argument in arguments
-                            for name in step_aliases
-                            if argument == f"${name}"
-                            or argument == f"${{{name}}}"
-                            or argument.startswith(f"${name}:")
-                            or argument.startswith(f"${{{name}}}:")
-                        }
-                        used_git_live = {
-                            name
-                            for argument in arguments
-                            for name in live_vars
-                            if argument == f"${name}"
-                            or argument == f"${{{name}}}"
-                            or argument.startswith(f"${name}:")
-                            or argument.startswith(f"${{{name}}}:")
-                        }
-                        used_git_invalid = {
-                            name
-                            for argument in arguments
-                            for name in invalid_aliases
-                            if argument == f"${name}"
-                            or argument == f"${{{name}}}"
-                            or argument.startswith(f"${name}:")
-                            or argument.startswith(f"${{{name}}}:")
-                        }
-                        if used_git_invalid:
-                            invalid_alias_sinks.update((job_name, name, f"git {command}") for name in used_git_invalid)
-                        direct_live = any(re.search(r"\$\(\s*git\s+ls-remote\b", argument) for argument in arguments)
-                        if (used_git_live or direct_live) and step_aliases:
-                            offences.append(
-                                f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
-                                f"replaces {pin.job}.{pin.output} at identity sink git {command}"
-                            )
-                        elif used_git & overridden:
-                            offences.append(
-                                f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
-                                f"{pin.job}.{pin.output} at identity sink git {command}"
-                            )
-                        elif used_git:
-                            identity = True
+                    if identity_command is None:
+                        continue
+                    command, arguments = identity_command
+                    used_git = {
+                        name
+                        for argument in arguments
+                        for name in aliases
+                        if argument == f"${name}"
+                        or argument == f"${{{name}}}"
+                        or argument.startswith(f"${name}:")
+                        or argument.startswith(f"${{{name}}}:")
+                    }
+                    exact_git = {name for name in used_git if aliases[name] == "exact"}
+                    live_git = {name for name in used_git if aliases[name] == "live"}
+                    derived_git = {name for name in used_git if aliases[name] == "derived"}
+                    overwritten_git = {name for name in used_git if aliases[name] == "overwritten"}
+                    for name in derived_git:
+                        sinks = invalid_alias_sinks if name in invalid_aliases else derived_alias_sinks
+                        sinks.add((job_name, name, f"git {command}"))
+                    direct_live = any(re.search(r"\$\(\s*git\s+ls-remote\b", argument) for argument in arguments)
+                    if (live_git or direct_live) and step_aliases:
+                        offences.append(
+                            f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
+                            f"replaces {pin.job}.{pin.output} at identity sink git {command}"
+                        )
+                    elif overwritten_git:
+                        offences.append(
+                            f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
+                            f"{pin.job}.{pin.output} at identity sink git {command}"
+                        )
+                    elif exact_git:
+                        identity = True
         if identity:
             offences.extend(
                 f"{pin.workflow}:{job_name}: rule=pin-consumer: derived or untrusted env alias "
                 f"{name} references {pin.job}.{pin.output} at identity sink {sink}"
                 for job_name, name, sink in invalid_alias_sinks
+            )
+            offences.extend(
+                f"{pin.workflow}:{job_name}: rule=pin-consumer: derived shell alias {name} references "
+                f"{pin.job}.{pin.output} at identity sink {sink}"
+                for job_name, name, sink in derived_alias_sinks
             )
         else:
             offences.append(
