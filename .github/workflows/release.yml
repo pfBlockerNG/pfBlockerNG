@@ -1299,7 +1299,7 @@ jobs:
         # false already isolates a failed leg, so it simply uploads nothing
         # and attach-pkgs/the publish healthcheck fail closed on the missing
         # asset.
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           name: pfBlockerNG-relpkg-${{ matrix.variant }}-${{ matrix.pfsense_version }}
           path: ${{ env.PKG_PATH }}
@@ -1311,7 +1311,7 @@ jobs:
         # -- the exact row identity consumers compose. Never uploaded when
         # extra_pkgs is empty (no empty artifacts).
         if: env.HAS_DEP_PKGS == '1'
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v8
         with:
           name: pfBlockerNG-relpkg-deppkgs-${{ matrix.variant }}-${{ matrix.pfsense_version }}
           path: ${{ env.DEP_PKG_DIR }}/*.pkg
@@ -1356,7 +1356,7 @@ jobs:
         # py311-charset-normalizer) are deliberate release assets, frozen
         # alongside the branch .pkgs for the pkg-repo publish + EOL/route-only
         # story. The draft healthcheck counts only the effective asset matrix.
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: pfBlockerNG-relpkg-*
           merge-multiple: true
