@@ -7,8 +7,9 @@ testing ports install it, which is what lets an ordinary ``pkg upgrade`` move a 
 onto the signed, plain-HTTP repository instead of requiring a bootstrap re-run.
 
 This line carries the hook as a shipped artefact only: its logic lives on ``devel`` and
-is tested there. What has to hold HERE is that the file is installable and that the
-contract 3.3's own PHP depends on is intact.
+is tested there. What has to hold HERE is that the file is installable. Issue #2694
+retired the last PHP-side dependency on the hook (the CA-consent verb dispatch); 3.3's
+PHP no longer reads the hook's body or invokes it at all.
 """
 
 from __future__ import annotations
@@ -22,7 +23,6 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parent.parent
 _HOOK = _ROOT / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
-_SOFTWARE_INC = _ROOT / "src" / "usr" / "local" / "pkg" / "pfblockerng" / "pfblockerng_software.inc"
 
 
 def test_the_hook_is_shipped_and_executable() -> None:
@@ -37,16 +37,6 @@ def test_the_hook_parses_as_posix_sh() -> None:
     the box on a stale conf for ever."""
     proc = subprocess.run(["sh", "-n", str(_HOOK)], capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
-
-
-def test_the_hook_carries_the_verbs_this_line_dispatches() -> None:
-    """`pfblockerng_software.inc` reads the installed hook's body and gates its
-    login.conf controls on finding these verbs (issue #2630). A hook without them
-    silently disables that page's controls rather than failing loudly.
-    """
-    body = _HOOK.read_text(encoding="utf-8")
-    for verb in ("login-ca-sync", "login-ca-revoke"):
-        assert verb in body, f"the shipped hook no longer offers {verb!r}"
 
 
 def test_the_conf_names_the_on_box_fingerprint_directory() -> None:
@@ -84,8 +74,6 @@ def test_the_hook_regenerates_every_channel_conf(tmp_path: Path, channel: str) -
         "PFB_PRODUCT_LABEL": str(box / "product_label"),
         "PFB_VERSION_FILE": str(box / "version"),
         "PFB_FINGERPRINT_DIR": str(box / "fingerprints" / "pfblockerng"),
-        "PFB_CONFIG_XML": str(box / "config.xml"),
-        "PFB_LOGIN_CONF": str(box / "login.conf"),
     }
     proc = subprocess.run(["sh", str(_HOOK), "onestart"], env=env, capture_output=True, text=True, check=False)
     assert proc.returncode == 0, proc.stderr
@@ -96,9 +84,3 @@ def test_the_hook_regenerates_every_channel_conf(tmp_path: Path, channel: str) -
     assert "signature_type: fingerprints," in written, written
     trusted = box / "fingerprints" / "pfblockerng" / "trusted" / "pkg.pfblockerng.com"
     assert trusted.is_file(), f"no trusted fingerprint installed:\n{proc.stderr}"
-
-
-def test_the_software_page_still_addresses_the_on_box_path() -> None:
-    """The port installs to PREFIX/etc/rc.d; this line's PHP addresses the same path."""
-    inc = _SOFTWARE_INC.read_text(encoding="utf-8")
-    assert "'/usr/local/etc/rc.d/pfblockerng_repo_generate.sh'" in inc
