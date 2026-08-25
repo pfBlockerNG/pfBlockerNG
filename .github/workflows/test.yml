@@ -1084,14 +1084,22 @@ jobs:
           PR_NUM: ${{ github.event.pull_request.number }}
         run: |
           set -euo pipefail
-          # Red canary: prove ON THIS RUNNER, under THIS block's shell options, that
-          # a violating input propagates exit 1 through the `| tee` pipeline before
-          # trusting the real run below. Same run: block as the enforce line, so
-          # dropping the `set` line above trips the canary instead of silencing the
-          # gate (#933's near-miss class).
-          echo "Red canary: the FAILED output below is expected; the canary passes iff it exits nonzero."
-          if echo "src/canary.inc" | python3 scripts/check_coverage_pairing.py | tee /dev/null; then
-            echo "::error::coverage-pairing red canary failed: a violating input did not propagate exit 1 through the pipe — fix this step's shell options before trusting the gate"
+          # Red canary 1: a release-plane change with no shipped test must fail
+          # through the same `| tee` pipeline as the real run.
+          echo "Red canary: the two FAILED outputs below are expected."
+          if printf "scripts/canary.py\0" | python3 scripts/check_coverage_pairing.py | tee /dev/null; then
+            echo "::error::coverage-pairing red canary failed: release-plane code without a test passed"
+            exit 1
+          fi
+          # Red canary 2: a shipped test whose recorded RED hash differs from its
+          # current blob must fail before the live PR body is trusted.
+          cat > frozen-red-canary-body.txt <<'EOF'
+          | Frozen RED test | git hash-object | RED run tail |
+          | --- | --- | --- |
+          | tests/test_coverage_pairing_check.py | 0000000000000000000000000000000000000000 | FAILED planted hash offence |
+          EOF
+          if printf "scripts/canary.py\0tests/test_coverage_pairing_check.py\0" | python3 scripts/check_coverage_pairing.py --pr-body-file frozen-red-canary-body.txt | tee /dev/null; then
+            echo "::error::coverage-pairing red canary failed: mismatched frozen-RED hash passed"
             exit 1
           fi
           # LIVE label + body read — never the trigger-time event payload. A
@@ -1120,7 +1128,7 @@ jobs:
           # `no-test-needed: <why>` — else it FAILS instead of downgrading. The
           # decision logic lives in the tested script, not in shell (mid-sentence
           # mentions and blockquotes must not count; pinned by its unit tests).
-          python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} ${WARN_ONLY:+--pr-body-file pr_body.txt} < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
+          python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} --pr-body-file pr_body.txt < changed.txt | tee -a "$GITHUB_STEP_SUMMARY"
 
   # ── Comment-narration gate (CLAUDE.md "Comments — constraint, not narration") ──
   # PR-only, diff-scoped: judges only the lines this PR ADDS under src/ + scripts/,
