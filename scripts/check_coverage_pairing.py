@@ -168,7 +168,7 @@ def _table_cells(line: str) -> list[str]:
 def _visible_markdown_lines(body: str) -> list[str]:
     visible: list[str] = []
     in_comment = False
-    fence: str | None = None
+    fence: tuple[str, int] | None = None
     for line in body.splitlines():
         if in_comment:
             if "-->" in line:
@@ -178,13 +178,14 @@ def _visible_markdown_lines(body: str) -> list[str]:
             if "-->" not in line.split("<!--", 1)[1]:
                 in_comment = True
             continue
-        stripped = line.lstrip(" ")
-        indent = len(line) - len(stripped)
-        marker = stripped[:3]
-        if indent <= 3 and marker in {"```", "~~~"}:
+        match = re.fullmatch(r" {0,3}((`{3,}|~{3,}))(.*)", line)
+        if match:
+            run = match.group(1)
+            char = run[0]
+            trailing = match.group(3)
             if fence is None:
-                fence = marker
-            elif fence == marker:
+                fence = (char, len(run))
+            elif char == fence[0] and len(run) >= fence[1] and not trailing.strip():
                 fence = None
             continue
         if fence is None:
@@ -299,7 +300,7 @@ def _parse_name_status_z(data: bytes) -> tuple[list[str], list[str]]:
         raise ValueError("name-status input is not NUL-terminated")
     fields = data.split(b"\0")[:-1] if data else []
     changed: list[str] = []
-    shipped: list[str] = []
+    live: dict[str, None] = {}
     i = 0
     while i < len(fields):
         try:
@@ -315,15 +316,18 @@ def _parse_name_status_z(data: bytes) -> tuple[list[str], list[str]]:
         i += count
         if kind == "R":
             changed.extend(paths)
-            shipped.append(paths[1])
+            live.pop(paths[0], None)
+            live[paths[1]] = None
         elif kind == "C":
             changed.append(paths[1])
-            shipped.append(paths[1])
+            live[paths[1]] = None
         else:
             changed.append(paths[0])
-            if kind != "D":
-                shipped.append(paths[0])
-    return changed, shipped
+            if kind == "D":
+                live.pop(paths[0], None)
+            else:
+                live[paths[0]] = None
+    return changed, list(live)
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -537,6 +537,23 @@ def test_status_stream_added_or_modified_test_satisfies_pairing() -> None:
         assert proc.returncode == 0, proc.stdout
 
 
+def test_status_stream_uses_final_live_test_state_without_losing_triggers() -> None:
+    deleted_after_add = _run_status_stream(
+        b"M\0scripts/publish_release.py\0A\0tests/test_release.py\0D\0tests/test_release.py\0"
+    )
+    assert deleted_after_add.returncode == 1, deleted_after_add.stdout
+
+    renamed_away = _run_status_stream(
+        b"M\0scripts/publish_release.py\0A\0tests/test_release.py\0R100\0tests/test_release.py\0docs/release-test.md\0"
+    )
+    assert renamed_away.returncode == 1, renamed_away.stdout
+
+    recreated = _run_status_stream(
+        b"M\0scripts/publish_release.py\0A\0tests/test_release.py\0D\0tests/test_release.py\0A\0tests/test_release.py\0"
+    )
+    assert recreated.returncode == 0, recreated.stdout
+
+
 def test_nul_paths_are_not_stripped_or_decoded_lossily(tmp_path: Path) -> None:
     body = tmp_path / "body.md"
     body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
@@ -567,6 +584,9 @@ def test_frozen_red_table_must_be_one_visible_unindented_delimited_table(tmp_pat
         textwrap.indent(table, "  "),
         table.replace("| --- | --- | --- |\n", ""),
         f"{table}\n{table}",
+        f"````text\n```\n{table}```\n````\n",
+        f"~~~~text\n~~~\n{table}~~~\n~~~~\n",
+        f"````\n````not-a-close\n{table}````\n",
     )
     for body_text in invalid_bodies:
         body = tmp_path / "body.md"
@@ -584,6 +604,19 @@ def test_every_changed_test_side_file_requires_its_own_frozen_row(tmp_path: Path
     body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
     assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST, second]) == 1
     assert second in capsys.readouterr().out
+
+
+def test_name_status_mode_requires_a_row_for_every_live_test(tmp_path: Path) -> None:
+    second = b"tests/test_check_skip_allowlist.py"
+    body = tmp_path / "body.md"
+    body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
+    proc = _run_status_stream(
+        b"M\0scripts/publish_release.py\0M\0tests/test_coverage_pairing_check.py\0M\0" + second + b"\0",
+        "--pr-body-file",
+        str(body),
+    )
+    assert proc.returncode == 1, proc.stdout
+    assert second in proc.stdout
 
 
 def test_frozen_hash_uses_repository_native_git_object_format(tmp_path: Path, monkeypatch: Any) -> None:
