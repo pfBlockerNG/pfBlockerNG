@@ -47,6 +47,11 @@ _IDENTITY_VALUES = {
     },
 }
 _SOURCE_RUN_ID_VALUE = "${{ github.run_id }}:${{ github.run_attempt }}"
+_SOURCE_SHA_VALUES = {
+    PUBLISHED: "${{ needs.resolve.outputs.source_sha }}",
+    REPUBLISH: "${{ steps.resolve.outputs.source_sha }}",
+}
+_HANDOFF_NAME = "pfblockerng-release-handoff.json"
 
 # issue #2675 step 1: PFB_PKG_SIGNING_KEY (the Actions secret) is materialised to
 # this exact path, then handed to publish-pkg-repo.sh as PFB_SIGN_KEY — never
@@ -72,6 +77,23 @@ def test_republish_and_published_callbacks_forward_exact_run_identity() -> None:
             assert f"{key}: {value}" in step
         assert f"SOURCE_RUN_ID: {_SOURCE_RUN_ID_VALUE}" in step
         assert "gh release list" not in workflow
+
+
+def test_tagged_publishers_consume_the_release_handoff_not_live_ci_metadata() -> None:
+    for workflow, job_name in _SIGN_KEY_JOBS.items():
+        job = extract_job(workflow, job_name)
+        assert "refs/heads/ci-metadata" not in job
+        assert "read-version-matrix.sh --print-route" not in job
+
+        download = extract_step(job, "Download release assets + build the digest sidecar")
+        assert f"HANDOFF_NAME: {_HANDOFF_NAME}" in download
+        assert "gh release download" in download
+        assert '--pattern "$HANDOFF_NAME"' in download
+
+        publish = extract_step(job, _STEP_NAMES[workflow])
+        assert f"SOURCE_SHA: {_SOURCE_SHA_VALUES[workflow]}" in publish
+        assert "ROUTE_MATRIX:" not in publish
+        assert f'export HANDOFF_FILE="$RUNNER_TEMP/assets/{_HANDOFF_NAME}"' in publish
 
 
 def test_publish_step_wires_pfb_sign_key_from_materialised_secret() -> None:

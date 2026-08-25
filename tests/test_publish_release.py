@@ -381,6 +381,31 @@ def _populate_assets_dir(
     return digests
 
 
+def _write_handoff(
+    path: Path,
+    *,
+    rows: Sequence[dict[str, object]],
+    tag: str,
+    source_sha: str = "a" * 40,
+    ports_sha: str = "b" * 64,
+) -> Path:
+    route_matrix = list(rows)
+    canonical_route = json.dumps(route_matrix, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    payload = {
+        "schema": 1,
+        "kind": "tagged-release-handoff",
+        "release_tag": tag,
+        "source_sha": source_sha,
+        "ci_metadata_sha": "c" * 40,
+        "ports_sha": ports_sha,
+        "route_matrix_sha256": hashlib.sha256(canonical_route.encode()).hexdigest(),
+        "route_matrix": route_matrix,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
 def _run(
     *,
     pkg_repo: Path,
@@ -391,17 +416,25 @@ def _run(
     tag: str,
     release_id: str = "1",
     source_run_id: str = "10:1",
+    source_sha: str = "a" * 40,
     sign_key: Path | None = None,
 ) -> pr.PublishReport:
+    handoff = _write_handoff(
+        assets_dir / "pfblockerng-release-handoff.json",
+        rows=rows,
+        tag=tag,
+        source_sha=source_sha,
+    )
     return pr.run(
         source_repository=_REPO,
         release_id=release_id,
         release_tag=tag,
+        source_sha=source_sha,
         destinations=destinations,
         source_run_id=source_run_id,
         assets_dir=assets_dir,
         pkg_repo=pkg_repo,
-        route_matrix=json.dumps(list(rows)),
+        handoff_file=handoff,
         engine=_ENGINE,
         sign_key=sign_key,
     )
@@ -532,11 +565,10 @@ class AssetDiscoveryTests(_TempDirTestCase):
 
 
 # --------------------------------------------------------------------------- #
-# Intake / ROUTE-matrix wiring rejections.
-# --------------------------------------------------------------------------- #
+# Intake / tagged-handoff wiring rejections.
 
 
-class IntakeAndRouteMatrixTests(_TempDirTestCase):
+class IntakeAndHandoffTests(_TempDirTestCase):
     @_requires_engine
     def test_nightly_intake_rejected(self) -> None:
         assets_dir = self.new_assets_dir()
@@ -547,11 +579,12 @@ class IntakeAndRouteMatrixTests(_TempDirTestCase):
                 source_repository=_REPO,
                 release_id="",
                 release_tag="",
+                source_sha="",
                 destinations='["nightly"]',
                 source_run_id="10:1",
                 assets_dir=assets_dir,
                 pkg_repo=self.pkg_repo,
-                route_matrix=json.dumps([ROW_CE]),
+                handoff_file=assets_dir / "missing-handoff.json",
                 engine=_ENGINE,
             )
         self.assertIn("only handles tagged intake", str(ctx.exception))
@@ -569,40 +602,49 @@ class IntakeAndRouteMatrixTests(_TempDirTestCase):
             )
 
     @_requires_engine
-    def test_route_matrix_not_json_rejected(self) -> None:
+    def test_handoff_not_json_rejected(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        with self.assertRaises(pr.PublishReleaseError) as ctx:
+        handoff = assets_dir / "pfblockerng-release-handoff.json"
+        handoff.write_text("not json", encoding="utf-8")
+        with self.assertRaises(ValueError) as ctx:
             pr.run(
                 source_repository=_REPO,
                 release_id="1",
                 release_tag="v4.0.0.b1",
+                source_sha="a" * 40,
                 destinations='["edge"]',
                 source_run_id="10:1",
                 assets_dir=assets_dir,
                 pkg_repo=self.pkg_repo,
-                route_matrix="not json",
+                handoff_file=handoff,
                 engine=_ENGINE,
             )
-        self.assertIn("not valid JSON", str(ctx.exception))
+        self.assertIn("valid JSON", str(ctx.exception))
 
     @_requires_engine
-    def test_route_matrix_empty_array_rejected(self) -> None:
+    def test_handoff_route_matrix_empty_array_rejected(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
-        with self.assertRaises(pr.PublishReleaseError) as ctx:
+        handoff = _write_handoff(
+            assets_dir / "pfblockerng-release-handoff.json",
+            rows=(),
+            tag="v4.0.0.b1",
+        )
+        with self.assertRaises(ValueError) as ctx:
             pr.run(
                 source_repository=_REPO,
                 release_id="1",
                 release_tag="v4.0.0.b1",
+                source_sha="a" * 40,
                 destinations='["edge"]',
                 source_run_id="10:1",
                 assets_dir=assets_dir,
                 pkg_repo=self.pkg_repo,
-                route_matrix="[]",
+                handoff_file=handoff,
                 engine=_ENGINE,
             )
-        self.assertIn("non-empty JSON array", str(ctx.exception))
+        self.assertIn("route_matrix must be a non-empty JSON array", str(ctx.exception))
 
 
 # --------------------------------------------------------------------------- #
@@ -652,6 +694,34 @@ class RejectionPropagationTests(_TempDirTestCase):
                 tag="v4.0.0.b1",
             )
         self.assertIn("not a build-role ROUTE row", str(ctx.exception))
+
+    @_requires_engine
+    def test_handoff_ports_identity_disagrees_with_build_record_before_publish(self) -> None:
+        assets_dir = self.new_assets_dir()
+        _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        handoff = _write_handoff(
+            assets_dir / "pfblockerng-release-handoff.json",
+            rows=(ROW_CE,),
+            tag="v4.0.0.b1",
+            ports_sha="d" * 40,
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            pr.run(
+                source_repository=_REPO,
+                release_id="1",
+                release_tag="v4.0.0.b1",
+                source_sha="a" * 40,
+                destinations='["edge"]',
+                source_run_id="10:1",
+                assets_dir=assets_dir,
+                pkg_repo=self.pkg_repo,
+                handoff_file=handoff,
+                engine=_ENGINE,
+            )
+
+        self.assertIn("freebsd_ports_sha", str(ctx.exception))
+        self.assertFalse(self.pkg_repo.exists())
 
 
 # --------------------------------------------------------------------------- #
@@ -1525,6 +1595,7 @@ class SignKeyThreadingTests(_TempDirTestCase):
     def test_main_sign_key_flag_reaches_regenerate_catalogue(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        handoff = _write_handoff(assets_dir / "pfblockerng-release-handoff.json", rows=(ROW_CE,), tag="v4.0.0.b1")
         # A REAL key: publish() derives its public half up front, so a placeholder
         # would abort the run before the threading this test is about.
         key = tbrp._gen_key(self.tmp / "repo.key")
@@ -1543,8 +1614,10 @@ class SignKeyThreadingTests(_TempDirTestCase):
             str(assets_dir),
             "--pkg-repo",
             str(self.pkg_repo),
-            "--route-matrix",
-            json.dumps([ROW_CE]),
+            "--source-sha",
+            "a" * 40,
+            "--handoff",
+            str(handoff),
             "--sign-key",
             str(key),
         ]
@@ -1558,6 +1631,7 @@ class SignKeyThreadingTests(_TempDirTestCase):
     def test_main_without_sign_key_flag_passes_none(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        handoff = _write_handoff(assets_dir / "pfblockerng-release-handoff.json", rows=(ROW_CE,), tag="v4.0.0.b1")
         argv = [
             "--source-repository",
             _REPO,
@@ -1573,8 +1647,10 @@ class SignKeyThreadingTests(_TempDirTestCase):
             str(assets_dir),
             "--pkg-repo",
             str(self.pkg_repo),
-            "--route-matrix",
-            json.dumps([ROW_CE]),
+            "--source-sha",
+            "a" * 40,
+            "--handoff",
+            str(handoff),
         ]
         patcher, seen = self._capture_sign_key()
         with patcher, mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}):
@@ -1593,6 +1669,7 @@ class MainCliTests(_TempDirTestCase):
     def test_main_success_prints_touched_and_returns_zero(self) -> None:
         assets_dir = self.new_assets_dir()
         _populate_assets_dir(assets_dir, rows=(ROW_CE,), source_tag="v4.0.0.b1", include_dependency=False)
+        handoff = _write_handoff(assets_dir / "pfblockerng-release-handoff.json", rows=(ROW_CE,), tag="v4.0.0.b1")
         argv = [
             "--source-repository",
             _REPO,
@@ -1608,8 +1685,10 @@ class MainCliTests(_TempDirTestCase):
             str(assets_dir),
             "--pkg-repo",
             str(self.pkg_repo),
-            "--route-matrix",
-            json.dumps([ROW_CE]),
+            "--source-sha",
+            "a" * 40,
+            "--handoff",
+            str(handoff),
         ]
         with (
             mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),
@@ -1623,6 +1702,7 @@ class MainCliTests(_TempDirTestCase):
     def test_main_failure_prints_error_and_returns_one(self) -> None:
         assets_dir = self.new_assets_dir()
         assets_dir.mkdir()
+        handoff = _write_handoff(assets_dir / "pfblockerng-release-handoff.json", rows=(ROW_CE,), tag="v4.0.0.b1")
         argv = [
             "--source-repository",
             _REPO,
@@ -1638,8 +1718,10 @@ class MainCliTests(_TempDirTestCase):
             str(assets_dir),
             "--pkg-repo",
             str(self.pkg_repo),
-            "--route-matrix",
-            json.dumps([ROW_CE]),
+            "--source-sha",
+            "a" * 40,
+            "--handoff",
+            str(handoff),
         ]
         with (
             mock.patch.dict(os.environ, {"PFB_SRC": str(_SRC_ROOT)}),

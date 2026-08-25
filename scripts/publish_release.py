@@ -65,6 +65,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import cast
 
 # scripts/ is not a package (no __init__.py); catalogue_assembly.py itself imports
 # publish_catalogues with a bare `from publish_catalogues import Engine`, so every
@@ -79,6 +80,7 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import catalogue_assembly as ca
 import catalogue_sig_only as cso
 import publish_catalogues as pc
+import tagged_release_handoff as trh
 
 _SITE_SUBDIR = "docs"
 _DIGESTS_FILENAME = "digests.json"
@@ -420,11 +422,12 @@ def run(
     source_repository: str,
     release_id: str,
     release_tag: str,
+    source_sha: str,
     destinations: str,
     source_run_id: str,
     assets_dir: str | Path,
     pkg_repo: str | Path,
-    route_matrix: str,
+    handoff_file: str | Path,
     engine: pc.Engine | None = None,
     sign_key: Path | None = None,
 ) -> PublishReport:
@@ -435,13 +438,12 @@ def run(
             "Nightly publishing is not implemented here"
         )
 
-    try:
-        route_matrix_rows = json.loads(route_matrix)
-    except json.JSONDecodeError as exc:
-        raise PublishReleaseError(f"--route-matrix is not valid JSON: {exc}") from exc
-    if not isinstance(route_matrix_rows, list) or not route_matrix_rows:
-        raise PublishReleaseError("--route-matrix must be a non-empty JSON array")
-
+    handoff = trh.load_handoff(
+        handoff_file,
+        expected_release_tag=release_tag,
+        expected_source_sha=source_sha,
+    )
+    route_matrix_rows = cast(list[Mapping[str, object]], handoff["route_matrix"])
     engine = engine if engine is not None else pc.load_engine()
 
     assets_dir = Path(assets_dir)
@@ -450,6 +452,21 @@ def run(
     with tempfile.TemporaryDirectory(prefix="publish-release-verify-") as work_dir:
         verified_assets = _verify_all_assets(engine, intake, assets_dir, digests, Path(work_dir))
         run_result = pc.verify_run(engine, intake, verified_assets, route_matrix_rows)
+        try:
+            trh.validate_build_records(
+                handoff,
+                [cast(Mapping[str, object], asset.record) for asset in run_result.canonical_assets],
+            )
+        except trh.BuildRecordIdentityError as exc:
+            if exc.field == "source_sha":
+                site_root = Path(pkg_repo) / _SITE_SUBDIR
+                for varver, target in _build_targets(engine, run_result).items():
+                    for channel in intake.destinations:
+                        existing = site_root / channel / varver / target.canonical.canonical_name
+                        if existing.is_file():
+                            raise DestinationConflictError(f"{existing}: {exc}") from exc
+                raise DestinationConflictError(str(exc)) from exc
+            raise
         return publish(engine, run_result, pkg_repo, sign_key=sign_key)
 
 
@@ -463,6 +480,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--source-repository", required=True)
     parser.add_argument("--release-id", required=True)
     parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--source-sha", required=True)
     parser.add_argument("--destinations", required=True, help="compact JSON array")
     parser.add_argument("--source-run-id", required=True)
     parser.add_argument(
@@ -475,7 +493,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         required=True,
         help="the checked-out pfBlockerNG/pkg working tree (site is <pkg-repo>/docs)",
     )
-    parser.add_argument("--route-matrix", required=True, help="compact JSON array")
+    parser.add_argument("--handoff", required=True, help="build-time tagged release handoff JSON")
     parser.add_argument(
         "--sign-key",
         default="",
@@ -502,16 +520,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             source_repository=args.source_repository,
             release_id=args.release_id,
             release_tag=args.release_tag,
+            source_sha=args.source_sha,
             destinations=args.destinations,
             source_run_id=args.source_run_id,
             assets_dir=args.assets_dir,
             pkg_repo=args.pkg_repo,
-            route_matrix=args.route_matrix,
+            handoff_file=args.handoff,
             engine=engine,
             sign_key=Path(args.sign_key) if args.sign_key else None,
         )
     except (
         PublishReleaseError,
+        trh.HandoffError,
         pc.PublishError,
         ca.CatalogueAssemblyError,
         engine.pfb_pkg.PkgError,

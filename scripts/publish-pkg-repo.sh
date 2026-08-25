@@ -93,14 +93,14 @@
 #                        noop=true|false.
 #
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=direct|stage only:
-#   SOURCE_REPOSITORY, RELEASE_ID, RELEASE_TAG, DESTINATIONS
+#   SOURCE_REPOSITORY, RELEASE_ID, RELEASE_TAG, SOURCE_SHA, DESTINATIONS
 #                        the rest of the publish_release.py intake — see its --help
 #   ASSETS_DIR             directory of downloaded .pkg assets + digests.json sidecar
-#   ROUTE_MATRIX           the pinned ROUTE matrix, compact JSON array text
+#   HANDOFF_FILE           durable build-time tagged release handoff JSON
 #
 # Required environment — PUBLISH_KIND=tagged, PUBLISH_STAGE=promote only:
 #   RELEASE_TAG, DESTINATIONS  the promote commit message's own trailers
-#                        Never ASSETS_DIR/ROUTE_MATRIX — promote never runs
+#                        Never ASSETS_DIR/HANDOFF_FILE — promote never runs
 #                        publish_release.py or any renderer, and the workflow's
 #                        promote-pkg-repo job does not export ASSETS_DIR (issue
 #                        #2389).
@@ -156,9 +156,10 @@ case "$PUBLISH_KIND" in
                 : "${SOURCE_REPOSITORY:?SOURCE_REPOSITORY is required}"
                 : "${RELEASE_ID:?RELEASE_ID is required}"
                 : "${RELEASE_TAG:?RELEASE_TAG is required}"
+                : "${SOURCE_SHA:?SOURCE_SHA is required}"
                 : "${DESTINATIONS:?DESTINATIONS is required}"
                 : "${ASSETS_DIR:?ASSETS_DIR is required}"
-                : "${ROUTE_MATRIX:?ROUTE_MATRIX is required}"
+                : "${HANDOFF_FILE:?HANDOFF_FILE is required}"
                 ;;
             promote)
                 : "${RELEASE_TAG:?RELEASE_TAG is required}"
@@ -495,11 +496,12 @@ while [ "$attempt" -le "$MAX_PUSH_ATTEMPTS" ]; do
                         --source-repository "$SOURCE_REPOSITORY" \
                         --release-id "$RELEASE_ID" \
                         --release-tag "$RELEASE_TAG" \
+                        --source-sha "$SOURCE_SHA" \
                         --destinations "$DESTINATIONS" \
                         --source-run-id "$SOURCE_RUN_ID" \
                         --assets-dir "$ASSETS_DIR" \
                         --pkg-repo "$PKG_REPO" \
-                        --route-matrix "$ROUTE_MATRIX"
+                        --handoff "$HANDOFF_FILE"
                     ;;
                 nightly)
                     set -- \

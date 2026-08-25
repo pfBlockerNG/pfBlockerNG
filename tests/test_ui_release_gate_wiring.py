@@ -1035,6 +1035,9 @@ def _run_healthcheck(
     source: str = "release/4.0",
 ) -> subprocess.CompletedProcess[str]:
     script = _healthcheck_script()
+    assets = json.loads(assets_json)
+    assets.append({"name": "pfblockerng-release-handoff.json"})
+    assets_json = json.dumps(assets, separators=(",", ":"))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
     gh_stub = bin_dir / "gh"

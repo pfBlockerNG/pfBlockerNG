@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _workflow_steps import extract_step
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 
@@ -116,6 +123,113 @@ def test_issue_2388_ports_sync_runs_only_after_published_release_resolution() ->
             resolve,
             re.MULTILINE,
         ), f"resolve must expose {output} for sync-ports-fork"
+
+
+def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    jobs = _workflow_jobs(ROOT / ".github/workflows/release.yml")
+    read_matrix = "\n".join(jobs["read-matrix"])
+    build = "\n".join(jobs["build-pkgs-portable"])
+
+    for output in ("route_matrix", "ci_metadata_sha", "ports_sha"):
+        assert re.search(
+            rf"^      {output}:\s+\$\{{\{{ steps\.pins\.outputs\.{output} \}}\}}$",
+            read_matrix,
+            re.MULTILINE,
+        ), f"read-matrix must expose the build-time {output}"
+    assert "ref: ${{ steps.pins.outputs.ci_metadata_sha }}" in read_matrix
+    assert read_matrix.count("git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports") == 1
+
+    assert "git ls-remote" not in build
+    build_step = extract_step(release, "Build the .pkg via build-leg.sh")
+    assert "PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}" in build_step
+    assert build_step.count("sh scripts/build-leg.sh") == 1
+    assert build_step.count('--ports-ref  "$PORTS_SHA"') == 1
+
+
+def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Path) -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    script = textwrap.dedent(
+        extract_step(release, "Pin ci-metadata, ROUTE, and Ports identities").split("run: |\n", 1)[1]
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    git_log = tmp_path / "git.log"
+    matrix = tmp_path / "supported-versions.json"
+    output = tmp_path / "github-output"
+    ci_sha = "a" * 40
+    ports_sha = "b" * 40
+    matrix.write_text(
+        '{"versions":[{"pfsense_version":"2.8","channel":"CE",'
+        '"freebsd_version":"15.0-RELEASE","freebsd_major":"15",'
+        '"php_version":"8.3","py_flavor":"py311","variant":"CE",'
+        '"status":"active","extra_pkgs":[]}]}\n',
+        encoding="utf-8",
+    )
+    fake_git = fake_bin / "git"
+    fake_git.write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            printf '%s\\n' "$*" >> "$GIT_LOG"
+            case "$1" in
+              fetch) exit 0 ;;
+              rev-parse) printf '%s\\n' "$CI_SHA" ;;
+              ls-remote) printf '%s\\trefs/heads/pfblockerng/use-github\\n' "$PORTS_SHA" ;;
+              show) cat "$MATRIX_FIXTURE" ;;
+              *) printf 'unexpected git command: %s\\n' "$*" >&2; exit 1 ;;
+            esac
+            """
+        ),
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+
+    completed = subprocess.run(
+        ["sh", "-c", script],
+        cwd=ROOT,
+        env=os.environ
+        | {
+            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
+            "GITHUB_OUTPUT": str(output),
+            "GITHUB_WORKSPACE": str(ROOT),
+            "GIT_LOG": str(git_log),
+            "MATRIX_FIXTURE": str(matrix),
+            "CI_SHA": ci_sha,
+            "PORTS_SHA": ports_sha,
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    emitted = output.read_text(encoding="utf-8")
+    assert f"ci_metadata_sha={ci_sha}" in emitted
+    assert f"ports_sha={ports_sha}" in emitted
+    assert '"pfsense_version":"2.8"' in emitted
+    commands = git_log.read_text(encoding="utf-8")
+    assert f"show {ci_sha}:supported-versions.json" in commands
+    assert commands.count("ls-remote ") == 1
+
+
+def test_issue_2387_draft_persists_the_exact_tagged_handoff_asset() -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    create = extract_step(release, "Create tagged release handoff")
+    for value in (
+        "--release-tag ${{ needs.prepare-release.outputs.tag }}",
+        "--source-sha ${{ needs.prepare-release.outputs.sha }}",
+        "--ci-metadata-sha ${{ needs.read-matrix.outputs.ci_metadata_sha }}",
+        "--ports-sha ${{ needs.read-matrix.outputs.ports_sha }}",
+        "--route-matrix ${{ runner.temp }}/route-matrix.json",
+    ):
+        assert value in create
+    draft = extract_step(release, "Create the GitHub Release as a DRAFT")
+    assert "${{ env.RELEASE_HANDOFF }}" in draft
+    healthcheck = extract_step(release, "Health-check the draft release is complete")
+    assert "pfblockerng-release-handoff.json" in healthcheck
+    assert "HANDOFF_COUNT" in healthcheck
+    assert 'HANDOFF_COUNT" -eq 1' in healthcheck
 
 
 def test_workflow_parser_does_not_cross_trigger_boundaries() -> None:

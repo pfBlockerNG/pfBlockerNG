@@ -24,28 +24,19 @@ def _republish_validate_script() -> str:
     return textwrap.dedent(REPUBLISH.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
 
 
-def test_build_record_step_exports_ports_sha_to_the_python_child(tmp_path: Path) -> None:
-    """The record step resolves PORTS_SHA in the shell and reads it from a python child."""
-    fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
-    fake_git = fake_bin / "git"
-    fake_git.write_text(
-        "#!/bin/sh\nprintf '%s\\t%s\\n' deadbeefdeadbeefdeadbeefdeadbeefdeadbeef refs/heads/x\n",
-        encoding="utf-8",
-    )
-    fake_git.chmod(0o755)
+def test_build_record_step_uses_pinned_ports_sha_in_python_child(tmp_path: Path) -> None:
+    """The record step reads the pre-fan-out PORTS_SHA pin from its environment."""
     workdir = tmp_path / "work"
     workdir.mkdir()
     runner_temp = tmp_path / "runner-temp"
     runner_temp.mkdir()
+    ports_sha = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
     completed = subprocess.run(
         ["sh", "-c", _build_record_script()],
         cwd=workdir,
         env=os.environ
         | {
-            "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
             "PYTHONPATH": str(ROOT),
-            "GITHUB_ENV": str(tmp_path / "github-env"),
             "RUNNER_TEMP": str(runner_temp),
             "TAG": "v4.0.0",
             "CHANNEL": "stable",
@@ -55,6 +46,7 @@ def test_build_record_step_exports_ports_sha_to_the_python_child(tmp_path: Path)
             "COMMIT": "0" * 40,
             "CREATED": "1700000000",
             "MATRIX_ROW": '{"variant":"CE","pfsense_version":"2.8"}',
+            "PORTS_SHA": ports_sha,
         },
         capture_output=True,
         text=True,
@@ -63,7 +55,7 @@ def test_build_record_step_exports_ports_sha_to_the_python_child(tmp_path: Path)
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not (workdir / "build-record.json").exists()
     record = json.loads((runner_temp / "build-record.json").read_text(encoding="utf-8"))
-    assert record["freebsd_ports_sha"] == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+    assert record["freebsd_ports_sha"] == ports_sha
 
 
 @pytest.mark.parametrize(
