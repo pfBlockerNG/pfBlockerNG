@@ -220,7 +220,7 @@ def test_tagged_callbacks_execute_handoff_asset_checks(tmp_path: Path) -> None:
                 ),
                 encoding="utf-8",
             )
-            runner_temp = tmp_path / f"runner-{len(handoff_assets)}-{expected}"
+            runner_temp = tmp_path / f"runner-{job_name}-{len(handoff_assets)}-{expected}"
             gh_log = tmp_path / "gh.log"
             gh_log.write_text("", encoding="utf-8")
             completed = subprocess.run(

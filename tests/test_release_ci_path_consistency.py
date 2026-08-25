@@ -219,11 +219,16 @@ def test_issue_2387_draft_persists_the_exact_tagged_handoff_asset() -> None:
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     create = extract_step(release, "Create tagged release handoff")
     for value in (
-        "--release-tag ${{ needs.prepare-release.outputs.tag }}",
-        "--source-sha ${{ needs.prepare-release.outputs.sha }}",
-        "--ci-metadata-sha ${{ needs.read-matrix.outputs.ci_metadata_sha }}",
-        "--ports-sha ${{ needs.read-matrix.outputs.ports_sha }}",
-        "--route-matrix ${{ runner.temp }}/route-matrix.json",
+        "RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}",
+        "SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}",
+        "CI_METADATA_SHA: ${{ needs.read-matrix.outputs.ci_metadata_sha }}",
+        "PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}",
+        '--release-tag "$RELEASE_TAG"',
+        '--source-sha "$SOURCE_SHA"',
+        '--ci-metadata-sha "$CI_METADATA_SHA"',
+        '--ports-sha "$PORTS_SHA"',
+        'ROUTE_MATRIX_FILE="$RUNNER_TEMP/route-matrix.json"',
+        '--route-matrix "$ROUTE_MATRIX_FILE"',
     ):
         assert value in create
     draft = extract_step(release, "Create the GitHub Release as a DRAFT")

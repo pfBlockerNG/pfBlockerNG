@@ -1016,16 +1016,21 @@ jobs:
       - name: Create tagged release handoff
         env:
           ROUTE_MATRIX: ${{ needs.read-matrix.outputs.route_matrix }}
+          RELEASE_TAG: ${{ needs.prepare-release.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}
+          CI_METADATA_SHA: ${{ needs.read-matrix.outputs.ci_metadata_sha }}
+          PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}
         run: |
           set -eu
           RELEASE_HANDOFF="$RUNNER_TEMP/pfblockerng-release-handoff.json"
-          printf '%s\n' "$ROUTE_MATRIX" > "${{ runner.temp }}/route-matrix.json"
+          ROUTE_MATRIX_FILE="$RUNNER_TEMP/route-matrix.json"
+          printf '%s\n' "$ROUTE_MATRIX" > "$ROUTE_MATRIX_FILE"
           python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/tagged_release_handoff.py" \
-            --release-tag ${{ needs.prepare-release.outputs.tag }} \
-            --source-sha ${{ needs.prepare-release.outputs.sha }} \
-            --ci-metadata-sha ${{ needs.read-matrix.outputs.ci_metadata_sha }} \
-            --ports-sha ${{ needs.read-matrix.outputs.ports_sha }} \
-            --route-matrix ${{ runner.temp }}/route-matrix.json \
+            --release-tag "$RELEASE_TAG" \
+            --source-sha "$SOURCE_SHA" \
+            --ci-metadata-sha "$CI_METADATA_SHA" \
+            --ports-sha "$PORTS_SHA" \
+            --route-matrix "$ROUTE_MATRIX_FILE" \
             --output "$RELEASE_HANDOFF"
           echo "RELEASE_HANDOFF=${RELEASE_HANDOFF}" >> "$GITHUB_ENV"
 
