@@ -164,6 +164,7 @@ def test_tagged_callbacks_execute_handoff_asset_checks(tmp_path: Path) -> None:
         textwrap.dedent(
             """\
             #!/bin/sh
+            printf '%s\n' "$*" >> "$GH_LOG"
             if [ "$1" = api ]; then
               cat "$META_FILE"
               exit
@@ -220,6 +221,8 @@ def test_tagged_callbacks_execute_handoff_asset_checks(tmp_path: Path) -> None:
                 encoding="utf-8",
             )
             runner_temp = tmp_path / f"runner-{len(handoff_assets)}-{expected}"
+            gh_log = tmp_path / "gh.log"
+            gh_log.write_text("", encoding="utf-8")
             completed = subprocess.run(
                 ["sh", "-c", script],
                 cwd=ROOT,
@@ -233,6 +236,7 @@ def test_tagged_callbacks_execute_handoff_asset_checks(tmp_path: Path) -> None:
                     "HANDOFF_NAME": _HANDOFF_NAME,
                     "HANDOFF_SOURCE": str(handoff),
                     "META_FILE": str(meta),
+                    "GH_LOG": str(gh_log),
                     "RUNNER_TEMP": str(runner_temp),
                 },
                 capture_output=True,
@@ -240,3 +244,7 @@ def test_tagged_callbacks_execute_handoff_asset_checks(tmp_path: Path) -> None:
                 check=False,
             )
             assert (completed.returncode == 0) == (expected == 0), completed.stdout + completed.stderr
+            if expected == 0:
+                calls = gh_log.read_text(encoding="utf-8")
+                assert "api repos/pfBlockerNG/pfBlockerNG/releases/1" in calls
+                assert "release download v4.0.0 -R pfBlockerNG/pfBlockerNG" in calls
