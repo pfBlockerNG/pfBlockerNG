@@ -20,11 +20,11 @@ table:
 
 ``| Frozen RED test | git hash-object | RED run tail |``
 
-Each data row names a changed ``tests/**`` path, its 40-character blob hash at
-RED time, and a non-empty failing-run tail. The hash is recomputed from the
-shipped file, so editing the reproduction between RED and GREEN fails the gate.
-The local gate runner omits the body file and checks pairing only; CI always
-passes the live PR body and therefore enforces both pairing and frozen proof.
+Each data row names one shipped non-documentation ``tests/**`` path, its
+repository-native ``git hash-object`` at RED time, and a non-empty failing-run
+tail. Every changed test-side file needs its own row. CI and the local gate
+runner use NUL-delimited Git name-status records so deletions and both rename
+sides remain visible without normalizing path bytes.
 
 The existing behavior-preserving escape is unchanged: ``--warn-only`` plus a
 PR-body line starting ``no-test-needed: <why>`` downgrades violations. It covers
@@ -33,9 +33,8 @@ comment-only/refactor changes without introducing a second or wider escape.
 
 from __future__ import annotations
 
-import hashlib
-import os
 import re
+import subprocess
 import sys
 
 _FIX_HINT = (
@@ -99,13 +98,14 @@ def _is_release_plane(path: str) -> bool:
     return not _is_neutral(path) and (path.startswith("scripts/") or path.startswith(".github/"))
 
 
-def evaluate(changed: list[str]) -> list[str]:
-    """Classify ``changed`` paths and return pairing violations."""
+def evaluate(changed: list[str], shipped: list[str] | None = None) -> list[str]:
+    """Classify triggering paths and return pairing violations."""
+    live = changed if shipped is None else shipped
     has_src = any(_is_src(p) for p in changed)
     has_www = any(_is_www(p) for p in changed)
     has_release = any(_is_release_plane(p) for p in changed)
-    has_test = any(_is_test(p) for p in changed)
-    has_ui_test = any(_is_ui_test(p) for p in changed)
+    has_test = any(_is_test(p) for p in live)
+    has_ui_test = any(_is_ui_test(p) for p in live)
 
     violations: list[str] = []
     if has_src and not has_test:
@@ -148,79 +148,127 @@ def _has_justification(body: str) -> bool:
 
 
 _FROZEN_RED_HEADER = ("frozen red test", "git hash-object", "red run tail")
-_GIT_HASH = re.compile(r"[0-9a-fA-F]{40}")
+_GIT_HASH = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+_DELIMITER = re.compile(r":?-{3,}:?")
+
+
+def _cell_text(cell: str) -> str:
+    value = cell.strip()
+    if len(value) >= 2 and value.startswith("`") and value.endswith("`"):
+        return value[1:-1]
+    return value
 
 
 def _table_cells(line: str) -> list[str]:
-    stripped = line.strip()
-    if not (stripped.startswith("|") and stripped.endswith("|")):
+    if not (line.startswith("|") and line.endswith("|")):
         return []
-    return [cell.strip().strip("`").strip() for cell in stripped[1:-1].split("|")]
+    return line[1:-1].split("|")
+
+
+def _visible_markdown_lines(body: str) -> list[str]:
+    visible: list[str] = []
+    in_comment = False
+    fence: str | None = None
+    for line in body.splitlines():
+        if in_comment:
+            if "-->" in line:
+                in_comment = False
+            continue
+        if "<!--" in line:
+            if "-->" not in line.split("<!--", 1)[1]:
+                in_comment = True
+            continue
+        stripped = line.lstrip(" ")
+        indent = len(line) - len(stripped)
+        marker = stripped[:3]
+        if indent <= 3 and marker in {"```", "~~~"}:
+            if fence is None:
+                fence = marker
+            elif fence == marker:
+                fence = None
+            continue
+        if fence is None:
+            visible.append(line)
+    return visible
 
 
 def _parse_frozen_red(body: str) -> tuple[list[tuple[str, str]], list[str]]:
-    """Return ``(path, hash)`` records and malformed-record errors."""
+    """Parse one visible, unindented, delimiter-bearing evidence table."""
+    lines = _visible_markdown_lines(body)
+    headers = [
+        i
+        for i, line in enumerate(lines)
+        if tuple(_cell_text(cell).lower() for cell in _table_cells(line)) == _FROZEN_RED_HEADER
+    ]
+    if len(headers) != 1:
+        return [], [f"expected exactly one visible unindented Frozen RED test table; found {len(headers)}"]
+
+    header = headers[0]
+    if header + 1 >= len(lines):
+        return [], ["Frozen RED table is missing its Markdown delimiter row"]
+    delimiter = _table_cells(lines[header + 1])
+    if len(delimiter) != 3 or not all(_DELIMITER.fullmatch(cell.strip()) for cell in delimiter):
+        return [], ["Frozen RED table is missing its Markdown delimiter row"]
+
     records: list[tuple[str, str]] = []
     errors: list[str] = []
-    in_table = False
-    for line in body.splitlines():
+    for line in lines[header + 2 :]:
         cells = _table_cells(line)
-        normalized = tuple(cell.replace("`", "").lower() for cell in cells)
-        if not in_table:
-            if normalized == _FROZEN_RED_HEADER:
-                in_table = True
-            continue
         if not cells:
             break
-        if len(cells) == 3 and all(cell and set(cell) <= {"-", ":"} for cell in cells):
-            continue
         if len(cells) != 3:
             errors.append("Frozen RED table rows must contain path, git hash-object, and RED run tail")
             continue
-        path, digest, tail = cells
+        path_cell = cells[0].strip()
+        if len(path_cell) < 2 or not (path_cell.startswith("`") and path_cell.endswith("`")):
+            errors.append("Frozen RED test paths must be enclosed in backticks")
+            continue
+        path = path_cell[1:-1]
+        digest = _cell_text(cells[1])
+        tail = _cell_text(cells[2])
         if not path.startswith("tests/"):
             errors.append(f"Frozen RED test path must be under tests/**: {path!r}")
             continue
         if _GIT_HASH.fullmatch(digest) is None:
-            errors.append(f"Frozen RED git hash-object must be 40 hexadecimal characters for {path}")
+            errors.append(f"Frozen RED git hash-object is not a Git object ID for {path}")
             continue
         if not tail:
             errors.append(f"Frozen RED record for {path} has no RED run tail")
             continue
         records.append((path, digest.lower()))
+    if not records and not errors:
+        errors.append("Frozen RED table has no evidence rows")
     return records, errors
 
 
 def _working_tree_blob_hash(path: str) -> str:
-    if os.path.islink(path):
-        data = os.readlink(os.fsencode(path))
-    else:
-        with open(path, "rb") as fh:
-            data = fh.read()
-    return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+    result = subprocess.run(
+        ["git", "hash-object", "--", path],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise OSError(result.stderr.strip() or f"git hash-object failed for {path}")
+    return result.stdout.strip()
 
 
-def _frozen_red_violations(changed: list[str], body: str) -> list[str]:
+def _frozen_red_violations(changed: list[str], shipped: list[str], body: str) -> list[str]:
     if not any(_is_release_plane(path) for path in changed):
         return []
     records, errors = _parse_frozen_red(body)
     if errors:
         return errors
-    if not records:
-        return [
-            "release-plane changes require a Frozen RED test table with columns "
-            "`Frozen RED test`, `git hash-object`, and `RED run tail`"
-        ]
 
     violations: list[str] = []
-    changed_set = set(changed)
+    changed_tests = {path for path in shipped if _is_test(path)}
     seen: set[str] = set()
     for path, recorded in records:
         if path in seen:
             violations.append(f"duplicate Frozen RED record for {path}")
             continue
         seen.add(path)
-        if path not in changed_set or not _is_test(path):
+        if path not in changed_tests:
             violations.append(f"Frozen RED test {path} is not changed by this PR")
             continue
         try:
@@ -232,47 +280,87 @@ def _frozen_red_violations(changed: list[str], body: str) -> list[str]:
             violations.append(
                 f"Frozen RED hash mismatch for {path}: PR body records {recorded}, shipped file is {actual}"
             )
+    for path in sorted(changed_tests - seen):
+        violations.append(f"changed test-side file {path} has no Frozen RED evidence row")
     return violations
+
+
+def _decode_status_path(raw: bytes) -> str:
+    if b"\n" in raw or b"\r" in raw:
+        raise ValueError("changed path cannot be represented in Markdown: contains a newline")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("changed path cannot be represented in Markdown: invalid UTF-8") from exc
+
+
+def _parse_name_status_z(data: bytes) -> tuple[list[str], list[str]]:
+    if data and not data.endswith(b"\0"):
+        raise ValueError("name-status input is not NUL-terminated")
+    fields = data.split(b"\0")[:-1] if data else []
+    changed: list[str] = []
+    shipped: list[str] = []
+    i = 0
+    while i < len(fields):
+        try:
+            status = fields[i].decode("ascii")
+        except UnicodeDecodeError as exc:
+            raise ValueError("invalid non-ASCII Git status") from exc
+        i += 1
+        kind = status[:1]
+        count = 2 if kind in {"R", "C"} else 1
+        if kind not in {"A", "C", "D", "M", "R", "T"} or i + count > len(fields):
+            raise ValueError(f"invalid Git name-status record: {status!r}")
+        paths = [_decode_status_path(raw) for raw in fields[i : i + count]]
+        i += count
+        if kind == "R":
+            changed.extend(paths)
+            shipped.append(paths[1])
+        elif kind == "C":
+            changed.append(paths[1])
+            shipped.append(paths[1])
+        else:
+            changed.append(paths[0])
+            if kind != "D":
+                shipped.append(paths[0])
+    return changed, shipped
 
 
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
-    Positional args are changed paths (used by tests); with none, changed paths
-    are read from stdin — NUL-separated as the CI job pipes ``git diff
-    --name-only -z`` output in, newline-separated otherwise. Every entry point is
-    normalized the same way (surrounding whitespace stripped, blank entries
-    dropped), so a padded positional arg and a trailing-newline stdin line
-    classify identically.
-
-    ``--pr-body-file <path>`` carries the live PR body. With ``--warn-only`` it
-    must contain the existing ``no-test-needed: <why>`` justification. Without
-    ``--warn-only``, release-plane changes use it for frozen-RED validation.
-    Omitting the flag keeps local/path-only callers pairing-only.
+    ``--name-status-z`` reads exact NUL-delimited ``git diff --name-status -z``
+    records from stdin. Positional and legacy stdin paths remain available for
+    direct callers and tests.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     warn_only = "--warn-only" in args
+    name_status_z = "--name-status-z" in args
     body_file: str | None = None
-    while "--pr-body-file" in args:  # strip EVERY occurrence — a leaked repeat must
-        i = args.index("--pr-body-file")  # never enter the path list; last value wins
+    while "--pr-body-file" in args:
+        i = args.index("--pr-body-file")
         if i + 1 >= len(args):
             print("error: --pr-body-file requires a file path argument")
             return 2
         body_file = args[i + 1]
         del args[i : i + 2]
-    paths = [a for a in args if a != "--warn-only"]
+    paths = [a for a in args if a not in {"--warn-only", "--name-status-z"}]
 
-    if not paths:
-        # NUL-separated is the CI job's transport (`git diff --name-only -z`):
-        # the newline form C-quotes a path holding a quote, backslash, control
-        # byte or non-ASCII byte, and a quoted path matches no rule at all
-        # (issues #2137, #2212). A newline-separated stream still works, so the
-        # positional/`echo`-piped entry points keep classifying identically.
-        stdin = sys.stdin.read()
-        # split("\n"), not splitlines(): the latter also breaks on \f, \x85 and
-        # the Unicode line separators, which are ordinary path bytes here.
-        paths = stdin.split("\0") if "\0" in stdin else stdin.split("\n")
-    paths = [p.strip() for p in paths if p.strip()]
+    if name_status_z:
+        if paths:
+            print("error: --name-status-z does not accept positional paths")
+            return 2
+        try:
+            paths, shipped = _parse_name_status_z(sys.stdin.buffer.read())
+        except ValueError as exc:
+            print(f"error: {exc}")
+            return 2
+    else:
+        if not paths:
+            stdin = sys.stdin.read()
+            paths = stdin.split("\0") if "\0" in stdin else stdin.split("\n")
+        paths = [p.strip() for p in paths if p.strip()]
+        shipped = paths
 
     body: str | None = None
     if body_file is not None:
@@ -291,9 +379,9 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
 
-    violations = evaluate(paths)
+    violations = evaluate(paths, shipped)
     if body is not None:
-        violations.extend(_frozen_red_violations(paths, body))
+        violations.extend(_frozen_red_violations(paths, shipped, body))
 
     if not violations:
         print("Coverage pairing OK: shipped tests and available frozen-RED evidence satisfy all rules.")

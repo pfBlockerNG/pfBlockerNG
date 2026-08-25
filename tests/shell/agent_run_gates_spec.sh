@@ -1,7 +1,7 @@
 #shellcheck shell=sh
 # run-gates.sh gates_for(): the touched-file-type -> canonical-gate-command mapping
-# plus the unconditional coverage-pairing gate. Pins per-file gates (php -l / sh -n /
-# shellcheck emit one command per file), suite gates once, and empty input -> pairing only.
+# (CLAUDE.md "Canonical gates" table). Pins per-file gates (php -l / sh -n / shellcheck
+# emit one command per file), whole-suite gates firing once, and empty input -> no gates.
 
 Describe 'run-gates.sh gates_for()'
   # shellcheck disable=SC2034 # consumed by the Included script's source-only guard
@@ -11,12 +11,11 @@ Describe 'run-gates.sh gates_for()'
   It 'maps a Python file to the four Python gates'
     Data "tests/test_x.py"
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'uv run --locked pytest'
-    The line 3 of output should equal 'uv run --locked ruff check .'
-    The line 4 of output should equal 'uv run --locked ruff format --check .'
-    The line 5 of output should equal 'uv run --locked mypy tests/'
-    The lines of output should equal 5
+    The line 1 of output should equal 'uv run --locked pytest'
+    The line 2 of output should equal 'uv run --locked ruff check .'
+    The line 3 of output should equal 'uv run --locked ruff format --check .'
+    The line 4 of output should equal 'uv run --locked mypy tests/'
+    The lines of output should equal 4
   End
 
   It 'maps PHP files to per-file lint plus the three suite gates'
@@ -25,25 +24,23 @@ Describe 'run-gates.sh gates_for()'
       #|src/b.php
     End
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'uv run --locked python scripts/check_composer_vendor.py'
-    The line 3 of output should equal 'php -l src/a.inc'
-    The line 4 of output should equal 'php -l src/b.php'
-    The line 5 of output should equal 'vendor/bin/phpunit'
-    The line 6 of output should equal 'composer phpstan'
-    The line 7 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
-    The lines of output should equal 7
+    The line 1 of output should equal 'uv run --locked python scripts/check_composer_vendor.py'
+    The line 2 of output should equal 'php -l src/a.inc'
+    The line 3 of output should equal 'php -l src/b.php'
+    The line 4 of output should equal 'vendor/bin/phpunit'
+    The line 5 of output should equal 'composer phpstan'
+    The line 6 of output should equal 'composer phpcs -- --standard=phpcs.xml.dist src/'
+    The lines of output should equal 6
   End
 
   It 'maps shell files to per-file sh -n + shellcheck plus the dash-pinned shellspec'
     Data "scripts/agent/x.sh"
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'sh -n scripts/agent/x.sh'
-    The line 3 of output should equal 'shellcheck scripts/agent/x.sh'
+    The line 1 of output should equal 'sh -n scripts/agent/x.sh'
+    The line 2 of output should equal 'shellcheck scripts/agent/x.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 4 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
-    The lines of output should equal 4
+    The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 3
   End
 
   It 'syntax-checks an out-of-scope shell file but does not shellcheck it'
@@ -54,12 +51,11 @@ Describe 'run-gates.sh gates_for()'
       #|.agents/skills/release/helper.sh
     End
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'sh -n tests/shell/agent_work_branch_spec.sh'
-    The line 3 of output should equal 'sh -n .agents/skills/release/helper.sh'
+    The line 1 of output should equal 'sh -n tests/shell/agent_work_branch_spec.sh'
+    The line 2 of output should equal 'sh -n .agents/skills/release/helper.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 4 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
-    The lines of output should equal 4
+    The line 3 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 3
     The output should not include 'shellcheck'
   End
 
@@ -70,23 +66,20 @@ Describe 'run-gates.sh gates_for()'
       #|tests/shell/y_spec.sh
     End
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh'
-    The line 3 of output should equal 'shellcheck src/usr/local/pkg/pfblockerng/pfblockerng.sh'
-    The line 4 of output should equal 'sh -n .claude/hooks/x.sh'
-    The line 5 of output should equal 'shellcheck .claude/hooks/x.sh'
-    The line 6 of output should equal 'sh -n tests/shell/y_spec.sh'
+    The line 1 of output should equal 'sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh'
+    The line 2 of output should equal 'shellcheck src/usr/local/pkg/pfblockerng/pfblockerng.sh'
+    The line 3 of output should equal 'sh -n .claude/hooks/x.sh'
+    The line 4 of output should equal 'shellcheck .claude/hooks/x.sh'
+    The line 5 of output should equal 'sh -n tests/shell/y_spec.sh'
     # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
-    The line 7 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
-    The lines of output should equal 7
+    The line 6 of output should equal 'shellspec --shell $(command -v dash || command -v sh)'
+    The lines of output should equal 6
   End
 
   It 'maps Markdown to markdownlint'
     Data "docs/misc/notes.md"
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'npx markdownlint-cli2'
-    The lines of output should equal 2
+    The output should equal 'npx markdownlint-cli2'
   End
 
   It 'ignores every legacy file type'
@@ -96,7 +89,7 @@ Describe 'run-gates.sh gates_for()'
       #|legacy/old.md
     End
     When call gates_for
-    The output should equal 'python3 scripts/check_coverage_pairing.py'
+    The output should equal ''
   End
 
   It 'combines gate families for a mixed diff'
@@ -105,7 +98,6 @@ Describe 'run-gates.sh gates_for()'
       #|scripts/b.sh
     End
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
     The output should include 'uv run --locked pytest'
     The output should include 'shellcheck scripts/b.sh'
   End
@@ -113,16 +105,14 @@ Describe 'run-gates.sh gates_for()'
   It 'refuses to build a command from an unsafe path that feeds a per-file gate'
     Data "evil\$(touch pwned).sh"
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
+    The line 1 of output should equal "printf 'unsafe filename in diff\\n' >&2; false"
   End
 
   It 'keeps aggregate gates for an unsafe-named Python file (no per-file interpolation)'
     Data "my file.py"
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'uv run --locked pytest'
-    The lines of output should equal 5
+    The line 1 of output should equal 'uv run --locked pytest'
+    The lines of output should equal 4
   End
 
   It 'ignores an unsafe-named file that has no gates at all'
@@ -131,15 +121,14 @@ Describe 'run-gates.sh gates_for()'
       #|scripts/ok.py
     End
     When call gates_for
-    The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
-    The line 2 of output should equal 'uv run --locked pytest'
+    The line 1 of output should equal 'uv run --locked pytest'
     The output should not include 'unsafe filename'
   End
 
   It 'emits nothing for file types with no gates'
     Data "src/usr/local/pkg/pfblockerng/info.xml"
     When call gates_for
-    The output should equal 'python3 scripts/check_coverage_pairing.py'
+    The output should equal ''
   End
 End
 
@@ -150,13 +139,11 @@ Describe 'run-gates.sh Composer vendor guard'
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesphp.XXXXXX")"
     git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
-    mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts" "$repo/tests"
-    cp "$PFB_ROOT/scripts/check_coverage_pairing.py" "$repo/scripts/"
+    mkdir -p "$repo/src" "$repo/vendor/bin" "$repo/scripts"
     printf 'base\n' > "$repo/README"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     printf '<?php echo 1;\n' > "$repo/src/a.php"
-    printf 'paired\n' > "$repo/tests/coverage-pairing.fixture"
     gitc add -A; gitc commit -qm php
 
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesphpstub.XXXXXX")"
@@ -166,17 +153,19 @@ Describe 'run-gates.sh Composer vendor guard'
     phpunit_marker="$stubdir/phpunit-ran"
     # The vendor checker runs through the locked uv environment, so `uv` is the tool
     # run_gate resolves for that gate; the stub stands in for the whole invocation.
+    pairing_marker="$stubdir/pairing-ran"
+    printf '#!/bin/sh\ncat >/dev/null\ntouch "%s"\nexit 0\n' "$pairing_marker" > "$stubdir/python3"
     printf '#!/bin/sh\ntouch "%s"\nprintf "version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)\\nremediation: composer install --no-interaction\\n"\nexit 1\n' "$checker_marker" > "$stubdir/uv"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$composer_marker" > "$stubdir/composer"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
-    chmod +x "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
+    chmod +x "$stubdir/python3" "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
     # The minimal-PATH contract for the script's own machinery: POSIX utilities only,
     # never an optional toolchain. `tr` and `rm` joined it with the NUL-separated path
     # listing and its temp file (issue #2228) -- that file is created with builtins
     # rather than mktemp, but reaping it needs `rm`.
-    for tool in cat dirname grep python3 rm sh sort tr; do
+    for tool in cat dirname grep rm sh sort tr; do
       ln -s "$(command -v "$tool")" "$stubdir/$tool"
     done
     PATH="$stubdir:$PATH"
@@ -189,7 +178,7 @@ Describe 'run-gates.sh Composer vendor guard'
   It 'stops before PHP analysis when the Composer vendor checker fails'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
-    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py'
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)'
     The line 3 of output should equal 'remediation: composer install --no-interaction'
     The output should include 'GATE FAIL: uv run --locked python scripts/check_composer_vendor.py'
@@ -198,6 +187,7 @@ Describe 'run-gates.sh Composer vendor guard'
     The output should not include 'GATE PASS: composer phpstan'
     The output should not include 'GATE PASS: composer phpcs -- --standard=phpcs.xml.dist src/'
     The lines of output should equal 5
+    Assert [ -e "$pairing_marker" ]
     Assert [ -e "$checker_marker" ]
     Assert [ ! -e "$php_marker" ]
     Assert [ ! -e "$composer_marker" ]
@@ -261,20 +251,24 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     git_fixture -C "$repo" init -q
     # Under scripts/ so the files are in shellcheck's scope (src, scripts, .claude/hooks).
     mkdir -p "$repo/scripts" "$repo/tests"
-    cp "$PFB_ROOT/scripts/check_coverage_pairing.py" "$repo/scripts/"
     printf '#!/bin/sh\n# gone-marker: content distinct from kept.sh so git reports a\n# genuine deletion (identical content collapses to an R100 rename)\ntrue\n' > "$repo/scripts/gone.sh"
     gitc add -A; gitc commit -qm base
     base_sha=$(gitc rev-parse HEAD)
     gitc rm -q scripts/gone.sh
+    mkdir -p "$repo/scripts"
     printf '#!/bin/sh\ntrue\n' > "$repo/scripts/kept.sh"
     printf 'paired\n' > "$repo/tests/coverage-pairing.fixture"
     gitc add -A; gitc commit -qm head
-    # Tool stubs: the LAST planned gate (shellspec) records that it actually ran.
+    # Controlled stubs isolate run-gates wiring from the real checker/tool suites.
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/gatestub.XXXXXX")"
     marker="$stubdir/last-gate-ran"
+    pairing_raw="$stubdir/pairing.raw"
+    pairing_lines="$stubdir/pairing.lines"
+    require_pair="$stubdir/require-pair"
+    printf '#!/bin/sh\ncat > "%s"\ntr "\\0" "\\n" < "%s" > "%s"\nif [ -e "%s" ]; then grep -q "^tests/" "%s"; fi\n' "$pairing_raw" "$pairing_raw" "$pairing_lines" "$require_pair" "$pairing_lines" > "$stubdir/python3"
     printf '#!/bin/sh\ntouch "%s"\n' "$marker" > "$stubdir/shellspec"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/shellcheck"
-    chmod +x "$stubdir/shellspec" "$stubdir/shellcheck"
+    chmod +x "$stubdir/python3" "$stubdir/shellspec" "$stubdir/shellcheck"
     PATH="$stubdir:$PATH"
   }
   cleanup() { rm -rf "$repo" "$stubdir"; }
@@ -285,10 +279,33 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   It 'executes EVERY planned gate including the last one, and passes'
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 0
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     The line 5 of output should equal 'GATES: PASS'
     Assert [ -e "$marker" ]
+  End
+
+  It 'feeds exact NUL status records to the first checker gate'
+    expected=$(printf 'D\nscripts/gone.sh\nA\nscripts/kept.sh\nA\ntests/coverage-pairing.fixture')
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 0
+    The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+    The contents of file "$pairing_lines" should equal "$expected"
+  End
+
+  It 'propagates an unpaired release-only checker failure outside plan mode'
+    unpaired_base=$(gitc rev-parse HEAD)
+    printf '#!/bin/sh\n# unpaired release edit\ntrue\n' > "$repo/scripts/kept.sh"
+    gitc add scripts/kept.sh
+    gitc commit -qm unpaired
+    touch "$require_pair"
+    expected=$(printf 'M\nscripts/kept.sh')
+    When run sh "$script" --worktree "$repo" --diff "$unpaired_base"
+    The status should equal 1
+    The line 1 of output should equal 'GATE FAIL: python3 scripts/check_coverage_pairing.py --name-status-z'
+    The output should include 'GATES: FAIL'
+    The contents of file "$pairing_lines" should equal "$expected"
   End
 
   It 'runs later gates after an ordinary failure and keeps the final failure verdict'
@@ -309,7 +326,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
-    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py'
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
     The line 3 of output should equal 'shellcheck stdout diagnostic'
     The line 4 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
@@ -323,7 +340,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
-    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py'
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
     The line 3 of output should equal 'shellcheck stderr diagnostic'
     The line 4 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
@@ -335,7 +352,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
-    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py'
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
     The line 3 of output should equal 'line one'
     The line 4 of output should equal 'line two'
@@ -372,7 +389,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
-    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py'
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
     The line 3 of output should equal 'before'
     The line 4 of output should equal 'OVERALL=0'
@@ -388,7 +405,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     chmod +x "$stubdir/shellcheck"
     When run sh "$script" --worktree "$repo" --diff "$base_sha"
     The status should equal 1
-    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py'
+    The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The line 2 of output should equal 'GATE PASS: sh -n scripts/kept.sh'
     The line 3 of output should equal 'GATE FAIL: shellcheck scripts/kept.sh'
   End
@@ -421,7 +438,6 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   It 'plans gates for an uncommitted UNSTAGED edit even when the committed diff is empty'
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# unstaged edit, never committed\ntrue\n' > "$repo/scripts/kept.sh"
-    printf 'paired unstaged\n' > "$repo/tests/coverage-pairing.fixture"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
@@ -433,9 +449,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   It 'plans gates for a STAGED (git add, not committed) edit identically'
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# staged edit, never committed\ntrue\n' > "$repo/scripts/kept.sh"
-    printf 'paired staged\n' > "$repo/tests/coverage-pairing.fixture"
     gitc add scripts/kept.sh
-    gitc add tests/coverage-pairing.fixture
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
@@ -459,9 +473,7 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   It 'plans gates for a staged edit whose working-tree copy was reverted back to HEAD'
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# staged edit\ntrue\n' > "$repo/scripts/kept.sh"
-    printf 'paired staged-revert\n' > "$repo/tests/coverage-pairing.fixture"
     gitc add scripts/kept.sh
-    gitc add tests/coverage-pairing.fixture
     # Direct overwrite, NOT `git checkout` (which would reset the index too):
     # index keeps the staged edit, working tree goes back to HEAD's exact bytes.
     printf '#!/bin/sh\ntrue\n' > "$repo/scripts/kept.sh"
@@ -478,7 +490,6 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   It 'plans gates for a brand-new file that was never git add-ed'
     head_sha=$(gitc rev-parse HEAD)
     printf '#!/bin/sh\n# never staged, never committed\ntrue\n' > "$repo/scripts/brand_new.sh"
-    printf 'paired untracked\n' > "$repo/tests/coverage-pairing.fixture"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
@@ -495,7 +506,6 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     printf 'ignored.sh\n' > "$repo/.gitignore"
     printf '#!/bin/sh\n# would gate if not excluded\ntrue\n' > "$repo/scripts/ignored.sh"
     printf '#!/bin/sh\n# real untracked file alongside the ignored one\ntrue\n' > "$repo/scripts/brand_new.sh"
-    printf 'paired ignored-control\n' > "$repo/tests/coverage-pairing.fixture"
     When run sh "$script" --worktree "$repo" --diff "$head_sha"
     The status should equal 0
     The output should include 'GATE PASS: sh -n scripts/brand_new.sh'
