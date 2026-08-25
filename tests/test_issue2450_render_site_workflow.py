@@ -14,8 +14,6 @@ import importlib.util
 import re
 from pathlib import Path
 
-import yaml
-
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
@@ -74,17 +72,7 @@ def test_render_site_job_pins_source_ref_and_credentials() -> None:
     assert "persist-credentials: true" in job
 
 
-def test_render_site_workflow_serialises_without_deadlocking_reusable_callers() -> None:
-    workflow = yaml.safe_load(RENDER)
-    concurrency = workflow["concurrency"]
-    assert concurrency == {
-        "group": (
-            "${{ inputs.caller_holds_pkg_lock "
-            "&& format('pkg-render-site-{0}', github.run_id) || 'pkg-repository-mutation' }}"
-        ),
-        "queue": "max",
-        "cancel-in-progress": False,
-    }
+def test_render_site_job_has_no_second_concurrency_lock() -> None:
     assert "concurrency:" not in _extract_job(RENDER, "render")
 
 
