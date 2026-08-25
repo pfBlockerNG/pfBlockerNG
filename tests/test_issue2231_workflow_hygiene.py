@@ -467,6 +467,15 @@ _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 _UNRESOLVED_EXPRESSION = re.compile(r"<unresolved:(?P<expression>[^>]+)>")
 
 
+def _artifact_action_match(uses: object, where: str) -> re.Match[str] | None:
+    if not isinstance(uses, str):
+        return None
+    match = _ARTIFACT_ACTION.fullmatch(uses)
+    if _ARTIFACT_ACTION_REF.fullmatch(uses) and match is None:
+        raise AssertionError(f"{where}: rule=artifact-major: unclassified action ref {uses!r}")
+    return match
+
+
 def _expression_parts(source: str, separator: str) -> list[str]:
     parts: list[str] = []
     start = 0
@@ -631,6 +640,19 @@ def _selectors_match(name: str, selector: str) -> bool:
 
 def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
     documents = {name: _workflow_document(source, name) for name, source in sources.items()}
+    for workflow, document in documents.items():
+        jobs = document.get("jobs")
+        if not isinstance(jobs, dict):
+            continue
+        for job_name, job in jobs.items():
+            if not isinstance(job_name, str) or not isinstance(job, dict):
+                continue
+            steps = job.get("steps", [])
+            if not isinstance(steps, list):
+                continue
+            for step_index, step in enumerate(steps):
+                if isinstance(step, dict):
+                    _artifact_action_match(step.get("uses"), f"{workflow}:{job_name}:step-{step_index}")
     offences: set[str] = set()
     download_matches: dict[_DownloadKey, bool] = {}
     download_selectors: dict[_DownloadKey, set[str]] = {}
@@ -707,13 +729,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                 for step_index, step in enumerate(steps):
                     if not isinstance(step, dict):
                         continue
-                    uses = step.get("uses")
-                    match = _ARTIFACT_ACTION.fullmatch(uses) if isinstance(uses, str) else None
-                    if isinstance(uses, str) and _ARTIFACT_ACTION_REF.fullmatch(uses) and match is None:
-                        raise AssertionError(
-                            f"{workflow}:{job_name}:step-{step_index}: rule=artifact-major: "
-                            f"unclassified action ref {uses!r}"
-                        )
+                    match = _artifact_action_match(step.get("uses"), f"{workflow}:{job_name}:step-{step_index}")
                     if match is None:
                         continue
                     action_inputs = step.get("with", {})
@@ -1255,6 +1271,8 @@ _DOCKER_GLOBAL_VALUE_OPTIONS = {
     "--tlscert",
     "--tlskey",
     "-H",
+    "-c",
+    "-l",
 }
 
 
@@ -1786,38 +1804,31 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
             ):
                 identity = True
                 break
+        exact_member = frozenset({(pin.job, pin.output)})
         for job_name in sorted(descendants):
             job = jobs[job_name]
             if not isinstance(job, dict):
                 continue
             job_env = job.get("env", {})
-            aliases: set[str] = set()
-            if isinstance(job_env, dict):
-                aliases.update(
-                    name
-                    for name, value in job_env.items()
-                    if isinstance(name, str)
-                    and isinstance(value, str)
-                    and (pin.job, pin.output)
-                    in {(match.group("job"), match.group("output")) for match in _NEEDS_OUTPUT.finditer(value)}
-                )
             steps = job.get("steps", [])
             if not isinstance(steps, list):
                 continue
             for step in steps:
                 if not isinstance(step, dict):
                     continue
-                step_aliases = set(aliases)
+                effective_env: dict[object, object] = {}
+                if isinstance(job_env, dict):
+                    effective_env.update(job_env)
                 env = step.get("env", {})
                 if isinstance(env, dict):
-                    step_aliases.update(
-                        name
-                        for name, value in env.items()
-                        if isinstance(name, str)
-                        and isinstance(value, str)
-                        and (pin.job, pin.output)
-                        in {(match.group("job"), match.group("output")) for match in _NEEDS_OUTPUT.finditer(value)}
-                    )
+                    effective_env.update(env)
+                step_aliases = {
+                    name
+                    for name, value in effective_env.items()
+                    if isinstance(name, str)
+                    and isinstance(value, str)
+                    and _pin_expression_members(value) == exact_member
+                }
                 run = step.get("run")
                 if not isinstance(run, str):
                     continue
@@ -1883,7 +1894,16 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                             or argument.startswith(f"${name}:")
                             or argument.startswith(f"${{{name}}}:")
                         }
-                        if used_git & live_vars:
+                        used_git_live = {
+                            name
+                            for argument in words[2:]
+                            for name in live_vars
+                            if argument == f"${name}"
+                            or argument == f"${{{name}}}"
+                            or argument.startswith(f"${name}:")
+                            or argument.startswith(f"${{{name}}}:")
+                        }
+                        if used_git_live and step_aliases:
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
                                 f"replaces {pin.job}.{pin.output} at identity sink git {words[1]}"
