@@ -66,9 +66,9 @@ git_paths() {
 # line). Per-file gates (php -l, sh -n, shellcheck) emit one command per touched file.
 gates_for() {
 	files=$(grep -v '^legacy/' || true)
-	out=''
 	nl='
 '
+	out="python3 scripts/check_coverage_pairing.py${nl}"
 	# Per-file commands (php -l / sh -n / shellcheck) are re-parsed by run_gate's
 	# `sh -c`; a diff filename carrying shell metacharacters would inject there.
 	# The guard applies ONLY to those buckets -- aggregate gates (.py/.md suites)
@@ -131,14 +131,16 @@ run_gate() {
 		[ "$allow_missing" -eq 1 ] || overall=1
 		return 0
 	fi
-	# issue #1194: </dev/null -- a stdin-reading gate (full PHPUnit) otherwise eats
-	# the command loop's remaining gate lines, silently skipping those gates.
+	# issue #1194: ordinary gates read </dev/null so a stdin-reading gate cannot
+	# consume the command loop. Coverage pairing is the one aggregate exception:
+	# it receives the already-normalized changed-path list.
+	gate_input=/dev/null
+	case "$1" in
+	'python3 scripts/check_coverage_pairing.py') gate_input=$paths_tmp ;;
+	esac
 	# issue #1865: capture combined stdout+stderr so a failing gate's own output
-	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed. Runs
-	# under $(...), so the capture also waits for EOF from any background child the
-	# gate leaves holding stdout (e.g. shellspec's own backgrounded cleanup `rm -rf`) --
-	# negligible today, but a future daemonizing gate would otherwise look hung.
-	gate_output=$(cd "$worktree" && sh -c "$1" </dev/null 2>&1)
+	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed.
+	gate_output=$(cd "$worktree" && sh -c "$1" < "$gate_input" 2>&1)
 	gate_status=$?
 	if [ "$gate_status" -eq 0 ]; then
 		printf 'GATE PASS: %s\n' "$label"
@@ -192,6 +194,7 @@ main() {
 	# neither diff form surfaces a brand-new file never `git add`ed.
 	untracked=$(git_paths ls-files -z --others --exclude-standard) || exit 2
 	files=$(printf '%s\n%s\n%s\n%s\n' "$committed" "$staged" "$unstaged" "$untracked" | LC_ALL=C sort -u | grep -v '^$')
+	printf '%s\n' "$files" > "$paths_tmp"
 	# The shellspec gate must also fire when only spec files changed (cross-language
 	# consumers rule): specs are .sh files, so the extension mapping already covers it.
 	cmds=$(printf '%s\n' "$files" | gates_for)
