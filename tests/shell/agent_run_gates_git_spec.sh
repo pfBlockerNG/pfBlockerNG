@@ -18,15 +18,19 @@ Describe 'run-gates.sh over a C-quoted path'
     repo="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungateshostile.XXXXXX")"
     git_fixture -C "$repo" init -q
     gitc config commit.gpgsign false
-    mkdir -p "$repo/scripts" "$repo/tests"
-    cp "$PFB_ROOT/scripts/check_coverage_pairing.py" "$repo/scripts/"
+    mkdir -p "$repo/scripts"
     printf 'base\n' > "$repo/README.md"
-    gitc add -A
+    gitc add README.md
     gitc commit -q -m base
     gitc branch -f base HEAD
-    printf 'paired\n' > "$repo/tests/coverage-pairing.fixture"
+    stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesstatus.XXXXXX")"
+    pairing_raw="$stubdir/pairing.raw"
+    printf '#!/bin/sh\ncat > "%s"\nexit 0\n' "$pairing_raw" > "$stubdir/python3"
+    printf '#!/bin/sh\nexit 0\n' > "$stubdir/npx"
+    chmod +x "$stubdir/python3" "$stubdir/npx"
+    PATH="$stubdir:$PATH"
   }
-  cleanup() { rm -rf "$repo"; }
+  cleanup() { rm -rf "$repo" "$stubdir"; }
   Before 'make_repo'
   After 'cleanup'
 
@@ -48,7 +52,6 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m hostile
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
       The output should include 'uv run --locked pytest'
       The output should include 'uv run --locked ruff check .'
       The stderr should equal ''
@@ -108,11 +111,71 @@ Describe 'run-gates.sh over a C-quoted path'
     End
   End
 
+  Describe 'status-aware coverage input'
+    It 'retains a committed release-plane deletion'
+      printf 'x = 1\n' > "$repo/scripts/deleted.py"
+      gitc add -A
+      gitc commit -q -m present
+      deletion_base=$(gitc rev-parse HEAD)
+      gitc rm -q scripts/deleted.py
+      gitc commit -q -m deleted
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$deletion_base"
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'D\nscripts/deleted.py')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
+
+    It 'retains a staged release-plane deletion'
+      printf 'x = 1\n' > "$repo/scripts/deleted.py"
+      gitc add -A
+      gitc commit -q -m present
+      deletion_base=$(gitc rev-parse HEAD)
+      gitc rm -q scripts/deleted.py
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$deletion_base"
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'D\nscripts/deleted.py')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
+
+    It 'retains an unstaged release-plane deletion'
+      printf 'x = 1\n' > "$repo/scripts/deleted.py"
+      gitc add -A
+      gitc commit -q -m present
+      deletion_base=$(gitc rev-parse HEAD)
+      rm "$repo/scripts/deleted.py"
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$deletion_base"
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'D\nscripts/deleted.py')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
+
+    It 'retains both sides of a release-to-neutral rename'
+      printf 'x = 1\n' > "$repo/scripts/renamed.py"
+      gitc add -A
+      gitc commit -q -m present
+      rename_base=$(gitc rev-parse HEAD)
+      gitc mv scripts/renamed.py scripts/README.md
+      gitc commit -q -m renamed
+      When run sh "$SCRIPT" --worktree "$repo" --diff "$rename_base" --allow-missing
+      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
+      The status should equal 0
+      expected=$(printf 'R100\nscripts/renamed.py\nscripts/README.md')
+      actual=$(tr '\0' '\n' < "$pairing_raw")
+      The variable actual should equal "$expected"
+    End
+  End
+
   # ── the planned command text is what actually runs ────────────────────────── #
   #
-  # gates_for() keeps the unconditional coverage checker first, followed by the
-  # file-type -> canonical-command mapping pinned by agent_run_gates_spec.sh.
-  # These examples cover main() handing those exact commands to the shell.
+  # gates_for() stays a pure file-type -> canonical-command mapping (pinned by the
+  # sibling agent_run_gates_spec.sh); these examples cover main() handing those exact
+  # commands to the shell, which is the half the AGENT_SOURCE_ONLY seam bypasses.
   Describe 'planned commands reach the shell verbatim'
     It 'plans the canonical Python gate commands in order'
       printf 'x = 1\n' > "$repo/scripts/mod.py"
@@ -120,7 +183,7 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m python
       When run sh "$SCRIPT" --worktree "$repo" --diff base --plan
       The status should equal 0
-      The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py'
+      The line 1 of output should equal 'python3 scripts/check_coverage_pairing.py --name-status-z'
       The line 2 of output should equal 'uv run --locked pytest'
       The line 3 of output should equal 'uv run --locked ruff check .'
     End
@@ -149,7 +212,6 @@ Describe 'run-gates.sh over a C-quoted path'
       gitc commit -q -m python
       When run sh -c "PATH='$stub:$PATH' sh '$SCRIPT' --worktree '$repo' --diff base"
       The status should equal 0
-      The output should include 'GATE PASS: python3 scripts/check_coverage_pairing.py'
       The output should include 'GATES: PASS'
       The output should not include 'TOOL-MISSING'
       The contents of file "$repo/uv.log" should include 'UV run --locked pytest'
