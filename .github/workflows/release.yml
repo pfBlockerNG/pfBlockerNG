@@ -478,6 +478,9 @@ jobs:
     if: ${{ always() && (needs.prepare-release.result == 'success' || needs.prepare-release.result == 'skipped') }}
     outputs:
       release_matrix: ${{ steps.matrices.outputs.release_matrix }}
+      route_matrix: ${{ steps.pins.outputs.route_matrix }}
+      ci_metadata_sha: ${{ steps.pins.outputs.ci_metadata_sha }}
+      ports_sha: ${{ steps.pins.outputs.ports_sha }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
       release_stage: ${{ steps.channel.outputs.release_stage }}
@@ -568,9 +571,37 @@ jobs:
           PY
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Pin ci-metadata, ROUTE, and Ports identities
+        id: pins
+        run: |
+          set -eu
+          git fetch --no-tags origin \
+            "+refs/heads/ci-metadata:refs/remotes/origin/ci-metadata"
+          CI_METADATA_SHA=$(git rev-parse "refs/remotes/origin/ci-metadata^{commit}")
+          PORTS_SHA=$(git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports \
+            refs/heads/pfblockerng/use-github | awk 'NR == 1 { print $1 }')
+          for PIN in "$CI_METADATA_SHA" "$PORTS_SHA"; do
+            case "$PIN" in
+              ''|*[!0-9a-f]*) echo "::error::resolved release identity is not a lowercase Git SHA"; exit 1 ;;
+            esac
+            case "${#PIN}" in
+              40|64) ;;
+              *) echo "::error::resolved release identity is not a 40- or 64-character Git SHA"; exit 1 ;;
+            esac
+          done
+          ROUTE_MATRIX=$(git show "${CI_METADATA_SHA}:supported-versions.json" \
+            | jq -ce '.versions | select(type == "array")')
+          {
+            echo "ci_metadata_sha=${CI_METADATA_SHA}"
+            echo "ports_sha=${PORTS_SHA}"
+            echo "route_matrix=${ROUTE_MATRIX}"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Read matrix from ci-metadata
         id: matrices
         uses: ./.github/actions/read-version-matrix
+        with:
+          ref: ${{ steps.pins.outputs.ci_metadata_sha }}
 
   # ── 1d. Resolve build stamp ──────────────────────────────────────────────
   # Checks out the SAME ref as build-pkgs-portable so that `created` (epoch of the
@@ -982,6 +1013,22 @@ jobs:
             src/
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
+      - name: Create tagged release handoff
+        env:
+          ROUTE_MATRIX: ${{ needs.read-matrix.outputs.route_matrix }}
+        run: |
+          set -eu
+          RELEASE_HANDOFF="$RUNNER_TEMP/pfblockerng-release-handoff.json"
+          printf '%s\n' "$ROUTE_MATRIX" > "${{ runner.temp }}/route-matrix.json"
+          python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/tagged_release_handoff.py" \
+            --release-tag ${{ needs.prepare-release.outputs.tag }} \
+            --source-sha ${{ needs.prepare-release.outputs.sha }} \
+            --ci-metadata-sha ${{ needs.read-matrix.outputs.ci_metadata_sha }} \
+            --ports-sha ${{ needs.read-matrix.outputs.ports_sha }} \
+            --route-matrix ${{ runner.temp }}/route-matrix.json \
+            --output "$RELEASE_HANDOFF"
+          echo "RELEASE_HANDOFF=${RELEASE_HANDOFF}" >> "$GITHUB_ENV"
+
       - name: Create the GitHub Release as a DRAFT
         # This repo has IMMUTABLE RELEASES enabled: once a release is PUBLISHED its
         # assets are frozen, so assets can only be added while it is still a draft.
@@ -998,10 +1045,11 @@ jobs:
           body: ${{ steps.changelog.outputs.body }}
           prerelease: ${{ steps.meta.outputs.prerelease }}
           draft: true
-          # Idempotent on re-run: update the existing draft and replace its source
-          # archive rather than erroring or duplicating it.
+          # Idempotent on re-run: replace both build-time identity assets.
           overwrite_files: true
-          files: ${{ env.ARCHIVE }}
+          files: |
+            ${{ env.ARCHIVE }}
+            ${{ env.RELEASE_HANDOFF }}
 
   # ── 2b. Build .pkg artifacts (portable Linux builder) ────────────────────
   # Builds ONE .pkg per build-role version/variant row. The release_matrix is
@@ -1105,13 +1153,9 @@ jobs:
           COMMIT:        ${{ needs.resolve-stamp.outputs.commit }}
           CREATED:       ${{ needs.resolve-stamp.outputs.created }}
           MATRIX_ROW:    ${{ toJson(matrix) }}
+          PORTS_SHA:     ${{ needs.read-matrix.outputs.ports_sha }}
         run: |
           set -eu
-          PORTS_SHA=$(git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports refs/heads/pfblockerng/use-github | awk 'NR == 1 { print $1 }')
-          [ -n "$PORTS_SHA" ] || { echo "::error::FreeBSD-ports branch has no resolvable SHA"; exit 1; }
-          # The heredoc below runs in a child process; $GITHUB_ENV only reaches LATER steps.
-          export PORTS_SHA
-          echo "PORTS_SHA=${PORTS_SHA}" >> "$GITHUB_ENV"
           python3 - <<'PY'
           import json
           import os
@@ -1165,6 +1209,7 @@ jobs:
           VARIANT:      ${{ matrix.variant }}
           PFSENSE_VERSION: ${{ matrix.pfsense_version }}
           EXTRA_PKGS:   ${{ steps.extras.outputs.extra_pkgs }}
+          PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}
         run: |
           set -eu
           # Keep generated Ports and package trees outside the pinned source checkout.
@@ -1422,13 +1467,15 @@ jobs:
           EXPECTED_PKGS=$(printf '%s' "$ASSET_MATRIX" | jq '(length) + ([.[] | (.extra_pkgs // []) | length] | add // 0)')
           PKG_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".pkg"))] | length')
           SRC_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name | endswith(".tar.gz"))] | length')
+          HANDOFF_COUNT=$(printf '%s' "$META" | jq '[.assets[] | select(.name == "pfblockerng-release-handoff.json")] | length')
 
           echo "Draft assets:"
           printf '%s' "$META" | jq -r '.assets[].name' | sort | sed 's/^/  - /'
-          echo "Expected .pkg: ${EXPECTED_PKGS} | found .pkg: ${PKG_COUNT} | source archives: ${SRC_COUNT}"
+          echo "Expected .pkg: ${EXPECTED_PKGS} | found .pkg: ${PKG_COUNT} | source archives: ${SRC_COUNT} | handoffs: ${HANDOFF_COUNT}"
 
           FAIL=0
           [ "$SRC_COUNT" -ge 1 ] || { echo "::error::no source archive (.tar.gz) attached to the draft"; FAIL=1; }
+          [ "$HANDOFF_COUNT" -eq 1 ] || { echo "::error::expected exactly one pfblockerng-release-handoff.json asset"; FAIL=1; }
           [ "$EXPECTED_PKGS" -ge 1 ] || { echo "::error::build matrix is empty"; FAIL=1; }
           [ "$PKG_COUNT" -eq "$EXPECTED_PKGS" ] || { echo "::error::expected ${EXPECTED_PKGS} .pkg assets, found ${PKG_COUNT} — the draft is incomplete"; FAIL=1; }
 

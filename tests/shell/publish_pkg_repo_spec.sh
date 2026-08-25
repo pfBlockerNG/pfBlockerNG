@@ -53,6 +53,7 @@ Describe 'publish-pkg-repo.sh'
     # python calls are doubled here rather than re-verified.
     mkdir -p "${base}/fake-src/scripts"
     cat >"${base}/fake-src/scripts/publish_release.py" <<'PY'
+import json
 import os
 import sys
 
@@ -64,6 +65,14 @@ def _arg(name, argv):
 def main():
     argv = sys.argv[1:]
     pkg_repo = _arg("--pkg-repo", argv)
+    handoff_path = _arg("--handoff", argv)
+    _arg("--source-sha", argv)
+    try:
+        with open(handoff_path, encoding="utf-8") as fh:
+            json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"::error::simulated tagged handoff read/parse failure: {exc}", file=sys.stderr)
+        return 1
     mode = os.environ.get("FAKE_MODE", "success")
 
     # Records the exact argv this invocation received, for the spec's own
@@ -229,11 +238,13 @@ PY
         SOURCE_REPOSITORY=pfBlockerNG/pfBlockerNG
         RELEASE_ID=1
         RELEASE_TAG=v4.0.0.b1
+        SOURCE_SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         DESTINATIONS='["edge"]'
         SOURCE_RUN_ID=10:1
         ASSETS_DIR="${base}/assets"
-        ROUTE_MATRIX='[{"freebsd_major":"15","pfsense_version":"2.8","variant":"CE","php_version":"8.3","py_flavor":"py311"}]'
-        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS SOURCE_RUN_ID ASSETS_DIR ROUTE_MATRIX
+        HANDOFF_FILE="${base}/tagged-release-handoff.json"
+        printf '%s\n' '{"release_tag":"v4.0.0.b1","source_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}' > "$HANDOFF_FILE"
+        export PFB_SRC PKG_REPO SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG SOURCE_SHA DESTINATIONS SOURCE_RUN_ID ASSETS_DIR HANDOFF_FILE
     }
     common_env
     mkdir -p "${base}/assets"
@@ -600,6 +611,44 @@ HOOK
     The result of function remote_head_now should equal "$original_remote_head"
   End
 
+  # --- Tagged durable handoff (issue #2387) ---------------------------------
+
+  It 't1: tagged mode forwards the immutable source and handoff instead of ROUTE text'
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    export FAKE_INVOCATION_RECORD="${base}/tagged-invocation.txt"
+    When run script "$script"
+    The status should equal 0
+    The output should include 'ADVANCE'
+    The stderr should include 'main'
+    invocation="$(cat "${base}/tagged-invocation.txt")"
+    The variable invocation should include '--source-sha'
+    The variable invocation should include "$SOURCE_SHA"
+    The variable invocation should include '--handoff'
+    The variable invocation should include "$HANDOFF_FILE"
+    The variable invocation should not include '--route-matrix'
+  End
+
+  It 't2: malformed tagged handoff aborts before any package-repository mutation'
+    printf '%s\n' 'not json' > "$HANDOFF_FILE"
+    export FAKE_MODE=success
+    export FAKE_TOUCHED=edge/ce-2.8
+    When run script "$script"
+    The status should equal 1
+    The stderr should include 'simulated tagged handoff read/parse failure'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
+  It 't3: missing tagged HANDOFF_FILE fails before any git call'
+    unset HANDOFF_FILE
+    When run script "$script"
+    The status should not equal 0
+    The stderr should include 'HANDOFF_FILE is required'
+    The result of function local_head_now should equal "$original_head"
+    The result of function remote_head_now should equal "$original_remote_head"
+  End
+
   # --- PFB_SIGN_KEY threading (issue #2675 step 1) --------------------------
 
   It 'sk1: tagged mode passes --sign-key to the publisher when PFB_SIGN_KEY is set and non-empty'
@@ -763,7 +812,7 @@ HOOK
 
   It 'n3: nightly mode does not require any tagged-only env var'
     nightly_env
-    unset SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS ASSETS_DIR ROUTE_MATRIX
+    unset SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG SOURCE_SHA DESTINATIONS ASSETS_DIR
     export FAKE_MODE=success
     export FAKE_TOUCHED=nightly/ce-2.8
     When run script "$script"
@@ -1193,7 +1242,7 @@ PY
 
   It 'd3: discard succeeds with none of the tagged-only vars set — discard needs only STAGING_PREFIX + SOURCE_RUN_ID'
     seed_staged_tree
-    unset ASSETS_DIR SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG DESTINATIONS ROUTE_MATRIX
+    unset ASSETS_DIR SOURCE_REPOSITORY RELEASE_ID RELEASE_TAG SOURCE_SHA DESTINATIONS HANDOFF_FILE
     export PUBLISH_STAGE=discard
     export STAGING_PREFIX=staging/10-1
     When run script "$script"

@@ -366,19 +366,13 @@ jobs:
           path: pkg-repo
           fetch-depth: 1
 
-      - name: Download release .pkg assets + build the digest sidecar
-        # ASSUMED: the GitHub Releases API asset object carries a `digest` field
-        # (`sha256:<hex>`) — an INDEPENDENT checksum from the CDN download itself,
-        # never recomputed from the same bytes it is meant to check. CI must confirm
-        # the live API response for pfBlockerNG/pfBlockerNG actually includes it; a
-        # missing digest fails this run closed rather than silently trusting the
-        # download. publish_release.py reads this sidecar as
-        # <assets-dir>/digests.json.
+      - name: Download release assets + build the digest sidecar
         env:
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
           RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          HANDOFF_NAME: pfblockerng-release-handoff.json
         run: |
           set -eu
           [ -n "$RELEASE_ID" ] || { echo "::error::release_id is empty — the resolve job produced none for this Release"; exit 1; }
@@ -391,19 +385,22 @@ jobs:
           BAD=$(printf '%s' "$PKG_ASSETS" | jq '[.[] | select((.digest // "") | startswith("sha256:") | not)] | length')
           [ "$BAD" -eq 0 ] || {
             echo "::error::one or more .pkg release assets have no sha256 digest from the GitHub API"; exit 1; }
+          HANDOFF_ASSET=$(printf '%s' "$META" | jq -c --arg name "$HANDOFF_NAME" '[.assets[] | select(.name == $name)]')
+          [ "$(printf '%s' "$HANDOFF_ASSET" | jq 'length')" -eq 1 ] || {
+            echo "::error::release ${RELEASE_TAG} must carry exactly one ${HANDOFF_NAME}"; exit 1; }
+          HANDOFF_DIGEST=$(printf '%s' "$HANDOFF_ASSET" | jq -r '.[0].digest // ""')
+          case "$HANDOFF_DIGEST" in
+            sha256:[0-9a-f][0-9a-f]*) ;;
+            *) echo "::error::${HANDOFF_NAME} has no sha256 digest from the GitHub API"; exit 1 ;;
+          esac
           printf '%s' "$PKG_ASSETS" \
             | jq 'map({(.name): (.digest | ltrimstr("sha256:"))}) | add' \
             > "${RUNNER_TEMP}/assets/digests.json"
           gh release download "$RELEASE_TAG" -R "$REPOSITORY" --pattern '*.pkg' --dir "${RUNNER_TEMP}/assets"
-
-      - name: Read the pinned ROUTE matrix
-        id: route
-        run: |
-          set -eu
-          git fetch --no-tags --depth 1 origin \
-            "+refs/heads/ci-metadata:refs/remotes/origin/ci-metadata"
-          ROUTE_MATRIX=$(sh scripts/read-version-matrix.sh --print-route | jq -c .)
-          echo "route_matrix=${ROUTE_MATRIX}" >> "$GITHUB_OUTPUT"
+          gh release download "$RELEASE_TAG" -R "$REPOSITORY" --pattern "$HANDOFF_NAME" --dir "${RUNNER_TEMP}/assets"
+          ACTUAL_HANDOFF_DIGEST=$(sha256sum "${RUNNER_TEMP}/assets/${HANDOFF_NAME}" | cut -d' ' -f1)
+          [ "sha256:${ACTUAL_HANDOFF_DIGEST}" = "$HANDOFF_DIGEST" ] || {
+            echo "::error::${HANDOFF_NAME} digest does not match the Release API"; exit 1; }
 
       - name: Materialise the catalogue signing key
         env:
@@ -418,9 +415,9 @@ jobs:
           SOURCE_REPOSITORY: ${{ needs.resolve.outputs.source_repository }}
           RELEASE_ID: ${{ needs.resolve.outputs.release_id }}
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
           DESTINATIONS: ${{ needs.resolve.outputs.destinations }}
           SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
-          ROUTE_MATRIX: ${{ steps.route.outputs.route_matrix }}
           # issue #2389: stage under docs/staging/<seg>/<channel>/<varver> instead
           # of publishing directly — nothing is visible under <channel>/<varver>
           # until promote-pkg-repo runs the SAME script in `promote` mode, after a
@@ -435,6 +432,7 @@ jobs:
           export PFB_SRC="$GITHUB_WORKSPACE"
           export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
           export ASSETS_DIR="$RUNNER_TEMP/assets"
+          export HANDOFF_FILE="$RUNNER_TEMP/assets/pfblockerng-release-handoff.json"
           export PFB_SIGN_KEY="${RUNNER_TEMP}/pfb-pkg-signing.key"
           sh scripts/publish-pkg-repo.sh
 

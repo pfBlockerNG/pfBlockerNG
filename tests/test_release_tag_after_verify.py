@@ -884,6 +884,7 @@ def test_build_record_keeps_the_original_release_33_matrix_row(tmp_path: Path) -
             "COMMIT": "b" * 40,
             "CREATED": "1",
             "MATRIX_ROW": json.dumps(row),
+            "PORTS_SHA": "a" * 40,
             "RUNNER_TEMP": str(tmp_path),
             "GITHUB_ENV": str(github_env),
         },
