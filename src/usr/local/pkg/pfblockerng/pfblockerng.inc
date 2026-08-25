@@ -5239,26 +5239,6 @@ if (!defined('PFB_PKG_TIMEOUT')) {
 }
 
 /*
- * Run one login.conf editor verb ('login-ca-sync' / 'login-ca-revoke', issue #2617) via the
- * installed rc.d hook, bounded by timeout(1) so a hung hook can never stall the caller. The
- * verbs are consent-independent: pfb_login_ca_apply() below decides which one to invoke and
- * must flush config.xml first, since the hook re-reads consent live from config.xml itself.
- */
-function pfb_login_ca_command(
-	string $action,
-	string $hook = PFB_REPO_GENERATE_HOOK,
-	string $timeout = PFB_PKG_TIMEOUT
-): bool {
-	if (!in_array($action, ['login-ca-sync', 'login-ca-revoke'], TRUE) || !is_executable($hook)) {
-		return FALSE;
-	}
-	$out = [];
-	$ret = -1;
-	exec($timeout . ' ' . escapeshellarg($hook) . ' ' . escapeshellarg($action) . ' 2>/dev/null', $out, $ret);
-	return $ret === 0;
-}
-
-/*
  * Regenerate this box's pkg repo conf (and install the catalogue signing key's trusted
  * fingerprint) by running the installed rc.d hook's start verb, bounded by timeout(1).
  *
@@ -5282,10 +5262,7 @@ function pfb_repo_conf_regenerate(
 }
 
 /*
- * Run a pkg(8) shell command directly. Carries no CA environment itself (issue #2623) --
- * SSL_CA_CERT_PATH reaches every pkg call through process inheritance instead: login.conf's
- * setenv at boot, and install.sh's one-time webConfigurator restart right after that carry
- * lands, which covers the current session too.
+ * Run a pkg(8) shell command directly.
  */
 function pfb_pkg_exec(string $command, array &$out = [], int &$ret = -1): void {
 	$out = [];
@@ -5435,30 +5412,6 @@ function pfb_pkg_newest_version(array $versions): string {
 		}
 	}
 	return $latest;
-}
-
-/*
- * Persist the login.conf CA-carry consent token (issue #2617). The section always renders
- * now, so an absent checkbox in the POST is the explicit Off token -- mirrors
- * pfb_software_check's save above, no "was it shown" marker gate.
- */
-function pfb_login_ca_consent_save(array $post): string {
-	$token = pfb_filter($post['pfb_pkg_ca_consent'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
-	PfbConfig::write('gen/pfb_pkg_ca_consent', $token);
-	return $token;
-}
-
-/* Caller must flush config after save() and before invoking the installed hook. */
-function pfb_login_ca_apply(
-	string $token,
-	bool $was_consented,
-	?callable $command = NULL
-): bool {
-	$command ??= 'pfb_login_ca_command';
-	if ($token === PfbToggle::On->value) {
-		return $command('login-ca-sync');
-	}
-	return !$was_consented || $command('login-ca-revoke');
 }
 
 /*

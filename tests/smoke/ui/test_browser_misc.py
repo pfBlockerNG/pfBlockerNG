@@ -56,7 +56,6 @@ import pytest
 from .. import helpers
 from .conftest import mask_page_identity
 from .test_render_smoke import (
-    _CONSENT_FIELD_MARKER,
     _seed_vm_file,
     software_panel_forced,
 )
@@ -317,25 +316,6 @@ def test_software_panel_screenshot_when_enabled(
         _open(browser_page, webui, SOFTWARE_PAGE)
         assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
         _shot(browser_page, screenshot_dir, "software_panel_enabled")
-
-
-def test_software_panel_login_ca_consent_section_screenshot(
-    smoke_vm: SmokeVM,
-    browser_page: Page,
-    webui: WebUI,
-    screenshot_dir: Path,
-) -> None:
-    """Capture the login.conf CA-consent section (issue #2617) in its rendered state.
-
-    Mirrors ``test_software_panel_screenshot_when_enabled``: the section now renders
-    unconditionally (issue #2617 retired the #2518 Plus-only pkg.conf PKG_ENV gate), so
-    no seeding is needed for the DOM/screenshot capture.
-    """
-    with software_panel_forced(smoke_vm, "on"):
-        _open(browser_page, webui, SOFTWARE_PAGE)
-        assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
-        assert _CONSENT_FIELD_MARKER in browser_page.content(), "login.conf CA-consent control absent from the DOM"
-        _shot(browser_page, screenshot_dir, "software_panel_login_ca_consent")
 
 
 @pytest.mark.ui_browser

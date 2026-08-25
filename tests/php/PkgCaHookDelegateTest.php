@@ -5,9 +5,7 @@ declare(strict_types=1);
 use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
-#[CoversFunction('pfb_login_ca_command')]
 #[CoversFunction('pfb_pkg_exec')]
-#[CoversFunction('pfb_login_ca_apply')]
 #[CoversFunction('pfb_repo_conf_regenerate')]
 final class PkgCaHookDelegateTest extends TestCase
 {
@@ -54,15 +52,6 @@ final class PkgCaHookDelegateTest extends TestCase
 		}
 	}
 
-	public function testCommandRunsLoginCaVerbsAndPropagatesStatus(): void
-	{
-		$this->assertTrue(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
-		$this->assertTrue(pfb_login_ca_command('login-ca-revoke', $this->hook, $this->timeout));
-		$this->assertSame("login-ca-sync\nlogin-ca-revoke\n", file_get_contents($this->log));
-		putenv('PFB_HOOK_STATUS=7');
-		$this->assertFalse(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
-	}
-
 	public function testRepoConfRegenerateRunsTheHooksStartVerb(): void
 	{
 		// issue #2675: an upgrade must correct a conf written before the flip. The
@@ -94,20 +83,6 @@ final class PkgCaHookDelegateTest extends TestCase
 		$this->assertFalse(pfb_repo_conf_regenerate($this->hook, $this->timeout));
 	}
 
-	public function testCommandRefusesRetiredVerbsWithoutRunningTheHook(): void
-	{
-		$this->assertFalse(pfb_login_ca_command('ca-sync', $this->hook, $this->timeout));
-		$this->assertFalse(pfb_login_ca_command('ca-revoke', $this->hook, $this->timeout));
-		$this->assertFalse(pfb_login_ca_command('ca-state', $this->hook, $this->timeout));
-		$this->assertFileDoesNotExist($this->log);
-	}
-
-	public function testCommandBoundsAHangingHook(): void
-	{
-		putenv('PFB_HOOK_SLEEP=1');
-		$this->assertFalse(pfb_login_ca_command('login-ca-sync', $this->hook, $this->timeout));
-	}
-
 	public function testPkgExecRunsTheCommandDirectlyWithNoSyncGate(): void
 	{
 		$out = [];
@@ -115,55 +90,5 @@ final class PkgCaHookDelegateTest extends TestCase
 		pfb_pkg_exec('/usr/bin/printf ok', $out, $ret);
 		$this->assertSame(['ok'], $out);
 		$this->assertSame(0, $ret);
-	}
-
-	/*
-	 * pfb_pkg_exec() no longer exports SSL_CA_CERT_PATH itself under any consent/CA-dir
-	 * combination (issue #2623) -- that per-call putenv is superseded by install.sh
-	 * restarting the webConfigurator once its login.conf carry lands, which reaches every
-	 * later GUI-driven pkg call natively. A caller still passing a CA-dir hint (the
-	 * retired 4th argument) proves the OLD contract would have exported here -- the new
-	 * one silently ignores it. An ambient value the process environment already carried
-	 * (what a restarted php-fpm inherits) must still pass through untouched, since
-	 * pfb_pkg_exec is a plain exec() that never mutates the environment either way.
-	 */
-	public function testPkgExecNeverExportsCaPathItself(): void
-	{
-		$caDir = $this->root . '/ca';
-		mkdir($caDir, 0o755, TRUE);
-		// A CA hash directory (certctl rehash output) is populated with dangling
-		// symlinks -- glob() still lists them, so a real directory always counts here.
-		symlink('/nonexistent-target', $caDir . '/dead.0');
-
-		$out = [];
-		$ret = -1;
-
-		// (a) consent ON + populated dir -- the retired contract exported here; the
-		// current one must not.
-		putenv('SSL_CA_CERT_PATH');
-		PfbConfig::writeSystem('gen/pfb_pkg_ca_consent', PfbToggle::On);
-		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
-		$this->assertSame(1, $ret);
-		$this->assertSame([], $out);
-
-		// (b) an ambient value the process environment already carried passes through
-		// untouched -- proving pfb_pkg_exec never unsets it either.
-		putenv('SSL_CA_CERT_PATH=' . $caDir);
-		pfb_pkg_exec('printenv SSL_CA_CERT_PATH', $out, $ret, $caDir);
-		$this->assertSame(0, $ret);
-		$this->assertSame([$caDir], $out);
-	}
-
-	public function testApplyMapsConsentTransitions(): void
-	{
-		$actions = [];
-		$command = static function (string $action) use (&$actions): bool {
-			$actions[] = $action;
-			return TRUE;
-		};
-		$this->assertTrue(pfb_login_ca_apply('on', FALSE, $command));
-		$this->assertTrue(pfb_login_ca_apply('', TRUE, $command));
-		$this->assertTrue(pfb_login_ca_apply('', FALSE, $command));
-		$this->assertSame(['login-ca-sync', 'login-ca-revoke'], $actions);
 	}
 }

@@ -89,36 +89,11 @@ $input_errors = array();
 // unticked, so persist the owner-ruled empty Off token; an absent config key defaults On.
 if ($_POST && isset($_POST['save'])) {
 	PfbConfig::write('gen/pfb_software_check', pfb_filter($_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '');
-
-	// issue #2617: pfb_login_ca_consent_save() only persists the posted token; it never
-	// touches /etc/login.conf. Flush BEFORE pfb_login_ca_apply() (the sync half) can invoke
-	// the hook -- a crash between the hook's edit and this flush must never leave the box
-	// modified with no recorded consent surviving a reboot, default-on notwithstanding.
-	$pfb_ca_was_consented = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
-	$pfb_ca_token = pfb_login_ca_consent_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');
-
-	// The consent flag is already durable; the installed hook now owns the file mutation.
-	$pfb_ca_ok = pfb_login_ca_apply($pfb_ca_token, $pfb_ca_was_consented);
-	if ($pfb_ca_ok) {
-		header('Location: /pfblockerng/pfblockerng_software.php');
-		exit;
-	}
-	// Diagnose per verb: a failed sync is almost always the unpopulated-CA-dir guard;
-	// a failed revoke has no CA-dir dependency by design, so its causes are the file's.
-	$input_errors[] = $pfb_ca_token === PfbToggle::On->value
-		? 'The setting was saved, but pfBlockerNG could not update /etc/login.conf right now '
-			. '(the CA certificate directory may be missing or empty -- try `certctl rehash`); '
-			. 'it will retry at the next boot.'
-		: 'The setting was saved, but pfBlockerNG could not update /etc/login.conf right now '
-			. '(the file may be a symlink, or have a shape pfBlockerNG does not edit); '
-			. 'it will retry at the next boot.';
+	header('Location: /pfblockerng/pfblockerng_software.php');
+	exit;
 }
 
-// N-stale-checkbox (issue #2518 fix round): read AFTER the save block above, not before -- a
-// CA-sync failure re-renders this SAME request (no redirect), and the admin's just-posted
-// 'pfb_software_check' choice must be reflected on that re-render, not the value from before
-// this Save.
 $pfb_sw_check	= pfb_software_check_enabled();
 
 // "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
@@ -225,29 +200,6 @@ $section->addInput(new Form_Checkbox(
 	$pfb_sw_check,
 	'on'
 ))->setHelp('Periodically check for a new version and notify when one is available.');
-$form->add($section);
-
-// Package manager CA trust -- always renders (owner ruling: no edition gate; the installed
-// rc.d hook applies the login.conf edit at boot and this save applies it immediately, and
-// its value is inert on a box with no Plus CA pin, so a CE box that later upgrades to Plus
-// already carries the setting).
-$pfb_ca_consent = PfbConfig::read('gen/pfb_pkg_ca_consent') === PfbToggle::On;
-$pfb_ca_help = 'pfSense Plus pins pkg to a Netgate-only CA bundle, which blocks third-party '
-	. 'package repositories. When enabled, pfBlockerNG keeps '
-	. '<code>SSL_CA_CERT_PATH=/etc/ssl/certs</code> in the <code>default</code> login class '
-	. '<code>setenv</code> list in <code>/etc/login.conf</code>, so every process started from '
-	. 'then on (including at boot) hands pkg the system trust store; running daemons pick it up '
-	. 'when they next start, and a reboot applies it everywhere. On CE the value is harmless. '
-	. 'Unchecking this removes only pfBlockerNG\'s value and leaves the rest of the file untouched.';
-
-$section = new Form_Section('Package manager CA trust');
-$section->addInput(new Form_Checkbox(
-	'pfb_pkg_ca_consent',
-	'Carry the system CA store into pkg',
-	'Enabled',
-	$pfb_ca_consent,
-	'on'
-))->setHelp($pfb_ca_help);
 $form->add($section);
 
 $section = new Form_Section('Actions');
