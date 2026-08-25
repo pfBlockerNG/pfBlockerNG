@@ -169,7 +169,7 @@ def _visible_markdown_lines(body: str) -> list[str]:
     visible: list[str] = []
     in_comment = False
     fence: tuple[str, int] | None = None
-    for line in body.splitlines():
+    for line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         if in_comment:
             if "-->" in line:
                 in_comment = False
@@ -185,7 +185,7 @@ def _visible_markdown_lines(body: str) -> list[str]:
             trailing = match.group(3)
             if fence is None:
                 fence = (char, len(run))
-            elif char == fence[0] and len(run) >= fence[1] and not trailing.strip():
+            elif char == fence[0] and len(run) >= fence[1] and re.fullmatch(r"[ \t]*", trailing):
                 fence = None
             continue
         if fence is None:

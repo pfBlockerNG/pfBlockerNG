@@ -587,6 +587,10 @@ def test_frozen_red_table_must_be_one_visible_unindented_delimited_table(tmp_pat
         f"````text\n```\n{table}```\n````\n",
         f"~~~~text\n~~~\n{table}~~~\n~~~~\n",
         f"````\n````not-a-close\n{table}````\n",
+        f"```text\n```\u00a0\n{table}```\n",
+        f"```text\n```\f{table}```\n",
+        f"```text\n```\u0085{table}```\n",
+        f"```text\n```\u2028{table}```\n",
     )
     for body_text in invalid_bodies:
         body = tmp_path / "body.md"
@@ -596,6 +600,13 @@ def test_frozen_red_table_must_be_one_visible_unindented_delimited_table(tmp_pat
     body = tmp_path / "visible.md"
     body.write_text(f"```text\nnot evidence\n```\n\n{table}", encoding="utf-8")
     assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 0
+
+    for newline in ("\n", "\r", "\r\n"):
+        body.write_text(
+            f"```text{newline}not evidence{newline}``` \t{newline}{newline}{table}",
+            encoding="utf-8",
+        )
+        assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 0
 
 
 def test_every_changed_test_side_file_requires_its_own_frozen_row(tmp_path: Path, capsys: Any) -> None:
