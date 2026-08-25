@@ -1033,10 +1033,11 @@ def _run_healthcheck(
     *,
     is_draft: bool = True,
     source: str = "release/4.0",
+    handoff_count: int = 1,
 ) -> subprocess.CompletedProcess[str]:
     script = _healthcheck_script()
     assets = json.loads(assets_json)
-    assets.append({"name": "pfblockerng-release-handoff.json"})
+    assets.extend({"name": "pfblockerng-release-handoff.json"} for _ in range(handoff_count))
     assets_json = json.dumps(assets, separators=(",", ":"))
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)
@@ -1078,6 +1079,17 @@ def test_healthcheck_rejects_published_stale_release(tmp_path: Path) -> None:
         build_matrix='[{"variant":"CE","pfsense_version":"2.8"}]',
         assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"}]',
         is_draft=False,
+    )
+    assert completed.returncode != 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize("handoff_count", [0, 2])
+def test_healthcheck_requires_exactly_one_tagged_handoff(tmp_path: Path, handoff_count: int) -> None:
+    completed = _run_healthcheck(
+        tmp_path,
+        build_matrix='[{"variant":"CE","pfsense_version":"2.8"}]',
+        assets_json='[{"name":"pfBlockerNG-src.tar.gz"},{"name":"pfSense-pkg-pfBlockerNG-4.0.0-CE-2.8.pkg"}]',
+        handoff_count=handoff_count,
     )
     assert completed.returncode != 0, completed.stdout + completed.stderr
 

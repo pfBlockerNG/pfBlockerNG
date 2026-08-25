@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import re
 import sys
@@ -12,7 +11,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 _GIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
-_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 _RELEASE_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:\.[abr][1-9][0-9]*)?$")
 _FIELDS = {
     "schema",
@@ -21,7 +19,6 @@ _FIELDS = {
     "source_sha",
     "ci_metadata_sha",
     "ports_sha",
-    "route_matrix_sha256",
     "route_matrix",
 }
 
@@ -56,11 +53,6 @@ def _route_matrix(value: object) -> list[dict[str, object]]:
     return normalized
 
 
-def _route_digest(route_matrix: Sequence[Mapping[str, object]]) -> str:
-    canonical = json.dumps(route_matrix, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode()).hexdigest()
-
-
 def build_handoff(
     *,
     release_tag: str,
@@ -83,7 +75,6 @@ def build_handoff(
         "source_sha": source_sha,
         "ci_metadata_sha": ci_metadata_sha,
         "ports_sha": ports_sha,
-        "route_matrix_sha256": _route_digest(rows),
         "route_matrix": rows,
     }
 
@@ -106,7 +97,7 @@ def load_handoff(
         raise HandoffError("tagged release handoff must be a JSON object")
     if set(raw) != _FIELDS:
         raise HandoffError("tagged release handoff has unexpected fields")
-    if raw["schema"] != 1 or raw["kind"] != "tagged-release-handoff":
+    if type(raw["schema"]) is not int or raw["schema"] != 1 or raw["kind"] != "tagged-release-handoff":
         raise HandoffError("tagged release handoff schema or kind is unsupported")
 
     validated = build_handoff(
@@ -116,9 +107,6 @@ def load_handoff(
         ports_sha=raw["ports_sha"],
         route_matrix=raw["route_matrix"],
     )
-    digest = raw["route_matrix_sha256"]
-    if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest) or digest != validated["route_matrix_sha256"]:
-        raise HandoffError("route_matrix_sha256 does not match route_matrix")
     if validated["release_tag"] != expected_release_tag:
         raise HandoffError("release_tag does not match the selected Release")
     if validated["source_sha"] != _git_sha(expected_source_sha, "expected source_sha"):

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -151,3 +153,90 @@ def test_manual_republish_rejects_release_selector_before_api(tmp_path: Path) ->
     )
     assert completed.returncode != 0
     assert not marker.exists()
+
+
+def test_tagged_callbacks_execute_handoff_asset_checks(tmp_path: Path) -> None:
+    handoff = tmp_path / _HANDOFF_NAME
+    handoff.write_text('{"schema":1}\n', encoding="utf-8")
+    digest = hashlib.sha256(handoff.read_bytes()).hexdigest()
+    gh = tmp_path / "gh"
+    gh.write_text(
+        textwrap.dedent(
+            """\
+            #!/bin/sh
+            if [ "$1" = api ]; then
+              cat "$META_FILE"
+              exit
+            fi
+            shift 3
+            pattern=
+            destination=
+            while [ "$#" -gt 0 ]; do
+              case "$1" in
+                --pattern) pattern=$2; shift 2 ;;
+                --dir) destination=$2; shift 2 ;;
+                *) shift ;;
+              esac
+            done
+            mkdir -p "$destination"
+            case "$pattern" in
+              '*.pkg') printf pkg > "$destination/test.pkg" ;;
+              *) cp "$HANDOFF_SOURCE" "$destination/$pattern" ;;
+            esac
+            """
+        ),
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+
+    for workflow, job_name in _SIGN_KEY_JOBS.items():
+        script = textwrap.dedent(
+            extract_step(extract_job(workflow, job_name), "Download release assets + build the digest sidecar").split(
+                "run: |\n", 1
+            )[1]
+        )
+        for handoff_assets, expected in (
+            ([], 1),
+            ([{"name": _HANDOFF_NAME, "digest": f"sha256:{digest}"}], 0),
+            (
+                [
+                    {"name": _HANDOFF_NAME, "digest": f"sha256:{digest}"},
+                    {"name": _HANDOFF_NAME, "digest": f"sha256:{digest}"},
+                ],
+                1,
+            ),
+            ([{"name": _HANDOFF_NAME, "digest": "sha256:" + "0" * 64}], 1),
+        ):
+            meta = tmp_path / "meta.json"
+            meta.write_text(
+                json.dumps(
+                    {
+                        "assets": [
+                            {"name": "test.pkg", "digest": "sha256:" + "1" * 64},
+                            *handoff_assets,
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            runner_temp = tmp_path / f"runner-{len(handoff_assets)}-{expected}"
+            completed = subprocess.run(
+                ["sh", "-c", script],
+                cwd=ROOT,
+                env=os.environ
+                | {
+                    "PATH": f"{tmp_path}:{os.environ.get('PATH', '')}",
+                    "GH_TOKEN": "token",
+                    "REPOSITORY": "pfBlockerNG/pfBlockerNG",
+                    "RELEASE_ID": "1",
+                    "RELEASE_TAG": "v4.0.0",
+                    "HANDOFF_NAME": _HANDOFF_NAME,
+                    "HANDOFF_SOURCE": str(handoff),
+                    "META_FILE": str(meta),
+                    "RUNNER_TEMP": str(runner_temp),
+                },
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            assert (completed.returncode == 0) == (expected == 0), completed.stdout + completed.stderr
