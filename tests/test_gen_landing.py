@@ -1408,7 +1408,8 @@ def test_generated_pages_share_the_main_site_chrome_and_keep_channel_accents(tmp
         assert '<a href="https://pkg.pfblockerng.com/" aria-current="page">Packages</a>' in rendered
         assert '<main id="main-content" class="pkg-shell">' in rendered
         assert '<footer class="site-footer">' in rendered
-        assert "@media(max-width:820px){.cards{grid-template-columns:1fr}" in rendered
+        assert ".cards{display:grid;gap:1rem;grid-template-columns:1fr}" in rendered
+        assert "@media(max-width:820px){.pkg-shell{padding-bottom:4rem}}" in rendered
         assert "@media(prefers-color-scheme:dark){.card{" in rendered
 
     assert '<section class="pkg-hero">' in page
