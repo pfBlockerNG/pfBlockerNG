@@ -70,6 +70,21 @@ exempted() {
 }
 exempt() { printf '[pre-commit] exempt (checker not shipped on this branch; listed in .githooks-exempt): %s\n' "$1"; }
 
+# A branch may also decline a TOOL gate -- ruff, shellcheck, phpcs -- with a
+# `gate:<name>` line in the same manifest (issue #2696). Every worktree runs the
+# PRIMARY checkout's hook (core.hooksPath is absolute), so without this a
+# maintenance line is graded by rules it never adopted: release/3.3 runs pytest
+# alone in CI, has no ruff config of its own -- ruff then walks up out of the
+# worktree and uses devel's -- and carries legacy shell that devel's shellcheck
+# sweep rejects. The escapes otherwise are --no-verify, or adopting the gate with
+# an allowlist for its pre-existing findings; both are worse than recording that
+# the line's contract is narrower.
+#
+# Graded from the STAGED blob by exempted(), exactly like a checker path: an
+# untracked or unstaged manifest declines nothing.
+gate_exempted() { exempted "gate:$1"; }
+gate_exempt() { printf '[pre-commit] exempt (gate not adopted on this branch; listed in .githooks-exempt): %s\n' "$1"; }
+
 # --- Stage classification: run a language's gates ONLY when this commit stages a
 #     file of that type. (diff-filter ACMR = added/copied/modified/renamed; a pure
 #     deletion stages nothing to lint.) Nothing staged -> nothing to do.
@@ -110,6 +125,10 @@ if [ "$staged_py" = 1 ]; then
 		ruff_bin=.venv/bin/ruff
 	elif have ruff; then
 		ruff_bin=ruff
+	fi
+	if gate_exempted ruff; then
+		gate_exempt ruff
+		ruff_bin=''
 	fi
 	if [ -n "$ruff_bin" ]; then
 		step 'ruff check'
@@ -173,7 +192,9 @@ if [ "$staged_sh" = 1 ]; then
 
 	# ShellCheck (src + scripts only; tests/ shellspec specs trip SC2034
 	# false-positives — tracked as a separate cleanup).
-	if have shellcheck; then
+	if gate_exempted shellcheck; then
+		gate_exempt shellcheck
+	elif have shellcheck; then
 		step 'shellcheck'
 		find src scripts .claude/hooks -name '*.sh' | sort \
 			| xargs shellcheck --severity=info || failed 'shellcheck'
