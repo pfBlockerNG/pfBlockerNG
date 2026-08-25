@@ -21,14 +21,11 @@ permissions:
   packages: read
   contents: read
 
-# issue #2389 / #2391: two publishes racing would both stage under docs/staging
-# and stomp each other's promote/discard — serialize the whole pipeline (stage
-# through promote) rather than just the push at the end.
-# Keep every published release queued: the default single pending run replaces an
-# earlier pending release when a third arrives. queue:max retains up to 100 pending
-# runs; cancel-in-progress:false preserves the one already running.
+# issue #2389 / #2391: serialize every workflow that can mutate pfBlockerNG/pkg
+# across stage, validation, promote/discard, and site rendering. Keep every run
+# queued and preserve the one already running.
 concurrency:
-  group: release-published-pkg-repo
+  group: pkg-repository-mutation
   queue: max
   cancel-in-progress: false
 

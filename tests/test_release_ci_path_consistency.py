@@ -1,4 +1,4 @@
-"""Keep release CI fallback exclusions aligned with workflow path filters."""
+"""Keep release CI fallback exclusions and workflow concurrency contracts aligned."""
 
 from __future__ import annotations
 
@@ -264,3 +264,149 @@ on:
 
     with pytest.raises(AssertionError, match="unparsed paths-ignore entry"):
         _workflow_paths_from_source(source, "push")
+
+
+_RELEASE_GROUP_RE = re.compile(
+    r"release-\$\{\{ github\.event\.inputs\.dry_run == '(?P<dry>true)' "
+    r"&& format\('(?P<template>dry-run-\{0\})', github\.run_id\) "
+    r"\|\| github\.event\.inputs\.channel \}\}"
+)
+_RELEASE_GROUP = (
+    "release-${{ github.event.inputs.dry_run == 'true' "
+    "&& format('dry-run-{0}', github.run_id) || github.event.inputs.channel }}"
+)
+_PKG_REPO_MUTATION_GROUP = "pkg-repository-mutation"
+
+
+def _top_level_concurrency(source: str) -> dict[str, str]:
+    lines = source.splitlines()
+    try:
+        start = lines.index("concurrency:")
+    except ValueError as exc:
+        raise AssertionError("missing top-level concurrency block") from exc
+    end = next(
+        (index for index in range(start + 1, len(lines)) if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*:", lines[index])),
+        len(lines),
+    )
+    values: dict[str, str] = {}
+    for line in lines[start + 1 : end]:
+        if not line or line.lstrip().startswith("#"):
+            continue
+        match = re.fullmatch(r"  ([A-Za-z][A-Za-z0-9_-]*):[ \t]+(.+)", line)
+        assert match is not None, f"unparsed top-level concurrency entry: {line!r}"
+        key, value = match.groups()
+        assert key not in values, f"duplicate top-level concurrency key: {key}"
+        values[key] = value
+    return values
+
+
+def _assert_release_concurrency(source: str) -> None:
+    concurrency = _top_level_concurrency(source)
+    assert concurrency.get("queue") == "max", "real cuts must retain every queued dispatch"
+    assert concurrency.get("cancel-in-progress") == "false", "a running cut must never be cancelled"
+    group = concurrency.get("group", "")
+    assert _RELEASE_GROUP_RE.fullmatch(group), f"release concurrency group has the wrong ownership: {group!r}"
+
+
+def _release_group(source: str, *, dry_run: str, channel: str, run_id: int) -> str:
+    _assert_release_concurrency(source)
+    match = _RELEASE_GROUP_RE.fullmatch(_top_level_concurrency(source)["group"])
+    assert match is not None
+    suffix = match.group("template").format(run_id) if dry_run == match.group("dry") else channel
+    return f"release-{suffix}"
+
+
+def _assert_pkg_repository_concurrency(source: str) -> None:
+    concurrency = _top_level_concurrency(source)
+    assert concurrency.get("group") == _PKG_REPO_MUTATION_GROUP
+    assert concurrency.get("queue") == "max"
+    assert concurrency.get("cancel-in-progress") == "false"
+
+
+def test_issue_2391_real_release_cuts_are_channel_serialized_and_dry_runs_are_unique() -> None:
+    source = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert _release_group(source, dry_run="false", channel="stable", run_id=101) == "release-stable"
+    assert _release_group(source, dry_run="false", channel="stable", run_id=102) == "release-stable"
+    assert _release_group(source, dry_run="false", channel="testing", run_id=101) == "release-testing"
+    assert _release_group(source, dry_run="true", channel="stable", run_id=101) == "release-dry-run-101"
+    assert _release_group(source, dry_run="true", channel="stable", run_id=102) == "release-dry-run-102"
+
+
+@pytest.mark.parametrize(
+    "offence",
+    (
+        "missing-block",
+        "missing-group",
+        "wrong-group",
+        "missing-queue",
+        "wrong-queue",
+        "missing-cancel",
+        "wrong-cancel",
+    ),
+)
+def test_issue_2391_release_concurrency_planted_offences_go_red(offence: str) -> None:
+    valid = (
+        "name: Release\n"
+        "concurrency:\n"
+        f"  group: {_RELEASE_GROUP}\n"
+        "  queue: max\n"
+        "  cancel-in-progress: false\n"
+        "jobs:\n"
+        "  build:\n"
+    )
+    _assert_release_concurrency(valid)
+    mutations = {
+        "missing-block": valid.replace(
+            f"concurrency:\n  group: {_RELEASE_GROUP}\n  queue: max\n  cancel-in-progress: false\n",
+            "",
+        ),
+        "missing-group": valid.replace(f"  group: {_RELEASE_GROUP}\n", ""),
+        "wrong-group": valid.replace("github.event.inputs.channel", "github.run_id"),
+        "missing-queue": valid.replace("  queue: max\n", ""),
+        "wrong-queue": valid.replace("  queue: max", "  queue: latest"),
+        "missing-cancel": valid.replace("  cancel-in-progress: false\n", ""),
+        "wrong-cancel": valid.replace("  cancel-in-progress: false", "  cancel-in-progress: true"),
+    }
+    with pytest.raises(AssertionError):
+        _assert_release_concurrency(mutations[offence])
+
+
+def test_issue_2391_every_external_pkg_repository_mutator_shares_one_queue() -> None:
+    workflows = ROOT / ".github/workflows"
+    mutators: dict[str, str] = {}
+    for path in workflows.glob("*.yml"):
+        source = path.read_text(encoding="utf-8")
+        if (
+            re.search(r"^\s+repository: pfBlockerNG/pkg$", source, re.MULTILINE)
+            and "\n  workflow_call:" not in source.split("\njobs:\n", 1)[0]
+        ):
+            mutators[path.name] = source
+    assert set(mutators) == {"nightly.yml", "release-published.yml", "pkg-republish.yml"}
+    for source in mutators.values():
+        _assert_pkg_repository_concurrency(source)
+
+
+@pytest.mark.parametrize(
+    ("key", "wrong_value"),
+    (
+        ("group", "tagged-publish-only"),
+        ("queue", "latest"),
+        ("cancel-in-progress", "true"),
+    ),
+)
+def test_issue_2391_pkg_repository_concurrency_planted_offences_go_red(key: str, wrong_value: str) -> None:
+    valid = f"""\
+name: Mutator
+concurrency:
+  group: {_PKG_REPO_MUTATION_GROUP}
+  queue: max
+  cancel-in-progress: false
+jobs:
+  publish:
+"""
+    _assert_pkg_repository_concurrency(valid)
+    current_value = _top_level_concurrency(valid)[key]
+    mutated = valid.replace(f"  {key}: {current_value}\n", f"  {key}: {wrong_value}\n")
+    with pytest.raises(AssertionError):
+        _assert_pkg_repository_concurrency(mutated)

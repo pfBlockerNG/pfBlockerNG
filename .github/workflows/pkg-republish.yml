@@ -28,6 +28,11 @@ permissions:
   packages: read
   contents: read
 
+concurrency:
+  group: pkg-repository-mutation
+  queue: max
+  cancel-in-progress: false
+
 jobs:
   publish:
     name: Publish the pkg catalogue

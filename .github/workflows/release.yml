@@ -98,6 +98,11 @@ permissions:
   contents: read
   packages: read
 
+concurrency:
+  group: release-${{ github.event.inputs.dry_run == 'true' && format('dry-run-{0}', github.run_id) || github.event.inputs.channel }}
+  queue: max
+  cancel-in-progress: false
+
 jobs:
   # ── 0. Prepare release (real publish only) ───────────────────────────────
   # PINS the release SHA and mints the annotated tag LOCALLY — it commits nothing,
