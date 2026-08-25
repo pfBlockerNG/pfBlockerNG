@@ -777,6 +777,81 @@ jobs:
     ]
 
 
+def test_workflow_hygiene_rejects_derived_env_alias_at_equals_flag_identity_sink() -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha || github.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.ports_sha }}
+      - run: sh scripts/build-leg.sh --ports-ref=$PORTS_SHA
+"""
+    assert hygiene._pin_offences({"equals-flag-env-alias.yml": source}) == [
+        "equals-flag-env-alias.yml:build: rule=pin-consumer: derived or untrusted env alias PORTS_SHA "
+        "references prepare.ports_sha at identity sink --ports-ref"
+    ]
+
+
+def test_workflow_hygiene_reports_live_alias_at_equals_flag_identity_sink() -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+    steps:
+      - run: |
+          git show "$PORTS_SHA:Makefile"
+          FRESH=$(git ls-remote origin main)
+          sh scripts/build-leg.sh --ports-ref=$FRESH
+"""
+    assert hygiene._pin_offences({"equals-flag-live-alias.yml": source}) == [
+        "equals-flag-live-alias.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink --ports-ref"
+    ]
+
+
+def test_workflow_hygiene_rejects_derived_shell_alias_at_flag_identity_sink() -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+    steps:
+      - run: |
+          git show "$PORTS_SHA:Makefile"
+          FRESH="${PORTS_SHA}-attacker"
+          sh scripts/build-leg.sh --ports-ref "$FRESH"
+"""
+    assert hygiene._pin_offences({"derived-shell-alias.yml": source}) == [
+        "derived-shell-alias.yml:build: rule=pin-consumer: derived shell alias FRESH references "
+        "prepare.ports_sha at identity sink --ports-ref"
+    ]
+
+
 def test_workflow_hygiene_reports_semicolon_live_replacement_beside_exact_sink() -> None:
     source = """\
 on: workflow_dispatch
