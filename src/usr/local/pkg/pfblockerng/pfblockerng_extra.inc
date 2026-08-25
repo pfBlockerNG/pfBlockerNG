@@ -32,15 +32,6 @@ final class PfbConfig
 		return config_get_path(self::path($key), NULL);
 	}
 
-	public static function write(string $key, mixed $value): void
-	{
-		self::assertRegistered($key);
-		if ($key !== 'gen/pfb_pkg_ca_consent' || !function_exists('isAllowedPage') || !isAllowedPage('pkg_mgr_installed.php')) {
-			throw new RuntimeException("PfbConfig: write of key '{$key}' denied");
-		}
-		self::writeValue($key, $value);
-	}
-
 	public static function writeSystem(string $key, mixed $value): void
 	{
 		self::assertRegistered($key);
@@ -49,7 +40,7 @@ final class PfbConfig
 
 	private static function assertRegistered(string $key): void
 	{
-		if (!in_array($key, ['gen/settings_family', 'gen/pfb_pkg_ca_consent'], TRUE)) {
+		if (!in_array($key, ['gen/settings_family'], TRUE)) {
 			throw new InvalidArgumentException("PfbConfig: key '{$key}' is not registered");
 		}
 	}
@@ -58,7 +49,6 @@ final class PfbConfig
 	{
 		return match ($key) {
 			'gen/settings_family' => 'installedpackages/pfblockerng/config/0/settings_family',
-			'gen/pfb_pkg_ca_consent' => 'installedpackages/pfblockerng/config/0/pfb_pkg_ca_consent',
 		};
 	}
 
@@ -68,8 +58,6 @@ final class PfbConfig
 			if (!is_string($value) || !isset(PFB_SETTINGS_FAMILY_RANK[$value])) {
 				throw new InvalidArgumentException('PfbConfig: invalid settings family');
 			}
-		} elseif (!is_string($value) || !in_array($value, ['on', ''], TRUE)) {
-			throw new InvalidArgumentException('PfbConfig: invalid CA consent');
 		}
 		config_set_path(self::path($key), $value);
 	}

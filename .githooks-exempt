@@ -17,3 +17,12 @@ scripts/check_noopener.py
 scripts/check_url_encoding.py
 scripts/check_version_literals.py
 scripts/agent/check-agent-config-parity.sh
+
+# Tool gates this line does not adopt (issue #2696). Its CI runs pytest alone:
+# no ruff, no shellcheck. Without these, every worktree of this branch is graded
+# by devel's rules -- ruff walks up out of the worktree to devel's config, and
+# devel's whole-tree shellcheck sweep rejects this line's legacy ip_pre_AWS_*.sh
+# for POSIX `==`. Neither is fixable from here, and neither reflects the change
+# being committed.
+gate:ruff
+gate:shellcheck

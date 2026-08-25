@@ -1,4 +1,4 @@
-"""Release/3.3 CA-consent page, cron, and URL integration seam."""
+"""Release/3.3 Software-page save, cron, and URL integration seam."""
 
 from __future__ import annotations
 
@@ -23,51 +23,45 @@ def _between(source: str, start: str, end: str) -> str:
     return tail.split(end, 1)[0]
 
 
-def test_save_persists_consent_before_applying_pkg_conf() -> None:
+def test_save_persists_the_software_check_setting_and_redirects() -> None:
+    # issue #2694: the CA-consent surface (#2617/#2518) is retired -- #2692 put the
+    # #2675 signed-catalogue hook on this line, so nothing consults pkg's CA store for
+    # our repository anymore. The save block is a plain write-config-redirect now.
     source = SOFTWARE_PAGE.read_text()
     save = _between(source, "if ($_POST && isset($_POST['save'])) {", '// "Check now"')
     positions = [
-        save.index("$pfb_ca_was_consented = pfb_pkg_ca_consent_enabled();"),
-        save.index("$pfb_ca_token = pfb_pkgconf_ca_save($_POST);"),
+        save.index("pfb_software_check_config_write("),
         save.index("write_config('[pfBlockerNG] save Software settings');"),
-        save.index("$pfb_ca_ok = pfb_pkgconf_ca_apply($pfb_ca_token, $pfb_ca_was_consented);"),
+        save.index("header('Location: /pfblockerng/pfblockerng_software.php');"),
     ]
     assert positions == sorted(positions)
-    assert "pfb_software_check_config_write(" in save
-    assert "if ($pfb_ca_ok)" in save
-    assert "$input_errors[]" in save
-    # issue #2631 review round: the failure notice speaks the installed generation.
-    # Login hook: per-verb diagnosis naming /etc/login.conf, boot-only retry (there
-    # is no per-check reapply to promise). Old hook: the shipped 3.3.3 sentence,
-    # byte-preserved, naming pkg.conf.
-    assert "if (pfb_pkgconf_ca_hook_is_login()) {" in save
-    assert save.count("could not update /etc/login.conf right now") == 2
-    assert "the file may be a symlink, or have a shape pfBlockerNG does not edit" in save
-    assert save.count("it will retry at the next boot.") == 2
-    assert "pfBlockerNG will retry at the next boot or package check." in save
-    assert "PFB_PKG_CONF" in save
-    assert "/etc/login.conf' : PFB_PKG_CONF" not in save
+    for retired in (
+        "pfb_pkg_ca_consent",
+        "pfb_pkgconf_ca_save",
+        "pfb_pkgconf_ca_apply",
+        "pfb_pkgconf_ca_hook_is_login",
+        "$input_errors[]",
+        "PFB_PKG_CONF",
+    ):
+        assert retired not in save
 
 
-def test_ui_is_conditional_and_posts_an_explicit_consent_token() -> None:
+def test_ui_has_no_ca_consent_section() -> None:
+    # issue #2694: no edition/hook-generation gate renders a CA-consent control anymore.
     page = SOFTWARE_PAGE.read_text()
     source = SOFTWARE_CORE.read_text()
-    assert "pfb_pkgconf_ca_add_form_controls($form, pfb_pkg_ca_consent_enabled());" in page
-    for token in (
-        "function pfb_pkgconf_ca_add_form_controls(",
-        "new Form_Checkbox(\n\t\t'pfb_pkg_ca_consent'",
-        "\n\t\t'on'\n\t))->setHelp($help);",
-        "new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1')",
-        "SSL_CA_CERT_PATH=/etc/ssl/certs",
-        "Unchecking this removes only that one line",
-        "re-applies the line at boot and before package checks",
+    for retired in (
+        "pfb_pkg_ca_consent",
+        "pfb_pkgconf_ca_add_form_controls",
+        "pfb_login_ca_add_form_controls",
+        "pfb_pkg_ca_is_plus",
+        "pfb_pkgconf_ca_hook_is_login",
+        "Package manager CA trust",
+        "SSL_CA_CERT_PATH",
     ):
-        assert token in source
-    # issue #2630: the login-generation hook applies on every edition; the pkg.conf
-    # generation stays Plus-only.
-    assert "if (pfb_pkg_ca_is_plus() || pfb_pkgconf_ca_hook_is_login()) {" in page
+        assert retired not in page
+        assert retired not in source
     assert "config_get_path" not in page
-    assert "gen/pfb_pkg_ca_consent" not in page
 
 
 def test_cron_keeps_feed_and_software_checks_without_a_duplicate_ca_writer() -> None:

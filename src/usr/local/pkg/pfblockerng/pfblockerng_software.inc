@@ -23,8 +23,6 @@
 /*
  * issue #2360 — ADR-19 channel-provenance + software-update-check backport, step 1.
  *
- * The CA-consent extension uses the release-local PfbConfig in pfblockerng_extra.inc;
- * production entry points and direct test consumers load extra.inc before this file.
  * pfb_software_check_config_read()/_write() remain the narrow file-local stand-in for
  * the older software-check field, matching devel's enabled/disabled semantics.
  *
@@ -232,23 +230,6 @@ function pfb_software_check_enabled(): bool {
 	return pfb_software_check_config_read();
 }
 
-function pfb_pkg_ca_consent_enabled(): bool {
-	$token = PfbConfig::read('gen/pfb_pkg_ca_consent');
-	// Login generation defaults ON (absent key = consented; a present empty token is
-	// the explicit opt-out), matching the on-box hook's own boot reconcile semantics.
-	// The hook's own reconcile matches the token case-insensitively, so a restored
-	// backup's 'On' must not read here as an opt-out while boot keeps adding the carry.
-	if (pfb_pkgconf_ca_hook_is_login()) {
-		return $token === NULL || strtolower(trim((string) $token)) === 'on';
-	}
-	return $token === 'on';
-}
-
-function pfb_pkg_ca_is_plus(string $product_label = '/etc/product_label'): bool {
-	$product = @file_get_contents($product_label);
-	return $product !== FALSE && strpos($product, 'Plus') !== FALSE;
-}
-
 /*
  * The notify state machine: TRUE iff a `file_notice` should fire THIS tick.
  *
@@ -284,54 +265,13 @@ function pfb_should_notify(?string $installed, ?string $latest, ?string $last_no
  */
 define('PFB_PKG_BIN', '/usr/local/sbin/pkg');
 
-define('PFB_PKG_CONF', '/usr/local/etc/pkg.conf');
-
-if (!defined('PFB_REPO_GENERATE_HOOK')) {
-	define('PFB_REPO_GENERATE_HOOK', '/usr/local/etc/rc.d/pfblockerng_repo_generate.sh');
-}
-if (!defined('PFB_PKG_TIMEOUT')) {
-	define('PFB_PKG_TIMEOUT', '/usr/bin/timeout -s TERM -k 5 60');
-}
-
 /*
- * TRUE when the installed hook is the login.conf generation (issue #2630): the
- * published installer's current hook carries the login-ca-sync/login-ca-revoke
- * verbs and retired ca-sync/ca-revoke; a box that never re-ran the installer
- * still has the pkg.conf-generation hook. The probe reads the hook body -- the
- * verbs are literal case labels there -- so the page always speaks the verbs
- * the on-box hook actually has.
+ * Run a pkg(8) shell command directly.
  */
-function pfb_pkgconf_ca_hook_is_login(): bool {
-	$body = @file_get_contents(PFB_REPO_GENERATE_HOOK, FALSE, NULL, 0, 65536);
-	return $body !== FALSE && strpos($body, 'login-ca-sync') !== FALSE;
-}
-
-function pfb_pkgconf_ca_command(string $action): bool {
-	$verbs = pfb_pkgconf_ca_hook_is_login()
-		? ['login-ca-sync', 'login-ca-revoke']
-		: ['ca-sync', 'ca-revoke'];
-	if (!in_array($action, $verbs, TRUE) || !is_executable(PFB_REPO_GENERATE_HOOK)) {
-		return FALSE;
-	}
-	$out = [];
-	$ret = -1;
-	exec(PFB_PKG_TIMEOUT . ' ' . escapeshellarg(PFB_REPO_GENERATE_HOOK) . ' ' . escapeshellarg($action) . ' 2>/dev/null', $out, $ret);
-	return $ret === 0;
-}
-
 function pfb_pkg_exec(string $command, array &$out = [], int &$ret = -1): void {
 	$out = [];
 	$ret = -1;
-	// Login generation: the hook's boot reconcile and the installer's webConfigurator
-	// restart own the environment, and login-ca-sync is consent-independent -- calling
-	// it per check would re-add the carry against a recorded opt-out. Plain exec.
-	if (pfb_pkgconf_ca_hook_is_login()) {
-		exec($command, $out, $ret);
-		return;
-	}
-	if (pfb_pkgconf_ca_command('ca-sync')) {
-		exec($command, $out, $ret);
-	}
+	exec($command, $out, $ret);
 }
 
 /*
@@ -435,95 +375,6 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	$ret = -1;
 	pfb_pkg_exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
 	return ($ret === 0 && $out !== []) ? pfb_pkg_newest_version($out) : '';
-}
-
-/* Persist consent only when the conditional Software-page section was rendered. */
-function pfb_pkgconf_ca_save(array $post): string {
-	if (!isset($post['pfb_pkg_ca_consent_shown'])) {
-		// Login generation: an absent key means consented, so answering '' here would
-		// make pfb_pkgconf_ca_apply() revoke with no recorded opt-out. Old generation:
-		// enabled is exactly token === 'on', so this stays value-identical to the
-		// shipped raw-token fallback on every path apply() distinguishes.
-		return pfb_pkg_ca_consent_enabled() ? 'on' : '';
-	}
-	$token = pfb_filter($post['pfb_pkg_ca_consent'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
-	PfbConfig::write('gen/pfb_pkg_ca_consent', $token);
-	return $token;
-}
-
-/* Caller must flush config after save() and before this file mutation. */
-function pfb_pkgconf_ca_apply(
-	string $token,
-	bool $was_consented
-): bool {
-	$login = pfb_pkgconf_ca_hook_is_login();
-	if ($token === 'on') {
-		return pfb_pkgconf_ca_command($login ? 'login-ca-sync' : 'ca-sync');
-	}
-	return !$was_consented || pfb_pkgconf_ca_command($login ? 'login-ca-revoke' : 'ca-revoke');
-}
-
-/* Add the Software-page consent controls for the installed hook generation. */
-function pfb_pkgconf_ca_add_form_controls($form, bool $consent): void {
-	if (pfb_pkgconf_ca_hook_is_login()) {
-		pfb_login_ca_add_form_controls($form, $consent);
-		return;
-	}
-	$help = sprintf(
-		gettext('This control adds or removes exactly one SSL_CA_CERT_PATH=/etc/ssl/certs line in %s. '),
-		PFB_PKG_CONF
-	);
-	if ($consent) {
-		$help .= gettext(
-			'Consent is on; pfBlockerNG verifies the line before each package check. '
-		);
-	} else {
-		$help .= gettext(
-			'Right now, pkg trusts only Netgate\'s own certificate bundle, so it '
-			. 'cannot install or update pfBlockerNG through the Package Manager or a plain '
-			. '<code>pkg install</code> in the shell. Checking this box restores the public root '
-			. 'certificate store pkg needs to reach that repository. '
-		);
-	}
-	$help .= gettext(
-		'pfBlockerNG re-applies the line at boot and before package checks. '
-		. 'Unchecking this removes only that one line; the rest of the file is left as pfSense wrote it.'
-	);
-
-	$section = new Form_Section(gettext('Package manager CA trust'));
-	$section->addInput(new Form_Checkbox(
-		'pfb_pkg_ca_consent',
-		gettext('Allow pfBlockerNG to manage the pkg.conf CA path'),
-		gettext('Enabled'),
-		$consent,
-		'on'
-	))->setHelp($help);
-	$form->add($section);
-	$form->addGlobal(new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1'));
-}
-
-/* Login-generation consent controls (issue #2630): the installed hook carries
- * SSL_CA_CERT_PATH in /etc/login.conf's default class setenv, on by default. */
-function pfb_login_ca_add_form_controls($form, bool $consent): void {
-	$help = gettext(
-		'pfSense Plus pins pkg to a Netgate-only CA bundle, which blocks third-party '
-		. 'package repositories. When enabled, pfBlockerNG keeps '
-		. 'SSL_CA_CERT_PATH=/etc/ssl/certs in the default login class setenv list in '
-		. '/etc/login.conf, so every process started from then on hands pkg the system '
-		. 'trust store; a reboot applies it everywhere. On CE the value is harmless. '
-		. 'This is on by default. Unchecking it removes only pfBlockerNG\'s value and '
-		. 'leaves the rest of the file untouched.'
-	);
-	$section = new Form_Section(gettext('Package manager CA trust'));
-	$section->addInput(new Form_Checkbox(
-		'pfb_pkg_ca_consent',
-		gettext('Carry the system CA store into pkg'),
-		gettext('Enabled'),
-		$consent,
-		'on'
-	))->setHelp($help);
-	$form->add($section);
-	$form->addGlobal(new Form_Input('pfb_pkg_ca_consent_shown', 'pfb_pkg_ca_consent_shown', 'hidden', '1'));
 }
 
 /*
