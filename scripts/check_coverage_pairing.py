@@ -1,66 +1,41 @@
 #!/usr/bin/env python3
-"""Gate a PR's diff for src<->tests and www<->UI-test coverage pairing.
+"""Gate PR diffs for shipped tests and frozen-RED proof.
 
-PROBLEM
--------
-CLAUDE.md's test-coverage mandate (#2: "every change ships WITH its tests"; #4:
-"front-end changes REQUIRE front-end tests") is currently enforced only by human/
-review discipline. This script is the mechanical backstop, wired as a PR-only CI
-job in ``.github/workflows/test.yml`` (see the ``coverage-pairing`` job) — never
-in ``.githooks/pre-commit``, because pre-commit only ever sees ONE commit's
-staged files, not the whole PR's diff against its base; the pairing question
-("did this PR's *src* change ship *any* test?") is only answerable with the full
-PR diff, which is what the CI job computes via ``git diff --name-only -z
-origin/<base>...HEAD`` and pipes into this script over stdin.
+The checker enforces three path rules:
 
-THE TWO RULES
--------------
-1. Any changed ``src/**`` path (rule: "src<->tests") requires at least one
-   changed ``tests/**`` path somewhere in the diff.
-2. Any changed ``src/usr/local/www/**`` path (rule: "www<->ui") additionally
-   requires at least one changed ``tests/smoke/ui/**`` path (Tier-A UI
-   coverage, CLAUDE.md test mandate #4) — a non-UI test under ``tests/`` alone
-   does NOT satisfy this second, stricter rule.
+1. changed ``src/**`` requires a changed non-documentation ``tests/**`` path;
+2. changed ``src/usr/local/www/**`` additionally requires a changed
+   ``tests/smoke/ui/**`` path;
+3. changed release-plane code under ``scripts/**`` or non-documentation
+   ``.github/**`` requires a changed non-documentation ``tests/**`` path.
 
-DOCS AND UPSTREAM DATA ARE NEUTRAL
-----------------------------------
-A changed path whose basename ends in ``.md`` (any case) OR that starts with
-``docs/`` never counts toward EITHER side of either rule — it neither trips a
-requirement (a docs-only diff must not fire) nor satisfies one (a `.md` explaining
-a change is not a test). This is checked first, so a `.md` file physically living
-under ``src/`` is still neutral, not "src code with no test".
+``scripts/*.md``, ``.github/ISSUE_TEMPLATE/**``, documentation, ``.agents/**``,
+``.claude/**``, and ``legacy/**`` are neutral. ``tests/smoke/**`` is test-side:
+tests, helpers, fixtures, and shell harnesses can satisfy pairing but never
+trigger a production rule themselves.
 
-The exact paths in ``_DATA_ONLY`` are neutral the same way (issue #2132):
-machine-regenerated upstream snapshots whose shape is already pinned by
-shipped-file tests, so a regeneration diff has no hand-authored change to pair
-with. Exempt on that provenance, NOT on "encodes no behaviour" —
-``pfb_py_hsts.txt`` decides NULL-vs-VIP on a DNSBL hit and ``dnsbl_psl`` is the
-public-suffix oracle — so do not extend the set to a hand-maintained file that
-merely looks like data (``pfb_dnsbl.*.conf``, the feed/ASN catalogs, the
-``*_global_usage`` provider definitions all stay gated).
+When ``--pr-body-file`` is supplied, a release-plane change must also carry at
+least one frozen-RED record using the landing evidence fields in one Markdown
+table:
 
-Neutral means IGNORED, not "satisfies": a real ``src/**`` file in the same diff
-still demands its paired test.
+``| Frozen RED test | git hash-object | RED run tail |``
 
-ESCAPE HATCH
-------------
-The CI job downgrades a violation to a warning (exit 0, printed to
-``$GITHUB_STEP_SUMMARY``) instead of failing the PR when the PR carries the
-``no-test-needed`` label — the ``--warn-only`` CLI flag mirrors that from this
-script's side; the label itself is applied by a human, not this script. When the
-label is set, the CI job additionally passes ``--pr-body-file`` so this script
-requires a ``no-test-needed: <why>`` justification LINE in the PR body (issue
-#921's "applied deliberately" constraint, enforced per #934) — an unjustified
-label FAILS the gate instead of downgrading it. See ``_has_justification`` for
-the exact (line-anchored) matching rules.
+Each data row names a changed ``tests/**`` path, its 40-character blob hash at
+RED time, and a non-empty failing-run tail. The hash is recomputed from the
+shipped file, so editing the reproduction between RED and GREEN fails the gate.
+The local gate runner omits the body file and checks pairing only; CI always
+passes the live PR body and therefore enforces both pairing and frozen proof.
 
-This is dev/CI-only tooling under ``scripts/`` (mirrors ``check_url_encoding.py``
-/ ``check_appliance_python.py``): it reasons over path STRINGS only, never reads
-file contents, and is intentionally NOT part of ``.githooks/pre-commit``.
+The existing behavior-preserving escape is unchanged: ``--warn-only`` plus a
+PR-body line starting ``no-test-needed: <why>`` downgrades violations. It covers
+comment-only/refactor changes without introducing a second or wider escape.
 """
 
 from __future__ import annotations
 
+import hashlib
+import os
+import re
 import sys
 
 _FIX_HINT = (
@@ -81,6 +56,13 @@ _DATA_ONLY = frozenset(
     }
 )
 
+_NEUTRAL_PREFIXES = (
+    ".agents/",
+    ".claude/",
+    ".github/ISSUE_TEMPLATE/",
+    "legacy/",
+)
+
 
 def _is_docs(path: str) -> bool:
     """True if ``path`` is documentation and therefore neutral to both rules."""
@@ -88,13 +70,8 @@ def _is_docs(path: str) -> bool:
 
 
 def _is_neutral(path: str) -> bool:
-    """True if ``path`` counts toward NEITHER side of EITHER rule.
-
-    Two neutral classes: documentation (see ``_is_docs``) and the exact
-    ``_DATA_ONLY`` paths. Membership is by WHOLE path, never prefix: a
-    neighbour whose name merely extends an exempt one stays gated.
-    """
-    return _is_docs(path) or path in _DATA_ONLY
+    """True if ``path`` counts toward neither side of any pairing rule."""
+    return _is_docs(path) or path in _DATA_ONLY or path.startswith(_NEUTRAL_PREFIXES)
 
 
 def _is_src(path: str) -> bool:
@@ -108,23 +85,25 @@ def _is_www(path: str) -> bool:
 
 
 def _is_test(path: str) -> bool:
-    """True if ``path`` is under ``tests/**`` (a sibling ``othertests/`` is not)."""
-    return path.startswith("tests/")
+    """True for a non-neutral path under ``tests/**``."""
+    return not _is_neutral(path) and path.startswith("tests/")
 
 
 def _is_ui_test(path: str) -> bool:
-    """True if ``path`` is under ``tests/smoke/ui/**`` (Tier-A UI coverage)."""
-    return path.startswith("tests/smoke/ui/")
+    """True for non-neutral Tier-A UI coverage under ``tests/smoke/ui/**``."""
+    return _is_test(path) and path.startswith("tests/smoke/ui/")
+
+
+def _is_release_plane(path: str) -> bool:
+    """True for behavior-bearing release/CI code."""
+    return not _is_neutral(path) and (path.startswith("scripts/") or path.startswith(".github/"))
 
 
 def evaluate(changed: list[str]) -> list[str]:
-    """Classify ``changed`` paths and return human-readable violation messages.
-
-    An empty return means the diff passes both pairing rules. Both rules are
-    independent and can both fire (up to 2 messages).
-    """
+    """Classify ``changed`` paths and return pairing violations."""
     has_src = any(_is_src(p) for p in changed)
     has_www = any(_is_www(p) for p in changed)
+    has_release = any(_is_release_plane(p) for p in changed)
     has_test = any(_is_test(p) for p in changed)
     has_ui_test = any(_is_ui_test(p) for p in changed)
 
@@ -132,14 +111,20 @@ def evaluate(changed: list[str]) -> list[str]:
     if has_src and not has_test:
         violations.append(
             "src<->tests coverage pairing violated: this PR changes `src/**` but ships no "
-            "`tests/**` change (CLAUDE.md test mandate #2: 'every change ships WITH its "
-            f"tests'). {_FIX_HINT}."
+            "`tests/**` change (test mandate #2: 'every change ships WITH its tests'). "
+            f"{_FIX_HINT}."
         )
     if has_www and not has_ui_test:
         violations.append(
             "www<->ui-tests coverage pairing violated: this PR changes `src/usr/local/www/**` "
-            "but ships no `tests/smoke/ui/**` change (Tier-A `ui_render` coverage, CLAUDE.md "
-            f"test mandate #4: front-end changes require front-end tests). {_FIX_HINT}."
+            "but ships no `tests/smoke/ui/**` change (Tier-A `ui_render` coverage, test "
+            f"mandate #4). {_FIX_HINT}."
+        )
+    if has_release and not has_test:
+        violations.append(
+            "release-plane<->tests coverage pairing violated: this PR changes behavior under "
+            "`scripts/**` or `.github/**` but ships no non-documentation `tests/**` change. "
+            f"{_FIX_HINT}."
         )
     return violations
 
@@ -162,6 +147,94 @@ def _has_justification(body: str) -> bool:
     return False
 
 
+_FROZEN_RED_HEADER = ("frozen red test", "git hash-object", "red run tail")
+_GIT_HASH = re.compile(r"[0-9a-fA-F]{40}")
+
+
+def _table_cells(line: str) -> list[str]:
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return []
+    return [cell.strip().strip("`").strip() for cell in stripped[1:-1].split("|")]
+
+
+def _parse_frozen_red(body: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """Return ``(path, hash)`` records and malformed-record errors."""
+    records: list[tuple[str, str]] = []
+    errors: list[str] = []
+    in_table = False
+    for line in body.splitlines():
+        cells = _table_cells(line)
+        normalized = tuple(cell.replace("`", "").lower() for cell in cells)
+        if not in_table:
+            if normalized == _FROZEN_RED_HEADER:
+                in_table = True
+            continue
+        if not cells:
+            break
+        if len(cells) == 3 and all(cell and set(cell) <= {"-", ":"} for cell in cells):
+            continue
+        if len(cells) != 3:
+            errors.append("Frozen RED table rows must contain path, git hash-object, and RED run tail")
+            continue
+        path, digest, tail = cells
+        if not path.startswith("tests/"):
+            errors.append(f"Frozen RED test path must be under tests/**: {path!r}")
+            continue
+        if _GIT_HASH.fullmatch(digest) is None:
+            errors.append(f"Frozen RED git hash-object must be 40 hexadecimal characters for {path}")
+            continue
+        if not tail:
+            errors.append(f"Frozen RED record for {path} has no RED run tail")
+            continue
+        records.append((path, digest.lower()))
+    return records, errors
+
+
+def _working_tree_blob_hash(path: str) -> str:
+    if os.path.islink(path):
+        data = os.readlink(os.fsencode(path))
+    else:
+        with open(path, "rb") as fh:
+            data = fh.read()
+    return hashlib.sha1(f"blob {len(data)}\0".encode() + data).hexdigest()
+
+
+def _frozen_red_violations(changed: list[str], body: str) -> list[str]:
+    if not any(_is_release_plane(path) for path in changed):
+        return []
+    records, errors = _parse_frozen_red(body)
+    if errors:
+        return errors
+    if not records:
+        return [
+            "release-plane changes require a Frozen RED test table with columns "
+            "`Frozen RED test`, `git hash-object`, and `RED run tail`"
+        ]
+
+    violations: list[str] = []
+    changed_set = set(changed)
+    seen: set[str] = set()
+    for path, recorded in records:
+        if path in seen:
+            violations.append(f"duplicate Frozen RED record for {path}")
+            continue
+        seen.add(path)
+        if path not in changed_set or not _is_test(path):
+            violations.append(f"Frozen RED test {path} is not changed by this PR")
+            continue
+        try:
+            actual = _working_tree_blob_hash(path)
+        except OSError as exc:
+            violations.append(f"cannot hash Frozen RED test {path}: {exc}")
+            continue
+        if actual != recorded:
+            violations.append(
+                f"Frozen RED hash mismatch for {path}: PR body records {recorded}, shipped file is {actual}"
+            )
+    return violations
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
@@ -172,12 +245,10 @@ def main(argv: list[str] | None = None) -> int:
     dropped), so a padded positional arg and a trailing-newline stdin line
     classify identically.
 
-    ``--pr-body-file <path>`` (passed by the CI job iff the ``no-test-needed``
-    label is set, alongside ``--warn-only``): the file holds the PR body; when
-    ``--warn-only`` is set and the body has no ``no-test-needed: <why>``
-    justification line, the gate FAILS (exit 1) instead of downgrading —
-    issue #921's "applied deliberately" constraint, enforced per #934. Without
-    the flag, ``--warn-only`` keeps its pure downgrade semantics.
+    ``--pr-body-file <path>`` carries the live PR body. With ``--warn-only`` it
+    must contain the existing ``no-test-needed: <why>`` justification. Without
+    ``--warn-only``, release-plane changes use it for frozen-RED validation.
+    Omitting the flag keeps local/path-only callers pairing-only.
     """
     args = list(sys.argv[1:] if argv is None else argv)
     warn_only = "--warn-only" in args
@@ -203,7 +274,8 @@ def main(argv: list[str] | None = None) -> int:
         paths = stdin.split("\0") if "\0" in stdin else stdin.split("\n")
     paths = [p.strip() for p in paths if p.strip()]
 
-    if warn_only and body_file is not None:
+    body: str | None = None
+    if body_file is not None:
         try:
             # utf-8-sig: a BOM at byte 0 must not hide a justification line.
             with open(body_file, encoding="utf-8-sig", errors="replace") as fh:
@@ -211,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"error: cannot read --pr-body-file {body_file!r}: {exc}")
             return 2
-        if not _has_justification(body):
+        if warn_only and not _has_justification(body):
             print(
                 "no-test-needed label is set but the PR body has no 'no-test-needed: <why>' "
                 "justification line (issue #921: the label must be applied deliberately, with "
@@ -220,9 +292,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
     violations = evaluate(paths)
+    if body is not None:
+        violations.extend(_frozen_red_violations(paths, body))
 
     if not violations:
-        print("Coverage pairing OK: no src<->tests or www<->ui-tests violation.")
+        print("Coverage pairing OK: shipped tests and available frozen-RED evidence satisfy all rules.")
         return 0
 
     if warn_only:

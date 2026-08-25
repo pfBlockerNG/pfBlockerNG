@@ -303,3 +303,142 @@ def test_uppercase_md_extension_is_neutral() -> None:
     # is still docs-neutral -- paired with a firing sibling to prove discrimination.
     assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/NOTES.MD"]) == [], "an uppercase .MD is docs, neutral"
     assert ccp.evaluate(["src/usr/local/pkg/pfblockerng/notes.inc"]) != [], "a .inc sibling is src code, fires"
+
+
+# ---- Release-plane pairing and frozen-RED proof (issue #2415) ------------
+
+_RELEASE_SCRIPT = "scripts/publish_release.py"
+_RELEASE_TEST = "tests/test_coverage_pairing_check.py"
+
+
+def _frozen_red_body(test_path: str, digest: str, tail: str = "FAILED test_release_plane") -> str:
+    return (
+        "| Frozen RED test | `git hash-object` | RED run tail |\n"
+        "| --- | --- | --- |\n"
+        f"| `{test_path}` | `{digest}` | `{tail}` |\n"
+    )
+
+
+def _working_tree_hash(path: str) -> str:
+    repo = Path(__file__).resolve().parent.parent
+    return subprocess.check_output(["git", "hash-object", "--", path], cwd=repo, text=True).strip()
+
+
+def test_release_plane_change_without_shipped_test_fails() -> None:
+    violations = ccp.evaluate([_RELEASE_SCRIPT])
+    assert len(violations) == 1, f"release script without a test must fail once; got {violations}"
+    assert "release-plane" in violations[0], f"violation must name the gated plane; got {violations[0]!r}"
+
+
+def test_release_plane_recorded_red_hash_must_match_shipped_test(tmp_path: Any, capsys: Any) -> None:
+    body = tmp_path / "pr-body.md"
+    body.write_text(_frozen_red_body(_RELEASE_TEST, "0" * 40), encoding="utf-8")
+
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 1
+    assert _RELEASE_TEST in capsys.readouterr().out
+
+
+def test_every_release_plane_path_class_is_gated() -> None:
+    for path in (
+        "scripts/publish_release.py",
+        "scripts/agent/run-gates.sh",
+        "scripts/release-notes-prompt.txt",
+        ".github/workflows/nightly.yml",
+        ".github/actions/read-version-matrix/action.yml",
+        ".github/actionlint.yaml",
+    ):
+        assert ccp.evaluate([path]) != [], f"{path} is release-plane behaviour and must require a shipped test"
+
+
+def test_release_plane_change_with_shipped_test_clears_pairing() -> None:
+    assert ccp.evaluate([_RELEASE_SCRIPT, _RELEASE_TEST]) == []
+    assert ccp.evaluate([".github/workflows/test.yml", "tests/smoke/test_stub_shapes.py"]) == []
+
+
+def test_release_plane_neutral_classes_stay_neutral() -> None:
+    for path in (
+        "scripts/README.md",
+        ".github/ISSUE_TEMPLATE/bug_report.yml",
+        ".github/agents/adversarial-reviewer.agent.md",
+        ".github/copilot-instructions.md",
+        ".agents/policy/testing.md",
+        ".claude/hooks/session-start.sh",
+        "legacy/archive/tool.py",
+        "docs/release.md",
+    ):
+        assert ccp.evaluate([path]) == [], f"{path} is neutral and must not trigger release-plane pairing"
+    assert ccp.evaluate([".github/actionlint.yaml"]) != [], "a gated sibling proves the classifier discriminates"
+    assert ccp.evaluate([_RELEASE_SCRIPT, "tests/README.md"]) != [], "neutral docs must not satisfy pairing"
+
+
+def test_smoke_tests_and_helpers_are_test_side_not_release_plane_triggers() -> None:
+    for path in (
+        "tests/smoke/test_repo_install.py",
+        "tests/smoke/helpers.py",
+        "tests/smoke/fixtures/repo/canonical.conf",
+        "tests/smoke/boot_vm.sh",
+    ):
+        assert ccp.evaluate([path]) == [], f"{path} is test-side and must not trigger a production pairing rule"
+        assert ccp.evaluate([_RELEASE_SCRIPT, path]) == [], f"{path} must satisfy the shipped-test side"
+
+
+def test_release_plane_requires_frozen_red_record_when_body_is_available(tmp_path: Any, capsys: Any) -> None:
+    body = tmp_path / "pr-body.md"
+    body.write_text("## Tests\nA test changed, but no frozen-RED record is present.\n", encoding="utf-8")
+
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 1
+    assert "Frozen RED test" in capsys.readouterr().out
+
+
+def test_matching_frozen_red_record_passes(tmp_path: Any) -> None:
+    body = tmp_path / "pr-body.md"
+    body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
+
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 0
+
+
+def test_frozen_red_record_must_name_a_changed_test_and_carry_a_tail(tmp_path: Any, capsys: Any) -> None:
+    body = tmp_path / "pr-body.md"
+    body.write_text(
+        _frozen_red_body(
+            "tests/test_check_skip_allowlist.py", _working_tree_hash("tests/test_check_skip_allowlist.py")
+        ),
+        encoding="utf-8",
+    )
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 1
+    assert "not changed by this PR" in capsys.readouterr().out
+
+    body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST), tail=""), encoding="utf-8")
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 1
+    assert "RED run tail" in capsys.readouterr().out
+
+
+def test_comment_only_release_change_uses_existing_no_test_needed_escape(tmp_path: Any) -> None:
+    body = tmp_path / "pr-body.md"
+    body.write_text("no-test-needed: comment-only change\n", encoding="utf-8")
+
+    assert ccp.main(["--warn-only", "--pr-body-file", str(body), _RELEASE_SCRIPT]) == 0
+
+
+def test_ci_wiring_carries_body_and_executes_both_release_plane_red_canaries() -> None:
+    workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/test.yml").read_text(encoding="utf-8")
+
+    assert 'printf "scripts/canary.py\\0"' in workflow, "CI must execute the missing-test release-plane offence"
+    assert "frozen-red-canary-body.txt" in workflow, "CI must execute the mismatched-hash release-plane offence"
+    assert (
+        "python3 scripts/check_coverage_pairing.py ${WARN_ONLY:+--warn-only} --pr-body-file pr_body.txt < changed.txt"
+    ) in workflow, "the real strict run must always carry the live PR body"
+
+
+def test_run_gates_plan_includes_coverage_pairing() -> None:
+    repo = Path(__file__).resolve().parent.parent
+    proc = subprocess.run(
+        ["sh", "scripts/agent/run-gates.sh", "--diff", "HEAD", "--plan"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.splitlines().count("python3 scripts/check_coverage_pairing.py") == 1, proc.stdout
