@@ -1425,20 +1425,8 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         tree = ast.parse(source, filename=where)
     except SyntaxError as exc:
         raise AssertionError(f"{where}:{exc.lineno}: rule=docker-init: invalid Python: {exc.msg}") from exc
-    imported_calls = {
-        alias.asname or alias.name
-        for node in tree.body
-        if isinstance(node, ast.ImportFrom) and node.module == "subprocess"
-        for alias in node.names
-        if alias.name in {"call", "check_call", "check_output", "Popen", "run"}
-    }
-    subprocess_modules = {
-        alias.asname or alias.name
-        for node in tree.body
-        if isinstance(node, ast.Import)
-        for alias in node.names
-        if alias.name == "subprocess"
-    }
+    imported_calls: dict[ast.AST, set[str]] = {}
+    subprocess_modules: dict[ast.AST, set[str]] = {}
     scope_types = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef)
     parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
 
@@ -1457,7 +1445,17 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
     functions: dict[ast.AST, dict[str, ast.FunctionDef | ast.AsyncFunctionDef]] = {}
     for node in ast.walk(tree):
         scope = scope_chain(node)[0] if not isinstance(node, ast.Module) else tree
-        if isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple)):
+        if isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            imported_calls.setdefault(scope, set()).update(
+                alias.asname or alias.name
+                for alias in node.names
+                if alias.name in {"call", "check_call", "check_output", "Popen", "run"}
+            )
+        elif isinstance(node, ast.Import):
+            subprocess_modules.setdefault(scope, set()).update(
+                alias.asname or alias.name for alias in node.names if alias.name == "subprocess"
+            )
+        elif isinstance(node, ast.Assign) and isinstance(node.value, (ast.List, ast.Tuple)):
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     bound_argv.setdefault(scope, {}).setdefault(target.id, []).append((node.lineno, node.value))
@@ -1515,7 +1513,7 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
         is_subprocess = (
             isinstance(function, ast.Attribute)
             and isinstance(function.value, ast.Name)
-            and function.value.id in subprocess_modules
+            and any(function.value.id in subprocess_modules.get(scope, set()) for scope in scope_chain(node))
             and function.attr in {"call", "check_call", "check_output", "Popen", "run"}
         )
         is_os_system = (
@@ -1524,7 +1522,9 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
             and function.value.id == "os"
             and function.attr == "system"
         )
-        is_imported_subprocess = isinstance(function, ast.Name) and function.id in imported_calls
+        is_imported_subprocess = isinstance(function, ast.Name) and any(
+            function.id in imported_calls.get(scope, set()) for scope in scope_chain(node)
+        )
         if not (is_subprocess or is_imported_subprocess or is_os_system):
             continue
         keyword_arguments = [keyword.value for keyword in node.keywords if keyword.arg == "args"]
@@ -1785,7 +1785,7 @@ def _sha_inventory(
 def _shell_commands(source: str) -> list[list[str]]:
     commands: list[list[str]] = []
     for _, logical in _logical_shell_lines(source):
-        lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()")
+        lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|")
         lexer.whitespace_split = True
         lexer.commenters = "#"
         try:
@@ -1887,6 +1887,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
 
         workflow_pins = {(candidate.job, candidate.output) for candidate in pins if candidate.workflow == pin.workflow}
         identity = False
+        invalid_alias_sinks: set[tuple[str, str, str]] = set()
         invalid_ref_jobs: set[str] = set()
         for job_name, path, value in consumers:
             if not _ref_binding(path):
@@ -1920,32 +1921,44 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 env = step.get("env", {})
                 if isinstance(env, dict):
                     effective_env.update(env)
-                step_aliases = {
+                pin_aliases = {
                     name
                     for name, value in effective_env.items()
                     if isinstance(name, str)
                     and isinstance(value, str)
-                    and _pin_expression_members(value) == exact_member
+                    and any(
+                        (member.group("job"), member.group("output")) == (pin.job, pin.output)
+                        for member in _NEEDS_OUTPUT.finditer(value)
+                    )
                 }
+                step_aliases = {
+                    name
+                    for name in pin_aliases
+                    if isinstance(value := effective_env[name], str) and _pin_expression_members(value) == exact_member
+                }
+                invalid_aliases = pin_aliases - step_aliases
                 run = step.get("run")
                 if not isinstance(run, str):
                     continue
                 overridden: set[str] = set()
-                live_vars = set(
-                    re.findall(
-                        r'(?ms)^\s*(?:(?:export|readonly)\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?'
-                        r"\$\(\s*git\s+ls-remote\b",
-                        run,
-                    )
-                )
                 normalized_run = re.sub(
                     r"\$\((.*?)\)",
                     lambda match: "$(" + " ".join(match.group(1).split()) + ")",
                     run,
                     flags=re.DOTALL,
                 )
+                commands = _shell_commands(normalized_run)
+                live_vars: set[str] = set()
+                for words in commands:
+                    assignment = re.match(
+                        r'(?:(?:export|readonly)\s+)?(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*["\']?'
+                        r"\$\(\s*git\s+ls-remote\b",
+                        " ".join(words),
+                    )
+                    if assignment is not None:
+                        live_vars.add(assignment.group("name"))
                 base = _pin_base(pin.output)
-                for words in _shell_commands(normalized_run):
+                for words in commands:
                     overridden.update(
                         assignment.group("name")
                         for word in words
@@ -2001,6 +2014,17 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                             or argument.startswith(f"${name}:")
                             or argument.startswith(f"${{{name}}}:")
                         }
+                        used_git_invalid = {
+                            name
+                            for argument in arguments
+                            for name in invalid_aliases
+                            if argument == f"${name}"
+                            or argument == f"${{{name}}}"
+                            or argument.startswith(f"${name}:")
+                            or argument.startswith(f"${{{name}}}:")
+                        }
+                        if used_git_invalid:
+                            invalid_alias_sinks.update((job_name, name, command) for name in used_git_invalid)
                         direct_live = any(re.search(r"\$\(\s*git\s+ls-remote\b", argument) for argument in arguments)
                         if (used_git_live or direct_live) and step_aliases:
                             offences.append(
@@ -2014,7 +2038,13 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                             )
                         elif used_git:
                             identity = True
-        if not identity:
+        if identity:
+            offences.extend(
+                f"{pin.workflow}:{job_name}: rule=pin-consumer: derived or untrusted env alias "
+                f"{name} references {pin.job}.{pin.output} at identity sink git {command}"
+                for job_name, name, command in invalid_alias_sinks
+            )
+        else:
             offences.append(
                 f"{pin.workflow}:{pin.job}.{pin.output}: rule=pin-consumer: pin is not consumed by a ref/identity sink"
             )

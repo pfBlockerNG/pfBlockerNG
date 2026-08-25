@@ -727,6 +727,69 @@ jobs:
     ]
 
 
+def test_workflow_hygiene_rejects_derived_env_alias_beside_exact_checkout() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      SOURCE_SHA: ${{ needs.prepare.outputs.source_sha || github.ref }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+      - run: git checkout "$SOURCE_SHA"
+"""
+    assert hygiene._pin_offences({"mixed-env.yml": source}) == [
+        "mixed-env.yml:build: rule=pin-consumer: derived or untrusted env alias SOURCE_SHA "
+        "references prepare.source_sha at identity sink git checkout"
+    ]
+
+
+def test_workflow_hygiene_reports_semicolon_live_replacement_beside_exact_sink() -> None:
+    source = """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    env:
+      PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+    steps:
+      - run: |
+          git show "$PORTS_SHA:Makefile"
+          true; FRESH=$(git ls-remote origin main)
+          FRESH=${FRESH%%[[:space:]]*}
+          git checkout "$FRESH"
+"""
+    assert hygiene._pin_offences({"valid-live.yml": source}) == [
+        "valid-live.yml:build: rule=pin-consumer: live git ls-remote replaces "
+        "prepare.ports_sha at identity sink git checkout"
+    ]
+
+
+def test_workflow_hygiene_resolves_function_local_subprocess_import() -> None:
+    source = """\
+def invoke():
+    import subprocess
+    subprocess.run(["docker", "run", "alpine"], check=True)
+invoke()
+"""
+    assert hygiene._docker_run_offences({"tests/smoke/nested_import.py": source}) == [
+        "tests/smoke/nested_import.py:3: rule=docker-init: docker run must include exact token --init"
+    ]
+
+
 def test_workflow_hygiene_resolves_static_shell_and_php_docker_aliases() -> None:
     sources = {
         "scripts/command-v.sh": 'runtime="$(command -v docker)"\n"$runtime" run alpine\n',
