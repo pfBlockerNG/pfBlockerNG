@@ -852,6 +852,96 @@ jobs:
     ]
 
 
+def test_workflow_hygiene_rejects_unknown_alias_at_flag_identity_sink() -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show "$PORTS_SHA:Makefile"
+          FRESH=main
+          sh scripts/build-leg.sh --ports-ref "$FRESH"
+"""
+    assert hygiene._pin_offences({"unknown-flag-alias.yml": source}) == [
+        "unknown-flag-alias.yml:build: rule=pin-consumer: identity flag --ports-ref uses "
+        "a derived, untrusted, or unknown value instead of prepare.ports_sha"
+    ]
+
+
+@pytest.mark.parametrize(
+    "identity_invocation",
+    (
+        "sh scripts/build-leg.sh --ports-ref main",
+        "sh scripts/build-leg.sh --ports-ref=main",
+    ),
+)
+def test_workflow_hygiene_rejects_direct_literal_at_flag_identity_sink(
+    identity_invocation: str,
+) -> None:
+    source = """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show "$PORTS_SHA:Makefile"
+          IDENTITY_INVOCATION
+""".replace("IDENTITY_INVOCATION", identity_invocation)
+    assert hygiene._pin_offences({"direct-flag-literal.yml": source}) == [
+        "direct-flag-literal.yml:build: rule=pin-consumer: identity flag --ports-ref uses "
+        "a derived, untrusted, or unknown value instead of prepare.ports_sha"
+    ]
+
+
+def test_workflow_hygiene_scopes_flag_identity_sinks_to_matching_prepared_pins() -> None:
+    sources = {
+        "exact-and-unrelated.yml": """\
+"on": workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show "$PORTS_SHA:Makefile"
+          sh scripts/build-leg.sh --ports-ref "$PORTS_SHA"
+          sh scripts/build-leg.sh --ports-sha "${{ needs.prepare.outputs.ports_sha }}"
+          sh scripts/build-leg.sh --cache-ref main
+""",
+        "no-prepared-pin.yml": """\
+"on": workflow_dispatch
+jobs:
+  build:
+    steps:
+      - run: sh scripts/build-leg.sh --ports-ref main
+""",
+    }
+    assert hygiene._pin_offences(sources) == []
+
+
 def test_workflow_hygiene_reports_semicolon_live_replacement_beside_exact_sink() -> None:
     source = """\
 on: workflow_dispatch

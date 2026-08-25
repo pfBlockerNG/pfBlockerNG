@@ -1988,11 +1988,20 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                     for name in pin_aliases
                     if _pin_expression_members(cast(str, effective_env[name])) == exact_member
                 }
+                prepared_aliases = {
+                    name
+                    for name, value in effective_env.items()
+                    if isinstance(name, str)
+                    and isinstance(value, str)
+                    and bool(_pin_expression_members(value))
+                    and _pin_expression_members(value) <= workflow_pins
+                }
                 invalid_aliases = pin_aliases - step_aliases
                 run = step.get("run")
                 if not isinstance(run, str):
                     continue
-                aliases = {name: "exact" for name in step_aliases}
+                aliases = {name: "prepared" for name in prepared_aliases}
+                aliases.update({name: "exact" for name in step_aliases})
                 aliases.update({name: "derived" for name in invalid_aliases})
                 normalized_run = re.sub(
                     r"\$\((.*?)\)",
@@ -2010,6 +2019,7 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                         if provenance is not None or name in aliases:
                             aliases[name] = provenance or "overwritten"
 
+                    flag_arguments: list[tuple[str, str, str | None, str | None, frozenset[tuple[str, str]]]] = []
                     for flag, argument in _pin_flag_arguments(words, base):
                         argument_match = _SHELL_EXACT_VARIABLE.fullmatch(argument)
                         argument_var = (
@@ -2017,7 +2027,23 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                             if argument_match is not None
                             else None
                         )
-                        provenance = aliases.get(argument_var or "")
+                        flag_arguments.append(
+                            (
+                                flag,
+                                argument,
+                                argument_var,
+                                aliases.get(argument_var or ""),
+                                _pin_expression_members(argument),
+                            )
+                        )
+                    has_prepared_argument = any(
+                        reference == argument
+                        or provenance in {"exact", "prepared"}
+                        or bool(argument_members)
+                        and argument_members <= workflow_pins
+                        for _, argument, _, provenance, argument_members in flag_arguments
+                    )
+                    for flag, argument, argument_var, provenance, argument_members in flag_arguments:
                         if provenance == "derived":
                             sinks = invalid_alias_sinks if argument_var in invalid_aliases else derived_alias_sinks
                             sinks.add((job_name, cast(str, argument_var), flag))
@@ -2026,12 +2052,19 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
                                 f"replaces {pin.job}.{pin.output} at identity sink {flag}"
                             )
-                        elif reference == argument or provenance == "exact":
+                        elif reference == argument or argument_members == exact_member or provenance == "exact":
                             identity = True
+                        elif provenance == "prepared" or bool(argument_members) and argument_members <= workflow_pins:
+                            continue
                         elif provenance == "overwritten":
                             offences.append(
                                 f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
                                 f"{pin.job}.{pin.output} at identity sink {flag}"
+                            )
+                        elif not has_prepared_argument:
+                            offences.append(
+                                f"{pin.workflow}:{job_name}: rule=pin-consumer: identity flag {flag} uses "
+                                f"a derived, untrusted, or unknown value instead of {pin.job}.{pin.output}"
                             )
 
                     identity_command = _git_identity_command(words)
