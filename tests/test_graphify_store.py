@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.gitenv import scrubbed_git_env
+
 SCRIPT = Path(__file__).parents[1] / "scripts" / "agent" / "graphify-store.py"
 SPEC = importlib.util.spec_from_file_location("graphify_store", SCRIPT)
 assert SPEC and SPEC.loader
@@ -24,6 +26,7 @@ def git(path: Path, *args: str) -> str:
         check=True,
         text=True,
         capture_output=True,
+        env=scrubbed_git_env(),
     )
     return result.stdout.strip()
 

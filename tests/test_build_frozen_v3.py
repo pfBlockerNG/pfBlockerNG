@@ -26,6 +26,8 @@ from typing import Any
 import pfb_pkg
 import pytest
 
+from tests.gitenv import scrubbed_git_env
+
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "build-frozen-v3.py"
 _spec = importlib.util.spec_from_file_location("build_frozen_v3", _TOOL)
 assert _spec is not None and _spec.loader is not None
@@ -314,7 +316,7 @@ def test_derive_deps_shape() -> None:
 
 
 def _git(*args: str, cwd: Path) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True)
+    return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, env=scrubbed_git_env())
 
 
 @pytest.fixture
