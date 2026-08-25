@@ -41,5 +41,7 @@ def test_actionlint_exception_is_narrowly_scoped_to_workflows_using_queue_max() 
             ".github/workflows/release-published.yml": {"ignore": [queue_error]},
             ".github/workflows/pkg-republish.yml": {"ignore": [queue_error]},
             ".github/workflows/release.yml": {"ignore": [queue_error]},
+            ".github/workflows/image-refresh.yml": {"ignore": [queue_error]},
+            ".github/workflows/nightly-failure-alert.yml": {"ignore": [queue_error]},
         }
     }

@@ -15,3 +15,9 @@ paths:
   .github/workflows/release.yml:
     ignore:
       - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/image-refresh.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'
+  .github/workflows/nightly-failure-alert.yml:
+    ignore:
+      - 'unexpected key "queue" for "concurrency" section'

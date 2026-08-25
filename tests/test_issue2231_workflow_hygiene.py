@@ -433,6 +433,13 @@ def test_workflow_parser_fails_closed_with_file_and_rule_diagnostics(where: str,
         _workflow_document(source, where)
 
 
+@pytest.mark.parametrize("workflow", ("image-refresh.yml", "nightly-failure-alert.yml"))
+def test_lossless_operational_workflows_keep_every_pending_event(workflow: str) -> None:
+    concurrency = _workflow_document(_workflow_sources()[workflow], workflow)["concurrency"]
+    assert isinstance(concurrency, dict)
+    assert concurrency.get("queue") == "max"
+
+
 # --------------------------------------------------------------------------- #
 # 5. Artifact producer/consumer chains keep one action major.
 # --------------------------------------------------------------------------- #
@@ -623,12 +630,14 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
     download_matches: dict[tuple[str, str, int, int], bool] = {}
     download_selectors: dict[tuple[str, str, int, int], set[str]] = {}
     major_mismatches: dict[tuple[str, str, int, int], set[tuple[str, str, int]]] = {}
+    required_downloads: set[tuple[str, str, int, int]] = set()
 
     def scan_instance(
         workflow: str,
         supplied_inputs: Mapping[str, frozenset[str]],
         inherited: tuple[_Artifact, ...],
         stack: tuple[str, ...],
+        require_matches: bool,
     ) -> tuple[tuple[_Artifact, ...], Mapping[str, frozenset[str]]]:
         assert workflow not in stack, f"{workflow}: rule=artifact-major: recursive reusable workflow"
         document = documents[workflow]
@@ -671,7 +680,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                         if isinstance(name, str)
                     }
                     called_produced, called_outputs = scan_instance(
-                        call_path, called_inputs, upstream, (*stack, workflow)
+                        call_path, called_inputs, upstream, (*stack, workflow), require_matches
                     )
                     lineage = tuple(
                         dict.fromkeys(
@@ -722,6 +731,8 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
                     key = (workflow, job_name, step_index, major)
                     download_selectors.setdefault(key, set()).update(selectors)
                     download_matches.setdefault(key, False)
+                    if require_matches:
+                        required_downloads.add(key)
                     available = (*upstream, *produced)
                     matched = {
                         artifact
@@ -784,7 +795,7 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
         if "workflow_run" in triggers:
             workflow_run_roots.append(workflow)
         if triggers & (_EXTERNAL_TRIGGERS | {"pull_request"}):
-            root_produced, _ = scan_instance(workflow, {}, (), ())
+            root_produced, _ = scan_instance(workflow, {}, (), (), "workflow_run" not in triggers)
             name = document.get("name")
             if isinstance(name, str):
                 direct_names[name] = root_produced
@@ -797,9 +808,9 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
         missing = [name for name in names if isinstance(name, str) and name not in direct_names]
         if missing:
             offences.add(f"{workflow}: rule=artifact-major: workflow_run names missing producers {missing!r}")
-        scan_instance(workflow, {}, inherited, ())
+        scan_instance(workflow, {}, inherited, (), True)
     for (workflow, job, step, major), matched in sorted(download_matches.items()):
-        if not matched and "workflow_run" not in _trigger_names(documents[workflow]):
+        if not matched and (workflow, job, step, major) in required_downloads:
             offences.add(
                 f"{workflow}:{job}:step-{step}: rule=artifact-major: no producer matches "
                 f"{sorted(download_selectors[(workflow, job, step, major)])!r}"
@@ -899,6 +910,7 @@ jobs:
         with: {name: family-two}
 """,
         "root.yaml": """\
+
 on: workflow_dispatch
 jobs:
   make:
@@ -934,6 +946,33 @@ jobs:
         and "('producer.yml', 'duplicate', 8)" in item
         for item in offences
     )
+
+
+def test_artifact_scanner_rejects_unmatched_workflow_run_selector() -> None:
+    sources = {
+        "root.yml": """\
+name: Root
+on: workflow_dispatch
+jobs:
+  upload:
+    steps:
+      - uses: actions/upload-artifact@v8
+        with: {name: expected}
+""",
+        "callback.yaml": """\
+on:
+  workflow_run:
+    workflows: [Root]
+jobs:
+  consume:
+    steps:
+      - uses: actions/download-artifact@v8
+        with: {name: typo}
+""",
+    }
+    assert _artifact_chain_offences(sources) == [
+        "callback.yaml:consume:step-0: rule=artifact-major: no producer matches ['typo']"
+    ]
 
 
 def test_artifact_scanner_resolves_workflow_run_display_name_through_local_reusable_producer() -> None:
@@ -1109,7 +1148,7 @@ def _logical_shell_lines(source: str) -> list[tuple[int, str]]:
 def _shell_words(source: str, where: str) -> list[tuple[int, list[str]]]:
     commands: list[tuple[int, list[str]]] = []
     for line_no, logical in _logical_shell_lines(source):
-        if "docker" not in logical or "run" not in logical:
+        if "docker" not in logical.lower() or "run" not in logical:
             continue
         lexer = shlex.shlex(logical, posix=True, punctuation_chars=";&|()")
         lexer.whitespace_split = True
@@ -1133,7 +1172,7 @@ def _docker_argv(words: list[str]) -> list[str] | None:
     index = 0
     while index < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[index]):
         index += 1
-    while index < len(words) and words[index] in {"command", "exec"}:
+    while index < len(words) and words[index] in {"command", "exec", "sudo"}:
         index += 1
     if index < len(words) and words[index] == "env":
         index += 1
@@ -1141,9 +1180,44 @@ def _docker_argv(words: list[str]) -> list[str] | None:
             words[index].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[index])
         ):
             index += 1
-    if index + 1 >= len(words) or Path(words[index]).name != "docker" or words[index + 1] != "run":
+    docker = words[index] if index < len(words) else ""
+    if (
+        index + 1 >= len(words)
+        or (Path(docker).name != "docker" and "DOCKER" not in docker)
+        or words[index + 1] != "run"
+    ):
         return None
     return words[index + 2 :]
+
+
+_DOCKER_VALUE_OPTIONS = {
+    "--add-host",
+    "--cap-add",
+    "--device",
+    "--env",
+    "--label",
+    "--name",
+    "--network",
+    "--publish",
+    "--sysctl",
+    "--tmpfs",
+    "--volume",
+    "-e",
+    "-p",
+    "-v",
+}
+
+
+def _docker_has_init_before_image(argv: list[str]) -> bool:
+    index = 0
+    while index < len(argv):
+        word = argv[index]
+        if word == "--init":
+            return True
+        if not word.startswith("-"):
+            return False
+        index += 2 if word in _DOCKER_VALUE_OPTIONS and "=" not in word else 1
+    return False
 
 
 def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
@@ -1152,6 +1226,13 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
     except SyntaxError as exc:
         raise AssertionError(f"{where}:{exc.lineno}: rule=docker-init: invalid Python: {exc.msg}") from exc
     invocations: list[tuple[int, list[str]]] = []
+    imported_calls = {
+        alias.asname or alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "subprocess"
+        for alias in node.names
+        if alias.name in {"call", "check_call", "check_output", "Popen", "run"}
+    }
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or not node.args:
             continue
@@ -1168,14 +1249,16 @@ def _python_docker_runs(source: str, where: str) -> list[tuple[int, list[str]]]:
             and function.value.id == "os"
             and function.attr == "system"
         )
-        if not (is_subprocess or is_os_system):
+        is_imported_subprocess = isinstance(function, ast.Name) and function.id in imported_calls
+        if not (is_subprocess or is_imported_subprocess or is_os_system):
             continue
         argument = node.args[0]
         words: list[str] | None = None
-        if isinstance(argument, (ast.List, ast.Tuple)) and all(
-            isinstance(item, ast.Constant) and isinstance(item.value, str) for item in argument.elts
-        ):
-            words = [cast(str, item.value) for item in argument.elts if isinstance(item, ast.Constant)]
+        if isinstance(argument, (ast.List, ast.Tuple)):
+            words = [
+                cast(str, item.value) if isinstance(item, ast.Constant) and isinstance(item.value, str) else "<dynamic>"
+                for item in argument.elts
+            ]
         elif isinstance(argument, ast.Constant) and isinstance(argument.value, str):
             words = _option_words(argument.value, f"{where}:{node.lineno}", "docker-init")
         if words is not None and _docker_argv(words) is not None:
@@ -1214,7 +1297,7 @@ def _docker_run_offences(sources: dict[str, str]) -> list[str]:
             invocations = _shell_words(source, where)
         for line_no, words in invocations:
             argv = _docker_argv(words)
-            if argv is not None and "--init" not in argv:
+            if argv is not None and not _docker_has_init_before_image(argv):
                 offences.append(f"{where}:{line_no}: rule=docker-init: docker run must include exact token --init")
     return offences
 
@@ -1265,6 +1348,27 @@ system('docker run --rm');
         "tests/smoke/case.py:5: rule=docker-init: docker run must include exact token --init",
         "scripts/case.php:5: rule=docker-init: docker run must include exact token --init",
     ]
+
+
+def test_docker_scanner_rejects_wrappers_dynamic_argv_and_late_init() -> None:
+    sources = {
+        "scripts/wrappers.sh": """\
+sudo docker run alpine
+docker run alpine --init
+DOCKER=docker
+"$DOCKER" run --rm alpine
+""",
+        "tests/smoke/imported.py": """\
+from subprocess import run
+
+opts = ["--rm", "alpine"]
+run(["docker", "run", "alpine"])
+run(["docker", "run", *opts])
+""",
+    }
+    offences = _docker_run_offences(sources)
+    assert len(offences) == 5, offences
+    assert all("rule=docker-init" in offence for offence in offences)
 
 
 # --------------------------------------------------------------------------- #
@@ -1382,8 +1486,15 @@ def _pin_base(output: str) -> str:
 def _ref_binding(path: tuple[str, ...]) -> bool:
     if not path or "env" in path:
         return False
-    key = path[-1].lower()
-    return key == "ref" or key.endswith("_ref") or key == "sha" or key.endswith("_sha")
+    return path[-1].lower() in {
+        "ref",
+        "sha",
+        "checkout_ref",
+        "source_ref",
+        "ports_ref",
+        "smoke_nightly_expected_source_sha",
+        "smoke_repo_expected_source_sha",
+    }
 
 
 def _pin_offences(sources: dict[str, str]) -> list[str]:
@@ -1411,7 +1522,10 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
             )
             continue
 
-        identity = any(_ref_binding(path) for _, path, _ in consumers)
+        identity = any(
+            _ref_binding(path) and value.strip().startswith("${{") and value.strip().endswith("}}")
+            for _, path, value in consumers
+        )
         for job_name in sorted(descendants):
             job = jobs[job_name]
             if not isinstance(job, dict):
@@ -1448,13 +1562,14 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                 if not isinstance(run, str):
                     continue
                 overridden = {
-                    name
-                    for name in step_aliases
-                    if re.search(
-                        rf"(?m)^\s*(?:export\s+)?{re.escape(name)}=.*\bgit\s+ls-remote\b",
+                    name for name in step_aliases if re.search(rf"(?m)^\s*(?:export\s+)?{re.escape(name)}=", run)
+                }
+                live_vars = set(
+                    re.findall(
+                        r"(?m)^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=.*\bgit\s+ls-remote\b",
                         run,
                     )
-                }
+                )
                 base = _pin_base(pin.output)
                 for words in _shell_commands(run):
                     for index, word in enumerate(words[:-1]):
@@ -1467,15 +1582,23 @@ def _pin_offences(sources: dict[str, str]) -> list[str]:
                         if not relevant_flag:
                             continue
                         argument = words[index + 1]
-                        used = {name for name in step_aliases if argument == f"${name}" or argument == f"${{{name}}}"}
-                        if reference in argument:
+                        argument_var = argument.removeprefix("${").removesuffix("}")
+                        if argument.startswith("$") and not argument.startswith("${"):
+                            argument_var = argument[1:]
+                        used = {name for name in step_aliases if argument_var == name}
+                        if argument_var in live_vars:
+                            offences.append(
+                                f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
+                                f"replaces {pin.job}.{pin.output} at identity sink {word}"
+                            )
+                        elif reference == argument:
                             identity = True
                         elif used - overridden:
                             identity = True
                         elif used & overridden:
                             offences.append(
-                                f"{pin.workflow}:{job_name}: rule=pin-consumer: live git ls-remote "
-                                f"replaces {pin.job}.{pin.output} at identity sink {word}"
+                                f"{pin.workflow}:{job_name}: rule=pin-consumer: alias overwrites "
+                                f"{pin.job}.{pin.output} at identity sink {word}"
                             )
                     if (
                         len(words) > 1
@@ -1641,3 +1764,39 @@ jobs:
         "live git ls-remote replaces resolve.ports_sha at identity sink --ports-ref" in item for item in offences
     )
     assert not any("unrelated.yaml" in item for item in offences)
+
+
+def test_pin_scanner_rejects_decorated_refs_alias_overwrites_and_indirect_live_refs() -> None:
+    sources = {
+        "hostile.yml": """\
+on: workflow_dispatch
+jobs:
+  prepare:
+    outputs:
+      ports_sha: ${{ steps.pin.outputs.ports_sha }}
+      source_sha: ${{ steps.pin.outputs.source_sha }}
+    steps:
+      - id: pin
+  build:
+    needs: prepare
+    with:
+      ref: refs/heads/${{ needs.prepare.outputs.source_sha }}-attacker
+      arbitrary_sha: ${{ needs.prepare.outputs.source_sha }}
+    steps:
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          git show \"$PORTS_SHA:Makefile\"
+          FRESH=\"$(git ls-remote origin main)\"
+          build-leg.sh --ports-ref \"$FRESH\"
+      - env:
+          PORTS_SHA: ${{ needs.prepare.outputs.ports_sha }}
+        run: |
+          PORTS_SHA=main
+          build-leg.sh --ports-ref \"$PORTS_SHA\"
+""",
+    }
+    offences = _pin_offences(sources)
+    assert any("prepare.source_sha: rule=pin-consumer: pin is not consumed" in item for item in offences)
+    assert any("live git ls-remote replaces prepare.ports_sha" in item for item in offences)
+    assert any("overwrites prepare.ports_sha" in item for item in offences)
