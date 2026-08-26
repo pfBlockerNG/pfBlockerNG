@@ -487,6 +487,7 @@ jobs:
       ci_metadata_sha: ${{ steps.pins.outputs.ci_metadata_sha }}
       ports_sha: ${{ steps.pins.outputs.ports_sha }}
       dependency_builder: ${{ steps.pins.outputs.dependency_builder }}
+      dependency_packages: ${{ steps.pins.outputs.dependency_packages }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
       release_stage: ${{ steps.channel.outputs.release_stage }}
@@ -580,7 +581,7 @@ jobs:
       - name: Check out pinned dependency-builder source
         uses: actions/checkout@v6
         with:
-          ref: ${{ steps.destinations.outputs.source_sha }}
+          ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || steps.destinations.outputs.source_sha }}
           fetch-depth: 1
           persist-credentials: false
           path: pinned-builder
@@ -591,6 +592,8 @@ jobs:
 
       - name: Pin ci-metadata, ROUTE, and Ports identities
         id: pins
+        env:
+          INPUT_SOURCE: ${{ github.event.inputs.source }}
         run: |
           set -eu
           git fetch --no-tags origin \
@@ -609,12 +612,39 @@ jobs:
           done
           ROUTE_MATRIX=$(git show "${CI_METADATA_SHA}:supported-versions.json" \
             | jq -ce '.versions | select(type == "array")')
+          if [ "$INPUT_SOURCE" = "release/3.3" ]; then
+            ROUTE_MATRIX=$(printf '%s' "$ROUTE_MATRIX" | jq -ce 'map(.extra_pkgs = [])')
+          fi
           PINNED_BUILDER="$GITHUB_WORKSPACE/pinned-builder"
+          DEPENDENCY_PACKAGES='{}'
+          ORIGINS=$(printf '%s' "$ROUTE_MATRIX" | jq -r '[.[].extra_pkgs[]?] | unique[]')
+          if [ -n "$ORIGINS" ]; then
+            PORTS_DIR="$RUNNER_TEMP/dependency-identity-ports"
+            git clone --filter=blob:none --no-checkout --depth 1 \
+              --branch pfblockerng/use-github \
+              https://github.com/pfBlockerNG/FreeBSD-ports "$PORTS_DIR"
+            git -C "$PORTS_DIR" sparse-checkout init --cone
+            for ORIGIN in $ORIGINS; do
+              git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
+            done
+            git -C "$PORTS_DIR" checkout --detach "$PORTS_SHA"
+            for ORIGIN in $ORIGINS; do
+              IDENTITY=$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" \
+                --print-port-identity \
+                --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
+                --port "$ORIGIN")
+              DEPENDENCY_PACKAGES=$(printf '%s' "$IDENTITY" \
+                | jq -ce --argjson current "$DEPENDENCY_PACKAGES" \
+                  '$current + {(.port_origin): (del(.port_origin))}')
+            done
+          fi
           DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
           {
             echo "ci_metadata_sha=${CI_METADATA_SHA}"
             echo "ports_sha=${PORTS_SHA}"
             echo "dependency_builder=${DEPENDENCY_BUILDER}"
+            echo "dependency_packages=${DEPENDENCY_PACKAGES}"
             echo "route_matrix=${ROUTE_MATRIX}"
           } >> "$GITHUB_OUTPUT"
 
@@ -1048,6 +1078,7 @@ jobs:
           CI_METADATA_SHA: ${{ needs.read-matrix.outputs.ci_metadata_sha }}
           PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}
           DEPENDENCY_BUILDER: ${{ needs.read-matrix.outputs.dependency_builder }}
+          DEPENDENCY_PACKAGES: ${{ needs.read-matrix.outputs.dependency_packages }}
         run: |
           set -eu
           RELEASE_HANDOFF="$RUNNER_TEMP/pfblockerng-release-handoff.json"
@@ -1055,6 +1086,8 @@ jobs:
           printf '%s\n' "$ROUTE_MATRIX" > "$ROUTE_MATRIX_FILE"
           DEPENDENCY_BUILDER_FILE="$RUNNER_TEMP/dependency-builder.json"
           printf '%s\n' "$DEPENDENCY_BUILDER" > "$DEPENDENCY_BUILDER_FILE"
+          DEPENDENCY_PACKAGES_FILE="$RUNNER_TEMP/dependency-packages.json"
+          printf '%s\n' "$DEPENDENCY_PACKAGES" > "$DEPENDENCY_PACKAGES_FILE"
           python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/tagged_release_handoff.py" \
             --release-tag "$RELEASE_TAG" \
             --source-sha "$SOURCE_SHA" \
@@ -1063,6 +1096,7 @@ jobs:
             --source-date-epoch "$(git show -s --format=%ct "$SOURCE_SHA")" \
             --dependency-builder "$DEPENDENCY_BUILDER_FILE" \
             --route-matrix "$ROUTE_MATRIX_FILE" \
+            --dependency-packages "$DEPENDENCY_PACKAGES_FILE" \
             --output "$RELEASE_HANDOFF"
           echo "RELEASE_HANDOFF=${RELEASE_HANDOFF}" >> "$GITHUB_ENV"
 
@@ -1136,12 +1170,14 @@ jobs:
           persist-credentials: false
 
       - name: Set up the pinned dependency-package toolchain
+        if: github.event.inputs.source != 'release/3.3'
         uses: astral-sh/setup-uv@v7
         with:
           version: "0.12.6"
           activate-environment: true
 
       - name: Sync the locked dependency-package toolchain
+        if: github.event.inputs.source != 'release/3.3'
         run: uv sync --locked --only-group dep-pkg-build
 
       - name: Compute this leg's LEG/ABI

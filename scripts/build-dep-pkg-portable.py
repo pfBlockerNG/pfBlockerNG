@@ -178,6 +178,9 @@ def read_port(port_dir: Path) -> PortFacts:
     if not portname or not portversion:
         raise DepPkgError(f"{port_dir}: Makefile missing PORTNAME/PORTVERSION")
     distname = mk.get("DISTNAME") or f"{portname}-{portversion}"
+    for label, value in (("PORTNAME", portname), ("PORTVERSION", portversion), ("DISTNAME", distname)):
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", value):
+            raise DepPkgError(f"{port_dir}: {label} is not a safe distfile component")
 
     www_all = mk.get("WWW").split()
     licenses = mk.get("LICENSE").split()
@@ -486,7 +489,11 @@ def stage_wheel(wheel: Path, stage_dir: Path, py_dotted: str) -> tuple[list[Path
 
     bin_root = stage_dir / "usr/local/bin"
     script_files: list[Path] = []
-    for name, (module, func) in sorted(parse_console_scripts(entry_points_text).items()):
+    scripts = parse_console_scripts(entry_points_text)
+    canonical_scripts = [unicodedata.normalize("NFC", name).casefold() for name in scripts]
+    if len(canonical_scripts) != len(set(canonical_scripts)):
+        raise DepPkgError("wheel contains host-canonical console-script collision")
+    for name, (module, func) in sorted(scripts.items()):
         bin_root.mkdir(parents=True, exist_ok=True)
         script = bin_root / name
         script.write_text(_SCRIPT_STUB.format(py_dotted=py_dotted, module=module, func=func))
@@ -540,20 +547,54 @@ def _dep_build_record(
     return json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
+def _checked_origin(value: str) -> PurePosixPath:
+    origin = PurePosixPath(value)
+    if (
+        not value
+        or "\\" in value
+        or origin.is_absolute()
+        or len(origin.parts) != 2
+        or any(part in ("", ".", "..") for part in origin.parts)
+        or origin.as_posix() != value
+    ):
+        raise DepPkgError("--port must be a safe category/name port origin")
+    return origin
+
+
+def dependency_port_identity(args: argparse.Namespace) -> dict[str, object]:
+    if not re.fullmatch(r"[0-9a-f]{40}", args.ports_sha):
+        raise DepPkgError("--ports-sha must be a lowercase 40-character Git SHA")
+    origin = _checked_origin(args.port)
+    ports_root = Path(args.ports).resolve()
+    port_payload = ports_root / origin
+    bpp._attest_checkout(ports_root, args.ports_sha, "FreeBSD-ports", payload_root=port_payload)
+    with tempfile.TemporaryDirectory(prefix="pfbng-depidentity-") as td:
+        snapshot_root = bpp._snapshot_checkout(
+            ports_root,
+            args.ports_sha,
+            Path(td) / "ports-snapshot",
+            payload_root=port_payload,
+        )
+        port_dir = snapshot_root / origin
+        port = read_port(port_dir)
+        distfile = f"{port.distname}.tar.gz"
+        sha256, size = read_distinfo(port_dir, distfile)
+    return {
+        "port_origin": args.port,
+        "portname": port.portname,
+        "port_version": port.portversion,
+        "distfile": distfile,
+        "distfile_sha256": sha256,
+        "distfile_size": size,
+        "python_dep_version": args.python_dep_version,
+    }
+
+
 def build_dep_pkg(args: argparse.Namespace) -> Path:
     epoch = _source_date_epoch(args)
     if not re.fullmatch(r"[0-9a-f]{40}", args.ports_sha):
         raise DepPkgError("--ports-sha must be a lowercase 40-character Git SHA")
-    origin = PurePosixPath(args.port)
-    if (
-        not args.port
-        or "\\" in args.port
-        or origin.is_absolute()
-        or len(origin.parts) != 2
-        or any(part in ("", ".", "..") for part in origin.parts)
-        or origin.as_posix() != args.port
-    ):
-        raise DepPkgError("--port must be a safe category/name port origin")
+    origin = _checked_origin(args.port)
     ports_root = Path(args.ports).resolve()
     port_payload = ports_root / origin
     py_dotted = python_dotted_version(args.py_flavor)  # validates the flavor too
@@ -629,6 +670,19 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
 def main(argv: list[str]) -> int:
     if argv == ["--print-toolchain"]:
         print(json.dumps(build_toolchain_identity(), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        return 0
+    if argv[:1] == ["--print-port-identity"]:
+        identity_parser = argparse.ArgumentParser(prog="build-dep-pkg-portable.py --print-port-identity")
+        identity_parser.add_argument("--ports", required=True)
+        identity_parser.add_argument("--ports-sha", required=True, dest="ports_sha")
+        identity_parser.add_argument("--port", required=True)
+        identity_parser.add_argument("--python-dep-version", default="0", dest="python_dep_version")
+        try:
+            identity = dependency_port_identity(identity_parser.parse_args(argv[1:]))
+        except (DepPkgError, bpp.BuildError) as exc:
+            sys.stderr.write(f"build-dep-pkg-portable: {exc}\n")
+            return 1
+        print(json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
         return 0
     ap = argparse.ArgumentParser(
         prog="build-dep-pkg-portable.py",
