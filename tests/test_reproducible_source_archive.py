@@ -6,9 +6,11 @@ import gzip
 import hashlib
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -43,6 +45,8 @@ def _source_tree(parent: Path, *, mtime: int, ordinary_mode: int, executable_mod
         (executable, b"#!/bin/sh\nexit 0\n"),
         (source / "ignored.pyc", b"bytecode"),
         (source / "__pycache__" / "ignored.cpython-311.pyc", b"cache"),
+        (source / ".pyc" / "hidden.conf", b"exact pyc component"),
+        (source / "cache.pyc" / "hidden.conf", b"pyc directory"),
         (source / "._Finder", b"AppleDouble"),
         (source / ".DS_Store", b"Finder metadata"),
     ):
@@ -66,8 +70,8 @@ def _source_tree(parent: Path, *, mtime: int, ordinary_mode: int, executable_mod
     return source
 
 
-def _build(source: Path, output: Path) -> bytes:
-    result = subprocess.run(
+def _run_builder(source: Path, output: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
         [
             sys.executable,
             str(BUILDER),
@@ -83,6 +87,10 @@ def _build(source: Path, output: Path) -> bytes:
         text=True,
         check=False,
     )
+
+
+def _build(source: Path, output: Path) -> bytes:
+    result = _run_builder(source, output)
     assert result.returncode == 0, result.stderr
     return output.read_bytes()
 
@@ -106,6 +114,10 @@ def test_fresh_trees_produce_identical_normalized_archives(tmp_path: Path) -> No
     with tarfile.open(tmp_path / "first output [x];$VAR.tar.gz", "r:gz") as archive:
         members = archive.getmembers()
         assert [member.name for member in members] == EXPECTED_MEMBERS
+        assert all(
+            not any(part.endswith(".pyc") or part == "__pycache__" for part in Path(member.name).parts)
+            for member in members
+        )
         assert all(member.mtime == SOURCE_EPOCH for member in members)
         assert all((member.uid, member.gid, member.uname, member.gname) == (0, 0, "root", "root") for member in members)
         assert all(not member.pax_headers for member in members)
@@ -134,6 +146,89 @@ def test_source_change_changes_hash_and_member_content(tmp_path: Path) -> None:
         assert changed_member is not None
         assert changed_member.read() == b"changed source\n"
         assert [member.name for member in archive.getmembers()] == EXPECTED_MEMBERS
+
+
+def test_source_root_symlink_is_rejected(tmp_path: Path) -> None:
+    outside = tmp_path / "outside-host-directory"
+    outside.mkdir()
+    (outside / "host-only.conf").write_text("host bytes\n", encoding="utf-8")
+    source_link = tmp_path / "src"
+    source_link.symlink_to(outside, target_is_directory=True)
+    output = tmp_path / "archive.tar.gz"
+
+    result = _run_builder(source_link, output)
+
+    assert result.returncode != 0
+    assert "source must be a real directory (not a symlink)" in result.stderr
+    assert not output.exists()
+
+
+def test_output_inside_source_is_rejected_without_clobbering_it(tmp_path: Path) -> None:
+    source = _source_tree(tmp_path, mtime=1_600_000_000, ordinary_mode=0o644, executable_mode=0o755)
+    output = source / "existing.tar.gz"
+    output.write_bytes(b"existing archive")
+
+    result = _run_builder(source, output)
+
+    assert result.returncode != 0
+    assert "output must be outside the source directory" in result.stderr
+    assert output.read_bytes() == b"existing archive"
+
+
+def test_output_symlink_is_replaced_without_touching_its_target(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
+    target = tmp_path / "outside-target"
+    target.write_bytes(b"outside bytes")
+    output = tmp_path / "archive.tar.gz"
+    output.symlink_to(target)
+
+    result = _run_builder(source, output)
+
+    assert result.returncode == 0, result.stderr
+    assert target.read_bytes() == b"outside bytes"
+    assert not output.is_symlink()
+    with tarfile.open(output, "r:gz") as archive:
+        assert [member.name for member in archive.getmembers()] == ["src", "src/ordinary.conf"]
+    assert not list(tmp_path.glob(f".{output.name}.*"))
+
+
+def test_unsupported_entry_failure_preserves_existing_output(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
+    os.mkfifo(source / "z-special")
+    output = tmp_path / "existing.tar.gz"
+    output.write_bytes(b"existing archive")
+
+    result = _run_builder(source, output)
+
+    assert result.returncode != 0
+    assert "unsupported source entry" in result.stderr
+    assert output.read_bytes() == b"existing archive"
+    assert not list(tmp_path.glob(f".{output.name}.*"))
+
+
+def test_socket_failure_is_contextual_and_preserves_existing_output() -> None:
+    with tempfile.TemporaryDirectory(prefix="issue2717-", dir="/tmp") as directory:
+        root = Path(directory)
+        source = root / "src"
+        source.mkdir()
+        (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
+        socket_path = source / "z.socket"
+        output = root / "existing.tar.gz"
+        output.write_bytes(b"existing archive")
+
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as unix_socket:
+            unix_socket.bind(str(socket_path))
+            result = _run_builder(source, output)
+
+        assert result.returncode != 0
+        assert f"unsupported source entry: {socket_path}" in result.stderr
+        assert "AttributeError" not in result.stderr
+        assert output.read_bytes() == b"existing archive"
+        assert not list(root.glob(f".{output.name}.*"))
 
 
 def _release_job() -> str:

@@ -5,10 +5,16 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import os
 import tarfile
+import tempfile
 from pathlib import Path
 
 _MAX_GZIP_EPOCH = (1 << 32) - 1
+
+
+class ArchiveError(Exception):
+    """Source archive cannot be built without violating its fixed contract."""
 
 
 def _epoch(value: str) -> int:
@@ -22,16 +28,18 @@ def _epoch(value: str) -> int:
 
 
 def _excluded(relative: Path) -> bool:
-    return (
-        relative.suffix == ".pyc"
-        or relative.name == ".DS_Store"
-        or any(part == "__pycache__" or part.startswith("._") for part in relative.parts)
+    return any(
+        part.endswith(".pyc") or part in {"__pycache__", ".DS_Store"} or part.startswith("._")
+        for part in relative.parts
     )
 
 
 def build_archive(source: Path, output: Path, epoch: int) -> None:
-    if not source.is_dir():
-        raise ValueError(f"source directory does not exist: {source}")
+    if source.is_symlink() or not source.is_dir():
+        raise ArchiveError(f"source must be a real directory (not a symlink): {source}")
+    output_location = output.parent.resolve() / output.name
+    if output_location.is_relative_to(source.resolve()):
+        raise ArchiveError(f"output must be outside the source directory: {output}")
 
     paths = [source]
     paths.extend(
@@ -41,31 +49,39 @@ def build_archive(source: Path, output: Path, epoch: int) -> None:
         )
     )
 
-    with (
-        output.open("wb") as raw_archive,
-        gzip.GzipFile(filename="", mode="wb", compresslevel=9, fileobj=raw_archive, mtime=epoch) as compressed,
-        tarfile.open(fileobj=compressed, mode="w|", format=tarfile.USTAR_FORMAT) as archive,
-    ):
-        for path in paths:
-            relative = path.relative_to(source)
-            archive_name = "src" if relative == Path() else f"src/{relative.as_posix()}"
-            info = archive.gettarinfo(str(path), arcname=archive_name)
-            info.uid = info.gid = 0
-            info.uname = info.gname = "root"
-            info.mtime = epoch
-            info.pax_headers = {}
-            if info.isdir():
-                info.mode = 0o755
-                archive.addfile(info)
-            elif info.isfile():
-                info.mode = 0o755 if info.mode & 0o111 else 0o644
-                with path.open("rb") as contents:
-                    archive.addfile(info, contents)
-            elif info.issym():
-                info.mode = 0o777
-                archive.addfile(info)
-            else:
-                raise ValueError(f"unsupported source entry: {path}")
+    temporary = tempfile.NamedTemporaryFile(mode="wb", prefix=f".{output.name}.", dir=output.parent, delete=False)
+    temporary_path = Path(temporary.name)
+    try:
+        with (
+            temporary as raw_archive,
+            gzip.GzipFile(filename="", mode="wb", compresslevel=9, fileobj=raw_archive, mtime=epoch) as compressed,
+            tarfile.open(fileobj=compressed, mode="w|", format=tarfile.USTAR_FORMAT) as archive,
+        ):
+            for path in paths:
+                relative = path.relative_to(source)
+                archive_name = "src" if relative == Path() else f"src/{relative.as_posix()}"
+                info = archive.gettarinfo(str(path), arcname=archive_name)
+                if info is None:
+                    raise ArchiveError(f"unsupported source entry: {path}")
+                info.uid = info.gid = 0
+                info.uname = info.gname = "root"
+                info.mtime = epoch
+                info.pax_headers = {}
+                if info.isdir():
+                    info.mode = 0o755
+                    archive.addfile(info)
+                elif info.isfile():
+                    info.mode = 0o755 if info.mode & 0o111 else 0o644
+                    with path.open("rb") as contents:
+                        archive.addfile(info, contents)
+                elif info.issym():
+                    info.mode = 0o777
+                    archive.addfile(info)
+                else:
+                    raise ArchiveError(f"unsupported source entry: {path}")
+        os.replace(temporary_path, output)
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
     print(f"built {output} from {len(paths)} normalized entries at source epoch {epoch}")
 
@@ -78,7 +94,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         build_archive(args.source, args.output, args.epoch)
-    except (OSError, tarfile.TarError, ValueError) as error:
+    except (ArchiveError, OSError, tarfile.TarError) as error:
         parser.error(str(error))
     return 0
 
