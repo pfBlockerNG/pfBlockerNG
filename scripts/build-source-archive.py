@@ -53,17 +53,6 @@ def _unchanged(expected: os.stat_result, actual: os.stat_result, path: Path) -> 
         raise ArchiveError(f"source entry changed while archiving: {path}")
 
 
-def _output_is_within_source(output_parent: Path, source: Path) -> bool:
-    current = output_parent
-    while True:
-        if os.path.samefile(current, source):
-            return True
-        parent = current.parent
-        if parent == current:
-            return False
-        current = parent
-
-
 def _tar_info(
     relative: Path,
     snapshot: os.stat_result,
@@ -156,7 +145,9 @@ def build_archive(source: Path, output: Path, epoch: int) -> None:
     if not stat.S_ISDIR(source_snapshot.st_mode):
         raise ArchiveError(f"source must be a real directory (not a symlink): {source}")
     output_parent = output.parent.resolve(strict=True)
-    if _output_is_within_source(output_parent, source):
+    if os.path.samefile(output_parent, source) or any(
+        os.path.samefile(parent, source) for parent in output_parent.parents
+    ):
         raise ArchiveError(f"output must be outside the source directory: {output}")
     output_location = output_parent / output.name
     with _open_directory(source) as source_fd:
