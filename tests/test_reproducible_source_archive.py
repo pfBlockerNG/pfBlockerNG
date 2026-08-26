@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import importlib.util
 import os
 import shutil
 import socket
@@ -12,6 +13,7 @@ import sys
 import tarfile
 import tempfile
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -32,6 +34,14 @@ EXPECTED_MEMBERS = [
     "src/usr/local/pkg",
     SAFE_MEMBER,
 ]
+
+
+def _builder_module() -> ModuleType:
+    spec = importlib.util.spec_from_file_location("issue2717_source_archive", BUILDER)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _source_tree(parent: Path, *, mtime: int, ordinary_mode: int, executable_mode: int) -> Path:
@@ -126,6 +136,9 @@ def test_fresh_trees_produce_identical_normalized_archives(tmp_path: Path) -> No
         safe_member = archive.extractfile(SAFE_MEMBER)
         assert safe_member is not None
         assert safe_member.read() == b"metacharacters stay data\n"
+        executable_member = archive.extractfile(EXEC_MEMBER)
+        assert executable_member is not None
+        assert executable_member.read() == b"#!/bin/sh\nexit 0\n"
     assert not (first_source.parent / "escaped").exists()
 
 
@@ -173,6 +186,24 @@ def test_output_inside_source_is_rejected_without_clobbering_it(tmp_path: Path) 
     assert result.returncode != 0
     assert "output must be outside the source directory" in result.stderr
     assert output.read_bytes() == b"existing archive"
+
+
+def test_case_alias_output_inside_source_is_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "Source"
+    source.mkdir()
+    (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
+    alias = tmp_path / "source"
+    if not alias.is_dir() or not os.path.samefile(source, alias):
+        pytest.skip("scratch filesystem is case-sensitive")
+    output = alias / "existing.tar.gz"
+    output.write_bytes(b"existing archive")
+
+    result = _run_builder(source, output)
+
+    assert result.returncode != 0
+    assert "output must be outside the source directory" in result.stderr
+    assert output.read_bytes() == b"existing archive"
+    assert not list(source.glob(f".{output.name}.*"))
 
 
 def test_output_symlink_is_replaced_without_touching_its_target(tmp_path: Path) -> None:
@@ -229,6 +260,98 @@ def test_socket_failure_is_contextual_and_preserves_existing_output() -> None:
         assert "AttributeError" not in result.stderr
         assert output.read_bytes() == b"existing archive"
         assert not list(root.glob(f".{output.name}.*"))
+
+
+@pytest.mark.parametrize("entry_kind", ["name", "link"])
+def test_ustar_limits_fail_contextually_without_replacing_output(tmp_path: Path, entry_kind: str) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    if entry_kind == "name":
+        (source / ("n" * 101)).write_bytes(b"too long")
+    else:
+        (source / "long-link").symlink_to("t" * 101)
+    output = tmp_path / "existing.tar.gz"
+    output.write_bytes(b"existing archive")
+
+    result = _run_builder(source, output)
+
+    assert result.returncode != 0
+    assert "USTAR cannot encode source entry" in result.stderr
+    assert "Traceback" not in result.stderr
+    assert output.read_bytes() == b"existing archive"
+    assert not list(tmp_path.glob(f".{output.name}.*"))
+
+
+@pytest.mark.parametrize("entry_kind", ["file", "directory"])
+def test_source_entry_swap_cannot_escape_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entry_kind: str) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    victim = source / "victim"
+    if entry_kind == "file":
+        victim.write_bytes(b"PUBLIC")
+        (outside / "secret").write_bytes(b"SECRET")
+    else:
+        victim.mkdir()
+        (victim / "file").write_bytes(b"PUBLIC")
+        (outside / "file").write_bytes(b"SECRET")
+    output = tmp_path / "existing.tar.gz"
+    output.write_bytes(b"existing archive")
+    module = _builder_module()
+    real_stat = module.os.stat
+    swapped = False
+
+    def racing_stat(path: object, *args: object, **kwargs: object) -> os.stat_result:
+        nonlocal swapped
+        result = real_stat(path, *args, **kwargs)
+        if path == "victim" and kwargs.get("dir_fd") is not None and not swapped:
+            swapped = True
+            if entry_kind == "file":
+                victim.unlink()
+                victim.symlink_to(outside / "secret")
+            else:
+                shutil.rmtree(victim)
+                victim.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(module.os, "stat", racing_stat)
+    with pytest.raises((OSError, module.ArchiveError)):
+        module.build_archive(source, output, SOURCE_EPOCH)
+
+    assert swapped
+    assert output.read_bytes() == b"existing archive"
+    assert not list(tmp_path.glob(f".{output.name}.*"))
+
+
+def test_output_parent_retarget_uses_stable_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir()
+    second.mkdir()
+    output_link = tmp_path / "output"
+    output_link.symlink_to(first, target_is_directory=True)
+    (first / "archive.tar.gz").write_bytes(b"old archive")
+    (second / "archive.tar.gz").write_bytes(b"other archive")
+    module = _builder_module()
+    real_replace = module.os.replace
+
+    def retargeting_replace(src: object, dst: object) -> None:
+        output_link.unlink()
+        output_link.symlink_to(second, target_is_directory=True)
+        real_replace(src, dst)
+
+    monkeypatch.setattr(module.os, "replace", retargeting_replace)
+    module.build_archive(source, output_link / "archive.tar.gz", SOURCE_EPOCH)
+
+    with tarfile.open(first / "archive.tar.gz", "r:gz") as archive:
+        assert [member.name for member in archive.getmembers()] == ["src", "src/ordinary.conf"]
+    assert (second / "archive.tar.gz").read_bytes() == b"other archive"
+    assert not list(first.glob(".archive.tar.gz.*"))
+    assert not list(second.glob(".archive.tar.gz.*"))
 
 
 def _release_job() -> str:
