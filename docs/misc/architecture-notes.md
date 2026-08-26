@@ -34,11 +34,11 @@ anchored patterns folded to dicts), and `$important`/`$badfilter` precedence res
 6-band numeric scale, with a build-emitted `important_rules` flag preserving a byte-identical
 fast path when no ABP precedence feature is loaded. (ADR-62 retired PHP's feed-level detection
 that used to route a whole feed here — see below; which lines reach `parse_abp()` is now a
-per-line decision, not a feed-level one.) At load, untrusted feed + user regex passes the always-on
-shared catastrophic-shape gate; the opt-in "Limit long/complex regex" setting separately caps pattern
-length. An always-on runtime warn/evict timer (warn 10 ms / evict 100 ms thread-CPU; snapshot-iterate,
-evict-after-loop) bounds admitted residuals. Pinned by `tests/test_adr07_*` (decision spec/oracle, parser,
-matcher strata, emit/wire, regex safety, PHP boundary); the regex/ReDoS kill-gate is
+per-line decision, not a feed-level one.) At load, the always-on shared catastrophic-shape gate
+rejects unsafe feed and user regex; the opt-in "Limit long/complex regex" setting separately caps
+pattern length. An always-on runtime guard warns on and evicts slow matches. Pinned by
+`tests/test_adr07_*` (decision spec/oracle, parser, matcher strata, emit/wire, regex safety, PHP boundary);
+the regex/ReDoS kill-gate is
 `legacy/benchmarks/spike_adr07_regex.py` — it exits non-zero on NO-GO (`--report-only` forces exit 0),
 runnable via the manual-only CI `benchmarks` job. See `legacy/ADRs/ADR_07_ABP_DNSBL_Support/`.
 

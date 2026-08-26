@@ -1615,11 +1615,7 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_query"] = "pfb_py_query"
     pfb["pfb_py_query_reply"] = "pfb_py_query.reply"
     pfb["pfb_py_count"] = "pfb_py_count"
-    # ADR-07: the ADMITTED feed+user regex total -- the count
-    # sync_package_pfblockerng()'s DNSBL_Regex alias-update block reads (falling
-    # back to the configured regex-line count when this file is stale/absent). It
-    # is the live size of regexDB + allowRegexDB after the shared catastrophic-shape
-    # gate and opt-in length cap (value changes by design, ADR §2).
+    # ADR-07: admitted feed + user regex count consumed by sync_package_pfblockerng().
     pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
     # ADR-48 (issue #789): the per-entry reject tally artifact (BuildResult.rejects,
     # a JSON array of nonzero-total {feed, group, shape, wire_cap} rows) -- PHP reads
@@ -1989,13 +1985,8 @@ def init_standard(id: int, env: module_env) -> bool:
             # Whitelist/HSTS dicts -- or close their entries when the blacklist gate is off.
             _load_whitelist_and_hsts_dbs(dnsbl_built)
 
-            # ADR-07: emit the ADMITTED regex total for sync_package_pfblockerng()'s
-            # DNSBL_Regex alias-update block. regexDB holds USER + FEED block regex;
-            # allowRegexDB holds FEED @@/re/ allow regex. Their shared catastrophic-
-            # shape gate and opt-in length cap already ran, so the live size is the
-            # admitted count (value changes by design, ADR §2). Emitted whenever the
-            # plugin is enabled so the alias is accurate even with feed regex but no
-            # user regex.
+            # Emit the admitted feed + user regex total for PHP's DNSBL_Regex alias,
+            # even when only feed regex is enabled.
             dnsbl_emit_count(pfb["pfb_py_regex_count"], len(regexDB) + len(allowRegexDB))
 
             # Validate SQLite3 database connections. A False validate (issue #900)
@@ -5156,10 +5147,8 @@ def _dnsbl_compile_regex_rules(
     load) -- it never aborts the build. Names are unique per pattern occurrence so two
     feeds carrying the same pattern both load.
 
-    ADR-07: the shared catastrophic-shape gate rejects structurally unsafe patterns
-    at load unconditionally, independent of ``static_cap``. The opt-in length ceiling
-    (the "Limit long/complex regex" setting, ``static_cap``) separately drops
-    over-length-but-safe patterns. Runtime warn/evict bounds admitted residuals.
+    ADR-07: the always-on shared catastrophic-shape gate rejects unsafe patterns;
+    ``static_cap`` separately enables the opt-in length cap.
     """
     db: dict[str, dict[str, Any]] = {}
     admitted = 0
@@ -5238,8 +5227,6 @@ def build(
     tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
     exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
 
-    # ADR-07: the opt-in feed-regex length cap. Structural rejection is the
-    # always-on shared catastrophic-shape gate in _dnsbl_compile_regex_rules().
     static_cap = bool(config.get("regex_cap", False))
 
     psl_rules = config.get("psl_rules", PslRules())
