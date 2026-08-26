@@ -250,7 +250,11 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
 
 def test_group_end_scan_is_linear_and_preserves_regex_escaping(monkeypatch: Any) -> None:
     import pfb_dnsbl_regex_rules
-    from pfb_dnsbl_regex_rules import _regex_group_end, _regex_has_adjacent_unbounded_atoms
+    from pfb_dnsbl_regex_rules import (
+        _regex_group_end,
+        _regex_has_adjacent_unbounded_atoms,
+        _regex_is_catastrophic_shape,
+    )
 
     cases = (
         ("(a(b)c)d", 7),
@@ -295,6 +299,8 @@ def test_group_end_scan_is_linear_and_preserves_regex_escaping(monkeypatch: Any)
     nested_alternation = "(a|" * 800 + "b" + ")" * 800
     assert isinstance(_regex_has_adjacent_unbounded_atoms(nested_alternation), bool)
     assert body_scans <= pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX
+    anchored_alternation = "[a-z]+[a-z]+" + nested_alternation + "[a-z]+[a-z]+"
+    assert isinstance(_regex_is_catastrophic_shape(anchored_alternation), bool)
 
 
 def test_probe_and_resolver_agree_on_issue2364_admission_rows() -> None:
