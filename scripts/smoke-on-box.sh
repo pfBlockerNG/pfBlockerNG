@@ -52,10 +52,11 @@
 #   3. Pull /root/images/{pfsense,civm} directly via oras into this workload's filesystem.
 #   4. Host prep: ip_unprivileged_port_start sysctl + pkill stale qemu.
 #   5. Build .pkg via build-leg.sh → SMOKE_PKG.
-#   6. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
+#   6. Sync the locked smoke + dependency-builder environment.
+#   7. Build this leg's extra_pkgs (per the CURRENT ref's version matrix) via
 #      build-dep-pkg-portable.py → SMOKE_DEP_PKGS (issue #1806 D2; empty when
 #      the leg's extra_pkgs is empty).
-#   7. Run: run-smoke.sh with the configured lane/marker/-k.
+#   8. Run: run-smoke.sh with the configured lane/marker/-k.
 #
 # POSIX sh; shellcheck clean; all expansions quoted.
 
@@ -315,7 +316,20 @@ SMOKE_PKG="$(sh scripts/build-leg.sh \
 export SMOKE_PKG
 printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
 
-# ── Step 5b: this leg's dep pkgs (issue #1806 D2) ──────────────────────────── #
+# ── Step 5b: provision the locked smoke + dep-builder venv ─────────────────── #
+# Both the extra_pkgs builder below and run-smoke.sh use this exact repo-root
+# environment. Idempotent: an already-synced venv is a no-op.
+printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
+_VENV_DIR="${REPO_ROOT}/.venv"
+# `uv sync` recreates an unusable environment in place, which would follow a directory
+# symlink and erase its target.
+if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; then
+    printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
+    exit 2
+fi
+uv sync --locked --group smoke --group dep-pkg-build
+
+# ── Step 5c: this leg's dep pkgs (issue #1806 D2) ──────────────────────────── #
 # Look up this leg's freebsd_major row in the CURRENT ref's BUILD matrix
 # (read-version-matrix.sh --print-build is deduped one row per major) for its
 # extra_pkgs (port origins pfSense's own repo doesn't carry, e.g.
@@ -335,7 +349,7 @@ if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
     _dep_source_epoch="$(git -C "$REPO_ROOT" show -s --format=%ct HEAD)"
     _dep_python="${REPO_ROOT}/.venv/bin/python"
     [ -x "$_dep_python" ] || {
-        printf 'smoke-on-box: missing locked dependency toolchain; run uv sync --locked --only-group dep-pkg-build\n' >&2
+        printf 'smoke-on-box: missing locked dependency toolchain after uv sync\n' >&2
         exit 1
     }
     _i=0
@@ -376,20 +390,6 @@ if [ ! -f "$SMOKE_SSH_KEY" ]; then
     exit 2
 fi
 
-# ── Step 5c: provision the Python test deps into a repo-root venv ──────────── #
-# The box ships python3 but not pytest. `uv sync --locked` materialises the checked-out
-# ref's pinned harness -- pyproject's `smoke` group resolved against uv.lock, so the
-# TRANSITIVE graph matches CI's too -- into ${REPO_ROOT}/.venv, which run-smoke.sh's
-# non-CI .venv preference then uses. Idempotent: an already-synced venv is a no-op.
-printf 'smoke-on-box: provisioning test venv (.venv)...\n' >&2
-_VENV_DIR="${REPO_ROOT}/.venv"
-# `uv sync` recreates an unusable environment in place, which would follow a directory
-# symlink and erase its target.
-if [ -L "$_VENV_DIR" ] || { [ -e "$_VENV_DIR" ] && [ ! -d "$_VENV_DIR" ]; }; then
-    printf 'smoke-on-box: refusing unsafe venv path: %s\n' "$_VENV_DIR" >&2
-    exit 2
-fi
-uv sync --locked --group smoke  # cwd is REPO_ROOT; uv reads pyproject and uv.lock from it
 
 # The Tier-B browser marker needs the Chromium BINARY (the playwright wheel ships the
 # bindings only); mirrors ui-tests.yml. The install order and its apt-failure fallback are

@@ -48,6 +48,12 @@ def _git_sha(value: object, name: str) -> str:
     return value
 
 
+def _ports_sha(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise HandoffError("ports_sha must be lowercase 40-character hex")
+    return value
+
+
 def _route_matrix(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list) or not value:
         raise HandoffError("route_matrix must be a non-empty JSON array")
@@ -75,7 +81,7 @@ def build_handoff(
         raise HandoffError("release_tag is malformed")
     source_sha = _git_sha(source_sha, "source_sha")
     ci_metadata_sha = _git_sha(ci_metadata_sha, "ci_metadata_sha")
-    ports_sha = _git_sha(ports_sha, "ports_sha")
+    ports_sha = _ports_sha(ports_sha)
     rows = _route_matrix(route_matrix)
     if type(source_date_epoch) is not int or source_date_epoch < 0:
         raise HandoffError("source_date_epoch must be a non-negative integer")

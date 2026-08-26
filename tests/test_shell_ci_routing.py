@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -33,15 +35,18 @@ def test_ports_parity_examples_are_isolated_and_explicitly_routed() -> None:
     assert "${PFB_RUN_ROOT}/${RUN_ID}/ports" in workflow
 
 
-def test_linux_dependency_builder_uses_the_locked_reproducibility_contract() -> None:
-    workflow = _read(".github/workflows/build-pkg-linux.yml")
-    for value in (
-        'version: "0.12.6"',
-        "uv sync --locked --only-group dep-pkg-build",
-        '--ports-sha "$PORTS_SHA"',
-        '--source-date-epoch "$SOURCE_DATE_EPOCH"',
-    ):
-        assert value in workflow
+def test_linux_dependency_builder_uses_structured_locked_reproducibility_contract() -> None:
+    workflow = yaml.safe_load(_read(".github/workflows/build-pkg-linux.yml"))
+    steps = workflow["jobs"]["build"]["steps"]
+    setup = next(step for step in steps if step.get("name") == "Set up uv and the pinned Python")
+    sync = next(step for step in steps if step.get("name") == "Sync the locked dependency-package toolchain")
+    build = next(step for step in steps if step.get("name") == "Build .pkg via build-leg.sh")
+
+    assert setup["with"]["version"] == "0.12.6"
+    assert setup["with"]["activate-environment"] is True
+    assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
+    assert '--ports-sha "$PORTS_SHA"' in build["run"]
+    assert '--source-date-epoch "$SOURCE_DATE_EPOCH"' in build["run"]
 
 
 def test_kcov_coverage_selectors_are_focused() -> None:

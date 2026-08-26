@@ -9,7 +9,6 @@ import os
 import sys
 import zipfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -65,13 +64,16 @@ def test_fresh_builds_have_identical_hashes_under_hostile_ambient_state(
     monkeypatch.setattr(bdp, "read_port", lambda _path: port)
     monkeypatch.setattr(bdp, "read_distinfo", lambda _path, _name: ("a" * 64, 123))
     monkeypatch.setattr(bdp, "read_descr", lambda _path, fallback: fallback)
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args: None)
     monkeypatch.setattr(
         bdp,
         "fetch_verified_sdist",
         lambda _port, dest, **_kwargs: dest / "demo-1.0.tar.gz",
     )
 
-    def fake_build_wheel(_sdist: Path, work_dir: Path, *_args: Any, **_kwargs: Any) -> Path:
+    def fake_build_wheel(_sdist: Path, work_dir: Path, *, source_date_epoch: int) -> Path:
+        assert source_date_epoch == 1_700_000_000
         wheel = work_dir / "wheel" / "demo-1.0-py3-none-any.whl"
         _wheel(wheel)
         return wheel

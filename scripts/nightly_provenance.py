@@ -58,6 +58,12 @@ def _validate_sha(value: object, label: str) -> str:
     return value
 
 
+def _validate_ports_sha(value: object) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{40}", value):
+        raise ProvenanceError("ports_sha must be lowercase 40-character hex")
+    return value
+
+
 def _validate_artifacts(value: object) -> list[dict[str, str]]:
     if not isinstance(value, list) or not value:
         raise ProvenanceError("artifacts must be a non-empty list")
@@ -130,7 +136,7 @@ def make_build_record(
     """Create one digest-bound portable-builder record for a Nightly leg."""
     try:
         validate_nightly_version(pkg_version, source_sha=source_sha)
-        _validate_sha(ports_sha, "ports_sha")
+        _validate_ports_sha(ports_sha)
         row = validate_build_matrix_row(dict(matrix_row))
     except (PkgError, TypeError, ValueError) as exc:
         raise ProvenanceError(str(exc)) from exc
@@ -173,6 +179,7 @@ def build_handoff(
     matrix_sha: str,
     matrix_digest: str,
     dependency_builder: Mapping[str, object],
+    source_date_epoch: int,
     run_id: str,
     source_ref: str = "",
     ports_repo: str = "",
@@ -181,7 +188,7 @@ def build_handoff(
     """Validate every matrix/build result and return publisher input."""
     try:
         validate_nightly_version(pkg_version, source_sha=source_sha)
-        _validate_sha(ports_sha, "ports_sha")
+        _validate_ports_sha(ports_sha)
     except ValueError as exc:
         raise ProvenanceError(str(exc)) from exc
     if not _SHA.fullmatch(tools_sha):
@@ -190,6 +197,8 @@ def build_handoff(
         raise ProvenanceError("handoff matrix_sha is malformed")
     if not _DIGEST.fullmatch(matrix_digest):
         raise ProvenanceError("handoff matrix_digest is malformed")
+    if type(source_date_epoch) is not int or source_date_epoch < 0:
+        raise ProvenanceError("handoff source_date_epoch must be a non-negative integer")
     normalized_dependency_builder = validate_dependency_builder(dict(dependency_builder))
     input_digest = combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
     if not build_rows or not route_rows:
@@ -236,6 +245,7 @@ def build_handoff(
             or record["source_sha"] != source_sha
             or record["freebsd_ports_sha"] != ports_sha
             or record["dependency_builder"] != normalized_dependency_builder
+            or record["source_date_epoch"] != source_date_epoch
         ):
             raise ProvenanceError("BUILD result provenance does not match Nightly snapshot")
         artifact = _validate_artifacts([result["artifact"]])[0]
@@ -278,6 +288,7 @@ def build_handoff(
         "tools_sha": tools_sha,
         "matrix_sha": matrix_sha,
         "matrix_digest": matrix_digest,
+        "source_date_epoch": source_date_epoch,
         "dependency_builder": normalized_dependency_builder,
         "build_matrix": normalized_build_rows,
         "route_matrix": normalized_route_rows,
@@ -348,6 +359,7 @@ def _command_handoff(args: argparse.Namespace) -> int:
         matrix_sha=args.matrix_sha,
         matrix_digest=args.matrix_digest,
         dependency_builder=_read_json(Path(args.dependency_builder)),
+        source_date_epoch=args.source_date_epoch,
         run_id=args.run_id,
         source_ref=args.source_ref,
         ports_repo=args.ports_repo,
@@ -380,6 +392,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handoff_parser.add_argument("--matrix-sha", required=True)
     handoff_parser.add_argument("--matrix-digest", required=True)
     handoff_parser.add_argument("--dependency-builder", required=True)
+    handoff_parser.add_argument("--source-date-epoch", required=True, type=int)
     handoff_parser.add_argument("--run-id", required=True)
     handoff_parser.add_argument("--source-ref", default="")
     handoff_parser.add_argument("--ports-repo", default="")

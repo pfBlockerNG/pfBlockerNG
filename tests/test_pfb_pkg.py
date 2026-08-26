@@ -58,7 +58,7 @@ def _record(**overrides: object) -> dict:
         "native_recipe_identity": "pfSense-pkg-pfBlockerNG",
         "emitted_identity": "pfSense-pkg-pfBlockerNG",
         "matrix_row": row,
-        "freebsd_ports_sha": "b" * 64,
+        "freebsd_ports_sha": "b" * 40,
         "route": "stable/ce-2.8",
         "source_date_epoch": 0,
         "dependency_builder": DEPENDENCY_BUILDER,
@@ -77,6 +77,49 @@ def test_build_record_valid_and_digest_is_canonical() -> None:
     assert pfb_pkg.validate_build_record(record) == record
     changed = dict(record, source_sha="c" * 40)
     assert pfb_pkg.build_input_digest(changed) != record["build_input_digest"]
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("source_date_epoch", 1),
+        ("freebsd_ports_sha", "c" * 40),
+        ("dependency_builder", {**DEPENDENCY_BUILDER, "wheel": "0.45.2"}),
+    ],
+)
+def test_build_input_digest_binds_reproducibility_fields(field: str, replacement: object) -> None:
+    record = _record()
+    changed = dict(record, **{field: replacement})
+    assert pfb_pkg.build_input_digest(changed) != record["build_input_digest"]
+
+
+@pytest.mark.parametrize("field", sorted(DEPENDENCY_BUILDER))
+def test_dependency_builder_rejects_non_string_fields(field: str) -> None:
+    malformed: dict[str, object] = dict(DEPENDENCY_BUILDER)
+    malformed[field] = 1
+    with pytest.raises(pfb_pkg.PkgError, match=field):
+        pfb_pkg.validate_dependency_builder(malformed)
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {key: value for key, value in DEPENDENCY_BUILDER.items() if key != "pip"},
+        {**DEPENDENCY_BUILDER, "extra": "1.0"},
+        {**DEPENDENCY_BUILDER, "python": "not a version"},
+        {**DEPENDENCY_BUILDER, "uv_lock_sha256": "D" * 64},
+    ],
+)
+def test_dependency_builder_requires_exact_well_formed_fields(malformed: dict[str, object]) -> None:
+    with pytest.raises(pfb_pkg.PkgError):
+        pfb_pkg.validate_dependency_builder(malformed)
+
+
+@pytest.mark.parametrize("ports_sha", ["B" * 40, "b" * 39, "b" * 41, "g" * 40, "b" * 64])
+def test_build_record_requires_exact_lowercase_40_hex_ports_sha(ports_sha: str) -> None:
+    record = _record(freebsd_ports_sha=ports_sha)
+    with pytest.raises(pfb_pkg.PkgError, match="freebsd_ports_sha"):
+        pfb_pkg.validate_build_record(record)
 
 
 @pytest.mark.parametrize(
