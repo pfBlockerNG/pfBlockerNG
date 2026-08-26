@@ -132,6 +132,16 @@ SCPEOF
     The line 1 of contents of file "$SSH_LOG" should include "pkg -o ABI='\''FreeBSD:15:amd64'\'' add"
   End
 
+  It 'SMOKE_ABI with a single quote is dash-escaped (issue #2730)'
+    SMOKE_ABI="FreeBSD:15:am'd64"
+    export SMOKE_ABI
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should be present
+    # sed-escape then ssh_t: an ABI quote becomes '\''\'\'''\'' in SSH_LOG.
+    The line 1 of contents of file "$SSH_LOG" should include "pkg -o ABI='\''FreeBSD:15:am'\''\\'\\'''\\''d64'\'' add"
+  End
+
   It 'SMOKE_ABI unset -> pkg add has no -o ABI (issue #2730)'
     When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
     The status should be success

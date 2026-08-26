@@ -105,6 +105,7 @@ def _identity_stdout(
     abi_line: str | None,
     *,
     freebsd_version_line: str = "freebsd_version=15.0-CURRENT",
+    kernel_release_line: str = "kernel_release=15.0-CURRENT",
     pkg_client_line: str = "pkg_client=1.21.3",
     pkg_pkg_line: str = "pkg_pkg=1.21.3_8",
 ) -> str:
@@ -113,7 +114,7 @@ def _identity_stdout(
     lines = [
         "etc_version=2.8.1-RELEASE",
         "versionpatch=0",
-        "kernel_release=15.0-CURRENT",
+        kernel_release_line,
         "kernel_version=FreeBSD 15 build",
     ]
     if abi_line is not None:
@@ -159,6 +160,32 @@ def test_log_guest_identity_refuses_when_userland_major_moved_with_pkg_abi(
 
     assert "16.0-CURRENT" in str(exc_info.value)
     assert "FreeBSD:15:amd64" in str(exc_info.value)
+
+
+@pytest.mark.parametrize("abi_line", ["abi=Linux:16:amd64", "abi=Debian:16:amd64"])
+def test_log_guest_identity_refuses_foreign_os_name(monkeypatch: pytest.MonkeyPatch, abi_line: str) -> None:
+    """issue #2730: drift-allow is FreeBSD major only, not a foreign OS name."""
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout(abi_line))
+
+    with pytest.raises(RuntimeError, match=r"OS name"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
+def test_log_guest_identity_refuses_kernel_major_mismatch_even_when_userland_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #2730: a 16 kernel is not config-ABI drift, even if freebsd-version stays 15."""
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(
+        _identity_stdout(
+            "abi=FreeBSD:16:amd64",
+            kernel_release_line="kernel_release=16.0-CURRENT",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match=r"kernel"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
 
 
 @pytest.mark.parametrize(
@@ -212,7 +239,7 @@ def test_log_guest_identity_raises_on_abi_fallback_placeholder(monkeypatch: pyte
 
 
 def test_log_guest_identity_allows_arch_only_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    # arch is deliberately not compared here — only OS/major (issue #2242 scope)
+    # arch is not compared; OS name and numeric major still must match (issue #2730)
     monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
     vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:aarch64"))
 
