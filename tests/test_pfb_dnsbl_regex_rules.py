@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import SupportsIndex
 
 PKG_DIR = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng"
 SCRIPT = PKG_DIR / "pfb_dnsbl_regex_rules.py"
@@ -143,6 +144,11 @@ def test_probe_and_resolver_agree_on_every_admission_verdict() -> None:
         "^" + "a" * 300 + "$",
         "",
         "^$",
+        "^([a-z])(?(1)[a-z]+[a-z]+[a-z]+[a-z]+|b)@x\\.com$",
+        "^[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+@x\\.com$",
+        "^[a-z]+[a-z]+(foo|foobar)[a-z]+[a-z]+@x\\.com$",
+        "^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\\.com$",
+        "^[a-z]+[a-z]+(?>12)[a-z]+[a-z]+$",
     ]
     # The hand-written rows above only cover rules that exist TODAY, so they cannot
     # catch a FUTURE rule wired into one composition and not the other. Enumerate every
@@ -240,6 +246,64 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
     assert _regex_is_catastrophic_shape(r"(?#x\w+\w+\w+") is True
     assert _regex_is_catastrophic_shape(r"(?=a\w+\w+\w+") is True
     assert _regex_is_catastrophic_shape(r"(?i:\w+\w+\w+") is True
+
+
+def test_group_end_scan_is_linear_and_preserves_regex_escaping() -> None:
+    from pfb_dnsbl_regex_rules import _regex_group_end, _regex_has_adjacent_unbounded_atoms
+
+    cases = (
+        ("(a(b)c)d", 7),
+        (r"(\))x", 4),
+        ("([)])x", 5),
+        ("(a", 2),
+    )
+    for pattern, expected in cases:
+        assert _regex_group_end(pattern, 0) == expected, pattern
+
+    class CountingPattern(str):
+        reads = 0
+
+        def __getitem__(self, key: SupportsIndex | slice) -> str:
+            type(self).reads += 1
+            return super().__getitem__(key)
+
+    def scan_reads(size: int) -> int:
+        CountingPattern.reads = 0
+        pattern = CountingPattern("(" * size)
+        assert _regex_has_adjacent_unbounded_atoms(pattern) is False
+        return CountingPattern.reads
+
+    small = scan_reads(400)
+    large = scan_reads(800)
+    assert large <= small * 3, f"2x input caused {large / small:.2f}x indexed reads ({small} -> {large})"
+
+
+def test_probe_and_resolver_agree_on_issue2364_admission_rows() -> None:
+    from pfb_dnsbl_regex_rules import _regex_is_catastrophic_shape
+
+    rows = (
+        (r"^([a-z])(?(1)[a-z]+[a-z]+[a-z]+[a-z]+|b)@x\.com$", True),
+        (r"^(a)?(?(1)b|[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$", True),
+        (r"^[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+@x\.com$", True),
+        (r"^[a-z]+[a-z]+(foo|foobar)[a-z]+[a-z]+@x\.com$", True),
+        (r"^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\.com$", True),
+        (r"^(a)?(?(1)[a-z]+[a-z]+|[a-z]+[a-z]+)$", False),
+        (r"^[a-z]+[a-z]+(?>12)[a-z]+[a-z]+$", False),
+        (r"^[a-z]+[a-z]+(\+|\*)[a-z]+[a-z]+$", False),
+        (r"^xn--bcher-kva\.[a-z]+$", False),
+    )
+    for pattern, expected in rows:
+        assert _regex_is_catastrophic_shape(pattern) is expected, pattern
+
+    proc = run_probe(("".join(pattern + "\n" for pattern, _ in rows)).encode("utf-8"), "0")
+    assert proc.returncode == 1
+    diagnostics = proc.stderr.decode("utf-8").splitlines()
+    expected_lines = [
+        f"line {line_number}: {pattern!r}: catastrophic-backtracking shape"
+        for line_number, (pattern, rejected) in enumerate(rows, 1)
+        if rejected
+    ]
+    assert diagnostics == expected_lines
 
 
 def test_probe_and_resolver_both_reject_an_overlapping_separator_run() -> None:

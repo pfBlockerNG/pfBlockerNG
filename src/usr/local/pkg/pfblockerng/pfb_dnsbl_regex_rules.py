@@ -185,33 +185,35 @@ def _regex_quantifier(pattern: str, index: int) -> tuple[int, str]:
     return end, "run" if unbounded else ("bridge" if optional else "break")
 
 
-def _regex_group_end(pattern: str, index: int) -> int:
-    """End offset past the ``)`` closing the group that opens at ``index`` (the end of the
-    string when it is never closed). Parentheses inside a class or an escape do not count."""
-    depth = 0
+def _regex_group_ends(pattern: str) -> dict[int, int]:
+    """Map every group opener to its closing offset in one pass."""
+    stack: list[int] = []
+    ends: dict[int, int] = {}
+    index = 0
     while index < len(pattern):
         character = pattern[index]
         if character in ("\\", "["):
             index = _regex_atom_end(pattern, index)
             continue
         if character == "(":
-            depth += 1
-        elif character == ")":
-            depth -= 1
-            if depth == 0:
-                return index + 1
+            stack.append(index)
+        elif character == ")" and stack:
+            ends[stack.pop()] = index + 1
         index += 1
-    return len(pattern)
+    end = len(pattern)
+    for opening in stack:
+        ends[opening] = end
+    return ends
+
+
+def _regex_group_end(pattern: str, index: int, group_ends: dict[int, int] | None = None) -> int:
+    """End offset past the matching ``)`` or the string when the group is unclosed."""
+    return (group_ends if group_ends is not None else _regex_group_ends(pattern)).get(index, len(pattern))
 
 
 @lru_cache(maxsize=512)
-def _regex_atoms_overlap(first: str, second: str) -> bool:
-    """True when both atoms can match the same character, i.e. the pair is ambiguous.
-
-    Compiled IGNORECASE (#2099): the DNSBL matcher compiles every admitted pattern
-    case-insensitively (#2079/#2097), so this probe must judge overlap under the
-    same semantics the runtime actually executes, not case-sensitive text overlap.
-    """
+def _regex_atoms_share_character(first: str, second: str) -> bool:
+    """True when both units can match one common character."""
     if first == second:
         return True
     try:
@@ -226,11 +228,26 @@ def _regex_atoms_overlap(first: str, second: str) -> bool:
     return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)
 
 
-def _regex_body_alternates(body: str) -> bool:
-    """True when ``body`` carries a top-level unescaped ``|`` -- an alternation whose
-    branches the enclosing group's parentheses scope (one inside a nested group or a
-    character class belongs to that construct instead)."""
+@lru_cache(maxsize=512)
+def _regex_atoms_overlap(first: str, second: str) -> bool:
+    """True when ``first`` can also consume the mandatory text matched by ``second``."""
+    if _regex_atoms_share_character(first, second):
+        return True
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            re.compile(first, re.IGNORECASE)
+            re.compile(second, re.IGNORECASE)
+    except re.error:
+        return False
+    return _regex_body_overlaps_atom(first, second)
+
+
+def _regex_top_level_branches(body: str) -> tuple[str, ...]:
+    """Split an alternation body without treating nested or escaped pipes as separators."""
+    branches: list[str] = []
     depth = 0
+    start = 0
     index = 0
     while index < len(body):
         character = body[index]
@@ -242,25 +259,43 @@ def _regex_body_alternates(body: str) -> bool:
         elif character == ")":
             depth = max(depth - 1, 0)
         elif character == "|" and depth == 0:
-            return True
+            branches.append(body[start:index])
+            start = index + 1
         index += 1
-    return False
+    branches.append(body[start:])
+    return tuple(branches)
 
 
-def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
-    """Read one unit at ``index``, returning ``(atom, role, next index)`` with the roles of
-    ``_regex_quantifier``. A group contributes by what it does to the engine, not by its
-    punctuation: a comment or a lookaround consumes nothing and bridges; a plain
-    ``(...)``/``(?:...)``/``(?P<n>...)`` -- and (issue #2082) a scoped-flags ``(?i:...)`` or
-    atomic ``(?>...)`` group -- is scanned through as if the parentheses were not there; one
-    wrapping a single atom IS that atom when the quantifier sits outside it; a conditional
-    ``(?(...)...)``, an atomic ``(?>...)``, or a bare-alternation group returns its body for
-    the caller's overlap probe; a named backreference is role ``float`` (mandatory,
-    overlap unknowable)."""
+def _regex_body_alternates(body: str) -> bool:
+    """True when ``body`` carries an alternation scoped by its enclosing group."""
+    return len(_regex_top_level_branches(body)) > 1
+
+
+def _regex_conditional_body(
+    pattern: str,
+    index: int,
+    group_ends: dict[int, int] | None = None,
+) -> str | None:
+    """The post-condition body of a closed ``(?(id/name)yes|no)`` group."""
+    if not pattern.startswith("(?(", index):
+        return None
+    group_end = _regex_group_end(pattern, index, group_ends)
+    if pattern[group_end - 1 : group_end] != ")":
+        return None
+    condition_end = pattern.find(")", index + 3, group_end)
+    if condition_end == -1 or condition_end >= group_end - 1:
+        return None
+    return pattern[condition_end + 1 : group_end - 1]
+
+
+def _regex_next_unit(
+    pattern: str,
+    index: int,
+    group_ends: dict[int, int] | None = None,
+    depth: int = 0,
+) -> tuple[str, str, int]:
+    """Read one unit as ``(atom, quantifier role, next index)``."""
     if pattern[index] == ")":
-        # A group's closing punctuation separates nothing by itself -- the atoms inside
-        # already decided whether the chain survives -- and a fixed repeat ON the group
-        # floats with it (issue #2082), so `)` never ends a chain.
         quantifier_end, _ = _regex_quantifier(pattern, index + 1)
         return "", "bridge", max(quantifier_end, index + 1)
     if pattern[index] != "(":
@@ -270,16 +305,13 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
         quantifier_end, role = _regex_quantifier(pattern, atom_end)
         return pattern[index:atom_end], role, max(quantifier_end, atom_end)
 
-    group_end = _regex_group_end(pattern, index)
+    group_end = _regex_group_end(pattern, index, group_ends)
     closed = pattern[group_end - 1 : group_end] == ")"
     if pattern.startswith(("(?#", "(?=", "(?!", "(?<=", "(?<!"), index):
-        # Skipping an UNCLOSED construct would blind the scan to everything after it.
         if not closed:
             return "", "break", index + 2
         if pattern.startswith("(?#", index):
-            return "", "bridge", group_end  # a comment is inert text, not a pattern
-        # A lookaround matches no characters, so it cannot join or separate the run around
-        # it -- but the engine still backtracks over its body, which is scanned on its own.
+            return "", "bridge", group_end
         body_start = index + 4 if pattern[index + 2] == "<" else index + 3
         return pattern[body_start : group_end - 1], "nested", group_end
     if pattern.startswith("(?P<", index):
@@ -290,21 +322,14 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
     elif pattern.startswith("(?:", index):
         body_start = index + 3
     elif pattern.startswith("(?(", index):
-        # issue #2082: a conditional is a mandatory construct whose POSITION floats, so its
-        # post-condition body (an alternation the overlap probe can compile) is handed to
-        # the caller to judge like a bare atom -- never read as a run boundary outright.
-        condition_end = pattern.find(")", index + 3)
-        if not closed or condition_end == -1 or condition_end >= group_end - 1:
+        body = _regex_conditional_body(pattern, index, group_ends)
+        if body is None:
             return "", "break", group_end
-        body = pattern[condition_end + 1 : group_end - 1]
         quantifier_end, role = _regex_quantifier(pattern, group_end)
         if role == "bridge" or not body:
             return "", "bridge", max(quantifier_end, group_end)
         return body, role, max(quantifier_end, group_end)
     elif pattern.startswith("(?>", index):
-        # Atomicity forbids backtracking INSIDE the body, so it is never entered as a run
-        # source -- but the group's POSITION floats with the run around it (issue #2082),
-        # so its body feeds the caller's overlap probe like a bare atom.
         if not closed:
             return "", "break", group_end
         body = pattern[index + 3 : group_end - 1]
@@ -313,42 +338,73 @@ def _regex_next_unit(pattern: str, index: int) -> tuple[str, str, int]:
             return "", "bridge", max(quantifier_end, group_end)
         return body, role, max(quantifier_end, group_end)
     elif pattern.startswith("(?P=", index):
-        # A backreference's character set is unknowable statically, so it can never be
-        # proven a boundary: mandatory, position floats, overlap assumed (issue #2082).
         return "", "float", group_end
     elif pattern.startswith("(?", index):
         flags_end = index + 2
         while flags_end < len(pattern) and pattern[flags_end] in "aiLmsux-":
             flags_end += 1
         if flags_end > index + 2 and pattern[flags_end : flags_end + 1] == ":":
-            body_start = flags_end + 1  # scoped flags: `(?i:...)` backtracks like `(?:...)`
+            body_start = flags_end + 1
         else:
-            return "", "break", group_end  # global flags and any unknown `(?` construct
+            return "", "break", group_end
     else:
         body_start = index + 1
     quantifier_end, role = _regex_quantifier(pattern, group_end)
     body = pattern[body_start : group_end - 1]
-    # A quantified group repeats its body, so the body IS the run's atom -- one atom
-    # (`(?:[a-z])+` is `[a-z]+`) or a plain sequence (`(ab)+(ab)+(ab)+` repeats too). A body
-    # carrying its own group or alternation belongs to the shapes above instead.
     if role == "run" and body and not any(character in body for character in "()|"):
         return body, "run", quantifier_end
-    # A mandatory group over a quantifier-free alternation (`(a|b)`, `(a|(b))`) is the
-    # conditional separator without the condition (issue #2082): entering it would read `|`
-    # as a boundary, so the body -- which compiles standalone -- is handed to the caller's
-    # overlap probe instead. A body carrying any quantifier keeps the entered scan, so a
-    # run inside a branch is still found rather than hidden behind the probe.
-    if (
-        role != "bridge"
-        and body
-        and _regex_body_alternates(body)
-        and not any(character in body for character in "+*{?")
-    ):
+    if role != "bridge" and body and _regex_body_alternates(body) and not _regex_body_has_run(body, depth + 1):
         return body, role, max(quantifier_end, group_end)
-    # Every other group is entered rather than skipped: parentheses hide a run from the
-    # reader, never from the engine, and its atoms -- not its punctuation -- decide what
-    # happens to the chain (issue #2082: a fixed repeat ON the group floats with it).
     return "", "bridge", body_start
+
+
+def _regex_body_has_run(body: str, depth: int = 0) -> bool:
+    """Whether a body contains a genuine backtracking, unbounded quantifier."""
+    group_ends = _regex_group_ends(body)
+    index = 0
+    while index < len(body):
+        unit_start = index
+        conditional = _regex_conditional_body(body, unit_start, group_ends)
+        if conditional is not None and depth < _REGEX_NESTED_SCAN_MAX:
+            if any(_regex_body_has_run(branch, depth + 1) for branch in _regex_top_level_branches(conditional)):
+                return True
+        atom, role, index = _regex_next_unit(body, index, group_ends, depth)
+        if role == "run":
+            return True
+        if role == "nested" and depth < _REGEX_NESTED_SCAN_MAX and _regex_body_has_run(atom, depth + 1):
+            return True
+    return False
+
+
+def _regex_body_overlaps_atom(anchor: str, body: str, depth: int = 0) -> bool:
+    """Whether one body branch consists only of text consumable by repeated ``anchor``."""
+    if depth > _REGEX_NESTED_SCAN_MAX:
+        return False
+    for branch in _regex_top_level_branches(body):
+        group_ends = _regex_group_ends(branch)
+        index = 0
+        overlaps = True
+        while index < len(branch):
+            unit_start = index
+            atom, role, index = _regex_next_unit(branch, index, group_ends, depth)
+            if role == "nested":
+                overlaps = False
+                break
+            if role in ("bridge", "float"):
+                continue
+            if not atom:
+                overlaps = False
+                break
+            if branch[unit_start] == "(":
+                unit_overlaps = _regex_body_overlaps_atom(anchor, atom, depth + 1)
+            else:
+                unit_overlaps = _regex_atoms_share_character(anchor, atom)
+            if not unit_overlaps:
+                overlaps = False
+                break
+        if overlaps:
+            return True
+    return False
 
 
 def _regex_is_backref(atom: str) -> bool:
@@ -358,21 +414,21 @@ def _regex_is_backref(atom: str) -> bool:
 
 
 def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
-    """True when ``pattern`` carries an overlap-connected CHAIN of more than
-    ``_REGEX_ADJACENT_ATOM_MAX`` atoms that each take a backtracking unbounded quantifier,
-    where the chain holds at least one back-to-back pair. A mandatory atom overlapping the
-    chain is no boundary -- its position floats inside the span (issue #2082) -- so it
-    bridges the chain while breaking pair-adjacency; a disjoint one really pins the split
-    and ends the chain. A lookaround's body is scanned as a pattern of its own, bounded by
-    ``_REGEX_NESTED_SCAN_MAX`` so nested lookarounds cannot exhaust the stack. Pure string
-    analysis: nothing here runs the candidate against an input."""
-    anchor = ""  # last quantified atom of the chain ("" = no chain)
+    """True when a pattern carries a dangerous overlap-connected quantifier chain."""
+    anchor = ""
     quantified = 0
     pairs = 0
-    adjacent = False  # whether the chain unit before this one was a quantified atom
+    adjacent = False
+    group_ends = _regex_group_ends(pattern)
     index = 0
     while index < len(pattern):
-        atom, role, index = _regex_next_unit(pattern, index)
+        unit_start = index
+        conditional = _regex_conditional_body(pattern, unit_start, group_ends)
+        if conditional is not None and depth < _REGEX_NESTED_SCAN_MAX:
+            for branch in _regex_top_level_branches(conditional):
+                if _regex_has_adjacent_unbounded_atoms(branch, depth + 1):
+                    return True
+        atom, role, index = _regex_next_unit(pattern, index, group_ends, depth)
         if role == "nested":
             if depth < _REGEX_NESTED_SCAN_MAX and _regex_has_adjacent_unbounded_atoms(atom, depth + 1):
                 return True
@@ -390,8 +446,6 @@ def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
             if (pairs and quantified > _REGEX_ADJACENT_ATOM_MAX) or quantified > _REGEX_CHAIN_ATOM_MAX:
                 return True
             continue
-        # A mandatory unit whose set overlaps the chain -- or cannot be proven disjoint
-        # (a backreference) -- floats, so it bridges the chain instead of ending it.
         if role == "float" or (atom and anchor and (_regex_atoms_overlap(anchor, atom) or _regex_is_backref(atom))):
             adjacent = False
             continue
