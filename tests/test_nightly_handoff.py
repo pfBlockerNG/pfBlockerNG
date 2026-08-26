@@ -73,6 +73,7 @@ def _call_handoff(
     build_rows: list[dict[str, object]] | None = None,
     route_rows: list[dict[str, object]] | None = None,
     pkg_version: str = VERSION,
+    source_date_epoch: int = 1_800_000_000,
 ) -> dict[str, Any]:
     return np.build_handoff(
         pkg_version=pkg_version,
@@ -85,6 +86,7 @@ def _call_handoff(
         matrix_sha="d" * 40,
         matrix_digest="c" * 64,
         dependency_builder=DEPENDENCY_BUILDER,
+        source_date_epoch=source_date_epoch,
         run_id="123",
     )
 
@@ -98,6 +100,8 @@ def test_handoff_accepts_complete_build_and_route_rows() -> None:
     assert handoff["kind"] == "nightly-handoff"
     assert handoff["pkg_version"] == VERSION
     assert handoff["input_digest"] == np.combined_nightly_input_digest(SOURCE_SHA, PORTS_SHA, "c" * 64)
+    assert handoff["source_date_epoch"] == 1_800_000_000
+    assert handoff["dependency_builder"] == DEPENDENCY_BUILDER
     assert handoff["tools_sha"] == "e" * 40
     builds = handoff["builds"]
     route_matrix = handoff["route_matrix"]
@@ -118,6 +122,24 @@ def test_handoff_rejects_missing_build_result() -> None:
 def test_handoff_rejects_version_for_different_source() -> None:
     with pytest.raises(np.ProvenanceError, match="does not match"):
         _call_handoff([_result()], pkg_version=f"20260814153045.{'f' * 7}")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("source_date_epoch", 1_800_000_001),
+        ("dependency_builder", {**DEPENDENCY_BUILDER, "wheel": "0.45.2"}),
+    ],
+)
+def test_handoff_rejects_per_leg_epoch_or_builder_drift(field: str, value: object) -> None:
+    result = _result()
+    record = result["record"]
+    assert isinstance(record, dict)
+    record[field] = value
+    record["build_input_digest"] = np.build_input_digest(record)
+
+    with pytest.raises(np.ProvenanceError, match="provenance"):
+        _call_handoff([result])
 
 
 def test_handoff_carries_one_dep_artifact_sorted() -> None:

@@ -67,6 +67,15 @@ STUBEOF
     cat > "${WORK}/bin/uv" <<'STUBEOF'
 #!/bin/sh
 printf '%s|%s\n' "$PWD" "$*" >> "${FAKE_UV_LOG:-/dev/null}"
+if [ "${FAKE_UV_CREATE_PYTHON:-0}" -eq 1 ]; then
+    mkdir -p "$PWD/.venv/bin"
+    cat > "$PWD/.venv/bin/python" <<'PYEOF'
+#!/bin/sh
+printf '%s\n' "$*" > "$DEP_BUILDER_ARGV_LOG"
+printf '%s\n' /tmp/fake-dep.pkg
+PYEOF
+    chmod +x "$PWD/.venv/bin/python"
+fi
 exit "${FAKE_UV_EXIT:-0}"
 STUBEOF
     chmod +x "${WORK}/bin/uv"
@@ -405,7 +414,58 @@ STUBEOF
     When run sh "$SCRIPT" --ref HEAD --no-two-vm
     The status should equal 42
     The stderr should include 'provisioning test venv'
-    The contents of file "$FAKE_UV_LOG" should equal "${FAKE_ROOT}|sync --locked --group smoke"
+    The contents of file "$FAKE_UV_LOG" should equal "${FAKE_ROOT}|sync --locked --group smoke --group dep-pkg-build"
+  End
+
+  It 'syncs dep-pkg-build before an extra_pkgs leg reaches the locked builder argv'
+    printf '0\n' > "${WORK}/port-floor"
+    cat > "${FAKE_ROOT}/scripts/lib/lan-registry.sh" <<'STUBEOF'
+pfb_lan_registry_active() { return 1; }
+pfb_rewrite_lan_registry() { printf '%s\n' "$1"; }
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/build-leg.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' /tmp/fake.pkg
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/read-version-matrix.sh" <<'STUBEOF'
+#!/bin/sh
+printf '%s\n' '[{"freebsd_major":"15","extra_pkgs":["textproc/py-charset-normalizer"],"py_flavor":"py311","php_version":"8.3"}]'
+STUBEOF
+    cat > "${FAKE_ROOT}/scripts/run-smoke.sh" <<'STUBEOF'
+#!/bin/sh
+printf 'deps=%s\n' "$SMOKE_DEP_PKGS"
+STUBEOF
+    chmod +x "${FAKE_ROOT}/scripts/build-leg.sh" "${FAKE_ROOT}/scripts/read-version-matrix.sh" \
+        "${FAKE_ROOT}/scripts/run-smoke.sh"
+
+    mkdir -p "${PFB_ONBOX_PORTS_DIR}/textproc/py-charset-normalizer"
+    printf 'PORTNAME=charset-normalizer\n' > "${PFB_ONBOX_PORTS_DIR}/textproc/py-charset-normalizer/Makefile"
+    git_fixture -C "$PFB_ONBOX_PORTS_DIR" init --quiet .
+    git_fixture -C "$PFB_ONBOX_PORTS_DIR" add .
+    git_fixture -C "$PFB_ONBOX_PORTS_DIR" -c user.name=t -c user.email=t@example.com \
+        commit --quiet -m seed
+    git_fixture -C "$PFB_ONBOX_PORTS_DIR" sparse-checkout init --cone
+    PORTS_HEAD="$(git_fixture -C "$PFB_ONBOX_PORTS_DIR" rev-parse HEAD)"
+    SOURCE_EPOCH="$(git_fixture -C "$FAKE_ROOT" show -s --format=%ct HEAD)"
+
+    true > "${WORK}/smoke-ssh-key"
+    SMOKE_SSH_KEY="${WORK}/smoke-ssh-key"
+    DEP_BUILDER_ARGV_LOG="${WORK}/dep-builder-argv"
+    FAKE_UV_CREATE_PYTHON=1
+    export SMOKE_SSH_KEY DEP_BUILDER_ARGV_LOG FAKE_UV_CREATE_PYTHON
+    cat > "${WORK}/bin/pkill" <<'STUBEOF'
+#!/bin/sh
+exit 0
+STUBEOF
+    chmod +x "${WORK}/bin/pkill"
+
+    When run sh "$SCRIPT" --ref HEAD --no-two-vm
+    The status should equal 0
+    The stdout should include 'deps=/tmp/fake-dep.pkg'
+    The stderr should include 'dep pkgs built: /tmp/fake-dep.pkg'
+    The contents of file "$FAKE_UV_LOG" should equal "${FAKE_ROOT}|sync --locked --group smoke --group dep-pkg-build"
+    The contents of file "$DEP_BUILDER_ARGV_LOG" should equal \
+        "scripts/build-dep-pkg-portable.py --ports ${PFB_ONBOX_PORTS_DIR} --ports-sha ${PORTS_HEAD} --port textproc/py-charset-normalizer --py-flavor py311 --freebsd-major 15 --source-date-epoch ${SOURCE_EPOCH} --out-dir ${FAKE_ROOT}/out/deppkgs"
   End
 
   # Parametrised over three entries drawn from different corners of the list: a box-only

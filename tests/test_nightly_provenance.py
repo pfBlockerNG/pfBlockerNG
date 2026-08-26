@@ -59,6 +59,21 @@ def test_build_record_binds_stateless_snapshot_identity() -> None:
     assert record["canonical_package_version"] == VERSION
     assert record["source_sha"] == SOURCE_SHA
     assert record["freebsd_ports_sha"] == PORTS_SHA
+    assert record["source_date_epoch"] == 1_800_000_000
+    assert record["dependency_builder"] == DEPENDENCY_BUILDER
+
+
+@pytest.mark.parametrize("ports_sha", ["B" * 40, "b" * 39, "b" * 41, "g" * 40, "b" * 64])
+def test_build_record_requires_exact_lowercase_40_hex_ports_sha(ports_sha: str) -> None:
+    with pytest.raises(np.ProvenanceError, match="ports_sha"):
+        np.make_build_record(
+            pkg_version=VERSION,
+            source_sha=SOURCE_SHA,
+            ports_sha=ports_sha,
+            matrix_row=_row(),
+            source_date_epoch=1_800_000_000,
+            dependency_builder=DEPENDENCY_BUILDER,
+        )
 
 
 def test_build_record_rejects_version_for_different_source() -> None:

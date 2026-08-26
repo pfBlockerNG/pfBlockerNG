@@ -142,6 +142,7 @@ def test_load_accepts_exact_release_and_source(tmp_path: Path) -> None:
         ("wrong-release", "release_tag"),
         ("wrong-source", "source_sha"),
         ("wrong-ci-shape", "ci_metadata_sha"),
+        ("wrong-ports-shape", "ports_sha"),
         ("extra-field", "unexpected fields"),
     ],
 )
@@ -166,6 +167,8 @@ def test_load_fails_closed_on_invalid_handoff(tmp_path: Path, case: str, message
             expected_source = "d" * 40
         elif case == "wrong-ci-shape":
             payload["ci_metadata_sha"] = "not-a-sha"
+        elif case == "wrong-ports-shape":
+            payload["ports_sha"] = "c" * 64
         elif case == "extra-field":
             payload["live_route"] = []
         _write(path, payload)
@@ -180,9 +183,11 @@ def test_load_fails_closed_on_invalid_handoff(tmp_path: Path, case: str, message
         ({"source_tag": "v4.0.0.b2"}, "source_tag"),
         ({"source_sha": "d" * 40}, "source_sha"),
         ({"freebsd_ports_sha": "e" * 40}, "freebsd_ports_sha"),
+        ({"source_date_epoch": SOURCE_DATE_EPOCH + 1}, "source_date_epoch"),
+        ({"dependency_builder": {**DEPENDENCY_BUILDER, "pip": "26.2.2"}}, "dependency_builder"),
     ],
 )
-def test_build_records_must_match_handoff_identities(changes: dict[str, str], message: str) -> None:
+def test_build_records_must_match_handoff_identities(changes: dict[str, object], message: str) -> None:
     module = _module()
     record = {
         "source_tag": TAG,

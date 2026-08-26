@@ -87,9 +87,22 @@ _UV_VERSION = "0.12.6"
 
 
 def _installed_build_toolchain() -> dict[str, str]:
+    try:
+        uv = subprocess.run(
+            [str(Path(sys.executable).with_name("uv")), "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise DepPkgError("uv build tool is unavailable") from exc
+    match = re.match(r"^uv ([0-9]+(?:\.[0-9]+)+)\b", uv.stdout)
+    if uv.returncode != 0 or match is None:
+        raise DepPkgError(f"cannot determine uv build tool version: {uv.stderr.strip() or uv.stdout.strip()!r}")
     return {
         "python": ".".join(str(part) for part in sys.version_info[:3]),
         **{name: importlib.metadata.version(name) for name in ("pip", "setuptools", "wheel", "zstandard")},
+        "uv": match.group(1),
     }
 
 
@@ -109,7 +122,7 @@ def validate_build_toolchain() -> dict[str, str]:
         raise DepPkgError(
             "dependency build toolchain is incomplete; run `uv sync --locked --only-group dep-pkg-build`"
         ) from exc
-    for name, expected in _BUILD_TOOLCHAIN.items():
+    for name, expected in {**_BUILD_TOOLCHAIN, "uv": _UV_VERSION}.items():
         if installed.get(name) != expected:
             raise DepPkgError(
                 f"{name} build tool is {installed.get(name)!r}, expected {expected!r}; run "
@@ -341,6 +354,7 @@ def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int | None = 
         "wheel",
         "--no-cache-dir",
         "--no-build-isolation",
+        "--no-index",
         "--no-deps",
         str(sdist),
         "-w",
@@ -535,18 +549,16 @@ def _dep_build_record(
 
 def build_dep_pkg(args: argparse.Namespace) -> Path:
     epoch = _source_date_epoch(args)
-    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", args.ports_sha):
-        raise DepPkgError("--ports-sha must be a lowercase 40- or 64-character Git SHA")
+    if not re.fullmatch(r"[0-9a-f]{40}", args.ports_sha):
+        raise DepPkgError("--ports-sha must be a lowercase 40-character Git SHA")
     port_dir = Path(args.ports).resolve() / args.port
     port = read_port(port_dir)
     py_dotted = python_dotted_version(args.py_flavor)  # validates the flavor too
 
     distfile = f"{port.distname}.tar.gz"
     sha256, size = read_distinfo(port_dir, distfile)
-
-    if getattr(args, "attest_ports", False):
-        validate_build_toolchain()
-        bpp._attest_checkout(Path(args.ports), args.ports_sha, "FreeBSD-ports")
+    validate_build_toolchain()
+    bpp._attest_checkout(Path(args.ports), args.ports_sha, "FreeBSD-ports")
     with tempfile.TemporaryDirectory(prefix="pfbng-deppkg-") as td:
         tmp = Path(td)
         sdist = fetch_verified_sdist(port, tmp, sha256=sha256, size=size)
@@ -658,7 +670,6 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--out-dir", required=True, dest="out_dir", help="output directory for the .pkg")
     ap.add_argument("--compression", choices=("zstd", "xz"), default="zstd", help="output compression (default: zstd)")
     args = ap.parse_args(argv)
-    args.attest_ports = True
 
     try:
         out_path = build_dep_pkg(args)

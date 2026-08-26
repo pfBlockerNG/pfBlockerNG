@@ -4,6 +4,7 @@ import itertools
 from pathlib import Path
 
 import pytest
+import yaml
 
 WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly.yml"
 ALERT_WORKFLOW = Path(__file__).parents[1] / ".github" / "workflows" / "nightly-failure-alert.yml"
@@ -205,12 +206,26 @@ def test_build_step_builds_and_hands_off_dependency_packages() -> None:
     assert "DEP_ARTIFACTS_JSON" in step
 
 
-def test_dependency_builder_toolchain_is_locked_and_handed_off() -> None:
-    text = WORKFLOW.read_text(encoding="utf-8")
-    assert 'version: "0.12.6"' in text
-    assert "uv sync --project trusted --locked --only-group dep-pkg-build" in text
-    assert "plan/dependency-builder.json" in text
-    assert "--dependency-builder plan/dependency-builder.json" in text
+def test_dependency_builder_toolchain_epoch_and_handoff_are_structurally_locked() -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    prepare_steps = workflow["jobs"]["prepare"]["steps"]
+    build_steps = workflow["jobs"]["build"]["steps"]
+    handoff_steps = workflow["jobs"]["handoff"]["steps"]
+
+    setup = next(step for step in build_steps if step.get("name") == "Set up the pinned dependency-package toolchain")
+    sync = next(step for step in build_steps if step.get("name") == "Sync the locked dependency-package toolchain")
+    prepare = next(
+        step for step in prepare_steps if step.get("name") == "Resolve pinned source, Ports, and live matrices"
+    )
+    handoff = next(step for step in handoff_steps if step.get("name") == "Create verified publisher handoff")
+
+    assert setup["with"]["version"] == "0.12.6"
+    assert sync["run"] == "uv sync --project trusted --locked --only-group dep-pkg-build"
+    assert "> plan/dependency-builder.json" in prepare["run"]
+    assert "> plan/source-date-epoch" in prepare["run"]
+    assert "--dependency-builder plan/dependency-builder.json" in handoff["run"]
+    assert handoff["env"]["SOURCE_DATE_EPOCH"] == "${{ needs.prepare.outputs.source_date_epoch }}"
+    assert '--source-date-epoch "$SOURCE_DATE_EPOCH"' in handoff["run"]
 
 
 def test_handoff_step_has_no_durable_completion() -> None:

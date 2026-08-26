@@ -23,6 +23,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 UI_WORKFLOW = ROOT / ".github/workflows/ui-tests.yml"
@@ -470,16 +471,32 @@ def test_build_pkgs_portable_leg_step_carries_row_identity_and_abi() -> None:
     assert "matrix.arch" not in job_text
 
 
-def test_release_dependency_builder_receives_every_reproducibility_input() -> None:
-    job_text = "\n".join(_jobs(RELEASE_WORKFLOW)["build-pkgs-portable"])
-    for value in (
-        'version: "0.12.6"',
-        "uv sync --locked --only-group dep-pkg-build",
-        '--ports-sha "$PORTS_SHA"',
-        '--source-date-epoch "$CREATED"',
-        '"dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"])',
-    ):
-        assert value in job_text
+def test_release_dependency_builder_receives_structured_reproducibility_inputs() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))
+    build_steps = workflow["jobs"]["build-pkgs-portable"]["steps"]
+    setup = next(step for step in build_steps if step.get("name") == "Set up the pinned dependency-package toolchain")
+    sync = next(step for step in build_steps if step.get("name") == "Sync the locked dependency-package toolchain")
+    record = next(step for step in build_steps if step.get("name") == "Write the destination-bound build record")
+    build = next(step for step in build_steps if step.get("name") == "Build the .pkg via build-leg.sh")
+    handoffs = [
+        step
+        for job in workflow["jobs"].values()
+        for step in job.get("steps", [])
+        if step.get("name") == "Create tagged release handoff"
+    ]
+
+    assert setup["with"] == {"version": "0.12.6", "activate-environment": True}
+    assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
+    assert "CREATED" in record["env"] and "DEPENDENCY_BUILDER" in record["env"]
+    assert '"source_date_epoch": int(os.environ["CREATED"])' in record["run"]
+    assert '"dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"])' in record["run"]
+    assert 'record["build_input_digest"] = build_input_digest(record)' in record["run"]
+    assert '--ports-sha "$PORTS_SHA"' in build["run"]
+    assert '--source-date-epoch "$CREATED"' in build["run"]
+    assert len(handoffs) == 1
+    assert "DEPENDENCY_BUILDER" in handoffs[0]["env"]
+    assert '--source-date-epoch "$(git show -s --format=%ct "$SOURCE_SHA")"' in handoffs[0]["run"]
+    assert '--dependency-builder "$DEPENDENCY_BUILDER_FILE"' in handoffs[0]["run"]
 
 
 # --------------------------------------------------------------------------- #

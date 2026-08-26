@@ -52,6 +52,7 @@ _RECORD_FIELDS = {
     "build_input_digest",
 }
 _RECORD_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
+_RECORD_PORTS_SHA = re.compile(r"^[0-9a-f]{40}$")
 _RECORD_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _DEPENDENCY_BUILDER_FIELDS = {"python", "pip", "setuptools", "wheel", "zstandard", "uv", "uv_lock_sha256"}
 _TOOL_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)+(?:[A-Za-z0-9._+-]*)?$")
@@ -275,8 +276,8 @@ def validate_build_record(
     ports_sha = record["freebsd_ports_sha"]
     if not isinstance(source_sha, str) or not _RECORD_SHA.fullmatch(source_sha):
         raise _record_error("source_sha must be lowercase 40- or 64-character hex")
-    if not isinstance(ports_sha, str) or not _RECORD_SHA.fullmatch(ports_sha):
-        raise _record_error("freebsd_ports_sha must be lowercase 40- or 64-character hex")
+    if not isinstance(ports_sha, str) or not _RECORD_PORTS_SHA.fullmatch(ports_sha):
+        raise _record_error("freebsd_ports_sha must be lowercase 40-character hex")
     epoch = record["source_date_epoch"]
     if type(epoch) is not int or epoch < 0:
         raise _record_error("source_date_epoch must be a non-negative integer")

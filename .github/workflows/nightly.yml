@@ -385,6 +385,7 @@ jobs:
           TOOLS_SHA: ${{ needs.prepare.outputs.tools_sha }}
           MATRIX_SHA: ${{ needs.prepare.outputs.matrix_sha }}
           MATRIX_DIGEST: ${{ needs.prepare.outputs.matrix_digest }}
+          SOURCE_DATE_EPOCH: ${{ needs.prepare.outputs.source_date_epoch }}
         run: |
           set -eu
           TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
@@ -398,6 +399,7 @@ jobs:
             --tools-sha "$TOOLS_SHA" \
             --matrix-sha "$MATRIX_SHA" \
             --matrix-digest "$MATRIX_DIGEST" \
+            --source-date-epoch "$SOURCE_DATE_EPOCH" \
             --dependency-builder plan/dependency-builder.json \
             --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
             --source-ref "$SOURCE_REF" \

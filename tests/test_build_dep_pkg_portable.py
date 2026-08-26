@@ -17,9 +17,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tarfile
+import tomllib
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -343,31 +345,63 @@ def test_build_wheel_refuses_platform_wheel(tmp_path: Path, monkeypatch: pytest.
         bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
 
 
-def test_build_wheel_sets_pip_constraint_pinning_setuptools_and_wheel(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The locked backend is used without isolated network resolution."""
-    captured_envs: list[dict[str, str]] = []
+def test_build_wheel_pins_command_and_sanitized_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[list[str], dict[str, str]]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
-        captured_envs.append(kwargs.get("env") or {})
+        captured.append((cmd, kwargs["env"]))
         return subprocess.CompletedProcess(cmd, 0)
 
+    for name in (
+        "LANG",
+        "LC_CTYPE",
+        "PIP_INDEX_URL",
+        "PYTHONPATH",
+        "SETUPTOOLS_SCM_PRETEND_VERSION",
+        "SOURCE_DATE_EPOCH",
+        "TZ",
+        "WHEEL_TOOL",
+    ):
+        monkeypatch.setenv(name, "hostile")
     monkeypatch.setattr(bdp.subprocess, "run", fake_run)
     wheel_dir = tmp_path / "wheel"
     wheel_dir.mkdir()
     (wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl").write_bytes(b"")
+    sdist = tmp_path / "sdist.tar.gz"
 
-    bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
+    bdp.build_wheel(sdist, tmp_path, source_date_epoch=1_700_000_000)
 
-    # The pip-wheel call carries the exact fallback constraint as defense in depth.
-    pip_wheel_env = captured_envs[-1]
-    assert "PIP_CONSTRAINT" in pip_wheel_env, "pip wheel call was not given PIP_CONSTRAINT"
-    constraints_path = Path(pip_wheel_env["PIP_CONSTRAINT"])
-    assert constraints_path.is_file(), f"PIP_CONSTRAINT points at a nonexistent file: {constraints_path}"
-    text = constraints_path.read_text()
-    assert "setuptools==" in text
-    assert "wheel==" in text
+    cmd, env = captured[-1]
+    assert cmd == [
+        sys.executable,
+        "-m",
+        "pip",
+        "wheel",
+        "--no-cache-dir",
+        "--no-build-isolation",
+        "--no-index",
+        "--no-deps",
+        str(sdist),
+        "-w",
+        str(wheel_dir),
+    ]
+    assert env["LANG"] == env["LC_ALL"] == "C"
+    assert env["PIP_CONFIG_FILE"] == os.devnull
+    assert env["PIP_DISABLE_PIP_VERSION_CHECK"] == env["PIP_NO_INDEX"] == "1"
+    assert env["PYTHONHASHSEED"] == "0"
+    assert env["SOURCE_DATE_EPOCH"] == "1700000000"
+    assert env["TZ"] == "UTC"
+    for name in (
+        "LC_CTYPE",
+        "PIP_INDEX_URL",
+        "PYTHONPATH",
+        "SETUPTOOLS_SCM_PRETEND_VERSION",
+        "WHEEL_TOOL",
+    ):
+        assert name not in env
+    constraints_path = Path(env["PIP_CONSTRAINT"])
+    assert constraints_path.is_file()
+    assert constraints_path.read_text() == "setuptools==75.6.0\nwheel==0.45.1\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -552,6 +586,66 @@ def _build_args(ports_root: Path, out_dir: Path) -> argparse.Namespace:
         out_dir=str(out_dir),
         compression="zstd",
     )
+
+
+def test_build_dep_pkg_forwards_epoch_and_requires_exact_ports_attestation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    fake_build_wheel = bdp.build_wheel
+    calls: list[tuple[object, ...]] = []
+
+    def validate_toolchain() -> dict[str, str]:
+        calls.append(("toolchain",))
+        return bdp.build_toolchain_identity()
+
+    def attest_ports(path: Path, sha: str, label: str) -> None:
+        calls.append(("attest", path, sha, label))
+
+    def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int) -> Path:
+        calls.append(("wheel", source_date_epoch))
+        return fake_build_wheel(sdist, work_dir, source_date_epoch=source_date_epoch)
+
+    monkeypatch.setattr(bdp, "validate_build_toolchain", validate_toolchain)
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", attest_ports)
+    monkeypatch.setattr(bdp, "build_wheel", build_wheel)
+    args = _build_args(ports_root, tmp_path / "out")
+
+    bdp.build_dep_pkg(args)
+
+    assert calls[:3] == [
+        ("toolchain",),
+        ("attest", Path(args.ports), args.ports_sha, "FreeBSD-ports"),
+        ("wheel", args.source_date_epoch),
+    ]
+
+
+def test_source_epoch_changes_normalized_payload_mtimes_and_package_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    first_args = _build_args(ports_root, tmp_path / "first")
+    second_args = _build_args(ports_root, tmp_path / "second")
+    second_args.source_date_epoch += 1
+
+    first = bdp.build_dep_pkg(first_args)
+    second = bdp.build_dep_pkg(second_args)
+    first_evidence = pfb_pkg.inspect_pkg(first)
+    second_evidence = pfb_pkg.inspect_pkg(second)
+
+    assert hashlib.sha256(first.read_bytes()).digest() != hashlib.sha256(second.read_bytes()).digest()
+    for evidence, epoch in (
+        (first_evidence, first_args.source_date_epoch),
+        (second_evidence, second_args.source_date_epoch),
+    ):
+        member_info = evidence["member_info"]
+        assert isinstance(member_info, dict)
+        payload_mtimes = {int(member.mtime) for name, member in member_info.items() if not name.startswith("+")}
+        assert payload_mtimes == {epoch}
 
 
 def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -800,18 +894,39 @@ def test_freebsd_majors_retain_target_specific_identity(tmp_path: Path, monkeypa
     second = bdp.build_dep_pkg(second_args)
 
     assert hashlib.sha256(first.read_bytes()).digest() != hashlib.sha256(second.read_bytes()).digest()
-    assert pfb_pkg.read_compact_manifest(first)["abi"] == "FreeBSD:15:*"
-    assert pfb_pkg.read_compact_manifest(second)["abi"] == "FreeBSD:16:*"
+    for pkg, major in ((first, "15"), (second, "16")):
+        manifest = pfb_pkg.read_compact_manifest(pkg)
+        assert manifest["abi"] == f"FreeBSD:{major}:*"
+        assert manifest["arch"] == f"freebsd:{major}:*"
+        dep_record = json.loads(manifest["annotations"]["pfb_dep_build_record"])
+        assert dep_record["abi"] == f"FreeBSD:{major}:*"
+        assert dep_record["freebsd_major"] == major
 
 
-@pytest.mark.parametrize("name", ["pip", "setuptools", "wheel"])
-def test_build_toolchain_rejects_backend_constraint_drift(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    installed = dict(bdp._BUILD_TOOLCHAIN)
+@pytest.mark.parametrize("name", ["python", "pip", "setuptools", "wheel", "zstandard", "uv"])
+def test_build_toolchain_rejects_explicit_drift(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    installed = {**bdp._BUILD_TOOLCHAIN, "uv": bdp._UV_VERSION}
     installed[name] = "999.0"
     monkeypatch.setattr(bdp, "_installed_build_toolchain", lambda: installed)
 
     with pytest.raises(bdp.DepPkgError, match=name):
         bdp.validate_build_toolchain()
+
+
+def test_installed_toolchain_uses_uv_from_the_active_locked_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="uv 0.12.6\n", stderr="")
+
+    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+
+    bdp._installed_build_toolchain()
+
+    assert calls == [[str(Path(sys.executable).with_name("uv")), "--version"]]
 
 
 def test_source_epoch_and_ports_identity_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -826,10 +941,13 @@ def test_source_epoch_and_ports_identity_fail_closed(monkeypatch: pytest.MonkeyP
     with pytest.raises(bdp.DepPkgError, match="must match"):
         bdp._source_date_epoch(args)
     monkeypatch.delenv("SOURCE_DATE_EPOCH")
+    _write_port(Path(args.ports))
+    _mock_network(monkeypatch, console_scripts=None)
 
-    args.ports_sha = "not-a-sha"
-    with pytest.raises(bdp.DepPkgError, match="ports-sha"):
-        bdp.build_dep_pkg(args)
+    for ports_sha in ("D" * 40, "d" * 39, "d" * 41, "g" * 40, "d" * 64):
+        args.ports_sha = ports_sha
+        with pytest.raises(bdp.DepPkgError, match="ports-sha"):
+            bdp.build_dep_pkg(args)
 
 
 def test_cli_requires_an_explicit_source_epoch(tmp_path: Path) -> None:
@@ -857,3 +975,25 @@ def test_print_toolchain_binds_the_lock_file(capsys: pytest.CaptureFixture[str])
     identity = json.loads(capsys.readouterr().out)
     assert identity == bdp.build_toolchain_identity()
     assert identity["uv_lock_sha256"] == hashlib.sha256((bdp._REPO_ROOT / "uv.lock").read_bytes()).hexdigest()
+
+
+def test_dependency_build_group_and_lock_use_exact_pins() -> None:
+    root = bdp._REPO_ROOT
+    assert (root / ".python-version").read_text(encoding="utf-8") == "3.11.15\n"
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["dependency-groups"]["dep-pkg-build"] == [
+        "pip==26.2.1",
+        "setuptools==75.6.0",
+        "wheel==0.45.1",
+        "zstandard==0.25.0",
+        "uv==0.12.6",
+    ]
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    versions = {package["name"]: package["version"] for package in lock["package"]}
+    assert {name: versions[name] for name in ("pip", "setuptools", "uv", "wheel", "zstandard")} == {
+        "pip": "26.2.1",
+        "setuptools": "75.6.0",
+        "uv": "0.12.6",
+        "wheel": "0.45.1",
+        "zstandard": "0.25.0",
+    }
