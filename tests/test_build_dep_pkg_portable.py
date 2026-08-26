@@ -17,6 +17,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import lzma
 import os
 import subprocess
 import sys
@@ -134,6 +135,16 @@ def _read_full_manifest(pkg_path: Path) -> dict:
         member = tf.extractfile("+MANIFEST")
         assert member is not None
         return json.loads(member.read())
+
+
+def _write_compact_package(path: Path, manifest: dict[str, object]) -> None:
+    payload = json.dumps(manifest).encode()
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as tf:
+        member = tarfile.TarInfo("+COMPACT_MANIFEST")
+        member.size = len(payload)
+        tf.addfile(member, io.BytesIO(payload))
+    path.write_bytes(lzma.compress(archive.getvalue()))
 
 
 # --------------------------------------------------------------------------- #
@@ -874,10 +885,39 @@ def test_real_dependency_builder_output_passes_tagged_dependency_validation(
     assert isinstance(rows, list)
     row = rows[0]
     assert isinstance(row, dict)
-    manifest = pfb_pkg.read_compact_manifest(tagged_package)
-    assert trh._validate_dependency_package(handoff, tagged_package, manifest, row) == (
-        "textproc/py-charset-normalizer"
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": "edge",
+        "release_line": "release/4.0",
+        "classification": "beta",
+        "source_tag": "v4.0.0.b1",
+        "source_sha": "a" * 40,
+        "canonical_package_version": "4.0.0.b1",
+        "native_recipe_identity": "pfSense-pkg-pfBlockerNG-edge",
+        "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "matrix_row": row,
+        "freebsd_ports_sha": "d" * 40,
+        "route": "edge/ce-2.8",
+        "source_date_epoch": 1_700_000_000,
+        "dependency_builder": bdp.build_toolchain_identity(),
+        "build_input_digest": "",
+    }
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    canonical_package = tagged_package.with_name("pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.8.pkg")
+    _write_compact_package(
+        canonical_package,
+        {
+            "name": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+            "version": "4.0.0.b1",
+            "origin": "net/pfSense-pkg-pfBlockerNG",
+            "abi": "FreeBSD:15:*",
+            "arch": "freebsd:15:*",
+            "prefix": "/usr/local",
+            "annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record)},
+        },
     )
+
+    trh.validate_packages(handoff, [canonical_package, tagged_package])
 
 
 def test_build_dep_pkg_no_console_scripts_still_emits_valid_pkg(
