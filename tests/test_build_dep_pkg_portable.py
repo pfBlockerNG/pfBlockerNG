@@ -923,6 +923,7 @@ def test_installed_toolchain_uses_uv_from_the_active_locked_environment(
         return subprocess.CompletedProcess(cmd, 0, stdout="uv 0.12.6\n", stderr="")
 
     monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+    monkeypatch.setattr(bdp.importlib.metadata, "version", lambda name: bdp._BUILD_TOOLCHAIN[name])
 
     bdp._installed_build_toolchain()
 
