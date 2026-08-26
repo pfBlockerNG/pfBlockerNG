@@ -18,7 +18,8 @@ fail() {
 install_from_url() {
 	installer_url=$1
 	installer_file=$(mktemp "${TMPDIR:-/tmp}/setup-agent-tools.XXXXXX") || return 1
-	if curl -LsSf "$installer_url" > "$installer_file" && sh "$installer_file"; then
+	if curl --proto '=https' --proto-redir '=https' -LsSf "$installer_url" > "$installer_file" &&
+		sh "$installer_file"; then
 		installer_status=0
 	else
 		installer_status=$?

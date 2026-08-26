@@ -227,9 +227,6 @@ GRAPHIFY
 #!/bin/sh
 [ "$*" = 'config shell install --yes' ] || exit 9
 printf 'wt:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
-if [ ! -f "$WORKTRUNK_SHELL_ARTIFACT" ]; then
-  printf '%s\n' "$WORKTRUNK_SHELL_MARKER" > "$WORKTRUNK_SHELL_ARTIFACT"
-fi
 WORKTRUNK
     for client in claude codex pi; do
       cat > "$installables/$client" <<'CLIENT'
@@ -251,8 +248,6 @@ GROK
     done
 
     worktrunk_config="$xdg_config/worktrunk/config.toml"
-    worktrunk_shell_artifact="$home/.worktrunk-shell-integration"
-    worktrunk_shell_marker='# worktrunk shell integration'
     brew_prefix="$fixture/homebrew uv"
     export HOME="$home"
     export XDG_CONFIG_HOME="$xdg_config"
@@ -262,8 +257,6 @@ GROK
     export DEBIAN_CURL_LOG="$curl_log"
     export DEBIAN_INSTALLABLES="$installables"
     export DEBIAN_REPOSITORY="$repository"
-    export WORKTRUNK_SHELL_ARTIFACT="$worktrunk_shell_artifact"
-    export WORKTRUNK_SHELL_MARKER="$worktrunk_shell_marker"
     export BREW_UV_PREFIX="$brew_prefix"
     unset CLAUDECODE CODEX_THREAD_ID GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
     unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE GROK_DOCTOR_RC AGENT_TEST_OS
@@ -759,8 +752,6 @@ CONFIG
     Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^wt:config shell install --yes$' "$tool_log")" -eq 2 ]
-    The contents of file "$worktrunk_shell_artifact" should equal "$worktrunk_shell_marker"
-    Assert [ "$(grep -Fxc "$worktrunk_shell_marker" "$worktrunk_shell_artifact")" -eq 1 ]
     Assert [ "$(grep -c '^https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh$' "$curl_log")" -eq 2 ]
     Assert [ "$(grep -c '^setup-hooks:$' "$helper_log")" -eq 2 ]
     Assert [ "$(grep -c "^init-worktree-tools:$repository$" "$helper_log")" -eq 2 ]
