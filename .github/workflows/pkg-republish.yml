@@ -36,12 +36,14 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
+          repository: pfBlockerNG/pfBlockerNG
           fetch-depth: 0
           persist-credentials: false
 
       - name: Resolve exact immutable Release
         id: resolve
         env:
+
           GH_TOKEN: ${{ github.token }}
           SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}

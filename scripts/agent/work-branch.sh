@@ -8,7 +8,8 @@
 #               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>,
 #               or <TMPDIR>/pfblockerng-<type>-<NN> under Codex; a relative --path anchors
 #               at the primary checkout); an existing branch or path gets a `-<epoch>` suffix
-#               (collision rule). Every created worktree gets an exact-root CodeGraph index.
+#               (collision rule). Every created worktree initializes CodeGraph,
+#               Graphify, and enabled Serena tools.
 #               Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
@@ -120,57 +121,9 @@ main() {
 		echo "work-branch.sh: cannot locate the primary checkout from '$common' (unsupported layout, e.g. --separate-git-dir)" >&2
 		exit 2
 	fi
-	graphify_store_script="$root/scripts/agent/graphify-store.py"
-	graphify_store_active=0
-	if [ -f "$graphify_store_script" ]; then
-		graphify_store_active=1
-		lock_path="$root/.git/graphify-store.lock"
-		exec 9>"$lock_path" || {
-			echo "work-branch.sh: cannot open Graphify store lock '$lock_path'" >&2
-			exit 1
-		}
-		if command -v lockf >/dev/null 2>&1; then
-			lockf -k 9 || {
-				echo "work-branch.sh: could not acquire Graphify store lock" >&2
-				exit 1
-			}
-		elif command -v flock >/dev/null 2>&1; then
-			flock 9 || {
-				echo "work-branch.sh: could not acquire Graphify store lock" >&2
-				exit 1
-			}
-		else
-			echo "TOOL-MISSING: lockf/flock" >&2
-			exit 4
-		fi
-		require_tool python3
-	fi
-	source_sha=''
-	graph_branch=''
-	if [ "$graphify_store_active" -eq 1 ]; then
-		if git -C "$root" remote get-url origin >/dev/null 2>&1; then
-			if ! git -C "$root" fetch origin >/dev/null 2>&1; then
-				echo "work-branch.sh: git fetch origin failed" >&2
-				exit 1
-			fi
-		fi
-		source_sha=$(git -C "$root" rev-parse "$base^{commit}") || {
-			echo "work-branch.sh: cannot resolve source ref '$base'" >&2
-			exit 2
-		}
-		case "$base" in
-			origin/*) graph_branch=${base#origin/} ;;
-			refs/remotes/origin/*) graph_branch=${base#refs/remotes/origin/} ;;
-			refs/heads/*) graph_branch=${base#refs/heads/} ;;
-			HEAD) graph_branch=$(git -C "$root" symbolic-ref --short HEAD 2>/dev/null) || graph_branch=devel ;;
-			*) graph_branch=$base ;;
-		esac
-		case "$graph_branch" in
-			refs/*) graph_branch=${graph_branch#refs/heads/} ;;
-		esac
-		if ! python3 "$graphify_store_script" has-exact \
-			--store-root "$root/.git/graphify-store" --branch "$graph_branch" --sha "$source_sha"; then
-			echo "GRAPHIFY-REFRESH-REQUIRED branch=$graph_branch sha=$source_sha" >&2
+	if git -C "$root" remote get-url origin >/dev/null 2>&1; then
+		if ! git -C "$root" fetch origin >/dev/null 2>&1; then
+			echo "work-branch.sh: git fetch origin failed" >&2
 			exit 1
 		fi
 	fi
@@ -187,13 +140,13 @@ main() {
 	fi
 	case "$path" in /*) ;; *) path="$root/$path" ;; esac   # worktree add needs ABSOLUTE paths
 	[ -e "$path" ] && path="$path-$(date +%s)"
-	worktree_base=$base
-	[ "$graphify_store_active" -eq 1 ] && worktree_base=$source_sha
-	git worktree add -b "$branch" "$path" "$worktree_base" >/dev/null || exit 1
-	if [ "$graphify_store_active" -eq 1 ] && ! python3 "$graphify_store_script" restore-exact \
-		--store-root "$root/.git/graphify-store" --branch "$graph_branch" --sha "$source_sha" --target "$path"; then
-		echo "work-branch.sh: removing worktree and branch after Graphify snapshot restore failure" >&2
-		git worktree remove "$path" >/dev/null 2>&1 || {
+	git worktree add -b "$branch" "$path" "$base" >/dev/null || exit 1
+	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
+	sh "$initializer" "$path"
+	initializer_status=$?
+	if [ "$initializer_status" -ne 0 ]; then
+		echo "work-branch.sh: removing worktree and branch after tool initialization failure" >&2
+		git worktree remove --force "$path" >/dev/null 2>&1 || {
 			echo "work-branch.sh: failed to remove incomplete worktree '$path'" >&2
 			exit 1
 		}
@@ -201,25 +154,7 @@ main() {
 			echo "work-branch.sh: failed to delete incomplete branch '$branch'" >&2
 			exit 1
 		}
-		exit 1
-	fi
-	# issue #2609: the Graphify store is not touched again from here -- CodeGraph writes
-	# only into the new worktree's own .codegraph. Drop the lock before indexing so a
-	# concurrent caller cutting its own worktree does not queue behind an unrelated index.
-	if [ "$graphify_store_active" -eq 1 ]; then
-		exec 9>&-
-	fi
-	if ! sh "$(dirname "$0")/ensure-codegraph.sh" "$path"; then
-		echo "work-branch.sh: removing worktree and branch after CodeGraph initialization failure" >&2
-		git worktree remove "$path" >/dev/null 2>&1 || {
-			echo "work-branch.sh: failed to remove incomplete worktree '$path'" >&2
-			exit 1
-		}
-		git branch -D "$branch" >/dev/null 2>&1 || {
-			echo "work-branch.sh: failed to delete incomplete branch '$branch'" >&2
-			exit 1
-		}
-		exit 1
+		exit "$initializer_status"
 	fi
 	printf '%s\t%s\n' "$branch" "$path"
 }

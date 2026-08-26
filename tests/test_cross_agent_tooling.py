@@ -180,24 +180,18 @@ def test_repository_intelligence_routing_is_canonical_for_every_client() -> None
     assert heading not in codex, "Codex must not own a second routing policy"
 
 
-def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() -> None:
+def test_repository_intelligence_initializes_each_worktree_directly() -> None:
     routing = (ROOT / ".agents/context/repository-intelligence.md").read_text(encoding="utf-8")
+    assert routing.strip(), "repository-intelligence routing must not be empty"
     for contract in (
-        "GRAPHIFY-REFRESH-REQUIRED",
-        ".git/graphify-store.lock",
-        "graphify-store.py seed",
-        "graphify-store.py validate-builder --builder .",
-        "graphify-store.py publish",
-        "takes `.git/graphify-store.lock` itself",
-        "source SHA",
+        "work-branch.sh --worktree",
+        "scripts/agent/init-worktree-tools.sh",
+        "scripts/agent/ensure-codegraph.sh",
+        "graphify update",
+        "serena project index",
+        "OMP_CLI",
+        "PI_CLI",
         "graphify-out/graph.json",
-        "graphify-out/GRAPH_REPORT.md",
-        "PYTHONHASHSEED=0",
-        "--code-only",
-        "--no-viz",
-        "cluster-only . --no-viz --no-label",
-        "legacy/",
-        "src/**/vendor/**",
         "source_file",
         "src/` is production",
         "tests/` is",
@@ -205,30 +199,35 @@ def test_repository_intelligence_routes_worktrees_through_exact_graph_seeds() ->
         "stubs/` is shim/support",
         "ignored and untracked",
     ):
-        assert contract in routing, f"Graphify worktree routing lost {contract}"
-    tail = routing.split("`GRAPHIFY-REFRESH-REQUIRED`", 1)[1]
-    # index(), not split(): a split on a terminator the doc no longer spells this way returns
-    # the whole tail and silently stops bounding the recipe, which is how the terminator
-    # drifted out of the assertion once already.
-    recipe = tail[: tail.index("Remove the builder")]
-    steps = (
-        "graphify-store.py seed",
-        "graphify-store.py validate-builder --builder .",
-        "graphify extract . --code-only --force",
-        "graphify cluster-only . --no-viz --no-label",
-        "graphify-store.py publish",
-    )
-    offsets = [recipe.index(step) for step in steps]
-    assert offsets == sorted(offsets), "Graphify refresh steps must remain in execution order"
+        assert contract in routing, f"direct worktree initialization routing lost {contract}"
+
+    folded_routing = routing.casefold()
+    for obsolete in (
+        "graphify-refresh-required",
+        "graphify-store.py",
+        ".git/graphify-store.lock",
+        "temporary detached builder",
+        "graphify extract",
+        "graphify cluster-only",
+        "cluster-only",
+    ):
+        assert obsolete not in folded_routing, f"obsolete Graphify store/refresh recipe remains: {obsolete}"
     assert "graphify-out/views" not in routing
     assert "update_graphify_views.py" not in routing
 
-    attrs = (ROOT / ".gitattributes").read_text(encoding="utf-8").casefold()
-    assert "graphify" not in attrs
+    attrs_text = (ROOT / ".gitattributes").read_text(encoding="utf-8")
+    assert attrs_text.strip(), ".gitattributes must not be empty"
+    attrs = attrs_text.splitlines()
+    graphify_attribute = "graphify-out/graph.json merge=graphify"
+    assert attrs.count(graphify_attribute) == 1, f"expected exact .gitattributes row: {graphify_attribute}"
     assert (
         subprocess.run(["git", "ls-files", "graphify-out"], cwd=ROOT, check=True, text=True, capture_output=True).stdout
         == ""
     )
+    root_ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert "graphify-out/" in root_ignore, "generated Graphify output must remain ignored"
+    for obsolete_path in ("scripts/agent/graphify-store.py", "tests/test_graphify_store.py"):
+        assert not (ROOT / obsolete_path).exists(), f"obsolete Graphify store path returned: {obsolete_path}"
 
 
 def test_markdownlint_excludes_generated_graphify_reports() -> None:

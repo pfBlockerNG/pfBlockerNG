@@ -104,7 +104,17 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    chmod +x "$stubdir/codegraph"
+    cat > "$stubdir/graphify" <<'GRAPHIFY'
+#!/bin/sh
+[ "$#" -eq 2 ] && [ "$1" = update ] || exit 9
+exit 0
+GRAPHIFY
+    cat > "$stubdir/serena" <<'SERENA'
+#!/bin/sh
+[ "$#" -eq 3 ] && [ "$1" = project ] && [ "$2" = index ] || exit 9
+exit 0
+SERENA
+    chmod +x "$stubdir/codegraph" "$stubdir/graphify" "$stubdir/serena"
     export CODEGRAPH_LOG="$codegraph_log"
     PATH="$stubdir:$PATH"; export PATH
   }

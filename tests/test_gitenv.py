@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import importlib
 import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -146,88 +145,6 @@ def test_frozen_build_scratch_repo_tags_under_a_hostile_config(tmp_path: Path, m
     git("tag", "v9.9.9", cwd=repo)
 
     assert git("tag", "--list", cwd=repo).stdout.split() == ["v9.9.9"]
-
-
-def test_graphify_store_publishes_under_a_hostile_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The store script scrubs for itself: ``publish`` tags every snapshot in the store repo."""
-    _hostile_config(tmp_path, monkeypatch)
-    mod = importlib.import_module("tests.test_graphify_store")
-
-    builder = tmp_path / "builder"
-    sha = mod.make_repo(builder)
-    result = mod.run_store(
-        "publish",
-        "--store-root",
-        str(tmp_path / "store"),
-        "--builder",
-        str(builder),
-        "--branch",
-        "devel",
-        "--sha",
-        sha,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_graphify_store_publish_ignores_an_inherited_git_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """``GIT_DIR`` beats ``git -C``, so an inherited one aims the store at the wrong repository."""
-    mod = importlib.import_module("tests.test_graphify_store")
-
-    builder = tmp_path / "builder"
-    sha = mod.make_repo(builder)
-    decoy = tmp_path / "decoy"
-    mod.make_repo(decoy)
-    monkeypatch.setenv("GIT_DIR", str(decoy / ".git"))
-    monkeypatch.setenv("GIT_WORK_TREE", str(decoy))
-
-    result = mod.run_store(
-        "publish",
-        "--store-root",
-        str(tmp_path / "store"),
-        "--builder",
-        str(builder),
-        "--branch",
-        "devel",
-        "--sha",
-        sha,
-    )
-    assert result.returncode == 0, result.stderr
-
-
-def test_graphify_store_pins_safe_directory_on_every_repository_it_touches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Neutralising the global scope also hides ``safe.directory``, which git reads nowhere else.
-
-    A checkout owned by another uid — bind-mounted into a container, or touched under sudo —
-    is refused as dubious ownership, and repo-local config cannot grant the exemption. The
-    store names the path it was asked to work on instead.
-    """
-    real_git = shutil.which("git")
-    assert real_git
-    shim_dir = tmp_path / "shim"
-    shim_dir.mkdir()
-    log = tmp_path / "git-argv.log"
-    shim = shim_dir / "git"
-    shim.write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >>"{log}"\nexec {real_git} "$@"\n')
-    shim.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{shim_dir}{os.pathsep}{os.environ['PATH']}")
-
-    mod = importlib.import_module("tests.test_graphify_store")
-    builder = tmp_path / "builder"
-    sha = mod.make_repo(builder)
-    store = tmp_path / "store"
-    result = mod.run_store(
-        "publish", "--store-root", str(store), "--builder", str(builder), "--branch", "devel", "--sha", sha
-    )
-    assert result.returncode == 0, result.stderr
-
-    invocations = [line for line in log.read_text().splitlines() if "-C " in line]
-    assert invocations, "the store made no git calls through the shim"
-    for target in (builder, store):
-        assert any(f"safe.directory={target} -C {target}" in line for line in invocations), (
-            f"no invocation pinned safe.directory for {target}: {invocations}"
-        )
 
 
 def test_read_version_matrix_env_neutralises_config_too(monkeypatch: pytest.MonkeyPatch) -> None:

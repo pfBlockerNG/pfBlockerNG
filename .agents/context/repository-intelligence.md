@@ -3,8 +3,14 @@
 Scope: cross-client repository discovery, exact code semantics, and persistent graphs.
 Load when: every agent session, from `AGENTS.md`.
 
-- Run `sh scripts/agent/ensure-codegraph.sh` at session start. It is exact-root and
-  idempotent; `work-branch.sh --worktree` also runs it for every worktree it creates.
+- Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`.
+  `work-branch.sh --worktree` runs the same initializer after creating a worktree and
+  removes the new worktree and branch if initialization fails.
+- CodeGraph and Graphify are mandatory. The initializer runs
+  `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index first, then
+  `graphify update <root>`. Install Graphify with `uv tool install graphifyy==0.9.50`.
+- Every worktree owns its ignored and untracked `graphify-out/` graph. Refresh it
+  directly with `graphify update <root>`; there is no shared repository graph.
 - For indexed code discovery, understanding, cross-file architecture, call paths,
   flows, structural exploration, and impact analysis, use CodeGraph through
   `codegraph_explore` or `codegraph explore`. Every client uses the same standard
@@ -15,27 +21,10 @@ Load when: every agent session, from `AGENTS.md`.
   inferred only from each node's `source_file`: `src/` is production, `tests/` is
   harness/test, and `stubs/` is shim/support; communities describe topology only.
   The root graph excludes `src/**/vendor/**`, documents/media, and `legacy/`.
-- Use `rg`, globbing, and file reads for literals, configuration, non-code files, and
-  details CodeGraph did not cover. Use the client's LSP surface—Serena where
+- Use `rg`, globbing, and file reads for literals, configuration, non-code files,
+  and details CodeGraph did not cover. Use the client's LSP surface—Serena where
   available—for exact symbols, definitions, references, implementations,
-  call/type hierarchy, diagnostics, and diagnostic-aware refactoring.
-- `work-branch.sh --worktree` restores an exact source-SHA snapshot from the local
-  Graphify store. `GRAPHIFY-REFRESH-REQUIRED` means create a temporary detached builder
-  at the reported source SHA; run `graphify-store.py seed`, then
-  `graphify-store.py validate-builder --builder .`, then refresh with Graphify 0.9.48
-  using `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify extract . --code-only --force`;
-  run
-  `graphify cluster-only . --no-viz --no-label`, then run `graphify-store.py publish`,
-  which takes `.git/graphify-store.lock` itself, so the refresh needs no hand-held lock;
-  a `work-branch.sh --worktree` started while the extract runs reports
-  `GRAPHIFY-REFRESH-REQUIRED` and refreshes in parallel, and one that lands inside
-  `publish` waits on that lock. Remove the builder and retry. The store
-  archives exactly `graph.json` and `GRAPH_REPORT.md` and rejects a refresh when
-  `graphify-out/memory` is present; other non-canonical roots are filtered out.
-- Canonical refreshes use `PYTHONHASHSEED=0 GRAPHIFY_VIZ_NODE_LIMIT=0 graphify
-  extract . --code-only --force` followed by `graphify cluster-only . --no-viz
-  --no-label`; no semantic agents, HTML, hooks, merge drivers, views, or generated
-  artifacts are repository contracts. The exact-SHA store
-  stores/restores only the root `graphify-out/graph.json` and
-  `graphify-out/GRAPH_REPORT.md`; both remain ignored and untracked locally.
-  Compiler, static analysis, tests, CI, and live smoke remain final.
+  call/type hierarchy, diagnostics, and diagnostic-aware refactoring. The initializer
+  runs `serena project index <root>` when Serena is available. Under OMP (`OMP_CLI`
+  or `PI_CLI`), it skips Serena because OMP provides native LSP tooling.
+- Compiler, static analysis, tests, CI, and live smoke remain final.

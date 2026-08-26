@@ -55,59 +55,32 @@ Describe 'work-branch.sh branch naming'
   End
 End
 
-Describe 'work-branch.sh Graphify store integration'
+Describe 'work-branch.sh post-add tool initialization'
   script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/work-branch.sh"
 
   setup() {
     . "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/lib/git-env-scrub.sh"
     pfb_scrub_git_env
-    fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_graphify.XXXXXX") || return 1
+    fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_tools.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary"
-    mkdir -p "$primary/scripts/agent"
-    git_fixture init -q -b devel "$primary" || return 1
-    git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
-      config user.email t@t
-    git_fixture -C "$primary" config user.name t
-    cp "${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/graphify-store.py" "$primary/scripts/agent/graphify-store.py"
-    chmod +x "$primary/scripts/agent/graphify-store.py"
-    git_fixture -C "$primary" add scripts/agent/graphify-store.py &&
+    git_fixture init -q -b devel "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
-        commit -q -m helper || return 1
-    mkdir -p "$primary/graphify-out/cache"
-    printf '%s\n' graph > "$primary/graphify-out/graph.json"
-    printf '%s\n' report > "$primary/graphify-out/GRAPH_REPORT.md"
-    printf '%s\n' payload > "$primary/graphify-out/cache/payload.txt"
-    ln -s cache "$primary/graphify-out/current"
-    sha=$(git_fixture -C "$primary" rev-parse HEAD)
-    python3 "$primary/scripts/agent/graphify-store.py" publish \
-      --store-root "$primary/.git/graphify-store" --builder "$primary" --branch devel --sha "$sha" || return 1
+        commit -q --allow-empty -m init || return 1
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
-    codegraph_log="$fixture/codegraph.log"
-    lock_probe_log="$fixture/lock-probe.log"
-    # Records, at a named step, whether the Graphify store lock is free RIGHT THEN --
-    # a direct, instantaneous read of the critical section's extent, so the ordering
-    # invariant never rides on wall-clock or on one process out-racing another.
-    cat > "$stubdir/wb-probe-lock" <<'PROBE'
+    events="$fixture/events"
+    cat > "$stubdir/init-worktree-tools" <<'INIT'
 #!/bin/sh
-# -k / -n keep the probe read-only: without -k, a SUCCESSFUL lockf unlinks the very
-# lock file under inspection. Tool preference mirrors work-branch.sh's own order.
-if [ -n "$WB_REAL_LOCKF" ]; then
-  if "$WB_REAL_LOCKF" -k -t 0 "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
-elif [ -n "$WB_REAL_FLOCK" ]; then
-  if "$WB_REAL_FLOCK" -n "$WB_LOCK_PATH" true 2>/dev/null; then state=lock-free; else state=lock-held; fi
-else
-  state=lock-tool-missing
-fi
-printf '%s:%s\n' "$1" "$state" >> "$WB_LOCK_PROBE_LOG"
-PROBE
-    chmod +x "$stubdir/wb-probe-lock"
+printf 'init:%s\n' "$1" >> "$WB_TOOL_EVENTS"
+[ "${WB_INIT_DIRTY:-0}" -eq 0 ] || printf '%s\n' debris > "$1/init-debris"
+exit "${WB_INIT_RC:-0}"
+INIT
+    chmod +x "$stubdir/init-worktree-tools"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
 case "$1" in
   init|index)
-    [ -n "$WB_LOCK_PROBE_LOG" ] && wb-probe-lock codegraph
-    printf '%s\n' "$*" >> "$WB_CODEGRAPH_LOG"
+    [ -n "${WB_DEFAULT_TOOL_LOG:-}" ] && printf 'codegraph:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
     mkdir -p "$2/.codegraph"
     true > "$2/.codegraph/codegraph.db"
     ;;
@@ -117,130 +90,82 @@ case "$1" in
   *) exit 9 ;;
 esac
 CODEGRAPH
-    chmod +x "$stubdir/codegraph"
-    # Transparent python3 wrapper: probes the lock as the store step runs, then hands
-    # off to the real interpreter, so graphify-store.py itself stays the real script.
-    cat > "$stubdir/python3" <<'PYTHON3'
+    cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
-case "$2" in
-  restore-exact|has-exact) [ -n "$WB_LOCK_PROBE_LOG" ] && wb-probe-lock "$2" ;;
+[ "$#" -eq 2 ] && [ "$1" = update ] || exit 9
+printf 'graphify:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
+GRAPHIFY
+    chmod +x "$stubdir/codegraph" "$stubdir/graphify"
+    export WB_REAL_GIT="$(command -v git)"
+    cat > "$stubdir/git" <<'GIT'
+#!/bin/sh
+case " $* " in
+  *" fetch origin "*) printf '%s\n' fetch >> "$WB_TOOL_EVENTS" ;;
+  *" worktree add "*) printf '%s\n' add >> "$WB_TOOL_EVENTS" ;;
 esac
-exec "$WB_REAL_PYTHON3" "$@"
-PYTHON3
-    chmod +x "$stubdir/python3"
-    export WB_CODEGRAPH_LOG="$codegraph_log"
-    export WB_LOCK_PATH="$primary/.git/graphify-store.lock"
-    export WB_REAL_FLOCK="$(command -v flock 2>/dev/null || true)"
-    export WB_REAL_LOCKF="$(command -v lockf 2>/dev/null || true)"
-    export WB_REAL_PYTHON3="$(command -v python3)"
+exec "$WB_REAL_GIT" "$@"
+GIT
+    chmod +x "$stubdir/git"
+    export WB_TOOL_EVENTS="$events"
+    default_tool_log="$fixture/default-tools"
+    export WB_DEFAULT_TOOL_LOG="$default_tool_log"
+    export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
   }
-  cleanup() { rm -rf "$fixture"; }
+  cleanup() {
+    unset PFB_INIT_WORKTREE_TOOLS
+    rm -rf "$fixture"
+  }
+  add_origin() {
+    git_fixture clone -q --bare "$primary" "$fixture/origin.git" &&
+      git_fixture -C "$primary" remote add origin "$fixture/origin.git"
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'requires an exact snapshot before creating a worktree'
-    rm -rf "$primary/.git/graphify-store"
-    When run sh -c 'cd "$1" && exec sh "$2" issue 31 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/missing"
-    The status should equal 1
-    The stderr should include "GRAPHIFY-REFRESH-REQUIRED branch=devel sha=$sha"
-    Assert [ ! -e "$fixture/missing" ]
+  It 'fetches a configured origin before add and initializes the new absolute worktree'
+    add_origin || return 1
+    mkdir -p "$primary/nested"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 41 tools --worktree --base HEAD --path nested/worktree' _ "$primary" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'adr/41-tools\t%s/nested/worktree' "$primary")"
+    The stderr should include 'Preparing worktree'
+    The contents of file "$events" should equal "$(printf 'fetch\nadd\ninit:%s/nested/worktree' "$primary")"
   End
 
-  It 'aborts before creating a worktree when configured origin fetch fails'
+  It 'uses the co-located default initializer when no test seam is configured'
+    add_origin || return 1
+    unset PFB_INIT_WORKTREE_TOOLS
+    When run env OMP_CLI=1 sh -c 'cd "$1" && exec sh "$2" adr 44 tools --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/default-init"
+    The status should equal 0
+    The output should equal "$(printf 'adr/44-tools\t%s/default-init' "$fixture")"
+    The stderr should include 'Preparing worktree'
+    The stderr should include 'Initializing CodeGraph in'
+    The contents of file "$events" should equal "$(printf 'fetch\nadd')"
+    The contents of file "$default_tool_log" should equal "$(printf 'codegraph:init:%s/default-init\ngraphify:update:%s/default-init' "$fixture" "$fixture")"
+  End
+
+  It 'aborts a configured origin fetch failure before add or initialization'
     git_fixture -C "$primary" remote add origin "$fixture/missing-origin"
-    When run sh -c 'cd "$1" && exec sh "$2" issue 36 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/fetch-fail"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 42 tools --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/fetch-fail"
     The status should equal 1
+    The output should equal ''
     The stderr should include 'git fetch origin failed'
+    The contents of file "$events" should equal fetch
     Assert [ ! -e "$fixture/fetch-fail" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/42-tools')" ]
   End
 
-  It 'restores the exact opaque snapshot before CodeGraph initialization'
-    When run sh -c 'cd "$1" && exec sh "$2" issue 32 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/exact"
-    The status should equal 0
-    The output should equal "$(printf 'issue/32-graph\t%s/exact' "$fixture")"
-    The stderr should include 'Preparing worktree'
-    Assert [ -f "$fixture/exact/graphify-out/graph.json" ]
-    Assert [ -f "$fixture/exact/graphify-out/GRAPH_REPORT.md" ]
-    Assert [ ! -e "$fixture/exact/graphify-out/cache" ]
-    Assert [ ! -e "$fixture/exact/graphify-out/current" ]
-    The contents of file "$codegraph_log" should equal "init $fixture/exact"
-  End
-
-  It 'fails loudly when neither kernel lock tool exists'
-    minimal="$fixture/minimal-bin"; mkdir -p "$minimal"
-    for tool in sh git dirname python3; do ln -s "$(command -v "$tool")" "$minimal/$tool"; done
-    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" adr 33 graph --worktree --base HEAD --path "$4"' _ "$primary" "$script_abs" "$minimal" "$fixture/no-lock"
-    The status should equal 4
-    The stderr should include 'TOOL-MISSING: lockf/flock'
-    Assert [ ! -e "$fixture/no-lock" ]
-  End
-
-  It 'uses the flock fallback when lockf is absent and passes fd 9'
-    fallback="$fixture/flock-bin"; mkdir -p "$fallback"
-    for tool in sh git dirname python3 mkdir tr sed rm pwd; do ln -s "$(command -v "$tool")" "$fallback/$tool"; done
-    ln -s "$stubdir/codegraph" "$fallback/codegraph"
-    cat > "$fallback/flock" <<'FLOCK'
-#!/bin/sh
-printf '%s\n' "$1" > "$WB_FLOCK_USED"
-FLOCK
-    chmod +x "$fallback/flock"
-    export WB_FLOCK_USED="$fixture/flock-used"
-    When run sh -c 'cd "$1" && PATH="$3" exec sh "$2" adr 35 graph --worktree --base HEAD --path "$4"' _ "$primary" "$script_abs" "$fallback" "$fixture/flock-worktree"
-    The status should equal 0
-    The output should equal "$(printf 'adr/35-graph\t%s/flock-worktree' "$fixture")"
-    The stderr should include 'Preparing worktree'
-    The contents of file "$WB_FLOCK_USED" should equal 9
-    Assert [ -f "$fixture/flock-worktree/graphify-out/graph.json" ]
-    Assert [ -f "$fixture/flock-worktree/graphify-out/GRAPH_REPORT.md" ]
-  End
-
-  It 'removes the worktree and branch when exact snapshot restoration fails'
-    store="$primary/.git/graphify-store"
-    git_fixture -C "$store" rm -q -r graphify-out &&
-      git_fixture -C "$store" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
-        commit -q -m corrupt &&
-      git_fixture -C "$store" tag -f "source/devel/$sha" devel >/dev/null 2>&1 || return 1
-    When run sh -c 'cd "$1" && exec sh "$2" issue 34 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/restore-fail"
-    The status should equal 1
-    The stderr should include 'Graphify snapshot restore failure'
-    Assert [ ! -e "$fixture/restore-fail" ]
-    Assert [ -z "$(git_fixture -C "$primary" branch --list 'issue/34-graph')" ]
-  End
-
-  # issue #2609: the lock guards .git/graphify-store, and the store is untouched once
-  # restore-exact has copied the snapshot into the new worktree -- CodeGraph writes only
-  # <worktree>/.codegraph. Holding the lock across a full index made every waiting agent
-  # queue behind an unrelated indexing run. The extent is read off the lock itself at each
-  # step, never inferred from one caller out-racing another.
-  It 'holds the Graphify store lock across the snapshot restore and drops it before indexing'
-    export WB_LOCK_PROBE_LOG="$lock_probe_log"
-    When run sh -c 'cd "$1" && exec sh "$2" issue 37 graph --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/held"
-    The status should equal 0
-    The output should equal "$(printf 'issue/37-graph\t%s/held' "$fixture")"
-    The stderr should include 'Preparing worktree'
-    The contents of file "$lock_probe_log" should equal "$(printf 'has-exact:lock-held\nrestore-exact:lock-held\ncodegraph:lock-free')"
-  End
-
-  # The window this widens is concurrency, so the concurrent case stays covered: two
-  # callers racing through the same store must both come out with their own worktree.
-  # No ordering is asserted -- which one indexes first is not a contract.
-  It 'lets concurrent callers each complete with their own worktree'
-    export WB_LOCK_PROBE_LOG="$lock_probe_log"
-    (cd "$primary" && sh "$script_abs" issue 39 graph --worktree --base HEAD --path "$fixture/race-a" >"$fixture/out-a" 2>"$fixture/err-a"; printf '%s\n' "$?" >"$fixture/status-a") &
-    a_pid=$!
-    (cd "$primary" && sh "$script_abs" issue 40 graph --worktree --base HEAD --path "$fixture/race-b" >"$fixture/out-b" 2>"$fixture/err-b"; printf '%s\n' "$?" >"$fixture/status-b") &
-    b_pid=$!
-    wait "$a_pid"
-    wait "$b_pid"
-    The contents of file "$fixture/status-a" should equal 0
-    The contents of file "$fixture/status-b" should equal 0
-    The contents of file "$fixture/out-a" should equal "$(printf 'issue/39-graph\t%s/race-a' "$fixture")"
-    The contents of file "$fixture/out-b" should equal "$(printf 'issue/40-graph\t%s/race-b' "$fixture")"
-    Assert [ -f "$fixture/race-a/graphify-out/graph.json" ]
-    Assert [ -f "$fixture/race-b/graphify-out/graph.json" ]
-    Assert [ -f "$fixture/race-a/.codegraph/codegraph.db" ]
-    Assert [ -f "$fixture/race-b/.codegraph/codegraph.db" ]
+  It 'force-removes a dirty worktree and preserves the tool initialization status'
+    add_origin || return 1
+    export WB_INIT_DIRTY=1 WB_INIT_RC=17
+    When run sh -c 'cd "$1" && exec sh "$2" adr 43 tools --worktree --base HEAD --path "$3"' _ "$primary" "$script_abs" "$fixture/init-fail"
+    The status should equal 17
+    The output should equal ''
+    The stderr should include 'tool initialization failure'
+    The contents of file "$events" should equal "$(printf 'fetch\nadd\ninit:%s/init-fail' "$fixture")"
+    Assert [ ! -e "$fixture/init-fail" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/43-tools')" ]
   End
 End
 
@@ -296,9 +221,20 @@ esac
 CODEGRAPH
     chmod +x "$stubdir/codegraph"
     export WB_CODEGRAPH_LOG="$codegraph_log"
+    cat > "$stubdir/init-worktree-tools" <<'INIT'
+#!/bin/sh
+printf 'init %s\n' "$1" >> "$WB_CODEGRAPH_LOG"
+mkdir -p "$1/.codegraph"
+true > "$1/.codegraph/codegraph.db"
+INIT
+    chmod +x "$stubdir/init-worktree-tools"
+    export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$PATH"; export PATH
   }
-  cleanup() { rm -rf "$fixture"; }
+  cleanup() {
+    unset PFB_INIT_WORKTREE_TOOLS
+    rm -rf "$fixture"
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
@@ -357,8 +293,7 @@ CODEGRAPH
     The stderr should include 'Preparing worktree'
   End
 
-  It 'keeps legacy offline worktree creation when origin is unreachable and the helper is absent'
-    git_fixture -C "$primary" remote add origin "$fixture/missing-origin"
+  It 'keeps worktree creation without a configured origin'
     When run sh -c 'cd "$1" && exec sh "$2" issue 13 tld --worktree --base HEAD --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/offline"
     The status should equal 0
     The output should equal "$(printf 'issue/13-tld\t%s/offline' "$fixture")"
@@ -414,9 +349,18 @@ esac
 CODEGRAPH
     chmod +x "$codegraph_dir/codegraph"
     export WB_CODEGRAPH_LOG="$codegraph_log"
+    cat > "$stubdir/init-worktree-tools" <<'INIT'
+#!/bin/sh
+exit 0
+INIT
+    chmod +x "$stubdir/init-worktree-tools"
+    export PFB_INIT_WORKTREE_TOOLS="$stubdir/init-worktree-tools"
     PATH="$stubdir:$codegraph_dir:$PATH"; export PATH
   }
-  cleanup() { rm -rf "$fixture"; }
+  cleanup() {
+    unset PFB_INIT_WORKTREE_TOOLS
+    rm -rf "$fixture"
+  }
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
