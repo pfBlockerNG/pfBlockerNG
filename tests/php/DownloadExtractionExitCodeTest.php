@@ -154,8 +154,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$scope,
 			'uncompressed Blacklist must not treat a non-archive body as a successful extract'
 		);
-		$this->assertStringContainsString('pfb_validate_log', $scope);
-		$this->assertStringContainsString('blacklist_not_archive', $scope);
+		$this->assertStringContainsString(
+			"pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);",
+			$scope,
+			'reject must name the detected type'
+		);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
 		// The gzip Blacklist branch publishes through pfb_stage_publish_dir() so a
 		// failed tar cannot replace live category files. This uncompressed reject
