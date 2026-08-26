@@ -192,7 +192,19 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
         run = str(step.get("run", ""))
         run_lines = _shell_commands(run)
         producer = row.producer
-        producer_lines = [line for line in run_lines if producer in line]
+        producer_start = {
+            "pytest": "uv run pytest",
+            "phpunit": "vendor/bin/phpunit",
+            "shellspec": "shellspec --shell",
+            "ports-parity": "shellspec --shell",
+            "widget-js": "node --test",
+            "webassets-grammar": "node --test",
+            "webassets-listgrammar": "node --test",
+            "webassets-bundle": "node --test",
+            "ui": "sh scripts/run-smoke.sh",
+            "smoke": "sh scripts/run-smoke.sh",
+        }[row.suite]
+        producer_lines = [line for line in run_lines if line.startswith(producer_start) and producer in line]
         if not producer_lines:
             errors.append(f"{row.suite}: producer command is missing")
 
@@ -204,7 +216,11 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
             "ui": ('set -- "$@" --junitxml=/tmp/ui-junit.xml',),
             "smoke": ('set -- "$@" --junitxml=smoke-diag/pytest-junit.xml',),
         }
-        flag_lines = run_lines if row.suite in {"ui", "smoke"} else producer_lines
+        flag_lines = (
+            [line for line in run_lines if line.startswith('set -- "$@"')]
+            if row.suite in {"ui", "smoke"}
+            else producer_lines
+        )
         if any(not any(flag in line for line in flag_lines) for flag in producer_flags.get(row.suite, ())):
             errors.append(f"{row.suite}: JUnit producer flags are missing")
 
@@ -225,7 +241,8 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
         if row.node:
             canary_report = checks[0].split()[-1]
             if "canary" not in canary_report or not any(
-                "--test-reporter=junit" in line
+                line.startswith("node --test")
+                and "--test-reporter=junit" in line
                 and f"--test-reporter-destination={canary_report}" in line
                 and "skip-allowlist-node-canary.test.mjs" in line
                 for line in run_lines
