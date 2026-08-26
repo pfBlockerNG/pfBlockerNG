@@ -356,7 +356,7 @@ def _pkg_abi_parseable(abi: str) -> bool:
     them as pkg-config ABI drift.
     """
     parts = abi.split(":")
-    return len(parts) >= 2 and bool(parts[0]) and parts[1].isdigit()
+    return len(parts) >= 2 and bool(parts[0]) and parts[1].isascii() and parts[1].isdigit()
 
 
 def _abi_major(abi: str) -> str:
@@ -387,6 +387,7 @@ def _log_guest_identity(vm: SmokeVM) -> None:
     )
     observed_abi = "?"
     observed_freebsd_version = "?"
+    observed_kernel_release = "?"
     observed_pkg_client = "?"
     observed_pkg_pkg = "?"
     for line in result.stdout.splitlines():
@@ -395,6 +396,8 @@ def _log_guest_identity(vm: SmokeVM) -> None:
             observed_abi = line[len("abi=") :]
         elif line.startswith("freebsd_version="):
             observed_freebsd_version = line[len("freebsd_version=") :]
+        elif line.startswith("kernel_release="):
+            observed_kernel_release = line[len("kernel_release=") :]
         elif line.startswith("pkg_client="):
             observed_pkg_client = line[len("pkg_client=") :]
         elif line.startswith("pkg_pkg="):
@@ -414,12 +417,23 @@ def _log_guest_identity(vm: SmokeVM) -> None:
                 f"guest pkg ABI {observed_abi} does not match expected SMOKE_ABI {expected_abi} "
                 "(unreadable pkg ABI; issue #2730)"
             )
+        if observed_abi.split(":", 1)[0] != expected_abi.split(":", 1)[0]:
+            raise RuntimeError(
+                f"guest pkg ABI {observed_abi} OS name does not match expected SMOKE_ABI "
+                f"{expected_abi} (issue #2730 — drift-allow is FreeBSD major only)"
+            )
         # row 2: the userland major itself, independent of what pkg claims its ABI is.
         if _dot_major(observed_freebsd_version) != expected_major:
             raise RuntimeError(
                 f"guest /bin/freebsd-version {observed_freebsd_version} does not match expected "
-                f"SMOKE_ABI {expected_abi} (major mismatch; issue #2242 — a foreign FreeBSD "
+                f"SMOKE_ABI {expected_abi} (major mismatch; issue #2730 — a foreign FreeBSD "
                 "userland replaced the guest's own, refusing to pkg add)"
+            )
+        if _dot_major(observed_kernel_release) != expected_major:
+            raise RuntimeError(
+                f"guest kernel {observed_kernel_release} does not match expected "
+                f"SMOKE_ABI {expected_abi} (major mismatch; issue #2730 — a 16 kernel "
+                "is not config-ABI drift)"
             )
         if observed_os_major != expected_os_major:
             print(f"PFB_GUEST_IDENTITY pkg_abi_drift={observed_abi} forcing_add_abi={expected_abi}")
