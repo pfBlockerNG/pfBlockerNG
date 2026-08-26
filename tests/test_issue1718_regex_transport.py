@@ -76,6 +76,30 @@ def test_swap_load_matches_initial(tmp_path: Path, monkeypatch: Any) -> None:
         P.deinit(0)
 
 
+def test_issue2364_shape_gate_matches_initial_and_swap_user_loads(tmp_path: Path, monkeypatch: Any) -> None:
+    unsafe = r"^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\.com$"
+    safe = r"^[a-z]+\.[a-z]+\.[a-z]+$"
+    text = f"{unsafe}#unsafe\n{safe}#safe\n"
+    encoded = base64.b64encode(text.encode("utf-8")).decode("ascii")
+    ini = tmp_path / "pfb_unbound.ini"
+    manifest = tmp_path / "pfb_py_sources.json"
+    _manifest(manifest)
+    ini.write_text(_ini(encoded), encoding="utf-8")
+    monkeypatch.setitem(P.pfb, "pfb_unbound.ini", str(ini))
+    monkeypatch.setitem(P.pfb, "pfb_py_sources", str(manifest))
+    try:
+        _initial_load(tmp_path, monkeypatch, _ini(encoded))
+        assert set(P.regexDB) == {"safe"}
+        assert P.regexDB["safe"]["re"].pattern == safe
+
+        swapped = P._build_swap_snapshot()
+        assert swapped is not None
+        assert set(swapped.regex_db) == {"safe"}
+        assert swapped.regex_db["safe"]["re"].pattern == safe
+    finally:
+        P.deinit(0)
+
+
 def test_present_malformed_or_non_utf8_marker_fails_closed(
     tmp_path: Path, monkeypatch: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
