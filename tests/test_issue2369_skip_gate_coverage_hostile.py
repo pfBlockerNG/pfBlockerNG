@@ -28,6 +28,11 @@ def test_command_prefixed_node_row_is_rejected() -> None:
     assert any("test-row table mismatch" in error for error in errors)
 
 
+def test_command_prefixed_pytest_row_is_rejected() -> None:
+    errors = _validation_errors(_mutate_widget_step("command uv run pytest tests/unlisted-blocking-row.py"))
+    assert any("test-row table mismatch" in error for error in errors)
+
+
 def test_local_report_cleanup_traps_hup_and_quit() -> None:
     script = (Path(__file__).resolve().parents[1] / "scripts/agent/run-gates.sh").read_text()
     assert "exit 129' HUP" in script
@@ -54,6 +59,39 @@ def test_producer_path_in_a_comment_does_not_satisfy_the_row() -> None:
     )
     errors = _validation_errors(texts)
     assert any("widget-js: producer command is missing" in error for error in errors)
+
+
+def test_inline_comment_does_not_supply_the_producer_path() -> None:
+    texts = _workflow_texts()
+    texts["test.yml"] = texts["test.yml"].replace(
+        "tests/js/*.test.js",
+        "# tests/js/*.test.js",
+        1,
+    )
+    errors = _validation_errors(texts)
+    assert any("widget-js: producer command is missing" in error for error in errors)
+
+
+def test_direct_reporter_flags_must_stay_on_the_producer_command() -> None:
+    texts = _workflow_texts()
+    texts["test.yml"] = texts["test.yml"].replace(
+        "run: uv run pytest --junitxml=/tmp/pytest-junit.xml",
+        "run: |\n          uv run pytest\n          echo --junitxml=/tmp/pytest-junit.xml",
+        1,
+    )
+    errors = _validation_errors(texts)
+    assert any("pytest: JUnit producer flags are missing" in error for error in errors)
+
+
+def test_node_producers_require_the_junit_reporter_not_only_a_destination() -> None:
+    texts = _workflow_texts()
+    texts["test.yml"] = texts["test.yml"].replace(
+        "--test-reporter=junit --test-reporter-destination=/tmp/widget-js-junit.xml",
+        "--test-reporter-destination=/tmp/widget-js-junit.xml",
+        1,
+    )
+    errors = _validation_errors(texts)
+    assert any("widget-js: native JUnit" in error for error in errors)
 
 
 def test_non_node_rows_require_their_native_junit_producer_flags() -> None:
