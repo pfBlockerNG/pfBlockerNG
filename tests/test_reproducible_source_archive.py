@@ -193,8 +193,9 @@ def test_case_alias_output_inside_source_is_rejected(tmp_path: Path) -> None:
     source.mkdir()
     (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
     alias = tmp_path / "source"
-    if not alias.is_dir() or not os.path.samefile(source, alias):
-        pytest.skip("scratch filesystem is case-sensitive")
+    if not alias.is_dir():
+        alias.symlink_to(source, target_is_directory=True)
+    assert os.path.samefile(source, alias)
     output = alias / "existing.tar.gz"
     output.write_bytes(b"existing archive")
 
