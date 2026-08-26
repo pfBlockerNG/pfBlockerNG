@@ -313,7 +313,6 @@ _BUILD_BACKEND_CONSTRAINTS = "setuptools==75.6.0\nwheel==0.45.1\n"
 def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int | None = None) -> Path:
     wheel_dir = work_dir / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
-    validate_build_toolchain()
     python = sys.executable
     constraints_file = work_dir / "build-constraints.txt"
     constraints_file.write_text(_BUILD_BACKEND_CONSTRAINTS)
@@ -540,13 +539,13 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
         raise DepPkgError("--ports-sha must be a lowercase 40- or 64-character Git SHA")
     port_dir = Path(args.ports).resolve() / args.port
     port = read_port(port_dir)
-    validate_build_toolchain()
     py_dotted = python_dotted_version(args.py_flavor)  # validates the flavor too
 
     distfile = f"{port.distname}.tar.gz"
     sha256, size = read_distinfo(port_dir, distfile)
 
     if getattr(args, "attest_ports", False):
+        validate_build_toolchain()
         bpp._attest_checkout(Path(args.ports), args.ports_sha, "FreeBSD-ports")
     with tempfile.TemporaryDirectory(prefix="pfbng-deppkg-") as td:
         tmp = Path(td)

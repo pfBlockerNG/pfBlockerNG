@@ -537,6 +537,7 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
     monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
     monkeypatch.setattr(bdp, "build_wheel", fake_build_wheel)
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
 
 
 def _build_args(ports_root: Path, out_dir: Path) -> argparse.Namespace:
@@ -714,6 +715,7 @@ def test_main_stdout_is_only_the_pkg_path_line(
     monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
     monkeypatch.setattr(bdp.subprocess, "run", fake_run)
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
 
     out_dir = tmp_path / "out"
     rc = bdp.main(
