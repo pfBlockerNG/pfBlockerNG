@@ -14832,7 +14832,11 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'blacklist') {
-				$retval = 0;
+				// issue #2635: a MIME-allowlisted non-archive body is not a
+				// successful Blacklist update — leave category files untouched.
+				pfb_validate_log($header, 'extract', 'blacklist_not_archive', $file_type);
+				unlink_if_exists($file_download);
+				return PfbDownloadResult::failure();
 			}
 			else {
 				// Rename file to 'orig' format

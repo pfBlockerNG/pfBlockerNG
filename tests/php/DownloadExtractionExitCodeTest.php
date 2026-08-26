@@ -135,6 +135,31 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
+	 * Issue #2635 — the uncompressed Blacklist branch must fail closed.
+	 * `$retval = 0` with no extract reports a successful update while
+	 * category files stay stale or missing. Comments/docblocks cannot
+	 * define this scope.
+	 */
+	public function testUncompressedBlacklistBodyFailsClosedWithoutExtraction(): void
+	{
+		$uncomp = strpos(self::$source, "if (\$type == 'geoip' || \$type == 'asn')");
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $uncomp === FALSE ? 0 : $uncomp);
+		$end = strpos(self::$source, 'else {', $blacklist === FALSE ? 0 : $blacklist);
+		$this->assertNotFalse($uncomp);
+		$this->assertNotFalse($blacklist);
+		$this->assertNotFalse($end);
+		$scope = substr(self::$source, $blacklist, $end - $blacklist);
+		$this->assertStringNotContainsString(
+			'$retval = 0;',
+			$scope,
+			'uncompressed Blacklist must not treat a non-archive body as a successful extract'
+		);
+		$this->assertStringContainsString('pfb_validate_log', $scope);
+		$this->assertStringContainsString('blacklist_not_archive', $scope);
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
+	}
+
+	/**
 	 * GeoIP ZIP extraction writes either a directory or stdout-derived target;
 	 * both live tar calls must remain in this dedicated, comment-free scope.
 	 * Comments/docblocks cannot define this scope.

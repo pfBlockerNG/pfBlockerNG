@@ -4046,6 +4046,53 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
 
 
+@pytest.mark.timeout(120)
+def test_blacklist_nongzip_body_fails_closed(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2635: a MIME-allowlisted non-archive Blacklist body must fail, not succeed empty.
+
+    Given previously extracted Blacklist category files and an origin answering
+      the archive URL with HTTP 200 HTML (allow-listed ``text/html``),
+    When  pfb_download() fetches it as type='blacklist',
+    Then  the result is failure, a canonical reject names the detected type,
+      and the existing category files are left untouched.
+
+    Fail-before: the uncompressed Blacklist branch sets ``$retval = 0`` with no
+    extract, so this reports PFB_DL_TRUE and the sentinel is still overwritten
+    by finalize. Pass-after: fail-closed return, sentinel byte-identical.
+    """
+    fixture = "html_error_page.html"
+    workdir = f"{_ADR46_WORKDIR}_2635"
+    category_dir = f"{h.PFB_DBDIR}/pfb2635"
+    sentinel_path = f"{category_dir}/pfb2635_testcat"
+    sentinel = "keep-me.example.test\n"
+    archive = f"{workdir}/pfb2635.tar.gz"
+    marker = "pfb_validate: REJECT feed=pfb2635 stage=extract reason=blacklist_not_archive"
+    try:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} && /bin/mkdir -p {workdir} {category_dir}")
+        deployed_vm.ssh(f"/bin/printf '%s\\n' 'keep-me.example.test' > {sentinel_path}")
+        box_mime = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
+        assert box_mime in _SANITY_SCANNED_MIME_TYPES, (
+            f"expected {fixture} on-box MIME in {_SANITY_SCANNED_MIME_TYPES}, got {box_mime!r}"
+        )
+        feed_url = mock_feeds.register("pfb2635.html", _fixture_bytes(fixture))
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+        out = _adr46_download(deployed_vm, feed_url, archive, "pfb2635", "blacklist")
+
+        assert "PFB_DL_FALSE" in out, (
+            f"expected pfb_download failure on a non-gzip Blacklist HTML body; got stdout: {out!r}"
+        )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert after > before, (
+            f"expected a NEW {marker!r} line in {h.PFB_LOG}; before={before} after={after}\n"
+            f"recent pfb_validate lines:\n{_recent_validate_lines(deployed_vm)}"
+        )
+        kept = deployed_vm.ssh(f"/bin/cat {sentinel_path} 2>&1").stdout
+        assert kept == sentinel, f"existing category file must be untouched; {sentinel_path} now holds {kept!r}"
+    finally:
+        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
+
+
 @pytest.mark.timeout(180)
 def test_blacklist_download_name_keys_on_provider_id(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """issue #2636: the UT1 download name comes from the provider id, not from a literal feed URL.
