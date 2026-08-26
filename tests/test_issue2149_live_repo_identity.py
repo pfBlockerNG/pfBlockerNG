@@ -12,6 +12,63 @@ from tests.smoke import test_repo_install as repo
 from tests.smoke.conftest import SmokeVM
 
 
+def _live_pages_cleanup_case(
+    monkeypatch: MonkeyPatch,
+    events: list[str],
+    *,
+    delete_failure_call: int | None = None,
+    install_failure: Exception | None = None,
+    same_identity: bool = False,
+) -> tuple[SmokeVM, str]:
+    canonical_name = repo.CANONICAL_PKG_NAME
+    branch_name = canonical_name if same_identity else f"{canonical_name}-edge"
+    delete_calls = 0
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if args == ("/bin/rm", "-f", repo.REPO_CONF):
+                events.append("remove-conf")
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    def fake_delete(_vm: object, *, pkg_name: str, **_kwargs: object) -> None:
+        nonlocal delete_calls
+        delete_calls += 1
+        events.append(f"delete:{pkg_name}")
+        if delete_calls == delete_failure_call:
+            raise RuntimeError(f"delete failed: {pkg_name}")
+
+    def fake_absence(_vm: object, **_kwargs: object) -> list[str]:
+        events.append("verify-absent")
+        return []
+
+    def fake_install(_vm: object, *, pkg_name: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        events.append(f"install:{pkg_name}")
+        if install_failure is not None:
+            raise install_failure
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(repo, "PKG_NAME", branch_name)
+    monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_SOURCE_SHA_ENV, "a" * 40)
+    monkeypatch.setenv(repo.LIVE_EXPECTED_VERSION_ENV, "4.0.0.a21")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_CHANNEL_ENV, "edge")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: events.append("restore-hosts"))
+    monkeypatch.setattr(repo, "repo_priority", lambda *_args: 0)
+    monkeypatch.setattr(repo, "pkg_delete", fake_delete)
+    monkeypatch.setattr(repo, "installed_pfblockerng_names", fake_absence)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_update", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_install_from_repo", fake_install)
+    monkeypatch.setattr(repo, "pkg_repo_origin_of", lambda *_args: repo.channel_repo_name("edge"))
+    monkeypatch.setattr(repo, "assert_live_package", lambda _vm, _name, version, *_args: version)
+
+    return cast(SmokeVM, FakeVM()), branch_name
+
+
 def test_smoke_single_exposes_nightly_provenance_inputs() -> None:
     """Actions callers can supply the provenance required by the live Nightly test."""
     workflow = (Path(__file__).parents[1] / ".github/workflows/smoke-single.yml").read_text()
@@ -234,6 +291,151 @@ def test_live_pages_cleanup_deletes_both_names_after_install_failure(monkeypatch
         repo.CANONICAL_PKG_NAME,
     ]
     assert ("/bin/rm", "-f", repo.REPO_CONF) in ssh_calls
+
+
+@pytest.mark.parametrize("delete_failure_call", [3, 4])
+def test_live_pages_teardown_attempts_every_cleanup_after_delete_exception(
+    monkeypatch: MonkeyPatch,
+    delete_failure_call: int,
+) -> None:
+    """Either teardown delete may fail without skipping the other cleanup operations."""
+    events: list[str] = []
+    vm, branch_name = _live_pages_cleanup_case(
+        monkeypatch,
+        events,
+        delete_failure_call=delete_failure_call,
+    )
+    failed_name = branch_name if delete_failure_call == 3 else repo.CANONICAL_PKG_NAME
+
+    with pytest.raises(RuntimeError) as exc_info:
+        repo.test_install_from_live_pages_url(vm)
+
+    assert str(exc_info.value) == (
+        "live Pages teardown failed: package cleanup: RuntimeError: "
+        f"live Pages package cleanup failed: delete {failed_name}: RuntimeError: delete failed: {failed_name}"
+    )
+    assert events == [
+        f"delete:{branch_name}",
+        f"delete:{repo.CANONICAL_PKG_NAME}",
+        "verify-absent",
+        f"install:{repo.CANONICAL_PKG_NAME}",
+        f"delete:{branch_name}",
+        f"delete:{repo.CANONICAL_PKG_NAME}",
+        "verify-absent",
+        "remove-conf",
+        "restore-hosts",
+    ]
+
+
+def test_live_pages_body_exception_survives_cleanup_failure(monkeypatch: MonkeyPatch) -> None:
+    """A cleanup failure is diagnostic context, never a replacement for the body failure."""
+    events: list[str] = []
+    vm, branch_name = _live_pages_cleanup_case(
+        monkeypatch,
+        events,
+        delete_failure_call=3,
+        install_failure=ValueError("install failed"),
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        repo.test_install_from_live_pages_url(vm)
+    assert str(exc_info.value) == "install failed"
+
+    assert exc_info.value.__notes__ == [
+        "live Pages cleanup also failed: live Pages teardown failed: package cleanup: RuntimeError: "
+        f"live Pages package cleanup failed: delete {branch_name}: RuntimeError: delete failed: {branch_name}"
+    ]
+    assert events == [
+        f"delete:{branch_name}",
+        f"delete:{repo.CANONICAL_PKG_NAME}",
+        "verify-absent",
+        f"install:{repo.CANONICAL_PKG_NAME}",
+        f"delete:{branch_name}",
+        f"delete:{repo.CANONICAL_PKG_NAME}",
+        "verify-absent",
+        "remove-conf",
+        "restore-hosts",
+    ]
+
+
+def test_live_pages_nonzero_deletes_cannot_hide_remaining_packages(monkeypatch: MonkeyPatch) -> None:
+    """Ignored nonzero delete exits are rejected by the installed-identity oracle."""
+    events: list[str] = []
+    canonical_name = repo.CANONICAL_PKG_NAME
+    branch_name = f"{canonical_name}-edge"
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if args[:5] == ("env", "ASSUME_ALWAYS_YES=yes", "pkg", "delete", "-y"):
+                events.append(f"delete:{args[5]}")
+                return subprocess.CompletedProcess([], 1, "", "delete failed")
+            if args[:4] == ("pkg", "query", "-g", "%n"):
+                events.append("verify-absent")
+                return subprocess.CompletedProcess([], 0, f"{branch_name}\n{canonical_name}\n", "")
+            if args == ("/bin/rm", "-f", repo.REPO_CONF):
+                events.append("remove-conf")
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    def fail_install(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise RuntimeError("install reached with live package identities still present")
+
+    monkeypatch.setattr(repo, "PKG_NAME", branch_name)
+    monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_SOURCE_SHA_ENV, "a" * 40)
+    monkeypatch.setenv(repo.LIVE_EXPECTED_VERSION_ENV, "4.0.0.a21")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_CHANNEL_ENV, "edge")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: events.append("restore-hosts"))
+    monkeypatch.setattr(repo, "repo_priority", lambda *_args: 0)
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_update", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_install_from_repo", fail_install)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
+
+    expected_absence_error = (
+        "live Pages package cleanup failed: verify package absence: AssertionError: "
+        f"live Pages packages still installed: expected absent [{branch_name!r}, {canonical_name!r}]; "
+        f"remaining [{branch_name!r}, {canonical_name!r}]; installed [{canonical_name!r}, {branch_name!r}]"
+    )
+    assert str(exc_info.value) == expected_absence_error
+    assert exc_info.value.__notes__ == [
+        "live Pages cleanup also failed: live Pages teardown failed: package cleanup: RuntimeError: "
+        + expected_absence_error
+    ]
+    assert events == [
+        f"delete:{branch_name}",
+        f"delete:{canonical_name}",
+        "verify-absent",
+        f"delete:{branch_name}",
+        f"delete:{canonical_name}",
+        "verify-absent",
+        "remove-conf",
+        "restore-hosts",
+    ]
+
+
+def test_live_pages_identical_package_names_are_deleted_once_per_phase(monkeypatch: MonkeyPatch) -> None:
+    """A canonical branch build deduplicates its identical cleanup identity."""
+    events: list[str] = []
+    vm, branch_name = _live_pages_cleanup_case(monkeypatch, events, same_identity=True)
+
+    repo.test_install_from_live_pages_url(vm)
+
+    assert branch_name == repo.CANONICAL_PKG_NAME
+    assert events == [
+        f"delete:{repo.CANONICAL_PKG_NAME}",
+        "verify-absent",
+        f"install:{repo.CANONICAL_PKG_NAME}",
+        f"delete:{repo.CANONICAL_PKG_NAME}",
+        "verify-absent",
+        "remove-conf",
+        "restore-hosts",
+    ]
 
 
 @pytest.mark.parametrize(
