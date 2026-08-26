@@ -157,6 +157,12 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringContainsString('pfb_validate_log', $scope);
 		$this->assertStringContainsString('blacklist_not_archive', $scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
+		// The gzip Blacklist branch publishes through pfb_stage_publish_dir() so a
+		// failed tar cannot replace live category files. This uncompressed reject
+		// must not extract or publish at all — unlink the .raw body and return.
+		$this->assertStringNotContainsString('pfb_stage_publish_dir', $scope);
+		$this->assertStringNotContainsString('tar -xf', $scope);
+		$this->assertStringNotContainsString('$pfb[\'dbdir\']', $scope);
 	}
 
 	/**

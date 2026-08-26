@@ -4046,6 +4046,23 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
 
 
+def _plant_guest_text(vm: SmokeVM, path: str, contents: str) -> None:
+    """Write ``contents`` to ``path`` on the guest via tee stdin.
+
+    Same plant as ``write_local_feed``: stdin, not a printf format string,
+    so the bytes on disk are the contents argument.
+    """
+    planted = subprocess.run(
+        vm.ssh_argv("tee", path),
+        input=contents,
+        capture_output=True,
+        text=True,
+        timeout=30.0,
+        check=False,
+    )
+    assert planted.returncode == 0, f"tee {path} failed: rc={planted.returncode} stderr={planted.stderr!r}"
+
+
 @pytest.mark.timeout(120)
 def test_blacklist_nongzip_body_fails_closed(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
     """issue #2635: a MIME-allowlisted non-archive Blacklist body must fail, not succeed empty.
@@ -4057,19 +4074,30 @@ def test_blacklist_nongzip_body_fails_closed(deployed_vm: SmokeVM, mock_feeds: _
       and the existing category files are left untouched.
 
     Fail-before: the uncompressed Blacklist branch sets ``$retval = 0`` with no
-    extract, so this reports PFB_DL_TRUE and the sentinel is still overwritten
-    by finalize. Pass-after: fail-closed return, sentinel byte-identical.
+    extract, so this reports PFB_DL_TRUE (a successful empty update). Pass-after:
+    fail-closed return; the planted sentinel stays byte-identical. Finalize writes
+    ``{downloadPath}.orig``, not the category file — the untouched contract is
+    this sentinel, asserted before and after the download.
     """
     fixture = "html_error_page.html"
-    workdir = f"{_ADR46_WORKDIR}_2635"
+    # Staging dir is /tmp, not under dbdir. Gzip Blacklist extracts into
+    # {dbdir}/{header}; a downloadPath next to that tree is not the category dir.
+    workdir = "/tmp/pfb2635_dl"
     category_dir = f"{h.PFB_DBDIR}/pfb2635"
     sentinel_path = f"{category_dir}/pfb2635_testcat"
     sentinel = "keep-me.example.test\n"
     archive = f"{workdir}/pfb2635.tar.gz"
     marker = "pfb_validate: REJECT feed=pfb2635 stage=extract reason=blacklist_not_archive"
     try:
-        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir} && /bin/mkdir -p {workdir} {category_dir}")
-        deployed_vm.ssh(f"/bin/printf '%s\\n' 'keep-me.example.test' > {sentinel_path}")
+        deployed_vm.ssh("/bin/rm", "-rf", workdir, category_dir, timeout=30.0)
+        mk = deployed_vm.ssh("/bin/mkdir", "-p", workdir, category_dir)
+        assert mk.returncode == 0, f"mkdir failed: rc={mk.returncode} stderr={mk.stderr!r}"
+        _plant_guest_text(deployed_vm, sentinel_path, sentinel)
+        planted = deployed_vm.ssh("/bin/cat", sentinel_path).stdout
+        assert planted == sentinel, (
+            f"before-state: planted sentinel must be {sentinel!r}, got {planted!r}; "
+            f"ls={deployed_vm.ssh('/bin/ls', '-la', category_dir).stdout!r}"
+        )
         box_mime = _box_mime_type(deployed_vm, _fixture_bytes(fixture))
         assert box_mime in _SANITY_SCANNED_MIME_TYPES, (
             f"expected {fixture} on-box MIME in {_SANITY_SCANNED_MIME_TYPES}, got {box_mime!r}"
@@ -4087,10 +4115,13 @@ def test_blacklist_nongzip_body_fails_closed(deployed_vm: SmokeVM, mock_feeds: _
             f"expected a NEW {marker!r} line in {h.PFB_LOG}; before={before} after={after}\n"
             f"recent pfb_validate lines:\n{_recent_validate_lines(deployed_vm)}"
         )
-        kept = deployed_vm.ssh(f"/bin/cat {sentinel_path} 2>&1").stdout
-        assert kept == sentinel, f"existing category file must be untouched; {sentinel_path} now holds {kept!r}"
+        kept = deployed_vm.ssh("/bin/cat", sentinel_path).stdout
+        listing = deployed_vm.ssh("/bin/ls", "-la", category_dir).stdout
+        assert kept == sentinel, (
+            f"existing category file must be untouched; {sentinel_path} now holds {kept!r}; ls={listing!r}"
+        )
     finally:
-        deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
+        deployed_vm.ssh("/bin/rm", "-rf", workdir, category_dir)
 
 
 @pytest.mark.timeout(180)
