@@ -39,6 +39,13 @@ def test_local_report_cleanup_traps_hup_and_quit() -> None:
     assert "exit 131' QUIT" in script
 
 
+def test_native_node_canary_fixture_stays_a_hostile_skip() -> None:
+    fixture = (Path(__file__).resolve().parent / "fixtures/skip-allowlist-node-canary.test.mjs").read_text()
+    assert 'describe("nested # suite :: punctuation!"' in fixture
+    assert 'it("skips # hash, punctuation: a::b!"' in fixture
+    assert 'skip: "environment reason #42"' in fixture
+
+
 def test_node_checker_must_read_the_native_canary_before_the_real_report() -> None:
     texts = _workflow_texts()
     texts["test.yml"] = texts["test.yml"].replace(
