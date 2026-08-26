@@ -348,6 +348,17 @@ def _abi_os_major(abi: str) -> str:
     return ":".join(abi.split(":")[:2])
 
 
+def _pkg_abi_parseable(abi: str) -> bool:
+    """True when ``abi`` is ``OS:<digits>[:arch...]``.
+
+    Empty, placeholder, missing colon, empty major, or a non-numeric major
+    are unreadable — issue #2730 fails those closed rather than treating
+    them as pkg-config ABI drift.
+    """
+    parts = abi.split(":")
+    return len(parts) >= 2 and bool(parts[0]) and parts[1].isdigit()
+
+
 def _abi_major(abi: str) -> str:
     """Second ``:``-separated field of a pkg ABI string (``FreeBSD:15:amd64`` -> ``15``)."""
     parts = abi.split(":")
@@ -398,10 +409,10 @@ def _log_guest_identity(vm: SmokeVM) -> None:
         expected_os_major = _abi_os_major(expected_abi)
         observed_os_major = _abi_os_major(observed_abi)
         expected_major = _abi_major(expected_abi)
-        if observed_os_major != expected_os_major and (observed_abi in {"", "?"} or ":" not in observed_abi):
+        if not _pkg_abi_parseable(observed_abi):
             raise RuntimeError(
                 f"guest pkg ABI {observed_abi} does not match expected SMOKE_ABI {expected_abi} "
-                "(unreadable pkg ABI; issue #2242)"
+                "(unreadable pkg ABI; issue #2730)"
             )
         # row 2: the userland major itself, independent of what pkg claims its ABI is.
         if _dot_major(observed_freebsd_version) != expected_major:
