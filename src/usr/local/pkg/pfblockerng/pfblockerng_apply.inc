@@ -2771,12 +2771,11 @@ function sync_package_pfblockerng($cron=''): bool {
 			$pfb['alias_dnsbl_all'][] = 'DNSBL_TLD_Allow';
 			dnsbl_stats_update('update', 'DNSBL_TLD_Allow', $tld_allow_cnt);
 		}
-		// ADR-07: the DNSBL_Regex alias count now reflects the ADMITTED
-		// (cap-filtered) feed + user regex total emitted by Python (regexDB +
-		// allowRegexDB after the static cap drops over-cap patterns at load) --
-		// value changes by design (ADR §2 "Emit + counts"). The Python count file
-		// is written at resolver (re)load, so it may be stale/absent on the first
-		// run or before a reload; fall back to the configured user-regex line count
+		// ADR-07: the DNSBL_Regex alias count reflects the admitted feed + user
+		// regex total emitted by Python after the shared catastrophic-shape gate
+		// and opt-in length cap (value changes by design, ADR §2 "Emit + counts").
+		// The Python count file is written at resolver (re)load, so it may be
+		// stale/absent; then fall back to the configured user-regex line count
 		// (today's behaviour) when it is not yet present. Surface the alias when the
 		// user regex feature is on OR Python reports admitted feed regex.
 		$py_regex_cnt = NULL;

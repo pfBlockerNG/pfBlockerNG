@@ -295,7 +295,7 @@ $pfb['unbound_py_ss']	= '/var/unbound/pfb_py_ss.txt';
 $pfb['unbound_py_hsts']	= '/var/unbound/pfb_py_hsts.txt';	// SHIPPED file re-staged by dnsbl_cache_stage() cp -f; fingerprinted so a package update ships a new list and triggers a zero-downtime reload
 $pfb['unbound_py_psl']	= '/var/unbound/dnsbl_psl';	// SHIPPED PSL authority, staged/fingerprinted exactly like unbound_py_hsts above
 $pfb['unbound_py_count']= '/var/unbound/pfb_py_count';
-$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted ADMITTED (cap-filtered) feed+user regex total for the DNSBL_Regex alias
+$pfb['unbound_py_regex_count']= '/var/unbound/pfb_py_regex_count';	// ADR-07: Python-emitted admitted feed+user regex total for the DNSBL_Regex alias
 $pfb['unbound_py_reject_stats']= '/var/unbound/pfb_py_reject_stats.json';	// ADR-48: Python-emitted per-entry reject tally (issue #789), read by pfb_emit_entry_reject_stats()
 $pfb['unbound_py_sources']= '/var/unbound/pfb_py_sources.json';	// ADR-06: per-feed manifest consumed by pfb_unbound.py init
 $pfb['unbound_py_top1m']= '/var/unbound/pfb_py_top1m.txt';	// issue #1542: fixed TOP1M sidecar consumed by pfb_unbound.py
@@ -3341,7 +3341,7 @@ function pfb_global() {
 	$pfb['dnsbl_idn_escalate_suspicious']	= PfbConfig::read('dnsbl/pfb_idn_escalate_suspicious');	// Confusable: escalate suspicious mixed-script to block (opt-in)
 	$pfb['dnsbl_regex']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_regex'] ?? '');			// DNSBL Resolver python regex
 	$pfb['dnsbl_regex_list']= $pfb['dnsblconfig']['pfb_regex_list'] ?? '';	// DNSBL Resolver python regex list
-	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver python opt-in "Limit long/complex regex" static cap
+	$pfb['dnsbl_regex_cap']	= PfbConfig::read('dnsbl/pfb_regex_cap');			// DNSBL Resolver Python opt-in regex length cap
 	$pfb['dnsbl_cname']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['pfb_cname'] ?? '');			// DNSBL Resolver python CNAME Validation
 	$pfb['dnsbl_tld_allow']	= pfb_cfg_toggle_read($pfb['dnsblconfig']['tld_allow'] ?? '');			// DNSBL Resolver TLD Allow option
 	$pfb['dnsbl_psl_include_private'] = PfbConfig::read('dnsbl/pfb_psl_include_private');			// PSL PRIVATE recognition (default On)
