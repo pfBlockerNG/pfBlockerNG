@@ -260,6 +260,7 @@ Produce the installable FreeBSD package:
 | Script | Runs on | How |
 | --- | --- | --- |
 | [`build-pkg-portable.py`](build-pkg-portable.py) | **Linux or macOS** (no FreeBSD) | reads the port files and emits the libpkg archive directly. |
+| [`build-dep-pkg-portable.py`](build-dep-pkg-portable.py) | **Linux or macOS** (no FreeBSD) | builds a pure-wheel dependency from its Ports-pinned sdist with the locked Python toolchain. |
 
 `build-pkg-portable.py` exploits the fact that pfBlockerNG is a `NO_BUILD` port:
 it executes the port's own `do-extract`/`post-extract`/`do-install` recipe and
@@ -275,15 +276,23 @@ emit `pfSense-pkg-pfBlockerNG`, `pfSense-pkg-pfBlockerNG-testing`,
 mode takes `--build-record JSON|PATH` plus `--pkgversion` and always emits the
 canonical `pfSense-pkg-pfBlockerNG`. The normalized record carries channel,
 release line, classification, source tag/SHA, canonical version, native and
-emitted identities, matrix row, Ports SHA, route, `SOURCE_DATE_EPOCH`, and a
-deterministic input digest. Clean Git source/Ports attestations and the full
-post-write identity/payload validation are mandatory. Project mode requires a
-`USE_GITHUB` recipe plus a clean local source checkout; native-only annotation,
+emitted identities, matrix row, Ports SHA, route, `SOURCE_DATE_EPOCH`, the
+dependency-builder toolchain/`uv.lock` identity, and a deterministic input
+digest. Clean Git source/Ports attestations and the full post-write
+identity/payload validation are mandatory.
+Project mode requires a `USE_GITHUB` recipe plus a clean local source checkout; native-only annotation,
 catalogue, and FreeBSD-version overrides are rejected. Output uses an atomic
 no-clobber boundary: identical bytes are reusable, while divergent bytes or a
 symlink/non-regular destination fail without replacing prior output. Nightly
 versions are explicit `YYYYMMDDHHMMSS.<7-character source SHA>`. The builder publishes nothing and does
 not start workflow/catalogue jobs.
+
+`build-dep-pkg-portable.py` requires `uv sync --locked --only-group
+dep-pkg-build`, exact `--ports-sha`, and a source-derived
+`--source-date-epoch`. It disables PEP-517 build isolation/network resolution,
+rejects interpreter/backend drift and non-pure wheel metadata, normalizes
+staged member mtimes and ordering, and records origin/version/distfile
+SHA/size, ABI, epoch, and toolchain in `pfb_dep_build_record`.
 
 Its output was **diffed field-by-field against a real `make package` build** (CI,
 FreeBSD VM) for the same commit: metadata, file set + checksums + perms

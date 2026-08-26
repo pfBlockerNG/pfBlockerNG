@@ -331,6 +331,13 @@ SMOKE_DEP_PKGS=""
 if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
     _DEP_PKG_DIR="${REPO_ROOT}/out/deppkgs"
     mkdir -p "$_DEP_PKG_DIR"
+    _dep_ports_sha="$(git -C "$PORTS_DIR" rev-parse HEAD)"
+    _dep_source_epoch="$(git -C "$REPO_ROOT" show -s --format=%ct HEAD)"
+    _dep_python="${REPO_ROOT}/.venv/bin/python"
+    [ -x "$_dep_python" ] || {
+        printf 'smoke-on-box: missing locked dependency toolchain; run uv sync --locked --only-group dep-pkg-build\n' >&2
+        exit 1
+    }
     _i=0
     while [ "$_i" -lt "$_EXTRA_PKGS_COUNT" ]; do
         _origin="$(printf '%s' "$_EXTRA_PKGS_JSON" | jq -r ".[$_i]")"
@@ -345,11 +352,13 @@ if [ "$_EXTRA_PKGS_COUNT" -gt 0 ]; then
         # masking a real build failure under `set -e`. Then tail -n 1 as
         # belt-and-braces on top of the script's own stdout=path-only contract
         # (take only the LAST line no matter what).
-        _dep_pkg_out="$(python3 scripts/build-dep-pkg-portable.py \
+        _dep_pkg_out="$("$_dep_python" scripts/build-dep-pkg-portable.py \
             --ports "$PORTS_DIR" \
+            --ports-sha "$_dep_ports_sha" \
             --port "$_origin" \
             --py-flavor "$_dep_py_flavor" \
             --freebsd-major "$_freebsd_major" \
+            --source-date-epoch "$_dep_source_epoch" \
             --out-dir "$_DEP_PKG_DIR")"
         _dep_pkg="$(printf '%s\n' "$_dep_pkg_out" | tail -n 1)"
         SMOKE_DEP_PKGS="${SMOKE_DEP_PKGS:+$SMOKE_DEP_PKGS }${_dep_pkg}"

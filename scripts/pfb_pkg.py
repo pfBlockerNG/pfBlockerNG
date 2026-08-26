@@ -48,10 +48,13 @@ _RECORD_FIELDS = {
     "freebsd_ports_sha",
     "route",
     "source_date_epoch",
+    "dependency_builder",
     "build_input_digest",
 }
 _RECORD_SHA = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _RECORD_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_DEPENDENCY_BUILDER_FIELDS = {"python", "pip", "setuptools", "wheel", "zstandard", "uv", "uv_lock_sha256"}
+_TOOL_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)+(?:[A-Za-z0-9._+-]*)?$")
 _VARIANT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
 _PF_VERSION = re.compile(r"^[0-9]+(?:\.[0-9]+)+$")
 _MATRIX_FIELDS = {
@@ -113,6 +116,20 @@ def _canonical_json(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     except (TypeError, ValueError) as exc:
         raise PkgError(f"invalid JSON value: {exc}") from None
+
+
+def validate_dependency_builder(value: object) -> dict[str, str]:
+    """Validate the immutable Python/wheel tool contract carried by release records."""
+    if not isinstance(value, dict) or set(value) != _DEPENDENCY_BUILDER_FIELDS:
+        raise _record_error("dependency_builder exact fields required")
+    for name in _DEPENDENCY_BUILDER_FIELDS - {"uv_lock_sha256"}:
+        version = value[name]
+        if not isinstance(version, str) or not _TOOL_VERSION.fullmatch(version):
+            raise _record_error(f"dependency_builder.{name} is malformed")
+    lock_sha = value["uv_lock_sha256"]
+    if not isinstance(lock_sha, str) or not _RECORD_DIGEST.fullmatch(lock_sha):
+        raise _record_error("dependency_builder.uv_lock_sha256 must be lowercase SHA-256")
+    return dict(value)
 
 
 def build_input_digest(record: Mapping[str, object]) -> str:
@@ -263,6 +280,7 @@ def validate_build_record(
     epoch = record["source_date_epoch"]
     if type(epoch) is not int or epoch < 0:
         raise _record_error("source_date_epoch must be a non-negative integer")
+    validate_dependency_builder(record["dependency_builder"])
 
     expected_recipe = CANONICAL_EMITTED_IDENTITY if channel == "stable" else f"{CANONICAL_EMITTED_IDENTITY}-{channel}"
     if record["emitted_identity"] != CANONICAL_EMITTED_IDENTITY or record["native_recipe_identity"] != expected_recipe:

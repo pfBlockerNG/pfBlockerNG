@@ -486,6 +486,7 @@ jobs:
       route_matrix: ${{ steps.pins.outputs.route_matrix }}
       ci_metadata_sha: ${{ steps.pins.outputs.ci_metadata_sha }}
       ports_sha: ${{ steps.pins.outputs.ports_sha }}
+      dependency_builder: ${{ steps.pins.outputs.dependency_builder }}
       pkg_channel:  ${{ steps.channel.outputs.pkg_channel }}
       portversion:  ${{ steps.channel.outputs.portversion }}
       release_stage: ${{ steps.channel.outputs.release_stage }}
@@ -596,9 +597,11 @@ jobs:
           done
           ROUTE_MATRIX=$(git show "${CI_METADATA_SHA}:supported-versions.json" \
             | jq -ce '.versions | select(type == "array")')
+          DEPENDENCY_BUILDER="$(python3 scripts/build-dep-pkg-portable.py --print-toolchain | jq -ce .)"
           {
             echo "ci_metadata_sha=${CI_METADATA_SHA}"
             echo "ports_sha=${PORTS_SHA}"
+            echo "dependency_builder=${DEPENDENCY_BUILDER}"
             echo "route_matrix=${ROUTE_MATRIX}"
           } >> "$GITHUB_OUTPUT"
 
@@ -1031,16 +1034,21 @@ jobs:
           SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}
           CI_METADATA_SHA: ${{ needs.read-matrix.outputs.ci_metadata_sha }}
           PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}
+          DEPENDENCY_BUILDER: ${{ needs.read-matrix.outputs.dependency_builder }}
         run: |
           set -eu
           RELEASE_HANDOFF="$RUNNER_TEMP/pfblockerng-release-handoff.json"
           ROUTE_MATRIX_FILE="$RUNNER_TEMP/route-matrix.json"
           printf '%s\n' "$ROUTE_MATRIX" > "$ROUTE_MATRIX_FILE"
+          DEPENDENCY_BUILDER_FILE="$RUNNER_TEMP/dependency-builder.json"
+          printf '%s\n' "$DEPENDENCY_BUILDER" > "$DEPENDENCY_BUILDER_FILE"
           python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/tagged_release_handoff.py" \
             --release-tag "$RELEASE_TAG" \
             --source-sha "$SOURCE_SHA" \
             --ci-metadata-sha "$CI_METADATA_SHA" \
             --ports-sha "$PORTS_SHA" \
+            --source-date-epoch "$(git show -s --format=%ct "$SOURCE_SHA")" \
+            --dependency-builder "$DEPENDENCY_BUILDER_FILE" \
             --route-matrix "$ROUTE_MATRIX_FILE" \
             --output "$RELEASE_HANDOFF"
           echo "RELEASE_HANDOFF=${RELEASE_HANDOFF}" >> "$GITHUB_ENV"
@@ -1114,6 +1122,15 @@ jobs:
           ref: ${{ needs.prepare-release.outputs.sha || needs.read-matrix.outputs.source_sha }}
           persist-credentials: false
 
+      - name: Set up the pinned dependency-package toolchain
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.6"
+          activate-environment: true
+
+      - name: Sync the locked dependency-package toolchain
+        run: uv sync --locked --only-group dep-pkg-build
+
       - name: Compute this leg's LEG/ABI
         id: leg
         # ABI's cpu segment ("amd64") is an INERT placeholder: the package is
@@ -1170,6 +1187,7 @@ jobs:
           CREATED:       ${{ needs.resolve-stamp.outputs.created }}
           MATRIX_ROW:    ${{ toJson(matrix) }}
           PORTS_SHA:     ${{ needs.read-matrix.outputs.ports_sha }}
+          DEPENDENCY_BUILDER: ${{ needs.read-matrix.outputs.dependency_builder }}
         run: |
           set -eu
           python3 - <<'PY'
@@ -1199,6 +1217,7 @@ jobs:
               "freebsd_ports_sha": os.environ["PORTS_SHA"],
               "route": f"{channel}/{row['variant'].lower()}-{major}.{minor}",
               "source_date_epoch": int(os.environ["CREATED"]),
+              "dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"]),
               "build_input_digest": "",
           }
           record["build_input_digest"] = build_input_digest(record)
@@ -1281,9 +1300,11 @@ jobs:
               git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
               python3 scripts/build-dep-pkg-portable.py \
                 --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
                 --port "$ORIGIN" \
                 --py-flavor "$PY" \
                 --freebsd-major "$MAJOR" \
+                --source-date-epoch "$CREATED" \
                 --out-dir "$DEP_PKG_DIR"
               I=$((I + 1))
             done

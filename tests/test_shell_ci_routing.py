@@ -33,6 +33,17 @@ def test_ports_parity_examples_are_isolated_and_explicitly_routed() -> None:
     assert "${PFB_RUN_ROOT}/${RUN_ID}/ports" in workflow
 
 
+def test_linux_dependency_builder_uses_the_locked_reproducibility_contract() -> None:
+    workflow = _read(".github/workflows/build-pkg-linux.yml")
+    for value in (
+        'version: "0.12.6"',
+        "uv sync --locked --only-group dep-pkg-build",
+        '--ports-sha "$PORTS_SHA"',
+        '--source-date-epoch "$SOURCE_DATE_EPOCH"',
+    ):
+        assert value in workflow
+
+
 def test_kcov_coverage_selectors_are_focused() -> None:
     workflow = _read(".github/workflows/test.yml")
     match = re.search(r"shellspec --kcov --shell bash(?P<body>[\s\S]*?)(?:\n\s*else|\n\s*fi)", workflow)

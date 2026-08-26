@@ -141,6 +141,8 @@ jobs:
           BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"
           SOURCE_SHORT_SHA="$(printf '%.7s' "$SOURCE_SHA")"
           PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHORT_SHA}"
+          python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
+            > plan/dependency-builder.json
           printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json
           printf '%s\n' "$ROUTE_MATRIX" > plan/route-matrix.json
           printf '%s\n' "$SOURCE_SHA" > plan/source-sha
@@ -212,6 +214,14 @@ jobs:
           persist-credentials: false
           path: source
 
+      - name: Set up the pinned dependency-package toolchain
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.6"
+
+      - name: Sync the locked dependency-package toolchain
+        run: uv sync --project trusted --locked --only-group dep-pkg-build
+
       - name: Build and verify package
         env:
           PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
@@ -228,6 +238,9 @@ jobs:
           export TRUSTED_DIR="$GITHUB_WORKSPACE/trusted"
           export SOURCE_DIR="$GITHUB_WORKSPACE/source"
           mkdir -p result
+          DEP_PYTHON="$TRUSTED_DIR/.venv/bin/python"
+          "$DEP_PYTHON" "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
+            > dependency-builder.json
           printf '%s\n' "$MATRIX_ROW" > row.json
           FREEBSD_MAJOR="$(jq -r '.freebsd_major' row.json)"
           VARIANT="$(jq -r '.variant' row.json)"
@@ -242,6 +255,7 @@ jobs:
             --ports-sha "$PORTS_SHA" \
             --matrix-row row.json \
             --source-date-epoch "$SOURCE_DATE_EPOCH" \
+            --dependency-builder dependency-builder.json \
             --output build-record.json
           PKG="$(
             sh "$TRUSTED_DIR/scripts/build-leg.sh" \
@@ -284,11 +298,13 @@ jobs:
             while [ "$I" -lt "$ORIGIN_COUNT" ]; do
               ORIGIN="$(printf '%s' "$EXTRA_PKGS" | jq -r ".[$I]")"
               git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
-              python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" \
+              "$DEP_PYTHON" "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" \
                 --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
                 --port "$ORIGIN" \
                 --py-flavor "$PY_FLAVOR" \
                 --freebsd-major "$FREEBSD_MAJOR" \
+                --source-date-epoch "$SOURCE_DATE_EPOCH" \
                 --out-dir "$DEP_PKG_DIR"
               I=$((I + 1))
             done
@@ -382,6 +398,7 @@ jobs:
             --tools-sha "$TOOLS_SHA" \
             --matrix-sha "$MATRIX_SHA" \
             --matrix-digest "$MATRIX_DIGEST" \
+            --dependency-builder plan/dependency-builder.json \
             --run-id "${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
             --source-ref "$SOURCE_REF" \
             --ports-repo "$PORTS_REPO" \

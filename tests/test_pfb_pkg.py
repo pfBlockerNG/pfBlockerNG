@@ -23,6 +23,16 @@ from pathlib import Path
 import pfb_pkg
 import pytest
 
+DEPENDENCY_BUILDER = {
+    "python": "3.11.15",
+    "pip": "26.2.1",
+    "setuptools": "75.6.0",
+    "wheel": "0.45.1",
+    "zstandard": "0.25.0",
+    "uv": "0.12.6",
+    "uv_lock_sha256": "d" * 64,
+}
+
 
 def _record(**overrides: object) -> dict:
     row = {
@@ -51,6 +61,7 @@ def _record(**overrides: object) -> dict:
         "freebsd_ports_sha": "b" * 64,
         "route": "stable/ce-2.8",
         "source_date_epoch": 0,
+        "dependency_builder": DEPENDENCY_BUILDER,
         "build_input_digest": "",
     }
     record.update(overrides)

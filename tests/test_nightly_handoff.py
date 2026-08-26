@@ -12,6 +12,15 @@ from scripts import nightly_provenance as np
 SOURCE_SHA = "a" * 40
 PORTS_SHA = "b" * 40
 VERSION = f"20260814153045.{SOURCE_SHA[:7]}"
+DEPENDENCY_BUILDER = {
+    "python": "3.11.15",
+    "pip": "26.2.1",
+    "setuptools": "75.6.0",
+    "wheel": "0.45.1",
+    "zstandard": "0.25.0",
+    "uv": "0.12.6",
+    "uv_lock_sha256": "f" * 64,
+}
 
 
 def _row(version: str = "2.8.0", *, role: str | None = None, ci: bool | None = None) -> dict[str, object]:
@@ -40,6 +49,7 @@ def _record(row: dict[str, object]) -> dict[str, object]:
         ports_sha=PORTS_SHA,
         matrix_row=row,
         source_date_epoch=1_800_000_000,
+        dependency_builder=DEPENDENCY_BUILDER,
     )
 
 
@@ -74,6 +84,7 @@ def _call_handoff(
         tools_sha="e" * 40,
         matrix_sha="d" * 40,
         matrix_digest="c" * 64,
+        dependency_builder=DEPENDENCY_BUILDER,
         run_id="123",
     )
 

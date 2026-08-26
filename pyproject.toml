@@ -1,9 +1,9 @@
 # Dev/CI Python environment (issue #2513). NOT a shipped package: releases contain
 # only src/, and `package = false` keeps uv from trying to build this tree.
 #
-# requires-python tracks the appliance, which carries python3.11 and no python3
-# symlink, so a dev environment on any other minor could accept code the box cannot
-# run. `.python-version` pins the same value for `uv python install`.
+# requires-python tracks the appliance's Python 3.11 minor. `.python-version`
+# additionally pins the exact patch used for reproducible dependency-package
+# artifacts.
 [project]
 name = "pfblockerng-dev"
 version = "0"
@@ -31,6 +31,15 @@ dev = [
     "dnspython==2.8.0",
     "charset-normalizer==3.4.9",
     "PyYAML==6.0.3",
+]
+
+# Reproducible PEP-517 dependency-package builder. The builder rejects any
+# interpreter/tool drift and disables build isolation; uv.lock supplies hashes.
+dep-pkg-build = [
+    "pip==26.2.1",
+    "setuptools==75.6.0",
+    "wheel==0.45.1",
+    "zstandard==0.25.0",
 ]
 
 # ADR-04 live-VM harness. Formerly tests/smoke/requirements.txt.

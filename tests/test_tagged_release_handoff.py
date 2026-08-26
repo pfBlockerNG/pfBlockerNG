@@ -17,6 +17,16 @@ TAG = "v4.0.0.b1"
 SOURCE_SHA = "a" * 40
 CI_METADATA_SHA = "b" * 40
 PORTS_SHA = "c" * 40
+SOURCE_DATE_EPOCH = 1_700_000_000
+DEPENDENCY_BUILDER = {
+    "python": "3.11.15",
+    "pip": "26.2.1",
+    "setuptools": "75.6.0",
+    "wheel": "0.45.1",
+    "zstandard": "0.25.0",
+    "uv": "0.12.6",
+    "uv_lock_sha256": "d" * 64,
+}
 ROW = {
     "pfsense_version": "2.8",
     "channel": "CE",
@@ -45,6 +55,8 @@ def _payload() -> dict[str, object]:
         ci_metadata_sha=CI_METADATA_SHA,
         ports_sha=PORTS_SHA,
         route_matrix=[ROW],
+        source_date_epoch=SOURCE_DATE_EPOCH,
+        dependency_builder=DEPENDENCY_BUILDER,
     )
 
 
@@ -56,6 +68,8 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
     route = tmp_path / "route.json"
     output = tmp_path / "handoff.json"
     _write(route, [ROW])
+    dependency_builder = tmp_path / "dependency-builder.json"
+    _write(dependency_builder, DEPENDENCY_BUILDER)
 
     completed = subprocess.run(
         [
@@ -69,6 +83,10 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
             CI_METADATA_SHA,
             "--ports-sha",
             PORTS_SHA,
+            "--source-date-epoch",
+            str(SOURCE_DATE_EPOCH),
+            "--dependency-builder",
+            str(dependency_builder),
             "--route-matrix",
             str(route),
             "--output",
@@ -90,6 +108,8 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
         "ci_metadata_sha",
         "ports_sha",
         "route_matrix",
+        "source_date_epoch",
+        "dependency_builder",
     }
     assert payload["kind"] == "tagged-release-handoff"
     assert payload["release_tag"] == TAG
@@ -97,6 +117,9 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
     assert payload["ci_metadata_sha"] == CI_METADATA_SHA
     assert payload["ports_sha"] == PORTS_SHA
     assert payload["route_matrix"] == [ROW]
+
+    assert payload["source_date_epoch"] == SOURCE_DATE_EPOCH
+    assert payload["dependency_builder"] == DEPENDENCY_BUILDER
 
 
 def test_load_accepts_exact_release_and_source(tmp_path: Path) -> None:
@@ -165,6 +188,8 @@ def test_build_records_must_match_handoff_identities(changes: dict[str, str], me
         "source_tag": TAG,
         "source_sha": SOURCE_SHA,
         "freebsd_ports_sha": PORTS_SHA,
+        "source_date_epoch": SOURCE_DATE_EPOCH,
+        "dependency_builder": DEPENDENCY_BUILDER,
         **changes,
     }
 
@@ -175,8 +200,20 @@ def test_build_records_must_match_handoff_identities(changes: dict[str, str], me
 def test_build_records_accept_exact_handoff_identities() -> None:
     module = _module()
     records = [
-        {"source_tag": TAG, "source_sha": SOURCE_SHA, "freebsd_ports_sha": PORTS_SHA},
-        {"source_tag": TAG, "source_sha": SOURCE_SHA, "freebsd_ports_sha": PORTS_SHA},
+        {
+            "source_tag": TAG,
+            "source_sha": SOURCE_SHA,
+            "freebsd_ports_sha": PORTS_SHA,
+            "source_date_epoch": SOURCE_DATE_EPOCH,
+            "dependency_builder": DEPENDENCY_BUILDER,
+        },
+        {
+            "source_tag": TAG,
+            "source_sha": SOURCE_SHA,
+            "freebsd_ports_sha": PORTS_SHA,
+            "source_date_epoch": SOURCE_DATE_EPOCH,
+            "dependency_builder": DEPENDENCY_BUILDER,
+        },
     ]
 
     module.validate_build_records(_payload(), records)
