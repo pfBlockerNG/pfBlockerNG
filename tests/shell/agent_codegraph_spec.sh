@@ -106,8 +106,9 @@ esac
 CODEGRAPH
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
-[ "$#" -eq 2 ] && [ "$1" = update ] || exit 9
-exit 0
+[ "$#" -eq 3 ] && [ "$1" = extract ] && [ "$3" = --code-only ] || exit 9
+mkdir -p "$2/graphify-out"
+true > "$2/graphify-out/graph.json"
 GRAPHIFY
     cat > "$stubdir/serena" <<'SERENA'
 #!/bin/sh

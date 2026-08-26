@@ -23,7 +23,11 @@ main() {
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 
 	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
-	graphify update "$root" || exit $?
+	if [ -f "$root/graphify-out/graph.json" ]; then
+		graphify update "$root" || exit $?
+	else
+		graphify extract "$root" --code-only || exit $?
+	fi
 
 	case "${OMP_CLI:-}${PI_CLI:-}" in
 		'') ;;

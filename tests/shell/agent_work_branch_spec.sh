@@ -93,8 +93,19 @@ esac
 CODEGRAPH
     cat > "$stubdir/graphify" <<'GRAPHIFY'
 #!/bin/sh
-[ "$#" -eq 2 ] && [ "$1" = update ] || exit 9
-printf 'graphify:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
+case "$1" in
+  extract)
+    [ "$#" -eq 3 ] && [ "$3" = --code-only ] || exit 9
+    printf 'graphify:%s:%s:%s\n' "$1" "$2" "$3" >> "$WB_DEFAULT_TOOL_LOG"
+    mkdir -p "$2/graphify-out"
+    true > "$2/graphify-out/graph.json"
+    ;;
+  update)
+    [ "$#" -eq 2 ] || exit 9
+    printf 'graphify:%s:%s\n' "$1" "$2" >> "$WB_DEFAULT_TOOL_LOG"
+    ;;
+  *) exit 9 ;;
+esac
 GRAPHIFY
     chmod +x "$stubdir/codegraph" "$stubdir/graphify"
     export WB_REAL_GIT="$(command -v git)"
@@ -144,7 +155,7 @@ GIT
     The stderr should include 'Preparing worktree'
     The stderr should include 'Initializing CodeGraph in'
     The contents of file "$events" should equal "$(printf 'fetch\nadd')"
-    The contents of file "$default_tool_log" should equal "$(printf 'codegraph:init:%s/default-init\ngraphify:update:%s/default-init' "$fixture" "$fixture")"
+    The contents of file "$default_tool_log" should equal "$(printf 'codegraph:init:%s/default-init\ngraphify:extract:%s/default-init:--code-only' "$fixture" "$fixture")"
   End
 
   It 'aborts a configured origin fetch failure before add or initialization'
