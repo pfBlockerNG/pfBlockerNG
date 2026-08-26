@@ -2,31 +2,12 @@
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _workflow_steps import extract_step
 
 PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
 MANUAL = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
-
-
-_STEP_NAMES = {
-    PUBLISHED: "Stage the pkg catalogue",
-    MANUAL: "Publish the pkg catalogue",
-}
-
-
-def _publish_step(workflow: str) -> str:
-    """The pkg-catalogue-dispatch step body (the in-repo publisher carrier that
-    replaced the retired `gh workflow run publish.yml -R pfBlockerNG/pkg` dispatch).
-    release-published.yml renamed it "Stage the pkg catalogue" (issue #2389:
-    gate-before-announce); pkg-republish.yml's is untouched and stays "Publish the
-    pkg catalogue" (see _STEP_NAMES)."""
-    return extract_step(workflow, _STEP_NAMES[workflow])
 
 
 def test_published_callback_derives_and_forwards_the_fresh_tuple() -> None:
@@ -34,7 +15,7 @@ def test_published_callback_derives_and_forwards_the_fresh_tuple() -> None:
     assert "current_commit=sys.argv[3]" in PUBLISHED
     assert "+refs/heads/release/*:refs/remotes/origin/release/*" in PUBLISHED
     assert "destinations=${DESTINATIONS}" in PUBLISHED
-    assert "DESTINATIONS: ${{ needs.resolve.outputs.destinations }}" in _publish_step(PUBLISHED)
+    assert "destinations: ${{ needs.resolve.outputs.destinations }}" in PUBLISHED
     assert "gh release list" not in PUBLISHED
 
 
@@ -43,7 +24,7 @@ def test_manual_callback_validates_published_release_and_derives_tuple() -> None
     assert "jq -r '.draft'" in MANUAL
     assert "primary_channel_for_tag" in MANUAL
     assert "derive_destinations_from_git" in MANUAL
-    assert "DESTINATIONS: ${{ steps.resolve.outputs.destinations }}" in _publish_step(MANUAL)
+    assert "destinations: ${{ needs.resolve.outputs.destinations }}" in MANUAL
     assert "gh release list" not in MANUAL
 
 

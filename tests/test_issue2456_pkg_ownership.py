@@ -70,6 +70,8 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
         self.assertIn("Ingest ${PKG_OPERATION} ${SOURCE_RUN_ID}", helper)
         self.assertIn("MAX_DISPATCH_ATTEMPTS", helper)
         self.assertIn("MAX_RUN_LOOKUPS", helper)
+        self.assertNotIn("while " + ":; do", helper)
+        self.assertIn('while [ "$attempt" -le "$MAX_DISPATCH_ATTEMPTS" ]; do', helper)
         self.assertIn("gh run watch", helper)
         self.assertIn("gh run download", helper)
         self.assertIn("publication-result", helper)
