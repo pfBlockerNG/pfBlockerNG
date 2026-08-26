@@ -54,14 +54,19 @@ jobs:
             echo "::error::Release is a draft"; exit 1; }
           [ "$(printf '%s' "$META" | jq -r '.immutable // false')" = true ] || {
             echo "::error::Release is not immutable"; exit 1; }
-
-          git fetch origin --tags --force '+refs/heads/release/*:refs/remotes/origin/release/*'
-          eval "$(sh scripts/release-version.sh "$RELEASE_TAG" "$(python3 - "$RELEASE_TAG" <<'PY'
+          CHANNEL=$(python3 - "$RELEASE_TAG" <<'PY'
           import sys
           from scripts.release_version import primary_channel_for_tag
           print(primary_channel_for_tag(sys.argv[1]))
           PY
-          )")"
+          )
+          eval "$(sh scripts/release-version.sh "$RELEASE_TAG" "$CHANNEL")"
+          RELEASE_PRERELEASE=$(printf '%s' "$META" | jq -r '.prerelease')
+          [ "$RELEASE_PRERELEASE" = "$prerelease" ] || {
+            echo "::error::Release prerelease flag does not match tag"; exit 1; }
+
+
+          git fetch origin --tags --force '+refs/heads/release/*:refs/remotes/origin/release/*'
           SOURCE_SHA=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
           DESTINATIONS=$(python3 - "$RELEASE_TAG" "$release_line" "$SOURCE_SHA" <<'PY'
           import json

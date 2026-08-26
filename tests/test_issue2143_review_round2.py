@@ -21,7 +21,9 @@ def _build_record_script() -> str:
 
 
 def _republish_validate_script() -> str:
-    return textwrap.dedent(REPUBLISH.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+    block = REPUBLISH.split("      - name: Resolve exact immutable Release", 1)[1]
+    script = block.split("        run: |\n", 1)[1].split("\n          git fetch", 1)[0]
+    return textwrap.dedent(script) + "\nexit 0\n"
 
 
 def test_build_record_step_uses_pinned_ports_sha_in_python_child(tmp_path: Path) -> None:
@@ -75,7 +77,10 @@ def test_manual_republish_requires_the_prerelease_flag_to_match_the_tag(
     bin_dir.mkdir()
     gh = bin_dir / "gh"
     gh.write_text(
-        f'#!/bin/sh\nprintf \'%s\\n\' \'{{"tag_name":"{tag}","draft":false,"prerelease":{prerelease}}}\'\n',
+        (
+            f'#!/bin/sh\nprintf \'%s\\n\' \'{{"tag_name":"{tag}","draft":false,'
+            f'"prerelease":{prerelease},"immutable":true}}\'\n'
+        ),
         encoding="utf-8",
     )
     gh.chmod(0o755)
@@ -87,7 +92,7 @@ def test_manual_republish_requires_the_prerelease_flag_to_match_the_tag(
             "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
             "RELEASE_ID": "12345",
             "RELEASE_TAG": tag,
-            "REPOSITORY": "owner/repo",
+            "SOURCE_REPOSITORY": "owner/repo",
         },
         capture_output=True,
         text=True,

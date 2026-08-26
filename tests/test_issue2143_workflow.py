@@ -4,14 +4,10 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import textwrap
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from _workflow_steps import extract_step
 
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 PUBLISHED = (ROOT / ".github/workflows/release-published.yml").read_text(encoding="utf-8")
@@ -30,23 +26,26 @@ def test_published_callback_dispatches_exact_release_identity() -> None:
     assert "release_id" in PUBLISHED
     assert "release_tag" in PUBLISHED
     assert "source_repository" in PUBLISHED
-    # The in-repo "Stage the pkg catalogue" step (renamed from "Publish the pkg
-    # catalogue" by issue #2389's gate-before-announce rework) replaced the retired
-    # `gh workflow run publish.yml -f <name>=<value>` dispatch to pfBlockerNG/pkg.
-    step = extract_step(PUBLISHED, "Stage the pkg catalogue")
-    assert "RELEASE_ID: ${{ needs.resolve.outputs.release_id }}" in step
-    assert "DESTINATIONS: ${{ needs.resolve.outputs.destinations }}" in step
+    assert "uses: ./.github/workflows/pkg-tagged-ingest.yml" in PUBLISHED
+    assert "release_id: ${{ needs.resolve.outputs.release_id }}" in PUBLISHED
+    assert "destinations: ${{ needs.resolve.outputs.destinations }}" in PUBLISHED
     assert "gh release list" not in PUBLISHED
 
 
+def _republish_validate_script() -> str:
+    block = REPUBLISH.split("      - name: Resolve exact immutable Release", 1)[1]
+    script = block.split("        run: |\n", 1)[1].split("\n          git fetch", 1)[0]
+    return textwrap.dedent(script) + "\nexit 0\n"
+
+
 def test_manual_republish_validates_decimal_release_identity(tmp_path: Path) -> None:
-    script = textwrap.dedent(REPUBLISH.split("        run: |\n", 1)[1].split("      - uses:", 1)[0])
+    script = _republish_validate_script()
     cases = (("v4.0.0", False, 0), ("v4.0.1", False, 1), ("v4.0.0", True, 1))
     for index, (tag, draft, expected_returncode) in enumerate(cases):
         bin_dir = tmp_path / f"case-{index}"
         bin_dir.mkdir()
         gh = bin_dir / "gh"
-        payload = f'{{"tag_name":"v4.0.0","draft":{str(draft).lower()},"prerelease":false}}'
+        payload = f'{{"tag_name":"v4.0.0","draft":{str(draft).lower()},"prerelease":false,"immutable":true}}'
         gh.write_text(
             f"#!/bin/sh\nprintf '%s\\n' '{payload}'\n",
             encoding="utf-8",
@@ -60,7 +59,7 @@ def test_manual_republish_validates_decimal_release_identity(tmp_path: Path) -> 
                 "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
                 "RELEASE_ID": "12345",
                 "RELEASE_TAG": tag,
-                "REPOSITORY": "owner/repo",
+                "SOURCE_REPOSITORY": "owner/repo",
             },
             capture_output=True,
             text=True,
