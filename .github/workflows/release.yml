@@ -594,6 +594,7 @@ jobs:
         id: pins
         env:
           INPUT_SOURCE: ${{ github.event.inputs.source }}
+          SOURCE_SHA: ${{ steps.destinations.outputs.source_sha }}
         run: |
           set -eu
           git fetch --no-tags origin \
@@ -616,6 +617,8 @@ jobs:
             ROUTE_MATRIX=$(printf '%s' "$ROUTE_MATRIX" | jq -ce 'map(.extra_pkgs = [])')
           fi
           PINNED_BUILDER="$GITHUB_WORKSPACE/pinned-builder"
+          DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$SOURCE_SHA")"
           DEPENDENCY_PACKAGES='{}'
           ORIGINS=$(printf '%s' "$ROUTE_MATRIX" | jq -r '[.[].extra_pkgs[]?] | unique[]')
           if [ -n "$ORIGINS" ]; then
@@ -628,18 +631,51 @@ jobs:
               git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
             done
             git -C "$PORTS_DIR" checkout --detach "$PORTS_SHA"
-            for ORIGIN in $ORIGINS; do
-              IDENTITY=$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" \
-                --print-port-identity \
-                --ports "$PORTS_DIR" \
-                --ports-sha "$PORTS_SHA" \
-                --port "$ORIGIN")
-              DEPENDENCY_PACKAGES=$(printf '%s' "$IDENTITY" \
-                | jq -ce --argjson current "$DEPENDENCY_PACKAGES" \
-                  '$current + {(.port_origin): (del(.port_origin))}')
+            ROW_COUNT=$(printf '%s' "$ROUTE_MATRIX" | jq 'length')
+            ROW_INDEX=0
+            while [ "$ROW_INDEX" -lt "$ROW_COUNT" ]; do
+              ROW=$(printf '%s' "$ROUTE_MATRIX" | jq -ce ".[$ROW_INDEX]")
+              SUFFIX=$(printf '%s' "$ROW" | jq -r '"-" + .variant + "-" + .pfsense_version + ".pkg"')
+              PY_FLAVOR=$(printf '%s' "$ROW" | jq -r '.py_flavor')
+              FREEBSD_MAJOR=$(printf '%s' "$ROW" | jq -r '.freebsd_major')
+              ROW_ORIGINS=$(printf '%s' "$ROW" | jq -r '.extra_pkgs[]?')
+              for ORIGIN in $ROW_ORIGINS; do
+                IDENTITY=$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" \
+                  --print-port-identity \
+                  --ports "$PORTS_DIR" \
+                  --ports-sha "$PORTS_SHA" \
+                  --port "$ORIGIN")
+                DEPENDENCY_PACKAGES=$(printf '%s' "$IDENTITY" | jq -ce \
+                  --argjson current "$DEPENDENCY_PACKAGES" \
+                  --arg suffix "$SUFFIX" \
+                  --arg origin "$ORIGIN" \
+                  --arg py_flavor "$PY_FLAVOR" \
+                  --arg freebsd_major "$FREEBSD_MAJOR" \
+                  --arg ports_sha "$PORTS_SHA" \
+                  --argjson source_date_epoch "$SOURCE_DATE_EPOCH" \
+                  --argjson toolchain "$DEPENDENCY_BUILDER" \
+                  'if .port_origin != $origin then error("dependency origin mismatch")
+                   else . as $recipe
+                   | ($py_flavor + "-" + $recipe.portname) as $package_name
+                   | ($recipe | del(.port_origin) + {
+                       package_name: $package_name,
+                       package_version: $recipe.port_version,
+                       filename: ($package_name + "-" + $recipe.port_version + $suffix),
+                       freebsd_ports_sha: $ports_sha,
+                       source_date_epoch: $source_date_epoch,
+                       toolchain: $toolchain,
+                       abi: ("FreeBSD:" + $freebsd_major + ":*"),
+                       freebsd_major: $freebsd_major,
+                       py_flavor: $py_flavor
+                     }) as $identity
+                   | $current + {
+                       ($suffix): (($current[$suffix] // {}) + {($origin): $identity})
+                     }
+                   end')
+              done
+              ROW_INDEX=$((ROW_INDEX + 1))
             done
           fi
-          DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
           {
             echo "ci_metadata_sha=${CI_METADATA_SHA}"
             echo "ports_sha=${PORTS_SHA}"
@@ -1336,6 +1372,11 @@ jobs:
           HAS_DEP_PKGS=0
           ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
           if [ "$ORIGIN_COUNT" -gt 0 ]; then
+            DEP_PYTHON="$GITHUB_WORKSPACE/.venv/bin/python"
+            if [ ! -x "$DEP_PYTHON" ]; then
+              echo "::error::locked dependency-package Python is missing"
+              exit 1
+            fi
             PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
             mkdir -p "$DEP_PKG_DIR"
             I=0
@@ -1347,7 +1388,7 @@ jobs:
               # materialized. Add it explicitly (idempotent; cone mode already
               # set by sparse-clone-ports.sh).
               git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
-              python3 scripts/build-dep-pkg-portable.py \
+              "$DEP_PYTHON" scripts/build-dep-pkg-portable.py \
                 --ports "$PORTS_DIR" \
                 --ports-sha "$PORTS_SHA" \
                 --port "$ORIGIN" \

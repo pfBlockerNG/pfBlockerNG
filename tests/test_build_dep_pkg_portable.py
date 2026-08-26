@@ -13,6 +13,7 @@ validated separately, outside this hermetic suite.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import io
@@ -145,6 +146,75 @@ def _write_compact_package(path: Path, manifest: dict[str, object]) -> None:
         member.size = len(payload)
         tf.addfile(member, io.BytesIO(payload))
     path.write_bytes(lzma.compress(archive.getvalue()))
+
+
+def _mutate_xz_dependency_metadata(source: Path, destination: Path, field: str) -> None:
+    entries: list[tuple[tarfile.TarInfo, bytes]] = []
+    with tarfile.open(fileobj=io.BytesIO(lzma.decompress(source.read_bytes())), mode="r:") as archive:
+        for member in archive.getmembers():
+            extracted = archive.extractfile(member)
+            entries.append((copy.copy(member), b"" if extracted is None else extracted.read()))
+    if field == "build-record":
+        for index, (manifest_member, manifest_data) in enumerate(entries):
+            if manifest_member.name not in ("+COMPACT_MANIFEST", "+MANIFEST"):
+                continue
+            manifest = json.loads(manifest_data)
+            record = json.loads(manifest["annotations"]["pfb_dep_build_record"])
+            record["distfile_size"] += 1
+            manifest["annotations"]["pfb_dep_build_record"] = json.dumps(
+                record,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            manifest_data = json.dumps(
+                manifest,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+            manifest_member.size = len(manifest_data)
+            entries[index] = (manifest_member, manifest_data)
+    else:
+        manifest_index = next(index for index, (member, _) in enumerate(entries) if member.name == "+MANIFEST")
+        manifest_member, manifest_data = entries[manifest_index]
+        manifest = json.loads(manifest_data)
+        target = next(iter(manifest["files"]))
+        metadata = manifest["files"][target]
+        if field == "mode":
+            metadata["perm"] = "0755"
+        elif field == "mtime":
+            metadata["mtime"] = int(metadata["mtime"]) + 1
+        elif field == "owner":
+            metadata["uname"] = "nobody"
+        elif field == "group":
+            metadata["gname"] = "evil"
+        elif field == "fflags":
+            metadata["fflags"] = 1
+        elif field == "checksum":
+            metadata["sum"] = "1$" + "0" * 64
+        else:
+            raise AssertionError(field)
+        manifest_data = json.dumps(manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+        manifest_member.size = len(manifest_data)
+        entries[manifest_index] = (manifest_member, manifest_data)
+        for member, _ in entries:
+            if "/" + member.name.lstrip("/") != target:
+                continue
+            if field == "mode":
+                member.mode = 0o755
+            elif field == "mtime":
+                member.mtime += 1
+            elif field == "owner":
+                member.uname = "nobody"
+            elif field == "group":
+                member.gname = "evil"
+            break
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
+        for member, data in entries:
+            archive.addfile(member, io.BytesIO(data) if member.isfile() else None)
+    destination.write_bytes(lzma.compress(output.getvalue()))
 
 
 # --------------------------------------------------------------------------- #
@@ -839,52 +909,52 @@ def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytes
     assert files["/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py"]["perm"] == "0644"
 
 
-def test_real_dependency_builder_output_passes_tagged_dependency_validation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ports_root = tmp_path / "ports"
-    _write_port(ports_root)
-    _mock_network(monkeypatch, console_scripts=None)
-    package = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
-    tagged_package = package.with_name(f"{package.stem}-CE-2.8.pkg")
-    package.rename(tagged_package)
+def _tagged_handoff_for_real_dependency(tagged_package: Path) -> tuple[dict[str, object], Path]:
+    row = {
+        "pfsense_version": "2.8",
+        "channel": "CE",
+        "freebsd_version": "15.0-RELEASE",
+        "freebsd_major": "15",
+        "php_version": "8.3",
+        "py_flavor": "py311",
+        "variant": "CE",
+        "status": "active",
+        "extra_pkgs": ["textproc/py-charset-normalizer"],
+    }
+    toolchain = bdp.build_toolchain_identity()
     handoff = trh.build_handoff(
         release_tag="v4.0.0.b1",
         source_sha="a" * 40,
         ci_metadata_sha="b" * 40,
         ports_sha="d" * 40,
-        route_matrix=[
-            {
-                "pfsense_version": "2.8",
-                "channel": "CE",
-                "freebsd_version": "15.0-RELEASE",
-                "freebsd_major": "15",
-                "php_version": "8.3",
-                "py_flavor": "py311",
-                "variant": "CE",
-                "status": "active",
-                "extra_pkgs": ["textproc/py-charset-normalizer"],
-            }
-        ],
+        route_matrix=[row],
         dependency_packages={
-            "textproc/py-charset-normalizer": {
-                "portname": "charset-normalizer",
-                "port_version": "3.4.4",
-                "distfile": "charset_normalizer-3.4.4.tar.gz",
-                "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
-                "distfile_size": 129_418,
-                "python_dep_version": "3.11.13",
+            "-CE-2.8.pkg": {
+                "textproc/py-charset-normalizer": {
+                    "portname": "charset-normalizer",
+                    "port_version": "3.4.4",
+                    "distfile": "charset_normalizer-3.4.4.tar.gz",
+                    "distfile_sha256": ("94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a"),
+                    "distfile_size": 129_418,
+                    "package_name": "py311-charset-normalizer",
+                    "package_version": "3.4.4",
+                    "filename": "py311-charset-normalizer-3.4.4-CE-2.8.pkg",
+                    "freebsd_ports_sha": "d" * 40,
+                    "source_date_epoch": 1_700_000_000,
+                    "toolchain": toolchain,
+                    "abi": "FreeBSD:15:*",
+                    "freebsd_major": "15",
+                    "py_flavor": "py311",
+                }
             }
         },
         source_date_epoch=1_700_000_000,
-        dependency_builder=bdp.build_toolchain_identity(),
+        dependency_builder=toolchain,
     )
-
-    rows = handoff["route_matrix"]
-    assert isinstance(rows, list)
-    row = rows[0]
-    assert isinstance(row, dict)
+    normalized_rows = handoff["route_matrix"]
+    assert isinstance(normalized_rows, list)
+    normalized_row = normalized_rows[0]
+    assert isinstance(normalized_row, dict)
     record: dict[str, object] = {
         "schema": 1,
         "channel": "edge",
@@ -895,11 +965,11 @@ def test_real_dependency_builder_output_passes_tagged_dependency_validation(
         "canonical_package_version": "4.0.0.b1",
         "native_recipe_identity": "pfSense-pkg-pfBlockerNG-edge",
         "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
-        "matrix_row": row,
+        "matrix_row": normalized_row,
         "freebsd_ports_sha": "d" * 40,
         "route": "edge/ce-2.8",
         "source_date_epoch": 1_700_000_000,
-        "dependency_builder": bdp.build_toolchain_identity(),
+        "dependency_builder": toolchain,
         "build_input_digest": "",
     }
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
@@ -916,8 +986,60 @@ def test_real_dependency_builder_output_passes_tagged_dependency_validation(
             "annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record)},
         },
     )
+    return handoff, canonical_package
+
+
+def test_real_dependency_builder_output_passes_tagged_dependency_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    args = _build_args(ports_root, tmp_path / "out")
+    args.compression = "xz"
+    package = bdp.build_dep_pkg(args)
+    tagged_package = package.with_name(f"{package.stem}-CE-2.8.pkg")
+    package.rename(tagged_package)
+    handoff, canonical_package = _tagged_handoff_for_real_dependency(tagged_package)
 
     trh.validate_packages(handoff, [canonical_package, tagged_package])
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("mode", "metadata"),
+        ("mtime", "metadata"),
+        ("owner", "metadata"),
+        ("group", "metadata"),
+        ("fflags", "metadata"),
+        ("checksum", "checksum"),
+        ("build-record", "distfile_size"),
+    ],
+)
+def test_real_dependency_package_mutations_fail_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    message: str,
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    args = _build_args(ports_root, tmp_path / "out")
+    args.compression = "xz"
+    package = bdp.build_dep_pkg(args)
+    tagged_package = package.with_name(f"{package.stem}-CE-2.8.pkg")
+    package.rename(tagged_package)
+    handoff, canonical_package = _tagged_handoff_for_real_dependency(tagged_package)
+    mutated_dir = tmp_path / field
+    mutated_dir.mkdir()
+    mutated_package = mutated_dir / tagged_package.name
+    _mutate_xz_dependency_metadata(tagged_package, mutated_package, field)
+
+    with pytest.raises(trh.HandoffError, match=message):
+        trh.validate_packages(handoff, [canonical_package, mutated_package])
 
 
 def test_build_dep_pkg_no_console_scripts_still_emits_valid_pkg(
@@ -1239,8 +1361,6 @@ def test_print_port_identity_reads_the_pinned_recipe(
                 "d" * 40,
                 "--port",
                 "textproc/py-charset-normalizer",
-                "--python-dep-version",
-                "3.11.13",
             ]
         )
         == 0
@@ -1252,7 +1372,6 @@ def test_print_port_identity_reads_the_pinned_recipe(
         "distfile": "charset_normalizer-3.4.4.tar.gz",
         "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
         "distfile_size": 129_418,
-        "python_dep_version": "3.11.13",
     }
 
 
@@ -1267,19 +1386,33 @@ def test_print_port_identity_consumes_pinned_snapshot(
     for name in ("Makefile", "distinfo"):
         path = snapshot_port / name
         path.write_text(path.read_text().replace("3.4.4", "9.9.9"))
-    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(bdp.bpp, "_snapshot_checkout", lambda *_args, **_kwargs: snapshot_root)
+    calls: list[tuple[object, ...]] = []
+
+    def attest(path: Path, sha: str, label: str, *, payload_root: Path) -> None:
+        calls.append(("attest", path, sha, label, payload_root))
+
+    def snapshot(path: Path, sha: str, dest: Path, *, payload_root: Path) -> Path:
+        calls.append(("snapshot", path, sha, dest, payload_root))
+        return snapshot_root
+
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", attest)
+    monkeypatch.setattr(bdp.bpp, "_snapshot_checkout", snapshot)
     args = argparse.Namespace(
         ports=str(ports_root),
         ports_sha="d" * 40,
         port="textproc/py-charset-normalizer",
-        python_dep_version="0",
     )
 
     identity = bdp.dependency_port_identity(args)
 
     assert identity["port_version"] == "9.9.9"
     assert identity["distfile"] == "charset_normalizer-9.9.9.tar.gz"
+    port_payload = ports_root / args.port
+    assert calls[0] == ("attest", ports_root, args.ports_sha, "FreeBSD-ports", port_payload)
+    assert calls[1][0:3] == ("snapshot", ports_root, args.ports_sha)
+    assert isinstance(calls[1][3], Path)
+    assert calls[1][3].name == "ports-snapshot"
+    assert calls[1][4] == port_payload
 
 
 def test_dependency_build_group_and_lock_use_exact_pins() -> None:

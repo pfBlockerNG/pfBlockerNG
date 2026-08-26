@@ -507,6 +507,7 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert "--print-port-identity" in pins["run"]
     assert "dependency_packages=${DEPENDENCY_PACKAGES}" in pins["run"]
     assert pins["env"]["INPUT_SOURCE"] == "${{ github.event.inputs.source }}"
+    assert pins["env"]["SOURCE_SHA"] == "${{ steps.destinations.outputs.source_sha }}"
     assert "map(.extra_pkgs = [])" in pins["run"]
     assert "CREATED" in record["env"] and "DEPENDENCY_BUILDER" in record["env"]
     assert '"source_date_epoch": int(os.environ["CREATED"])' in record["run"]
@@ -514,6 +515,8 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert 'record["build_input_digest"] = build_input_digest(record)' in record["run"]
     assert '--ports-sha "$PORTS_SHA"' in build["run"]
     assert '--source-date-epoch "$CREATED"' in build["run"]
+    assert '"$DEP_PYTHON" scripts/build-dep-pkg-portable.py' in build["run"]
+    assert "python3 scripts/build-dep-pkg-portable.py \\" not in build["run"]
     assert len(handoffs) == 1
     assert "DEPENDENCY_BUILDER" in handoffs[0]["env"]
     assert '--source-date-epoch "$(git show -s --format=%ct "$SOURCE_SHA")"' in handoffs[0]["run"]

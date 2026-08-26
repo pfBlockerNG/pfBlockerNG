@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -153,26 +154,42 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
     build_step = extract_step(release, "Build the .pkg via build-leg.sh")
     assert "PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}" in build_step
     assert build_step.count("sh scripts/build-leg.sh") == 1
-    assert build_step.count('--ports-ref  "$PORTS_SHA"') == 1
 
 
-def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("source", "expected_extra_pkgs"),
+    [
+        ("release/4.0", '["textproc/py-charset-normalizer"]'),
+        ("release/3.3", "[]"),
+    ],
+)
+def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
+    tmp_path: Path,
+    source: str,
+    expected_extra_pkgs: str,
+) -> None:
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     script = textwrap.dedent(
         extract_step(release, "Pin ci-metadata, ROUTE, and Ports identities").split("run: |\n", 1)[1]
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    git_log = tmp_path / "git.log"
-    matrix = tmp_path / "supported-versions.json"
     output = tmp_path / "github-output"
+    git_log = tmp_path / "git.log"
     ci_sha = "a" * 40
     ports_sha = "b" * 40
+    source_sha = "c" * 40
+    source_epoch = 1_700_000_000
+    matrix = tmp_path / "supported-versions.json"
     matrix.write_text(
         '{"versions":[{"pfsense_version":"2.8","channel":"CE",'
         '"freebsd_version":"15.0-RELEASE","freebsd_major":"15",'
         '"php_version":"8.3","py_flavor":"py311","variant":"CE",'
-        '"status":"active","extra_pkgs":[]}]}\n',
+        '"status":"active","extra_pkgs":["textproc/py-charset-normalizer"]},'
+        '{"pfsense_version":"2.9","channel":"CE",'
+        '"freebsd_version":"16.0-RELEASE","freebsd_major":"16",'
+        '"php_version":"8.3","py_flavor":"py311","variant":"CE",'
+        '"status":"active","extra_pkgs":["textproc/py-charset-normalizer"]}]}\n',
         encoding="utf-8",
     )
     fake_git = fake_bin / "git"
@@ -185,7 +202,14 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
               fetch) exit 0 ;;
               rev-parse) printf '%s\\n' "$CI_SHA" ;;
               ls-remote) printf '%s\\trefs/heads/pfblockerng/use-github\\n' "$PORTS_SHA" ;;
-              show) cat "$MATRIX_FIXTURE" ;;
+              show)
+                if [ "$2" = "-s" ]; then printf '%s\\n' "$SOURCE_EPOCH"; else cat "$MATRIX_FIXTURE"; fi
+                ;;
+              clone)
+                for destination do :; done
+                mkdir -p "$destination"
+                ;;
+              -C) exit 0 ;;
               *) printf 'unexpected git command: %s\\n' "$*" >&2; exit 1 ;;
             esac
             """
@@ -196,9 +220,16 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
     builder = tmp_path / "pinned-builder/scripts/build-dep-pkg-portable.py"
     builder.parent.mkdir(parents=True)
     builder.write_text(
-        'print(\'{"python":"3.11.15","pip":"26.2.1","setuptools":"75.6.0",'
-        '"wheel":"0.45.1","zstandard":"0.25.0","uv":"0.12.6",'
-        '"uv_lock_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}\')\n',
+        "import json, sys\n"
+        "if '--print-port-identity' in sys.argv:\n"
+        " print(json.dumps({'port_origin':'textproc/py-charset-normalizer',"
+        "'portname':'charset-normalizer','port_version':'3.4.4',"
+        "'distfile':'charset_normalizer-3.4.4.tar.gz','distfile_sha256':'e'*64,"
+        "'distfile_size':129418}, separators=(',', ':')))\n"
+        "else:\n"
+        " print(json.dumps({'python':'3.11.15','pip':'26.2.1','setuptools':'75.6.0',"
+        "'wheel':'0.45.1','zstandard':'0.25.0','uv':'0.12.6',"
+        "'uv_lock_sha256':'d'*64}, separators=(',', ':')))\n",
         encoding="utf-8",
     )
 
@@ -210,11 +241,14 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
             "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
             "GITHUB_OUTPUT": str(output),
             "GITHUB_WORKSPACE": str(tmp_path),
+            "RUNNER_TEMP": str(tmp_path),
             "GIT_LOG": str(git_log),
             "MATRIX_FIXTURE": str(matrix),
             "CI_SHA": ci_sha,
             "PORTS_SHA": ports_sha,
-            "INPUT_SOURCE": "devel",
+            "SOURCE_SHA": source_sha,
+            "SOURCE_EPOCH": str(source_epoch),
+            "INPUT_SOURCE": source,
         },
         capture_output=True,
         text=True,
@@ -225,13 +259,101 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
     emitted = output.read_text(encoding="utf-8")
     assert f"ci_metadata_sha={ci_sha}" in emitted
     assert f"ports_sha={ports_sha}" in emitted
-    assert '"pfsense_version":"2.8"' in emitted
-    assert "dependency_packages={}" in emitted
+    assert f'"extra_pkgs":{expected_extra_pkgs}' in emitted
+    if source == "release/3.3":
+        assert "dependency_packages={}" in emitted
+        assert "textproc/py-charset-normalizer" not in emitted
+    else:
+        toolchain = {
+            "python": "3.11.15",
+            "pip": "26.2.1",
+            "setuptools": "75.6.0",
+            "wheel": "0.45.1",
+            "zstandard": "0.25.0",
+            "uv": "0.12.6",
+            "uv_lock_sha256": "d" * 64,
+        }
+        expected: dict[str, dict[str, dict[str, object]]] = {}
+        for version, major in (("2.8", "15"), ("2.9", "16")):
+            suffix = f"-CE-{version}.pkg"
+            identity = {
+                "abi": f"FreeBSD:{major}:*",
+                "distfile": "charset_normalizer-3.4.4.tar.gz",
+                "distfile_sha256": "e" * 64,
+                "distfile_size": 129_418,
+                "filename": f"py311-charset-normalizer-3.4.4{suffix}",
+                "freebsd_major": major,
+                "freebsd_ports_sha": ports_sha,
+                "package_name": "py311-charset-normalizer",
+                "package_version": "3.4.4",
+                "port_version": "3.4.4",
+                "portname": "charset-normalizer",
+                "py_flavor": "py311",
+                "source_date_epoch": source_epoch,
+                "toolchain": toolchain,
+            }
+            expected[suffix] = {"textproc/py-charset-normalizer": identity}
+        line = next(line for line in emitted.splitlines() if line.startswith("dependency_packages="))
+        assert json.loads(line.partition("=")[2]) == expected
     commands = git_log.read_text(encoding="utf-8")
     assert "fetch --no-tags origin +refs/heads/ci-metadata:refs/remotes/origin/ci-metadata" in commands
     assert "rev-parse refs/remotes/origin/ci-metadata^{commit}" in commands
     assert f"show {ci_sha}:supported-versions.json" in commands
     assert commands.count("ls-remote ") == 1
+
+
+def test_release_dependency_loop_executes_every_origin_with_locked_python(tmp_path: Path) -> None:
+    release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+    script = textwrap.dedent(extract_step(release, "Build the .pkg via build-leg.sh").split("run: |\n", 1)[1])
+    lines = script.splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip().startswith("DEP_PKG_DIR="))
+    end = next(index for index, line in enumerate(lines[start:], start) if line.strip().startswith("for DEP_PKG in"))
+    command = "\n".join(lines[start:end])
+    locked_python = tmp_path / ".venv/bin/python"
+    locked_python.parent.mkdir(parents=True)
+    locked_log = tmp_path / "locked-argv"
+    locked_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" >> "$LOCKED_LOG"\n', encoding="utf-8")
+    locked_python.chmod(0o755)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    ambient_log = tmp_path / "ambient-argv"
+    ambient_python = fake_bin / "python3"
+    ambient_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" >> "$AMBIENT_LOG"\n', encoding="utf-8")
+    ambient_python.chmod(0o755)
+    fake_git = fake_bin / "git"
+    fake_git.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$GIT_LOG"\n', encoding="utf-8")
+    fake_git.chmod(0o755)
+    origins = ["textproc/py-charset-normalizer", "devel/py-demo"]
+    env = os.environ | {
+        "GITHUB_WORKSPACE": str(tmp_path),
+        "PFB_RUN_ROOT": str(tmp_path / "run"),
+        "RUN_ID": "release-test",
+        "EXTRA_PKGS": json.dumps(origins),
+        "PORTS_SHA": "a" * 40,
+        "PY": "py311",
+        "MAJOR": "15",
+        "CREATED": "1700000000",
+        "LOCKED_LOG": str(locked_log),
+        "AMBIENT_LOG": str(ambient_log),
+        "GIT_LOG": str(tmp_path / "git.log"),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    completed = subprocess.run(
+        ["dash", "-c", command],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not ambient_log.exists()
+    argv = locked_log.read_bytes().split(b"\0")[:-1]
+    assert argv.count(b"scripts/build-dep-pkg-portable.py") == len(origins)
+    for origin in origins:
+        assert argv.count(origin.encode()) == 1
+    assert (tmp_path / "git.log").read_text(encoding="utf-8").count("sparse-checkout add") == len(origins)
 
 
 def test_issue_2387_draft_persists_the_exact_tagged_handoff_asset() -> None:
