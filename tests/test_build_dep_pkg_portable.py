@@ -528,6 +528,13 @@ def test_parse_console_scripts_unparseable_line_raises() -> None:
         bdp.parse_console_scripts("[console_scripts]\nthis line has no colon target\n")
 
 
+def test_parse_console_scripts_refuses_exact_duplicate_name() -> None:
+    text = "[console_scripts]\nnormalizer = first:main\nnormalizer = second:main\n"
+
+    with pytest.raises(bdp.DepPkgError, match="duplicate console-script"):
+        bdp.parse_console_scripts(text)
+
+
 # --------------------------------------------------------------------------- #
 # --py-flavor -> python3.NN dotted version
 # --------------------------------------------------------------------------- #
@@ -589,6 +596,21 @@ def test_stage_wheel_refuses_console_script_host_collision(tmp_path: Path) -> No
     )
 
     with pytest.raises(bdp.DepPkgError, match="console-script.*collision"):
+        bdp.stage_wheel(wheel, tmp_path / "stage", "3.11")
+
+
+def test_stage_wheel_refuses_non_utf8_entry_points(tmp_path: Path) -> None:
+    wheel = tmp_path / "mypkg-1.0-py3-none-any.whl"
+    _write_wheel(
+        wheel,
+        files={
+            "mypkg/__init__.py": b"X = 1\n",
+            "mypkg-1.0.dist-info/entry_points.txt": b"\xff",
+        },
+        entry_points=None,
+    )
+
+    with pytest.raises(bdp.DepPkgError, match="entry_points.*UTF-8"):
         bdp.stage_wheel(wheel, tmp_path / "stage", "3.11")
 
 

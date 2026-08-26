@@ -409,6 +409,9 @@ def _validate_dependency_package(
     member_info = evidence["member_info"]
     if not isinstance(manifest, dict) or not isinstance(payload, dict) or not isinstance(member_info, dict):
         raise HandoffError(f"{package.name}: dependency package inspection evidence is malformed")
+    for forbidden in ("scripts", "directories"):
+        if forbidden in compact or forbidden in manifest:
+            raise HandoffError(f"{package.name}: dependency package compact/full manifest must not contain {forbidden}")
     compact_from_full = {key: value for key, value in manifest.items() if key != "files"}
     if compact != compact_from_full:
         raise HandoffError(f"{package.name}: dependency package compact/full manifest mismatch")
