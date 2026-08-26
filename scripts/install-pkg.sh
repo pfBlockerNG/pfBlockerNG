@@ -119,7 +119,9 @@ pkg_add_lock_retry() {
         # Same-shell probe: a separate SSH round-trip can observe a different ABI
         # while first-boot metadata settles. The final pkg command supplies status.
         if [ -n "${SMOKE_ABI:-}" ]; then
-            _pkg_add="pkg -o ABI=${SMOKE_ABI} add"
+            # Quote ABI for dash; empty SMOKE_ABI is treated as unset by -n above.
+            _abi_q=$(printf '%s' "$SMOKE_ABI" | sed "s/'/'\\\\''/g")
+            _pkg_add="pkg -o ABI='${_abi_q}' add"
         else
             _pkg_add="pkg add"
         fi

@@ -122,13 +122,32 @@ SCPEOF
     The contents of file "$SSH_LOG" should include "$(basename "$PKGFILE")"
   End
 
-  It 'SMOKE_ABI set -> pkg add forces that ABI (issue #2730)'
+  It 'SMOKE_ABI set -> pkg add forces that ABI quoted (issue #2730)'
     SMOKE_ABI=FreeBSD:15:amd64
     export SMOKE_ABI
     When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
     The status should be success
     The stdout should be present
-    The line 1 of contents of file "$SSH_LOG" should include 'pkg -o ABI=FreeBSD:15:amd64 add'
+    # ssh_t single-quotes the remote blob, so inner ABI quotes log as '\''.
+    The line 1 of contents of file "$SSH_LOG" should include "pkg -o ABI='\''FreeBSD:15:amd64'\'' add"
+  End
+
+  It 'SMOKE_ABI unset -> pkg add has no -o ABI (issue #2730)'
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should be present
+    The line 1 of contents of file "$SSH_LOG" should include 'pkg add'
+    The line 1 of contents of file "$SSH_LOG" should not include 'pkg -o ABI='
+  End
+
+  It 'SMOKE_ABI empty -> treated as unset (issue #2730)'
+    SMOKE_ABI=
+    export SMOKE_ABI
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should be present
+    The line 1 of contents of file "$SSH_LOG" should include 'pkg add'
+    The line 1 of contents of file "$SSH_LOG" should not include 'pkg -o ABI='
   End
 
   It 'logs pkg identity in the same remote shell immediately before pkg add'

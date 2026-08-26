@@ -143,6 +143,45 @@ def test_log_guest_identity_allows_pkg_abi_drift_when_userland_major_matches(
     assert "forcing_add_abi=FreeBSD:15:amd64" in printed
 
 
+def test_log_guest_identity_refuses_when_userland_major_moved_with_pkg_abi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """issue #2730 escalation: a 16 userland plus a 16 pkg ABI is not agreement.
+
+    Drift-allow is only when freebsd-version stays on the matrix major. Row 2
+    still refuses a real OS upgrade, even if pkg config ABI matches that upgrade.
+    """
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout("abi=FreeBSD:16:amd64", freebsd_version_line="freebsd_version=16.0-CURRENT"))
+
+    with pytest.raises(RuntimeError, match=r"freebsd-version") as exc_info:
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+    assert "16.0-CURRENT" in str(exc_info.value)
+    assert "FreeBSD:15:amd64" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    "abi_line",
+    [
+        "abi=",
+        "abi= ",
+        "abi=?",
+        "abi=FreeBSD:",
+        "abi=FreeBSD:x:amd64",
+        "abi=not-an-abi",
+        "abi=FreeBSD",
+    ],
+)
+def test_log_guest_identity_refuses_unreadable_pkg_abi(monkeypatch: pytest.MonkeyPatch, abi_line: str) -> None:
+    """issue #2730: unreadable/placeholder pkg ABI fails closed, not as drift."""
+    monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
+    vm = _IdentityVM(_identity_stdout(abi_line))
+
+    with pytest.raises(RuntimeError, match=r"unreadable pkg ABI"):
+        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+
+
 def test_log_guest_identity_allows_matching_abi_os_major(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
     vm = _IdentityVM(_identity_stdout("abi=FreeBSD:15:amd64"))
