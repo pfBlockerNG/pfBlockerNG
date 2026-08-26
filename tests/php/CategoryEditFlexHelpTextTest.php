@@ -15,21 +15,18 @@ use PHPUnit\Framework\TestCase;
  */
 final class CategoryEditFlexHelpTextTest extends TestCase
 {
-	private static string $source;
-
-	public static function setUpBeforeClass(): void
-	{
-		self::$source = php_strip_whitespace(
-			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
-		);
-		if (self::$source === '') {
-			throw new RuntimeException('test bootstrap: failed to read comment-free pfblockerng_category_edit.php');
-		}
-	}
-
 	public function testFlexHelpStatesCertificateVerificationIsDisabled(): void
 	{
-		$help = self::flexGuidelineHelp();
+		$source = php_strip_whitespace(
+			dirname(__DIR__, 2) . '/src/usr/local/www/pfblockerng/pfblockerng_category_edit.php'
+		);
+		if ($source === '') {
+			throw new RuntimeException('test bootstrap: failed to read comment-free pfblockerng_category_edit.php');
+		}
+		if (preg_match('#<dt>Flex:</dt><dd>.*?</dd>#s', $source, $match) !== 1) {
+			self::fail('category-edit Guidelines infoblock is missing a Flex definition');
+		}
+		$help = $match[0];
 
 		$this->assertStringContainsString(
 			'certificate verification disabled',
@@ -56,13 +53,5 @@ final class CategoryEditFlexHelpTextTest extends TestCase
 			$help,
 			'Flex help must not hide the retry behind unspecific downgrade wording'
 		);
-	}
-
-	private static function flexGuidelineHelp(): string
-	{
-		if (preg_match('#<dt>Flex:</dt><dd>.*?</dd>#s', self::$source, $match) !== 1) {
-			self::fail('category-edit Guidelines infoblock is missing a Flex definition');
-		}
-		return $match[0];
 	}
 }
