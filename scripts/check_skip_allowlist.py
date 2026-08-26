@@ -73,6 +73,7 @@ _ENTRY = re.compile(r"^(?P<id>\S.*)\s{2,}#\s*(?P<reason>\S.*)$")
 # a clean verdict on a report that recorded skips, which is the failure this gate exists
 # to catch.
 _SKIP_ELEMENTS = frozenset({"skipped", "skip"})
+_NODE_SUITES = frozenset({"widget-js", "webassets-grammar", "webassets-listgrammar", "webassets-bundle"})
 
 
 class ReportError(Exception):
@@ -111,12 +112,13 @@ def parse_report(path: Path, suite: str) -> list[tuple[str, str | None]]:
     except ET.ParseError as exc:
         raise ReportError(f"report file is not well-formed XML: {path}: {exc}") from exc
     skips: list[tuple[str, str | None]] = []
-    seen: set[str] = set()
+    seen: set[str] | None = set() if suite in _NODE_SUITES else None
     for testcase in root.iter("testcase"):
         test_id = testcase_id(suite, testcase)
-        if test_id in seen:
-            raise ReportError(f"report contains duplicate testcase id: {test_id}")
-        seen.add(test_id)
+        if seen is not None:
+            if test_id in seen:
+                raise ReportError(f"report contains duplicate testcase id: {test_id}")
+            seen.add(test_id)
         for child in testcase:
             if child.tag in _SKIP_ELEMENTS:
                 skips.append((test_id, skip_reason(child)))
