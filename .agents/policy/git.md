@@ -25,12 +25,23 @@ sh scripts/agent/init-worktree-tools.sh <path>      # mandatory per-worktree ind
 git worktree remove <path>            # run from any directory OUTSIDE <path>
 ```
 
-`scripts/agent/work-branch.sh … --worktree` performs the configured-origin fetch,
-worktree add at the requested base, and direct tool initialization as one operation;
-an initialization failure rolls back both the worktree and its new branch. After a
-manual `git worktree add`, run the initializer yourself. CodeGraph and Graphify are
-mandatory and every worktree keeps its own ignored `graphify-out/`; Serena runs when
-available except under OMP (`OMP_CLI` or `PI_CLI`), which uses native LSP tooling.
+`work-branch.sh … --worktree` fetches, adds below
+`<repo-parent>/.<repo-name>_worktrees/<sanitized-branch>`, and initializes tools.
+Relative paths stay below that root; absolute paths stay exact; initialization failure
+rolls back the worktree and branch. It uses Git directly. Manual adds must run
+`init-worktree-tools.sh`; CodeGraph and Graphify are mandatory, while Serena is skipped
+when absent or under OMP.
+
+For matching Worktrunk placement, set:
+
+```toml
+# ~/.config/worktrunk/config.toml
+worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"
+```
+
+The tracked `.config/wt.toml` initializes tools during `wt switch --create <branch>`
+and prunes metadata after merge/removal. `wt remove` deletes only branches it verifies
+as integrated; landing observes the foreground result.
 
 - Branch off **current** base (`git fetch` first); stale-tip worktree needs rebase
   before it can land.
