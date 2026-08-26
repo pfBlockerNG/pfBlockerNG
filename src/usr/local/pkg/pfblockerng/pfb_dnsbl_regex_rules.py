@@ -226,7 +226,7 @@ def _regex_atoms_share_character(first: str, second: str) -> bool:
             warnings.simplefilter("ignore")
             left = re.compile(first, re.IGNORECASE)
             right = re.compile(second, re.IGNORECASE)
-    except re.error:
+    except (re.error, RecursionError):
         return False
     return any(left.fullmatch(probe) and right.fullmatch(probe) for probe in _REGEX_OVERLAP_ALPHABET)
 
@@ -241,7 +241,7 @@ def _regex_atoms_overlap(first: str, second: str) -> bool:
             warnings.simplefilter("ignore")
             re.compile(first, re.IGNORECASE)
             re.compile(second, re.IGNORECASE)
-    except re.error:
+    except (re.error, RecursionError):
         return False
     return _regex_body_overlaps_atom(first, second)
 
