@@ -18,7 +18,7 @@ issues, process improvements become a PR against this skill.
 
 | # | Scope | Roots (source of truth) | Read first |
 |---|-------|--------------------------|------------|
-| 0 | release/publish plane | `.github/workflows/{release,release-published,nightly,pkg-republish,pkg-render-site}.yml`, `scripts/publish_*.py`, `scripts/catalogue_assembly.py`, `scripts/build-*-portable.py`, `scripts/build-leg.sh`, `scripts/publish-pkg-repo.sh`, `scripts/render-pkg-site.sh`, `scripts/gen_landing.py`, `pkg-site/`, live `pfBlockerNG/pkg` `docs/` + Pages | `.agents/context/release.md`, `docs/misc/architecture-notes.md` (pkg repository) |
+| 0 | release/publish plane | source `.github/workflows/{release,release-published,nightly,pkg-republish,pkg-tagged-ingest}.yml`, `scripts/{dispatch-pkg-publication.sh,build-*-portable.py,build-leg.sh}`, plus live `pfBlockerNG/pkg` `.github/workflows/{ingest,render-site}.yml`, `scripts/{publish_*.py,publish-pkg-repo.sh,render-pkg-site.sh,gen_landing.py,catalogue_assembly.py}`, `pkg-site/`, `docs/`, and Pages | `.agents/context/release.md`, `docs/misc/architecture-notes.md` (pkg repository) |
 | 1 | DNSBL/ABP pipeline | `src/usr/local/pkg/pfblockerng/pfb_unbound.py`, `list_scripts/`, manifest/swap/watcher paths in `pfblockerng.inc` | architecture-notes "DNSBL/ABP pipeline", `docs/misc/public-suffix-list.md` |
 | 2 | IP alias tables + reload + scheduling | `pfblockerng.inc` alias/reload/cron code, `pfblockerng.sh` | architecture-notes ADR-40/43/11 |
 | 3 | Web UI + Alerts/Reports | `src/usr/local/www/**` | architecture-notes "Web UI test tiers", `docs/misc/alerts-reports-pipeline.md`, `.agents/context/lang-php.md` |

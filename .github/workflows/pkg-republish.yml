@@ -1,16 +1,4 @@
-name: Trigger pkg repository republish
-
-# Manual dispatch that re-runs the SAME publish-pkg-repo.sh flow
-# release-published.yml's publish-pkg-repo job runs on a release, for a Release
-# already published. Two uses: republish the self-hosted pkg catalog on demand
-# (e.g. after a catalogue-side fix), and verify the GitHub App credentials work — a
-# FAILED run means the App ID / private key is missing, misconfigured, or lacks
-# Contents:write on pfBlockerNG/pkg. issue #2146: there is no workflow in
-# pfBlockerNG/pkg any more — this run does the verify + assemble + commit + push
-# itself, exactly like release-published.yml's job. This job republishes the
-# catalogue ONLY; the render-site job below (pkg-render-site.yml, issue #2450
-# step 3) renders the site around it afterward — the two are separate concerns
-# with disjoint docs/ ownership.
+name: Republish immutable Release through pkg
 
 on:
   workflow_dispatch:
@@ -25,179 +13,84 @@ on:
         type: string
 
 permissions:
-  packages: read
   contents: read
 
 concurrency:
   group: pkg-repository-mutation
-  queue: max
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: Publish the pkg catalogue
+  resolve:
     runs-on: ubuntu-latest
+    outputs:
+      source_repository: ${{ steps.resolve.outputs.source_repository }}
+      release_id: ${{ steps.resolve.outputs.release_id }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      destinations: ${{ steps.resolve.outputs.destinations }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      portversion: ${{ steps.resolve.outputs.portversion }}
     steps:
-      - name: Validate immutable source Release identity
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RELEASE_ID: ${{ inputs.release_id }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -eu
-          [ -n "$RELEASE_ID" ] || { echo "::error::release_id is required"; exit 1; }
-          [ -n "$RELEASE_TAG" ] || { echo "::error::release_tag is required"; exit 1; }
-          case "$RELEASE_ID" in
-            ''|*[!0-9]*) echo "::error::release_id must be a decimal GitHub Release id"; exit 1 ;;
-          esac
-          RELEASE_JSON=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
-          ACTUAL_TAG=$(printf '%s' "$RELEASE_JSON" | jq -r '.tag_name')
-          RELEASE_DRAFT=$(printf '%s' "$RELEASE_JSON" | jq -r '.draft')
-          RELEASE_PRERELEASE=$(printf '%s' "$RELEASE_JSON" | jq -r '.prerelease')
-          [ "$ACTUAL_TAG" = "$RELEASE_TAG" ] || {
-            echo "::error::release ${RELEASE_ID} is not tagged ${RELEASE_TAG}"; exit 1;
-          }
-          [ "$RELEASE_DRAFT" = "false" ] || {
-            echo "::error::release ${RELEASE_ID} is still a draft"; exit 1;
-          }
-          # Same identity check release-published.yml makes. This step runs before the
-          # checkout, so the tag shape stands in for the canonical parse: every tag that
-          # survives derive_destinations_from_git below is vX.Y.Z or vX.Y.Z.<stage><n>,
-          # and only the latter is a prerelease. A malformed tag fails there instead.
-          case "$RELEASE_TAG" in
-            *.*.*.*) EXPECTED_PRERELEASE=true ;;
-            *) EXPECTED_PRERELEASE=false ;;
-          esac
-          [ "$RELEASE_PRERELEASE" = "$EXPECTED_PRERELEASE" ] || {
-            echo "::error::release ${RELEASE_ID} prerelease flag does not match ${RELEASE_TAG}"; exit 1;
-          }
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.workflow_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Derive destinations from the exact Release tag
+
+      - name: Resolve exact immutable Release
         id: resolve
         env:
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -eu
-          git fetch origin --tags --force '+refs/heads/release/*:refs/remotes/origin/release/*'
-          SOURCE_LINE=$(python3 - "$RELEASE_TAG" <<'PY'
-          import sys
-
-          from scripts.release_version import parse_release_tag, primary_channel_for_tag
-
-          tag = sys.argv[1]
-          print(parse_release_tag(tag, primary_channel_for_tag(tag)).release_line)
-          PY
-          )
-          SOURCE_SHA=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
-          DESTINATIONS=$(python3 - "$RELEASE_TAG" "$SOURCE_LINE" "$SOURCE_SHA" <<'PY'
-          import json
-          import sys
-
-          from scripts.release_version import derive_destinations_from_git
-
-          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3])), separators=(",", ":")))
-          PY
-          )
-          echo "destinations=${DESTINATIONS}" >> "$GITHUB_OUTPUT"
-          echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
-      - name: Generate GitHub App token (pkg)
-        id: app-token
-        # Mint a short-lived installation token from the PKG GitHub App, scoped to
-        # pfBlockerNG/pkg with Contents:write — create-github-app-token NARROWS the
-        # token to only the permission(s) listed, so contents:write here (not
-        # actions:write) is the whole reason the token can push code.
-        uses: actions/create-github-app-token@v3
-        with:
-          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
-          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
-          owner: pfBlockerNG
-          repositories: pkg
-          permission-contents: write
-
-      - name: Checkout pfBlockerNG/pkg
-        uses: actions/checkout@v6
-        with:
-          repository: pfBlockerNG/pkg
-          ref: main
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true # publish-pkg-repo.sh pushes via this token
-          path: pkg-repo
-          fetch-depth: 1
-
-      - name: Download release assets + build the digest sidecar
-        env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          RELEASE_ID: ${{ inputs.release_id }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-          HANDOFF_NAME: pfblockerng-release-handoff.json
-        run: |
-          set -eu
-          mkdir -p "${RUNNER_TEMP}/assets"
-          META=$(gh api "repos/${REPOSITORY}/releases/${RELEASE_ID}")
-          PKG_ASSETS=$(printf '%s' "$META" | jq -c '[.assets[] | select(.name | endswith(".pkg"))]')
-          [ "$(printf '%s' "$PKG_ASSETS" | jq 'length')" -gt 0 ] || {
-            echo "::error::release ${RELEASE_TAG} carries no .pkg assets"; exit 1; }
-          BAD=$(printf '%s' "$PKG_ASSETS" | jq '[.[] | select((.digest // "") | startswith("sha256:") | not)] | length')
-          [ "$BAD" -eq 0 ] || {
-            echo "::error::one or more .pkg release assets have no sha256 digest from the GitHub API"; exit 1; }
-          HANDOFF_ASSET=$(printf '%s' "$META" | jq -c --arg name "$HANDOFF_NAME" '[.assets[] | select(.name == $name)]')
-          [ "$(printf '%s' "$HANDOFF_ASSET" | jq 'length')" -eq 1 ] || {
-            echo "::error::release ${RELEASE_TAG} must carry exactly one ${HANDOFF_NAME}"; exit 1; }
-          HANDOFF_DIGEST=$(printf '%s' "$HANDOFF_ASSET" | jq -r '.[0].digest // ""')
-          case "$HANDOFF_DIGEST" in
-            sha256:[0-9a-f][0-9a-f]*) ;;
-            *) echo "::error::${HANDOFF_NAME} has no sha256 digest from the GitHub API"; exit 1 ;;
-          esac
-          printf '%s' "$PKG_ASSETS" \
-            | jq 'map({(.name): (.digest | ltrimstr("sha256:"))}) | add' \
-            > "${RUNNER_TEMP}/assets/digests.json"
-          gh release download "$RELEASE_TAG" -R "$REPOSITORY" --pattern '*.pkg' --dir "${RUNNER_TEMP}/assets"
-          gh release download "$RELEASE_TAG" -R "$REPOSITORY" --pattern "$HANDOFF_NAME" --dir "${RUNNER_TEMP}/assets"
-          ACTUAL_HANDOFF_DIGEST=$(sha256sum "${RUNNER_TEMP}/assets/${HANDOFF_NAME}" | cut -d' ' -f1)
-          [ "sha256:${ACTUAL_HANDOFF_DIGEST}" = "$HANDOFF_DIGEST" ] || {
-            echo "::error::${HANDOFF_NAME} digest does not match the Release API"; exit 1; }
-
-      - name: Materialise the catalogue signing key
-        env:
-          PFB_PKG_SIGNING_KEY: ${{ secrets.PFB_PKG_SIGNING_KEY }}
-        run: |
-          umask 077
-          printf '%s\n' "$PFB_PKG_SIGNING_KEY" > "${RUNNER_TEMP}/pfb-pkg-signing.key"
-
-      - name: Publish the pkg catalogue
-        env:
           SOURCE_REPOSITORY: ${{ github.repository }}
           RELEASE_ID: ${{ inputs.release_id }}
           RELEASE_TAG: ${{ inputs.release_tag }}
-          SOURCE_SHA: ${{ steps.resolve.outputs.source_sha }}
-          DESTINATIONS: ${{ steps.resolve.outputs.destinations }}
-          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
-        # Path env vars are exported HERE, not in the env: map above — GitHub
-        # Actions never shell-expands env-map values, so `$GITHUB_WORKSPACE`
-        # there reaches the job as a literal dollar-string (issue #2231). The
-        # run body is where a shell expands the container-translated value.
         run: |
           set -eu
-          export PFB_SRC="$GITHUB_WORKSPACE"
-          export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
-          export ASSETS_DIR="$RUNNER_TEMP/assets"
-          export HANDOFF_FILE="$RUNNER_TEMP/assets/pfblockerng-release-handoff.json"
-          export PFB_SIGN_KEY="${RUNNER_TEMP}/pfb-pkg-signing.key"
-          sh scripts/publish-pkg-repo.sh
+          case "$RELEASE_ID" in ''|*[!0-9]*) echo "::error::release_id must be decimal"; exit 1 ;; esac
+          META=$(gh api "repos/${SOURCE_REPOSITORY}/releases/${RELEASE_ID}")
+          [ "$(printf '%s' "$META" | jq -r '.tag_name')" = "$RELEASE_TAG" ] || {
+            echo "::error::Release id/tag mismatch"; exit 1; }
+          [ "$(printf '%s' "$META" | jq -r '.draft')" = false ] || {
+            echo "::error::Release is a draft"; exit 1; }
+          [ "$(printf '%s' "$META" | jq -r '.immutable // false')" = true ] || {
+            echo "::error::Release is not immutable"; exit 1; }
 
-  render-site:
-    name: Render the pkg website
-    needs: publish
-    uses: ./.github/workflows/pkg-render-site.yml
+          git fetch origin --tags --force '+refs/heads/release/*:refs/remotes/origin/release/*'
+          eval "$(sh scripts/release-version.sh "$RELEASE_TAG" "$(python3 - "$RELEASE_TAG" <<'PY'
+          import sys
+          from scripts.release_version import primary_channel_for_tag
+          print(primary_channel_for_tag(sys.argv[1]))
+          PY
+          )")"
+          SOURCE_SHA=$(git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}")
+          DESTINATIONS=$(python3 - "$RELEASE_TAG" "$release_line" "$SOURCE_SHA" <<'PY'
+          import json
+          import sys
+          from scripts.release_version import derive_destinations_from_git
+          print(json.dumps(list(derive_destinations_from_git(sys.argv[1], sys.argv[2], current_commit=sys.argv[3])), separators=(",", ":")))
+          PY
+          )
+          {
+            echo "source_repository=$SOURCE_REPOSITORY"
+            echo "release_id=$RELEASE_ID"
+            echo "release_tag=$RELEASE_TAG"
+            echo "source_sha=$SOURCE_SHA"
+            echo "destinations=$DESTINATIONS"
+            echo "channel=$release_channel"
+            echo "portversion=$portversion"
+          } >> "$GITHUB_OUTPUT"
+
+  publish-pkg:
+    needs: resolve
+    uses: ./.github/workflows/pkg-tagged-ingest.yml
     with:
-      source_ref: "${{ github.workflow_sha }}"
-      caller_holds_pkg_lock: true
+      source_repository: ${{ needs.resolve.outputs.source_repository }}
+      release_id: ${{ needs.resolve.outputs.release_id }}
+      release_tag: ${{ needs.resolve.outputs.release_tag }}
+      source_sha: ${{ needs.resolve.outputs.source_sha }}
+      destinations: ${{ needs.resolve.outputs.destinations }}
+      channel: ${{ needs.resolve.outputs.channel }}
+      portversion: ${{ needs.resolve.outputs.portversion }}
     secrets:
       PKG_GITHUB_APP_ID: ${{ secrets.PKG_GITHUB_APP_ID }}
       PKG_GITHUB_APP_PRIVATE_KEY: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}

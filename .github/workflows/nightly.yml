@@ -396,104 +396,132 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  publish-pkg-repo:
-    name: "Publish the pkg catalogue"
+  publish-nightly-oci:
+    name: Publish verified Nightly handoff to OCI
     needs: [prepare, handoff]
     runs-on: ubuntu-latest
     permissions:
-      packages: read
+      packages: write
       contents: read
+    outputs:
+      artifact_ref: ${{ steps.push.outputs.artifact_ref }}
     steps:
-      - name: Checkout trusted workflow tools (the engine + orchestration scripts — TRUSTED ref)
-        uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
         with:
-          # SECURITY: publish-pkg-repo.sh below is EXECUTED AS SHELL and, via
-          # publish_nightly.py, holds an App token able to push to
-          # pfBlockerNG/pkg. Same rule as release-published.yml's own
-          # publish-pkg-repo job: pin the revision the workflow's own `prepare`
-          # job already resolved (needs.prepare.outputs.tools_sha), never a
-          # floating ref that could move between this run's start and now.
-          ref: ${{ needs.prepare.outputs.tools_sha }}
-          fetch-depth: 0
-          persist-credentials: false
-          path: trusted
+          name: nightly-handoff-${{ github.run_id }}
+          path: oci
 
-      - name: Generate GitHub App token (pkg)
-        id: app-token
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: nightly-result-*
+          path: oci/results
+          merge-multiple: false
+
+      - uses: oras-project/setup-oras@v1
+
+      - name: Push exact Nightly OCI manifest
+        id: push
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PKG_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: |
+          set -eu
+          tar -czf oci/results.tar.gz -C oci/results .
+          printf '%s' "$GH_TOKEN" | oras login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          cd oci
+          TARGET="ghcr.io/pfblockerng/pfblockerng-nightly:${PKG_VERSION}"
+          DIGEST=$(oras push \
+            --artifact-type application/vnd.pfblockerng.nightly.v1 \
+            --annotation "org.opencontainers.image.version=${PKG_VERSION}" \
+            --annotation "org.opencontainers.image.revision=${SOURCE_SHA}" \
+            --annotation "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --annotation "org.pfblockerng.source-run-id=${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}" \
+            --format go-template='{{.digest}}' \
+            "$TARGET" \
+            "nightly-handoff.json:application/vnd.pfblockerng.nightly.handoff.v1+json" \
+            "results.tar.gz:application/vnd.pfblockerng.nightly.results.v1+tar+gzip")
+          case "$DIGEST" in sha256:[0-9a-f][0-9a-f]*) ;; *) echo "::error::ORAS returned an invalid manifest digest"; exit 1 ;; esac
+          DIGEST_HEX=${DIGEST#sha256:}
+          [ "${#DIGEST_HEX}" -eq 64 ] || { echo "::error::ORAS digest is not sha256"; exit 1; }
+          ARTIFACT_REF="ghcr.io/pfblockerng/pfblockerng-nightly@sha256:${DIGEST_HEX}"
+          echo "artifact_ref=$ARTIFACT_REF" >> "$GITHUB_OUTPUT"
+          echo "artifact_ref=ghcr.io/pfblockerng/pfblockerng-nightly@sha256:${DIGEST_HEX}"
+
+  ingest-pkg:
+    name: Dispatch digest-pinned Nightly ingestion
+    needs: [prepare, publish-nightly-oci]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate pkg Actions token
+        id: pkg-token
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
           private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
           owner: pfBlockerNG
           repositories: pkg
-          permission-contents: write
+          permission-actions: write
 
-      - name: Checkout pfBlockerNG/pkg
-        uses: actions/checkout@v6
-        with:
-          repository: pfBlockerNG/pkg
-          ref: main
-          token: ${{ steps.app-token.outputs.token }}
-          persist-credentials: true # publish-pkg-repo.sh pushes via this token
-          path: pkg-repo
-          fetch-depth: 1
-
-      - name: Download verified publisher handoff
-        uses: actions/download-artifact@v7
-        with:
-          name: nightly-handoff-${{ github.run_id }}
-          path: handoff
-
-      - name: Download every BUILD result
-        uses: actions/download-artifact@v7
-        with:
-          pattern: nightly-result-*
-          path: results
-          merge-multiple: false
-
-      - name: Materialise the catalogue signing key
+      - name: Dispatch exact Nightly digest
         env:
-          PFB_PKG_SIGNING_KEY: ${{ secrets.PFB_PKG_SIGNING_KEY }}
-        run: |
-          umask 077
-          printf '%s\n' "$PFB_PKG_SIGNING_KEY" > "${RUNNER_TEMP}/pfb-pkg-signing.key"
-
-      - name: Publish the pkg catalogue
+          GH_TOKEN: ${{ steps.pkg-token.outputs.token }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          ARTIFACT_REF: ${{ needs.publish-nightly-oci.outputs.artifact_ref }}
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          RESULT_FILE: ${{ runner.temp }}/pkg-nightly-result.json
         run: |
           set -eu
-          export PFB_SRC="$GITHUB_WORKSPACE/trusted"
-          export PKG_REPO="$GITHUB_WORKSPACE/pkg-repo"
-          export HANDOFF_FILE="$GITHUB_WORKSPACE/handoff/nightly-handoff.json"
-          export RESULTS_DIR="$GITHUB_WORKSPACE/results"
-          export PUBLISH_KIND=nightly
-          export PFB_SIGN_KEY="${RUNNER_TEMP}/pfb-pkg-signing.key"
-          # Failed Nightly? Dispatch another one. No durable allocation exists to
-          # recover or replay; each invocation gets its own timestamped version.
-          export SOURCE_RUN_ID="${GITHUB_RUN_ID}:${GITHUB_RUN_ATTEMPT}"
-          sh trusted/scripts/publish-pkg-repo.sh
-
-  render-site:
-    name: Render the pkg website
-    needs: [prepare, publish-pkg-repo]
-    uses: ./.github/workflows/pkg-render-site.yml
-    with:
-      source_ref: "${{ needs.prepare.outputs.tools_sha }}"
-      caller_holds_pkg_lock: true
-    secrets:
-      PKG_GITHUB_APP_ID: ${{ secrets.PKG_GITHUB_APP_ID }}
-      PKG_GITHUB_APP_PRIVATE_KEY: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          export PKG_OPERATION=nightly # operation=nightly
+          sh scripts/dispatch-pkg-publication.sh
 
   validate-live-pages-install:
     name: Live Pages pkg install
-    needs: [prepare, publish-pkg-repo]
+    needs: [prepare, ingest-pkg]
     uses: ./.github/workflows/smoke-single.yml
     with:
       pytest_marker: repo
-      # Nightly URL uses the existing smoke_nightly_* inputs on smoke-single.yml
-      # (already declared). smoke_repo_* (generic channel URL) lands when that
-      # 48k callee can be updated; actionlint rejects undeclared inputs.
       pytest_filter: test_install_from_live_nightly_url
       smoke_nightly_live_url: https://pkg.pfblockerng.com/nightly
       smoke_nightly_expected_source_sha: ${{ needs.prepare.outputs.source_sha }}
       smoke_nightly_expected_version: ${{ needs.prepare.outputs.pkg_version }}
     secrets: inherit
+
+  cleanup-nightly-oci:
+    name: Delete successfully validated Nightly OCI handoff
+    needs: [prepare, publish-nightly-oci, validate-live-pages-install]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.prepare.outputs.tools_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Generate pkg Actions token
+        id: pkg-token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.PKG_GITHUB_APP_ID }}
+          private-key: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+          owner: pfBlockerNG
+          repositories: pkg
+          permission-actions: write
+
+      - name: Delete the exact consumed manifest through pkg
+        env:
+          GH_TOKEN: ${{ steps.pkg-token.outputs.token }}
+          SOURCE_RUN_ID: ${{ github.run_id }}:${{ github.run_attempt }}
+          ARTIFACT_REF: ${{ needs.publish-nightly-oci.outputs.artifact_ref }}
+          NIGHTLY_VERSION: ${{ needs.prepare.outputs.pkg_version }}
+          RESULT_FILE: ${{ runner.temp }}/pkg-cleanup-result.json
+        run: |
+          set -eu
+          export PKG_OPERATION=nightly-cleanup # operation=nightly-cleanup
+          sh scripts/dispatch-pkg-publication.sh
