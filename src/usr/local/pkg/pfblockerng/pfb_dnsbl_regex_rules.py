@@ -209,10 +209,6 @@ def _regex_group_metadata(pattern: str) -> tuple[dict[int, int], set[int]]:
     return ends, alternates
 
 
-def _regex_group_ends(pattern: str) -> dict[int, int]:
-    return _regex_group_metadata(pattern)[0]
-
-
 def _regex_group_end(pattern: str, index: int, group_ends: dict[int, int] | None = None) -> int:
     """End offset past the matching ``)`` or the string when the group is unclosed."""
     return (group_ends if group_ends is not None else _regex_group_metadata(pattern)[0]).get(index, len(pattern))
@@ -293,8 +289,8 @@ def _regex_conditional_body(
 def _regex_next_unit(
     pattern: str,
     index: int,
-    group_ends: dict[int, int] | None = None,
-    group_alternates: set[int] | None = None,
+    group_ends: dict[int, int],
+    group_alternates: set[int],
     depth: int = 0,
 ) -> tuple[str, str, int]:
     """Read one unit as ``(atom, quantifier role, next index)``."""
@@ -307,11 +303,6 @@ def _regex_next_unit(
         atom_end = _regex_atom_end(pattern, index)
         quantifier_end, role = _regex_quantifier(pattern, atom_end)
         return pattern[index:atom_end], role, max(quantifier_end, atom_end)
-
-    if group_ends is None or group_alternates is None:
-        metadata_ends, metadata_alternates = _regex_group_metadata(pattern)
-        group_ends = metadata_ends if group_ends is None else group_ends
-        group_alternates = metadata_alternates if group_alternates is None else group_alternates
 
     group_end = _regex_group_end(pattern, index, group_ends)
     closed = pattern[group_end - 1 : group_end] == ")"
@@ -366,6 +357,8 @@ def _regex_next_unit(
         if body and not any(character in body for character in "()|"):
             return body, "run", quantifier_end
     if role != "bridge" and index in group_alternates:
+        if depth >= _REGEX_NESTED_SCAN_MAX:
+            return "", "float", max(quantifier_end, group_end)
         body = body if body is not None else pattern[body_start : group_end - 1]
         if body and not _regex_body_has_run(body, depth + 1):
             return body, role, max(quantifier_end, group_end)
