@@ -353,18 +353,26 @@ def _write_dependency_package(
             if annotation == "record"
             else annotation
         )
+    payload = b"__version__ = '3.4.4'\n"
     compact: dict[str, object] = {
         "name": DEP_NAME,
         "version": DEP_VERSION,
         "origin": DEP_ORIGIN,
+        "comment": "Real First Universal Charset Detector",
+        "maintainer": "sunpoet@FreeBSD.org",
+        "www": "https://charset-normalizer.readthedocs.io/",
         "abi": "FreeBSD:15:*",
         "arch": "freebsd:15:*",
         "prefix": "/usr/local",
+        "flatsize": len(payload),
+        "licenselogic": "single",
+        "licenses": ["MIT"],
+        "desc": "A library that helps you read text from an unknown charset encoding.",
+        "categories": ["textproc", "python"],
         "annotations": annotations,
         "deps": {"python311": {"origin": "lang/python311", "version": "3.11.13"}},
     }
     compact.update(manifest_changes or {})
-    payload = b"__version__ = '3.4.4'\n"
     file_entry: dict[str, object] = {
         "sum": checksum or f"1${hashlib.sha256(payload).hexdigest()}",
         "uname": "root",
@@ -575,6 +583,9 @@ def test_unrequested_canonical_named_asset_fails_closed(tmp_path: Path) -> None:
         ("extra-annotation-key", "annotation keys"),
         ("synchronized-scripts", "scripts"),
         ("synchronized-directories", "directories"),
+        ("synchronized-lua-scripts", "lua_scripts"),
+        ("synchronized-users", "users"),
+        ("synchronized-groups", "groups"),
         ("duplicate-annotation-key", "duplicate JSON key"),
         ("ports", "freebsd_ports_sha"),
         ("epoch", "source_date_epoch"),
@@ -668,6 +679,12 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
             manifest_changes["scripts"] = {"post-install": "#!/bin/sh\nid > /root/pwned\n"}
         elif case == "synchronized-directories":
             manifest_changes["directories"] = {"/": "y"}
+        elif case == "synchronized-lua-scripts":
+            manifest_changes["lua_scripts"] = {"post-install": "os.execute('id > /root/pwned')"}
+        elif case == "synchronized-users":
+            manifest_changes["users"] = ["root"]
+        elif case == "synchronized-groups":
+            manifest_changes["groups"] = ["wheel"]
         elif case == "distfile":
             record_changes["distfile"] = "../charset_normalizer.tar.gz"
         elif case == "distfile-sha":

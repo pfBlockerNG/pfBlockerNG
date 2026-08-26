@@ -79,6 +79,25 @@ _DEP_IDENTITY_FIELDS = (
     "freebsd_major",
     "py_flavor",
 )
+_DEP_COMPACT_MANIFEST_FIELDS = {
+    "name",
+    "origin",
+    "version",
+    "comment",
+    "maintainer",
+    "www",
+    "abi",
+    "arch",
+    "prefix",
+    "flatsize",
+    "licenselogic",
+    "licenses",
+    "desc",
+    "categories",
+    "deps",
+    "annotations",
+}
+_DEP_FULL_MANIFEST_FIELDS = _DEP_COMPACT_MANIFEST_FIELDS | {"files"}
 _ORIGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
@@ -409,9 +428,16 @@ def _validate_dependency_package(
     member_info = evidence["member_info"]
     if not isinstance(manifest, dict) or not isinstance(payload, dict) or not isinstance(member_info, dict):
         raise HandoffError(f"{package.name}: dependency package inspection evidence is malformed")
-    for forbidden in ("scripts", "directories"):
-        if forbidden in compact or forbidden in manifest:
-            raise HandoffError(f"{package.name}: dependency package compact/full manifest must not contain {forbidden}")
+    if set(compact) != _DEP_COMPACT_MANIFEST_FIELDS:
+        raise HandoffError(
+            f"{package.name}: dependency package compact/full manifest exact compact fields required; "
+            f"got {sorted(compact)}"
+        )
+    if set(manifest) != _DEP_FULL_MANIFEST_FIELDS:
+        raise HandoffError(
+            f"{package.name}: dependency package compact/full manifest exact full fields required; "
+            f"got {sorted(manifest)}"
+        )
     compact_from_full = {key: value for key, value in manifest.items() if key != "files"}
     if compact != compact_from_full:
         raise HandoffError(f"{package.name}: dependency package compact/full manifest mismatch")
