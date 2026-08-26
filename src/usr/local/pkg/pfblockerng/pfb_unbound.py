@@ -1498,7 +1498,8 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["allowRegexDB"] = False
     pfb["important_rules"] = False
     # ADR-07 regex-safety defaults: opt-in length cap OFF; shared catastrophic-shape
-    # gate and runtime warn/evict ALWAYS on. The ini MAIN section overrides these.
+    # gate and runtime warn/evict are always active. MAIN ini may override
+    # regex_cap, regex_warn_ms, and regex_evict_ms; it cannot disable the shape gate.
     pfb["regex_cap"] = False
     pfb["regex_warn_ms"] = REGEX_WARN_MS_DEFAULT
     pfb["regex_evict_ms"] = REGEX_EVICT_MS_DEFAULT
