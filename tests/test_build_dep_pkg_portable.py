@@ -358,6 +358,7 @@ def test_build_wheel_pins_command_and_sanitized_environment(tmp_path: Path, monk
         "LANG",
         "LC_CTYPE",
         "PIP_INDEX_URL",
+        "PIP_CONSTRAINT",
         "PYTHONPATH",
         "SETUPTOOLS_SCM_PRETEND_VERSION",
         "SOURCE_DATE_EPOCH",
@@ -396,14 +397,12 @@ def test_build_wheel_pins_command_and_sanitized_environment(tmp_path: Path, monk
     for name in (
         "LC_CTYPE",
         "PIP_INDEX_URL",
+        "PIP_CONSTRAINT",
         "PYTHONPATH",
         "SETUPTOOLS_SCM_PRETEND_VERSION",
         "WHEEL_TOOL",
     ):
         assert name not in env
-    constraints_path = Path(env["PIP_CONSTRAINT"])
-    assert constraints_path.is_file()
-    assert constraints_path.read_text() == "setuptools==75.6.0\nwheel==0.45.1\n"
 
 
 # --------------------------------------------------------------------------- #
@@ -599,7 +598,7 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
         "_snapshot_checkout",
         lambda checkout, _sha, _dest, payload_root=None: checkout,
     )
-    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: None)
 
 
 def _build_args(ports_root: Path, out_dir: Path) -> argparse.Namespace:
@@ -625,9 +624,8 @@ def test_build_dep_pkg_forwards_epoch_and_requires_exact_ports_attestation(
     fake_build_wheel = bdp.build_wheel
     calls: list[tuple[object, ...]] = []
 
-    def validate_toolchain() -> dict[str, str]:
+    def validate_toolchain() -> None:
         calls.append(("toolchain",))
-        return bdp.build_toolchain_identity()
 
     def attest_ports(path: Path, sha: str, label: str, *, payload_root: Path) -> None:
         calls.append(("attest", path, sha, label, payload_root))
@@ -656,6 +654,32 @@ def test_build_dep_pkg_forwards_epoch_and_requires_exact_ports_attestation(
     assert snapshot_dest.name == "ports-snapshot"
     assert calls[2][4] == ports_root / args.port
     assert calls[3] == ("wheel", args.source_date_epoch)
+
+
+def test_build_dep_pkg_consumes_the_pinned_ports_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_port = _write_port(snapshot_root)
+    for name in ("Makefile", "distinfo"):
+        path = snapshot_port / name
+        path.write_text(path.read_text().replace("3.4.4", "9.9.9"))
+    _mock_network(monkeypatch, console_scripts=None)
+    monkeypatch.setattr(
+        bdp.bpp,
+        "_snapshot_checkout",
+        lambda *_args, **_kwargs: snapshot_root,
+    )
+
+    package = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
+    manifest = pfb_pkg.read_compact_manifest(package)
+    record = json.loads(manifest["annotations"]["pfb_dep_build_record"])
+
+    assert manifest["version"] == "9.9.9"
+    assert record["distfile"] == "charset_normalizer-9.9.9.tar.gz"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -900,7 +924,7 @@ def test_main_stdout_is_only_the_pkg_path_line(
         "_snapshot_checkout",
         lambda checkout, _sha, _dest, payload_root=None: checkout,
     )
-    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: None)
 
     out_dir = tmp_path / "out"
     rc = bdp.main(
@@ -963,7 +987,7 @@ def test_main_returns_1_and_reports_refusal_on_stderr(
 ) -> None:
     ports_root = tmp_path / "ports"
     _write_port(ports_root, no_arch_line="")  # missing NO_ARCH -> refusal, no network involved
-    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: None)
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         bdp.bpp,

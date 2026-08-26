@@ -116,7 +116,7 @@ def build_toolchain_identity() -> dict[str, str]:
     }
 
 
-def validate_build_toolchain() -> dict[str, str]:
+def validate_build_toolchain() -> None:
     try:
         installed = _installed_build_toolchain()
     except importlib.metadata.PackageNotFoundError as exc:
@@ -129,7 +129,6 @@ def validate_build_toolchain() -> dict[str, str]:
                 f"{name} build tool is {installed.get(name)!r}, expected {expected!r}; run "
                 "`uv sync --locked --only-group dep-pkg-build`"
             )
-    return build_toolchain_identity()
 
 
 class DepPkgError(Exception):
@@ -318,18 +317,10 @@ def _run_relayed(cmd: list[str], **kwargs: Any) -> None:
         raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
 
 
-# The PEP-517 backend versions are installed from uv.lock and verified above.
-# PIP_CONSTRAINT also prevents a future accidental removal of
-# --no-build-isolation from silently resolving different backend versions.
-_BUILD_BACKEND_CONSTRAINTS = "setuptools==75.6.0\nwheel==0.45.1\n"
-
-
 def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int | None = None) -> Path:
     wheel_dir = work_dir / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
     python = sys.executable
-    constraints_file = work_dir / "build-constraints.txt"
-    constraints_file.write_text(_BUILD_BACKEND_CONSTRAINTS)
     blocked_env_prefixes = ("LC_", "PIP_", "PYTHON", "SETUPTOOLS_", "SOURCE_DATE_EPOCH", "TZ", "WHEEL_")
     env = {
         key: value
@@ -340,7 +331,6 @@ def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int | None = 
         LANG="C",
         LC_ALL="C",
         PIP_CONFIG_FILE=os.devnull,
-        PIP_CONSTRAINT=str(constraints_file),
         PIP_DISABLE_PIP_VERSION_CHECK="1",
         PIP_NO_INDEX="1",
         PYTHONHASHSEED="0",
@@ -588,8 +578,6 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
         site_files, script_files = stage_wheel(wheel, stage, py_dotted)
         for staged_file in site_files + script_files:
             os.utime(staged_file, (epoch, epoch))
-        if not site_files:
-            raise DepPkgError(f"{wheel.name}: wheel contained no files")
 
         portname = f"{args.py_flavor}-{port.portname}"
         pyv = args.py_flavor[2:]  # "py311" -> "311"
