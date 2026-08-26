@@ -14432,6 +14432,8 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 
 					// Create update file indicator for update process
 					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
+					// issue #2735: do not fall through into @touch($orig_download).
+					return PfbDownloadResult::success();
 				}
 				else {
 					pfb_logger("\n Invalid filename [{$filename}]", 1);
@@ -14881,7 +14883,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// would consume the change signal and make the loops' norm-skip gate
 			// wrongly reuse stale staging (caught live by
 			// test_cron_detects_changed_local_feed). The geoip/asn/top1m/blacklist
-			// archive paths early-return above and never reach the text pipeline.
+			// archive paths return above (issue #2735) and never reach the text pipeline.
 
 			// Process Emerging Threats IQRisk if required
 			if (strpos($list_url, 'iprepdata.txt') !== FALSE) {
