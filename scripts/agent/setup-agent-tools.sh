@@ -256,8 +256,8 @@ main() {
 			;;
 	esac
 	require_tool uv
-	uv tool install --upgrade -p 3.13 serena-agent
-	uv tool install --upgrade graphifyy==0.9.50
+	uv tool install --upgrade serena-agent
+	uv tool install --upgrade graphifyy
 	uv tool install --upgrade ast-grep-cli
 	uv tool install --upgrade semgrep
 	require_tool serena
