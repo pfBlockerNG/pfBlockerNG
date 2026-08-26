@@ -11,6 +11,8 @@ import sys
 import tarfile
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 BUILDER = ROOT / "scripts" / "build-source-archive.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "release.yml"
@@ -134,16 +136,45 @@ def test_source_change_changes_hash_and_member_content(tmp_path: Path) -> None:
         assert [member.name for member in archive.getmembers()] == EXPECTED_MEMBERS
 
 
-def test_release_workflow_pins_and_uses_the_source_archive_builder() -> None:
+def _release_job() -> str:
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    release_job = workflow.split("  release:", 1)[1].split("\n  # ── 2b", 1)[0]
+    return workflow.split("  release:", 1)[1].split("\n  # ── 2b", 1)[0]
+
+
+def _assert_archive_tool_pin_precedes_build(release_job: str) -> None:
+    pin_name = "      - name: Pin source archive Python"
+    archive_name = "      - name: Build source archive"
+    pin_start = release_job.index(pin_name)
+    archive_start = release_job.index(archive_name)
+    pin_step = release_job[pin_start:].split("\n      - name:", 1)[0]
+
+    assert "uses: actions/setup-python@v6" in pin_step
+    assert 'python-version: "3.11.15"' in pin_step
+    assert pin_start < archive_start, "the exact source-archive Python pin must precede the archive build"
+
+
+def test_release_workflow_pins_and_uses_the_source_archive_builder() -> None:
+    release_job = _release_job()
     archive_step = release_job.split("      - name: Build source archive", 1)[1].split("\n      - name:", 1)[0]
 
     assert "runs-on: ubuntu-24.04" in release_job
-    assert "uses: actions/setup-python@v6" in release_job
-    assert 'python-version: "3.11.15"' in release_job
+    _assert_archive_tool_pin_precedes_build(release_job)
     assert "set -eu" in archive_step
     assert 'SOURCE_EPOCH="$(git show -s --format=%ct HEAD)"' in archive_step
     assert 'python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/build-source-archive.py"' in archive_step
     assert '--source src --output "$ARCHIVE" --epoch "$SOURCE_EPOCH"' in archive_step
     assert "tar -czf" not in archive_step
+
+
+def test_moving_archive_python_pin_after_build_goes_red() -> None:
+    release_job = _release_job()
+    pin_start = release_job.index("      - name: Pin source archive Python")
+    pin_end = release_job.index("\n      - name:", pin_start + 1)
+    pin_step = release_job[pin_start:pin_end]
+    without_pin = release_job[:pin_start] + release_job[pin_end:]
+    archive_start = without_pin.index("      - name: Build source archive")
+    archive_end = without_pin.index("\n      - name:", archive_start + 1)
+    moved = without_pin[:archive_end] + "\n" + pin_step + without_pin[archive_end:]
+
+    with pytest.raises(AssertionError, match="must precede"):
+        _assert_archive_tool_pin_precedes_build(moved)
