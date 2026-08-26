@@ -1333,7 +1333,7 @@ $infotxt .= '	</dd>
 				<dt>On:</dt><dd>Enable List</dd>
 				<dt>Off:</dt><dd>Disable List</dd>
 				<dt>Hold:</dt><dd>Download List only once</dd>
-				<dt>Flex:</dt><dd>Downgrade the SSL Connection (Not Recommended)</dd>
+				<dt>Flex:</dt><dd>After a TLS failure, retry this feed with certificate verification disabled and a widened cipher list (Not Recommended). Only for feeds whose server has a broken certificate chain — the feed\'s contents are then unauthenticated.</dd>
 			</dl>
 		</dd>
 	<dt>Source:</dt>
