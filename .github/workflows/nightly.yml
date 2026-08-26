@@ -399,6 +399,7 @@ jobs:
   publish-nightly-oci:
     name: Publish verified Nightly handoff to OCI
     needs: [prepare, handoff]
+    if: vars.PKG_PUBLICATION_ENABLED == 'true'
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -441,8 +442,9 @@ jobs:
             "$TARGET" \
             "nightly-handoff.json:application/vnd.pfblockerng.nightly.handoff.v1+json" \
             "results.tar.gz:application/vnd.pfblockerng.nightly.results.v1+tar+gzip")
-          case "$DIGEST" in sha256:[0-9a-f][0-9a-f]*) ;; *) echo "::error::ORAS returned an invalid manifest digest"; exit 1 ;; esac
+          case "$DIGEST" in sha256:*) ;; *) echo "::error::ORAS returned an invalid manifest digest"; exit 1 ;; esac
           DIGEST_HEX=${DIGEST#sha256:}
+          case "$DIGEST_HEX" in ''|*[!0-9a-f]*) echo "::error::ORAS digest is not sha256"; exit 1 ;; esac
           [ "${#DIGEST_HEX}" -eq 64 ] || { echo "::error::ORAS digest is not sha256"; exit 1; }
           ARTIFACT_REF="ghcr.io/pfblockerng/pfblockerng-nightly@sha256:${DIGEST_HEX}"
           echo "artifact_ref=$ARTIFACT_REF" >> "$GITHUB_OUTPUT"

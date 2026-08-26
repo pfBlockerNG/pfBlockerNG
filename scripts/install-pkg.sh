@@ -93,8 +93,8 @@ ssh_t() {
 PKG_LOCK_RETRY_MAX="${PFB_INSTALL_PKG_RETRY_MAX:-12}"
 PKG_LOCK_RETRY_DELAY="${PFB_INSTALL_PKG_RETRY_DELAY:-5}"
 # A non-integer cap makes the -ge comparison silently FALSE and the loop
-# unbounded — the same trap publish-pkg-repo.sh guards its MAX_PUSH_ATTEMPTS
-# against. Reject bad values before any ssh/sleep runs; 0 delay is valid.
+# unbounded — the same trap guarded by the publication retry loops. Reject bad
+# values before any ssh/sleep runs; 0 delay is valid.
 case "$PKG_LOCK_RETRY_MAX" in '' | *[!0-9]*) PKG_LOCK_RETRY_MAX=0 ;; esac
 [ "$PKG_LOCK_RETRY_MAX" -ge 1 ] || {
     echo "install-pkg: PFB_INSTALL_PKG_RETRY_MAX must be a positive integer" >&2

@@ -295,6 +295,7 @@ jobs:
   publish-pkg:
     name: Ingest the immutable Release in pkg
     needs: [resolve]
+    if: vars.PKG_PUBLICATION_ENABLED == 'true'
     uses: ./.github/workflows/pkg-tagged-ingest.yml
     with:
       source_repository: ${{ needs.resolve.outputs.source_repository }}
@@ -304,6 +305,4 @@ jobs:
       destinations: ${{ needs.resolve.outputs.destinations }}
       channel: ${{ needs.resolve.outputs.channel }}
       portversion: ${{ needs.resolve.outputs.portversion }}
-    secrets:
-      PKG_GITHUB_APP_ID: ${{ secrets.PKG_GITHUB_APP_ID }}
-      PKG_GITHUB_APP_PRIVATE_KEY: ${{ secrets.PKG_GITHUB_APP_PRIVATE_KEY }}
+    secrets: inherit

@@ -185,7 +185,7 @@ def pkg_checksum(pkg_bytes: bytes) -> str:
 
 # --------------------------------------------------------------------------- #
 # .pkg reading (zstd framing + +COMPACT_MANIFEST) lives in pfb_pkg, shared with
-# gen_landing.py. zstd_decompress / read_compact_manifest are imported above.
+# the pkg-owned catalogue renderer. zstd_decompress / read_compact_manifest are imported above.
 # --------------------------------------------------------------------------- #
 
 
