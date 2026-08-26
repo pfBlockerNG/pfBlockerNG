@@ -413,59 +413,28 @@ Full options: [`scripts/deploy.sh`](scripts/deploy.sh).
 ### How the `pkg` repository is published (GitHub Pages)
 
 The self-hosted repository (installed per the [README](README.md#installation))
-is a **derived index** — there is no stateful store to maintain. The
-**separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg) repo** holds the served
-tree and GitHub Pages publishes it straight from that repo's `main`; it carries no workflow
-of its own. **This** repo does the publishing (see **Triggers** below): the exact `.pkg`
-assets of the published Release are verified and dropped into the catalogue directory of
-every channel the release's destination tuple names; each of those catalogues is then
-**regenerated** from the files present in that directory
-(`meta.conf`/`packagesite.pkg`/`data.pkg` per `<channel>/<varver>`); and only then is the
-result committed, in one commit, to `pkg`. So the tree itself is the state, and a rollback
-is installing a retained older version rather than re-deploying a site.
+is published from the separate [`pfBlockerNG/pkg`](https://github.com/pfBlockerNG/pkg)
+repository. This repository produces immutable tagged Release assets or a
+digest-pinned Nightly OCI handoff, then dispatches the repository-local
+ingestion workflow in `pkg`. The `pkg` workflow verifies the immutable input,
+owns catalogue and site generation, and commits its own GitHub Pages tree.
+pfBlockerNG never checks out or writes `pkg`; it retains only source-side
+builders, provenance creation, installer, and boot-hook code.
 
-- **Per-`<varver>` tree, arch-less.** One catalog under `<channel>/<varver>/` (channels
-  `stable`, `testing`, `edge` and `nightly`) per edition + pfSense major.minor present in
-  the ci-metadata version matrix (`supported-versions.json`) — `<varver>` is edition +
-  pfSense major.minor, e.g. `ce-2.8` / `plus-26.03`, and is **arch-less**: every pfBlockerNG
-  `.pkg` is NO_ARCH, so one directory serves every CPU arch of a FreeBSD major (issue #1806)
-  — no per-ABI/arch subdirectory.
-  The client conf's `url:` is fully resolved for the box's own edition/version at bootstrap
-  time — there is no `${ABI}` pkg(8) variable any more; a boot-time `rc.d` hook
-  (`pfblockerng_repo_generate.sh`, ADR-39) rewrites the conf on a pfSense OS upgrade that
-  moves the box to a different varver.
-- **Signed, key-anchored.** The catalogues are signed with an ECDSA key (`secp384r1`, private
-  half in the `PFB_PKG_SIGNING_KEY` Actions secret) and clients verify against a trusted
-  fingerprint the boot `rc.d` hook installs (issue #2675). The catalogue is fetched over plain
-  **HTTP** — `pkg` on pfSense Plus runs against a Netgate-pinned CA bundle nothing we ship can
-  widen, so TLS there is not a trust anchor we can rely on; the signature is. The catalogue is
-  served at the project's GitHub Pages host, e.g. **`http://pkg.pfblockerng.com/stable/ce-2.8`**,
-  and everything a human or a root shell fetches from that host (the site, `install.sh`) stays
-  HTTPS.
-- **Generators.** `scripts/build-repo-portable.py` is the primary — pure Python (stdlib +
-  `zstd`), no libpkg, run on a plain Linux runner. `scripts/build-repo.sh` (real `pkg repo`
-  in a FreeBSD VM) is the fidelity fallback, and both share the exact `--print-conf` shape
-  the inline conf in the README reuses byte-for-byte.
-- **Site tree.** `pkg-site/` (this repo) is the declared, non-catalogue site tree —
-  `install.sh`, `--channel`-parameterized (issue #2416 follow-up) — the SOLE client entry
-  point — and `recipes/<channel>.sh` (the verbatim card text each channel's landing card
-  shows). `scripts/render-pkg-site.sh` mirrors it 1:1 into `pkg`'s `docs/`, `{base}`-substituted
-  and with the boot-time regenerator hook embedded, alongside the dynamic pages it also renders
-  (landing `index.html`, `browse.html`, `browse/<channel>/<varver>/index.html`) — all of it
-  OUTSIDE the catalogue trees (issue #2450).
-- **Triggers.** `pfBlockerNG/pkg` carries no workflow of its own — it holds the served tree and
-  GitHub Pages publishes it from `main`. This repo does the publishing: the `publish-pkg-repo`
-  job in `release-published.yml` runs on the real `release: published` event, and
-  `pkg-republish.yml` re-runs the same flow on manual dispatch. Both mint a GitHub App token
-  scoped to `pfBlockerNG/pkg` with `contents: write` (`actions/create-github-app-token@v3`,
-  secrets `PKG_GITHUB_APP_ID` + `PKG_GITHUB_APP_PRIVATE_KEY`), then run
-  `scripts/publish-pkg-repo.sh`, which commits the assembled catalogue into `pkg` — nothing
-  else. Each of those, plus `nightly.yml`'s own `publish-pkg-repo` job, then calls
-  `pkg-render-site.yml` (a reusable `workflow_call`, also directly `workflow_dispatch`-able) to
-  render the site around that catalogue; a publish failure never breaks the Release or the ports
-  PR.
+Live publication remains opt-in until the owner completes the GHCR access and
+canary checkpoint: `PKG_PUBLICATION_ENABLED` must be set to `true` as a
+repository Actions variable. Leaving it unset keeps scheduled Nightly OCI
+publication and tagged/manual `pkg` dispatch disabled.
 
-See [ADR-17](legacy/ADRs/ADR_17_Pkg_Repository/ADR.md) for the full design.
+Recipe and rendered-site bytes are tested in `pfBlockerNG/pkg`; this repository
+tests only its source-side installer and published channel URL contract. CI does
+not clone one repository from the other for a cross-repository byte comparison,
+because that would reintroduce a floating ownership dependency. A coordinated
+client/recipe change lands in `pkg` first, then updates this source contract.
+
+See [ADR-17](legacy/ADRs/ADR_17_Pkg_Repository/ADR.md) and the
+[distribution architecture notes](docs/misc/architecture-notes.md)
+for the package identity, signing, channel, and live-gate contracts.
 
 ## Smoke tests (live pfSense VM)
 

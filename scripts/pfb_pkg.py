@@ -608,8 +608,8 @@ def validate_project_pkg(
 
 
 # --------------------------------------------------------------------------- #
-# Version sort key — shared by build-repo-portable.py (release/nightly retention)
-# and gen_landing.py (the landing page's "newest build" picks).
+# Version sort key — shared by source package builds/retention and the pkg-owned
+# landing renderer's "newest build" selection.
 # --------------------------------------------------------------------------- #
 
 # FreeBSD pkg ranks a prerelease stage BELOW the bare release, and alpha < beta <
