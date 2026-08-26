@@ -16,7 +16,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import SupportsIndex
+from typing import Any, SupportsIndex
 
 PKG_DIR = Path(__file__).resolve().parent.parent / "src/usr/local/pkg/pfblockerng"
 SCRIPT = PKG_DIR / "pfb_dnsbl_regex_rules.py"
@@ -248,7 +248,8 @@ def test_shape_gate_stays_total_on_malformed_pattern_fragments() -> None:
     assert _regex_is_catastrophic_shape(r"(?i:\w+\w+\w+") is True
 
 
-def test_group_end_scan_is_linear_and_preserves_regex_escaping() -> None:
+def test_group_end_scan_is_linear_and_preserves_regex_escaping(monkeypatch: Any) -> None:
+    import pfb_dnsbl_regex_rules
     from pfb_dnsbl_regex_rules import _regex_group_end, _regex_has_adjacent_unbounded_atoms
 
     cases = (
@@ -279,7 +280,21 @@ def test_group_end_scan_is_linear_and_preserves_regex_escaping() -> None:
     for build in (lambda size: "(" * size, lambda size: "(" * size + ")" * size):
         small = scan_work(build(400))
         large = scan_work(build(800))
+        assert small > 0 and large > 0
         assert large <= small * 3, f"2x input caused {large / small:.2f}x string work ({small} -> {large})"
+
+    body_scans = 0
+    original_body_scan = pfb_dnsbl_regex_rules._regex_body_has_run
+
+    def counted_body_scan(body: str, depth: int = 0) -> bool:
+        nonlocal body_scans
+        body_scans += 1
+        return original_body_scan(body, depth)
+
+    monkeypatch.setattr("pfb_dnsbl_regex_rules._regex_body_has_run", counted_body_scan)
+    nested_alternation = "(a|" * 800 + "b" + ")" * 800
+    assert isinstance(_regex_has_adjacent_unbounded_atoms(nested_alternation), bool)
+    assert body_scans <= pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX
 
 
 def test_probe_and_resolver_agree_on_issue2364_admission_rows() -> None:
