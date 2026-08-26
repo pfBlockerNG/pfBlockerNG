@@ -1,6 +1,8 @@
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_CONFIG = ROOT / ".config" / "wt.toml"
 WORKTREE_DOCS = (
@@ -24,13 +26,20 @@ def test_tracked_worktrunk_project_config_defines_required_hooks() -> None:
     assert {hook: config[hook] for hook in REQUIRED_HOOKS} == REQUIRED_HOOKS
 
 
+def _assert_supported_creation_command(text: str, source: str) -> None:
+    assert "wt start" not in text, f"{source} documents nonexistent `wt start`"
+    assert "wt --yes switch --create" in text, f"{source} must document noninteractive `wt --yes switch --create`"
+
+
 def test_worktrunk_docs_use_the_supported_creation_command() -> None:
     for path in WORKTREE_DOCS:
-        text = path.read_text(encoding="utf-8")
-        assert "wt start" not in text, f"{path.relative_to(ROOT)} documents nonexistent `wt start`"
-        assert "wt --yes switch --create" in text, (
-            f"{path.relative_to(ROOT)} must document noninteractive `wt --yes switch --create`"
-        )
+        _assert_supported_creation_command(path.read_text(encoding="utf-8"), str(path.relative_to(ROOT)))
+
+
+def test_worktrunk_creation_guard_rejects_the_legacy_command() -> None:
+    fixture = "Use wt start only after wt --yes switch --create was attempted."
+    with pytest.raises(AssertionError, match="nonexistent"):
+        _assert_supported_creation_command(fixture, "fixture")
 
 
 def test_landing_fetches_before_json_cleanup_and_reports_branch_deletion() -> None:

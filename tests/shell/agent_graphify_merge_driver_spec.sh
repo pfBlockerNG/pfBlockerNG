@@ -48,16 +48,18 @@ GRAPHIFY
     The value "$(git_fixture -C "$repo" config --get merge.graphify.driver)" should include 'graphify merge-driver %O %A %B'
   End
 
-  Parameters
-    'missing'
-    'malformed'
-  End
+  Context 'driver validation failures'
+    Parameters
+      'missing'
+      'malformed'
+    End
 
-  It "fails loudly when the installed driver is $1"
-    export GRAPHIFY_DRIVER_MODE="$1"
-    When run sh "$script_abs" "$repo"
-    The status should equal 1
-    The stderr should include 'merge.graphify.driver'
-    The stderr should include 'graphify merge-driver %O %A %B'
+    It "fails loudly when the installed driver is $1"
+      export GRAPHIFY_DRIVER_MODE="$1"
+      When run sh "$script_abs" "$repo"
+      The status should equal 1
+      The stderr should include 'merge.graphify.driver'
+      The stderr should include 'graphify merge-driver %O %A %B'
+    End
   End
 End
