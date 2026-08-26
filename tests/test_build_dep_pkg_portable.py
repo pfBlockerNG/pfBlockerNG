@@ -870,7 +870,9 @@ def test_real_dependency_builder_output_passes_tagged_dependency_validation(
         dependency_builder=bdp.build_toolchain_identity(),
     )
 
-    row = handoff["route_matrix"][0]
+    rows = handoff["route_matrix"]
+    assert isinstance(rows, list)
+    row = rows[0]
     assert isinstance(row, dict)
     manifest = pfb_pkg.read_compact_manifest(tagged_package)
     assert trh._validate_dependency_package(handoff, tagged_package, manifest, row) == (
