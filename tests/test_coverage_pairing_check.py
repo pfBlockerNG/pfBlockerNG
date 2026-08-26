@@ -310,7 +310,7 @@ def test_uppercase_md_extension_is_neutral() -> None:
 
 # ---- Release-plane pairing and frozen-RED proof (issue #2415) ------------
 
-_RELEASE_SCRIPT = "scripts/publish_release.py"
+_RELEASE_SCRIPT = "scripts/dispatch-pkg-publication.sh"
 _RELEASE_TEST = "tests/test_coverage_pairing_check.py"
 
 
@@ -343,7 +343,7 @@ def test_release_plane_recorded_red_hash_must_match_shipped_test(tmp_path: Any, 
 
 def test_every_release_plane_path_class_is_gated() -> None:
     for path in (
-        "scripts/publish_release.py",
+        "scripts/dispatch-pkg-publication.sh",
         "scripts/agent/run-gates.sh",
         "scripts/release-notes-prompt.txt",
         ".github/workflows/nightly.yml",
@@ -533,34 +533,34 @@ def test_status_stream_retains_deleted_release_paths_but_not_deleted_tests() -> 
     deleted_release = _run_status_stream(b"D\0scripts/removed.py\0")
     assert deleted_release.returncode == 1, deleted_release.stdout
 
-    deleted_test = _run_status_stream(b"M\0scripts/publish_release.py\0D\0tests/test_removed.py\0")
+    deleted_test = _run_status_stream(b"M\0scripts/dispatch-pkg-publication.sh\0D\0tests/test_removed.py\0")
     assert deleted_test.returncode == 1, deleted_test.stdout
 
 
 def test_status_stream_retains_release_side_of_rename_to_neutral() -> None:
-    renamed = _run_status_stream(b"R100\0scripts/publish_release.py\0scripts/README.md\0")
+    renamed = _run_status_stream(b"R100\0scripts/dispatch-pkg-publication.sh\0scripts/README.md\0")
     assert renamed.returncode == 1, renamed.stdout
 
 
 def test_status_stream_added_or_modified_test_satisfies_pairing() -> None:
     for status in (b"A", b"M"):
-        proc = _run_status_stream(b"M\0scripts/publish_release.py\0" + status + b"\0tests/test_release.py\0")
+        proc = _run_status_stream(b"M\0scripts/dispatch-pkg-publication.sh\0" + status + b"\0tests/test_release.py\0")
         assert proc.returncode == 0, proc.stdout
 
 
 def test_status_stream_uses_final_live_test_state_without_losing_triggers() -> None:
     deleted_after_add = _run_status_stream(
-        b"M\0scripts/publish_release.py\0A\0tests/test_release.py\0D\0tests/test_release.py\0"
+        b"M\0scripts/dispatch-pkg-publication.sh\0A\0tests/test_release.py\0D\0tests/test_release.py\0"
     )
     assert deleted_after_add.returncode == 1, deleted_after_add.stdout
 
     renamed_away = _run_status_stream(
-        b"M\0scripts/publish_release.py\0A\0tests/test_release.py\0R100\0tests/test_release.py\0docs/release-test.md\0"
+        b"M\0scripts/dispatch-pkg-publication.sh\0A\0tests/test_release.py\0R100\0tests/test_release.py\0docs/release-test.md\0"
     )
     assert renamed_away.returncode == 1, renamed_away.stdout
 
     recreated = _run_status_stream(
-        b"M\0scripts/publish_release.py\0A\0tests/test_release.py\0D\0tests/test_release.py\0A\0tests/test_release.py\0"
+        b"M\0scripts/dispatch-pkg-publication.sh\0A\0tests/test_release.py\0D\0tests/test_release.py\0A\0tests/test_release.py\0"
     )
     assert recreated.returncode == 0, recreated.stdout
 
@@ -573,7 +573,7 @@ def test_nul_paths_are_not_stripped_or_decoded_lossily(tmp_path: Path) -> None:
         b"tests/test_coverage_pairing_check.py\t",
     ):
         proc = _run_status_stream(
-            b"M\0scripts/publish_release.py\0M\0" + impostor + b"\0",
+            b"M\0scripts/dispatch-pkg-publication.sh\0M\0" + impostor + b"\0",
             "--pr-body-file",
             str(body),
         )
@@ -581,7 +581,7 @@ def test_nul_paths_are_not_stripped_or_decoded_lossily(tmp_path: Path) -> None:
         assert b"not changed by this PR" in proc.stdout
 
     for unrepresentable in (b"tests/test_bad\nname.py", b"tests/test_\xff.py"):
-        proc = _run_status_stream(b"M\0scripts/publish_release.py\0M\0" + unrepresentable + b"\0")
+        proc = _run_status_stream(b"M\0scripts/dispatch-pkg-publication.sh\0M\0" + unrepresentable + b"\0")
         assert proc.returncode == 2, proc.stdout
         assert b"cannot be represented in Markdown" in proc.stdout
 
@@ -633,7 +633,7 @@ def test_name_status_mode_requires_a_row_for_every_live_test(tmp_path: Path) -> 
     body = tmp_path / "body.md"
     body.write_text(_frozen_red_body(_RELEASE_TEST, _working_tree_hash(_RELEASE_TEST)), encoding="utf-8")
     proc = _run_status_stream(
-        b"M\0scripts/publish_release.py\0M\0tests/test_coverage_pairing_check.py\0M\0" + second + b"\0",
+        b"M\0scripts/dispatch-pkg-publication.sh\0M\0tests/test_coverage_pairing_check.py\0M\0" + second + b"\0",
         "--pr-body-file",
         str(body),
     )

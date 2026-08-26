@@ -3049,33 +3049,53 @@ def test_edge_rollback_stays_within_the_edge_repository(
 # ============================================================================ #
 # issue #2416 — the per-channel installer, published                           #
 #                                                                              #
-# One self-contained install.sh, --channel parameterized, is the SOLE client   #
-# entry point: EVERY starting state (fresh box, legacy -devel, a Netgate-      #
-# origin canonical install, another channel) folds                            #
-# into ONE idempotent state machine, published by                             #
-# gen_landing.py exactly the way the live website build does it (rendering     #
-# the repo's pkg-site/ tree via --site-tree; issue #2450). These cases run     #
-# the PUBLISHED form -- the hook embedded, no sibling file on                  #
-# disk -- piped into /bin/sh on the guest, the `fetch | sh` shape a user       #
-# actually runs. Each starting state gets its own case, and every case         #
-# proves a second run is a true no-op (conf/hook bytes + installed version     #
-# unchanged, "Already up to date" reported, no install/reinstall/delete        #
-# line).                                                                       #
+# One self-contained install.sh, --channel parameterized, is the SOLE client
+# entry point. These cases assemble the source-owned installer and hook inputs
+# into the same safe single-quoted heredoc shape the pkg-owned renderer ships,
+# then exercise the published pipe form on the guest.
 #                                                                              #
 # Marker: @pytest.mark.repo (inherited from pytestmark).                       #
 # Dispatch: gh workflow run smoke-single.yml -f pytest_marker=repo             #
 # ============================================================================ #
 
-# Runner-side path to the generator under test (scripts/gen_landing.py is invoked as a
-# subprocess with THIS process's interpreter, mirroring how every other runner-side
-# script in this module is driven — build-repo-portable.py, build-repo.sh — never
-# imported directly).
-GEN_LANDING_PY = Path(__file__).resolve().parents[2] / "scripts" / "gen_landing.py"
-PKG_SITE_DIR = Path(__file__).resolve().parents[2] / "pkg-site"
+INSTALL_SH = Path(__file__).resolve().parents[2] / "scripts" / "install.sh"
+REPO_GENERATE_HOOK = (
+    Path(__file__).resolve().parents[2] / "src" / "usr" / "local" / "etc" / "rc.d" / "pfblockerng_repo_generate.sh"
+)
+_HOOK_BEGIN = "# PFB_EMBED_HOOK_BEGIN"
+_HOOK_END = "# PFB_EMBED_HOOK_END"
+_HOOK_HEREDOC = "PFB_REPO_GENERATE_HOOK_EOF"
 
 # The four stdout markers install.sh's converge step (9) guards every mutating
 # pkg call with; a no-op second run must print NONE of them.
 _MUTATION_MARKERS = ("==> Installing", "==> Reinstalling", "==> Removing")
+
+
+def _published_installer(path: Path) -> Path:
+    script = INSTALL_SH.read_text(encoding="utf-8")
+    hook = REPO_GENERATE_HOOK.read_text(encoding="utf-8")
+    lines = script.splitlines(keepends=True)
+    begin = next((i for i, line in enumerate(lines) if _HOOK_BEGIN in line), None)
+    end = next((i for i, line in enumerate(lines) if _HOOK_END in line), None)
+    assert begin is not None and end is not None and begin < end, "install.sh embed markers are missing or reordered"
+    assert _HOOK_HEREDOC not in hook, "repository hook collides with the installer heredoc delimiter"
+    replacement = [
+        lines[begin],
+        f"    cat <<'{_HOOK_HEREDOC}'\n",
+        hook if hook.endswith("\n") else hook + "\n",
+        f"{_HOOK_HEREDOC}\n",
+        lines[end],
+    ]
+    path.write_text("".join(lines[:begin] + replacement + lines[end + 1 :]), encoding="utf-8")
+    return path
+
+
+def test_source_installer_inputs_assemble_self_contained(tmp_path: Path) -> None:
+    published = _published_installer(tmp_path / "install.sh").read_text(encoding="utf-8")
+    hook = REPO_GENERATE_HOOK.read_text(encoding="utf-8")
+    assert hook in published
+    assert "printf 'install.sh: no embedded hook in this copy" not in published
+    assert published.count(_HOOK_HEREDOC) == 2
 
 
 def run_channel_installer(
@@ -3086,15 +3106,11 @@ def run_channel_installer(
     *,
     timeout: float = 900.0,
 ) -> subprocess.CompletedProcess[str]:
-    """Publish the SHIPPED ``install.sh`` and run it PIPED on the guest, parameterized
-    by ``--channel``.
+    """Assemble the source client inputs and run the published pipe form.
 
-    Generates the self-contained published form the SAME way the live website build
-    does it (``gen_landing.py <site> <base> --site-tree <pkg-site>``): the hook is
-    embedded via the PFB_EMBED splice, install.sh's own ``PFB_BASE_URL`` default
-    baked to *base_url* (issue #2416 B3/F3), no sibling file needed on disk. The env
-    override below rides alongside it (harmless, keeps the staged/prefix shape a
-    fork run would use).
+    The pkg repository owns the production renderer and site. This source-side
+    contract keeps the install state machine and hook composable into the same
+    self-contained script without checking out or executing pkg code.
 
     Ships ``install.sh`` to ``GUEST_SPIKE_DIR`` (once — the same file serves every
     channel) and PIPES it through ``fetch(1)`` exactly the
@@ -3106,30 +3122,7 @@ def run_channel_installer(
     unredirected stdin would consume trailing script bytes). Returns WITHOUT
     raising — the refusal case (case 5 below) asserts on a non-zero exit.
     """
-    # A full render always overwrites the same install.sh file, so one shared site
-    # dir per test is fine even across repeated/multi-channel calls.
-    site_dir = tmp_path / "site"
-    site_dir.mkdir(parents=True, exist_ok=True)
-    gen = subprocess.run(
-        [
-            sys.executable,
-            str(GEN_LANDING_PY),
-            str(site_dir),
-            base_url,
-            "--site-tree",
-            str(PKG_SITE_DIR),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120.0,
-        check=False,
-    )
-    if gen.returncode != 0:
-        raise RuntimeError(
-            f"gen_landing.py --site-tree failed: rc={gen.returncode}\nstdout:\n{gen.stdout}\nstderr:\n{gen.stderr}"
-        )
-    local_script = site_dir / "install.sh"
-    assert local_script.is_file(), f"gen_landing.py did not publish {local_script.name}"
+    local_script = _published_installer(tmp_path / "install.sh")
 
     guest_path = f"{GUEST_SPIKE_DIR}/install.sh"
     _ssh_check(vm, "/bin/mkdir", "-p", GUEST_SPIKE_DIR)

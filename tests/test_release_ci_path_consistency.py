@@ -278,10 +278,6 @@ _RELEASE_GROUP = (
     "&& format('dry-run-{0}', github.run_id) || github.event.inputs.channel }}"
 )
 _PKG_REPO_MUTATION_GROUP = "pkg-repository-mutation"
-_RENDER_GROUP = (
-    "${{ inputs.caller_holds_pkg_lock && format('pkg-render-site-{0}', github.run_id) || 'pkg-repository-mutation' }}"
-)
-_RENDER_WORKFLOW = "./.github/workflows/pkg-render-site.yml"
 
 
 def _workflow_document(source: str) -> dict[object, object]:
@@ -305,15 +301,6 @@ def _external_workflow(document: dict[object, object]) -> bool:
     triggers = document.get(True)  # PyYAML 1.1 resolves the plain `on` key to True.
     assert isinstance(triggers, dict), "workflow must declare an on mapping"
     return any(trigger != "workflow_call" for trigger in triggers)
-
-
-def _render_call(document: dict[object, object]) -> dict[object, object] | None:
-    jobs = document.get("jobs")
-    assert isinstance(jobs, dict)
-    for job in jobs.values():
-        if isinstance(job, dict) and job.get("uses") == _RENDER_WORKFLOW:
-            return job
-    return None
 
 
 def _workflow_sources(directory: Path) -> dict[str, str]:
@@ -350,13 +337,6 @@ def _release_group(source: str, *, dry_run: str, channel: str, run_id: int) -> s
 def _assert_pkg_repository_concurrency(source: str) -> None:
     concurrency = _top_level_concurrency(source)
     assert concurrency.get("group") == _PKG_REPO_MUTATION_GROUP
-    assert concurrency.get("queue") == "max"
-    assert concurrency.get("cancel-in-progress") is False
-
-
-def _assert_render_site_concurrency(source: str) -> None:
-    concurrency = _top_level_concurrency(source)
-    assert concurrency.get("group") == _RENDER_GROUP
     assert concurrency.get("queue") == "max"
     assert concurrency.get("cancel-in-progress") is False
 
@@ -410,52 +390,21 @@ def test_issue_2391_release_concurrency_planted_offences_go_red(offence: str) ->
         _assert_release_concurrency(mutations[offence])
 
 
-def test_issue_2391_every_external_pkg_repository_mutator_shares_one_queue() -> None:
+def test_source_workflows_never_mutate_the_external_pkg_repository() -> None:
     sources = _workflow_sources(ROOT / ".github/workflows")
     mutators = {
-        name: source
+        name
         for name, source in sources.items()
         if _contains_mapping_value(_workflow_document(source), "repository", "pfBlockerNG/pkg")
         and _external_workflow(_workflow_document(source))
     }
-    assert set(mutators) == {
-        "nightly.yml",
-        "pkg-render-site.yml",
-        "pkg-republish.yml",
-        "release-published.yml",
-    }
-    for name, source in mutators.items():
-        if name == "pkg-render-site.yml":
-            _assert_render_site_concurrency(source)
-        else:
-            _assert_pkg_repository_concurrency(source)
+    assert not mutators
 
 
-def test_issue_2391_render_callers_own_the_pkg_lock_without_deadlocking_the_callee() -> None:
+def test_source_workflows_never_call_the_retired_renderer() -> None:
     sources = _workflow_sources(ROOT / ".github/workflows")
-    callers = {
-        name: (source, call)
-        for name, source in sources.items()
-        if (call := _render_call(_workflow_document(source))) is not None
-    }
-    assert set(callers) == {"nightly.yml", "pkg-republish.yml", "release-published.yml"}
-    for source, call in callers.values():
-        _assert_pkg_repository_concurrency(source)
-        inputs = call.get("with")
-        assert isinstance(inputs, dict)
-        assert inputs.get("caller_holds_pkg_lock") is True
-
-    render = _workflow_document(sources["pkg-render-site.yml"])
-    triggers = render.get(True)
-    assert isinstance(triggers, dict)
-    workflow_call = triggers.get("workflow_call")
-    assert isinstance(workflow_call, dict)
-    call_inputs = workflow_call.get("inputs")
-    assert isinstance(call_inputs, dict)
-    lock_input = call_inputs.get("caller_holds_pkg_lock")
-    assert isinstance(lock_input, dict)
-    assert lock_input.get("required") is True
-    assert lock_input.get("type") == "boolean"
+    callers = {name for name, source in sources.items() if "pkg-render-site.yml" in source}
+    assert not callers
 
 
 @pytest.mark.parametrize(

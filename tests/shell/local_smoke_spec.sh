@@ -198,13 +198,12 @@ FAKEEOF
     End
 
     It 'checks out only the paths a smoke leg reads'
-      # src/ (the .pkg build), scripts/ (the harness), stubs/python/ (root conftest's
-      # unboundmodule import), tests/smoke/ (the suite) and pkg-site/ (the channel-installer
-      # cases render it through gen_landing.py --site-tree, issue #2450). Widening this to a
-      # full checkout costs 34 MB against 13 MB; narrowing it silently starves a leg.
+      # src/ builds the .pkg; scripts/ holds the harness and installer client input;
+      # stubs/python supports root conftest; tests/smoke/ is the suite.
       When call run_and_diag --ref dummy
       The line 1 of output should equal 'exit=0'
-      The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke pkg-site'
+      The output should include 'git sparse-checkout set src scripts stubs/python tests/smoke'
+      The output should not include 'pkg-site'
     End
 
     It 'keeps a space-bearing filter as ONE argument through the exec env handoff'

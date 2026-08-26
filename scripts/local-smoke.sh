@@ -215,7 +215,7 @@ fi
 
 _bootstrap="cd /root/pfBlockerNG \
  && git sparse-checkout init --cone \
- && git sparse-checkout set src scripts stubs/python tests/smoke pkg-site \
+ && git sparse-checkout set src scripts stubs/python tests/smoke \
  && git fetch --quiet '$_GIT_REMOTE_Q' '$_REF_Q' \
  && git checkout --quiet --force FETCH_HEAD \
  && git fetch --quiet --no-tags '$_GIT_REMOTE_Q' '$_CIMETA_REFSPEC_Q' \

@@ -389,7 +389,7 @@ def test_the_draft_job_never_runs_without_the_tag() -> None:
 def test_downstream_publish_effects_do_not_run_in_the_draft_workflow() -> None:
     jobs = _jobs()
     release_text = RELEASE_WORKFLOW.read_text(encoding="utf-8")
-    assert "publish-pkg-repo" not in jobs, "the pkg catalogue publish must wait for release: published"
+    assert "publish-pkg" not in jobs, "the pkg catalogue publish must wait for release: published"
     assert "sync-ports-fork" not in jobs, "the ports bump must wait for release: published"
     for marker in ("publish-pkg-repo.sh", "publish_release.py"):
         assert marker not in release_text, f"{marker} must not run inside the release workflow"
@@ -404,7 +404,7 @@ def test_the_published_workflow_triggers_on_a_published_release() -> None:
 
 def test_the_published_workflow_carries_both_downstream_effects() -> None:
     jobs = _jobs(PUBLISHED_WORKFLOW)
-    assert "publish-pkg-repo" in jobs, sorted(jobs)
+    assert "publish-pkg" in jobs, sorted(jobs)
     assert "sync-ports-fork" in jobs, sorted(jobs)
 
 
@@ -432,7 +432,7 @@ def test_no_job_output_is_read_through_index_syntax(workflow: Path) -> None:
 def test_published_downstream_effects_resolve_the_release_independently() -> None:
     graph = {name: _needs(lines) for name, lines in _jobs(PUBLISHED_WORKFLOW).items()}
     assert graph["sync-ports-fork"] == {"resolve"}, graph
-    assert graph["publish-pkg-repo"] == {"resolve"}, graph
+    assert graph["publish-pkg"] == {"resolve"}, graph
 
 
 # Jobs that hold a credential worth stealing AND execute a repository script as shell.
@@ -441,7 +441,6 @@ CREDENTIALLED_JOBS = (
     (RELEASE_WORKFLOW, "prepare-release", _TRUSTED_HELPER_ROOT),
     (RELEASE_WORKFLOW, "release", _TRUSTED_HELPER_ROOT),
     (PUBLISHED_WORKFLOW, "sync-ports-fork", _TRUSTED_HELPER_ROOT),
-    (PUBLISHED_WORKFLOW, "publish-pkg-repo", "scripts/"),
 )
 
 _HELPER_CALL_RE = re.compile(r"\bsh\s+(\S*scripts/[A-Za-z0-9._-]+)")
