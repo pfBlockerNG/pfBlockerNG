@@ -188,6 +188,7 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "scripts/agent/init-worktree-tools.sh",
         "scripts/agent/ensure-codegraph.sh",
         "graphify update",
+        "graphify extract",
         "serena project index",
         "OMP_CLI",
         "PI_CLI",
@@ -207,7 +208,6 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "graphify-store.py",
         ".git/graphify-store.lock",
         "temporary detached builder",
-        "graphify extract",
         "graphify cluster-only",
         "cluster-only",
     ):
