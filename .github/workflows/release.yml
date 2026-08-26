@@ -826,7 +826,7 @@ jobs:
   # (/release-with-changelog), who then publishes it. Nothing here un-drafts.
   release:
     name: Create draft GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # The draft is created only AFTER the tag exists on the verified commit —
     # softprops/action-gh-release CREATES a missing tag itself, which is exactly how a
     # failed run used to strand one, so a skipped tag-release must never reach it.
@@ -1094,16 +1094,20 @@ jobs:
             echo "__RELEASE_BODY__"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Pin source archive Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.15"
+
       - name: Build source archive
         run: |
+          set -eu
           VERSION="${{ steps.meta.outputs.version }}"
           ARCHIVE="pfBlockerNG-${VERSION}.tar.gz"
+          SOURCE_EPOCH="$(git show -s --format=%ct HEAD)"
 
-          # src/ is the production filesystem overlay; dev tooling is outside it
-          tar -czf "$ARCHIVE" \
-            --exclude="*.pyc" \
-            --exclude="__pycache__" \
-            src/
+          python3 "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/build-source-archive.py" \
+            --source src --output "$ARCHIVE" --epoch "$SOURCE_EPOCH"
           echo "ARCHIVE=${ARCHIVE}" >> "$GITHUB_ENV"
 
       - name: Create tagged release handoff
