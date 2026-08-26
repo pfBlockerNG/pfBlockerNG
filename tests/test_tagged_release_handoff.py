@@ -395,23 +395,32 @@ def test_dependency_package_is_bound_to_exact_route_handoff(tmp_path: Path) -> N
     module.validate_packages(_payload_with_dependency(), [canonical, dependency])
 
 
-def test_dependency_recipe_identity_must_match_handoff(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("record_changes", "version", "field"),
+    [
+        ({"port_version": "3.4"}, "3.4", "port_version"),
+        ({"distfile": "other-3.4.4.tar.gz"}, DEP_VERSION, "distfile"),
+        ({"distfile_sha256": "a" * 64}, DEP_VERSION, "distfile_sha256"),
+        ({"distfile_size": 1}, DEP_VERSION, "distfile_size"),
+    ],
+)
+def test_dependency_recipe_identity_must_match_handoff(
+    tmp_path: Path,
+    record_changes: dict[str, object],
+    version: str,
+    field: str,
+) -> None:
     module = _module()
     canonical = tmp_path / CANONICAL_ASSET
-    dependency = tmp_path / f"{DEP_NAME}-9.9.9-CE-2.8.pkg"
+    dependency = tmp_path / f"{DEP_NAME}-{version}-CE-2.8.pkg"
     _write_package(canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
     _write_dependency_package(
         dependency,
-        record_changes={
-            "port_version": "9.9.9",
-            "distfile": "other-9.9.9.tar.gz",
-            "distfile_sha256": "a" * 64,
-            "distfile_size": 1,
-        },
-        manifest_changes={"version": "9.9.9"},
+        record_changes=record_changes,
+        manifest_changes={"version": version},
     )
 
-    with pytest.raises(module.HandoffError, match="port_version|distfile"):
+    with pytest.raises(module.HandoffError, match=field):
         module.validate_packages(_payload_with_dependency(), [canonical, dependency])
 
 
