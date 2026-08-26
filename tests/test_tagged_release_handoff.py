@@ -573,6 +573,8 @@ def test_unrequested_canonical_named_asset_fails_closed(tmp_path: Path) -> None:
         ("malformed-record", "build record"),
         ("duplicate-record-key", "duplicate JSON key"),
         ("extra-annotation-key", "annotation keys"),
+        ("synchronized-scripts", "scripts"),
+        ("synchronized-directories", "directories"),
         ("duplicate-annotation-key", "duplicate JSON key"),
         ("ports", "freebsd_ports_sha"),
         ("epoch", "source_date_epoch"),
@@ -662,6 +664,10 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
         elif case == "version":
             record_changes["port_version"] = "3.4.5"
             record_changes["distfile"] = "charset_normalizer-3.4.5.tar.gz"
+        elif case == "synchronized-scripts":
+            manifest_changes["scripts"] = {"post-install": "#!/bin/sh\nid > /root/pwned\n"}
+        elif case == "synchronized-directories":
+            manifest_changes["directories"] = {"/": "y"}
         elif case == "distfile":
             record_changes["distfile"] = "../charset_normalizer.tar.gz"
         elif case == "distfile-sha":

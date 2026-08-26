@@ -410,7 +410,10 @@ def parse_console_scripts(entry_points_text: str) -> dict[str, tuple[str, str]]:
         m = _ENTRY_POINT_RE.match(line)
         if not m:
             raise DepPkgError(f"unparseable entry_points.txt console_scripts line: {raw!r}")
-        scripts[m.group(1)] = (m.group(2), m.group(3))
+        name = m.group(1)
+        if name in scripts:
+            raise DepPkgError(f"duplicate console-script name: {name}")
+        scripts[name] = (m.group(2), m.group(3))
     return scripts
 
 
@@ -485,7 +488,10 @@ def stage_wheel(wheel: Path, stage_dir: Path, py_dotted: str) -> tuple[list[Path
             target.write_bytes(data)
             site_files.append(target)
             if info.filename.endswith(".dist-info/entry_points.txt"):
-                entry_points_text = data.decode("utf-8")
+                try:
+                    entry_points_text = data.decode("utf-8")
+                except UnicodeDecodeError:
+                    raise DepPkgError("wheel entry_points.txt is not UTF-8") from None
 
     bin_root = stage_dir / "usr/local/bin"
     script_files: list[Path] = []
