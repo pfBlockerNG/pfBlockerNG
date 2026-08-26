@@ -19,6 +19,7 @@ try:
         inspect_pkg,
         load_build_record,
         read_compact_manifest,
+        validate_build_matrix_row,
         validate_dependency_builder,
     )
 except ImportError:
@@ -29,6 +30,7 @@ except ImportError:
         inspect_pkg,
         load_build_record,
         read_compact_manifest,
+        validate_build_matrix_row,
         validate_dependency_builder,
     )
 
@@ -44,6 +46,7 @@ _FIELDS = {
     "source_date_epoch",
     "dependency_builder",
     "route_matrix",
+    "dependency_packages",
 }
 _DEP_BUILD_RECORD_KEY = "pfb_dep_build_record"
 _DEP_RECORD_FIELDS = {
@@ -59,6 +62,14 @@ _DEP_RECORD_FIELDS = {
     "abi",
     "source_date_epoch",
     "toolchain",
+}
+_DEP_IDENTITY_FIELDS = {
+    "portname",
+    "port_version",
+    "distfile",
+    "distfile_sha256",
+    "distfile_size",
+    "python_dep_version",
 }
 _ORIGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -83,12 +94,68 @@ def _ports_sha(value: object) -> str:
 def _route_matrix(value: object) -> list[dict[str, object]]:
     if not isinstance(value, list) or not value:
         raise HandoffError("route_matrix must be a non-empty JSON array")
-    if any(not isinstance(row, Mapping) for row in value):
-        raise HandoffError("route_matrix rows must be JSON objects")
+    normalized: list[dict[str, object]] = []
     try:
-        normalized = json.loads(json.dumps(value, ensure_ascii=False))
-    except (TypeError, ValueError) as exc:
-        raise HandoffError(f"route_matrix is not JSON-serializable: {exc}") from exc
+        for raw_row in value:
+            if not isinstance(raw_row, Mapping):
+                raise HandoffError("route_matrix rows must be JSON objects")
+            route_row = dict(raw_row)
+            ci = route_row.pop("ci", None)
+            if ci is not None and type(ci) is not bool:
+                raise HandoffError("route_matrix row ci must be boolean")
+            row = validate_build_matrix_row(route_row)
+            if ci is not None:
+                row["ci"] = ci
+            normalized.append(row)
+    except PkgError as exc:
+        raise HandoffError(str(exc)) from exc
+    return normalized
+
+
+def _dependency_packages(
+    value: object,
+    rows: Sequence[Mapping[str, object]],
+) -> dict[str, dict[str, object]]:
+    if not isinstance(value, Mapping):
+        raise HandoffError("dependency_packages must be an object")
+    required_origins: set[str] = set()
+    for index, row in enumerate(rows):
+        origins = row.get("extra_pkgs")
+        if not isinstance(origins, list):
+            raise HandoffError(f"route_matrix row {index} extra_pkgs must be an array")
+        for origin in origins:
+            if not isinstance(origin, str) or not _ORIGIN_RE.fullmatch(origin):
+                raise HandoffError(f"route_matrix row {index} extra_pkgs contains a malformed origin")
+            required_origins.add(origin)
+    if set(value) != required_origins:
+        raise HandoffError("dependency_packages must exactly match ROUTE extra_pkgs origins")
+    normalized: dict[str, dict[str, object]] = {}
+    for origin, identity in value.items():
+        if not isinstance(identity, Mapping) or set(identity) != _DEP_IDENTITY_FIELDS:
+            raise HandoffError(f"dependency_packages[{origin!r}] exact fields required")
+        portname = identity["portname"]
+        port_version = identity["port_version"]
+        distfile = identity["distfile"]
+        distfile_sha256 = identity["distfile_sha256"]
+        distfile_size = identity["distfile_size"]
+        python_dep_version = identity["python_dep_version"]
+        if not isinstance(portname, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", portname):
+            raise HandoffError(f"dependency_packages[{origin!r}].portname is malformed")
+        if not isinstance(port_version, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]*", port_version):
+            raise HandoffError(f"dependency_packages[{origin!r}].port_version is malformed")
+        if (
+            not isinstance(distfile, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*\.tar\.gz", distfile)
+            or port_version not in distfile
+        ):
+            raise HandoffError(f"dependency_packages[{origin!r}].distfile is malformed")
+        if not isinstance(distfile_sha256, str) or not _SHA256_RE.fullmatch(distfile_sha256):
+            raise HandoffError(f"dependency_packages[{origin!r}].distfile_sha256 is malformed")
+        if type(distfile_size) is not int or distfile_size <= 0:
+            raise HandoffError(f"dependency_packages[{origin!r}].distfile_size is malformed")
+        if not isinstance(python_dep_version, str) or not python_dep_version:
+            raise HandoffError(f"dependency_packages[{origin!r}].python_dep_version is malformed")
+        normalized[origin] = dict(identity)
     return normalized
 
 
@@ -99,6 +166,7 @@ def build_handoff(
     ci_metadata_sha: str,
     ports_sha: str,
     route_matrix: object,
+    dependency_packages: object,
     source_date_epoch: int,
     dependency_builder: object,
 ) -> dict[str, object]:
@@ -109,6 +177,7 @@ def build_handoff(
     ci_metadata_sha = _git_sha(ci_metadata_sha, "ci_metadata_sha")
     ports_sha = _ports_sha(ports_sha)
     rows = _route_matrix(route_matrix)
+    normalized_dependency_packages = _dependency_packages(dependency_packages, rows)
     if type(source_date_epoch) is not int or source_date_epoch < 0:
         raise HandoffError("source_date_epoch must be a non-negative integer")
     try:
@@ -125,6 +194,7 @@ def build_handoff(
         "source_date_epoch": source_date_epoch,
         "dependency_builder": normalized_dependency_builder,
         "route_matrix": rows,
+        "dependency_packages": normalized_dependency_packages,
     }
 
 
@@ -155,6 +225,7 @@ def load_handoff(
         ci_metadata_sha=raw["ci_metadata_sha"],
         ports_sha=raw["ports_sha"],
         route_matrix=raw["route_matrix"],
+        dependency_packages=raw["dependency_packages"],
         source_date_epoch=raw["source_date_epoch"],
         dependency_builder=raw["dependency_builder"],
     )
@@ -268,12 +339,16 @@ def _validate_dependency_package(
     member_info = evidence["member_info"]
     if not isinstance(manifest, dict) or not isinstance(payload, dict) or not isinstance(member_info, dict):
         raise HandoffError(f"{package.name}: dependency package inspection evidence is malformed")
-    compact_from_full = {
-        key: value for key, value in manifest.items() if key not in ("files", "directories", "scripts")
-    }
+    compact_from_full = {key: value for key, value in manifest.items() if key != "files"}
     if compact != compact_from_full:
         raise HandoffError(f"{package.name}: dependency package compact/full manifest mismatch")
     record = _dependency_record(package, compact)
+    dependency_packages = handoff.get("dependency_packages")
+    if not isinstance(dependency_packages, Mapping):
+        raise HandoffError("tagged release handoff dependency_packages is malformed")
+    identity = dependency_packages.get(record["port_origin"])
+    if not isinstance(identity, Mapping):
+        raise HandoffError(f"{package.name}: unrequested dependency package {record['port_origin']}")
     expected = {
         "freebsd_ports_sha": handoff.get("ports_sha"),
         "source_date_epoch": handoff.get("source_date_epoch"),
@@ -281,14 +356,19 @@ def _validate_dependency_package(
         "freebsd_major": row["freebsd_major"],
         "py_flavor": row["py_flavor"],
         "abi": f"FreeBSD:{row['freebsd_major']}:*",
+        "port_version": identity["port_version"],
+        "distfile": identity["distfile"],
+        "distfile_sha256": identity["distfile_sha256"],
+        "distfile_size": identity["distfile_size"],
     }
     for field, value in expected.items():
         if record[field] != value:
             raise HandoffError(f"{package.name}: dependency package build record {field} does not match route handoff")
     name = compact.get("name")
     version = compact.get("version")
-    if not isinstance(name, str) or not name.startswith(f"{row['py_flavor']}-"):
-        raise HandoffError(f"{package.name}: dependency package name does not match route py_flavor")
+    expected_name = f"{row['py_flavor']}-{identity['portname']}"
+    if name != expected_name:
+        raise HandoffError(f"{package.name}: dependency package name does not match route py_flavor/portname")
     if version != record["port_version"]:
         raise HandoffError(f"{package.name}: dependency package version does not match build record")
     if compact.get("origin") != record["port_origin"]:
@@ -298,6 +378,15 @@ def _validate_dependency_package(
     expected_filename = f"{name}-{version}-{row['variant']}-{row['pfsense_version']}.pkg"
     if package.name != expected_filename:
         raise HandoffError(f"{package.name}: dependency package filename must be {expected_filename}")
+    py_digits = str(row["py_flavor"])[2:]
+    expected_dependencies = {
+        f"python{py_digits}": {
+            "origin": f"lang/python{py_digits}",
+            "version": identity["python_dep_version"],
+        }
+    }
+    if compact.get("deps") != expected_dependencies:
+        raise HandoffError(f"{package.name}: dependency package runtime dependencies do not match handoff")
     files = manifest.get("files")
     if not isinstance(files, dict) or not files or set(files) != set(payload):
         raise HandoffError(f"{package.name}: dependency package payload inventory differs from manifest")
@@ -315,22 +404,32 @@ def _validate_dependency_package(
         if checksum[2:] != hashlib.sha256(data).hexdigest():
             raise HandoffError(f"{package.name}: dependency package checksum mismatch for {path}")
         member = member_info[path]
-        perm = entry.get("perm")
-        mtime = entry.get("mtime")
+        required_fields = {"sum", "uname", "gname", "perm", "fflags", "mtime"}
+        if not required_fields.issubset(entry) or set(entry) - required_fields - {"size"}:
+            raise HandoffError(f"{package.name}: dependency package manifest metadata for {path} is malformed")
+        perm = entry["perm"]
+        mtime = entry["mtime"]
         size = entry.get("size")
         if (
-            not isinstance(perm, str)
+            entry["uname"] != "root"
+            or entry["gname"] != "wheel"
+            or entry["fflags"] != 0
+            or not isinstance(perm, str)
             or not re.fullmatch(r"0[0-7]{3}", perm)
             or type(mtime) is not int
-            or type(size) is not int
+            or ("size" in entry and type(size) is not int)
         ):
             raise HandoffError(f"{package.name}: dependency package manifest metadata for {path} is malformed")
         mode = int(perm, 8)
         if (
-            member.mode != mode
+            member.uid != 0
+            or member.gid != 0
+            or member.uname != "root"
+            or member.gname != "wheel"
+            or member.mode != mode
             or int(member.mtime) != mtime
             or mtime != handoff.get("source_date_epoch")
-            or size != len(data)
+            or ("size" in entry and size != len(data))
         ):
             raise HandoffError(
                 f"{package.name}: dependency package manifest metadata for {path} does not match handoff"
@@ -343,18 +442,41 @@ def validate_packages(handoff: Mapping[str, object], packages: Sequence[str | Pa
     records: list[Mapping[str, object]] = []
     requirements, rows_by_suffix = _dependency_requirements(handoff)
     seen_dependencies: set[tuple[str, str]] = set()
+    seen_canonical: set[str] = set()
     try:
         for raw_package in packages:
             package = Path(raw_package)
             manifest = read_compact_manifest(package)
             if manifest.get("name") == CANONICAL_EMITTED_IDENTITY:
+                suffixes = [suffix for suffix in rows_by_suffix if package.name.endswith(suffix)]
+                if len(suffixes) != 1:
+                    raise HandoffError(f"{package.name}: canonical package filename does not match one route row")
+                suffix = suffixes[0]
                 annotations = manifest.get("annotations")
                 if not isinstance(annotations, Mapping):
                     raise HandoffError(f"{package.name}: package annotations are missing")
                 annotation = annotations.get(PFB_BUILD_RECORD_KEY)
                 if not isinstance(annotation, str):
                     raise HandoffError(f"{package.name}: package build record annotation is missing")
-                records.append(load_build_record(annotation))
+                record = load_build_record(annotation)
+                row = rows_by_suffix[suffix]
+                record_row = record["matrix_row"]
+                expected_filename = (
+                    f"{CANONICAL_EMITTED_IDENTITY}-{record['canonical_package_version']}"
+                    f"-{row['variant']}-{row['pfsense_version']}.pkg"
+                )
+                if package.name != expected_filename:
+                    raise HandoffError(f"{package.name}: canonical package filename must be {expected_filename}")
+                if (
+                    not isinstance(record_row, Mapping)
+                    or record_row.get("variant") != row["variant"]
+                    or record_row.get("pfsense_version") != row["pfsense_version"]
+                ):
+                    raise HandoffError(f"{package.name}: canonical package matrix row does not match route handoff")
+                if suffix in seen_canonical:
+                    raise HandoffError(f"{package.name}: duplicate canonical package for route row {suffix}")
+                seen_canonical.add(suffix)
+                records.append(record)
                 continue
             suffixes = [suffix for suffix in rows_by_suffix if package.name.endswith(suffix)]
             if len(suffixes) != 1:
@@ -384,6 +506,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--source-date-epoch", required=True, type=int)
     parser.add_argument("--dependency-builder", required=True, type=Path)
     parser.add_argument("--route-matrix", required=True, type=Path)
+    parser.add_argument("--dependency-packages", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args(argv)
 
@@ -412,12 +535,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             args = _parse_args(arguments)
             route_matrix = json.loads(args.route_matrix.read_text(encoding="utf-8"))
             dependency_builder = json.loads(args.dependency_builder.read_text(encoding="utf-8"))
+            dependency_packages = json.loads(args.dependency_packages.read_text(encoding="utf-8"))
             handoff = build_handoff(
                 release_tag=args.release_tag,
                 source_sha=args.source_sha,
                 ci_metadata_sha=args.ci_metadata_sha,
                 ports_sha=args.ports_sha,
                 route_matrix=route_matrix,
+                dependency_packages=dependency_packages,
                 source_date_epoch=args.source_date_epoch,
                 dependency_builder=dependency_builder,
             )

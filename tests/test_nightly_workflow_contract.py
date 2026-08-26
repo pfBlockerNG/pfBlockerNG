@@ -327,6 +327,8 @@ def test_dependency_builder_toolchain_epoch_and_handoff_are_structurally_locked(
     assert "--dependency-builder plan/dependency-builder.json" in handoff["run"]
     assert handoff["env"]["SOURCE_DATE_EPOCH"] == "${{ needs.prepare.outputs.source_date_epoch }}"
     assert '--source-date-epoch "$SOURCE_DATE_EPOCH"' in handoff["run"]
+    build = next(step for step in build_steps if step.get("name") == "Build and verify package")
+    assert '[ "$ORIGIN_COUNT" -gt 0 ]' in build["run"]
 
 
 def test_handoff_step_has_no_durable_completion() -> None:

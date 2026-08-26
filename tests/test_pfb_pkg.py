@@ -79,6 +79,14 @@ def test_build_record_valid_and_digest_is_canonical() -> None:
     assert pfb_pkg.build_input_digest(changed) != record["build_input_digest"]
 
 
+def test_build_record_rejects_malformed_dependency_builder() -> None:
+    record = _record(dependency_builder={**DEPENDENCY_BUILDER, "wheel": "not-a-version"})
+    with pytest.raises(pfb_pkg.PkgError, match="dependency_builder"):
+        pfb_pkg.validate_build_record(record)
+    with pytest.raises(pfb_pkg.PkgError, match="dependency_builder"):
+        pfb_pkg.load_build_record(json.dumps(record))
+
+
 @pytest.mark.parametrize(
     ("field", "replacement"),
     [

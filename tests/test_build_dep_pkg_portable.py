@@ -29,6 +29,7 @@ from typing import Any
 import pfb_pkg
 import pytest
 
+from scripts import tagged_release_handoff as trh
 from tests.gitenv import scrubbed_git_env
 
 # --------------------------------------------------------------------------- #
@@ -167,6 +168,17 @@ def test_read_port_refuses_missing_no_arch(tmp_path: Path) -> None:
 def test_read_port_refuses_no_arch_explicitly_no(tmp_path: Path) -> None:
     port_dir = _write_port(tmp_path, no_arch_line="NO_ARCH=\tno")
     with pytest.raises(bdp.DepPkgError, match="NO_ARCH"):
+        bdp.read_port(port_dir)
+
+
+def test_read_port_refuses_unsafe_distname(tmp_path: Path) -> None:
+    port_dir = _write_port(tmp_path)
+    makefile = port_dir / "Makefile"
+    makefile.write_text(
+        makefile.read_text().replace("DISTNAME=\tcharset_normalizer-${PORTVERSION}", "DISTNAME=\t../../escaped")
+    )
+
+    with pytest.raises(bdp.DepPkgError, match="DISTNAME"):
         bdp.read_port(port_dir)
 
 
@@ -487,6 +499,18 @@ def test_stage_wheel_lays_out_site_packages_and_console_script(tmp_path: Path) -
     assert (script.stat().st_mode & 0o777) == 0o555
 
 
+def test_stage_wheel_refuses_console_script_host_collision(tmp_path: Path) -> None:
+    wheel = tmp_path / "mypkg-1.0-py3-none-any.whl"
+    _write_wheel(
+        wheel,
+        files={"mypkg/__init__.py": b"X = 1\n"},
+        entry_points="[console_scripts]\nFoo = mypkg:main\nfoo = mypkg:main\n",
+    )
+
+    with pytest.raises(bdp.DepPkgError, match="console-script.*collision"):
+        bdp.stage_wheel(wheel, tmp_path / "stage", "3.11")
+
+
 def test_stage_wheel_without_entry_points_yields_no_scripts(tmp_path: Path) -> None:
     wheel = tmp_path / "mypkg-1.0-py3-none-any.whl"
     _write_wheel(wheel, files={"mypkg/__init__.py": b"X = 1\n"}, entry_points=None)
@@ -804,6 +828,52 @@ def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytes
     assert files["/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py"]["perm"] == "0644"
 
 
+def test_real_dependency_builder_output_passes_tagged_dependency_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    package = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "out"))
+    tagged_package = package.with_name(f"{package.stem}-CE-2.8.pkg")
+    package.rename(tagged_package)
+    handoff = trh.build_handoff(
+        release_tag="v4.0.0.b1",
+        source_sha="a" * 40,
+        ci_metadata_sha="b" * 40,
+        ports_sha="d" * 40,
+        route_matrix=[
+            {
+                "pfsense_version": "2.8",
+                "channel": "CE",
+                "freebsd_version": "15.0-RELEASE",
+                "freebsd_major": "15",
+                "php_version": "8.3",
+                "py_flavor": "py311",
+                "variant": "CE",
+                "status": "active",
+                "extra_pkgs": ["textproc/py-charset-normalizer"],
+            }
+        ],
+        dependency_packages={
+            "textproc/py-charset-normalizer": {
+                "portname": "charset-normalizer",
+                "port_version": "3.4.4",
+                "distfile": "charset_normalizer-3.4.4.tar.gz",
+                "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
+                "distfile_size": 129_418,
+                "python_dep_version": "3.11.13",
+            }
+        },
+        source_date_epoch=1_700_000_000,
+        dependency_builder=bdp.build_toolchain_identity(),
+    )
+
+    with pytest.raises(trh.HandoffError, match="no canonical"):
+        trh.validate_packages(handoff, [tagged_package])
+
+
 def test_build_dep_pkg_no_console_scripts_still_emits_valid_pkg(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1102,6 +1172,68 @@ def test_print_toolchain_binds_the_lock_file(capsys: pytest.CaptureFixture[str])
     identity = json.loads(capsys.readouterr().out)
     assert identity == bdp.build_toolchain_identity()
     assert identity["uv_lock_sha256"] == hashlib.sha256((bdp._REPO_ROOT / "uv.lock").read_bytes()).hexdigest()
+
+
+def test_print_port_identity_reads_the_pinned_recipe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+
+    assert (
+        bdp.main(
+            [
+                "--print-port-identity",
+                "--ports",
+                str(ports_root),
+                "--ports-sha",
+                "d" * 40,
+                "--port",
+                "textproc/py-charset-normalizer",
+                "--python-dep-version",
+                "3.11.13",
+            ]
+        )
+        == 0
+    )
+    assert json.loads(capsys.readouterr().out) == {
+        "port_origin": "textproc/py-charset-normalizer",
+        "portname": "charset-normalizer",
+        "port_version": "3.4.4",
+        "distfile": "charset_normalizer-3.4.4.tar.gz",
+        "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
+        "distfile_size": 129_418,
+        "python_dep_version": "3.11.13",
+    }
+
+
+def test_print_port_identity_consumes_pinned_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    snapshot_root = tmp_path / "snapshot"
+    snapshot_port = _write_port(snapshot_root)
+    for name in ("Makefile", "distinfo"):
+        path = snapshot_port / name
+        path.write_text(path.read_text().replace("3.4.4", "9.9.9"))
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(bdp.bpp, "_snapshot_checkout", lambda *_args, **_kwargs: snapshot_root)
+    args = argparse.Namespace(
+        ports=str(ports_root),
+        ports_sha="d" * 40,
+        port="textproc/py-charset-normalizer",
+        python_dep_version="0",
+    )
+
+    identity = bdp.dependency_port_identity(args)
+
+    assert identity["port_version"] == "9.9.9"
+    assert identity["distfile"] == "charset_normalizer-9.9.9.tar.gz"
 
 
 def test_dependency_build_group_and_lock_use_exact_pins() -> None:

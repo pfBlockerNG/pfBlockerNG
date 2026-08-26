@@ -133,7 +133,7 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
     read_matrix = "\n".join(jobs["read-matrix"])
     build = "\n".join(jobs["build-pkgs-portable"])
 
-    for output in ("route_matrix", "ci_metadata_sha", "ports_sha"):
+    for output in ("route_matrix", "ci_metadata_sha", "ports_sha", "dependency_packages"):
         assert re.search(
             rf"^      {output}:\s+\$\{{\{{ steps\.pins\.outputs\.{output} \}}\}}$",
             read_matrix,
@@ -143,7 +143,10 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
     assert read_matrix.count("git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports") == 1
     builder_checkout = extract_step(release, "Check out pinned dependency-builder source")
     assert "uses: actions/checkout@v6" in builder_checkout
-    assert "ref: ${{ steps.destinations.outputs.source_sha }}" in builder_checkout
+    assert (
+        "ref: ${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || "
+        "steps.destinations.outputs.source_sha }}" in builder_checkout
+    )
     assert "path: pinned-builder" in builder_checkout
 
     assert "git ls-remote" not in build
@@ -211,6 +214,7 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
             "MATRIX_FIXTURE": str(matrix),
             "CI_SHA": ci_sha,
             "PORTS_SHA": ports_sha,
+            "INPUT_SOURCE": "devel",
         },
         capture_output=True,
         text=True,
@@ -222,6 +226,7 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
     assert f"ci_metadata_sha={ci_sha}" in emitted
     assert f"ports_sha={ports_sha}" in emitted
     assert '"pfsense_version":"2.8"' in emitted
+    assert "dependency_packages={}" in emitted
     commands = git_log.read_text(encoding="utf-8")
     assert "fetch --no-tags origin +refs/heads/ci-metadata:refs/remotes/origin/ci-metadata" in commands
     assert "rev-parse refs/remotes/origin/ci-metadata^{commit}" in commands
@@ -237,12 +242,14 @@ def test_issue_2387_draft_persists_the_exact_tagged_handoff_asset() -> None:
         "SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}",
         "CI_METADATA_SHA: ${{ needs.read-matrix.outputs.ci_metadata_sha }}",
         "PORTS_SHA: ${{ needs.read-matrix.outputs.ports_sha }}",
+        "DEPENDENCY_PACKAGES: ${{ needs.read-matrix.outputs.dependency_packages }}",
         '--release-tag "$RELEASE_TAG"',
         '--source-sha "$SOURCE_SHA"',
         '--ci-metadata-sha "$CI_METADATA_SHA"',
         '--ports-sha "$PORTS_SHA"',
         'ROUTE_MATRIX_FILE="$RUNNER_TEMP/route-matrix.json"',
         '--route-matrix "$ROUTE_MATRIX_FILE"',
+        '--dependency-packages "$DEPENDENCY_PACKAGES_FILE"',
     ):
         assert value in create
     draft = extract_step(release, "Create the GitHub Release as a DRAFT")

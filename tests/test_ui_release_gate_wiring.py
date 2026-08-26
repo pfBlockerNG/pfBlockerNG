@@ -495,12 +495,19 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert setup["with"] == {"version": "0.12.6", "activate-environment": True}
     assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
     assert pinned_builder["uses"] == "actions/checkout@v6"
-    assert pinned_builder["with"]["ref"] == "${{ steps.destinations.outputs.source_sha }}"
+    assert pinned_builder["with"]["ref"] == (
+        "${{ github.event.inputs.source == 'release/3.3' && github.workflow_sha || "
+        "steps.destinations.outputs.source_sha }}"
+    )
     assert pinned_builder["with"]["path"] == "pinned-builder"
     assert "scripts/" in pinned_builder["with"]["sparse-checkout"]
     assert "uv.lock" in pinned_builder["with"]["sparse-checkout"]
     assert 'python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain' in pins["run"]
     assert "python3 scripts/build-dep-pkg-portable.py --print-toolchain" not in pins["run"]
+    assert "--print-port-identity" in pins["run"]
+    assert "dependency_packages=${DEPENDENCY_PACKAGES}" in pins["run"]
+    assert pins["env"]["INPUT_SOURCE"] == "${{ github.event.inputs.source }}"
+    assert "map(.extra_pkgs = [])" in pins["run"]
     assert "CREATED" in record["env"] and "DEPENDENCY_BUILDER" in record["env"]
     assert '"source_date_epoch": int(os.environ["CREATED"])' in record["run"]
     assert '"dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"])' in record["run"]
@@ -511,6 +518,10 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     assert "DEPENDENCY_BUILDER" in handoffs[0]["env"]
     assert '--source-date-epoch "$(git show -s --format=%ct "$SOURCE_SHA")"' in handoffs[0]["run"]
     assert '--dependency-builder "$DEPENDENCY_BUILDER_FILE"' in handoffs[0]["run"]
+    assert "DEPENDENCY_PACKAGES" in handoffs[0]["env"]
+    assert '--dependency-packages "$DEPENDENCY_PACKAGES_FILE"' in handoffs[0]["run"]
+    assert setup["if"] == "github.event.inputs.source != 'release/3.3'"
+    assert sync["if"] == "github.event.inputs.source != 'release/3.3'"
 
 
 # --------------------------------------------------------------------------- #

@@ -43,6 +43,21 @@ ROW = {
     "status": "active",
     "extra_pkgs": [],
 }
+DEP_ORIGIN = "textproc/py-charset-normalizer"
+DEP_NAME = "py311-charset-normalizer"
+DEP_VERSION = "3.4.4"
+DEP_ASSET = f"{DEP_NAME}-{DEP_VERSION}-CE-2.8.pkg"
+CANONICAL_ASSET = "pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.8.pkg"
+DEP_RECORD_KEY = "pfb_dep_build_record"
+DEP_PAYLOAD = "/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py"
+DEP_IDENTITY = {
+    "portname": "charset-normalizer",
+    "port_version": DEP_VERSION,
+    "distfile": f"charset_normalizer-{DEP_VERSION}.tar.gz",
+    "distfile_sha256": "e" * 64,
+    "distfile_size": 129_418,
+    "python_dep_version": "3.11.13",
+}
 
 
 def _module() -> Any:
@@ -53,13 +68,17 @@ def _module() -> Any:
     return module
 
 
-def _payload(route_matrix: object | None = None) -> dict[str, object]:
+def _payload(
+    route_matrix: object | None = None,
+    dependency_packages: object | None = None,
+) -> dict[str, object]:
     return _module().build_handoff(
         release_tag=TAG,
         source_sha=SOURCE_SHA,
         ci_metadata_sha=CI_METADATA_SHA,
         ports_sha=PORTS_SHA,
         route_matrix=[ROW] if route_matrix is None else route_matrix,
+        dependency_packages={} if dependency_packages is None else dependency_packages,
         source_date_epoch=SOURCE_DATE_EPOCH,
         dependency_builder=DEPENDENCY_BUILDER,
     )
@@ -75,6 +94,8 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
     _write(route, [ROW])
     dependency_builder = tmp_path / "dependency-builder.json"
     _write(dependency_builder, DEPENDENCY_BUILDER)
+    dependency_packages = tmp_path / "dependency-packages.json"
+    _write(dependency_packages, {})
 
     completed = subprocess.run(
         [
@@ -94,6 +115,8 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
             str(dependency_builder),
             "--route-matrix",
             str(route),
+            "--dependency-packages",
+            str(dependency_packages),
             "--output",
             str(output),
         ],
@@ -113,6 +136,7 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
         "ci_metadata_sha",
         "ports_sha",
         "route_matrix",
+        "dependency_packages",
         "source_date_epoch",
         "dependency_builder",
     }
@@ -122,6 +146,7 @@ def test_cli_creates_canonical_build_time_handoff(tmp_path: Path) -> None:
     assert payload["ci_metadata_sha"] == CI_METADATA_SHA
     assert payload["ports_sha"] == PORTS_SHA
     assert payload["route_matrix"] == [ROW]
+    assert payload["dependency_packages"] == {}
 
     assert payload["source_date_epoch"] == SOURCE_DATE_EPOCH
     assert payload["dependency_builder"] == DEPENDENCY_BUILDER
@@ -271,14 +296,6 @@ def _write_package(path: Path, record: dict[str, object], *, name: str) -> None:
     path.write_bytes(lzma.compress(archive.getvalue()))
 
 
-DEP_ORIGIN = "textproc/py-charset-normalizer"
-DEP_NAME = "py311-charset-normalizer"
-DEP_VERSION = "3.4.4"
-DEP_ASSET = f"{DEP_NAME}-{DEP_VERSION}-CE-2.8.pkg"
-DEP_RECORD_KEY = "pfb_dep_build_record"
-DEP_PAYLOAD = "/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py"
-
-
 def _dependency_record(**changes: object) -> dict[str, object]:
     record: dict[str, object] = {
         "schema": 1,
@@ -304,6 +321,8 @@ def _write_dependency_package(
     record_changes: dict[str, object] | None = None,
     manifest_changes: dict[str, object] | None = None,
     full_manifest_changes: dict[str, object] | None = None,
+    file_changes: dict[str, object] | None = None,
+    member_changes: dict[str, object] | None = None,
     annotation: str | None = "record",
     checksum: str | None = None,
 ) -> None:
@@ -323,19 +342,22 @@ def _write_dependency_package(
         "arch": "freebsd:15:*",
         "prefix": "/usr/local",
         "annotations": annotations,
+        "deps": {"python311": {"origin": "lang/python311", "version": "3.11.13"}},
     }
     compact.update(manifest_changes or {})
     payload = b"__version__ = '3.4.4'\n"
+    file_entry: dict[str, object] = {
+        "sum": checksum or f"1${hashlib.sha256(payload).hexdigest()}",
+        "uname": "root",
+        "gname": "wheel",
+        "perm": "0644",
+        "fflags": 0,
+        "mtime": SOURCE_DATE_EPOCH,
+    }
+    file_entry.update(file_changes or {})
     full = {
         **compact,
-        "files": {
-            DEP_PAYLOAD: {
-                "sum": checksum or f"1${hashlib.sha256(payload).hexdigest()}",
-                "perm": "0644",
-                "mtime": SOURCE_DATE_EPOCH,
-                "size": len(payload),
-            }
-        },
+        "files": {DEP_PAYLOAD: file_entry},
     }
     full.update(full_manifest_changes or {})
     archive = io.BytesIO()
@@ -349,17 +371,23 @@ def _write_dependency_package(
         member.size = len(payload)
         member.mode = 0o644
         member.mtime = SOURCE_DATE_EPOCH
+        member.uid = 0
+        member.gid = 0
+        member.uname = "root"
+        member.gname = "wheel"
+        for name, value in (member_changes or {}).items():
+            setattr(member, name, value)
         tf.addfile(member, io.BytesIO(payload))
     path.write_bytes(lzma.compress(archive.getvalue()))
 
 
 def _payload_with_dependency(origin: str = DEP_ORIGIN) -> dict[str, object]:
-    return _payload([{**ROW, "extra_pkgs": [origin]}])
+    return _payload([{**ROW, "extra_pkgs": [origin]}], {origin: DEP_IDENTITY})
 
 
 def test_dependency_package_is_bound_to_exact_route_handoff(tmp_path: Path) -> None:
     module = _module()
-    canonical = tmp_path / "canonical.pkg"
+    canonical = tmp_path / CANONICAL_ASSET
     dependency = tmp_path / DEP_ASSET
     _write_package(canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
     _write_dependency_package(dependency)
@@ -367,10 +395,48 @@ def test_dependency_package_is_bound_to_exact_route_handoff(tmp_path: Path) -> N
     module.validate_packages(_payload_with_dependency(), [canonical, dependency])
 
 
+def test_dependency_recipe_identity_must_match_handoff(tmp_path: Path) -> None:
+    module = _module()
+    canonical = tmp_path / CANONICAL_ASSET
+    dependency = tmp_path / f"{DEP_NAME}-9.9.9-CE-2.8.pkg"
+    _write_package(canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+    _write_dependency_package(
+        dependency,
+        record_changes={
+            "port_version": "9.9.9",
+            "distfile": "other-9.9.9.tar.gz",
+            "distfile_sha256": "a" * 64,
+            "distfile_size": 1,
+        },
+        manifest_changes={"version": "9.9.9"},
+    )
+
+    with pytest.raises(module.HandoffError, match="port_version|distfile"):
+        module.validate_packages(_payload_with_dependency(), [canonical, dependency])
+
+
+def test_handoff_rejects_blank_dependency_origin() -> None:
+    with pytest.raises(ValueError, match="extra_pkgs"):
+        _payload_with_dependency("")
+
+
+def test_handoff_rejects_unsafe_route_identity() -> None:
+    with pytest.raises(ValueError, match="variant"):
+        _payload([{**ROW, "variant": ".."}], {})
+
+
+def test_unrequested_canonical_named_asset_fails_closed(tmp_path: Path) -> None:
+    module = _module()
+    package = tmp_path / "unrequested-CE-2.8.pkg"
+    _write_package(package, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+
+    with pytest.raises(module.HandoffError, match="canonical package filename"):
+        module.validate_packages(_payload(), [package])
+
+
 @pytest.mark.parametrize(
     ("case", "message"),
     [
-        ("blank", "extra_pkgs"),
         ("missing", "missing dependency"),
         ("duplicate", "duplicate dependency"),
         ("unrequested", "unrequested dependency"),
@@ -382,28 +448,42 @@ def test_dependency_package_is_bound_to_exact_route_handoff(tmp_path: Path) -> N
         ("abi", "abi"),
         ("major", "freebsd_major"),
         ("flavor", "py_flavor"),
-        ("origin", "port_origin"),
+        ("origin", "unrequested dependency"),
         ("manifest-origin", "origin"),
         ("version", "version"),
         ("distfile", "distfile"),
+        ("distfile-sha", "distfile_sha256"),
+        ("distfile-size", "distfile_size"),
         ("asset", "filename"),
         ("checksum", "checksum"),
         ("manifest", "compact/full manifest"),
+        ("manifest-mode", "metadata"),
+        ("manifest-mtime", "metadata"),
+        ("manifest-size", "metadata"),
+        ("scripts", "compact/full manifest"),
+        ("directories", "compact/full manifest"),
+        ("deps", "dependencies"),
+        ("owner", "metadata"),
+        ("group", "metadata"),
+        ("fflags", "metadata"),
+        ("tar-owner", "metadata"),
     ],
 )
 def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, message: str) -> None:
     module = _module()
-    canonical = tmp_path / "canonical.pkg"
-    dependency = tmp_path / (DEP_ASSET if case != "asset" else f"{DEP_NAME}-{DEP_VERSION}-Plus-26.03.pkg")
+    canonical = tmp_path / CANONICAL_ASSET
+    dependency = tmp_path / (DEP_ASSET if case != "asset" else f"wrong-{DEP_VERSION}-CE-2.8.pkg")
     _write_package(canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
-    handoff = _payload_with_dependency("" if case == "blank" else DEP_ORIGIN)
+    handoff = _payload_with_dependency()
     packages = [canonical]
-    if case not in ("blank", "missing"):
+    if case != "missing":
         record_changes: dict[str, object] = {}
         manifest_changes: dict[str, object] = {}
         full_manifest_changes: dict[str, object] = {}
+        file_changes: dict[str, object] = {}
         annotation: str | None = "record"
         checksum = None
+        member_changes: dict[str, object] = {}
         if case == "missing-record":
             annotation = None
         elif case == "malformed-record":
@@ -429,15 +509,41 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
             record_changes["distfile"] = "charset_normalizer-3.4.5.tar.gz"
         elif case == "distfile":
             record_changes["distfile"] = "../charset_normalizer.tar.gz"
+        elif case == "distfile-sha":
+            record_changes["distfile_sha256"] = "e" * 63
+        elif case == "distfile-size":
+            record_changes["distfile_size"] = 0
         elif case == "checksum":
             checksum = "1$" + "0" * 64
+        elif case == "manifest-mode":
+            file_changes["perm"] = "0755"
+        elif case == "manifest-mtime":
+            file_changes["mtime"] = SOURCE_DATE_EPOCH + 1
+        elif case == "manifest-size":
+            file_changes["size"] = 0
         elif case == "manifest":
             full_manifest_changes["origin"] = "textproc/py-wrong"
+        elif case == "scripts":
+            full_manifest_changes["scripts"] = {"install": "#!/bin/sh\nexit 0\n"}
+        elif case == "directories":
+            full_manifest_changes["directories"] = {"/usr/local/share/demo": "y"}
+        elif case == "deps":
+            manifest_changes["deps"] = {"evil": {"origin": "security/evil", "version": "1"}}
+        elif case == "owner":
+            file_changes["uname"] = "nobody"
+        elif case == "group":
+            file_changes["gname"] = "evil"
+        elif case == "fflags":
+            file_changes["fflags"] = 1
+        elif case == "tar-owner":
+            member_changes["uname"] = "nobody"
         _write_dependency_package(
             dependency,
             record_changes=record_changes,
             manifest_changes=manifest_changes,
             full_manifest_changes=full_manifest_changes,
+            file_changes=file_changes,
+            member_changes=member_changes,
             annotation=annotation,
             checksum=checksum,
         )
@@ -464,9 +570,11 @@ def test_actual_package_records_must_match_tagged_handoff(
     field: str,
 ) -> None:
     module = _module()
-    exact = tmp_path / "exact.pkg"
+    exact = tmp_path / CANONICAL_ASSET
     dependency = tmp_path / DEP_ASSET
-    drifted = tmp_path / "drifted.pkg"
+    drifted_dir = tmp_path / "drifted"
+    drifted_dir.mkdir()
+    drifted = drifted_dir / CANONICAL_ASSET
     _write_package(exact, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
     _write_dependency_package(dependency)
     _write_package(drifted, _canonical_record(**changes), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
