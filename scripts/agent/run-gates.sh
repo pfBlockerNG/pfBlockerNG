@@ -213,7 +213,9 @@ main() {
 	export PFB_SKIP_REPORT_DIR
 	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"' EXIT
 	# dash runs no EXIT trap on an untrapped signal, so reap explicitly there too.
+	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 129' HUP
 	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 130' INT
+	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 131' QUIT
 	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 143' TERM
 
 	# Coverage pairing consumes status-aware records: deletions and rename sources

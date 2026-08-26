@@ -229,10 +229,10 @@ build. To add a legitimately new skip, add its id as its own line with a trailin
 `# <reason>` comment (a bare id with no reason is itself a build failure) — run the suite
 to get the exact id from its report, never hand-guess it.
 
-`scripts/agent/run-gates.sh` runs these same commands for whatever a diff touches, and
-the `pre-commit` hook runs the fast subset. A gate whose tool is missing is a **failure**
-for `run-gates.sh` (pass `--allow-missing` to downgrade it to a skip); the hook is the
-lenient one and skips what is not installed, because CI is the hard gate.
+`scripts/agent/run-gates.sh` adds the same report/check when its touched-path mapping
+already selects pytest, PHPUnit, or ShellSpec; it does not add new local suites. The
+`pre-commit` hook runs the fast subset. A missing tool is a **failure** for `run-gates.sh`
+(`--allow-missing` downgrades it to a skip); the hook is lenient because CI is the hard gate.
 
 ### Shell tests (shellspec)
 

@@ -522,7 +522,6 @@ jobs:
           [ -n "$DASH" ] || { echo 'red canary failed: dash not found'; exit 1; }
           out="$("$DASH" -c ': > /tmp; echo SURVIVED' 2>/dev/null)" || true
           [ "$out" != "SURVIVED" ] || { echo 'red canary failed: dash did not abort on special-builtin redirection error'; exit 1; }
-          # Report: /tmp/shellspec-report/results_junit.xml
           shellspec --shell "$DASH" -o junit --reportdir /tmp/shellspec-report
 
       - name: Skip allowlist

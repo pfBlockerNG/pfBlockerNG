@@ -43,6 +43,28 @@ Describe 'run-gates.sh gates_for()'
     The lines of output should equal 3
   End
 
+  It 'wraps the selected pytest gate with JUnit, canary, and real check'
+    When call gate_command 'uv run --locked pytest'
+    The output should include '--junitxml="$PFB_SKIP_REPORT_DIR/pytest.xml"'
+    The output should include '--suite pytest'
+    The output should include 'skip-allowlist-canary.xml'
+  End
+
+  It 'wraps the selected PHPUnit gate with JUnit, canary, and real check'
+    When call gate_command 'vendor/bin/phpunit'
+    The output should include '--log-junit "$PFB_SKIP_REPORT_DIR/phpunit.xml"'
+    The output should include '--suite phpunit'
+    The output should include 'skip-allowlist-canary.xml'
+  End
+
+  It 'wraps the selected ShellSpec gate with JUnit, canary, and real check'
+    # shellcheck disable=SC2016 # the literal $( ) is the pinned command text
+    When call gate_command 'shellspec --shell $(command -v dash || command -v sh)'
+    The output should include '-o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec"'
+    The output should include '--suite shellspec'
+    The output should include 'skip-allowlist-canary.xml'
+  End
+
   It 'syntax-checks an out-of-scope shell file but does not shellcheck it'
     # The hook + CI shellcheck only src/, scripts/ and .claude/hooks/; tests/ specs and
     # skill helpers are outside that production-tooling scope.
@@ -311,13 +333,40 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
   script="scripts/agent/run-gates.sh"
 
   It 'executes EVERY planned gate including the last one, and passes'
-    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
     The status should equal 0
     The line 1 of output should equal 'GATE PASS: python3 scripts/check_coverage_pairing.py --name-status-z'
     The output should include 'GATE PASS: sh -n scripts/kept.sh'
     The output should include 'GATE PASS: shellspec'
     The line 5 of output should equal 'GATES: PASS'
     Assert [ -e "$marker" ]
+    Assert [ ! -e "$stubdir"/pfb-run-gates-skip-reports.* ]
+  End
+
+  It 'preserves a selected suite failure and cleans its report directory'
+    printf '#!/bin/sh\nexit 37\n' > "$stubdir/shellspec"
+    chmod +x "$stubdir/shellspec"
+    When run sh -c "TMPDIR='$stubdir' sh '$script' --worktree '$repo' --diff '$base_sha'"
+    The status should equal 1
+    The output should include 'GATE FAIL: shellspec --shell $(command -v dash || command -v sh)'
+    The output should include 'GATES: FAIL'
+    The output should not include 'red canary failed'
+    Assert [ ! -e "$stubdir"/pfb-run-gates-skip-reports.* ]
+  End
+
+  It 'fails when the checker accepts the known-skip canary'
+    {
+      printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = scripts/check_skip_allowlist.py ]; then exit 0; fi'
+      printf 'cat > "%s"\ntr "\\0" "\\n" < "%s" > "%s"\n' \
+        "$pairing_raw" "$pairing_raw" "$pairing_lines"
+    } > "$stubdir/python3"
+    chmod +x "$stubdir/python3"
+    When run sh "$script" --worktree "$repo" --diff "$base_sha"
+    The status should equal 1
+    The output should include 'red canary failed: an unlisted skip did not fail the gate'
+    The output should include 'GATE FAIL: shellspec --shell $(command -v dash || command -v sh)'
+    The output should include 'GATES: FAIL'
   End
 
   It 'feeds exact NUL status records to the first checker gate'

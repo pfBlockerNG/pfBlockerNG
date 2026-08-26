@@ -111,10 +111,15 @@ def parse_report(path: Path, suite: str) -> list[tuple[str, str | None]]:
     except ET.ParseError as exc:
         raise ReportError(f"report file is not well-formed XML: {path}: {exc}") from exc
     skips: list[tuple[str, str | None]] = []
+    seen: set[str] = set()
     for testcase in root.iter("testcase"):
+        test_id = testcase_id(suite, testcase)
+        if test_id in seen:
+            raise ReportError(f"report contains duplicate testcase id: {test_id}")
+        seen.add(test_id)
         for child in testcase:
             if child.tag in _SKIP_ELEMENTS:
-                skips.append((testcase_id(suite, testcase), skip_reason(child)))
+                skips.append((test_id, skip_reason(child)))
                 break
     return skips
 

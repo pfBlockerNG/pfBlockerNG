@@ -425,6 +425,16 @@ def test_failure_and_skip_siblings_only_the_skip_counts(tmp_path: Path) -> None:
     assert csa.parse_report(report, "pytest") == [("pytest:C::b", None)]
 
 
+def test_duplicate_testcase_ids_are_rejected_before_allowlist_matching(tmp_path: Path) -> None:
+    tcs = (
+        '<testcase classname="test" name="same name"></testcase>'
+        '<testcase classname="test" name="same name"><skipped/></testcase>'
+    )
+    report = _report(tmp_path, "r.xml", tcs)
+    with pytest.raises(csa.ReportError, match="duplicate testcase id"):
+        csa.parse_report(report, "webassets-bundle")
+
+
 # --------------------------------------------------------------------------- #
 # Allowlist vs observed.
 # --------------------------------------------------------------------------- #

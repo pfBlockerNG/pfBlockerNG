@@ -22,7 +22,7 @@ test("fromTextarea is exported (the --global-name=pfbCM bundle-facing entry poin
 
 // issue #1875: the dedup itself is the contract -- cm-regex.js must delegate to the shared
 // scaffold, not carry its own copy.
-test("mountTextarea is imported from the shared cm-shell.js module", () => {
+test("cm-regex imports mountTextarea from the shared cm-shell.js module", () => {
   assert.match(src, /import\s*\{[^}]*mountTextarea[^}]*\}\s*from\s*"\.\/cm-shell\.js"/);
 });
 
