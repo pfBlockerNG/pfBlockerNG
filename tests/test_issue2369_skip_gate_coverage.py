@@ -128,11 +128,34 @@ def _step(workflow: dict[str, object], row: Row) -> dict[str, object] | None:
     return next((step for step in steps if step.get("name") == row.step), None)
 
 
+def _shell_line(raw: str) -> str:
+    line = raw.strip().removesuffix("\\").rstrip()
+    if not line or line.startswith("#"):
+        return ""
+    return line.split(" #", 1)[0].removeprefix("command ").strip()
+
+
+def _shell_commands(script: str) -> list[str]:
+    commands: list[str] = []
+    pending = ""
+    for raw in script.splitlines():
+        stripped = raw.strip()
+        continuation = stripped.endswith("\\")
+        piece = stripped[:-1] if continuation else stripped
+        pending = f"{pending} {piece}".strip()
+        if not continuation:
+            line = _shell_line(pending)
+            if line:
+                commands.append(line)
+            pending = ""
+    return commands
+
+
 def _discovered_rows(texts: dict[str, str]) -> Counter[tuple[str, str, str]]:
     found: Counter[tuple[str, str, str]] = Counter()
     command = re.compile(
         r"^(?:uv run(?: --locked)? pytest\b|vendor/bin/phpunit|shellspec --shell|"
-        r"(?:command )?node --test\b|npm run test:(?:grammar|listgrammar|bundle)|"
+        r"node --test\b|npm run test:(?:grammar|listgrammar|bundle)|"
         r"sh scripts/run-smoke\.sh)"
     )
     for filename, text in texts.items():
@@ -142,8 +165,7 @@ def _discovered_rows(texts: dict[str, str]) -> Counter[tuple[str, str, str]]:
                 step_name = step.get("name", "")
                 if "informational" in step_name.lower():
                     continue
-                for raw in str(step.get("run", "")).splitlines():
-                    line = raw.strip()
+                for line in _shell_commands(str(step.get("run", ""))):
                     if "skip-allowlist-node-canary.test.mjs" not in line and command.match(line):
                         found[(filename, job_name, step_name)] += 1
     return found
@@ -168,8 +190,9 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
             errors.append(f"{row.workflow}/{row.job}: missing step {row.step!r}")
             continue
         run = str(step.get("run", ""))
-        run_lines = [line.strip() for line in run.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-        producer_lines = [line for line in run_lines if row.producer in line]
+        run_lines = _shell_commands(run)
+        producer = row.producer
+        producer_lines = [line for line in run_lines if producer in line]
         if not producer_lines:
             errors.append(f"{row.suite}: producer command is missing")
 
@@ -181,7 +204,8 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
             "ui": ('set -- "$@" --junitxml=/tmp/ui-junit.xml',),
             "smoke": ('set -- "$@" --junitxml=smoke-diag/pytest-junit.xml',),
         }
-        if any(not any(flag in line for line in run_lines) for flag in producer_flags.get(row.suite, ())):
+        flag_lines = run_lines if row.suite in {"ui", "smoke"} else producer_lines
+        if any(not any(flag in line for line in flag_lines) for flag in producer_flags.get(row.suite, ())):
             errors.append(f"{row.suite}: JUnit producer flags are missing")
 
         if row.same_step:
@@ -201,7 +225,9 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
         if row.node:
             canary_report = checks[0].split()[-1]
             if "canary" not in canary_report or not any(
-                f"--test-reporter-destination={canary_report}" in line and "skip-allowlist-node-canary.test.mjs" in line
+                "--test-reporter=junit" in line
+                and f"--test-reporter-destination={canary_report}" in line
+                and "skip-allowlist-node-canary.test.mjs" in line
                 for line in run_lines
             ):
                 errors.append(f"{row.suite}: native Node canary reporter is missing")
@@ -214,7 +240,8 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
         if not canary_guard.startswith("&& { echo 'red canary failed:"):
             errors.append(f"{row.suite}: canary does not require nonzero")
         if row.node and not any(
-            row.producer in line
+            producer in line
+            and "--test-reporter=junit" in line
             and f"--test-reporter-destination={row.report}" in line
             and "--test-reporter=spec --test-reporter-destination=stdout" in line
             for line in run_lines
