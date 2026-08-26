@@ -25,7 +25,7 @@ esac
 
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 attempt=1
-while :; do
+while [ "$attempt" -le "$MAX_DISPATCH_ATTEMPTS" ]; do
 	if gh workflow run "$PKG_WORKFLOW" -R "$PKG_REPOSITORY" --ref main \
 		-f "operation=$PKG_OPERATION" \
 		-f "source_repository=${SOURCE_REPOSITORY:-}" \

@@ -1854,6 +1854,7 @@ def _ref_binding(path: tuple[str, ...]) -> bool:
         "ref",
         "checkout_ref",
         "source_ref",
+        "source_sha",
         "ports_ref",
         "smoke_nightly_expected_source_sha",
         "smoke_repo_expected_source_sha",
