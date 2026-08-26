@@ -106,77 +106,6 @@ PUSH_JOBS = (
             ),
         ),
     ),
-    PushJob(
-        "release-published.yml",
-        "publish-pkg-repo",
-        "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
-        "sh scripts/publish-pkg-repo.sh",
-        checkout_groups=(
-            (
-                "uses: actions/checkout@v6",
-                "repository: pfBlockerNG/pfBlockerNG",
-                "ref: ${{ github.workflow_sha }}",
-            ),
-            ("uses: actions/checkout@v6", "repository: pfBlockerNG/pkg", "ref: main", "path: pkg-repo"),
-        ),
-    ),
-    PushJob(
-        "release-published.yml",
-        "promote-pkg-repo",
-        "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
-        "sh scripts/publish-pkg-repo.sh",
-        checkout_groups=(
-            (
-                "uses: actions/checkout@v6",
-                "repository: pfBlockerNG/pfBlockerNG",
-                "ref: ${{ github.workflow_sha }}",
-            ),
-            ("uses: actions/checkout@v6", "repository: pfBlockerNG/pkg", "ref: main", "path: pkg-repo"),
-        ),
-    ),
-    PushJob(
-        "nightly.yml",
-        "publish-pkg-repo",
-        "sh trusted/scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
-        "sh trusted/scripts/publish-pkg-repo.sh",
-        checkout_groups=(
-            (
-                "uses: actions/checkout@v6",
-                "repository: pfBlockerNG/pfBlockerNG",
-                "ref: ${{ needs.prepare.outputs.tools_sha }}",
-                "path: trusted",
-            ),
-            ("uses: actions/checkout@v6", "repository: pfBlockerNG/pkg", "ref: main", "path: pkg-repo"),
-        ),
-    ),
-    PushJob(
-        "pkg-republish.yml",
-        "publish",
-        "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
-        "sh scripts/publish-pkg-repo.sh",
-        checkout_groups=(
-            (
-                "uses: actions/checkout@v6",
-                "repository: pfBlockerNG/pfBlockerNG",
-                "ref: ${{ github.workflow_sha }}",
-            ),
-            ("uses: actions/checkout@v6", "repository: pfBlockerNG/pkg", "ref: main", "path: pkg-repo"),
-        ),
-    ),
-    PushJob(
-        "pkg-render-site.yml",
-        "render",
-        "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
-        "sh scripts/render-pkg-site.sh",
-        checkout_groups=(
-            (
-                "uses: actions/checkout@v6",
-                "repository: pfBlockerNG/pfBlockerNG",
-                "ref: ${{ inputs.source_ref || github.sha }}",
-            ),
-            ("uses: actions/checkout@v6", "repository: pfBlockerNG/pkg", "ref: main", "path: pkg-repo"),
-        ),
-    ),
 )
 
 
@@ -294,12 +223,12 @@ def _discovered_driver_jobs() -> set[tuple[str, str]]:
 
 def test_exhaustive_push_matrix_has_graphify_driver_before_each_mutation() -> None:
     expected = {(spec.workflow, spec.job) for spec in PUSH_JOBS}
-    assert len(PUSH_JOBS) == len(expected) == 13, "issue #2713 defines 13 unique mutating jobs"
+    assert len(PUSH_JOBS) == len(expected) == 8, "issue #2713 defines 8 unique mutating jobs"
     assert _discovered_mutation_jobs() == expected, (
         "the workflow push/pull/merge inventory changed; update the issue #2713 matrix"
     )
     assert _discovered_driver_jobs() == expected, (
-        "Graphify merge-driver setup exists outside the 13 push/pull/merge jobs"
+        "Graphify merge-driver setup exists outside the 8 push/pull/merge jobs"
     )
 
     failures: list[str] = []
