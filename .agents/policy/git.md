@@ -20,9 +20,17 @@ flow.
 
 ```sh
 git worktree add -b <branch> <path> origin/devel   # branch off the latest base
+sh scripts/agent/init-worktree-tools.sh <path>      # mandatory per-worktree indexes
 # … work, commit, push, open the PR from inside <path> …
 git worktree remove <path>            # run from any directory OUTSIDE <path>
 ```
+
+`scripts/agent/work-branch.sh … --worktree` performs the configured-origin fetch,
+worktree add at the requested base, and direct tool initialization as one operation;
+an initialization failure rolls back both the worktree and its new branch. After a
+manual `git worktree add`, run the initializer yourself. CodeGraph and Graphify are
+mandatory and every worktree keeps its own ignored `graphify-out/`; Serena runs when
+available except under OMP (`OMP_CLI` or `PI_CLI`), which uses native LSP tooling.
 
 - Branch off **current** base (`git fetch` first); stale-tip worktree needs rebase
   before it can land.

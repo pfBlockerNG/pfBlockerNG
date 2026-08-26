@@ -275,6 +275,12 @@ jobs:
           persist-credentials: true   # push the tracker/* matrix-PR branches
           fetch-depth: 0
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
       # The reconcile needs EVERY family, one row per version: build_matrix is
       # deduped to one row per freebsd_major (issue #1806), which hides a
       # same-major family (26.03 vs 26.07) and blinds the boot source + the

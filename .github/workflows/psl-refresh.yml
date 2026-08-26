@@ -67,6 +67,12 @@ jobs:
           persist-credentials: true   # need to push the automation branch via git push --force
           ref: devel
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
       # Automated commits must hit the same local gates as a human commit.
       - name: Activate git hooks
         run: sh scripts/setup-hooks.sh

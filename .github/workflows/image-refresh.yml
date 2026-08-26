@@ -228,6 +228,12 @@ jobs:
           persist-credentials: true   # the activation step pushes tracker/* branches (issue #1837)
           fetch-depth: 0              # reach the ci-metadata orphan ref
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
       - name: Enable KVM access for the runner user
         # GH-hosted ubuntu-latest ships /dev/kvm but the unprivileged `runner` user is
         # not in the `kvm` group, so qemu -enable-kvm gets EPERM. A udev rule making

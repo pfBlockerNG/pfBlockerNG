@@ -61,6 +61,12 @@ jobs:
           ref: devel
           fetch-depth: 0   # full history so the pre-push rebase can replay cleanly
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh scripts/agent/ensure-graphify-merge-driver.sh .
+
       - name: Verify the source smoke run finished green
         env:
           GH_TOKEN: ${{ github.token }}

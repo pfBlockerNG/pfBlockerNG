@@ -16,6 +16,10 @@ Describe 'ensure-codegraph.sh failures'
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
     codegraph_log="$fixture/codegraph.log"
     codegraph_state="$fixture/codegraph.complete"
+    missing_codegraph_path="$fixture/no-codegraph"; mkdir -p "$missing_codegraph_path"
+    for tool in sh git dirname tr; do
+      ln -s "$(command -v "$tool")" "$missing_codegraph_path/$tool"
+    done
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
 case "$1" in
@@ -130,8 +134,7 @@ CODEGRAPH
   End
 
   It 'uses the agent-tool missing exit contract when CodeGraph is unavailable'
-    tool_path="$(dirname "$(command -v git)"):/usr/bin:/bin"
-    When run env PATH="$tool_path" sh "$script_abs" "$primary"
+    When run env PATH="$missing_codegraph_path" sh "$script_abs" "$primary"
     The status should equal 4
     The stderr should include 'TOOL-MISSING: codegraph'
   End

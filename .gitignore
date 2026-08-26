@@ -64,7 +64,6 @@ test-results/
 .grok/worktrees/
 .codex/local-notes.md
 graphify-out/
-.graphify-swap-*/
 .ua/
 
 # Per-machine Claude Code / Grok overrides — never committed

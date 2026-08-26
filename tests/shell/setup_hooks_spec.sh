@@ -17,6 +17,10 @@ Describe 'setup-hooks.sh CodeGraph bootstrap'
         commit -q --allow-empty -m init || return 1
     stubdir="$fixture/bin"; mkdir -p "$stubdir"
     codegraph_log="$fixture/codegraph.log"
+    missing_codegraph_path="$fixture/no-codegraph"; mkdir -p "$missing_codegraph_path"
+    for tool in sh git basename; do
+      ln -s "$(command -v "$tool")" "$missing_codegraph_path/$tool"
+    done
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
 #!/bin/sh
 case "$1" in
@@ -49,8 +53,7 @@ CODEGRAPH
   End
 
   It 'still activates Git hooks when CodeGraph is unavailable'
-    tool_path="$(dirname "$(command -v git)"):/usr/bin:/bin"
-    When run env PATH="$tool_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
+    When run env PATH="$missing_codegraph_path" sh -c 'cd "$1" && exec sh "$2"' _ "$primary" "$script_abs"
     The status should equal 0
     The output should include 'core.hooksPath set to: .githooks'
     The stderr should equal ''

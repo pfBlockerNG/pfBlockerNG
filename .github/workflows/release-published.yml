@@ -200,6 +200,12 @@ jobs:
           path: pfblockerng-src
           persist-credentials: false
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install the Graphify merge driver
+        run: sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/agent/ensure-graphify-merge-driver.sh" .
+
       - name: Configure git
         run: |
           git config user.name  "github-actions[bot]"
@@ -306,3 +312,4 @@ jobs:
       channel: ${{ needs.resolve.outputs.channel }}
       portversion: ${{ needs.resolve.outputs.portversion }}
     secrets: inherit
+
