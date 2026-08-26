@@ -393,6 +393,42 @@ GIT
     The path "$worktree_root/adr-49-race-1700000000" should be directory
   End
 
+  It 'atomically suffixes synchronized creators sharing an explicit relative path'
+    race_dir="$fixture/relative-race"
+    mkdir -p "$race_dir"
+    mkfifo "$race_dir/ready-one" "$race_dir/ready-two" "$race_dir/release-one" "$race_dir/release-two"
+    When run sh -c '
+      (
+        printf "ready\n" > "$3/ready-one"
+        IFS= read -r _ < "$3/release-one"
+        cd "$1" || exit 125
+        exec sh "$2" adr 54 relative-race --worktree --base HEAD --path shared
+      ) > "$3/one.out" 2> "$3/one.err" &
+      one=$!
+      (
+        printf "ready\n" > "$3/ready-two"
+        IFS= read -r _ < "$3/release-two"
+        cd "$1" || exit 125
+        exec sh "$2" adr 54 relative-race --worktree --base HEAD --path shared
+      ) > "$3/two.out" 2> "$3/two.err" &
+      two=$!
+      IFS= read -r _ < "$3/ready-one"
+      IFS= read -r _ < "$3/ready-two"
+      printf "go\n" > "$3/release-one"
+      printf "go\n" > "$3/release-two"
+      wait "$one"; one_rc=$?
+      wait "$two"; two_rc=$?
+      sort "$3/one.out" "$3/two.out" > "$3/results"
+      printf "%s %s\n" "$one_rc" "$two_rc"
+      [ "$one_rc" -eq 0 ] && [ "$two_rc" -eq 0 ]
+    ' _ "$fixture/session" "$script_abs" "$race_dir"
+    The status should equal 0
+    The output should equal '0 0'
+    The contents of file "$race_dir/results" should equal "$(printf 'adr/54-relative-race\t%s/shared\nadr/54-relative-race-1700000000\t%s/shared-1700000000' "$worktree_root" "$worktree_root")"
+    The path "$worktree_root/shared" should be directory
+    The path "$worktree_root/shared-1700000000" should be directory
+  End
+
   It 'refuses a --separate-git-dir layout instead of anchoring outside the checkout'
     git_fixture init -q --separate-git-dir "$fixture/gitmeta" "$fixture/sep" &&
       git_fixture -C "$fixture/sep" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
@@ -418,6 +454,24 @@ GIT
     The contents of file "$fixture/occupied/marker" should equal keep
     Assert [ ! -e "$fixture/occupied-1700000000" ]
     Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/50-occupied*')" ]
+  End
+
+  It 'treats a leading-dash --base as a ref without deleting the reserved branch'
+    git_fixture -C "$primary" branch adr/52-base-option
+    When run sh -c 'cd "$1" && exec sh "$2" adr 52 base-option --worktree --base -D --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/base-option"
+    The stderr should include 'could not reserve branch'
+    The status should not equal 0
+    Assert [ -n "$(git_fixture -C "$primary" branch --list 'adr/52-base-option')" ]
+    Assert [ ! -e "$fixture/base-option" ]
+  End
+
+  It 'advances the branch when only its default worktree path is occupied'
+    mkdir -p "$worktree_root/adr-53-path-only"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 53 path-only --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The stderr should include 'Preparing worktree'
+    The status should equal 0
+    The output should equal "$(printf 'adr/53-path-only-1700000000\t%s/adr-53-path-only-1700000000' "$worktree_root")"
+    The path "$worktree_root/adr-53-path-only-1700000000" should be directory
   End
 
   It 'keeps worktree creation without a configured origin'

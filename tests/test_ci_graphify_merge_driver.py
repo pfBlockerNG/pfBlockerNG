@@ -16,9 +16,11 @@ _SETUP_UV = "uses: astral-sh/setup-uv@v7"
 _DRIVER = "ensure-graphify-merge-driver.sh"
 _STEP_RE = re.compile(r"^      - [A-Za-z_][A-Za-z0-9_-]*:", re.MULTILINE)
 _JOB_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*(?:#.*)?$", re.MULTILINE)
+_SHELL_ARG = r"(?:\"[^\"]*\"|'[^']*'|\S+)"
 _GIT_MUTATION_RE = re.compile(
-    r"^(?:(?:if|until|while)\s+|!\s+)*git"
-    r"(?:\s+-C\s+(?:\"[^\"]*\"|'[^']*'|\S+))?"
+    r"^(?:(?:if|until|while)\s+|!\s+)*"
+    r"(?:env(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S+)*\s+)?git"
+    rf"(?:\s+(?:-C|-c)\s+{_SHELL_ARG})*"
     r"\s+(?:push|pull|merge|rebase|cherry-pick)(?:\s|$)"
 )
 _GH_MUTATION_RE = re.compile(r"^gh\s+pr\s+merge(?:\s|$)")
@@ -29,7 +31,6 @@ _WRAPPER_MUTATION_RE = re.compile(r"^sh\s+\S*scripts/(?:publish-pkg-repo|render-
 class PushJob:
     workflow: str
     job: str
-    checkout_markers: tuple[str, ...]
     ensure_command: str
     first_mutation: str
     checkout_groups: tuple[tuple[str, ...], ...] = ()
@@ -39,7 +40,6 @@ PUSH_JOBS = (
     PushJob(
         "hsts-refresh.yml",
         "refresh",
-        ("uses: actions/checkout@v6",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$BRANCH"',
         checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
@@ -47,7 +47,6 @@ PUSH_JOBS = (
     PushJob(
         "psl-refresh.yml",
         "refresh",
-        ("uses: actions/checkout@v6",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$BRANCH"',
         checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
@@ -55,7 +54,6 @@ PUSH_JOBS = (
     PushJob(
         "tld-refresh.yml",
         "refresh",
-        ("uses: actions/checkout@v6",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$BRANCH"',
         checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
@@ -63,7 +61,6 @@ PUSH_JOBS = (
     PushJob(
         "image-refresh.yml",
         "refresh",
-        ("name: Checkout (for scripts/ + tests/smoke/)",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git -C "$WT" push --force origin "$BR"',
         checkout_groups=(("name: Checkout (for scripts/ + tests/smoke/)", "uses: actions/checkout@v6"),),
@@ -71,7 +68,6 @@ PUSH_JOBS = (
     PushJob(
         "module-durations.yml",
         "refresh",
-        ("uses: actions/checkout@v6",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         "until git push origin HEAD:devel; do",
         checkout_groups=(("uses: actions/checkout@v6", "ref: devel"),),
@@ -79,7 +75,6 @@ PUSH_JOBS = (
     PushJob(
         "version-tracker.yml",
         "reconcile",
-        ("uses: actions/checkout@v6",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push --force origin "$1"',
         checkout_groups=(("uses: actions/checkout@v6",),),
@@ -87,7 +82,6 @@ PUSH_JOBS = (
     PushJob(
         "release.yml",
         "tag-release",
-        ("ref: ${{ needs.prepare-release.outputs.sha }}",),
         "sh scripts/agent/ensure-graphify-merge-driver.sh .",
         'git push origin "refs/tags/${TAG}"',
         checkout_groups=(("uses: actions/checkout@v6", "ref: ${{ needs.prepare-release.outputs.sha }}"),),
@@ -95,13 +89,6 @@ PUSH_JOBS = (
     PushJob(
         "release-published.yml",
         "sync-ports-fork",
-        (
-            "repository: pfBlockerNG/FreeBSD-ports",
-            "ref: pfblockerng/use-github",
-            "repository: pfBlockerNG/pfBlockerNG",
-            "ref: ${{ github.workflow_sha }}",
-            "path: pfblockerng-src",
-        ),
         'sh "${GITHUB_WORKSPACE}/pfblockerng-src/scripts/agent/ensure-graphify-merge-driver.sh" .',
         "until git push origin HEAD:pfblockerng/use-github; do",
         checkout_groups=(
@@ -122,13 +109,6 @@ PUSH_JOBS = (
     PushJob(
         "release-published.yml",
         "publish-pkg-repo",
-        (
-            "ref: ${{ github.workflow_sha }}",
-            "repository: pfBlockerNG/pfBlockerNG",
-            "repository: pfBlockerNG/pkg",
-            "ref: main",
-            "path: pkg-repo",
-        ),
         "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
         "sh scripts/publish-pkg-repo.sh",
         checkout_groups=(
@@ -143,13 +123,6 @@ PUSH_JOBS = (
     PushJob(
         "release-published.yml",
         "promote-pkg-repo",
-        (
-            "ref: ${{ github.workflow_sha }}",
-            "repository: pfBlockerNG/pfBlockerNG",
-            "repository: pfBlockerNG/pkg",
-            "ref: main",
-            "path: pkg-repo",
-        ),
         "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
         "sh scripts/publish-pkg-repo.sh",
         checkout_groups=(
@@ -164,14 +137,6 @@ PUSH_JOBS = (
     PushJob(
         "nightly.yml",
         "publish-pkg-repo",
-        (
-            "ref: ${{ needs.prepare.outputs.tools_sha }}",
-            "repository: pfBlockerNG/pfBlockerNG",
-            "path: trusted",
-            "repository: pfBlockerNG/pkg",
-            "ref: main",
-            "path: pkg-repo",
-        ),
         "sh trusted/scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
         "sh trusted/scripts/publish-pkg-repo.sh",
         checkout_groups=(
@@ -187,13 +152,6 @@ PUSH_JOBS = (
     PushJob(
         "pkg-republish.yml",
         "publish",
-        (
-            "ref: ${{ github.workflow_sha }}",
-            "repository: pfBlockerNG/pfBlockerNG",
-            "repository: pfBlockerNG/pkg",
-            "ref: main",
-            "path: pkg-repo",
-        ),
         "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
         "sh scripts/publish-pkg-repo.sh",
         checkout_groups=(
@@ -208,13 +166,6 @@ PUSH_JOBS = (
     PushJob(
         "pkg-render-site.yml",
         "render",
-        (
-            "ref: ${{ inputs.source_ref || github.sha }}",
-            "repository: pfBlockerNG/pfBlockerNG",
-            "repository: pfBlockerNG/pkg",
-            "ref: main",
-            "path: pkg-repo",
-        ),
         "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
         "sh scripts/render-pkg-site.sh",
         checkout_groups=(
@@ -261,12 +212,6 @@ def _has_step_line(step: str, marker: str) -> bool:
     return any(line.strip() in expected for line in step.splitlines())
 
 
-def _unique_step(steps: list[str], marker: str, label: str) -> int:
-    matches = [index for index, step in enumerate(steps) if _has_step_line(step, marker)]
-    assert len(matches) == 1, f"{label}: expected one step line {marker!r}, found {len(matches)}"
-    return matches[0]
-
-
 def _command_step(steps: list[str], command: str, label: str) -> int:
     matches = [index for index, step in enumerate(steps) if command in _run_commands(step)]
     assert len(matches) == 1, f"{label}: expected one executable command {command!r}, found {len(matches)}"
@@ -284,7 +229,7 @@ def _first_mutation(steps: list[str]) -> tuple[int, str] | None:
 def _assert_job_contract(job: str, spec: PushJob) -> None:
     label = f"{spec.workflow}:{spec.job}"
     steps = _steps(job)
-    checkout_steps = [_unique_step(steps, marker, label) for marker in spec.checkout_markers]
+    checkout_steps: list[int] = []
     for group in spec.checkout_groups:
         matches = [index for index, step in enumerate(steps) if all(_has_step_line(step, marker) for marker in group)]
         assert len(matches) == 1, f"{label}: expected one checkout step containing {group!r}, found {len(matches)}"
@@ -392,9 +337,12 @@ _PUBLISH_FIXTURE = """\
 _FIXTURE_SPEC = PushJob(
     "fixture.yml",
     "publish",
-    ("name: Checkout tools", "path: pkg-repo"),
     "sh scripts/agent/ensure-graphify-merge-driver.sh pkg-repo",
     "sh scripts/publish-pkg-repo.sh",
+    checkout_groups=(
+        ("name: Checkout tools", "uses: actions/checkout@v6"),
+        ("name: Checkout target", "uses: actions/checkout@v6", "path: pkg-repo"),
+    ),
 )
 
 
@@ -428,7 +376,7 @@ def test_comments_cannot_spoof_tool_pins_or_checkout_paths() -> None:
         "          path: pkg-repo",
         "          path: wrong-repo\n          # path: pkg-repo",
     )
-    with pytest.raises(AssertionError, match="step line"):
+    with pytest.raises(AssertionError, match="checkout step"):
         _assert_job_contract(wrong_path, _FIXTURE_SPEC)
 
 
@@ -439,6 +387,8 @@ def test_comments_cannot_spoof_tool_pins_or_checkout_paths() -> None:
         "git pull origin devel",
         "git rebase origin/devel",
         "git cherry-pick deadbeef",
+        "env GIT_TERMINAL_PROMPT=0 git push origin main",
+        "git -C repo -c user.name=bot push origin main",
         "gh pr merge 42",
     ),
 )

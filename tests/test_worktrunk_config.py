@@ -28,17 +28,21 @@ def test_worktrunk_docs_use_the_supported_creation_command() -> None:
     for path in WORKTREE_DOCS:
         text = path.read_text(encoding="utf-8")
         assert "wt start" not in text, f"{path.relative_to(ROOT)} documents nonexistent `wt start`"
-        assert "wt switch --create" in text, f"{path.relative_to(ROOT)} must document `wt switch --create`"
+        assert "wt --yes switch --create" in text, (
+            f"{path.relative_to(ROOT)} must document noninteractive `wt --yes switch --create`"
+        )
 
 
 def test_landing_fetches_before_json_cleanup_and_reports_branch_deletion() -> None:
     landing = LANDING_POLICY.read_text(encoding="utf-8")
+    merge_section = landing.split("## Merge step", 1)[1].split("## Post-merge", 1)[0]
 
-    merged = landing.index("PR's state must read `MERGED`")
-    fetch = landing.index("git fetch origin", merged)
-    remove = landing.index("wt remove --foreground --format=json --yes <head>", fetch)
-    outcome = landing.index("`branch_outcome`", remove)
-    deleted = landing.index("`deleted`", outcome)
-    reported = landing.index("branch-deletion outcome", deleted)
+    merged = merge_section.index("PR's state must read `MERGED`")
+    fetch = merge_section.index("Run `git fetch origin` after that verification", merged)
+    remove = merge_section.index("wt remove --foreground --format=json --yes <head>", fetch)
+    outcome = merge_section.index("Inspect and report its JSON `branch_outcome`", remove)
+    deleted = merge_section.index("requires `deleted`", outcome)
+    retained = merge_section.index("For any other branch-deletion outcome, retain the local branch", deleted)
+    safe = merge_section.index("Never force removal or branch deletion here", retained)
 
-    assert merged < fetch < remove < outcome < deleted < reported
+    assert merged < fetch < remove < outcome < deleted < retained < safe
