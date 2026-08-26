@@ -1,6 +1,7 @@
 """Static contract for the branch-independent Nightly workflow."""
 
 import itertools
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -217,58 +218,70 @@ def _continued_command_ending_with(script: str, suffix: str) -> str:
     return "\n".join(lines[start : end + 1])
 
 
-def test_build_step_executes_dependency_builder_with_locked_python(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "origins",
+    [
+        ["textproc/py-charset-normalizer"],
+        ["textproc/py-charset-normalizer", "devel/py-demo"],
+    ],
+)
+def test_build_step_executes_every_dependency_with_locked_python(tmp_path: Path, origins: list[str]) -> None:
     workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
     step = next(item for item in workflow["jobs"]["build"]["steps"] if item.get("name") == "Build and verify package")
-    command = _continued_command_ending_with(step["run"], '--out-dir "$DEP_PKG_DIR"')
+    lines = step["run"].splitlines()
+    start = next(index for index, line in enumerate(lines) if line.strip().startswith("EXTRA_PKGS="))
+    end = next(index for index, line in enumerate(lines[start:], start) if line.strip() == "done")
+    command = "\n".join([*lines[start : end + 1], "fi"])
     trusted = tmp_path / "trusted"
     locked_python = trusted / ".venv/bin/python"
     locked_python.parent.mkdir(parents=True)
     locked_log = tmp_path / "locked-argv"
-    locked_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$LOCKED_LOG"\n', encoding="utf-8")
+    locked_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" >> "$LOCKED_LOG"\n', encoding="utf-8")
     locked_python.chmod(0o755)
-    ambient_bin = tmp_path / "ambient"
-    ambient_bin.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
     ambient_log = tmp_path / "ambient-argv"
-    ambient_python = ambient_bin / "python3"
-    ambient_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$AMBIENT_LOG"\n', encoding="utf-8")
+    ambient_python = fake_bin / "python3"
+    ambient_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" >> "$AMBIENT_LOG"\n', encoding="utf-8")
     ambient_python.chmod(0o755)
+    fake_git = fake_bin / "git"
+    fake_git.write_text('#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$GIT_LOG"\n', encoding="utf-8")
+    fake_git.chmod(0o755)
+    (tmp_path / "row.json").write_text(
+        json.dumps({"extra_pkgs": origins}),
+        encoding="utf-8",
+    )
     env = os.environ | {
         "DEP_PYTHON": str(locked_python),
         "TRUSTED_DIR": str(trusted),
-        "PORTS_DIR": "/pinned/ports",
+        "RUN_ROOT": str(tmp_path / "run"),
+        "RUN_ID": "nightly-test",
+        "PORTS_DIR": str(tmp_path / "ports"),
         "PORTS_SHA": "a" * 40,
-        "ORIGIN": "textproc/py-charset-normalizer",
         "PY_FLAVOR": "py311",
         "FREEBSD_MAJOR": "15",
         "SOURCE_DATE_EPOCH": "1700000000",
-        "DEP_PKG_DIR": "/output",
         "LOCKED_LOG": str(locked_log),
         "AMBIENT_LOG": str(ambient_log),
-        "PATH": f"{ambient_bin}:{os.environ['PATH']}",
+        "GIT_LOG": str(tmp_path / "git.log"),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
     }
 
-    completed = subprocess.run(["dash", "-c", command], env=env, capture_output=True, text=True)
+    completed = subprocess.run(
+        ["dash", "-c", command],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
     assert not ambient_log.exists()
-    assert locked_log.read_bytes().split(b"\0")[:-1] == [
-        str(trusted / "scripts/build-dep-pkg-portable.py").encode(),
-        b"--ports",
-        b"/pinned/ports",
-        b"--ports-sha",
-        b"a" * 40,
-        b"--port",
-        b"textproc/py-charset-normalizer",
-        b"--py-flavor",
-        b"py311",
-        b"--freebsd-major",
-        b"15",
-        b"--source-date-epoch",
-        b"1700000000",
-        b"--out-dir",
-        b"/output",
-    ]
+    argv = locked_log.read_bytes().split(b"\0")[:-1]
+    assert argv.count(str(trusted / "scripts/build-dep-pkg-portable.py").encode()) == len(origins)
+    for origin in origins:
+        assert argv.count(origin.encode()) == 1
+    assert (tmp_path / "git.log").read_text(encoding="utf-8").count("sparse-checkout add") == len(origins)
 
 
 def test_prepare_executes_exact_pinned_toolchain_generation(tmp_path: Path) -> None:

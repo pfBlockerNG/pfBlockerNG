@@ -586,7 +586,6 @@ def dependency_port_identity(args: argparse.Namespace) -> dict[str, object]:
         "distfile": distfile,
         "distfile_sha256": sha256,
         "distfile_size": size,
-        "python_dep_version": args.python_dep_version,
     }
 
 
@@ -676,7 +675,6 @@ def main(argv: list[str]) -> int:
         identity_parser.add_argument("--ports", required=True)
         identity_parser.add_argument("--ports-sha", required=True, dest="ports_sha")
         identity_parser.add_argument("--port", required=True)
-        identity_parser.add_argument("--python-dep-version", default="0", dest="python_dep_version")
         try:
             identity = dependency_port_identity(identity_parser.parse_args(argv[1:]))
         except (DepPkgError, bpp.BuildError) as exc:

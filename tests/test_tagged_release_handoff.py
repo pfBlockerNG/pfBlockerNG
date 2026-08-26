@@ -10,6 +10,7 @@ import lzma
 import subprocess
 import sys
 import tarfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -46,18 +47,35 @@ ROW = {
 DEP_ORIGIN = "textproc/py-charset-normalizer"
 DEP_NAME = "py311-charset-normalizer"
 DEP_VERSION = "3.4.4"
-DEP_ASSET = f"{DEP_NAME}-{DEP_VERSION}-CE-2.8.pkg"
+DEP_SUFFIX = "-CE-2.8.pkg"
+DEP_ASSET = f"{DEP_NAME}-{DEP_VERSION}{DEP_SUFFIX}"
 CANONICAL_ASSET = "pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.8.pkg"
 DEP_RECORD_KEY = "pfb_dep_build_record"
 DEP_PAYLOAD = "/usr/local/lib/python3.11/site-packages/charset_normalizer/__init__.py"
-DEP_IDENTITY = {
-    "portname": "charset-normalizer",
-    "port_version": DEP_VERSION,
-    "distfile": f"charset_normalizer-{DEP_VERSION}.tar.gz",
-    "distfile_sha256": "e" * 64,
-    "distfile_size": 129_418,
-    "python_dep_version": "3.11.13",
-}
+
+
+def _dependency_identity(row: Mapping[str, object] = ROW) -> dict[str, object]:
+    suffix = f"-{row['variant']}-{row['pfsense_version']}.pkg"
+    package_name = f"{row['py_flavor']}-charset-normalizer"
+    return {
+        "portname": "charset-normalizer",
+        "port_version": DEP_VERSION,
+        "distfile": f"charset_normalizer-{DEP_VERSION}.tar.gz",
+        "distfile_sha256": "e" * 64,
+        "distfile_size": 129_418,
+        "package_name": package_name,
+        "package_version": DEP_VERSION,
+        "filename": f"{package_name}-{DEP_VERSION}{suffix}",
+        "freebsd_ports_sha": PORTS_SHA,
+        "source_date_epoch": SOURCE_DATE_EPOCH,
+        "toolchain": DEPENDENCY_BUILDER,
+        "abi": f"FreeBSD:{row['freebsd_major']}:*",
+        "freebsd_major": row["freebsd_major"],
+        "py_flavor": row["py_flavor"],
+    }
+
+
+DEP_IDENTITY = _dependency_identity()
 
 
 def _module() -> Any:
@@ -325,6 +343,7 @@ def _write_dependency_package(
     member_changes: dict[str, object] | None = None,
     annotation: str | None = "record",
     checksum: str | None = None,
+    duplicate_annotation_key: bool = False,
 ) -> None:
     record = _dependency_record(**(record_changes or {}))
     annotations = {}
@@ -364,6 +383,9 @@ def _write_dependency_package(
     with tarfile.open(fileobj=archive, mode="w") as tf:
         for name, value in (("+COMPACT_MANIFEST", compact), ("+MANIFEST", full)):
             data = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+            if duplicate_annotation_key:
+                marker = f'"{DEP_RECORD_KEY}":'
+                data = data.replace(marker.encode(), f'{marker}"duplicate",{marker}'.encode(), 1)
             member = tarfile.TarInfo(name)
             member.size = len(data)
             tf.addfile(member, io.BytesIO(data))
@@ -382,7 +404,86 @@ def _write_dependency_package(
 
 
 def _payload_with_dependency(origin: str = DEP_ORIGIN) -> dict[str, object]:
-    return _payload([{**ROW, "extra_pkgs": [origin]}], {origin: DEP_IDENTITY})
+    return _payload(
+        [{**ROW, "extra_pkgs": [origin]}],
+        {DEP_SUFFIX: {origin: DEP_IDENTITY}},
+    )
+
+
+def test_same_origin_on_distinct_route_rows_requires_distinct_assets(tmp_path: Path) -> None:
+    module = _module()
+    second_row = {**ROW, "pfsense_version": "2.9", "extra_pkgs": [DEP_ORIGIN]}
+    first_row = {**ROW, "extra_pkgs": [DEP_ORIGIN]}
+    second_suffix = "-CE-2.9.pkg"
+    handoff = _payload(
+        [first_row, second_row],
+        {
+            DEP_SUFFIX: {DEP_ORIGIN: _dependency_identity(first_row)},
+            second_suffix: {DEP_ORIGIN: _dependency_identity(second_row)},
+        },
+    )
+    first_canonical = tmp_path / CANONICAL_ASSET
+    first_dependency = tmp_path / DEP_ASSET
+    second_canonical = tmp_path / "pfSense-pkg-pfBlockerNG-4.0.0.b1-CE-2.9.pkg"
+    second_dependency = tmp_path / f"{DEP_NAME}-{DEP_VERSION}{second_suffix}"
+    _write_package(first_canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+    _write_dependency_package(first_dependency)
+    _write_package(
+        second_canonical,
+        _canonical_record(matrix_row=second_row, route="edge/ce-2.9"),
+        name=pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+    )
+    _write_dependency_package(second_dependency)
+
+    module.validate_packages(
+        handoff,
+        [first_canonical, first_dependency, second_canonical, second_dependency],
+    )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("package_name", "py311-wrong"),
+        ("package_version", "9.9"),
+        ("filename", "py311-wrong-9.9-CE-2.8.pkg"),
+        ("freebsd_ports_sha", "f" * 40),
+        ("source_date_epoch", SOURCE_DATE_EPOCH + 1),
+        ("toolchain", {**DEPENDENCY_BUILDER, "wheel": "0.45.2"}),
+        ("abi", "FreeBSD:16:*"),
+        ("freebsd_major", "16"),
+        ("py_flavor", "py312"),
+    ],
+)
+def test_dependency_identity_map_rejects_drift(field: str, value: object) -> None:
+    identity = {**DEP_IDENTITY, field: value}
+
+    with pytest.raises(ValueError, match=field):
+        _payload(
+            [{**ROW, "extra_pkgs": [DEP_ORIGIN]}],
+            {DEP_SUFFIX: {DEP_ORIGIN: identity}},
+        )
+
+
+def test_coherent_dependency_identity_drift_fails_against_actual_package(tmp_path: Path) -> None:
+    module = _module()
+    identity = {
+        **DEP_IDENTITY,
+        "portname": "wrong",
+        "package_name": "py311-wrong",
+        "filename": f"py311-wrong-{DEP_VERSION}{DEP_SUFFIX}",
+    }
+    handoff = _payload(
+        [{**ROW, "extra_pkgs": [DEP_ORIGIN]}],
+        {DEP_SUFFIX: {DEP_ORIGIN: identity}},
+    )
+    canonical = tmp_path / CANONICAL_ASSET
+    dependency = tmp_path / DEP_ASSET
+    _write_package(canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+    _write_dependency_package(dependency)
+
+    with pytest.raises(module.HandoffError, match="package name"):
+        module.validate_packages(handoff, [canonical, dependency])
 
 
 def test_dependency_package_is_bound_to_exact_route_handoff(tmp_path: Path) -> None:
@@ -424,6 +525,17 @@ def test_dependency_recipe_identity_must_match_handoff(
         module.validate_packages(_payload_with_dependency(), [canonical, dependency])
 
 
+def test_dependency_portname_is_bound_through_actual_package_name_and_filename(tmp_path: Path) -> None:
+    module = _module()
+    canonical = tmp_path / CANONICAL_ASSET
+    dependency = tmp_path / f"py311-wrong-{DEP_VERSION}{DEP_SUFFIX}"
+    _write_package(canonical, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+    _write_dependency_package(dependency, manifest_changes={"name": "py311-wrong"})
+
+    with pytest.raises(module.HandoffError, match="package name"):
+        module.validate_packages(_payload_with_dependency(), [canonical, dependency])
+
+
 def test_handoff_rejects_blank_dependency_origin() -> None:
     with pytest.raises(ValueError, match="extra_pkgs"):
         _payload_with_dependency("")
@@ -459,6 +571,9 @@ def test_unrequested_canonical_named_asset_fails_closed(tmp_path: Path) -> None:
         ("unrequested", "unrequested dependency"),
         ("missing-record", "build record"),
         ("malformed-record", "build record"),
+        ("duplicate-record-key", "duplicate JSON key"),
+        ("extra-annotation-key", "annotation keys"),
+        ("duplicate-annotation-key", "duplicate JSON key"),
         ("ports", "freebsd_ports_sha"),
         ("epoch", "source_date_epoch"),
         ("toolchain", "toolchain"),
@@ -484,6 +599,9 @@ def test_unrequested_canonical_named_asset_fails_closed(tmp_path: Path) -> None:
         ("group", "metadata"),
         ("fflags", "metadata"),
         ("tar-owner", "metadata"),
+        ("tar-group", "metadata"),
+        ("tar-mode", "metadata"),
+        ("tar-mtime", "metadata"),
     ],
 )
 def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, message: str) -> None:
@@ -501,10 +619,30 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
         annotation: str | None = "record"
         checksum = None
         member_changes: dict[str, object] = {}
+        duplicate_annotation_key = False
         if case == "missing-record":
             annotation = None
         elif case == "malformed-record":
             annotation = "{"
+        elif case == "duplicate-record-key":
+            annotation = json.dumps(
+                _dependency_record(),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).replace('"schema":1', '"schema":1,"schema":1')
+        elif case == "extra-annotation-key":
+            manifest_changes["annotations"] = {
+                DEP_RECORD_KEY: json.dumps(
+                    _dependency_record(),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "extra": "bad",
+            }
+        elif case == "duplicate-annotation-key":
+            duplicate_annotation_key = True
         elif case == "ports":
             record_changes["freebsd_ports_sha"] = "f" * 40
         elif case == "epoch":
@@ -554,6 +692,12 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
             file_changes["fflags"] = 1
         elif case == "tar-owner":
             member_changes["uname"] = "nobody"
+        elif case == "tar-group":
+            member_changes["gname"] = "evil"
+        elif case == "tar-mode":
+            member_changes["mode"] = 0o755
+        elif case == "tar-mtime":
+            member_changes["mtime"] = SOURCE_DATE_EPOCH + 1
         _write_dependency_package(
             dependency,
             record_changes=record_changes,
@@ -563,10 +707,15 @@ def test_dependency_package_validation_fails_closed(tmp_path: Path, case: str, m
             member_changes=member_changes,
             annotation=annotation,
             checksum=checksum,
+            duplicate_annotation_key=duplicate_annotation_key,
         )
         packages.append(dependency)
         if case == "duplicate":
-            packages.append(dependency)
+            duplicate_dir = tmp_path / "duplicate"
+            duplicate_dir.mkdir()
+            duplicate = duplicate_dir / dependency.name
+            duplicate.write_bytes(dependency.read_bytes())
+            packages.append(duplicate)
         if case == "unrequested":
             handoff = _payload()
 
