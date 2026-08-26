@@ -103,7 +103,12 @@ def _route_matrix(value: object) -> list[dict[str, object]]:
             ci = route_row.pop("ci", None)
             if ci is not None and type(ci) is not bool:
                 raise HandoffError("route_matrix row ci must be boolean")
+            role = route_row.get("role")
+            if role == "route-only":
+                del route_row["role"]
             row = validate_build_matrix_row(route_row)
+            if role == "route-only":
+                row["role"] = role
             if ci is not None:
                 row["ci"] = ci
             normalized.append(row)

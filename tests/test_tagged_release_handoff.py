@@ -434,6 +434,14 @@ def test_handoff_rejects_unsafe_route_identity() -> None:
         _payload([{**ROW, "variant": ".."}], {})
 
 
+def test_handoff_accepts_route_only_row() -> None:
+    route_only = {**ROW, "role": "route-only", "ci": False, "last_tag": "v3.3.3"}
+
+    handoff = _payload([route_only], {})
+
+    assert handoff["route_matrix"] == [route_only]
+
+
 def test_unrequested_canonical_named_asset_fails_closed(tmp_path: Path) -> None:
     module = _module()
     package = tmp_path / "unrequested-CE-2.8.pkg"
