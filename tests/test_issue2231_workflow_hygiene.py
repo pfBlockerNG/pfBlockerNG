@@ -17,8 +17,9 @@ disables silently. These gates cover what actionlint cannot:
 3. The ``actionlint`` job keeps its embedded ShellCheck pass over ``run:``
    bodies, and no config filters that pass's findings away (issue #2241).
 4. Dispatchable workflows own top-level concurrency; artifact chains keep one
-   upload/download action major; container invocations pass ``--init``; and
-   downstream jobs consume prepared SHA pins (issue #2413).
+   upload/download action major at the highest major both actions publish
+   (issue #2725); container invocations pass ``--init``; and downstream jobs
+   consume prepared SHA pins (issue #2413).
 """
 
 from __future__ import annotations
@@ -464,6 +465,16 @@ _DownloadKey = tuple[str, str, int, int, tuple[tuple[str, str], ...], tuple[str,
 
 _ARTIFACT_ACTION_REF = re.compile(r"^actions/(?P<kind>upload|download)-artifact@.+$")
 _ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)(?:\.[0-9]+){0,2}$")
+# Frozen 2026-08-26 from the GitHub API (issue #2725). upload-artifact has no v8
+# tag (latest v7.0.1); download-artifact does (v8.0.1). Highest common is v7.
+_KNOWN_ARTIFACT_MAJORS: dict[str, frozenset[int]] = {
+    "upload": frozenset({4, 5, 6, 7}),
+    "download": frozenset({3, 4, 5, 6, 7, 8}),
+}
+_HIGHEST_COMMON_ARTIFACT_MAJOR = max(_KNOWN_ARTIFACT_MAJORS["upload"] & _KNOWN_ARTIFACT_MAJORS["download"])
+_LIVE_ARTIFACT_USES = re.compile(
+    r"uses:\s+actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)(?:\.[0-9]+){0,2}"
+)
 _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 _UNRESOLVED_EXPRESSION = re.compile(r"<unresolved:(?P<expression>[^>]+)>")
 
@@ -850,6 +861,40 @@ def _artifact_chain_offences(sources: dict[str, str]) -> list[str]:
 def test_artifact_action_majors_match_per_producer_consumer_chain() -> None:
     offences = _artifact_chain_offences(_workflow_sources())
     assert not offences, "artifact chain hygiene failed:\n  " + "\n  ".join(offences)
+
+
+def test_live_artifact_actions_use_highest_common_existing_major() -> None:
+    """issue #2725: producer/consumer major matching does not prove the pin
+    exists upstream. ``upload-artifact@v8`` matched ``download-artifact@v8``
+    and passed every gate, then failed at Set up job.
+
+    Live workflow pins must be a known upstream major for that action and use
+    the highest major both actions publish, so the pair stays matched at a
+    resolvable ref. Fixture YAML in this file is out of scope — those literals
+    exercise the scanner, not GitHub's tag namespace.
+    """
+    assert _HIGHEST_COMMON_ARTIFACT_MAJOR == 7
+    offences: list[str] = []
+    for name, text in _workflow_sources().items():
+        for line_no, line in enumerate(text.splitlines(), start=1):
+            match = _LIVE_ARTIFACT_USES.search(line)
+            if match is None:
+                continue
+            kind = match.group("kind")
+            major = int(match.group("major"))
+            known = _KNOWN_ARTIFACT_MAJORS[kind]
+            if major not in known:
+                offences.append(
+                    f"{name}:{line_no}: actions/{kind}-artifact@v{major} is not a known "
+                    f"upstream major (known: {sorted(known)})"
+                )
+            elif major != _HIGHEST_COMMON_ARTIFACT_MAJOR:
+                offences.append(
+                    f"{name}:{line_no}: pin actions/{kind}-artifact to "
+                    f"v{_HIGHEST_COMMON_ARTIFACT_MAJOR} (highest common existing major), "
+                    f"not v{major}"
+                )
+    assert not offences, "live artifact pins failed:\n  " + "\n  ".join(offences)
 
 
 def test_artifact_scanner_follows_needs_reusable_inputs_outputs_and_workflow_run() -> None:

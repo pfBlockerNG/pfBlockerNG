@@ -588,7 +588,7 @@ jobs:
         # pkg_artifact set (issue #857): download the shared per-leg .pkg
         # smoke.yml's build-pkg job already built. Blank: fall back to the
         # artifact this workflow's OWN build-pkg job just built above.
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.pkg_artifact != '' && inputs.pkg_artifact || needs.build-pkg.outputs.artifact }}
           path: pkg
@@ -601,7 +601,7 @@ jobs:
       # build-pkg job's dep_artifact_name above (bare dispatch / repo-install.yml).
       - name: Download dep packages
         if: ${{ inputs.extra_pkgs != '' && inputs.extra_pkgs != '[]' }}
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.dep_artifact != '' && inputs.dep_artifact || format('pfBlockerNG-deppkgs-{0}-{1}-s{2}', inputs.image_name, inputs.pfsense_version, inputs.shard) }}
           path: deppkgs
@@ -850,7 +850,7 @@ jobs:
       # the release gate (#1662).
       - name: Upload shard selection-status marker (leg-level empty-selection gate, issue #1767)
         if: always()
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-shard-status-${{ inputs.image_name }}-${{ inputs.pfsense_version }}-s${{ inputs.shard }}
           path: smoke-diag/shard-selection-status
@@ -873,7 +873,7 @@ jobs:
 
       - name: Upload smoke diagnostics
         if: always()
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           # Per-leg-per-shard name (issue #797) — also fixes the pre-existing
           # wart where every leg of a fan-out run uploaded the SAME bare

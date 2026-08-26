@@ -537,7 +537,7 @@ jobs:
           chmod 600 smoke_key
 
       - name: Download the built pfBlockerNG package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           # pkg_artifact_prefix set: download the prebuilt artifact a caller
           # (e.g. release.yml) already published, named
@@ -572,7 +572,7 @@ jobs:
       #; blank -> this run's own build-pkg job's dep_artifact_name.
       - name: Download dep packages
         if: steps.depmajor.outputs.needed == '1'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: ${{ inputs.pkg_artifact_prefix != '' && format('{0}-deppkgs-{1}-{2}', inputs.pkg_artifact_prefix, matrix.variant, matrix.version) || format('pfBlockerNG-deppkgs-{0}-{1}', matrix.variant, matrix.version) }}
           path: deppkgs
