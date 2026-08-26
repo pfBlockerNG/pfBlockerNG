@@ -675,6 +675,8 @@ jobs:
           MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
+          python3 scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
           # Run-body exports, not env: map values — GitHub Actions never
           # shell-expands env-map values (issue #2231).
           export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
@@ -686,6 +688,7 @@ jobs:
           # Build argv via set -- so --filter rides as ONE quoted arg.
           set -- --paths tests/smoke/ui -m "${MARKER}" --timeout 300
           [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
+          set -- "$@" --junitxml=/tmp/ui-junit.xml
           rc=0
           sh scripts/run-smoke.sh "$@" || rc=$?
           # pytest exit 5 = no test carried this tier's marker under the
@@ -702,7 +705,8 @@ jobs:
               echo "::error::pytest exit 5 (no tests collected) for marker ${MARKER} on a full-scope, unfiltered run — treating as a failure."
             fi
           fi
-          exit "$rc"
+          [ "$rc" -eq 0 ] || exit "$rc"
+          python3 scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt /tmp/ui-junit.xml
 
       # ADR-24: runner-side scrub of the Plus secret identity from the diagnostics
       # BEFORE upload. For a non-CE (Plus) image: drop ONLY the QEMU CONSOLE

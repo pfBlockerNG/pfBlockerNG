@@ -25,7 +25,16 @@ Describe 'run-gates.sh over a C-quoted path'
     gitc branch -f base HEAD
     stubdir="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesstatus.XXXXXX")"
     pairing_raw="$stubdir/pairing.raw"
-    printf '#!/bin/sh\ncat > "%s"\nexit 0\n' "$pairing_raw" > "$stubdir/python3"
+    {
+      printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = scripts/check_skip_allowlist.py ]; then' \
+        '  case "$*" in *skip-allowlist-canary.xml*) exit 1 ;; esac' \
+        '  for report do :; done' \
+        '  [ -f "$report" ] || exit 2' \
+        '  exit 0' \
+        'fi'
+      printf 'cat > "%s"\nexit 0\n' "$pairing_raw"
+    } > "$stubdir/python3"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/npx"
     chmod +x "$stubdir/python3" "$stubdir/npx"
     PATH="$stubdir:$PATH"
@@ -256,7 +265,12 @@ Describe 'run-gates.sh over a C-quoted path'
       # A stub named for the gate's own tool proves the argv end to end: a run that
       # reached anything else would leave the log unwritten.
       stub="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/rungatesuv.XXXXXX")"
-      printf '#!/bin/sh\necho "UV $*" >> "%s"\nexit 0\n' "$repo/uv.log" > "$stub/uv"
+      {
+        printf '%s\n' '#!/bin/sh' 'echo "UV $*" >> "'"$repo"'/uv.log"' \
+          'for arg do case "$arg" in --junitxml=*) report=${arg#*=} ;; esac; done' \
+          '[ -z "${report:-}" ] || printf "<testsuites/>\\n" > "$report"' \
+          'exit 0'
+      } > "$stub/uv"
       chmod +x "$stub/uv"
       printf 'x = 1\n' > "$repo/scripts/mod.py"
       gitc add -A

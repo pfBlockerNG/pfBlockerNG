@@ -10,11 +10,10 @@ a year, and the only signal was the wording of a summary line
 the skip SET grew, so the next silently-skipped test would be found the same
 way: by someone reading a skip list on purpose.
 
-This script is that gate, wired as a step in each of the three suite jobs in
-``.github/workflows/test.yml`` (pytest's ``test``, ``php-unit``, ``shell-tests``):
-it parses the suite's JUnit report, collects every skipped ``<testcase>``, and
-fails when any of them is not on ``tests/skip-allowlist.txt`` — one file shared
-by all three suites, since each id is suite-prefixed.
+This script is that gate, wired wherever a blocking suite writes JUnit: it parses
+the report, collects every skipped ``<testcase>``, and fails when any of them is
+not on ``tests/skip-allowlist.txt`` — one file shared by all suites, since each id
+is suite-prefixed.
 
 ID FORMAT
 ---------
@@ -144,7 +143,22 @@ def parse_allowlist(path: Path) -> dict[str, str]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else None)
-    parser.add_argument("--suite", required=True, choices=("pytest", "phpunit", "shellspec"))
+    parser.add_argument(
+        "--suite",
+        required=True,
+        choices=(
+            "pytest",
+            "phpunit",
+            "shellspec",
+            "widget-js",
+            "webassets-grammar",
+            "webassets-listgrammar",
+            "webassets-bundle",
+            "ports-parity",
+            "ui",
+            "smoke",
+        ),
+    )
     parser.add_argument("--allowlist", required=True, type=Path)
     parser.add_argument("report", type=Path)
     args = parser.parse_args(argv)

@@ -283,11 +283,15 @@ jobs:
           PARITY_PHP: ${{ inputs.php_version }}
         run: |
           set -eu
+          python3 scripts/check_skip_allowlist.py --suite ports-parity --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
           DASH="$(command -v dash 2>/dev/null || true)"
           [ -n "$DASH" ] || { echo 'dash is required for Ports parity' >&2; exit 1; }
-          shellspec --shell "$DASH" \
+          rm -rf /tmp/ports-parity-junit
+          shellspec --shell "$DASH" -o junit --reportdir /tmp/ports-parity-junit \
             --pattern 'tests/shell/build_leg_ports_parity_env.sh' \
             --tag env:ports --fail-no-examples
+          python3 scripts/check_skip_allowlist.py --suite ports-parity --allowlist tests/skip-allowlist.txt /tmp/ports-parity-junit/results_junit.xml
 
       - name: Upload package
         if: always()

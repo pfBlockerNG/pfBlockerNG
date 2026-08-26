@@ -220,14 +220,14 @@ PHP build (whether `php://memory` can fail `flock()`), the uid you run as and th
 flavour on the box each decide whether a case runs at all. Read the skip list, not just
 the exit status; a skip is not coverage.
 
-CI gates the skip *set*, not just its count (issue #2359): each suite's job writes a
-JUnit report and a `Skip allowlist` step runs `scripts/check_skip_allowlist.py` against
-`tests/skip-allowlist.txt` (one file, shared by all three suites — ids are prefixed
-`pytest:` / `phpunit:` / `shellspec:`). A test that starts skipping and is not on that
-file fails the build. To add a legitimately new skip, add its id as its own line in
-`tests/skip-allowlist.txt` with a trailing `# <reason>` comment (a bare id with no reason
-is itself a build failure) — run the suite locally to get the exact id from its report,
-never hand-guess it.
+CI gates the skip *set*, not just its count (issues #2359 and #2369): every blocking
+test row writes JUnit and runs `scripts/check_skip_allowlist.py` against
+`tests/skip-allowlist.txt`. The file stays shared because ids carry a unique
+`<suite>:<classname>::<name>` prefix for pytest, PHPUnit, ShellSpec, each Node invocation,
+Ports parity, UI, and smoke. A test that starts skipping and is not on that file fails the
+build. To add a legitimately new skip, add its id as its own line with a trailing
+`# <reason>` comment (a bare id with no reason is itself a build failure) — run the suite
+to get the exact id from its report, never hand-guess it.
 
 `scripts/agent/run-gates.sh` runs these same commands for whatever a diff touches, and
 the `pre-commit` hook runs the fast subset. A gate whose tool is missing is a **failure**

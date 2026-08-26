@@ -522,6 +522,7 @@ jobs:
           [ -n "$DASH" ] || { echo 'red canary failed: dash not found'; exit 1; }
           out="$("$DASH" -c ': > /tmp; echo SURVIVED' 2>/dev/null)" || true
           [ "$out" != "SURVIVED" ] || { echo 'red canary failed: dash did not abort on special-builtin redirection error'; exit 1; }
+          # Report: /tmp/shellspec-report/results_junit.xml
           shellspec --shell "$DASH" -o junit --reportdir /tmp/shellspec-report
 
       - name: Skip allowlist
@@ -909,10 +910,14 @@ jobs:
           node-version: '24.19.0'
 
       - name: Run the Dashboard widget JS tests
-        # Offline unit coverage for the widget render helpers (pfBlockerNG_escapeHtml /
-        # pfBlockerNG_buildWidgetRow): pins that data columns are HTML-escaped before
-        # DOM insertion and that server-rendered markup columns pass through verbatim.
-        run: node --test tests/js/*.test.js
+        # Native Node JUnit keeps this dependency-free. The spec reporter preserves
+        # the existing live log while JUnit records the skip set.
+        run: |
+          command node --test --test-reporter=junit --test-reporter-destination=/tmp/widget-js-canary.xml tests/fixtures/skip-allowlist-node-canary.test.mjs
+          python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/widget-js-junit.xml tests/js/*.test.js
+          python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-junit.xml
 
   webassets-vendor:
     name: Webassets vendor drift guard + Lezer grammar tests (issue #1669)
@@ -945,20 +950,25 @@ jobs:
         run: python3 scripts/check_webassets_vendor.py
 
       - name: Lezer grammar parse tests (regexp + pfb regex-list)
-        # tools/webassets/lezer-regexp/ (issue #1669 slice A): a Lezer grammar
-        # for Python 3.11 `re`. tools/webassets/lezer-pfb-regex-list/ (slice
-        # B): the outer pfBlockerNG list-format grammar (pattern + "#"
-        # description per line) that mounts the regexp grammar via
-        # parseMixed -- together they back the CodeMirror 6 editor bundle
-        # that replaced the Prism overlay. The drift-guard step above already
-        # ran `npm ci` in tools/webassets/ via build-webassets.sh, so this
-        # repeat is a fast no-op; kept explicit so this step runs standalone too.
+        # Generate each grammar exactly as the package pretest hooks do, then use
+        # Node's native reporters so every invocation has its own skip-set prefix.
         run: |
-          cd tools/webassets
-          npm ci --no-audit --no-fund
-          npm run test:grammar
-          npm run test:listgrammar
-          npm run test:bundle
+          npm --prefix tools/webassets ci --no-audit --no-fund
+          npm --prefix tools/webassets/lezer-regexp run generate
+          npm --prefix tools/webassets/lezer-pfb-regex-list run generate
+          command node --test --test-reporter=junit --test-reporter-destination=/tmp/webassets-node-canary.xml tests/fixtures/skip-allowlist-node-canary.test.mjs
+          python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-grammar-junit.xml tools/webassets/lezer-regexp/test/parse.test.js
+          python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-grammar-junit.xml
+          python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-listgrammar-junit.xml tools/webassets/lezer-pfb-regex-list/test/parse.test.js
+          python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-listgrammar-junit.xml
+          python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-bundle-junit.xml tools/webassets/test/cm-lint.test.js tools/webassets/test/cm-regex-source.test.js tools/webassets/test/cm-hooks-source.test.js tools/webassets/test/cm-shell-source.test.js tools/webassets/test/plain-list-language.test.js
+          python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-bundle-junit.xml
 
   benchmarks:
     name: Benchmark kill-gates (ReDoS + build RAM)
