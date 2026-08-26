@@ -154,18 +154,34 @@ Describe 'run-gates.sh Composer vendor guard'
     # The vendor checker runs through the locked uv environment, so `uv` is the tool
     # run_gate resolves for that gate; the stub stands in for the whole invocation.
     pairing_marker="$stubdir/pairing-ran"
-    printf '#!/bin/sh\ncat >/dev/null\ntouch "%s"\nexit 0\n' "$pairing_marker" > "$stubdir/python3"
+    {
+      printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = scripts/check_skip_allowlist.py ]; then' \
+        '  case "$*" in *skip-allowlist-canary.xml*) exit 1 ;; esac' \
+        '  for report do :; done' \
+        '  [ -f "$report" ] || exit 2' \
+        '  exit 0' \
+        'fi' \
+        'cat >/dev/null'
+      printf 'touch "%s"\nexit 0\n' "$pairing_marker"
+    } > "$stubdir/python3"
     printf '#!/bin/sh\ntouch "%s"\nprintf "version mismatch: phpstan/phpstan (locked 2.2.5; installed 2.2.1)\\nremediation: composer install --no-interaction\\n"\nexit 1\n' "$checker_marker" > "$stubdir/uv"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$php_marker" > "$stubdir/php"
     printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$composer_marker" > "$stubdir/composer"
-    printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$phpunit_marker" > "$repo/vendor/bin/phpunit"
+    {
+      printf '%s\n' '#!/bin/sh' 'report=' \
+        'while [ "$#" -gt 0 ]; do' \
+        '  if [ "$1" = --log-junit ]; then shift; report=$1; fi' \
+        '  shift' \
+        'done' \
+        'printf "<testsuites/>\\n" > "$report"'
+      printf 'touch "%s"\nexit 0\n' "$phpunit_marker"
+    } > "$repo/vendor/bin/phpunit"
     chmod +x "$stubdir/python3" "$stubdir/uv" "$stubdir/php" "$stubdir/composer" "$repo/vendor/bin/phpunit"
     ln -s "$(command -v git)" "$stubdir/git"
-    # The minimal-PATH contract for the script's own machinery: POSIX utilities only,
-    # never an optional toolchain. `tr` and `rm` joined it with the NUL-separated path
-    # listing and its temp file (issue #2228) -- that file is created with builtins
-    # rather than mktemp, but reaping it needs `rm`.
-    for tool in cat dirname grep rm sh sort tr; do
+    # The minimal-PATH contract uses only POSIX utilities. The report directory
+    # adds mkdir; rm reaps it and the NUL-separated path/status files.
+    for tool in cat dirname grep mkdir rm sh sort tr; do
       ln -s "$(command -v "$tool")" "$stubdir/$tool"
     done
     PATH="$stubdir:$PATH"
@@ -265,8 +281,26 @@ Describe 'run-gates.sh main (fixture repo, stubbed tools)'
     pairing_raw="$stubdir/pairing.raw"
     pairing_lines="$stubdir/pairing.lines"
     require_pair="$stubdir/require-pair"
-    printf '#!/bin/sh\ncat > "%s"\ntr "\\0" "\\n" < "%s" > "%s"\nif [ -e "%s" ]; then grep -q "^tests/" "%s"; fi\n' "$pairing_raw" "$pairing_raw" "$pairing_lines" "$require_pair" "$pairing_lines" > "$stubdir/python3"
-    printf '#!/bin/sh\ntouch "%s"\n' "$marker" > "$stubdir/shellspec"
+    {
+      printf '%s\n' '#!/bin/sh' \
+        'if [ "$1" = scripts/check_skip_allowlist.py ]; then' \
+        '  case "$*" in *skip-allowlist-canary.xml*) exit 1 ;; esac' \
+        '  for report do :; done' \
+        '  [ -f "$report" ] || exit 2' \
+        '  exit 0' \
+        'fi'
+      printf 'cat > "%s"\ntr "\\0" "\\n" < "%s" > "%s"\nif [ -e "%s" ]; then grep -q "^tests/" "%s"; fi\n' \
+        "$pairing_raw" "$pairing_raw" "$pairing_lines" "$require_pair" "$pairing_lines"
+    } > "$stubdir/python3"
+    {
+      printf '%s\n' '#!/bin/sh' 'reportdir=' \
+        'while [ "$#" -gt 0 ]; do' \
+        '  if [ "$1" = --reportdir ]; then shift; reportdir=$1; fi' \
+        '  shift' \
+        'done' \
+        'printf "<testsuites/>\\n" > "$reportdir/results_junit.xml"'
+      printf 'touch "%s"\n' "$marker"
+    } > "$stubdir/shellspec"
     printf '#!/bin/sh\nexit 0\n' > "$stubdir/shellcheck"
     chmod +x "$stubdir/python3" "$stubdir/shellspec" "$stubdir/shellcheck"
     PATH="$stubdir:$PATH"

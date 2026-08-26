@@ -809,6 +809,8 @@ jobs:
           # WITHOUT pipefail (only an explicit `shell: bash` implies `-o pipefail`) —
           # this `set -o pipefail` is what actually turns it on.
           set -euo pipefail
+          python3 scripts/check_skip_allowlist.py --suite smoke --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
+            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
           # Run-body exports, not env: map values — GitHub Actions never
           # shell-expands env-map values (issue #2231).
           export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"
@@ -830,6 +832,7 @@ jobs:
           set -- --paths tests/smoke -m "${PYTEST_MARKER}" --timeout 30
           [ -n "${PYTEST_FILTER:-}" ] && set -- "$@" --filter "${PYTEST_FILTER}"
           set -- "$@" --shard "${SHARD}" --shard-total "${SHARD_TOTAL}"
+          set -- "$@" --junitxml=smoke-diag/pytest-junit.xml
           # Tee the run into the diagnostics dir so its pytest --durations=0 lines
           # ride the smoke-diagnostics artifact. module-durations.yml aggregates
           # every leg/shard's log after a green nightly to refresh the sharding
@@ -837,6 +840,7 @@ jobs:
           # non-duration lines. pipefail (above) keeps run-smoke.sh's exit status.
           mkdir -p smoke-diag
           sh scripts/run-smoke.sh "$@" 2>&1 | tee smoke-diag/pytest-durations.log
+          python3 scripts/check_skip_allowlist.py --suite smoke --allowlist tests/skip-allowlist.txt smoke-diag/pytest-junit.xml
 
       # issue #1767: a tiny per-shard marker recording whether THIS shard's
       # slice selected any tests ('selected') or hit the #855 empty-partition

@@ -114,6 +114,24 @@ is_vendor_gate() {
 	return 1
 }
 
+# Add report generation and the shared skip-set gate only to suites this runner
+# already selected. The public plan/labels stay the canonical commands.
+# shellcheck disable=SC2016 # report vars and $? expand later in run_gate's sh -c
+gate_command() {
+	case "$1" in
+	'uv run --locked pytest')
+		printf '%s' 'uv run --locked pytest --junitxml="$PFB_SKIP_REPORT_DIR/pytest.xml" || exit $?; python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && { echo "red canary failed: an unlisted skip did not fail the gate"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/pytest.xml"'
+		;;
+	'vendor/bin/phpunit')
+		printf '%s' 'vendor/bin/phpunit --log-junit "$PFB_SKIP_REPORT_DIR/phpunit.xml" || exit $?; python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && { echo "red canary failed: an unlisted skip did not fail the gate"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/phpunit.xml"'
+		;;
+	'shellspec --shell $(command -v dash || command -v sh)')
+		printf '%s' 'shellspec --shell $(command -v dash || command -v sh) -o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec" || exit $?; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && { echo "red canary failed: an unlisted skip did not fail the gate"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/shellspec/results_junit.xml"'
+		;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
 
 run_gate() {
 	# $1 = command line
@@ -138,7 +156,8 @@ run_gate() {
 	esac
 	# issue #1865: capture combined stdout+stderr so a failing gate's own output
 	# surfaces before its GATE FAIL line; a passing gate stays fully suppressed.
-	gate_output=$(cd "$worktree" && sh -c "$1" < "$gate_input" 2>&1)
+	gate_exec=$(gate_command "$1")
+	gate_output=$(cd "$worktree" && sh -c "$gate_exec" < "$gate_input" 2>&1)
 	gate_status=$?
 	if [ "$gate_status" -eq 0 ]; then
 		printf 'GATE PASS: %s\n' "$label"
@@ -167,24 +186,35 @@ main() {
 	require_tool git
 	[ -n "$worktree" ] || worktree=$(git rev-parse --show-toplevel) || exit 2
 
-	# Created with builtins only (no mktemp -- not POSIX, and this script's minimal-PATH
-	# contract is pinned by agent_run_gates_spec.sh). `set -C` makes the redirect fail
-	# rather than follow a planted file or symlink at the predictable name; the writes
-	# in git_paths() are unguarded, so the residual swap window is bounded by /tmp's
-	# sticky bit, not by this check. `true >`,
-	# never `: >`: a redirection error on the SPECIAL builtin `:` exits the shell
-	# outright instead of yielding to `||` (issues #1172, #1850).
+	# The path/status files use builtins (no mktemp -- not POSIX). `set -C` makes
+	# their redirects fail instead of following a planted file or symlink; mkdir
+	# gives the report directory the same fail-if-present property. The residual
+	# swap window is bounded by /tmp's sticky bit. Use `true >`, never `: >`: a
+	# redirection error on the special builtin `:` exits dash outright instead of
+	# yielding to `||` (issues #1172, #1850).
 	paths_tmp="${TMPDIR:-/tmp}/pfb-run-gates-paths.$$"
 	status_tmp="${TMPDIR:-/tmp}/pfb-run-gates-status.$$"
+	skip_report_dir="${TMPDIR:-/tmp}/pfb-run-gates-skip-reports.$$"
 	( set -C; true > "$paths_tmp" ) || exit 2
 	( set -C; true > "$status_tmp" ) || {
 		rm -f "$paths_tmp"
 		exit 2
 	}
-	trap 'rm -f "$paths_tmp" "$status_tmp"' EXIT
+	mkdir "$skip_report_dir" || {
+		rm -f "$paths_tmp" "$status_tmp"
+		exit 2
+	}
+	mkdir "$skip_report_dir/shellspec" || {
+		rm -f "$paths_tmp" "$status_tmp"
+		rm -rf "$skip_report_dir"
+		exit 2
+	}
+	PFB_SKIP_REPORT_DIR=$skip_report_dir
+	export PFB_SKIP_REPORT_DIR
+	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"' EXIT
 	# dash runs no EXIT trap on an untrapped signal, so reap explicitly there too.
-	trap 'rm -f "$paths_tmp" "$status_tmp"; trap - EXIT; exit 130' INT
-	trap 'rm -f "$paths_tmp" "$status_tmp"; trap - EXIT; exit 143' TERM
+	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 130' INT
+	trap 'rm -f "$paths_tmp" "$status_tmp"; rm -rf "$skip_report_dir"; trap - EXIT; exit 143' TERM
 
 	# Coverage pairing consumes status-aware records: deletions and rename sources
 	# still trigger production rules, while only live destinations can satisfy tests.

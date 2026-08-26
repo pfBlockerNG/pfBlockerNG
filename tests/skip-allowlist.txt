@@ -1,5 +1,5 @@
 # tests/skip-allowlist.txt -- recorded skip allowlist for scripts/check_skip_allowlist.py
-# (issue #2359). One entry per line: <suite>:<classname>::<name>, the id the script derives
+# (issues #2359 and #2369). One entry per line: <suite>:<classname>::<name>, the id the script derives
 # from each suite's JUnit report (`#` starts a comment; blank lines ignored).
 #
 # Every entry MUST carry a trailing `# <reason>` comment -- an entry with none is a parse
@@ -31,6 +31,9 @@ phpunit:OctetStreamRecoveryWiringTest::test_octet_stream_archive_recovered_to_zi
 phpunit:PfbFeedNormalizeTest::testBomAndZwjAreStrippedAsNonPrintable  # platform locale data (PHP 8.3 and 8.5)
 phpunit:PfbFeedNormalizeTest::testInteriorNbspIsDataWhileTrailingNbspIsTrimmed  # platform locale data (PHP 8.3 and 8.5)
 phpunit:PfbFlockBoundedTest::testBoundedAcquireRealErrorReturnsFalsePromptlyWithTimedOutFalse  # PHP 8.3's php://memory can fail flock(); absent from the PHP 8.5 report (informational there)
+
+# ShellSpec -- macOS/BSD host lacks the GNU stat/date/touch branch exercised in Linux CI.
+shellspec:tests/shell/pfblockerng_adr26_locale_spec.sh::ADR-26 — pfb_list_orig_by_mtime() diagnostic listing (Phase 3) lists *.orig oldest-first as "<YYYY-MM-DD> <HH:MM><TAB><name>" (ISO date, path + .orig stripped)  # GNU-only off-box branch; BSD branch is covered live by ADR-04 smoke
 
 # pytest -- 4 observed on the Linux CI runner.
 pytest:tests.test_build_pkg_origins::test_print_build_origins_includes_expected_dirs  # FreeBSD-ports checkout not present on the runner

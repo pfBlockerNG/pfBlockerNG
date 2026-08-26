@@ -352,13 +352,28 @@ def _run_exit5_mapper(
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir(exist_ok=True)
     run_smoke = scripts_dir / "run-smoke.sh"
-    run_smoke.write_text(f"#!/bin/sh\nexit {run_smoke_rc}\n")
+    run_smoke.write_text(
+        "#!/bin/sh\n"
+        'for arg do case "$arg" in --junitxml=*) report=${arg#*=} ;; esac; done\n'
+        'printf "<testsuites/>\\n" > "$report"\n'
+        f"exit {run_smoke_rc}\n"
+    )
     run_smoke.chmod(0o755)
     select_box = scripts_dir / "select-box.sh"
     select_box.write_text("#!/bin/sh\necho stub-run-id\n")
     select_box.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    python3 = bin_dir / "python3"
+    python3.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in *skip-allowlist-canary.xml*) exit 1 ;; esac\n'
+        "for report do :; done\n"
+        '[ -s "$report" ] || exit 2\n'
+    )
+    python3.chmod(0o755)
     env = {
-        "PATH": os.environ.get("PATH", ""),
+        "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
         "PYTEST_FILTER": pytest_filter,
         "SCOPE": scope,
         "MARKER": "ui_render",
