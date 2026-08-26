@@ -150,24 +150,50 @@ disable_serena_dashboard() {
 	mv "$serena_tmp" "$serena_config"
 }
 
+setup_serena_client() {
+	if serena_output=$(serena setup "$2" 2>&1); then
+		return 0
+	else
+		serena_status=$?
+	fi
+	case "$serena_output" in
+		*'already exists'*) ;;
+		*)
+			printf '%s\n' "$serena_output" >&2
+			return "$serena_status"
+			;;
+	esac
+	case "$1" in
+		claude) claude mcp remove serena -s user || return $? ;;
+		codex) codex mcp remove serena || return $? ;;
+		grok) grok mcp remove serena || return $? ;;
+		*) return "$serena_status" ;;
+	esac
+	serena setup "$2"
+}
+
 configure_agents() {
 	if command -v claude >/dev/null 2>&1; then
-		serena setup claude-code
+		setup_serena_client claude claude-code
 		(cd "$HOME" && graphify claude install)
 	fi
 	if command -v codex >/dev/null 2>&1; then
-		serena setup codex
+		setup_serena_client codex codex
 		(cd "$HOME" && graphify codex install)
 	fi
 	if command -v grok >/dev/null 2>&1; then
-		serena setup grok
+		setup_serena_client grok grok
 		(cd "$HOME" && graphify install --platform agents)
 		if ! grok mcp doctor codegraph --json >/dev/null 2>&1; then
 			grok mcp remove codegraph >/dev/null 2>&1 || true
 			grok mcp add codegraph -- codegraph serve --mcp
 		fi
 	fi
-	if command -v pi >/dev/null 2>&1; then
+	if command -v copilot >/dev/null 2>&1; then
+		(cd "$HOME" && graphify copilot install)
+	fi
+	if command -v pi >/dev/null 2>&1 ||
+		command -v omp >/dev/null 2>&1; then
 		(cd "$HOME" && graphify pi install)
 	fi
 }
@@ -232,8 +258,12 @@ main() {
 	require_tool uv
 	uv tool install --upgrade -p 3.13 serena-agent
 	uv tool install --upgrade graphifyy==0.9.50
+	uv tool install --upgrade ast-grep-cli
+	uv tool install --upgrade semgrep
 	require_tool serena
 	require_tool graphify
+	require_tool ast-grep
+	require_tool semgrep
 
 	if command -v codegraph >/dev/null 2>&1; then
 		codegraph upgrade

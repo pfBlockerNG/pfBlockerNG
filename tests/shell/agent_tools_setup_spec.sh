@@ -23,7 +23,8 @@ Describe 'setup-agent-tools.sh'
     home="$fixture/home root"
     repository="$fixture/repository root"
     xdg_config="$home/config root"
-    mkdir -p "$home" "$repository/scripts/agent"
+    serena_state="$fixture/serena-state"
+    mkdir -p "$home" "$repository/scripts/agent" "$serena_state"
     git_fixture init -q "$repository" &&
       git_fixture -C "$repository" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
@@ -160,6 +161,16 @@ case "$*" in
     mkdir -p "$uv_tool_bin"
     cp "$DEBIAN_INSTALLABLES/graphify" "$uv_tool_bin/graphify"
     ;;
+  'tool install --upgrade ast-grep-cli')
+    uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
+    mkdir -p "$uv_tool_bin"
+    [ "${UV_OMIT_TOOL:-}" = ast-grep ] || cp "$DEBIAN_INSTALLABLES/ast-grep" "$uv_tool_bin/ast-grep"
+    ;;
+  'tool install --upgrade semgrep')
+    uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
+    mkdir -p "$uv_tool_bin"
+    [ "${UV_OMIT_TOOL:-}" = semgrep ] || cp "$DEBIAN_INSTALLABLES/semgrep" "$uv_tool_bin/semgrep"
+    ;;
   *) exit 9 ;;
 esac
 UV
@@ -206,6 +217,22 @@ CONFIG
     esac
   fi
 fi
+if [ "$#" -eq 2 ] && [ "$1" = setup ]; then
+  case "${SERENA_SETUP_MODE:-ok}" in
+    ok) ;;
+    duplicate)
+      if [ ! -f "$SERENA_STATE_DIR/$2.removed" ]; then
+        printf '%s\n' "Serena MCP entry for $2 already exists" >&2
+        exit 7
+      fi
+      ;;
+    permission-denied)
+      printf '%s\n' 'permission denied' >&2
+      exit 7
+      ;;
+    *) exit 9 ;;
+  esac
+fi
 SERENA
     cat > "$installables/codegraph" <<'CODEGRAPH'
 #!/bin/sh
@@ -222,13 +249,39 @@ if [ "$*" = 'install --platform agents' ] && [ "$(pwd -P)" = "$DEBIAN_REPOSITORY
   printf '%s\n' '# graphify rewrote repository agents' > "$DEBIAN_REPOSITORY/AGENTS.md"
   printf '%s\n' '# graphify rewrote repository policy' > "$DEBIAN_REPOSITORY/.agents/policy/invariants.txt"
 fi
+if [ "$*" = 'copilot install' ]; then
+  mkdir -p "$HOME/.copilot/skills/graphify"
+  printf '%s\n' '0.9.50' > "$HOME/.copilot/skills/graphify/.graphify_version"
+fi
 GRAPHIFY
+    for tool in ast-grep semgrep; do
+      cat > "$installables/$tool" <<'STATIC_TOOL'
+#!/bin/sh
+exit 0
+STATIC_TOOL
+    done
     cat > "$installables/wt" <<'WORKTRUNK'
 #!/bin/sh
 [ "$*" = 'config shell install --yes' ] || exit 9
 printf 'wt:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 WORKTRUNK
-    for client in claude codex pi; do
+    cat > "$installables/claude" <<'CLAUDE'
+#!/bin/sh
+printf 'claude:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
+case "$*" in
+  'mcp remove serena -s user') touch "$SERENA_STATE_DIR/claude-code.removed" ;;
+  *) exit 9 ;;
+esac
+CLAUDE
+    cat > "$installables/codex" <<'CODEX'
+#!/bin/sh
+printf 'codex:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
+case "$*" in
+  'mcp remove serena') touch "$SERENA_STATE_DIR/codex.removed" ;;
+  *) exit 9 ;;
+esac
+CODEX
+    for client in copilot omp pi; do
       cat > "$installables/$client" <<'CLIENT'
 #!/bin/sh
 exit 0
@@ -238,7 +291,10 @@ CLIENT
 #!/bin/sh
 printf 'grok:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
+  'mcp remove serena') touch "$SERENA_STATE_DIR/grok.removed" ;;
   'mcp doctor codegraph --json') exit "${GROK_DOCTOR_RC:-0}" ;;
+  'mcp remove codegraph'|'mcp add codegraph -- codegraph serve --mcp') ;;
+  *) exit 9 ;;
 esac
 GROK
     chmod +x "$activebin/id" "$activebin/uname" "$activebin/dpkg-query" \
@@ -258,9 +314,11 @@ GROK
     export DEBIAN_INSTALLABLES="$installables"
     export DEBIAN_REPOSITORY="$repository"
     export BREW_UV_PREFIX="$brew_prefix"
-    unset CLAUDECODE CODEX_THREAD_ID GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
-    unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE GROK_DOCTOR_RC AGENT_TEST_OS
-    unset BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR CODEGRAPH_BIN_DIR CARGO_HOME
+    export SERENA_STATE_DIR="$serena_state"
+    unset CLAUDECODE CODEX_THREAD_ID COPILOT_CLI GROK_AGENT GROK_SESSION_ID OMP_CLI PI_CLI
+    unset DEBIAN_MISSING_PACKAGES SERENA_CONFIG_MODE SERENA_SETUP_MODE
+    unset GROK_DOCTOR_RC AGENT_TEST_OS BREW_UV_INSTALLED XDG_BIN_HOME UV_TOOL_BIN_DIR
+    unset UV_OMIT_TOOL CODEGRAPH_BIN_DIR CARGO_HOME
     PATH="$activebin:$basebin"; export PATH
   }
 
@@ -307,12 +365,16 @@ GROK
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init')"
     The path "$home/.local/bin/uv" should be executable
     The path "$home/.local/bin/serena" should be executable
     The path "$home/.local/bin/graphify" should be executable
+    The path "$home/.local/bin/ast-grep" should be executable
+    The path "$home/.local/bin/semgrep" should be executable
     The path "$home/.local/bin/codegraph" should be executable
     The path "$home/.cargo/bin/wt" should be executable
   End
@@ -337,14 +399,34 @@ GROK
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init')"
     The path "$custom_xdg_bin/uv" should be executable
     The path "$custom_uv_tool_bin/serena" should be executable
     The path "$custom_uv_tool_bin/graphify" should be executable
+    The path "$custom_uv_tool_bin/ast-grep" should be executable
+    The path "$custom_uv_tool_bin/semgrep" should be executable
     The path "$custom_codegraph_bin/codegraph" should be executable
     The path "$custom_cargo_home/bin/wt" should be executable
+  End
+
+  It 'requires ast-grep immediately after its uv installation'
+    export UV_OMIT_TOOL=ast-grep
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include 'TOOL-MISSING: ast-grep'
+    The contents of file "$tool_log" should not include 'codegraph:'
+  End
+
+  It 'requires semgrep immediately after its uv installation'
+    export UV_OMIT_TOOL=semgrep
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include 'TOOL-MISSING: semgrep'
+    The contents of file "$tool_log" should not include 'codegraph:'
   End
 
   It 'updates existing Linux uv and CodeGraph while rerunning global auto configuration'
@@ -356,6 +438,8 @@ GROK
       'uv:self update' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -378,6 +462,8 @@ UNMANAGED_UV
       'brew:--prefix uv' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -398,6 +484,8 @@ UNMANAGED_UV
       'brew:--prefix uv' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -407,6 +495,8 @@ UNMANAGED_UV
       'brew:--prefix uv' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
@@ -429,6 +519,8 @@ UNMANAGED_UV
       'brew:--prefix uv' \
       'uv:tool install --upgrade -p 3.13 serena-agent' \
       'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade ast-grep-cli' \
+      'uv:tool install --upgrade semgrep' \
       'codegraph:install -l global -y -t auto' \
       'wt:config shell install --yes' \
       'serena:init')"
@@ -511,6 +603,62 @@ UNMANAGED_UV
     The contents of file "$tool_log" should include 'codegraph:install -l global -y -t auto'
   End
 
+  It 'replaces a duplicate Claude Code Serena entry before retrying setup'
+    enable_client claude
+    export SERENA_SETUP_MODE=duplicate
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s\n%s' \
+      'serena:setup claude-code' \
+      'claude:mcp remove serena -s user' \
+      'serena:setup claude-code' \
+      "graphify:$home:claude install")"
+    Assert [ "$(grep -Fxc 'serena:setup claude-code' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -Fxc 'claude:mcp remove serena -s user' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:claude install" "$tool_log")" -eq 1 ]
+  End
+
+  It 'replaces a duplicate Codex Serena entry before retrying setup'
+    enable_client codex
+    export SERENA_SETUP_MODE=duplicate
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s\n%s' \
+      'serena:setup codex' \
+      'codex:mcp remove serena' \
+      'serena:setup codex' \
+      "graphify:$home:codex install")"
+    Assert [ "$(grep -Fxc 'serena:setup codex' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -Fxc 'codex:mcp remove serena' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:codex install" "$tool_log")" -eq 1 ]
+  End
+
+  It 'replaces a duplicate Grok Serena entry before retrying setup'
+    enable_client grok
+    export SERENA_SETUP_MODE=duplicate
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$tool_log" should include "$(printf '%s\n%s\n%s\n%s' \
+      'serena:setup grok' \
+      'grok:mcp remove serena' \
+      'serena:setup grok' \
+      "graphify:$home:install --platform agents")"
+    Assert [ "$(grep -Fxc 'serena:setup grok' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -Fxc 'grok:mcp remove serena' "$tool_log")" -eq 1 ]
+    Assert [ "$(grep -Fxc "graphify:$home:install --platform agents" "$tool_log")" -eq 1 ]
+  End
+
+  It 'keeps a nonduplicate Serena setup failure fatal before removal or Graphify'
+    enable_client claude
+    export SERENA_SETUP_MODE=permission-denied
+    When run sh "$script_abs" "$repository"
+    The status should not equal 0
+    The stderr should include 'permission denied'
+    Assert [ "$(grep -Fxc 'serena:setup claude-code' "$tool_log")" -eq 1 ]
+    The contents of file "$tool_log" should not include 'mcp remove serena'
+    The contents of file "$tool_log" should not include 'graphify:'
+  End
+
   It 'reruns detected Claude Code setup and its home-scoped Graphify installer on every invocation'
     enable_client claude
     When run sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
@@ -571,6 +719,34 @@ UNMANAGED_UV
     Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 1 ]
   End
 
+  It 'refreshes detected Copilot Graphify through its native home-scoped installer'
+    enable_client copilot
+    mkdir -p "$home/.copilot/skills/graphify"
+    printf '%s\n' '0.9.48' > "$home/.copilot/skills/graphify/.graphify_version"
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    The contents of file "$home/.copilot/skills/graphify/.graphify_version" should equal '0.9.50'
+    Assert [ "$(grep -Fxc "graphify:$home:copilot install" "$tool_log")" -eq 1 ]
+    The contents of file "$tool_log" should not include 'serena:setup'
+  End
+
+  It 'uses one Pi-compatible home-scoped Graphify install for detected OMP'
+    enable_client omp
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -Fxc "graphify:$home:pi install" "$tool_log")" -eq 1 ]
+    The contents of file "$tool_log" should not include 'serena:setup'
+  End
+
+  It 'does not duplicate the shared Pi-compatible Graphify install when OMP and Pi are detected'
+    enable_client omp
+    enable_client pi
+    When run sh "$script_abs" "$repository"
+    The status should equal 0
+    Assert [ "$(grep -Fxc "graphify:$home:pi install" "$tool_log")" -eq 1 ]
+    The contents of file "$tool_log" should not include 'serena:setup'
+  End
+
   It 'reruns detected Pi home-scoped Graphify installation without Serena client setup'
     enable_client pi
     When run sh -c 'sh "$1" "$2" && sh "$1" "$2"' _ "$script_abs" "$repository"
@@ -585,8 +761,8 @@ UNMANAGED_UV
   End
 
   It 'ignores agent environment markers when no client executable is present'
-    When run env CLAUDECODE=1 CODEX_THREAD_ID=thread GROK_AGENT=1 GROK_SESSION_ID=session PI_CLI=1 \
-      sh "$script_abs" "$repository"
+    When run env CLAUDECODE=1 CODEX_THREAD_ID=thread COPILOT_CLI=1 GROK_AGENT=1 \
+      GROK_SESSION_ID=session OMP_CLI=1 PI_CLI=1 sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$tool_log" should include 'serena:init'
     The contents of file "$tool_log" should not include 'serena:setup'
@@ -749,6 +925,8 @@ CONFIG
     Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade -p 3.13 serena-agent$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy==0.9.50$' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^codegraph:install -l global -y -t auto$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^wt:config shell install --yes$' "$tool_log")" -eq 2 ]
