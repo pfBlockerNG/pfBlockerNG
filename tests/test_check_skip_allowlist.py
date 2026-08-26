@@ -435,6 +435,15 @@ def test_duplicate_testcase_ids_are_rejected_before_allowlist_matching(tmp_path:
         csa.parse_report(report, "webassets-bundle")
 
 
+def test_non_node_reports_keep_their_reporter_defined_duplicate_semantics(tmp_path: Path) -> None:
+    tcs = (
+        '<testcase classname="C" name="same name"></testcase>'
+        '<testcase classname="C" name="same name"><skip message="second occurrence"/></testcase>'
+    )
+    report = _report(tmp_path, "r.xml", tcs)
+    assert csa.parse_report(report, "shellspec") == [("shellspec:C::same name", "second occurrence")]
+
+
 # --------------------------------------------------------------------------- #
 # Allowlist vs observed.
 # --------------------------------------------------------------------------- #
