@@ -613,7 +613,7 @@ UNMANAGED_UV
 
   It 'creates the canonical global Worktrunk key when the user config is empty'
     mkdir -p "$(dirname "$worktrunk_config")"
-    : > "$worktrunk_config"
+    true > "$worktrunk_config"
     When run sh "$script_abs" "$repository"
     The status should equal 0
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
