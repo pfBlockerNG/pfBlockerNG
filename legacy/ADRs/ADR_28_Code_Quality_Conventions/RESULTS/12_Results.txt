@@ -1,0 +1,131 @@
+ADR-28 Follow-up Results — string-prefilter guards for hot regex paths
+=======================================================================
+Branch: claude/string-regex-feedback-ysb1lv
+Date: 2026-06-18
+Extends: Phase 7 (regex -> string, PHP) and Phase 8 (Python conventions)
+PRs: #289 (PHP IP guards), #290 (Python regex-rule prefilter)
+
+
+1. CONTEXT
+-----------
+
+Phases 7 and 8 concluded that no preg_*/re site was a 1:1 string-function
+equivalent, so zero swaps were made. A follow-up review (issue #265) reframed
+the goal: not equivalent replacement, but cheap necessary-condition GUARDS that
+short-circuit a regex when the input provably cannot match. Two hot paths were
+addressed; both are behaviour-preserving (a guard only skips a regex that would
+not have matched) and pinned by tests against the live patterns.
+
+
+2. CHANGES
+-----------
+
+(a) PHP — IP-regex presence guards (PR #289, pfblockerng.inc, sync_package_pfblockerng)
+    The two preg_match_all IPv4/IPv6 fallback parsers run on $oline (the original
+    feed line, which may carry an IP embedded in surrounding text). Added a
+    presence prefilter before each:
+        IPv4: substr_count($oline, '.') >= 3 && preg_match_all($pfb['ipv4'], ...)
+        IPv6: strpos($oline, ':') !== FALSE && preg_match_all($pfb['ipv6'], ...)
+    A v4 match needs 3 literal dots; a v6 match needs a colon. The v6 guard also
+    closed a gap: that fallback ran unguarded while the auto/range paths already
+    colon-check. Pinned by tests/php/IpRegexPrefilterGuardTest.php (output-identity
+    against the regex literals extracted from the source).
+
+(b) Python — required-literal prefilter (PR #290, pfb_unbound.py)
+    The per-query regex-rule scan (_scan_block_band / _scan_allow_regex_band) ran
+    every compiled DNSBL rule against every query. Now a required literal is
+    extracted from each rule's AST at load (_required_literal), rules are bucketed
+    by that literal's first character (_build_regex_index, cached per regex-DB
+    identity), and per query only the rules whose literal is present in the name
+    reach re.search. Rules with no extractable literal are always-run; the
+    extractor degrades to always-run if the private AST parser is unavailable.
+    Pinned by tests/test_regex_literal_prefilter.py (fuzz soundness + scan
+    output-identity).
+
+
+3. BENCHMARKS
+--------------
+
+PHP (20k-line noisy corpus, regex invocations vs naive, output byte-identical):
+    IPv4 dot-guard:    ~1.35x fewer regex calls
+    IPv6 colon-guard:  ~1.94x fewer regex calls
+
+Python (realistic ABP-shaped rule mix, per-query, output-identical):
+    simple required-literal prefilter:  ~2.5-2.6x over naive scan-all
+    + first-char bucket:                small additional, alphabet-bounded win
+    extractor literal coverage:         ~86% of rules (rest always-run)
+    extractor soundness fuzz:           0 violations / 3,068 matches
+
+Multi-literal index comparison (speed vs the simple prefilter / memory vs it):
+    simple prefilter:        1.0x        baseline (~67 B/rule)
+    first-char bucket:       1.05-1.26x  +2-7 KiB total, FLAT in rule count
+    flat-dict Aho-Corasick:  ~1.7-1.8x   ~6x memory
+    array-DFA Aho-Corasick:  ~1.7-1.8x   ~8-9x memory (DOMINATED)
+
+
+4. LESSONS LEARNED
+-------------------
+
+- Measure first. The "guard the hot \s regex in pfb_dnsbl_abp_extract_ip" idea
+  was rejected by profiling: ~2-4% of a build-time function dominated ~3:1 by a
+  single is_ipaddr* call. The real PHP win was the IP fallback parsers instead.
+- Presence, not anchoring. These parsers run on the whole line, which can carry
+  an IP/literal embedded in noise (HTML cells, log prefixes). A start-anchored
+  guard ("line begins with a digit/colon") silently drops embedded matches — a
+  correctness regression. The guards test presence ANYWHERE, a true necessary
+  condition, so output is identical.
+- First-char bucket over Aho-Corasick. In pure Python (Unbound's loader, stdlib
+  only) the per-character interpreter loop is the bottleneck, not transition
+  storage — so every AC variant (dict, flat-transition, reduced-alphabet
+  array-DFA) lands at the same ~1.8x over the simple prefilter while costing 6-9x
+  the memory; the array-DFA is dominated. A single re alternation is unsound
+  (leftmost/non-overlapping matching drops prefix-overlapping literals) and not
+  faster (backtracking NFA). The first-char bucket adds a few KiB flat in rule
+  count and is the right point for an opt-in feature on small boxes.
+
+
+5. SOUNDNESS
+-------------
+
+Both guards are necessary conditions: a skipped input provably cannot match, so
+no decision changes. The Python prefilter's full re.search still runs on the
+original q_name; the lowercased form is used only for the membership test, which
+can only over-include. The runtime warn/evict ReDoS guard is unaffected — a
+skipped rule consumes no time, so a slow rule is still timed/evicted on the
+queries where it actually runs.
+
+
+6. SCOPE / CAVEATS
+-------------------
+
+- Both changes are gated on their feature being in use: the IP regex fallback
+  (regex/parse-error path) and DNSBL regex rules (opt-in). The common
+  domain/zone dict path is untouched.
+- The Python extractor uses the private re._parser AST module, guarded by
+  try/except -> None (always-run) if absent or renamed across Python versions.
+- PHP follow-up is exhausted: a second-round audit found the remaining hot
+  per-line PHP candidate (idn_to_ascii) already guarded by !ctype_print, and the
+  rest of the regex sites cold (per-config sanitisation) or not string-equivalent.
+
+
+7. VERIFICATION GATES
+----------------------
+
+PHP (#289):
+    vendor/bin/phpunit     652 tests, OK                       OK
+    vendor/bin/phpcs       0 errors (PFBL-01 + ADR-28 sniff)   OK
+    vendor/bin/phpstan     0 errors                            OK
+Python (#290):
+    python -m pytest       1730 passed                         OK
+    ruff check / format    clean                               OK
+    mypy tests/            no issues                           OK
+
+
+8. FUTURE WORK
+---------------
+
+- Full Aho-Corasick stays a conditional upgrade only if a deployment runs
+  thousands of regex rules AND the O(rules) candidate loop measurably dominates;
+  if pursued, use the flat-transition encoding (~6x memory), not dict-per-node.
+- A first-2-char bucket (a shallow trie) is the next cheap step on the
+  bucket->trie->AC continuum if profiling on real rule sets warrants it.

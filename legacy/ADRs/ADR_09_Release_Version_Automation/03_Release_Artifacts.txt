@@ -1,0 +1,75 @@
+================================================================================
+PHASE 3 PROMPT — Release-side: build (portable default / FreeBSD fallback) + attach .pkg
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §2 "Release .pkg
+     artifacts" row + the contract, §1 facts 2-3 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/09` branch performing Phase 3 of ADR-09. Wire the two EXISTING
+builders (inventoried in Phase 1) into the release flow: on a tag, for each matrix entry
+build an INSTALLABLE .pkg against its (freebsd_version, php_version) pair — DEFAULTING to
+the portable Linux builder, with the FreeBSD `make package` builder as a selectable
+oracle/fallback — attach one .pkg per distinct FreeBSD major to the GitHub Release,
+WITHOUT breaking the existing GitHub Release + FreeBSD-ports PR. Work inline on `adr/09`,
+one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Today release.yml only bumps GH_TAGNAME (no artifact). This phase adds published,
+installable .pkg artifacts (one per FreeBSD major — §1 fact 2) as a higher-fidelity
+install/packaging path, while keeping the real distribution path (the ports PR) intact.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior handoffs:
+  RESULTS/01_Results.txt (the two builders' contracts: portable Linux DEFAULT +
+  FreeBSD make-package ORACLE/fallback, and how each takes the (freebsd_version,
+  php_version) pair) AND RESULTS/02_Results.txt (the matrix reader: how to get the build
+  matrix of (freebsd_version, php_version) entries). If either is missing, STOP and report.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§2 Release row + contract; §4 req 2).
+- .github/workflows/build-pkg-linux.yml  (the DEFAULT portable builder — call this).
+- .github/workflows/build-pkg.yml  (the FreeBSD make-package ORACLE/fallback — selectable).
+- .github/workflows/release.yml  (the full current flow: verify-checks -> release ->
+  ports-pr; the meta step that decides prerelease from devel; softprops/action-gh-release;
+  the FreeBSD-ports PR job — you EXTEND this, you do NOT break ports-pr).
+- CLAUDE.md  (commit style; secrets; no src/ changes).
+
+ACTION PLAN (ordered)
+1. BUILD JOB: a job that, per the Phase-2 build matrix (each entry's (freebsd_version,
+   php_version) pair), builds the .pkg against the TAGGED source. DEFAULT to the portable
+   Linux builder (build-pkg-linux.yml); make the FreeBSD make-package builder
+   (build-pkg.yml) a SELECTABLE fallback/oracle (e.g. a `builder: portable|freebsd`
+   input, default portable) — "Linux by default, FreeBSD if we fuck up". Build CE and
+   Plus (Plus build-only — same port, the channel's FreeBSD major + PHP).
+2. ATTACH: pass the .pkg files to the existing `release` job (softprops/action-gh-release
+   `files:`) so they attach to the GitHub Release — one per distinct FreeBSD major (ABI
+   dedup). Name them unambiguously (...-FreeBSD-<major>.pkg).
+3. KEEP ports-pr INTACT: the build is additive; a build failure must surface clearly but
+   MUST NOT silently skip or break the ports-pr job (the ports PR is the real channel).
+   Decide + document the dependency edges so ports-pr still runs.
+4. SELF-TEST: a dry-run (workflow_dispatch or a throwaway pre-release tag) that produces
+   + attaches at least one .pkg and still opens the ports PR.
+
+CONSTRAINTS
+- Do NOT break the existing release/ports-pr behaviour. Do NOT touch src/.
+- The CI-image / smoke phases are NOT in scope (Phases 5-6, gated).
+- POSIX sh; workflows lint-clean; secrets via Actions secrets.
+- python -m pytest (default) green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- A tag (or dry-run) attaches a .pkg per distinct FreeBSD major to the Release, each
+  `pkg add`-installable on a matching pfSense (spot-check per RESULTS/01).
+- The FreeBSD-ports PR still opens (ports-pr unaffected).
+- ruff/ShellCheck/markdownlint clean; pytest green/unchanged.
+
+EXPECTED RESULT
+release.yml attaches per-FreeBSD-major .pkg artifacts to the GitHub Release, with the
+ports PR intact.
+
+COMMIT (single)
+    ci: build + attach per-FreeBSD-major .pkg artifacts to the Release (ADR-09 P3)
+Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/03_Results.txt` (plain .txt)
+For Phase 4/7. Include: the build-job shape + how it reads the matrix; artifact naming;
+the dependency edges that keep ports-pr intact; how Plus is built build-only; any
+budget/flake notes; and the go-ahead.

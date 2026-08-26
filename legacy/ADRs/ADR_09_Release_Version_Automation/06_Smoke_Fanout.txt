@@ -1,0 +1,66 @@
+================================================================================
+PHASE 6 PROMPT — CI smoke matrix fan-out across CE minors (ungated — ADR-04 Accepted)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §2 "CI smoke fan-out"
+     row + contract, §4 req 5 FIRST)
+================================================================================
+
+GATE — SATISFIED (ADR-04 is Accepted)
+This phase runs ADR-04's smoke suite across multiple images. ADR-04 is Accepted, so the
+gate is lifted. (Sanity-confirm .ADRs/ADR_04_VM_Smoke_Tests/ADR.md still reads Accepted
+before starting; if it has regressed, STOP and report.)
+
+ROLE
+You are on the `adr/09` branch performing Phase 6 of ADR-09. Fan the ADR-04 smoke suite
+across every supported CE image — never Plus — in PARALLEL, with the gate being the AND
+of all legs. Work inline on `adr/09`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Supporting multiple CE versions means running the smoke suite against each (§4 req 5).
+Plus is build-only (licensing — §1 fact 7), so it is NEVER run here.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read RESULTS/05_Results.txt (the refreshed images available in GHCR) AND
+  RESULTS/02_Results.txt (the CI matrix = ci:true CE entries). If missing or ADR-04 not
+  Accepted, STOP.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§2 fan-out row + contract).
+- .ADRs/ADR_04_VM_Smoke_Tests/  (the smoke workflow this parametrises) + its RESULTS.
+- CLAUDE.md.
+
+ACTION PLAN (ordered)
+1. PARAMETRISE: the ADR-04 smoke workflow reads the Phase-2 CI matrix (ci:true CE
+   entries) and runs the smoke suite once per CE image as a `strategy.matrix` job over
+   the GHCR tags, with `fail-fast: false` so EVERY leg runs to completion (one failure
+   must not cancel the others).
+2. AND-GATE: add a gating job that `needs:` the whole matrix and is the required status —
+   it is green ONLY if every leg passed; any red leg turns the gate red. The pass
+   criterion is the AND of all parallel legs (no partial pass, no silent drop).
+3. NEVER PLUS: assert Plus entries (ci:false) are excluded; add a guard so a Plus tag can
+   never enter the smoke matrix.
+4. TRIGGER: wire the version-tracker (Phase 4) to launch the fan-out on a new CE image
+   (after the Phase-5 refresh publishes it).
+5. SELF-TEST: the fan-out runs across the seed's CE images (parallel), SKIPS Plus, and a
+   deliberately-failed leg turns the AND-gate red while the other legs still complete.
+
+CONSTRAINTS
+- Plus is NEVER run in CI.
+- Do NOT touch src/. POSIX sh; workflows lint-clean.
+- python -m pytest (default) green/unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- The smoke fan-out runs across all ci:true CE images in PARALLEL (fail-fast:false) and
+  excludes Plus; the AND-gate job is green only when every leg passed.
+- ruff/ShellCheck/markdownlint clean; pytest green/unchanged.
+
+EXPECTED RESULT
+The ADR-04 smoke suite runs across every supported CE image (never Plus), triggered on
+new CE images.
+
+COMMIT (single)
+    ci: fan smoke suite across supported CE images (never Plus) (ADR-09 P6)
+Push directly to `adr/09`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/06_Results.txt` (plain .txt)
+For Phase 7. Include: how the smoke matrix is built from the CI matrix; the fail-fast:false
++ AND-gate wiring (the required gating job that needs: all legs); the Plus exclusion
+guard; the tracker trigger; and the go-ahead.

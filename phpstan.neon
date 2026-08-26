@@ -1,0 +1,36 @@
+includes:
+    - phpstan-baseline.neon
+
+rules:
+    # Bans empty() on statically-string-typed operands (empty('0') is TRUE —
+    # issue #1787); the honest predicates are pfb_is_empty()/pfb_is_blank().
+    - PfBlockerNG\PHPStan\NoEmptyOnStringRule
+
+parameters:
+    paths:
+        - src
+    # Climbing incrementally above level 0 (roadmap: issue #1144; origin #88):
+    # each level statically catches more of the class the live Tier-A/UI run
+    # catches at runtime (undefined variables/constants, bad arg counts,
+    # return shapes). The phpstan-baseline.neon entries are the pre-existing
+    # legacy debt at the current level — an acknowledged blind-spot list to
+    # BURN DOWN, not grow. Next: burn down the level-2 baseline, then level 3.
+    # No memory limit is configurable here (probed: 'Unexpected item') — run
+    # via `composer phpstan`, which carries the required --memory-limit=2G.
+    level: 2
+    # Pulled forward from level 5 (issue #1144): checkFunctionArgumentTypes is a
+    # plain parameter, not level-gated rule registration — probed clean at level
+    # 2 (+24 argument.type, zero collateral noise) vs. jumping the whole level.
+    checkFunctionArgumentTypes: true
+    checkArgumentsPassedByReference: true
+    fileExtensions:
+        - php
+        - inc
+    # pfSense runtime functions and globals declared in stubs/ — scan so
+    # PHPStan knows the symbols exist without analysing the stubs themselves.
+    scanDirectories:
+        - stubs/pfsense
+    reportUnmatchedIgnoredErrors: false
+    ignoreErrors:
+        # pfSense runtime include files don't exist outside the appliance.
+        - '#is not a file or it does not exist#'

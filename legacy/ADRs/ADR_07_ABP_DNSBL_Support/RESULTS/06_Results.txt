@@ -1,0 +1,223 @@
+================================================================================
+ADR-07 -- PHASE 6 RESULTS / HANDOFF FOR PHASE 7
+Stage-C emit + wire build() to abp feeds + LIVE 6-band precedence matcher (ABP ACTIVE)
+Branch: adr/07   Commit: pfb_unbound: ADR-07 P6 -- emit + wire ABP build + live 6-band precedence matcher
+================================================================================
+
+VERDICT (headline): DONE. ABP support is LIVE in the Python build + matcher.
+build() now routes format_hint='abp' feeds through parse_abp (Stage A) -> reconcile
+(Stage B) -> EMITS the matcher dicts (dataDB/zoneDB +band/important, whiteDB
++band, regexDB / allowRegexDB compiled) + the important_rules fast-path flag +
+counts. init MERGES the emitted regex into the live globals and threads
+important_rules/allowRegexDB into the matcher cfg/containers. evaluate_domain
+applies allowRegexDB + the full 6-band resolution LIVE, gated by important_rules.
+Regex is COMPILED + LOADED (re.compile) with NO runtime cap/evict guard yet (that
+is Phase 7); the regex scans already SNAPSHOT-ITERATE (list(...)) so Phase 7 drops
+in eviction with no structural change. Both oracles green: ADR-06 (no-regression,
+OFF) UNCHANGED-green; ADR-07 spec/parser/reconcile/strata + the new production
+emit+wire equivalence (ON) green against decide(). GO-AHEAD to Phase 7.
+
+GATES (this phase):
+  python -m pytest   -> 891 passed (was 868 after P5; +23 are the new emit+wire
+                        production-equivalence tests). ADR-06 golden oracle +
+                        ADR-07 spec/strata/parser/reconcile ALL green.
+  ruff check .       -> All checks passed!
+  ruff format --check-> 26 files already formatted (clean).
+  php -l / ShellCheck-> N/A (Python-only phase; no .php/.inc/.sh touched).
+
+Files changed:
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py
+      - BuildResult: +regex_db, +allow_regex_db, +important_rules, +regex_count.
+      - _dnsbl_compile_regex_rules(): compile RegexRule list -> live regex-DB shape.
+      - build(): abp-feed branch (parse_abp) + reconcile + Stage-C emit; non-abp
+        path unchanged but block payloads now carry band=PRIO_FEED_BLOCK.
+      - _dnsbl_normalise_whitelist(): whiteDB values carry band=PRIO_USER_ALLOW.
+      - init: MERGE regex_db/allow_regex_db into regexDB/allowRegexDB globals; set
+        pfb["regexDB"/"allowRegexDB"/"important_rules"]; emit count unchanged.
+      - operate(): cfg + containers now include allowRegexDB + important_rules.
+      - matcher: _white_entry_band, _block_entry_band, _scan_block_band,
+        _scan_allow_regex_band, whitelist_lookup_band; _resolve_numeric_allow now
+        takes block_band (was block_important); evaluate_domain numeric branch
+        computes the MAX block band and resolves block_band vs allow_band.
+  M tests/conftest.py                 (reset fixture: +allowRegexDB global +
+                                       pfb["allowRegexDB"]/["important_rules"] keys)
+  M tests/test_adr06_build_module.py  (3 whiteDB SHAPE assertions: +band key)
+  M tests/test_adr06_init_from_raw.py (1 whiteDB SHAPE assertion: +band key)
+  A tests/test_adr07_emit_wire.py     (23 production emit+wire equivalence tests)
+
+================================================================================
+1. THE EMITTED STRUCTURE SHAPES  (what is now LIVE in the matcher)
+================================================================================
+All payloads widened with a numeric `band` (the P3 PRIO_* scale, 1-6). The matcher
+reads every new field TOLERANTLY (.get / isinstance) so a payload missing it still
+decides (the ADR-06 oracle + the strata synthetic payloads have no `band`).
+
+  dataDB[d] / zoneDB[z]  (BLOCK)
+    {"log": <flag>, "index": <int>, "important": bool, "band": int}
+    band: PRIO_FEED_BLOCK(1) | PRIO_FEED_BLOCK_IMPORTANT(3) | PRIO_USER_BLOCK(5).
+    Non-abp + synthetic-TLD-zone blocks are band 1, important False.
+
+  whiteDB[d]  (ALLOW domain)
+    {"wildcard": bool, "important": bool, "band": int}
+    band: PRIO_FEED_ALLOW(2) | PRIO_FEED_ALLOW_IMPORTANT(4) | PRIO_USER_ALLOW(6).
+    User whitelist + TOP1M -> band 6 (sovereign). A reduced feed @@/re/ or @@||d^
+    -> band 2 (or 4 with $important). A feed allow NEVER downgrades a higher-band
+    user-whitelist entry on the SAME key (build() guards with _white_entry_band).
+    LEGACY-TOLERANT: a bare-bool whiteDB value (ADR-06 oracle, add_white helper)
+    still works -- _white_entry_band derives band 6 if important else 2.
+
+  regexDB[name]        (BLOCK regex)        allowRegexDB[name]   (ALLOW @@/re/)
+    {"re": <compiled>, "important": bool, "band": int}
+    name = "{feed}#{seq}" (seq is a per-build counter so duplicate patterns from one
+    or many feeds DO NOT COLLIDE and EACH is independently evictable -- P7 keys off
+    this). LEGACY-TOLERANT: a bare compiled pattern (the user REGEX-ini load) still
+    works -- _block_entry_band / _scan_allow_regex_band treat it as band 1 / band 2.
+
+  BuildResult also carries: important_rules (the flag, below), regex_count (the
+  ADMITTED feed-regex total: block_admitted + allow_admitted -- for the DNSBL_Regex
+  UI alias; see SS4), counts (unchanged: len(data)+len(zone)).
+
+================================================================================
+2. WHERE regexDB / allowRegexDB ARE SCANNED  (the Phase-7 eviction hook points)
+================================================================================
+ALL regex scans already iterate a SNAPSHOT (list(...)) so Phase 7 can evict mid-
+scan by mutating the live dict AFTER the loop (never during). The hook points:
+
+  a) evaluate_domain DISCOVERY block-regex scan (the FAST + numeric first-hit):
+       for k, r in list(regex_db.items()):
+           pattern = r.get("re") if isinstance(r, dict) else r
+           if pattern.search(q_name): ...   # first hit sets is_found + block_band
+     -> this is the per-query block-regex pass (the ADR-01-class cost site). Phase 7
+        wraps `pattern.search` with thread-CPU timing here.
+
+  b) _scan_block_band(q_name, cfg, data_db, zone_db, regex_db) -- NUMERIC branch
+     only. Re-scans data/zone-suffix/block-regex (snapshot list()) to take the MAX
+     block band (decide() semantics; discovery short-circuits on first hit).
+
+  c) _scan_allow_regex_band(q_name, allow_regex_db) -- NUMERIC branch only. Snapshot
+     list() over the allow-regex DB; returns the highest matching allow band.
+
+PHASE 7 PLAN: add per-match thread-CPU timing (time.thread_time) around each
+`pattern.search` in (a)/(b)/(c); collect over-warn / over-evict names into a local
+list; AFTER the loop do regexDB.pop(name)/allowRegexDB.pop(name) (atomic under the
+GIL). Default warn 10 ms / evict 100 ms (ADR.md SS2; Phase-1 ceilings). The
+per-name keying (SS1) makes a single bad pattern evictable without dropping good
+ones that share its source feed.
+
+================================================================================
+3. HOW important_rules GATES THE FAST vs NUMERIC PATH  (the contract, preserved)
+================================================================================
+build() emits important_rules = reconcile(...).important_rules: True iff any
+surviving rule needs numeric resolution (any $important, any feed @@/allow, any
+feed irreducible regex). init -> pfb["important_rules"] -> cfg["important_rules"].
+
+evaluate_domain resolution stratum:
+  if is_found:
+      if not cfg.get("important_rules", False):     # FAST PATH -- BYTE-IDENTICAL
+          if cfg["whiteDB"]:                         # to pre-P6 (the no-regression
+              in_whitelist = any(whitelist_check_domain(...) for n in names)
+                                                     #  anchor; ADR-06 oracle green)
+      else:                                          # NUMERIC 6-BAND (now LIVE)
+          block_band = max(block_band, _scan_block_band(...))   # max over all blocks
+          in_whitelist = _resolve_numeric_allow(..., block_band)
+  -> _resolve_numeric_allow returns (allow_band >= block_band): an ALLOW wins ->
+     mapped onto in_whitelist (== "name resolves"), so the shared downstream
+     hsts/null-routing logic is untouched. No allow match -> allow_band 0 -> block.
+
+CONFIRMED byte-identical fast path: the `if not flag: if cfg["whiteDB"]:` block is
+unchanged from pre-P6; allowRegexDB + the band fields are NOT read on the fast path.
+A pure plain/hosts/||domain^ feed set OR a user-whitelist-only set keeps
+important_rules False (RESULTS/05 SS5) -> stays on the fast path. The only fast-path
+edit is wrapping the block-regex `.items()` in list() (iteration-safety; no
+semantic change).
+
+================================================================================
+4. COUNTS + THE inc:3149 / DNSBL_Regex SYNC-CHECK NOTE FOR PHASE 8
+================================================================================
+* pfb_py_count = build_result.counts = len(dataDB)+len(zoneDB) -- UNCHANGED policy
+  (ADR-06: loaded total, value rises as lists are un-pruned). dnsbl_emit_count call
+  site at init is unchanged. The inc:3149 sync-check note from RESULTS/01 still
+  stands and is a Phase-8 PHP reconcile item.
+* NEW: build_result.regex_count = ADMITTED feed-regex total (block+allow that
+  compiled). ADR.md SS2 "Emit + counts": the DNSBL_Regex alias (inc:8329) must now
+  reflect admitted (cap-filtered in P7) feed+user regex -- VALUE CHANGES BY DESIGN.
+  Phase 6 only PRODUCES the number on BuildResult; it is NOT yet written to a file
+  the PHP UI reads (no PHP touched this phase, per constraints). PHASE 8 ACTION:
+  wire the DNSBL_Regex alias count to (admitted feed regex + user regex), e.g. emit
+  regex_count alongside pfb_py_count, and update inc:8329's expectation. Until then
+  the alias still counts only the user regex list (today's behaviour) -- no UI
+  break, just an undercount of the new feed regex.
+
+================================================================================
+5. PRODUCTION-vs-ORACLE EQUIVALENCE  (how P6 is pinned; reuse in P7/P9)
+================================================================================
+tests/test_adr07_emit_wire.py drives the REAL build() with an in-memory abp
+manifest + a line_reader (no filesystem), then runs the REAL evaluate_domain over
+the emitted structures and reduces to {block,resolve,pass}:
+   _live_label: not is_found->"pass"; in_whitelist->"resolve"; else "block".
+   _oracle_label: spec.decide(rules, q) (Phase-2 oracle) on the SAME rule set.
+Mapping caveat (RESULTS/02 SS1): the spec distinguishes "resolve" (an allow won
+over a matched block) from "pass" (nothing matched); the production matcher returns
+"pass" when a $badfilter prunes the only block and no block remains, even if a user
+whitelist matches -- both are the SAME net "NOT null-routed" DNS outcome, so the
+badfilter-vs-user-whitelist case asserts != "block" rather than an exact label.
+
+Coverage: emit shapes (band/important/flag/compiled regex/reduction/broken-skip/
+badfilter-prune); OFF fast-path no-regression (+ oracle agreement); ON live matcher
+== oracle (@@ unblock, $important inversion both directions, irreducible block+allow
+regex, regex-vs-regex); user sovereignty (user whitelist beats feed $important,
+TOP1M as user allow, badfilter feed-only); BOTH important_rules branches + the
+numeric MAX-block-band (data-important + feed-allow -> block stands).
+
+The strata synthetic-payload tests (tests/test_adr07_matcher_strata.py) STILL pin
+the numeric branch helpers directly and stay green: _block_entry_band falls back to
+_block_priority(important) for a payload with NO band key (so a strata `_data(
+important=True)` payload still resolves to band 3); _white_entry_band derives 6/2
+from important; _scan_allow_regex_band derives 4/2 from a {"re","important"} or bare
+pattern. So the band fields are the LIVE driver while the derived fallbacks keep the
+synthetic + legacy payloads correct.
+
+================================================================================
+6. ADR-06 ORACLE STATUS + the 4 shape-assertion updates
+================================================================================
+* ADR-06 GOLDEN DECISION ORACLE: UNCHANGED-green. The fast path is byte-identical;
+  the oracle's bare-bool whiteDB + {"log","index"} payloads decide as before via the
+  tolerant accessors. Net non-ABP DNS decisions intact (no-regression contract).
+* 4 SHAPE-ASSERTION tests of the producers I widened were updated (NOT the decision
+  oracle): test_adr06_build_module.py TestWhitelistNormalisation (x3) +
+  test_adr06_init_from_raw.py::test_top1m_enabled_flows_from_manifest_config -- they
+  assert the whiteDB VALUE dict, which now carries "band": PRIO_USER_ALLOW. These
+  pin the producer shape, not net DNS decisions (those stay pinned by the oracle).
+
+================================================================================
+7. GO-AHEAD + WHAT PHASE 7 SHOULD DO
+================================================================================
+GO-AHEAD: add the regex runtime safeguard + the opt-in static cap setting. No
+reject-criterion (ADR.md SS7) tripped -- sovereignty/precedence reproduce decide()
+(production emit+wire equivalence), the fast path is byte-identical, regex is
+compiled+loaded and the scan points already snapshot-iterate for safe eviction.
+
+Phase 7 (07_Regex_Safety.txt) -- the runtime guard + the setting + user-regex:
+  * RUNTIME TIMING (always on): time each `pattern.search` (per-match thread CPU,
+    time.thread_time) at the SS2 scan points (a)/(b)/(c). Over a WARN ceiling -> log
+    a warning; over a higher EVICT ceiling -> log an error + EVICT the pattern from
+    the live regexDB/allowRegexDB. SNAPSHOT-iterate is already in place: collect
+    names to evict in a local list, pop AFTER the loop (atomic under the GIL).
+    Per-name keying ("{feed}#{seq}") makes one bad pattern evictable in isolation.
+    Apply to FEED regex AND the user pfb_regex_list (the init REGEX-ini load -> bare
+    compiled regexDB entries; they are un-vetted today -- ADR fact 3 / SS2).
+  * STATIC CAP (opt-in "Limit long/complex regex"): drop over-length / nested-
+    quantifier patterns at LOAD (no execution). Apply in _dnsbl_compile_regex_rules
+    (feed) AND the init REGEX-ini load (user). Plain stdlib heuristic, unit-testable.
+  * THE SETTING + ceilings: add the opt-in cap setting + the warn/evict thresholds
+    (advanced, Phase-1 defaults warn 10 ms / evict 100 ms). The setting/threshold
+    values reach the plugin via the pfb_unbound.ini (the cap flag + ceilings); plumb
+    them into pfb[...] -> cfg so the matcher reads them.
+  * Unit tests: cap drops over-long; a synthetic slow pattern warns then evicts; the
+    evict does NOT corrupt the scan (snapshot proof); user-regex gets the same
+    treatment. Keep the P6 emit+wire equivalence + the ADR-06 oracle green.
+
+GATES TO KEEP GREEN: python -m pytest (ADR-06 oracle + ADR-07 spec/strata/parser/
+reconcile + emit_wire), ruff check/format, php -l + ShellCheck on any PHP/shell
+touched (the setting page is PHP -- Phase 7 may touch www/ + inc settings).
+================================================================================

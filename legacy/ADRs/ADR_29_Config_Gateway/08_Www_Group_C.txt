@@ -1,0 +1,57 @@
+================================================================================
+PHASE 8 PROMPT — Route www/ group C: Alerts + Sync + Software + Logs + widget + wizard
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §2.5 first)
+================================================================================
+
+ROLE
+You implement Phase 8 of ADR-29 on branch `adr/29-config-gateway`. BEHAVIOUR-PRESERVING. Route the
+remaining pfblockerng* config access — Alerts, Sync, Software, log pages, the dashboard widget, and
+the setup wizard — through PfbConfig. After this phase NO pfblockerng* raw config_*_path remains
+outside the gateway (foreign keys excepted, documented). Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Final www/ migration group; closes the raw-access surface so the Phase-9 enforcement sniff can be
+turned on without pre-existing violations.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/07_Results.txt — it must
+  confirm group B is routed and green. If missing, STOP and report.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.1, §2.5 out-of-scope/foreign keys).
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php, pfblockerng_sync.php (XMLRPC-fed
+  installedpackages/pfblockerngsync), pfblockerng_software.php, the log page(s), the dashboard widget
+  under src/usr/local/www/widgets/, and the wizard under src/usr/local/www/wizards/pfblockerng_wizard.inc
+  (it sets pfblockerng/config/0 keys incl. pfb_keep ~:158) — their config_get_path/config_set_path sites.
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — PfbConfig + section helpers.
+- CLAUDE.md — PHP standards; Web-UI help-text rule; ui_render gate; test mandate.
+
+ACTION PLAN
+1. Route each remaining pfblockerng* read/write through PfbConfig (the wizard's pfb_keep set now uses
+   the registry write, matching Phase 4's repaired default). Leave foreign keys raw + annotated.
+2. After this phase, `grep -n "config_\(get\|set\|del\)_path" src/` should show only: PfbConfig's own
+   internals, the migration driver's gateway calls, and documented foreign keys. Capture that grep in
+   the handoff as evidence.
+3. Tests: per-page parity/round-trip for the routed fields. ui_render green across all pages.
+
+CONSTRAINTS
+- Behaviour-preserving; no visible UI/stored change; foreign keys raw + annotated.
+- PHP tabs/uppercase literals; sniffs green.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green
+- vendor/bin/phpstan analyse / phpcs   -> clean
+- php -l on the group C files
+- python -m pytest              -> green
+- diff-read + the grep evidence: no stray pfblockerng* raw config access remains
+
+EXPECTED RESULT
+All pfblockerng* config access flows through the gateway; only documented foreign keys use raw
+config_*_path; the codebase is ready for enforcement.
+
+COMMIT (single)
+    pfblockerng: route Alerts/Sync/Software/widget/wizard through the config gateway (ADR-29 P8)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/08_Results.txt
+Record: the final routed sites, the grep evidence (remaining raw sites = gateway internals + foreign
+keys only), the complete foreign-key list, test counts, and the go-ahead for Phase 9.

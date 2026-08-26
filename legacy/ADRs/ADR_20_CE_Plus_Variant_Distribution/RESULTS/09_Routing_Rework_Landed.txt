@@ -1,0 +1,117 @@
+ADR-20 — ROUTING REWORK LANDED (B1–B3 implemented)  (2026-06-15)
+================================================================
+
+Follows 08_Routing_Completion_Handoff.txt. The B1→B2→B3 plan is implemented and
+pushed. What remains is the maintainer-only live deploy (CF creds) + un-xfail.
+
+Work branch (all repos): claude/adr-20-ql247e
+
+
+1. B1 — pfBlockerNG repo (branch claude/adr-20-ql247e)
+------------------------------------------------------
+scripts/build-pkg-portable.py — DUMB builder (ADR-20 D1):
+  - Dropped --variant. The versioned php/py guard deps are now injected directly
+    from --php / --py-flavor, keyed on --php (independent of whether the port
+    USES=php; php_ver was "" for a non-php port but the guard must still land).
+  - _resolve_variant_deps() emits each side only when its source is non-empty.
+  - .github/workflows/build-pkg-linux.yml: dropped the now-unused `variant`
+    input + VARIANT_ARG plumbing (the guard rides --php).
+  - Tests: test_no_php_no_guard_injected (off) + test_php_injects_variant_guard_via_cli
+    (on) — the real branch, before/after.
+
+scripts/build-repo-portable.py — the BRAIN (ADR-20 D2):
+  - build_repo_matrix(matrix, out, *, builder=_subprocess_pkg_builder, ports,
+    local_src, stable_src, stable_tag, nightly_keep=14, nightly_pkgversion,
+    build_nightly=True, **builder_kwargs). Per entry:
+      * release/<varver>/<arch>/  = devel + (stable from tag, if any), one catalog.
+      * nightly/<varver>/<arch>/  = fresh nightly folded with retained priors, pruned to N.
+      * a routing.json route {pattern: UA, catalog: <varver>, status}, deduped, most
+        specific first.
+  - LEAF = bare ARCH (amd64/aarch64), NOT the full ABI (ADR-20 D5). The varver
+    segment implies the FreeBSD major; each .pkg's manifest carries its real ABI.
+    NOTE: this is the reconciliation flagged in handoff 08 §5. The LEGACY build_repo
+    + its --catalog-name (full-ABI leaf under varver) is UNCHANGED and still tested —
+    it is the per-subtree primitive; the brain uses the arch leaf via _write_catalog_dir.
+  - Helpers: _ua_pattern (CE "pfSense/<mm>" / Plus "Netgate pfSense Plus/<mm>"),
+    _pkg_version_key (numeric component sort — .10 > .2), _dedup_routes,
+    _emit_catalog_from_paths, _retain_newest, _write_catalog_dir (refactored out of
+    build_repo; reads all source bytes BEFORE the wipe so a source .pkg inside dest —
+    nightly retention — survives).
+  - CLI: --build-matrix --matrix-json <file|-> --out ... [--ports --local-src
+    --stable-tag --stable-src --nightly-keep --nightly-pkgversion --no-nightly
+    --annotate K=V (repeatable, all builds)]. Accepts a bare array or {versions:[...]}.
+  - _CATALOG_PKG_FILES = {packagesite.pkg, data.pkg} — excluded when re-scanning a
+    built subtree for retention (they are *.pkg but not libpkg archives — a real bug
+    the tests caught).
+  - Tests (tests/test_build_repo_portable.py): tree layout (arch leaf, NOT full ABI),
+    routing.json contents + status passthrough + dedup/order, release devel-only→devel+stable
+    (before/after), full-matrix no-dedup, aarch64 distinct leaf, --no-nightly, nightly
+    retention across 3 runs (keep 2), _retain_newest, _ua_pattern, _pkg_version_key,
+    annotate passthrough, CLI validation + {versions:[...]} unwrap.
+
+Source-repo commits: df8e3ac (matrix builder + drop --variant), cbead2b (--annotate).
+
+
+2. B3 — pfBlockerNG repo, the Worker (same branch)
+--------------------------------------------------
+scripts/worker/src/index.js — rewritten to redirect to the matrix tree:
+    https://pfblockerng.github.io/pkg/<channel>/<varver>/<arch>/<rest>
+  channel = "nightly" if the request path starts with /nightly/, else "release"
+            (the tree HAS a release/ dir — resolves the 08-§3-vs-B3 ambiguity in
+             favour of §3's explicit examples; both channels carry a prefix).
+  varver  = matched from the UA via routing.json (first match wins).
+  arch    = parsed from the request's FreeBSD:<major>:<arch> ABI segment.
+  rest    = the path after the ABI segment.
+  Pure helpers parseArch() + resolveTarget() exported; failure modes 502/404 kept.
+  scripts/worker/test/router.test.js (node:test, `npm test`) — every branch incl.
+  the no-ABI 404 path. package.json: "type":"module" + "test":"node --test".
+
+Commit: 71d29b3.
+
+
+3. B2 — pfBlockerNG/pkg repo (branch claude/adr-20-ql247e)
+----------------------------------------------------------
+.github/workflows/publish.yml — rewritten to call the brain. Replaced the hand-rolled
+per-ABI devel loop, the manual nightly build/fingerprint/prune, the per-ABI catalog
+gen, and the release-asset fold-in with ONE `build-repo-portable.py --build-matrix`
+call. Reads the SOURCE BUILD matrix → matrix.json; resolves the latest non-prerelease
+release tag (→ stable_src; none today → stable skipped); restores the nightly Actions
+cache into site/nightly; builds; saves the cache; gen_landing (unchanged — it is
+manifest-driven, walks the tree, reads ABI/channel from each .pkg); deploy-pages.
+  - Nightly VER = <(-nightly PORTVERSION)>.YYYYMMDD.<run_number>.
+  - commit/created annotations stamped via --annotate for the landing page.
+
+Commit (pkg repo): 2dddc42.
+
+
+4. WHAT REMAINS (maintainer-only — needs creds I do not have)
+-------------------------------------------------------------
+a) Land the three branches (claude/adr-20-ql247e in pfBlockerNG, pfBlockerNG/pkg).
+   These are CI/scripts changes — normally /pr-merge-flow; here pushed to the
+   session branch per the task instructions (no PR opened).
+b) Run pfBlockerNG/pkg publish.yml (workflow_dispatch) → publishes the variant tree
+   + routing.json to Pages. Verify pfblockerng.github.io/pkg/routing.json is 200 and
+   release/ce-2.8/amd64/meta.conf etc. exist.
+c) `wrangler deploy` the Worker (scripts/worker) with the CF account creds.
+d) Verify: curl with the CE UA ("pfSense/2.8.0-RELEASE:<uid>") and Plus UA
+   ("Netgate pfSense Plus/26.03-RELEASE:<uid>") through the Worker → 302 to the
+   correct release/<varver>/<arch>/ target (and /nightly/ → nightly/).
+e) Un-xfail Case 4 (tests/smoke/test_repo_install.py ::
+   test_routing_url_delivers_variant_catalog): remove @pytest.mark.xfail and turn the
+   else-branch pytest.xfail into a hard assert. Dispatch the repo-install fan-out /
+   live-URL smoke to prove green. THEN ADR-20 flips to fully Accepted.
+
+
+5. KNOWN DEVIATIONS / FOLLOW-UPS
+--------------------------------
+- The old publish.yml's nightly FINGERPRINT skip (don't rebuild on a no-change day)
+  is GONE — the brain rebuilds the nightly every run, so a daily schedule yields a
+  new nightly per day even with unchanged source, consuming the 14-slot window with
+  identical-code builds. Acceptable for a nightly channel; re-add a skip in the brain
+  if churn matters.
+- The --annotate values (devel HEAD commit/created) are applied to ALL builds incl.
+  stable; for a real stable build from a tag the commit annotation would be devel's,
+  not the tag's. Harmless while production is empty; revisit when the first stable tag
+  is cut (pass the tag's commit for the stable leg).
+- gen_landing may list a .pkg twice if two varvers share the SAME ABI (full-matrix,
+  no-dedup). No such collision in today's matrix (CE FreeBSD:15, Plus FreeBSD:16).

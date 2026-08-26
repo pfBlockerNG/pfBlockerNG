@@ -1,0 +1,145 @@
+ADR-08 — Phase 6 Results (UI mode selector + sub-toggles + PHP config plumbing + alerts)
+========================================================================================
+Status: DONE. The blunt pfb_idn on/off checkbox is now a three-value mode selector
+(Off | All-IDN | Confusable) + two Confusable sub-toggles, persisted via dnsblconfig
+and emitted into the plugin python ini as the EXACT keys the Phase-5 matcher reads.
+Backward-compatible: a config carrying pfb_idn='on' comes up as All-IDN (byte-identical);
+empty/'off' -> Off. Config/UI/plumbing ONLY -- the Phase-5 matcher decision logic is
+UNTOUCHED. One commit on adr/08-homoglyph-protection (pushed).
+
+Gates green: python -m pytest = 1303 passed (floor met, matcher unchanged); ruff check .
++ ruff format --check . clean; mypy tests/ clean (27 files); php -l clean on all three
+touched files (the pre-existing 8.5-vs-8.3 "optional param before required" deprecations
+are unrelated to this change); PHPStan green (--memory-limit=1G; no new pfSense fn -> no
+new stub needed); PHPUnit = 153 passed.
+
+
+1. WHAT CHANGED (PHP/UI + the ini-read side; NO matcher logic change)
+---------------------------------------------------------------------
+src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+  - pconfig read (~59): pfb_idn read, then legacy 'on' -> 'all' migration. NEW pconfig
+    pfb_idn_block_malicious (default 'on' via isset?:'on') + pfb_idn_escalate_suspicious
+    (default '').
+  - POST handler (~544): pfb_idn now validated with PFB_FILTER_WORD (the on/off filter
+    only accepts on|''), legacy 'on'->'all', then whitelisted to {'all','confusable'} else
+    '' (Off). The two sub-toggles use PFB_FILTER_ON_OFF.
+  - Control (~2443): Form_Checkbox replaced by Form_Select 'pfb_idn' with options
+    ''=>Off, all=>All-IDN, confusable=>Confusable + two Form_Checkbox sub-toggles
+    'pfb_idn_block_malicious' (default-ON) and 'pfb_idn_escalate_suspicious' (default-OFF).
+  - JS (~3141): new enable_idn_mode() shows/hides both sub-toggles via hideCheckbox()
+    iff #pfb_idn == 'confusable'; wired on #pfb_idn .change() + once on load.
+
+src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - read (~1228): $pfb['dnsbl_idn'] now normalized -- 'on'->'all', else the raw value or
+    ''. NEW $pfb['dnsbl_idn_block_malicious'] (default 'on') + dnsbl_idn_escalate_suspicious
+    (default '').
+  - ini write (~3560): $idn_mode = whitelist($pfb['dnsbl_idn'] in {all,confusable}) else
+    'off'; $python_idn = 'on' ONLY when $idn_mode=='all' (legacy flag + its blacklist
+    side-effect stay byte-identical to today); two sub-toggle on/off vars.
+  - ini heredoc (~3637): three NEW [MAIN] keys emitted -- idn_mode, python_idn_block_malicious,
+    python_idn_escalate_suspicious -- ALONGSIDE the retained python_idn key.
+  - alias/count (~9634): the old `if dnsbl_idn=='on'` becomes `if=='all'` (DNSBL_IDN,
+    unchanged) + an `elif=='confusable'` that creates the DNSBL_Homoglyph and
+    DNSBL_Homoglyph_Suspect aliases (symbolic count 1; the matcher decides per-query).
+
+src/usr/local/pkg/pfblockerng/pfb_unbound.py  (ini-READ side only, NOT the decision logic)
+  - init (~880): now reads the explicit MAIN idn_mode key when present (validated against
+    {off,all,confusable}); falls back to idn_mode_from_legacy(python_idn) when the key is
+    absent (old config / pre-sync upgrade) -- 'on'->All, off->Off, byte-identical to today.
+  - python_blacklist enable gate (~963): fires for `python_idn OR idn_mode != off`, so
+    Confusable mode (python_idn=off) still activates the blacklist machinery (whitelist
+    load + stats) the Confusable matcher needs. The evaluate_domain IDN branch, cfg
+    passthrough (already carried idn_mode + both sub-toggles since Phase 5), and
+    idn_confusable_action are UNCHANGED.
+
+src/usr/local/www/pfblockerng/pfblockerng_alerts.php  -- NO change required (see section 4).
+
+
+2. THE UI CONTROL + SUB-TOGGLE LABELS/DEFAULTS
+----------------------------------------------
+  Select  'pfb_idn'  label "IDN Blocking"  options:
+      ''           -> Off
+      'all'        -> All-IDN
+      'confusable' -> Confusable
+    Help: "IDN handling (not Regex based). Off: no IDN action. All-IDN: block every
+    IDN/'xn--' domain (blunt). Confusable: block only cross-script homoglyphs
+    (Latin/Cyrillic/Greek mixes, including Cyrillic+Greek). Does not catch whole-script
+    confusables or pure-ASCII typosquats."  (scope + the documented limitation)
+
+  Checkbox 'pfb_idn_block_malicious'      label "Block clearly-malicious homoglyphs"
+      DEFAULT ON.  Shown only under Confusable. Disable -> alert only.
+  Checkbox 'pfb_idn_escalate_suspicious'  label "Block suspicious mixed-script"
+      DEFAULT OFF (opt-in). Shown only under Confusable. On -> suspicious escalates
+      alert->block.
+
+
+3. dnsblconfig KEYS -> PLUGIN PYTHON-CONFIG (ini) MAPPING
+--------------------------------------------------------
+  dnsblconfig key                  normalized $pfb            ini [MAIN] key (value)
+  ------------------------------   -----------------------    -------------------------------
+  pfb_idn ('' | all | confusable;  dnsbl_idn (on->all)        idn_mode = {off|all|confusable}
+    legacy 'on' migrates to all)                              python_idn = on  (ONLY when all)
+                                                              python_idn = off (all other modes)
+  pfb_idn_block_malicious (def on) dnsbl_idn_block_malicious  python_idn_block_malicious = on|off
+  pfb_idn_escalate_suspicious(def  dnsbl_idn_escalate_susp.   python_idn_escalate_suspicious = on|off
+    '')
+
+  The three ini keys are EXACTLY what Phase 5 reads (RESULTS/05 section 2):
+  pfb["idn_mode"], pfb["python_idn_block_malicious"], pfb["python_idn_escalate_suspicious"].
+
+  'on' -> All-IDN migration AS IMPLEMENTED (the backward-compat contract, end-to-end):
+    UI:   pconfig 'on' -> 'all' (renders All-IDN in the select).
+    PHP read:  dnsblconfig 'on' -> $pfb['dnsbl_idn']='all'.
+    PHP ini:   idn_mode='all' AND python_idn='on'  (the legacy flag stays set for All-IDN,
+               preserving the python_blacklist side-effect + every All-IDN code path).
+    Python:    explicit idn_mode='all' -> IDN_MODE_ALL; a pre-sync upgrade config with only
+               python_idn=on (no idn_mode key) -> idn_mode_from_legacy(True)=ALL. Both ALL.
+    Off:   empty/'off' -> dnsbl_idn='' -> idn_mode='off', python_idn='off' -> IDN_MODE_OFF.
+  All-IDN and Off remain byte-identical to today; the All/Off arm (idn_mode_decision) is
+  untouched. The ADR-08 mode-baseline + confusable-matcher tests stay green.
+
+
+4. COUNTS / ALERTS SURFACING
+----------------------------
+  - All-IDN: DNSBL_IDN alias/count exactly as before (the `=='all'` arm).
+  - Confusable: NEW DNSBL_Homoglyph + DNSBL_Homoglyph_Suspect aliases created in the
+    same always-rebuilt-specials block (outside the feed loop, in alias_dnsbl_all so they
+    survive the unused-alias cleanup). These GROUP names match the matcher's emitted
+    group labels (RESULTS/05 section 3: IDN_GROUP_MALICIOUS="DNSBL_Homoglyph",
+    IDN_GROUP_SUSPECT="DNSBL_Homoglyph_Suspect"), so Reports/Alerts render their counts.
+  - Alerts page (pfblockerng_alerts.php): NO code change needed. A homoglyph block lands
+    in the blocked-domain field (f2 / p_domain / CNAME f7), and the page ALREADY decodes
+    ANY 'xn--' domain to "<xn--...> [<decoded-unicode>]" via idn_to_utf8 (~2259/2272/2281).
+    The matcher's dual-form b_eval (RESULTS/05 section 4: "<a_label> [<decoded>] <scripts>")
+    additionally carries the offending script in the log/feed column. The feed/group
+    (fields[5]) renders generically, so DNSBL_Homoglyph / DNSBL_Homoglyph_Suspect display
+    as-is. Decoded Unicode is therefore shown beside the xn-- form for homoglyph hits with
+    no alerts-page edit.
+
+
+5. VALIDATION / NAMING NOTES
+----------------------------
+  - Inputs validated with the existing pfb_filter helpers: PFB_FILTER_WORD for the mode
+    word (then an in_array whitelist), PFB_FILTER_ON_OFF for the two sub-toggles. No
+    die()/exit() added. PFB_FILTER_ON_OFF could NOT be reused for the 3-value select (it
+    accepts only 'on'|'') -- WORD + whitelist is the minimal correct validator.
+  - Naming follows the file conventions: UI element ids pfb_idn_block_malicious /
+    pfb_idn_escalate_suspicious mirror the sibling pfb_* dconfig keys; the ini keys mirror
+    the python_* family (python_idn, python_hsts, ...) and match Phase 5 exactly.
+  - No new pfSense PHP function is called (Form_Select, in_array, pfb_filter all
+    pre-existing) -> no stubs/pfsense/ addition, no phpstan-baseline change.
+
+
+6. GO-AHEAD FOR PHASE 7 (validation + manual live-box smoke + DoD)
+------------------------------------------------------------------
+  PROCEED. The feature is fully surfaced + plumbed end-to-end and CI-green. Phase 7:
+    - Full golden/no-regression re-run + re-run the Phase-1 FP/TP on adr/08 vs threshold.
+    - Finalise help text + README/CLAUDE.md (the new mode/sub-toggles + the Unicode-data
+      version/update step shipped in Phase 4).
+    - Manual smoke on a LIVE pfSense box (CI cannot reach Unbound's python loader), per
+      ADR §7 checklist: Latin+Cyrillic + Cyrillic+Greek block in Confusable; a legit
+      Japanese/Korean/Chinese domain + an IDN-ccTLD SLD (example.рф / site.中国) resolve;
+      suspicious alerts (not blocks) until escalate is on; All-IDN still blocks all 'xn--';
+      Off resolves; alerts show decoded form + offending script; backward-compat
+      ('on'->All-IDN); a malformed 'xn--' does not crash the resolver; whitelist still wins.
+  No further Python/PHP change is expected in Phase 7 beyond docs + any smoke-driven fix.

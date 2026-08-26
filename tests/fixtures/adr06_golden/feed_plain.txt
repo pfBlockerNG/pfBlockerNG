@@ -1,0 +1,19 @@
+# Plain-domain format feed (one bare domain per line).
+# Feed=PlainFeed Group=Malware  log_flag=1
+# Exercises: a 2-label registrable domain (-> ZONE); a deep sub-domain whose
+# parent is NOT listed (-> exact DATA); a multi-label public-suffix domain
+# shop.co.uk (-> ZONE on the co.uk suffix); adblock.com (blocked here, but the
+# user whitelist un-blocks it at query time -> resolves); a domain ALSO present
+# in the hosts feed (cross-feed duplicate: last-wins attribution after ADR-06);
+# a popular domain in TOP1M (un-blocked at query time only when TOP1M enabled);
+# a leading-dot wildcard-style line (PHP strips the dot to a bare domain); and a
+# bare IP (-> firewall).
+malware.com
+phishing.net
+deep.path.cleanmal.com
+shop.co.uk
+adblock.com
+tracker.org
+popularcdn.com
+.wildcardish.org
+203.0.113.45

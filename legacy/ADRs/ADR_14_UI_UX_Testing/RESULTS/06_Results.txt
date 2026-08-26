@@ -1,0 +1,236 @@
+ADR-14 — Phase 6 (FINAL) RESULTS: Release integration (D1) + docs + §7 finalised
+================================================================================
+
+Status: Implemented (pending smoke test). The release pipeline now gates on the
+full UI suite, the docs describe the harness, and ADR §7 + the ADR Status are
+finalised. The remaining Accept step is the MAINTAINER's live-box manual smoke +
+screenshot review (the live pfSense VM exists only in GitHub Actions CI; this dev
+box cannot boot/reach it, so the live run + the §7 reliability numbers are
+CI-pending and are NOT fabricated here).
+
+NO src/ change. Default `python -m pytest` byte-identical at 1019. verify-checks
+is UNCHANGED (its single step is intact) — the UI gate is ADDED alongside, not a
+rewrite. test.yml / ui-tests.yml were NOT re-edited (no wiring bug found).
+
+Scope touched: release.yml, README.md, CLAUDE.md, ADR.md, + this RESULTS/06.
+
+--------------------------------------------------------------------------------
+1) RELEASE WIRING (D1) — release.yml now needs: the full UI suite before publish
+--------------------------------------------------------------------------------
+
+NEW job `ui-suite` in release.yml:
+    ui-suite:
+      name: UI suite (live pfSense VM)
+      uses: ./.github/workflows/ui-tests.yml
+      with:
+        tier: all
+      secrets: inherit
+
+`tier: all` expands the reusable workflow's matrix to ONE GH JOB PER
+(tier x version) leg — render/ce, functional/ce, browser/ce today (the single CE
+image; B1) — each with `fail-fast: false`.
+
+JOB GRAPH (read back from the parsed YAML):
+    jobs:        [verify-checks, ui-suite, release, ports-pr]
+    permissions: {contents: read, packages: read}   # packages:read ADDED for the GHCR pull
+    release  needs: [verify-checks, ui-suite]        # was: [verify-checks]
+    ports-pr needs: release                          # unchanged -> transitively gated
+    verify-checks: PRESENT, 1 step, UNCHANGED         # the PR-time aggregate gate is NOT weakened
+
+So the publish (`release`) now waits on BOTH:
+  * verify-checks — asserts the "All tests passed" check-run for the tagged commit
+    (covers the Tier-A PR fold from Phase 5; unchanged), AND
+  * ui-suite      — the full live-VM UI suite (Tier A + Tier B functional + browser).
+`ports-pr` (the FreeBSD-ports PR) `needs: release`, so it is transitively gated too.
+
+PER-LEG RE-RUN ISOLATION (the D1 requirement — explained):
+  Each (tier x version) is a SEPARATE GitHub job (the matrix in ui-tests.yml's
+  `ui` job, fail-fast: false). `release` runs only once ALL of its `needs:` are
+  `success`. Therefore:
+    - A single flaky leg (e.g. browser/ce) fails -> `release`/`ports-pr` do NOT
+      run (their needs aren't all green) and the OTHER legs are NOT cancelled
+      (fail-fast: false).
+    - "Re-run failed jobs" re-runs ONLY that one leg. When it goes green, the
+      `needs:` set becomes all-success and `release`/`ports-pr` proceed — WITHOUT
+      re-running the passing legs and WITHOUT redoing any already-done publish
+      step. A not-our-fault browser flake costs a single-leg re-run, never a
+      republish.
+  This is the GitHub-native mechanism; it is STRUCTURAL (the job-per-leg + the
+  needs graph), proven by the parsed YAML, and confirmed live by the maintainer's
+  §7 "Release dry-run" checklist item (forced single-leg failure, re-run in
+  isolation). NO dry-run was claimed to have "run" here (this box can't run GHA).
+
+§7 BROWSER DEMOTE SWITCH (decision + how):
+  DECISION: gate the release on Tier A + Tier B-functional FIRMLY and INCLUDE the
+  browser leg as a separate, isolated, re-runnable leg (`tier: all`). Rationale:
+  the browser tier is already non-PR-blocking BY CONSTRUCTION (Phase 4 §6), so
+  including it in the release gate adds JS/screenshot coverage at the cost of one
+  re-runnable leg; its §7 numbers are CI-pending and the maintainer applies the
+  switch on the FIRST CI evidence if it misses the bar.
+  ONE-LINE DEMOTE (documented inline in release.yml's ui-suite header + in ADR §7):
+    (a) drop `browser` from DEFAULT_SCHEDULE_TIERS in ui-tests.yml (kills the
+        nightly browser leg), AND
+    (b) change `tier: all` -> `tier: functional` in release.yml's ui-suite
+        (drops browser from the release gate).
+  The browser stays dispatch-only; the test code is untouched; Tiers A + B-HTTP
+  keep gating the release.
+
+--------------------------------------------------------------------------------
+2) DOCS — README.md + CLAUDE.md
+--------------------------------------------------------------------------------
+
+README.md — NEW "## Web UI tests (live pfSense VM)" section (after the smoke
+"Adding a matrix case", before "Image pipeline"):
+  * The three tiers in a table (A render / B functional / B browser), each with
+    its marker (ui_render / ui_e2e / ui_browser), what it does, and when it runs.
+  * The real oracle (never HTTP 200 alone: body + page-marker + on-box
+    php_error.log for Tier A; effective config.xml/pfctl/unbound for Tier B).
+  * "Running it in CI": the reusable ui-tests.yml (workflow_call + dispatch +
+    daily schedule), one job per (tier x version) + fail-fast:false, diagnostics
+    artifact `ui-diagnostics-<tier>-<version>` if:always(); the three wirings
+    (Tier A PR gate -> "All tests passed"; Tier B schedule/dispatch; release
+    `ui-suite` tier:all before release/ports-pr). `gh workflow run` examples.
+  * "Running it locally": pip + `playwright install chromium` (browser only),
+    the SMOKE_* env (incl. SMOKE_ADMIN_PASSWORD -> else fixtures SKIP), the
+    per-marker pytest invocations, the screenshot dir.
+  * "Version matrix (B1) and adding an image": parametric axis, single CE image
+    today, one-line DEFAULT_VERSIONS append, IMAGE_RUNBOOK pointer.
+
+CLAUDE.md — kept in sync with its smoke section + repo-structure tree:
+  * "Repository structure" prose: noted `tests/smoke/ui/` holds the ADR-14 Web-UI
+    tiers reusing smoke_vm + helpers.py.
+  * "## Smoke tests (ADR-04 ...)": NEW subsection "### Web UI tiers (ADR-14) —
+    live under tests/smoke/ui/, reuse smoke_vm" — the three tiers/markers, the
+    "never 200 alone" oracle, the local run line, the reusable-workflow shape
+    (one job per tier x version), the PR/schedule/release wirings, the B1 single
+    CE image + one-line add, the diagnostics artifact, and the §7 CI-pending
+    browser numbers + one-line demote/drop switch. (The UI tiers live inside the
+    smoke section because they REUSE smoke_vm — that is their home.)
+
+markdownlint-cli2 on README.md + CLAUDE.md + ADR.md (and the whole repo): 0 errors.
+
+--------------------------------------------------------------------------------
+3) ADR §7 + STATUS — finalised
+--------------------------------------------------------------------------------
+
+STATUS: Proposed -> "Implemented (pending smoke test)" (2026-06-04). NOT Accepted:
+per the DoD the Accept flip is the maintainer's call after the live-box smoke +
+screenshot review. The header lists why (live VM only in CI) + points to the
+outstanding Accept criteria in §7.
+
+§7 Definition of done rewritten into two halves:
+  * "Done in-repo" — the six phases landed; pytest 1019 byte-identical; the three
+    tiers + the body+marker+php_error.log oracle (broken-page proof); the reusable
+    matrix workflow (one job per tier x version, fail-fast:false, diagnostics
+    if:always()); Tier A PR fold (blocking); the release gate D1 ALONGSIDE the
+    unchanged verify-checks; per-leg re-run isolation explained.
+  * "Outstanding — the maintainer's Accept criteria" — Tier A green on the live
+    VM (real oracle + broken-page caught); Tier B functional effective-state +
+    browser screenshots; the §7 browser reliability NUMBERS measured in CI (or
+    the demote/drop applied) — explicitly CI-PENDING, not fabricated; the manual
+    smoke + screenshot review.
+
+§7 reject/pivot criteria finalised — folded in the Phase-4 browser decision:
+  * Browser tier is already non-PR-blocking by construction; numbers CI-pending;
+    shipped posture = gate on A + B-functional firmly, include browser as an
+    isolated re-runnable release leg, demote/drop on first evidence. The demote =
+    a ONE-LINE switch (drop `browser` from DEFAULT_SCHEDULE_TIERS + release
+    ui-suite tier:functional). Drop = deselect `-m ui_browser` / delete the leg.
+    Tiers A + B-HTTP retain standalone value. Added the explicit measurement
+    procedure (>= 5 runs, >= 4/5 clean AND <= ~25 min/leg, record into
+    RESULTS/04).
+  * Tier-A-too-heavy pivot now names the exact lever (remove ui-render from
+    test.yml's aggregate needs + its result case).
+
+§7 manual-smoke checklist LOCKED (owner: maintainer) — the complete list:
+  [ ] Tier A green on the live VM — dispatch ui-tests.yml tier=render (or a PHP/JS
+      PR); the ui_render sweep passes on the CE image with the real oracle
+      (body + marker + php_error.log); ui-diagnostics-render-<version> present.
+  [ ] Screenshot review — dispatch tier=browser, pull
+      ui-diagnostics-browser-<version>; every pfBlockerNG page renders correctly
+      (no broken layout/missing fields/stray PHP output) across <version>/<page>.png.
+  [ ] Functional reality — a GUI settings change persists + takes effect (matches
+      ui_e2e) — spot-check General + one IP feed + one DNSBL toggle.
+  [ ] JS UX — field enable/disable toggles, autocomplete, dashboard widget behave
+      in a real browser as ui_browser drives them.
+  [ ] Flake reality / §7 numbers — run the browser leg >= 5x; confirm >= 4/5 clean
+      AND <= ~25 min/leg, OR apply the demote/drop switch. Record numbers into
+      RESULTS/04_Results.txt.
+  [ ] Release dry-run — a tag/release dry-run runs the full UI suite first (ui-suite
+      -> one leg per tier x version); release/ports-pr wait on every leg; a forced
+      single-leg failure is re-runnable in isolation WITHOUT redoing release/ports-pr.
+  [ ] Multi-version (when a 2nd image exists) — append the label to
+      DEFAULT_VERSIONS + wire its ref; the matrix runs green on the added image
+      with no harness change beyond the image ref.
+
+--------------------------------------------------------------------------------
+4) GATES (local / static — NO CI run claimed)
+--------------------------------------------------------------------------------
+- python -m pytest --collect-only  => 1019 collected (== baseline, UNCHANGED).   [VERIFIED]
+- ruff check .                     => All checks passed!                          [VERIFIED]
+- ruff format --check .            => 47 files already formatted.                 [VERIFIED]
+- YAML parse (PyYAML): release.yml / ui-tests.yml / test.yml all parse OK.        [VERIFIED]
+- release.yml structure read-back: release.needs=[verify-checks, ui-suite];
+  ui-suite uses ./.github/workflows/ui-tests.yml with {tier: all} secrets:inherit;
+  ports-pr needs: release; verify-checks present + 1 step (unchanged);
+  permissions {contents:read, packages:read}.                                    [VERIFIED]
+- markdownlint-cli2 (README.md, CLAUDE.md, ADR.md; 38 files repo-wide) => 0 error(s). [VERIFIED]
+- NO src/ change: `git diff origin/devel..HEAD --name-only -- src/` empty;
+  `git status --porcelain src/` empty.                                           [VERIFIED]
+- This phase's uncommitted edits = exactly release.yml, README.md, CLAUDE.md,
+  ADR.md (+ this RESULTS/06). test.yml / ui-tests.yml NOT re-edited.              [VERIFIED]
+- adr/14 already sits atop origin/devel (merge-base --is-ancestor origin/devel
+  HEAD => yes) — no rebase needed for the commit.                                [VERIFIED]
+- Inline shell: the release.yml edit adds NO new shell — only a `uses:` job +
+  `needs:` graph + comments; existing shell blocks untouched.                    [N/A]
+
+--------------------------------------------------------------------------------
+5) ADR-14 — COMPLETION SUMMARY (Phases 1-6)
+--------------------------------------------------------------------------------
+P1 — authenticated `webui` session helper (CSRF login, session cookie, get()) +
+     recon pinned (protocol/form/cookie/creds); marker ui_render; requests dep.
+P2 — Tier A render-smoke: parametrized ui_render sweep over every pfBlockerNG page
+     (14 main + widget + 2 DNSBL-VIP sinkhole), real oracle (body + page-marker +
+     on-box php_error.log), broken-page proof; page-table coverage guard.
+P3 — Tier B functional: ui_e2e CSRF-POST flows asserting effective
+     config.xml/pfctl/unbound state via helpers.config_get.
+P4 — Tier B browser: headless Playwright/Chromium reusing the P1 session via the
+     injected PHPSESSID cookie (no 2nd login), driving the JS-only UX
+     (enable_change_*, autocomplete, pfb_chg_state_bkgd, widget) + per-page
+     screenshots; playwright dep; §7 numbers honestly CI-pending; one-line
+     demote/drop switch.
+P5 — Workflows: reusable ui-tests.yml (workflow_call + dispatch + daily schedule),
+     (tier x version) matrix, fail-fast:false, one job per leg; Tier A folded into
+     test.yml's "All tests passed" aggregate (paths-gated on PHP/JS); Tier B
+     schedule/dispatch non-PR-blocking; ui-diagnostics artifact if:always().
+P6 — THIS: release.yml needs: the full UI suite (ui-suite, tier:all) before
+     release/ports-pr alongside the unchanged verify-checks, each leg re-runnable
+     in isolation; README + CLAUDE.md docs; §7 + Status finalised.
+
+Default pytest stayed 1019 byte-identical through ALL phases; NO src/ change in any.
+
+ACCEPT CRITERIA STILL OUTSTANDING (maintainer, on the live box / CI):
+  1. Tier A ui_render green on the CE VM with the real oracle + broken-page caught.
+  2. Tier B ui_e2e effective-state flows green; ui_browser screenshots produced +
+     uploaded (ui-diagnostics-*).
+  3. The §7 browser reliability numbers measured in CI (>= 4/5 clean AND
+     <= ~25 min/leg) — or the one-line demote/drop applied. CI-PENDING.
+  4. The §7 manual smoke completed + screenshot artifacts reviewed.
+  5. (When a 2nd image exists) the matrix green on the added image.
+On all of the above, the maintainer flips Status -> Accepted.
+
+--------------------------------------------------------------------------------
+6) FILES
+--------------------------------------------------------------------------------
+- .github/workflows/release.yml  — EDIT: permissions +packages:read; NEW ui-suite
+  job (uses ./.github/workflows/ui-tests.yml, tier:all, secrets:inherit);
+  release.needs += ui-suite (verify-checks unchanged). Documents per-leg re-run
+  isolation + the §7 browser demote switch inline.
+- README.md                      — EDIT: NEW "## Web UI tests (live pfSense VM)".
+- CLAUDE.md                       — EDIT: repo-structure prose (tests/smoke/ui/) +
+  NEW "### Web UI tiers (ADR-14)" inside the smoke section.
+- .ADRs/ADR_14_UI_UX_Testing/ADR.md — EDIT: Status -> Implemented (pending smoke
+  test); §7 DoD split (done-in-repo / outstanding Accept) + reject/pivot criteria
+  + manual-smoke checklist finalised.
+- .ADRs/ADR_14_UI_UX_Testing/RESULTS/06_Results.txt — NEW (this file).
+No src/ change; default pytest unchanged at 1019; test.yml + ui-tests.yml unedited.

@@ -1,0 +1,177 @@
+ADR-53 Phase 4 — v4 UI mask lift (/8-/32) with an extracted pure validator
+============================================================================
+
+STATUS: Done. v4suppression textarea now accepts /8-/32 (was /32-or-/24-only)
+through a new pure, PHPUnit-tested validator; help text updated; page renders
+clean. Red->green proven for the exact behaviour change.
+
+New validator
+-------------
+`pfb_validate_suppression_line(string $line, string $family): ?string`
+(pfblockerng_extra.inc, appended after pfb_due_ledger_is_pending(), before the
+logger()/localize_text() CE-2.8 fallback block). Signature matches the phase
+spec exactly. PURE -- no config access, no I/O; only the pfSense is_subnetv4()
+predicate (already doubled in tests/php/pfsense_doubles.php -- no new double
+needed).
+
+Behaviour, one call per raw textarea line (as split on "\r\n", untrimmed):
+  - Blank, or starts with '#' -> NULL (skip, no-op -- matches today's `continue`).
+  - An inline "# comment" suffix is stripped via the SAME `preg_split('/(?=#)/')`
+    the old inline code used, so "10.0.0.1/32 # example.com" validates on
+    "10.0.0.1/32" only (tolerated shape, unchanged).
+  - family == 'ipv6' -> ALWAYS returns an error (see "v6 contract" below).
+  - family == 'ipv4':
+      1. If the entry has a '/' followed by a purely-numeric mask, and that
+         mask is < 8 or > 32 -> return the RANGE message (see below). This
+         check runs BEFORE the general subnet-shape check so an
+         out-of-range-but-well-formed mask (/7, /33) gets the message naming
+         the accepted range, not the generic malformed-input one.
+      2. Else if `is_subnetv4($entry)` fails (bad octets, no '/', non-numeric
+         mask, etc.) -> return the generic SUBNET message.
+      3. Else -> NULL (valid).
+
+Message texts (exact, chosen to match neighbour tone/length -- no existing
+test pinned the old wording, so free to update; new text still follows the
+"IPv{4,6} Suppression: <detail>" pattern already in use):
+  - Range violation (floor /7 or below, ceiling /33 or above):
+    "IPv4 Suppression: Invalid mask [ <entry> ]. Mask must be between /8 and /32."
+  - Generic malformed input (unchanged from today, verbatim):
+    "IPv4 Suppression: Invalid IPv4 subnet address defined [ <entry> ]"
+  - IPv6 (Phase-6-not-yet contract):
+    "IPv6 Suppression: IPv6 suppression is not yet supported [ <entry> ]."
+
+v6-not-yet contract (Phase 6 must flip this)
+---------------------------------------------
+`SuppressionValidatorTest::testIpv6NotYetSupported()` asserts
+`pfb_validate_suppression_line('2001:db8::1/64', 'ipv6')` returns a NON-NULL
+error. This is the deliberate, pinned "not implemented yet" red for Phase 6:
+when Phase 6 wires the pure v6 diff engine + config + UI, it must replace the
+unconditional `if ($family === 'ipv6') { return ...; }` branch with the real
+v6 validation (masks /32-/128 per ADR §2.1) and this exact test must then be
+rewritten to assert NULL for valid v6 lines (and a range message for
+out-of-range v6 masks, mirroring the v4 shape) -- i.e. this test is Phase 6's
+red-check tripwire, not a permanent contract.
+
+Red->green evidence (the exact CLAUDE.md-mandated proof)
+-----------------------------------------------------------
+Wrote the full test file first (tests/php/SuppressionValidatorTest.php, 12
+tests), THEN implemented the function with TODAY'S exact rule verbatim
+(mask must be === '/32' or === '/24', migrated unchanged from the inline
+POST-handler loop) as a temporary stand-in, ran the suite, and got:
+
+  4 failures (12 tests, 14 assertions):
+    1) testSlash16NowValid       -- 'Invalid mask [ 10.0.0.0/16 ]... /32 or /24
+       only.' is not null (old rule rejects the new /16 case)
+    2) testSlash8FloorNowValid   -- same, for '10.0.0.0/8'
+    3) testSlash7BelowFloorRejected  -- error message doesn't yet contain '/8'
+       (old wording names /32-or-/24, not the new accepted range)
+    4) testSlash33AboveCeilingRejected -- same, message doesn't contain '/8' yet
+
+All 4 failures are for the EXACTLY documented reason (the old /32-or-/24-only
+rule, and its old wording). The other 8 tests (legacy /32 + /24 valid, bad
+octet, non-CIDR garbage, comment/blank skip, trailing-comment tolerance, v6
+not-yet) were ALREADY green under the old-rule stand-in, proving nothing else
+regressed by the extraction itself.
+
+Then replaced the mask check with the widened /8-/32 range logic (the block
+shown above) and re-ran: 12 tests, 16 assertions, 0 failures -- full green,
+including the /16 + /8 red->green pair and both /7 and /33 now naming the
+accepted range.
+
+Call-site swap (pfblockerng_ip.php:147-155)
+---------------------------------------------
+The 19-line inline validation loop (comment/blank skip + inline preg_split +
+mask compare + is_subnetv4 check, TWO separate `$input_errors[]` pushes per
+line) collapsed to a 6-line loop that calls the extracted validator once per
+line and pushes at most ONE message per line (a minor, intentional
+simplification: the old code could push both a mask error AND a subnet error
+for the same malformed line with no '/' at all; the new single-message-per-line
+contract returns the more specific message first -- range message when the
+mask parses as an out-of-bounds number, else the generic subnet message).
+This does not change what is ACCEPTED vs REJECTED (the thing pinned by tests
+and the ADR contract), only de-duplicates redundant per-line error text.
+
+Help-text wording chosen (two blocks per the phase's REQUIRED READING pointers,
+both updated -- "/32 or /24" -> "/8 through /32" pattern, matching neighbour
+tone/length):
+  1. Suppression toggle help (pfblockerng_ip.php:358, was :369):
+     "Only for IPv4 lists (/32 and /24)." -> "Only for IPv4 lists (/8 through /32)."
+     And the same block's GeoIP/whitelist-alias caveat (was :373):
+     "For GeoIP/Blocked IPs in a CIDR other than /32 or /24, will need a
+     'Whitelist alias'..." -> "For GeoIP/Blocked IPs in a CIDR broader than /8,
+     will need a 'Whitelist alias'..." (accurate under the new floor: only a
+     block coarser than /8 -- essentially never realistic -- still needs the
+     workaround).
+  2. `$suppression_text` (IPv4 Suppression section, was :500 + :511):
+     "This suppression list is for [ /32 or /24 ] IPv4 addresses only!" ->
+     "This suppression list is for [ /8 through /32 ] IPv4 addresses only!"
+     "Note: When manually adding an IPv4 address [ /32 or /24 only! ]..." ->
+     "Note: When manually adding an IPv4 address [ /8 through /32 only! ]..."
+
+Tier A / Tier B UI test check
+-------------------------------
+- Tier A `ui_render`'s PAGE_TABLE marker set for the "ip" page is
+  `("IP Configuration", "ASN configuration", "Aggregated Aliases", "Alias
+  Table Apply Mode")` (tests/smoke/ui/test_render_smoke.py) -- none of these
+  reference the mask wording, so NO marker update was needed. Verified via
+  `.venv/bin/python -m pytest tests/smoke/ui -m ui_render
+  --override-ini="addopts=" --collect-only -q` -> 79 tests collected (105
+  deselected), no collection errors, IP page's render case present.
+  `--collect-only` over the FULL `tests/smoke/ui` tree -> 184 tests collected,
+  0 errors. Per the orchestrator's UI-tier note, the LIVE Tier A run for
+  pfblockerng_ip.php rides Phase 9's CE+Plus fan-out (no live box touched
+  from this worktree).
+- Found and fixed a STALE Tier B (`ui_e2e`, non-PR-blocking) assertion:
+  `tests/smoke/ui/test_functional.py::
+  test_ip_v4suppression_mask_validation_base64_and_reject_unchanged` asserted
+  that a `/16` mask ABORTS the save -- true under the old rule, now WRONG
+  (a /16 is valid post-Phase-4). Left uncorrected it would have been a live
+  regression the very next time Phase 9's Tier B fan-out ran, testing this
+  phase's own change against stale expectations. Rewrote it to: (1) keep the
+  legacy /24-valid assertion, (2) ADD a new /16-now-valid assertion (proving
+  the widened range persists via the base64 store), (3) swap the rejection
+  case from /16 to /7 (now below the /8 floor -- the genuinely-still-invalid
+  case). Not run live from here (per the orchestrator's constraint); it will
+  execute for real under Phase 9's fan-out.
+
+Gate results
+------------
+- vendor/bin/phpunit -> 1873 tests, 15494 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets", macOS inet_pton). Test count is P3's
+  1861 + 12 new SuppressionValidatorTest cases = 1873, confirming no other
+  test file changed.
+- php -l on both touched files -> clean.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean, no output.
+- vendor/bin/phpstan --memory-limit=1G -> "[OK] No errors" (28/28 files).
+- .venv/bin/python -m pytest -q -> 2042 passed, 4 skipped (identical to P1-3's
+  baseline; no Python touched this phase, tests/smoke/ui edit doesn't run
+  under the default testpaths without -m ui_render/-k).
+- .venv/bin/ruff check . -> "All checks passed!"; ruff format --check . ->
+  "158 files already formatted" (test_functional.py edit already compliant).
+- shellspec (full suite) -> 259 examples, 0 failures, 8 skips -- byte-identical
+  to P3's baseline (no shell touched this phase).
+- Tier A ui_render collection -> 79/184 selected, 0 errors (see above).
+
+Scope confirmation
+-------------------
+`git diff --stat` vs the P3 commit: exactly 3 files touched + 1 new --
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc  (+54, new validator)
+  src/usr/local/www/pfblockerng/pfblockerng_ip.php     (-19/+8, call site + 2 help texts)
+  tests/smoke/ui/test_functional.py                    (stale Tier B assertion fix)
+  tests/php/SuppressionValidatorTest.php               (new, 12 tests)
+No shell touched. No alerts page touched (Phase 8's job). No v6 engine/config/
+UI touched (Phase 5/6's job) -- the v6 branch of the new validator is a
+deliberate, explicitly-pinned "not yet" stub, not an implementation.
+
+Go-ahead for Phase 5
+---------------------
+Phase 4 is complete and green (PHPUnit, PHPCS, PHPStan, pytest, ruff,
+shellspec, UI-test collection). Phase 5 (pure v6 diff engine, no UI -- parse
+lines to fixed-width binary ranges, subtract suppress ranges, emit remainders
+via `ip_range_to_subnet_array()`, never iprange per §1.2) can proceed
+independently: it touches new pure-PHP engine code, not
+`pfblockerng_extra.inc`'s validator, `pfblockerng_ip.php`, or any test file
+this phase touched. Phase 6 (v6 config/UI wiring) is the one that must revisit
+`pfb_validate_suppression_line()`'s `family === 'ipv6'` branch and flip
+`testIpv6NotYetSupported()`.

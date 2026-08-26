@@ -1,0 +1,177 @@
+================================================================================
+ADR-21 Phase 2 RESULTS -- PHP companion: download loop + manifest builder +
+broadened header sniff (+ pfb_dnsbl_is_abp_header helper + tests)
+Branch: adr/21-abp-header-agnostic-detection
+================================================================================
+
+GATE: Phase 1 (RESULTS/01_Results.txt) confirmed COMPLETE -- GO recorded.
+Phase 1 carry-forward honoured: $badfilter is a feed-only, same-stream prune
+inside the frozen reconcile() over the ABP Rule stream. Phase 2 does NOT design
+any cross-pipeline badfilter cancel; it only completes the PHP -> .txt -> .raw
+verbatim pass-through so Phase 1's build() routing actually receives the lines.
+
+
+SUMMARY
+-------
+Three call sites in pfblockerng.inc now feed `||`/`@@||` lines from non-ABP
+feeds through to the Python `.raw`, and the whole-feed ABP header sniff is
+broadened to the generic ABP header convention:
+
+  1. DOWNLOAD LOOP (sync_package_pfblockerng, ~line 10626): before the
+     pfb_filter(PFB_FILTER_DOMAIN) drop, a line that str_starts_with('||') or
+     str_starts_with('@@||') is written VERBATIM to the `.bk`/`.txt` staging
+     file (@fwrite($dhandle,...)) and `continue`d.
+  2. MANIFEST BUILDER (pfb_unbound_python_sources 'plain' path, ~line 3841):
+     before the CSV col-1 extraction, an rtrim()'d line that
+     str_starts_with('||')/'@@||' is written VERBATIM to the `.raw`
+     (@fwrite($raw_h,...)) and `continue`d; otherwise unchanged CSV col-1.
+  3. HEADER SNIFF (~line 10252): the four legacy magic-string strpos() tests
+     are replaced by a single call to the new pure helper
+     pfb_dnsbl_is_abp_header($line), which prefix-matches (str_starts_with,
+     ltrim-tolerant) '[Adblock' / '[uBlock' / '! Title:'. Scan window untouched
+     (the elseif '!'/else arms unchanged) -> sniffing still stops at the first
+     non-`!` non-header line.
+
+`if ($easylist)` ABP block, the IP-collection / IDN / dot-trim logic, the
+manifest row builder (format_hint still follows $easylist), parse_abp(),
+_dnsbl_parse_abp_line(), and pfb_unbound.py are ALL unmodified.
+
+
+EXACT DIFF -- the three change sites
+------------------------------------
+
+SITE 3a -- new pure helper (before pfb_unbound_py_atomic_write, ~line 3542):
+  +function pfb_dnsbl_is_abp_header($line) {
+  +	$hline = ltrim($line);
+  +	return (str_starts_with($hline, '[Adblock') ||
+  +		str_starts_with($hline, '[uBlock') ||
+  +		str_starts_with($hline, '! Title:'));
+  +}
+
+SITE 3b -- the sniff call (~line 10252):
+  -	if (strpos($line, '[Adblock Plus ') !== FALSE ||
+  -	    strpos($line, '[Adblock Plus]') !== FALSE ||
+  -	    strpos($line, '[uBlock Origin') !== FALSE ||
+  -	    strpos($line, '! Title: AdGuard') !== FALSE) {
+  +	if (pfb_dnsbl_is_abp_header($line)) {
+  		$easylist = $validate_header = TRUE;
+  		continue;
+  	}
+
+SITE 1 -- download loop (after `$line = trim(trim($line), '.');`, ~line 10626):
+  +	if (str_starts_with($line, '||') || str_starts_with($line, '@@||')) {
+  +		$domain_data = "{$line}\n";
+  +		@fwrite($dhandle, $domain_data);
+  +		continue;
+  +	}
+  (placed BEFORE `if (empty(pfb_filter($line, PFB_FILTER_DOMAIN, ...)))`)
+
+SITE 2 -- manifest builder (before `$cols = explode(',', $line, 3);`, ~3841):
+  +	$rawline = rtrim($line, "\r\n");
+  +	if (str_starts_with($rawline, '||') || str_starts_with($rawline, '@@||')) {
+  +		@fwrite($raw_h, "{$rawline}\n");
+  +		continue;
+  +	}
+  (placed AFTER the `if ($format === 'abp') { ... continue; }` block)
+
+(Full inline ADR-21 comment blocks at each site -- see `git diff`.)
+
+
+PROVENANCE NOTE
+---------------
+Sites 1 + 3 (download-loop guard + broadened sniff + helper) were already
+present UNCOMMITTED in the worktree from a prior aborted Phase-2 attempt; their
+content was reviewed against this prompt's ACTION PLAN step-by-step and matches
+it verbatim (tabs, str_starts_with, prefix-not-strpos, scan window untouched).
+Site 2 (manifest-builder guard) was MISSING and was added in this run. The
+DnsblIsAbpHeaderTest.php was also a leftover; it was reviewed and matches the
+required PHPUnit case list exactly (kept as-is).
+
+
+PHPCS scopeFunctions
+--------------------
+NO change. pfb_dnsbl_is_abp_header() is a pure predicate (no exec-family /
+json_encode / dynamic path sink), so PFBL-01 does not require it in the
+allow-list. The download-loop guard lives in sync_package_pfblockerng (legacy,
+intentionally NOT allow-listed). The manifest guard's @fwrite is not a sink the
+RequirePfbFilter sniff tracks. vendor/bin/phpcs -> exit 0 (clean) confirms.
+
+
+TESTS
+-----
+NEW PHPUnit: tests/php/DnsblIsAbpHeaderTest.php (DataProvider, 18 cases)
+  TRUE  (regression -- all four legacy magic strings, ADR §2.3.9):
+    '[Adblock Plus 2.0]', '[Adblock Plus]', '[uBlock Origin]',
+    '! Title: AdGuard DNS filter'
+  TRUE  (broadened): '! Title: HaGeZi Pro DNS Blocklist', '! Title:',
+    '[Adblock]', '[uBlock]', leading-space '   ! Title: Something',
+    leading-tab "\t[Adblock Plus]"
+  FALSE (must NOT flip): 'x.com', '0.0.0.0 x.com', '||x^',
+    '! this is just a comment', 'x.com ! Title: nope',
+    'data ! Title: AdGuard' (mid-line), '', '# comment'
+  Branch coverage: each prefix class that flips (TRUE) paired with non-header /
+  mid-line classes that must not (FALSE) -> both sides of the predicate pinned.
+
+NEW Python sim: tests/test_adr21_abp_per_line.py :: test_manifest_builder_mixed_feed
+  (+ helper _simulate_php_manifest_builder). Given a non-ABP `.txt` mixing 6-col
+  CSV plain rows with verbatim `||`/`@@||` lines, the manifest-builder 'plain'
+  rule must emit BOTH the CSV col-1 bare domains AND the verbatim ABP anchors to
+  `.raw` (and never the CSV decoration of a plain row). Asserts the exact ordered
+  `.raw` list.
+
+RED->GREEN STATUS (per ADR §5 / §4.11):
+  - DnsblIsAbpHeaderTest -- the broadened/mid-line cases are genuine behavioural
+    reds against the legacy strpos() sniff (e.g. '! Title: HaGeZi' -> FALSE
+    pre-change since not one of the 4 magic strings; 'data ! Title: AdGuard'
+    mid-line -> TRUE pre-change under strpos, now correctly FALSE). Pre-change the
+    helper itself is undefined (nothing to call) -- that IS the red for the new
+    cases, per the prompt's note. Post-change: 18/18 green.
+  - test_manifest_builder_mixed_feed -- EXEMPT off-appliance SIMULATION of the PHP
+    manifest-builder rule (ADR §5). It cannot go red against the PHP change (it
+    re-implements the rule in Python); it pins the SHAPE of the change, not that
+    the live PHP runs. Live proof is Phase 3's smoke. Named as exempt here.
+
+
+VERIFICATION (all green)
+------------------------
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc -> No syntax errors detected
+  php -l tests/php/DnsblIsAbpHeaderTest.php             -> No syntax errors detected
+  vendor/bin/phpunit                                   -> OK (411 tests, 788 assertions)
+  vendor/bin/phpunit --filter DnsblIsAbpHeader         -> OK (18 tests)
+  vendor/bin/phpcs                                     -> exit 0 (clean; PFBL-01 OK)
+  vendor/bin/phpstan analyse                           -> [OK] No errors
+  python -m pytest -q                                  -> 1575 passed
+     (baseline 1574 + 1 new sim; no regression in test_adr07_* or others)
+  python -m pytest tests/test_adr21_abp_per_line.py    -> 9 passed
+  ruff check .                                         -> All checks passed!
+  ruff format --check .                                -> 98 files already formatted
+  mypy tests/                                          -> Success: no issues (40 files)
+
+  DIFF SCOPE (git diff origin/devel...HEAD beyond Phase 1):
+    src/usr/local/pkg/pfblockerng/pfblockerng.inc  (+49/-5)
+    tests/test_adr21_abp_per_line.py               (+63, new sim test)
+    tests/php/DnsblIsAbpHeaderTest.php             (new)
+  pfb_unbound.py: NOT touched in Phase 2. No unrelated churn / debug probes.
+
+
+EDGE / DEVIATIONS
+-----------------
+- Behavioural delta named in ADR §2.4 confirmed by test: legacy strpos() would
+  flip a feed on a '! Title: AdGuard' token ANYWHERE in a header-window line; the
+  new prefix match only flips on a leading-prefix line. The mid-line FALSE case
+  ('data ! Title: AdGuard') pins this strictly-safer behaviour.
+- IP anchors: `||1.2.3.4^` / `@@||1.2.3.4^` in a non-ABP feed pass the download-
+  loop guard (write verbatim) and reach Python, where parse_abp() returns None
+  (ADR-06 no-leak) -> silently skipped. No PHP IP guard added (per constraint);
+  PHP IP collection at the non-ABP IP path is unchanged. No double-handling.
+- No new config key / UI field / per-feed selector (ADR §2.4 dropped it).
+
+
+GO / NO-GO FOR PHASE 3
+----------------------
+GO. End-to-end PHP path complete: download loop writes `||`/`@@||` verbatim to
+`.txt` -> manifest builder passes them verbatim to `.raw` -> Phase-1 build()
+routes them to parse_abp() -> abp_rules -> reconcile(). Header sniff broadened to
+'[Adblock'/'[uBlock'/'! Title:' (pfb_dnsbl_is_abp_header), pinned by PHPUnit; all
+four legacy magic strings still detect. Phase 3 (live-VM smoke + inline doc
+polish + DoD) can proceed against this.

@@ -1,0 +1,83 @@
+================================================================================
+PHASE 1 PROMPT — Inventory the two .pkg builders + define the matrix-driven build
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_09_Release_Version_Automation/ADR.md   (read §1 facts 2-3, §2
+     "Release .pkg artifacts" row, and §7 "Reject criteria" FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/09` branch (off `devel`) performing Phase 1 of ADR-09. The release
+build premise is ALREADY PROVEN — two working .pkg builders exist and both pass the
+ADR-04 smoke gate. This phase is NOT a de-risking spike: it INVENTORIES those two
+builders and pins the contract Phase 3 will drive from the matrix. Work inline on
+`adr/09`, one commit, push directly (no worktree isolation — project workflow).
+
+WHY THIS PHASE EXISTS (read carefully — the original spike is moot)
+ADR-09 was authored when "can a GH runner build our port into an installable .pkg
+cheaply?" was unproven, so Phase 1 was a kill-gate spike. That risk is GONE:
+  * `build-pkg-linux.yml` -> `scripts/build-pkg-portable.py` is the DEFAULT builder:
+    it executes the port's own recipe + pkg-plist on a PLAIN LINUX runner (pfBlockerNG
+    is a NO_BUILD port), and was diffed byte-for-byte against a real `make package`
+    artifact (exact except mtime + a few binary-repo dep versions).
+  * `build-pkg.yml` runs the REAL `make package` on an ABI-matched FreeBSD VM and is
+    retained as the FIDELITY ORACLE / FALLBACK ("Linux by default, FreeBSD if we fuck
+    up").
+So there is nothing to spike. Inventory both, document their inputs (notably the
+(freebsd_version, php_version) pair), and hand Phase 3 a precise contract.
+
+REQUIRED READING (inspect before editing)
+- This is Phase 1 — there is NO prior handoff. Start from the ADR.
+- .ADRs/ADR_09_Release_Version_Automation/ADR.md  (§1 facts 2-3; §2 Release row; §7 reject).
+- .github/workflows/build-pkg-linux.yml + scripts/build-pkg-portable.py  (the DEFAULT
+  portable builder: its inputs — ABI/PHP/python flavor, channel, ports ref — and outputs).
+- .github/workflows/build-pkg.yml  (the FreeBSD `make package` ORACLE/fallback: inputs
+  freebsd_version/php_version/channel/ports_repo/ports_ref; the workflow_call contract).
+- .github/workflows/build-image.yml  (how it already consumes build-pkg.yml + the
+  `resolve-version` map added for issue #22 — the (freebsd_version, php_version) source).
+- docs/misc/pfSense_versions.md  (the per-version base facts: FreeBSD base + PHP per CE).
+- ../FreeBSD-ports/net/pfSense-pkg-pfBlockerNG-devel/  (Makefile: RUN_DEPENDS incl.
+  net/libmaxminddb; USES=php/python; pkg-plist) — so the inventory is grounded in the port.
+- CLAUDE.md  (POSIX-sh; commit style; push-direct).
+
+ACTION PLAN (ordered — document, do not re-spike)
+1. INVENTORY: for EACH builder record, in RESULTS/01_Results.txt: trigger (dispatch /
+   workflow_call), the full input set (esp. how freebsd_version + php_version are passed),
+   the runner it needs (Linux vs KVM/FreeBSD-VM), wall-time class, output artifact name +
+   ABI tag, and how `pkg add` of the result resolves deps (incl. libmaxminddb).
+2. SELECTION CONTRACT: document how Phase 3 selects DEFAULT (portable Linux) vs
+   FALLBACK/ORACLE (FreeBSD `make package`) for a given matrix entry — e.g. a `builder`
+   input/dispatch knob — and the artifact-naming convention (one .pkg per distinct
+   FreeBSD major; e.g. ...-FreeBSD-<major>.pkg).
+3. (freebsd_version, php_version) PAIR: confirm both builders consume the PAIR (not just
+   a major), matching `build-image.yml`'s resolve-version map + pfSense_versions.md. Note
+   the CE 2.8.x pair = (15.0-RELEASE, 8.3).
+4. NO NEW WORKFLOW: do NOT add a build-spike.yml. If anything, a tiny dispatch-only
+   sanity wrapper is acceptable ONLY if it reuses the existing reusable workflows; prefer
+   pure documentation.
+
+CONSTRAINTS
+- Do NOT write the matrix, the release wiring, or any CI-image phase here (Phases 2-6).
+- Do NOT touch src/ (shipped code). Do NOT add deps to the default pytest run.
+- Any shell is POSIX sh, quoted, ShellCheck-clean. Workflows lint-clean.
+- python -m pytest (default) must remain green and unchanged.
+
+VERIFICATION (must all pass before the phase is done)
+- RESULTS/01_Results.txt fully documents BOTH builders' input/output contracts, the
+  default-vs-fallback selection, and the (freebsd_version, php_version) pair handling.
+- python -m pytest -> green (unchanged). ruff/ShellCheck/markdownlint -> clean.
+
+EXPECTED RESULT
+A precise written contract for the two existing builders (portable Linux default +
+FreeBSD oracle fallback), keyed on the (freebsd_version, php_version) pair, ready for
+Phase 3 to drive from the matrix. No new spike workflow, no matrix, no release wiring.
+
+COMMIT (single)
+    ci: inventory the portable + FreeBSD .pkg builders for the release matrix (ADR-09 P1)
+Push directly to `adr/09`; open a PR only if the direct push is rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_09_Release_Version_Automation/RESULTS/01_Results.txt` (plain .txt)
+For Phase 3 (release artifacts). Include: both builders' EXACT input/output contracts
+(triggers, inputs incl. the freebsd_version+php_version pair, runner, artifact name + ABI
+tag, pkg-add/dep-resolve behaviour); the DEFAULT (portable Linux) vs FALLBACK/ORACLE
+(FreeBSD make package) selection mechanism; artifact naming (one .pkg per FreeBSD major);
+and the go-ahead.

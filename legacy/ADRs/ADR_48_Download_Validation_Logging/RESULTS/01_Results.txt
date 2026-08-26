@@ -1,0 +1,149 @@
+================================================================================
+PHASE 1 RESULTS — Pure pfb_validate_log_line() formatter + pfb_validate_log() wrapper
+ADR-48, Phase 1 of 4
+================================================================================
+
+SIGNATURES + LOCATION
+
+Both land in src/usr/local/pkg/pfblockerng/pfblockerng.inc, at the end of the
+pure-helper block, right after pfb_archive_missing_tool() and right before
+pfb_filter():
+
+  function pfb_validate_log_line(string $feed, string $stage, string $reason, string $detail = ''): string
+      — line 864
+
+  function pfb_validate_log(string $feed, string $stage, string $reason, string $detail = '', int $level = 2): void
+      — line 894
+
+pfb_validate_log_line() is pure (string in, string out, no I/O, no globals; the
+four values are escaped via a single array_map over an inline closure — no new
+named helper). pfb_validate_log() is a one-line wrapper: it calls
+pfb_validate_log_line() then pfb_logger($line, $level).
+
+CANONICAL LINE FORMAT
+
+  \npfb_validate: REJECT feed=<feed> stage=<stage> reason=<reason> detected=<detail>
+
+Leading "\n" is part of the return value (matches the pfb_logger() caller
+convention — pfb_logger() itself emits no newline). Example (all four keys
+ALWAYS present, empty detail still prints `detected=`):
+
+  pfb_validate_log_line('pfB_Feed1', 'mime', 'invalid-mime', 'application/x-msi')
+  => "\npfb_validate: REJECT feed=pfB_Feed1 stage=mime reason=invalid-mime detected=application/x-msi"
+
+  pfb_validate_log_line('F', 'mime', 'r')   // detail omitted
+  => "\npfb_validate: REJECT feed=F stage=mime reason=r detected="
+
+ESCAPING ORDER (applied to EACH of the four values independently — feed, stage,
+reason, detail — same code path for all four; IMPORTANT for Phase 2 and Phase 3's
+smoke greps, which must match the RENDERED (escaped) form, not the raw input):
+
+  1. every control byte in [\x00-\x1F\x7F] is replaced with a SINGLE space
+     (per-byte, not collapsed — implemented as preg_replace('/[\x00-\x1F\x7F]/', ' ', $v));
+     this runs FIRST so a raw "\n"/"\r"/NUL in attacker-influenced file(1) output
+     can never forge or split the greppable line.
+  2. htmlspecialchars() is applied to the result (PHP 8.3 default flags:
+     ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401 — escapes & < > " ').
+
+Worked example (the oracle's hostile-detail case):
+  input detail:  "app\x00lication/zip\nfake pfb_validate: REJECT x <b>&"
+  after step 1:  "app lication/zip fake pfb_validate: REJECT x <b>&"
+  after step 2:  "app lication/zip fake pfb_validate: REJECT x &lt;b&gt;&amp;"
+  → single line, no embedded "\n": the "fake pfb_validate: REJECT" text rides
+    inside detected= as inert text, never as its own greppable entry.
+
+RED -> GREEN EVIDENCE
+
+Red (pre-change code — inc edit stashed via `git stash push -- src/.../pfblockerng.inc`,
+both new test files present):
+
+  $ vendor/bin/phpunit --filter 'PfbValidateLogLineTest|PfbValidateLogTest'
+  ...
+  1) PfbValidateLogLineTest::testCanonicalLineForStageMime
+  Error: Call to undefined function pfb_validate_log_line()
+  ... (same error repeated for all 12 PfbValidateLogLineTest cases)
+  13) PfbValidateLogTest::testDefaultLevelWritesBothPfbLogAndErrorLog
+  Error: Call to undefined function pfb_validate_log_line()
+  14) PfbValidateLogTest::testLevelOneWritesPfbLogOnlyNotErrorLog
+  Error: Call to undefined function pfb_validate_log_line()
+
+  ERRORS!
+  Tests: 14, Assertions: 12, Errors: 14.
+
+Green (post-change code — `git stash pop` restores the inc edit):
+
+  $ vendor/bin/phpunit --filter 'PfbValidateLogLineTest|PfbValidateLogTest'
+  ..............                                                    14 / 14 (100%)
+  OK (14 tests, 29 assertions)
+
+GATE SUMMARY
+
+- vendor/bin/phpunit (full suite)              -> OK, 2049 tests, 16122 assertions,
+                                                   4 pre-existing skips (unrelated:
+                                                   an environment-dependent VFS-mtime
+                                                   test that only reproduces on Linux/CI).
+- php -l pfblockerng.inc                       -> "No syntax errors detected"
+                                                   (pre-existing E_DEPRECATED notices
+                                                   on 4 unrelated legacy functions,
+                                                   untouched by this phase).
+- vendor/bin/phpstan analyse --memory-limit=1G -> "[OK] No errors"
+                                                   (default 128M worker limit crashed
+                                                   the parallel run in this sandbox —
+                                                   an environment artifact, not a code
+                                                   issue; raised via CLI flag only, no
+                                                   repo config changed).
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> clean (no output).
+
+SCOPE — git diff --stat:
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc | 33 +++++++++++++++++++++++++++
+  1 file changed, 33 insertions(+)
+  (+ 2 new untracked test files: tests/php/PfbValidateLogLineTest.php,
+    tests/php/PfbValidateLogTest.php)
+No call site touched — pfb_filter(), pfb_download(), pfb_logger() are unchanged.
+Zero behaviour change for any existing code path (both new functions are unused
+as of this commit; nothing calls them yet).
+
+SELF-REVIEW (done before this handoff)
+- Both helpers sit in the pure-helper block, same doc-comment style as their
+  siblings (pfb_mime_normalise, pfb_archive_probe, etc.).
+- pfb_validate_log_line() is pure — no pfb_logger() call inside it; only
+  pfb_validate_log() calls pfb_logger().
+- Every stage token in the vocabulary (mime, structural, inner, member,
+  plaintext, entries) has its own exact-string oracle test.
+- The hostile-detail case covers all three required classes in one value: a NUL
+  byte, an embedded "\n", and HTML metacharacters (<, >, &) — plus an explicit
+  substr_count($result, "\n") === 1 assertion proving the single-line invariant.
+  Hostile feed/reason/stage each get their own one-case test (same code path).
+- The wrapper test proves level routing both ways: level 2 (default) writes to
+  BOTH pfB log and error log; level 1 writes to pfB log only and asserts the
+  error log stays EMPTY (not just "didn't check it") — a real before/after
+  transition assertion, not a single-ended check.
+
+COMMIT
+  52d6262f is the pre-existing tip (ADR text authoring). This phase's commit:
+  3006fcc8 — "pfblockerng: add canonical download-validation reject formatter (ADR-48 P1)"
+
+PUSH
+  Pushed directly to adr/48-download-validation-logging (no PR — Phase 1 of 4,
+  more phases follow on the same branch; the PR opens once the ADR's
+  implementation phases are complete, per the worktree + rebase-only-PR flow).
+
+WATCH-OUT FOR PHASE 2
+- pfb_logger() substitutes the literal token "NOW" wherever it appears in a
+  message. The canonical line built by pfb_validate_log_line() does not contain
+  that token by construction, but raw file(1) output passed as `detail` could
+  in principle contain the substring "NOW" (e.g. as part of a MIME string or
+  path). This is ACCEPTED, not special-cased — matches the ADR's explicit
+  instruction not to special-case it. Phase 2 should be aware that in the rare
+  case detail contains "NOW", pfb_logger()'s substitution will still fire on it
+  (same behaviour as every other existing pfb_logger() caller).
+- Phase 2 emits through pfb_validate_log() at the existing reject sites (MIME
+  gate, live inner-class checks, the four ADR-45 structural-probe sites). Smoke
+  greps in Phase 3 must match the RENDERED (escaped) form of feed/stage/reason/
+  detail, not the raw pre-escape values — see the escaping order above.
+- The §2 fork resolution (option a): pfb_filter()'s two reject sites need an
+  opt-in by-ref out-param carrying the raw detail + exit code so the
+  pfb_download() call site (which has $header and the stage in scope) can emit
+  the canonical line; callers that don't opt in keep pfb_filter()'s existing
+  ad-hoc message unchanged. Phase 2 owns designing that out-param; Phase 1 does
+  not touch pfb_filter() at all.

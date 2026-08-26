@@ -1,0 +1,152 @@
+================================================================================
+PHASE 6 PROMPT — Populate PFB_CHANGED_IP_ALIASES + PFB_CHANGED_DNSBL_GROUPS
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_12_Update_Hooks/ADR.md   (read §2 context row + §7 future-phase note FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/12` branch performing Phase 6 of ADR-12 — turn the reserved
+placeholder (today one var hardcoded to '') into TWO real, space-separated lists of what was
+UPDATED this pass, SPLIT BY SIDE: `PFB_CHANGED_IP_ALIASES` for the IP/firewall aliases and
+`PFB_CHANGED_DNSBL_GROUPS` for the DNSBL groups. DNSBL groups are NOT firewall aliases, so
+they get their own var. ADDITIVE: with no enabled `post` hook the pass stays byte-identical
+(the runner early-returns). Work inline on `adr/12`, one commit, then a PR (the change touches
+src/ + tests/ + README/CLAUDE/UI, so it is NOT the ADR-text carve-out).
+
+WHY THIS PHASE EXISTS
+ADR-12 shipped a single `PFB_CHANGED_ALIASES` as a STABLE RESERVED PLACEHOLDER (name present,
+value always '') because no pass-wide changed-alias signal was surfaced and the ADR forbade
+inventing tracking machinery. Investigation (this phase's premise) found the signal ALREADY
+EXISTS and is merely discarded: the pass builds an "updated alias lists" array IP-side and
+calls a per-group reload helper DNSBL-side. This phase SURFACES that existing fact — it does
+not build new tracking. The maintainer decision SPLITS it into two vars by side
+(PFB_CHANGED_IP_ALIASES = rename of the old PFB_CHANGED_ALIASES; PFB_CHANGED_DNSBL_GROUPS =
+new) because DNSBL groups are not firewall aliases.
+
+DECISION (settled with the maintainer — do not re-litigate)
+- SEMANTIC = "updated this pass" (feeds re-processed / list rebuilt / removed),
+  sourced from the signal the pass ALREADY computes — NOT a byte-level membership diff, and
+  NOT the rep-mode-inflated "reloaded into kernel" set (`$final_alias`).
+  * Rationale: this is rep-mode-INDEPENDENT (it reflects genuine feed changes, not
+    Reputation's "rewrite everything when anything changes"), so it is the honest cheap
+    signal. A literal member-level diff stays a documented FUTURE increment.
+- SCOPE = IP + DNSBL, on SEPARATE vars: `PFB_CHANGED_IP_ALIASES` (`pfB_*` firewall aliases)
+  and `PFB_CHANGED_DNSBL_GROUPS` (`DNSBL_*` groups). DNSBL groups are not firewall aliases.
+- `PFB_STATUS` is OUT OF SCOPE — it stays the `ok` reserved placeholder (no pass-wide
+  ok/partial/error accumulator exists; do not invent one).
+
+REQUIRED READING (inspect before editing)
+- FIRST, the prior handoffs:
+  .ADRs/ADR_12_Update_Hooks/RESULTS/02_Results.txt — the post context-builder + the exact
+  post call-site and the flag→env-var mapping. If missing, STOP and report.
+  .ADRs/ADR_12_Update_Hooks/RESULTS/05_Results.txt — the live-VM smoke module
+  (tests/smoke/test_smoke_hooks.py) + helpers, including the current present-and-EMPTY
+  assertions on the changed-alias vars you will flip.
+- .ADRs/ADR_12_Update_Hooks/ADR.md (§2 context row, §4 req 3, §7 DoD + the future-phase note).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc (line numbers approximate — VERIFY each):
+  * POST hook fire + ctx, where the changed-alias ctx key(s) live (~:11595, the array passed
+    to pfb_run_hooks('post', …)).
+  * IP "updated alias lists" accumulation: `$pfb_alias_lists[]` (~:10583 feed updated,
+    ~:9905/:9931 continent MD5-diff, ~:8311 alias removed) and `$pfb_alias_lists_all[]`
+    (~:10164 ALL active — used only under Reputation). Names are `pfB_<aliasname>_v4/_v6`.
+  * The pfctl-replace branches (~:11234 rule-changed, ~:11285 no-rule) and `$final_alias`
+    (~:11221/:11267) — READ them to understand why you must NOT source from `$final_alias`
+    (it intersects `$pfb_alias_lists_all` under rep mode = inflates to all active; and the
+    no-rule branch's `$final_alias` is guarded by `if (!$pfb['save'])` = unreliable at the
+    hook). Source from the UPDATED set instead.
+  * DNSBL per-group changed seam: `dnsbl_alias_update($mode, $alias, …)` (def ~:2167);
+    'update' callers ~:9509 (gated by `$pfb['aliasupdate']`), ~:4054 (gated by non-empty
+    `$pfb['tld_update']`), and the special always-rebuilt aliases ~:9542 DNSBL_IDN /
+    ~:9556 DNSBL_TLD_Allow / ~:9583 DNSBL_Regex. `$alias` is the `DNSBL_<group>` name.
+- src/usr/local/www/pfblockerng/pfblockerng_hooks.php (~:221 — the changed-alias help text).
+- src/usr/local/www/pfblockerng/pfblockerng.php (~:87 — the OTHER post-ctx site, the synthetic
+  runhooks manual-test path; keep both sites consistent, or confirm which path is live).
+- README.md (~:385 the env-var table row) and CLAUDE.md (the env-var contract sentence; only
+  PFB_STATUS stays a reserved placeholder).
+- tests/php/ (the PHPUnit hook-context test, if one exists) and tests/smoke/test_smoke_hooks.py
+  + tests/smoke/helpers.py (read_hook_env, the hooks fixture).
+- CLAUDE.md (worktree/PR flow, test-coverage rules: branch coverage + before/after).
+
+ACTION PLAN (ordered)
+1. TWO ACCUMULATORS: introduce TWO pass-scoped lists, split by side —
+   `$pfb['changed_ip_aliases']` (IP firewall aliases) and `$pfb['changed_dnsbl_groups']`
+   (DNSBL groups) — both initialised empty near the top of sync_package_pfblockerng (so each
+   is always defined at the hook). Each is the single source its post ctx key reads.
+2. IP side: populate `$pfb['changed_ip_aliases']` from the EXISTING updated-alias set. VERIFY
+   whether `$pfb_alias_lists` is populated independent of Reputation mode (the population sites
+   at ~:10583/:9905/:9931/:8311 appear unconditional within the "updated" branch — confirm by
+   reading). Use `$pfb_alias_lists` (the genuinely-updated set), NOT `$final_alias`. If — and
+   only if — you find `$pfb_alias_lists` is itself rep-gated, fall back to recording at the
+   two pfctl-replace sites and DOCUMENT the rep-mode inflation; otherwise the updated set is
+   the answer. De-dup; names are already `pfB_*_v4/_v6`.
+3. DNSBL side: record each `DNSBL_<group>` that genuinely changed into
+   `$pfb['changed_dnsbl_groups']`. Cleanest: inside `dnsbl_alias_update()` when
+   `$mode == 'update'`, append `$alias` to the DNSBL accumulator (this centralises all
+   'update' callers). CONFIRM every 'update' caller is change-gated (the IDN/TLD_Allow/Regex
+   specials rebuild when those features change — acceptable as "changed"); if any 'update'
+   call fires every pass regardless of change, exclude it or note it. De-dup.
+4. WIRE THE CTX: at the post fire site, replace the single changed-alias key with TWO keys:
+   `'CHANGED_IP_ALIASES' => implode(' ', array_unique($pfb['changed_ip_aliases']))` and
+   `'CHANGED_DNSBL_GROUPS' => implode(' ', array_unique($pfb['changed_dnsbl_groups']))`. The
+   runner prepends `PFB_` to ctx keys, so these yield exactly PFB_CHANGED_IP_ALIASES /
+   PFB_CHANGED_DNSBL_GROUPS. Apply the SAME two keys to the second ctx site in
+   pfblockerng.php:~87 (value '' there — no pass runs). Leave `'STATUS' => 'ok'` as-is.
+5. UI: pfblockerng_hooks.php:~221 — replace the single changed-alias help line with TWO lines:
+   PFB_CHANGED_IP_ALIASES ("space-separated list of IP firewall aliases (pfB_*) updated this
+   pass; empty when none") and PFB_CHANGED_DNSBL_GROUPS ("space-separated list of DNSBL groups
+   (DNSBL_*) updated this pass; empty when none"). Leave the PFB_STATUS help line unchanged
+   (still reserved).
+6. DOCS: README.md:~385 — split the single env-var table row into two rows (IP aliases +
+   DNSBL groups). CLAUDE.md — update the contract sentence to name both new vars (PFB_STATUS
+   remains the sole reserved placeholder). ADR.md §2/§6/§7 — reference the two vars. Keep
+   markdownlint clean.
+
+TESTS (branch coverage + before/after — both REQUIRED by CLAUDE.md)
+- PHPUnit (tests/php/): the DNSBL recording seam `dnsbl_alias_update()` IS unit-reachable —
+  assert `$pfb['changed_dnsbl_groups']` is EMPTY before, collects `DNSBL_<group>` on 'update',
+  and records NOTHING on 'disabled' (branch coverage + before/after). The IP merge + ctx
+  implode live inside sync_package_pfblockerng (not unit-reachable off-appliance) and are
+  covered by smoke below. Add a faithful double to tests/php/pfsense_doubles.php only if a
+  newly reached pfSense fn needs one.
+- Smoke (tests/smoke/test_smoke_hooks.py): the module asserts the changed-alias vars
+  PRESENT-and-EMPTY. Add/extend a case that (a) asserts BOTH PFB_CHANGED_IP_ALIASES and
+  PFB_CHANGED_DNSBL_GROUPS present-and-EMPTY after a no-op reload (before state), then (b)
+  changes a known IP feed AND a DNSBL group and asserts the `pfB_*` token APPEARS in
+  PFB_CHANGED_IP_ALIASES and the `DNSBL_*` token in PFB_CHANGED_DNSBL_GROUPS (after state).
+  Reuse the existing hooks fixture + read_hook_env helper. Keep the present-and-empty
+  no-op assertions as the OFF/before branch.
+
+CONSTRAINTS
+- ADDITIVE: do not alter any existing update/reload logic; only read the existing
+  changed-alias signals + assemble the string. No die()/exit(). PHP tabs / 8.3.
+- No enabled `post` hook ⇒ runner early-returns ⇒ byte-identical pass (unchanged guarantee).
+- PFB_STATUS stays 'ok' (reserved) — do NOT touch it this phase.
+- Do not invent new per-pass tracking state beyond the single accumulator list that merely
+  collects names the pass already decided were updated.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest → green/unchanged.
+- php -l + PHPStan (--memory-limit=1G) → clean. vendor/bin/phpunit → green.
+- npx markdownlint-cli2 → 0 errors (README/CLAUDE/ADR touched).
+- diff-read: the TWO accumulators are initialised once each, fed only from existing
+  updated-alias signals (IP `$pfb_alias_lists`) and the 'update' path of dnsbl_alias_update
+  (DNSBL), and read only at the post ctx site(s); no existing update logic changed; STATUS
+  untouched. A grep proves zero remaining `CHANGED_ALIASES`/`changed_aliases` (old name).
+
+EXPECTED RESULT
+A `post` hook on a pass that updates feed "MyList" and DNSBL group "ads" receives
+`PFB_CHANGED_IP_ALIASES="pfB_MyList_v4 pfB_MyList_v6"` and
+`PFB_CHANGED_DNSBL_GROUPS="DNSBL_ads"` (order/spacing not contractual); on a no-op pass it
+receives both as `""`. With no enabled hook the pass is byte-identical to today.
+
+COMMIT (single)
+    pfblockerng: ADR-12 P6 populate PFB_CHANGED_IP_ALIASES + PFB_CHANGED_DNSBL_GROUPS
+Push `adr/12` and open the PR (--body-file; seed from this prompt + ADR §2/§7). Rebase onto
+origin/devel first if behind.
+
+HANDOFF — write `.ADRs/ADR_12_Update_Hooks/RESULTS/06_Results.txt` (plain .txt)
+State: where the two accumulators are declared; the IP source actually used (and the rep-mode
+verification result); the DNSBL recording point + which 'update' callers were counted; the
+two ctx wiring keys + site(s); the UI/README/CLAUDE edits; the PHPUnit + smoke cases added
+(before/after + both IP and DNSBL); confirmation of the additive no-op; and a note that
+PFB_STATUS remains the sole reserved placeholder.

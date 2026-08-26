@@ -1,0 +1,196 @@
+name: Repo install (live pfSense VM)
+
+# ADR-17 — the release -> repository -> install flow, validated on the live ADR-04
+# pfSense VM. This is DISTINCT from the smoke suite (Smoke / ADR-04): the smoke
+# matrix validates pfBlockerNG's *runtime behaviour* (DNSBL blocking, etc.), while
+# this validates *distribution* — that a box installs our package from a
+# self-hosted, NONE-signed third-party `pkg` repository, lands every file, and that
+# cross-repo version precedence favours our build.
+#
+# FANS OUT OVER EVERY ci:true LEG, CE AND PLUS (ADR-24): the self-hosted repo must
+# install on Plus exactly as on CE, so — like smoke.yml — this reads the
+# ci-metadata CI matrix and runs one repo-install leg per ci:true entry in parallel
+# (fail-fast: false), with an AND-gate that is green only if every leg passed.
+#
+# REUSE, NOT DUPLICATION: each leg calls the smoke harness (smoke-single.yml as a reusable
+# workflow) so the VM boot / image pull / branch-.pkg build / SSH wiring are shared,
+# but selects the `repo` pytest marker (tests/smoke/test_repo_install.py) instead of
+# `smoke`. The `repo` tests are deselected from `-m smoke`, so the smoke gate never
+# runs them and this never runs the smoke matrix. Each leg builds its own ABI-matched
+# .pkg — pkg add refuses a cross-major-ABI package, and each version's FreeBSD major
+# comes from the ci-metadata version matrix.
+#
+# TRIGGERS: workflow_dispatch (always runs) + a nightly `schedule`. The scheduled run
+# is GATED — it only proceeds when `devel` actually moved since the previous nightly
+# (no point rebuilding the branch .pkg + booting VMs to re-test unchanged code; the
+# source publication dispatch runs only on a published Release). Not an every-PR gate (a
+# live VM under KVM is ~15 min/leg). Secrets + required config are smoke-single.yml's
+# (SMOKE_IMAGE_* / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY, plus the Plus-leg SMOKE_PLUS_*
+# identity secrets); `secrets: inherit` forwards them.
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 08:00 UTC nightly — staggered after ui-tests (05), version-tracker (06) and
+    # the smoke fan-out (07) so the KVM runs don't pile up. Gated on `devel` having changed.
+    - cron: "0 8 * * *"
+
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Gate (skip nightly if devel unchanged)
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Event '${{ github.event_name }}' — always runs."
+            exit 0
+          fi
+          since="$(gh run list --workflow=repo-install.yml --branch="${{ github.ref_name }}" \
+                     --status=success --limit 1 --json createdAt --jq '.[0].createdAt // ""' 2>/dev/null || true)"
+          if [ -z "$since" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "No prior successful run (or gh unavailable) — running."
+            exit 0
+          fi
+          n="$(gh api "repos/${{ github.repository }}/commits?sha=${{ github.ref_name }}&since=${since}" --jq 'length' 2>/dev/null || true)"
+          if [ -z "$n" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not count commits since ${since} (gh api failed) — running to be safe."
+          elif [ "$n" -gt 0 ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "${n} commit(s) to ${{ github.ref_name }} since the last successful run (${since}) — running."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No commits to ${{ github.ref_name }} since the last successful run (${since}) — skipping."
+          fi
+
+  prepare:
+    name: Read CI matrix
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      ci_matrix: ${{ steps.read.outputs.ci_matrix }}
+      leg_count: ${{ steps.count.outputs.leg_count }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Read CI matrix from ci-metadata
+        id: read
+        uses: ./.github/actions/read-version-matrix
+
+      - name: Count legs + assert every leg is ci:true
+        id: count
+        env:
+          CI_MATRIX: ${{ steps.read.outputs.ci_matrix }}
+        run: |
+          set -eu
+          COUNT=$(printf '%s\n' "$CI_MATRIX" | jq 'length')
+          echo "leg_count=${COUNT}" >> "$GITHUB_OUTPUT"
+          echo "Legs in CI matrix: ${COUNT}"
+
+          BAD_COUNT=$(printf '%s\n' "$CI_MATRIX" \
+            | jq '[.[] | select(.ci != true)] | length')
+          if [ "$BAD_COUNT" -ne 0 ]; then
+            echo "::error::CI GUARD: CI matrix contains ${BAD_COUNT} ci:false entries — aborting."
+            printf '%s\n' "$CI_MATRIX" | jq '.[] | select(.ci != true)'
+            exit 1
+          fi
+          echo "CI guard: OK — all ${COUNT} leg(s) are ci:true."
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::warning::CI matrix is empty — no images to repo-install-test."
+          fi
+
+  repo-install:
+    name: Repo install (${{ matrix.channel }} ${{ matrix.pfsense_version }})
+    needs: prepare
+    if: needs.prepare.outputs.leg_count != '0'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.prepare.outputs.ci_matrix) }}
+    uses: ./.github/workflows/smoke-single.yml
+    with:
+      pfsense_version: ${{ matrix.pfsense_version }}
+      image_name: ${{ matrix.image_name }}
+      mac: ${{ matrix.mac }}
+      abi: FreeBSD:${{ matrix.freebsd_major }}:amd64
+      php_version: ${{ matrix.php_version }}
+      py_flavor: ${{ matrix.py_flavor }}
+      pytest_marker: repo
+      # issue #2389: do NOT pass smoke_*_live_url here. This schedule is 08:00,
+      # before nightly publish at 09:00. A live Nightly URL would hit yesterday's
+      # tree or 404. Live Pages validation belongs in the pkg publication flow
+      # after ingestion.
+      extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
+    secrets: inherit
+
+  all-repo-install-passed:
+    name: All repo-install legs passed (AND gate)
+    runs-on: ubuntu-latest
+    needs: [gate, prepare, repo-install]
+    if: always()
+    steps:
+      - name: Assert every repo-install leg passed
+        env:
+          GATE_RUN: ${{ needs.gate.outputs.run }}
+          REPO_RESULT: ${{ needs.repo-install.result }}
+          LEG_COUNT: ${{ needs.prepare.outputs.leg_count }}
+        run: |
+          set -eu
+          echo "Nightly gate run    : ${GATE_RUN}"
+          echo "Repo-install result : ${REPO_RESULT}"
+          echo "CI matrix leg count : ${LEG_COUNT}"
+          echo ""
+
+          if [ "${GATE_RUN}" != "true" ]; then
+            echo "AND gate PASS — nightly gate skipped the run (devel unchanged); nothing to test."
+            exit 0
+          fi
+
+          if [ "${LEG_COUNT:-0}" -eq 0 ]; then
+            echo "::error::AND gate FAIL — CI matrix was empty (zero legs); nothing was tested."
+            exit 1
+          fi
+
+          case "$REPO_RESULT" in
+            success)
+              echo "AND gate PASS — all ${LEG_COUNT} repo-install leg(s) succeeded."
+              ;;
+            failure)
+              echo "::error::AND gate FAIL — one or more repo-install legs failed (result='failure')."
+              exit 1
+              ;;
+            skipped)
+              echo "::error::AND gate FAIL — repo-install job was skipped despite leg_count=${LEG_COUNT}."
+              exit 1
+              ;;
+            cancelled)
+              echo "::error::AND gate FAIL — repo-install job was cancelled; result is indeterminate."
+              exit 1
+              ;;
+            *)
+              echo "::error::AND gate FAIL — unexpected repo-install result '${REPO_RESULT}'."
+              exit 1
+              ;;
+          esac

@@ -1,0 +1,56 @@
+================================================================================
+PHASE 3 PROMPT — Publish wiring (cross-repo: pfBlockerNG/pkg publish.yml)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.1 retention-source row, §6 Phase 3)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 3 of 5. The catalog-generator change is
+done (Phase 2); this phase makes the PUBLISH actually feed the retained Releases in. Inline, one commit,
+push directly. NOTE: the live publish.yml lives in the SEPARATE pfBlockerNG/pkg repo — this phase lands
+the THIS-repo half (generator CLI/help/docs parity + a dry-run proof) and SPECIFIES the publish.yml edit
+for the pkg repo to apply.
+
+WHY THIS PHASE EXISTS
+The release retention policy lives in this repo's generator (Phase 2); the candidate provision lives in
+pfBlockerNG/pkg publish.yml (it must enumerate Releases, bucket prerelease vs stable, take the newest
+N/M, download their .pkg, and pass them + the --release-keep-* flags). Keep the two in step.
+
+REQUIRED READING
+- FIRST, read RESULTS/02_Results.txt — confirm the flags + how candidates are passed. If missing, STOP.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md  (§2.1, §2.3, §3 cross-repo risk)
+- scripts/build-repo-portable.py — the Phase-2 CLI; scripts/build-repo.sh (parity/help only).
+- pfBlockerNG/pkg .github/workflows/publish.yml — the release/devel/stable build steps + the
+  "resolve latest stable tag" step (the pattern to extend to N/M).
+- scripts/README.md / README.md — where the generator's flags are documented.
+
+ACTION PLAN (this repo)
+1. Finalize the generator's public contract for multi-release input (e.g. an --in-release DIR or
+   repeated --release-pkg PATH) so publish.yml can hand it N+M downloaded .pkg deterministically.
+2. Update scripts/README.md + README.md + `--help` so the retention flags + input are documented.
+3. Add an off-box dry-run test (tests/test_build_repo_portable.py) that feeds a synthetic set of
+   devel_1..devel_4 + stable_1..stable_4 and asserts the published tree keeps the newest N/M.
+4. SPECIFY the publish.yml change in this phase's HANDOFF (and as a comment block / docs note): the
+   gh-api Release enumeration, the prerelease bucketing, the newest-N/M selection + download, and the
+   generator invocation with --release-keep-devel/-stable. The actual publish.yml edit is applied in
+   pfBlockerNG/pkg (referenced, not in this repo's diff).
+
+CONSTRAINTS
+- This repo's diff = generator CLI/help/docs/tests ONLY (no pkg-repo YAML lives here).
+- Keep generator output deterministic; don't regress Phase-2 behaviour.
+
+VERIFICATION (must all pass)
+- python -m pytest / ruff / mypy tests/   → clean/green
+- diff-read: the dry-run test proves N/M retention end-to-end through the documented input path.
+
+EXPECTED RESULT
+The generator's multi-release input + flags are documented + dry-run-proven; the publish.yml change is
+fully specified for the pkg repo.
+
+COMMIT (single)
+    dev: document + dry-run the multi-release publish input (ADR-27 P3)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/03_Results.txt
+State: the exact generator input contract; the verbatim publish.yml steps to apply in pfBlockerNG/pkg
+(enumeration + bucketing + selection + invocation); dry-run numbers. Go-ahead for Phase 4.

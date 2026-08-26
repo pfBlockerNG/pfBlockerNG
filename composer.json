@@ -1,0 +1,20 @@
+{
+    "require-dev": {
+        "phpstan/phpstan": "^2.0",
+        "phpunit/phpunit": "^12.5",
+        "squizlabs/php_codesniffer": "^3.10"
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "PfBlockerNG\\PHPStan\\": "tests/phpstan/"
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit",
+        "phpstan": "phpstan analyse --no-progress --memory-limit=2G",
+        "phpcs": "phpcs -d memory_limit=1G"
+    }
+}

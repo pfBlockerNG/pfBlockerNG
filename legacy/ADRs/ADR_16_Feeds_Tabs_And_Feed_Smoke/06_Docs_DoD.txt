@@ -1,0 +1,67 @@
+================================================================================
+PHASE 6 PROMPT — Docs + Definition of Done + finalise affected-flow UI tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md   (read §7 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/16` branch performing Phase 6 (final) of ADR-16. Update the user/dev docs
+for the Feeds-page tabs + the new feed-load smoke, finalise §7, and set the ADR Status. Mostly
+docs; no behaviour change. Work in this ADR's `adr/16` worktree, one commit.
+
+WHY THIS PHASE EXISTS
+The Feeds page UX changed (IPv4/IPv6/DNSBL tabs) and a new smoke feed-set + tabs browser test
+exist; README/CLAUDE.md must reflect both, and the ADR Status + the §7 affected-flow UI-test list
+(which REPLACES the old maintainer manual smoke) must be finalised so it's clear Accept rides on
+those automated tests, not on a human.
+
+REQUIRED READING (inspect before editing)
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/05_Results.txt — the Part-C GO/DEMOTE outcome,
+  which formats are covered, and the ui_browser tabs test result (so the docs + §7 reflect reality).
+  If missing, STOP and report.
+- .ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/ADR.md (§7 DoD, reject criteria, the affected-flow UI
+  tests) and the RESULTS/01-05 handoffs (to summarise what actually landed).
+- README.md / CLAUDE.md — the sections describing the Feeds page (if any) and the smoke harness /
+  how to add a feed fixture or run the smoke.
+- CLAUDE.md "## Updating documentation" (docs-only CI carve-out; markdownlint compliance).
+
+ACTION PLAN (ordered)
+1. README.md: note the Feeds page is organized into IPv4/IPv6/DNSBL tabs (matching IP/DNSBL/Reports).
+2. CLAUDE.md (smoke section): document the mock-feed load smoke — where the sample fixtures live,
+   how `_MockFeedServer.register()` serves them, how to add a format, and the Part-C gate status
+   (gated vs dispatch-only per RESULTS/05).
+3. ADR.md: finalise §7 — tick the affected-flow UI tests that landed (per-type render, cross-type
+   non-clobber, feed-load smoke, the ui_browser tabs test), record the Part-C outcome (covered
+   formats / any demotion), and set Status → "Implemented (pending smoke test)" → "Accepted" once
+   those UI tests are green on the live VM. Keep the reject criteria. There is NO human manual-smoke
+   gate — confirm §7 reflects that.
+4. Make sure the §7 affected-flow UI-test list is concrete and matches the tests that actually landed
+   (names + markers + whether each is gated or dispatch-only).
+
+CONSTRAINTS
+- Docs + ADR text only (no src/ or test behaviour change). markdownlint-clean (blank lines around
+  headings/lists/fences; language on fences; single trailing newline).
+- ADR text (ADR.md + this RESULTS handoff) may push direct to `devel` per the CLAUDE.md carve-out;
+  README/CLAUDE.md are docs (CI-skipped) and go through the normal worktree flow. Keep it one commit.
+
+VERIFICATION (must all pass before the phase is done)
+- npx markdownlint-cli2 → 0 errors on the touched .md files.
+- python -m pytest → unchanged; the tree is otherwise untouched.
+- Read-through: README/CLAUDE.md describe the tabs + the feed smoke accurately; §7 matches reality.
+
+EXPECTED RESULT
+Docs reflect the Feeds tabs + the feed-load smoke + the tabs browser test; ADR-16 §7 is finalised
+with the affected-flow UI tests (no human manual-smoke gate); Status set; Accept rides on those
+automated tests being green on the live VM.
+
+COMMIT (single)
+    docs: finalize ADR-16 (Feeds tabs + feed-load smoke) + set Status (ADR-16 P6)
+In this ADR's `adr/16` worktree: `git fetch` + rebase onto the latest `origin/devel`. The
+README/CLAUDE.md doc changes land on `devel` (docs-only, CI-skipped); the ADR.md/RESULTS push
+direct per the carve-out. PR body via --body-file if a PR is used.
+
+HANDOFF — write `.ADRs/ADR_16_Feeds_Tabs_And_Feed_Smoke/RESULTS/06_Results.txt` (plain .txt)
+State: what docs changed; the final Status; the Part-C outcome (formats covered / demotion); the
+affected-flow UI tests that gate Accept (names + markers + green/pending on the live VM);
+confirmation the ADR is fully implemented in-repo and that no human manual-smoke gate remains.

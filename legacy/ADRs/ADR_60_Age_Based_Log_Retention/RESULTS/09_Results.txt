@@ -1,0 +1,350 @@
+ADR-60 Phase 9 -- Live-VM smoke test authoring + off-box validation -- RESULTS
+================================================================================
+
+VERDICT: DONE-WITH-DEVIATION (scope narrowed by the orchestrator -- see below)
+
+--------------------------------------------------------------------------------
+SCOPE NOTE (from the orchestrator, overriding the ADR's own Phase 9 prompt)
+--------------------------------------------------------------------------------
+This session had explicit scope narrowing: write the new live-VM smoke test
+file, update any stale docs, and get the full OFF-BOX suite green
+(phpunit/phpstan/phpcs/pytest) plus a collect-only confirmation the new test
+is discovered. Explicitly OUT of scope this session (no live pfSense VM
+available, deferred to the orchestrator):
+  - Actually running `python3 -m pytest tests/smoke -k log_age_retention`
+    against a real VM.
+  - Flipping ADR.md's Status line to Accepted.
+  - The cross-commit red-proof dispatch (pre-Phase-6 checkout fails / current
+    tip passes), which needs a disposable branch + live-VM dispatch.
+This handoff documents what WAS done under that narrowed scope and carries
+forward everything the orchestrator needs for the deferred live-VM step.
+
+--------------------------------------------------------------------------------
+REALITY CHECK AGAINST THE BRIEF (verified this session, before writing)
+--------------------------------------------------------------------------------
+1. Confirmed `tests/smoke/test_log_rotate.py` is GONE from the live tree
+   (Phase 7 deleted it, commit eb1f3121):
+     $ ls tests/smoke/test_log_rotate.py
+     ls: tests/smoke/test_log_rotate.py: No such file or directory
+   Retrieved the pre-deletion version for its template shape as instructed:
+     $ git show 3638c363~2:tests/smoke/test_log_rotate.py   (884 lines, full
+     file read) -- deployed_vm fixture, _get_inode/_get_file_owner/_seed_log/
+     _read_file helpers, chroot-path resolution, h.reload(vm, 'tick') idle-tick
+     pattern all confirmed still structurally valid against the CURRENT
+     tests/smoke/conftest.py + helpers.py (SmokeVM.ssh/ssh_argv, php_eval,
+     _php_str, reload() all unchanged in signature/behaviour) and the current
+     tests/smoke/test_smoke_tick.py / test_smoke_apply_on_change.py (same
+     deployed_vm + pfb_due_ledger_write_entry + idle-tick shape, still live and
+     passing today).
+
+2. Confirmed the REAL current log paths and CSV shapes from source, not the
+   brief's citation alone:
+     $ grep -n "'dnslog'\]\s*=\|'ip_blocklog'\]\s*=" pfblockerng.inc
+     $pfb['dnslog']      = "{$pfb['logdir']}/dnsbl.log";
+     $pfb['ip_blocklog']  = "{$pfb['logdir']}/ip_block.log";
+     $pfb['logdir'] = "{$g['varlog_path']}/pfblockerng"; g['varlog_path'] =
+       '/var/log' (stubs/pfsense/globals.php) -> matches the brief's stated
+       paths exactly (/var/log/pfblockerng/ip_block.log,
+       /var/log/pfblockerng/dnsbl.log, chrooted at
+       /var/unbound/var/log/pfblockerng/dnsbl.log).
+   - ip_blocklog real CSV shape (inc:12734/:12750/:12758): confirmed
+     `"{$ts_formatted},{$d[3]},{$d[4]},{$int},{$d[6]},{$d[8]},{$d[15]},
+     {$d[16]},{$d[18]},{$d[19]},{$d[20]},{$d[21]},{$dir},{$geoip},
+     {$pfb_alias},{$pfb_query[1]},{$pfb_query[0]},{$resolved_host},
+     {$hostname},{$asn},{$dup_entry}\n"` -- byte-matches the brief's quoted
+     12-field-then-details shape; timestamp is field 0.
+   - dnslog real CSV shape (pfb_unbound.py:2617-2633): confirmed
+     `"DNSBL-python,{timestamp},{q_name},{q_ip},{p_type},{b_type},{group},
+     {b_eval},{feed},{dupEntry},{q_type}"` -- 11 fields, timestamp at field 1
+     -- byte-matches the brief's quoted shape.
+   - Confirmed pfb_log_age_field_mode() (inc:2797) maps ip_blocklog ->
+     'field0' and dnslog -> 'field1', matching both the brief and the above.
+
+3. Confirmed the registry state Phase 6/7/8 left behind:
+     $ grep -n "log_max_days" pfblockerng_extra.inc
+     $registry['log_max_days_' . $log_type] = [... 'default' => '0', ...
+     'since' => '4.0.0']; -- all 10 types registered, default '0'.
+
+4. Read pfb_log_mgmt() (inc:2881) end-to-end: confirmed the 'nolimit' AND
+   agedays===0 continue-guard, the age-cutoff pass gated on `$ret === 0 &&
+   $agedays > 0`, and the chown-unbound re-application after every trim of
+   dnslog/dnsreplylog/unilog (inc:2936-2937) -- this is exactly what Case 2's
+   ownership assertion is proving live.
+
+5. Doc-staleness grep (re-run fresh, not trusted from the brief's own
+   citation):
+     $ grep -rniE 'log.?rotat|daily.*weekly.*monthly|scheduled.?reset|
+       log_reset_keep' README.md docs/ | grep -v '\.ADRs/'
+     docs/misc/adr-7day-review-2026-06-26.md:47   (pre-existing, dated audit
+       report -- already flagged+left alone by Phases 7/8; rewriting a past
+       audit finding fabricates history, per Phase 7/8's own precedent)
+     docs/release-notes/v4.0.0.alpha.2.md:29      ("Scheduled log rotation &
+       retention" feature bullet -- a DATED release-notes entry describing
+       what v4.0.0.alpha.2 genuinely shipped at the time; ADR-60 retires the
+       feature in a LATER alpha. Same "don't rewrite history" rule as the
+       audit doc above -- this is release-notes precedent, not a live
+       user-facing doc describing CURRENT behaviour.)
+     $ grep -niE "log.*(reset|rotat)|rotat.*log" README.md   -> no output
+       (README.md clean, exit 1)
+   No non-historical stale doc/help text found. No doc changes made.
+
+No contradiction with the brief found; no blocker. Proceeded per the
+narrowed action plan.
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 84113100b8ce79ec860de081189a963de7b9780a
+Branch: adr/60-age-based-log-retention (pushed directly -- no PR needed,
+  `git push origin adr/60-age-based-log-retention` succeeded, no rejection)
+
+- tests/smoke/test_log_age_retention.py (NEW, 452 lines)
+  New live-VM smoke module covering ADR-60's age-cutoff cap. Structure mirrors
+  the retired ADR-30 test_log_rotate.py's helper SHAPES (deployed_vm fixture,
+  _get_inode/_get_file_owner/_seed_log/_read_file/_resolve_dnslog_path), with
+  NEW seed content matching the REAL current per-type CSV formats (not the
+  old test's synthetic ADR-30-era content -- see DEVIATIONS):
+  - `deployed_vm` module fixture: deploys the branch .pkg, sets enable_cb=on +
+    pfb_interval=Disabled + seeds future dcc/bl ledger entries (idle-tick-only,
+    same rationale as the retired test and the still-live test_smoke_tick.py).
+  - `_reset_log_max_days` autouse fixture: resets log_max_days_ip_blocklog/
+    dnslog to '0' before every test -- CLAUDE.md self-encapsulation (no test
+    may depend on a sibling's cleanup).
+  - `_set_log_max_days()`: new config-set helper (adapts the retired
+    `_set_log_rotate_schedule()`'s shape for the numeric log_max_days_<type>
+    key).
+  - `_ip_blocklog_line()` / `_dnslog_line()`: new content builders producing
+    the REAL per-writer CSV shapes (see REALITY CHECK #2), not the old test's
+    ADR-30-era format.
+  - `_resolve_dnslog_path()`: chroot-path resolution, reused verbatim from the
+    retired test (mirrors pfb_log_mgmt()'s own resolution, inc:2907).
+  - Three test cases:
+    1. test_age_cutoff_trims_expired_lines_host_path_ip_blocklog -- host-path
+       CSV log, 2 expired (10d/8d old) + 2 current (3d/1d old) lines seeded,
+       log_max_days_ip_blocklog=7, tick, asserts before (verbatim seed intact)
+       and after (only the 2 current lines remain, in order) + inode
+       unchanged.
+    2. test_age_cutoff_trims_expired_lines_chrooted_dnslog_preserves_ownership
+       -- same shape on the chrooted python-side dnslog, PLUS asserts unbound
+       ownership held before AND after.
+    3. test_log_max_days_zero_leaves_only_line_count_trim -- control: log
+       seeded with 400/200-day-old lines, log_max_days_ip_blocklog left at
+       '0' (default), asserts the file is BYTE-IDENTICAL before/after (age
+       logic never engages) + inode unchanged.
+
+No doc changes: doc-staleness grep (REALITY CHECK #5) found only two
+dated/historical documents, neither of which describes current behaviour --
+left untouched per Phase 7/8's own precedent for the same class of finding.
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit 84113100)
+--------------------------------------------------------------------------------
+
+$ python3 -m pytest tests/smoke -k log_age_retention --collect-only
+=============== 3/602 tests collected (599 deselected) in 0.21s ================
+<Package tests><Package smoke><Module test_log_age_retention.py>
+  <Function test_age_cutoff_trims_expired_lines_host_path_ip_blocklog>
+  <Function test_age_cutoff_trims_expired_lines_chrooted_dnslog_preserves_ownership>
+  <Function test_log_max_days_zero_leaves_only_line_count_trim>
+(3 new tests discovered under the `smoke` marker; 602 total smoke-suite tests
+now collect where 599 did before this file existed.)
+
+$ python3 -m pytest tests/smoke --collect-only -q
+========================= 602 tests collected in 0.20s =========================
+(full smoke package still collects cleanly with the new module present.)
+
+$ ruff check tests/smoke/test_log_age_retention.py
+All checks passed!
+
+$ ruff format --check tests/smoke/test_log_age_retention.py
+1 file already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+(tests/smoke is excluded from mypy per pyproject.toml's `exclude =
+['^tests/smoke/']` -- same as every prior phase's ui_render edits; file count
+unchanged from Phase 8's baseline, consistent with that exclusion.)
+
+$ python3 -m pytest
+======================= 2436 passed, 4 skipped in 44.22s =======================
+(unchanged from Phase 8's baseline -- tests/smoke is excluded from default
+collection via pyproject.toml's testpaths/--ignore, so this new file does not
+appear here.)
+
+$ vendor/bin/phpunit
+............................................................. 2318 / 2372 ( 97%)
+......................................................         2372 / 2372 (100%)
+Time: 00:11.266, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2372, Assertions: 18574, PHPUnit Deprecations: 2, Skipped: 4.
+(byte-identical to Phase 8's baseline -- no PHP files touched this phase.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+Note: Using configuration file phpstan.neon.
+ [OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 scripts/check_appliance_python.py
+(exit 0, clean -- the new test file uses no `python3`/appliance-python calls;
+it drives the guest via PHP (php_eval/pfSsh.php) and POSIX sh (SmokeVM.ssh),
+per CLAUDE.md's hard constraint.)
+
+$ python3 scripts/check_comment_narration.py --diff origin/devel
+(exit 0, clean)
+
+$ python3 scripts/check_version_literals.py
+(exit 0, clean)
+
+$ python3 scripts/check_url_encoding.py
+(exit 0, clean)
+
+Pre-commit hook (ran automatically on `git commit`): ruff check, ruff format
+--check (199 files), no-appliance-python, version-literals, comment-narration
+all passed; mypy reported "skipped (tool not found)" in the hook's own
+sandboxed PATH -- re-run manually above via `python3 -m mypy tests/`, green.
+PHP checks (php -l/phpstan/phpcs) did not fire in the hook (no PHP files
+staged this commit) -- re-run manually above regardless, per the brief's
+mandatory gate list; all green.
+
+--------------------------------------------------------------------------------
+LIVE-VM EXECUTION: EXPLICITLY DEFERRED, NOT ATTEMPTED THIS SESSION
+--------------------------------------------------------------------------------
+Per the orchestrator's scope-narrowing (see SCOPE NOTE above), none of the
+following was attempted this session -- no live pfSense VM access:
+  - `python3 -m pytest tests/smoke -k log_age_retention` executed for real
+    against a booted VM (CE or Plus).
+  - The cross-commit red-proof dispatch: the new test failing against a
+    pre-Phase-6 checkout (no age-cutoff code exists at all) and passing on
+    the current branch tip. This needs a disposable branch checked out to a
+    pre-Phase-6 commit (e.g. `0f866cf3` or earlier, before `9e3b8b8f`
+    "pfblockerng: add log_max_days_<type> age-based log retention") plus a
+    live-VM dispatch -- both squarely the orchestrator's job per this
+    session's scope.
+  - Flipping ADR.md's Status line to Accepted (also explicitly reserved for
+    the orchestrator, gated on a real green live-VM CE+Plus run).
+This is an honest gap, not a silent one -- flagged exactly as the brief
+instructed, mirroring Phase 5/8's own precedent for the same class of
+deferral (no PFB_BOXES / VM pool available off-box).
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX (this phase's narrowed action-plan items)
+--------------------------------------------------------------------------------
+| Item | Status |
+| --- | --- |
+| Seed ip_blocklog (PHP-side, host path) + dnslog (python-side, chroot path), mixed expired/current, REAL CSV shapes | DONE -- _ip_blocklog_line()/_dnslog_line(), verified against inc:12734-12758 and pfb_unbound.py:2617-2633 |
+| Set log_max_days_<type> via config, trigger tick | DONE -- _set_log_max_days() + h.reload(vm, 'tick') |
+| Assert before-state (all seeded lines present) AND after-state (only non-expired remain) | DONE -- both Case 1 and Case 2 assert content_before == seed, then content_after == kept |
+| Assert inode unchanged, both host-path and chroot-path | DONE -- Case 1 (ip_blocklog) + Case 2 (dnslog chroot) |
+| Assert unbound ownership preserved for chrooted dnslog | DONE -- Case 2, before AND after |
+| Control case: log_max_days_<type>='0' untouched (line-count-only, unchanged) | DONE -- Case 3, byte-identical assertion |
+| Update stale doc/help text referencing old scheduled-reset feature | DONE -- none found beyond two dated/historical documents, left untouched (see REALITY CHECK #5) |
+| `pytest tests/smoke -k log_age_retention --collect-only` | DONE -- 3 tests collected, pasted above |
+| Full off-box suite (phpunit/phpstan/phpcs/pytest) green | DONE -- all pasted above, byte-identical to Phase 8's baseline plus the 3 new smoke-suite-only tests |
+| Live-VM execution (actual run + red-proof dispatch) | DEFERRED to orchestrator, per this session's scope narrowing (no VM access) |
+| Flip ADR.md Status -> Accepted | DEFERRED to orchestrator, per this session's scope narrowing |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. Seed-content design: the retired ADR-30 test_log_rotate.py's seed constants
+   (_SEED_IP_BLOCKLOG etc.) used a 3-space-token, no-CSV-details format
+   specific to that ADR's calendar-reset mechanism (which never parsed
+   per-line timestamps -- it only truncated to empty or kept the last K
+   lines). This phase's seed content is NEW, written from scratch to match
+   the REAL current per-type CSV shapes this ADR's Phases 2-4 established
+   (verified against pfblockerng.inc/pfb_unbound.py source, not assumed --
+   see REALITY CHECK #2), because the whole point of this live-VM case is to
+   exercise Phase 6's real per-line timestamp parser (pfb_log_line_timestamp/
+   pfb_log_age_cutoff) on realistic input. Filler CSV fields beyond the
+   timestamp (interface names, protocol, hostnames) are semantically inert
+   placeholders (RFC 5737 TEST-NET-1 IPs, "Unknown"/"pfB_TestList" labels) --
+   the age-cutoff parser only reads field 0 (ip_blocklog) / field 1 (dnslog),
+   so filler-field realism beyond "looks like a real CSV row" was not
+   required and would have added no coverage value (ponytail: YAGNI).
+2. Reused `h.unique_domain()` for the dnslog test's q_name values instead of
+   a fixed literal -- not strictly required (a byte-identity harness may use
+   fixed inert literals per the fixtures policy), but free and avoids any
+   theoretical cross-run collision on a shared module VM; costs nothing.
+3. Added a `_reset_log_max_days` autouse fixture (not present in the retired
+   ADR-30 test, which relied only on per-test try/finally). This is a
+   strengthening, not a weakening: CLAUDE.md's test-coverage mandate
+   ("Self-encapsulated — never order-dependent... Reset per-test state
+   explicitly with an autouse fixture") applies here just as it did to
+   test_smoke_tick.py's `_reset_ledger`, and this module's 3 cases share a
+   module-scoped VM the same way.
+4. Kept the module-scoped `deployed_vm` fixture DNSBL-free (no
+   ensure_dnsbl_vip/use_system_dns_upstream), matching the retired ADR-30
+   test's own reasoning verbatim: log retention needs neither DNSBL nor feed
+   infrastructure. Added `h.collect_host_diagnostics(smoke_vm)` in a
+   try/finally around the fixture body (the retired test had none) to match
+   the CURRENT house convention seen in test_smoke_tick.py/
+   test_smoke_apply_on_change.py (both post-date the retired test).
+None of the above weakens any CLAUDE.md MUST rule; all are additive/
+strengthening relative to the retired template.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR THE ORCHESTRATOR'S LIVE-VM DISPATCH STEP
+--------------------------------------------------------------------------------
+- Exact filter to dispatch: `python3 -m pytest tests/smoke -k log_age_retention
+  -m smoke --override-ini="addopts="` (or the project's current
+  smoke-fanout.yml `pytest_filter="log_age_retention"` input) -- runs exactly
+  the 3 new tests, nothing else, on the CE + Plus fan-out.
+- Config keys the test manipulates: `log_max_days_ip_blocklog`,
+  `log_max_days_dnslog` (both under
+  installedpackages/pfblockerng/config/0), plus the pre-existing
+  `enable_cb`/`pfb_interval` (Disabled) and the due-ledger entries for
+  `dcc`/`bl` (all in the module fixture, unchanged from the retired ADR-30
+  test's own setup).
+- Log files touched: `/var/log/pfblockerng/ip_block.log` (host path) and
+  `/var/log/pfblockerng/dnsbl.log`, resolved to
+  `/var/unbound/var/log/pfblockerng/dnsbl.log` when the chroot dir exists
+  (the harness creates it if absent, mirroring pfb_log_mgmt()'s own
+  resolution).
+- What a GREEN run actually proves (per test):
+    1. test_age_cutoff_trims_expired_lines_host_path_ip_blocklog -- the
+       age-cutoff pass drops exactly the lines older than the configured
+       cutoff from a HOST-path CSV log, keeps the rest in order, and the
+       trim is IN-PLACE (inode unchanged).
+    2. test_age_cutoff_trims_expired_lines_chrooted_dnslog_preserves_ownership
+       -- the same age-cutoff pass, run against the python-side log through
+       Unbound's chroot resolution, ALSO preserves the file's `unbound`
+       ownership across the trim (the chown-unbound re-application in
+       pfb_log_mgmt() actually fires and the chroot path is correctly
+       resolved on a live box).
+    3. test_log_max_days_zero_leaves_only_line_count_trim -- with the
+       default '0' (off) value, even a log full of very old lines is left
+       completely untouched (byte-identical) by a tick -- proving zero
+       behaviour change for any operator who never opts in (§2.3 item 2).
+  Together these 3 cases are the live-VM proof for §2.3 contract items 1
+  (inode+ownership preserved on every trim path) and 2 (default '0' = zero
+  behaviour change); items 3 (nolimit independence), 4 (every log line
+  carries an ISO timestamp), 5 (pfb_failures() still works), and 6 (a failed
+  tail/cat never blanks the log) were already covered by earlier phases'
+  off-box unit/integration tests per the ADR §2.5 coverage matrix and are
+  NOT re-exercised live here (out of this phase's narrowed scope).
+- The cross-commit red-proof dispatch (mandatory before this phase can be
+  considered fully done per the ADR's own Phase 9 prompt's TEST MODE
+  section): check out the new test file against commit `0f866cf3` (the tip
+  just before Phase 6's `9e3b8b8f` "add log_max_days_<type> age-based log
+  retention" landed) or earlier -- expect all 3 cases to FAIL (no
+  log_max_days_<type> registry entry, no age-cutoff code path at all, so
+  `_set_log_max_days()`'s config write is a no-op the code never reads, and
+  the log is either untouched (Case 1/2 would fail their "expired lines
+  gone" assertion) or already byte-identical for the wrong reason). Then
+  check out the current branch tip and confirm all 3 PASS. Neither run was
+  possible this session (no VM).
+- Doc-staleness grep is genuinely clean of any NON-historical stale text;
+  no further doc action needed for this phase.
+- ADR.md's Status line stays "Proposed" until the orchestrator's own live-VM
+  CE+Plus run goes green -- this handoff does NOT flip it.
+
+--------------------------------------------------------------------------------
+FINAL ADR STATUS
+--------------------------------------------------------------------------------
+Unchanged: "Proposed" (2026-07-08). Flips to Accepted only after the
+orchestrator's real live-VM CE+Plus fan-out run goes green for this phase's 3
+cases (per this repo's "ADR acceptance — automated tests, not a manual
+sign-off" rule) -- Phase 10 remains a separate, non-gating follow-on
+regardless.

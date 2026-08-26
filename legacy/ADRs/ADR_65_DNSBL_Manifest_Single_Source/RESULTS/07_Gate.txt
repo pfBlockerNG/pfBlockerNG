@@ -1,0 +1,75 @@
+ADR-65 Phase 7 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (verifier verdict PASS, zero blockers; no orchestrator
+remediation needed)
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently)
+--------------------------------------------------------------------------------
+- PATH-shimmed sh scripts/agent/run-gates.sh --diff origin/devel: every GATE
+  PASS line (pytest/ruff x2/mypy/php -l x16/phpunit/phpstan/phpcs/
+  markdownlint); the www/ Tier-A reminder is branch-cumulative (this phase's
+  own diff touches zero www/ files -- confirmed by git diff --stat).
+- pytest --collect-only: 71 tests across the three alerts ui modules; 51 in
+  the pre-edit baseline scope -- IDENTICAL count (renames only, no
+  add/remove).
+- Narration/version-literal checkers: exit 0. check_retired_tokens.py:
+  reported honestly; the single count drift ('Domain' 270->269) mechanically
+  attributed to two intervening dev-only devel commits, zero new stragglers.
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE
+--------------------------------------------------------------------------------
+Behaviour-preserving test maintenance; no off-appliance ui_e2e harness
+exists. The off-appliance oracle of the same contract
+(tests/php/AlertsDnsblLoggedFieldsRenderTest.php) is unmodified (empty diff)
+and green; the reconciled ui_e2e rows execute on the deferred CE+Plus
+acceptance run -- recorded, never claimed run.
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read the full diff)
+--------------------------------------------------------------------------------
+- Six D-tests renamed + reconciled to the logged-fields contract (names state
+  the new pinned outcome, e.g. test_d1_cache_bait_ignored_renders_logged_
+  fields, test_d4_total_miss_renders_logged_fields_not_unknown); the
+  filterdnsbl axis re-pinned to the logged value; fixture seeding (cache/
+  data/zone bait) KEPT as adversarial bait proving the page ignores drift
+  state -- PASS.
+- test_d5 upstream + the upstream-guard test + IP-side rows byte-untouched
+  (Semantic 8) -- PASS.
+- Sweep: two stale test_smoke_matrix.py docstrings (claiming tld_analysis
+  writes pfb_py_data.txt) reconciled; the enumerated leave-alone sites
+  (tolerant diagnostic harvesters, past-tense fixtures, synthetic widget
+  ledger literals) each justified -- PASS.
+- Test honesty: every polarity flip strengthens or matches the new contract;
+  bait tokens verified non-substrings of logged tokens (assertions cannot be
+  vacuously satisfied) -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+Six tests + the filter axis + the sweep rows all ticked in the handoff;
+verifier confirmed each against the diff. Deferral: on-box execution -> the
+acceptance run (standing).
+
+--------------------------------------------------------------------------------
+BRIEF VALIDATION (orchestrator, non-vacuous)
+--------------------------------------------------------------------------------
+The brief's enumerations (six test names + line ranges, filter-axis sites,
+collection baseline 51) all matched the live tree per the implementer's
+zero-ESCALATE report and the verifier's independent collect-only run. No
+drift_flags.
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Live-VM ui_e2e execution: by design -- rides the orchestrator's CE+Plus
+  acceptance run after phases 8-9.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+Run PAUSED here by owner directive (2026-07-14): phases 8-9 + the acceptance
+run wait for the briefing-process optimization; next briefs move to Opus 4.8.
+Resume: /adr-phase 65 all (picks up at phase 8).

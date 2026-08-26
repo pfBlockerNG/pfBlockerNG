@@ -1,0 +1,68 @@
+================================================================================
+PHASE 9 PROMPT — Landing "EOL pfSense versions" section (CE + Plus tables)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.4 Landing bullet, §6 Phase 9)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 9 of 10. Surfaces the EOL (route-only)
+versions to humans on the self-hosted Pages landing page: a new "EOL pfSense versions" section with
+ONE table per edition (CE and Plus), one row per EOL pfSense version → the last/highest .pkg we still
+serve for it. scripts/ + tests only (no src/, so no ui_render gate). Inline, one commit, push.
+
+WHY THIS PHASE EXISTS
+An operator on an EOL pfSense box needs to SEE that we still serve it and at which last build. The
+landing page already renders per-edition tables + "Older releases"/"Older nightlies" disclosures; this
+adds a parallel, explicit EOL section so the route-only set is human-discoverable.
+
+REQUIRED READING
+- FIRST read RESULTS/08_Results.txt (and 06/07) — confirm how a route-only version is identified
+  (the matrix `role`) and that its catalog/served .pkg live at release/<varver>/. If unclear, STOP.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md §2.4 (Landing bullet) + §6 Phase 9.
+- scripts/gen_landing.py:
+  - _edition_table_html(rows) (~line 385) — the per-edition table (columns pfSense | Channel | Version |
+    ABI | PHP | Python | Published | Commit | Size) + the row-builder; mimic its shape.
+  - _packages_html(pkgs, matrix) (~line 407) — orchestrates per-edition <h3> + table + disclosures.
+  - build_edition_sections / _join_matrix / _edition_key (~330-382) — how a row is joined to a matrix
+    entry and normalised to an edition key (CE/Plus); how the generator learns which versions/editions
+    exist (matrix + the catalog tree).
+  - The Part-1 "Older releases" functions (older_releases / _older_releases_by_edition /
+    _older_releases_table_html / _older_releases_details) — the closest pattern to copy.
+  - write_site(site, base, addrepo, matrix) — the matrix is the source of role/edition truth.
+- tests/test_gen_landing.py — pure-helper + integration style (manifest reader injected, no live .pkg);
+  the "Older releases"/"Older nightlies" test cases to mirror.
+
+ACTION PLAN
+1. gen_landing.py: add an "EOL pfSense versions" section, one table per edition (CE, Plus). A version is
+   EOL iff its matrix entry has role == "route-only". For each such version, the row = that pfSense
+   version → the last/highest served .pkg version (version-sorted newest), with commit/date, mimicking
+   _edition_table_html columns (drop columns that don't apply, e.g. Channel, to match the existing
+   "Older …" table shape). Place the section deterministically (e.g. after the live per-edition tables).
+   Keep output mtime-pinned + deterministic (ADR-17). Reuse the matrix-join + table helpers; don't
+   duplicate row HTML.
+2. Tests (tests/test_gen_landing.py), CE + Plus, before/after:
+   - GIVEN a matrix with a route-only CE version + a route-only Plus version (+ live build entries) and
+     served .pkg for each: THEN the EOL section lists exactly those versions under the correct edition,
+     each showing its newest served .pkg (assert the live build versions are ABSENT from the EOL section).
+   - Empty case: no route-only entries ⇒ NO "EOL pfSense versions" section emitted (before-state).
+   - CE/Plus split: a CE route-only version appears only in the CE table, Plus only in Plus.
+
+CONSTRAINTS
+- Python 3.11+, stdlib; deterministic, mtime-pinned. Type-hint new funcs. markdownlint/ruff clean.
+- No src/ — pure scripts/ + tests/. Match neighbouring gen_landing style + naming.
+
+VERIFICATION (must all pass)
+- python -m pytest / ruff check . / ruff format --check / mypy tests/  → green/clean.
+- Render the landing HTML from a synthetic site+matrix locally; eyeball the CE + Plus EOL tables.
+
+EXPECTED RESULT
+The landing page shows an "EOL pfSense versions" section — one table per edition — listing each EOL
+version and the last .pkg still served for it.
+
+COMMIT (single)
+    dev: surface EOL (route-only) pfSense versions on the landing page (ADR-27 P9)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/09_Results.txt
+State: the new gen_landing functions + where the section renders; how EOL is derived (role==route-only)
+and how the last-served .pkg is chosen; the CE/Plus + empty-case tests. Go-ahead for Phase 10.

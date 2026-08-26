@@ -1,0 +1,228 @@
+================================================================================
+PHASE 2 PROMPT — lenient toggle + RFC 3986 validation + migration + skip logging
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md
+     (read §2.1 toggle, §2.2 migration, §2.3 logging, §2.4 validation rule,
+      §2.5 decision table, §4 requirements FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/22-dnsbl-parser-scheme-anchored-host` branch performing Phase 2
+of ADR-22. This single phase delivers the whole behaviour change behind ONE global
+toggle: (a) the `pfb_dnsbl_lenient` config key + DNSBL-tab checkbox, (b) RFC 3986
+scheme validation in `pfb_dnsbl_strip_scheme()` gated on that toggle, (c) the call-site
+wiring + per-line and per-feed skip logging, and (d) the upgrade migration. There is NO
+per-feed selector and NO known-affected-feeds list (the 2026-06-15 design revision
+removed both — see ADR §1.6). Inline on the branch, one commit, push, update the PR.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/01_Results.txt — confirm the
+  helper is extracted, oracle tests are green, the exact helper location + call site line.
+  If missing, Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/ADR.md — §2.1 (toggle + the trivial
+  `strict = lenient !== 'on'` resolution), §2.2 (migration), §2.3 (skip logging), §2.4
+  (validation rule), §2.5 (decision table), §2.6 (contract), §4 (requirements).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  • The DNSBL General Settings config-key read/default convention — read nearby keys
+    (e.g. `pfb_dnsbl`, `pfb_dnsbl_ip`) to match the exact config path + style for the new
+    `pfb_dnsbl_lenient` key. Do NOT guess the path; read it.
+  • The download loop + the `pfb_dnsbl_strip_scheme()` call site (from Phase 1), and the
+    surrounding variables for the current feed (the feed header/label and the feed URL,
+    for the log messages).
+  • `pfb_parsed_fail()` signature (the per-line parse-error sink) and `pfb_logger()` (or
+    whatever the file uses to write the main pfBlockerNG log) — read a couple of existing
+    call sites of each to copy the idiom.
+- src/usr/local/www/pfblockerng/pfblockerng_general.php — find the DNSBL-tab settings
+  group to add the checkbox.
+- CLAUDE.md — "PHP" standards (tabs; PHP 8.3; help text "brief yet clear"); "Naming".
+
+ACTION PLAN (ordered)
+
+1. ADD the `pfb_dnsbl_lenient` global config key + DNSBL-tab checkbox:
+
+   UI (General Settings → DNSBL tab, in `pfblockerng_general.php`):
+   - Add a checkbox field `pfb_dnsbl_lenient` labelled "Lenient feed parsing" with help
+     text along these lines (match neighbouring help length/tone — don't out-prose them):
+       "When enabled, DNSBL feed lines are parsed permissively: any scheme:// is stripped
+        and URL paths are removed. When disabled (strict), lines with an invalid scheme
+        (e.g. 123://) or a URL path are skipped and logged. New installs default to
+        disabled (strict); upgraded installs keep the permissive behaviour."
+   - Default for a NEW install is unchecked (OFF / strict) — i.e. do NOT pre-check it.
+
+   Read path (in `pfblockerng.inc`, where DNSBL keys are read/defaulted):
+   - `$pfb['dnsbl_lenient'] = (config value === 'on') ? 'on' : 'off';`
+     Match the exact config-read pattern of neighbouring keys (read the file first).
+
+2. CHANGE `pfb_dnsbl_strip_scheme()` to `string|false` with a `bool $strict = false`
+   parameter implementing ADR §2.4 (the default `false` keeps the Phase-1 oracle tests
+   green without modification):
+
+   ```php
+   function pfb_dnsbl_strip_scheme(string $line, bool $strict = false): string|false {
+       $pos = strpos($line, '://');
+       if ($pos === FALSE) {
+           return $line;
+       }
+       if ($strict) {
+           $scheme = substr($line, 0, $pos);
+           if (!preg_match('/^[a-zA-Z][a-zA-Z0-9+\-.]*$/', $scheme)) {
+               return FALSE;
+           }
+       }
+       $remainder = substr($line, $pos + 3);
+       if ($strict) {
+           // A single trailing '/' is the root path — normalise it away.
+           if (str_ends_with($remainder, '/')) {
+               $remainder = substr($remainder, 0, -1);
+           }
+           // Any remaining '/' means an actual path is present — reject.
+           if (strpos($remainder, '/') !== FALSE) {
+               return FALSE;
+           }
+       }
+       return $remainder;
+   }
+   ```
+
+3. WIRE the call site in the non-lite block — the trivial single-toggle resolution, the
+   skip + per-line log, and a per-feed skip COUNTER for the summary warning:
+
+   ```php
+   $strict = ($pfb['dnsbl_lenient'] !== 'on');
+   $stripped = pfb_dnsbl_strip_scheme($line, $strict);
+   if ($stripped === FALSE) {
+       pfb_parsed_fail($header, $line, $oline, $pfb['dnsbl_parse_err']);
+       $pfb_scheme_skipped++;   // per-feed counter (init to 0 before the line loop)
+       continue;
+   }
+   $line = $stripped;
+   ```
+
+   (Adapt `$header`/`$oline`/`$pfb['dnsbl_parse_err']` to the real variable names at the
+   call site — read the surrounding loop. Replace the old
+   `// If 'http|https|telnet|ftp://' found, remove` comment with one that states the
+   ADR-22 behaviour: any valid RFC 3986 scheme accepted; invalid scheme / path → skip+log.)
+
+4. EMIT the per-feed summary WARNING (ADR §2.3) — AFTER the per-line loop for the feed,
+   once, only when something was skipped, to the MAIN pfBlockerNG log (not per line):
+
+   ```php
+   if ($pfb_scheme_skipped > 0) {
+       pfb_logger("[ DNSBL ] {$feed_label}: {$pfb_scheme_skipped} line(s) skipped — strict parsing rejected an invalid scheme or URL path (see DNSBL parse-error log)\n", 1);
+   }
+   ```
+
+   (Use the real feed label/header variable and the file's actual main-log function +
+   level argument — copy an existing `pfb_logger()` call's signature. Lenient mode never
+   increments the counter, so this stays silent — byte-identical to today.)
+
+5. IMPLEMENT the upgrade migration in `pfblockerng_install.inc` (ADR §2.2):
+
+   On upgrade, if an EXISTING pfBlockerNG config section is present but lacks
+   `pfb_dnsbl_lenient`, set it `'on'` (preserve permissive behaviour). A first-ever
+   install (no prior config section) must NOT be migrated — it keeps the new-install
+   default (OFF/strict). Never overwrite an existing value.
+
+   ```php
+   // ADR-22: preserve permissive DNSBL scheme parsing for EXISTING installs on upgrade.
+   // (A fresh install has no prior config section and keeps the strict default.)
+   if (<existing pfBlockerNG config[0] present> &&
+       !isset($config[...]['pfb_dnsbl_lenient'])) {
+       $config[...]['pfb_dnsbl_lenient'] = 'on';
+       write_config('pfBlockerNG: preserve permissive DNSBL parsing for existing install (ADR-22 migration)');
+   }
+   ```
+
+   Adapt the config path + the "existing install" predicate to match the adjacent
+   migration blocks in `pfblockerng_install.inc` — read them first; follow the same
+   detection pattern they use to tell an upgrade from a first install.
+
+6. WRITE PHPUnit tests (extend the Phase-1 class or add a new one):
+
+   Helper — lenient (strict=false), current behaviour preserved:
+   a. `test_invalid_scheme_passthrough_when_lenient`: '123://evil.com', false → 'evil.com'
+   b. `test_empty_scheme_passthrough_when_lenient`:   '://evil.com',   false → 'evil.com'
+   c. `test_path_passthrough_when_lenient`: 'http://evil.com/path', false → 'evil.com/path'
+
+   Helper — strict (strict=true), new behaviour (before-state comment citing the lenient
+   result for the transition pairs):
+   d. `test_invalid_scheme_rejected_when_strict`: '123://evil.com', true → false
+   e. `test_empty_scheme_rejected_when_strict`:   '://evil.com',   true → false
+   f. `test_special_chars_scheme_rejected_when_strict`: '!!bad://evil.com', true → false
+   g. `test_path_rejected_when_strict`: 'http://evil.com/path', true → false
+   h. `test_trailing_slash_normalised_when_strict`: 'ftp://ftp.evil.com/', true → 'ftp.evil.com'
+   i. `test_path_after_root_slash_rejected_when_strict`: 'http://evil.com/path/', true → false
+
+   Regression guards (BOTH states must pass — valid schemes always accepted):
+   j. `test_valid_scheme_accepted_when_lenient`: 'evil://evil.com', false → 'evil.com'
+   k. `test_valid_scheme_accepted_when_strict`:  'evil://evil.com', true  → 'evil.com'
+   l. `test_compound_scheme_when_strict`: 'pkg+https://evil.com', true → 'evil.com'
+   m. `test_no_scheme_when_strict`: 'evil.com', true → 'evil.com'
+
+   Toggle resolution (the call-site predicate — extract `strict = lenient !== 'on'` into a
+   tiny pure helper if that is the simplest testable seam, else assert the expression):
+   n. `test_strict_resolves_true_when_lenient_off`: lenient 'off' → strict true
+   o. `test_strict_resolves_false_when_lenient_on`: lenient 'on'  → strict false
+
+   Migration (assert BEFORE then AFTER):
+   p. `test_migration_sets_lenient_on_for_existing_install_missing_key`: existing config
+      section, no `pfb_dnsbl_lenient` → after migration === 'on'.
+   q. `test_migration_does_not_overwrite_existing_value`: existing 'off' → stays 'off'.
+   r. `test_migration_skips_fresh_install`: no prior config section → key NOT written
+      (new-install strict default preserved).
+
+   Skip logging — prove strict skips are recorded and lenient is silent. Use the doubles
+   in tests/php/pfsense_doubles.php (add a faithful `pfb_logger`/`pfb_parsed_fail` double
+   capturing into a $GLOBALS array if one is not already present), then:
+   s. `test_strict_skip_is_logged`: a strict skip records a parse-error-log line AND a
+      per-feed main-log WARNING containing the count + feed label.
+   t. `test_lenient_emits_no_new_log`: the same malformed input under lenient produces no
+      parse-error line and no WARNING (byte-identical to today).
+   Note: if the skip/log path is only reachable through the download loop, extract the
+   smallest pure seam needed (e.g. a function that takes a line + strict flag and returns
+   [kept|skipped] + the log side-effect) rather than asserting nothing — coverage theater
+   is not acceptable (CLAUDE.md "Test coverage").
+
+7. CONFIRM the Phase-1 oracle tests still pass unmodified (helper default `$strict=false`).
+8. RUN `php -l` on every modified PHP file → no syntax errors.
+9. RUN `vendor/bin/phpunit` → green.
+10. RUN `python -m pytest` → unchanged.
+11. RUN `ruff check . && ruff format .` → clean.
+
+CONSTRAINTS
+- ONE global toggle only — do NOT add a per-feed selector and do NOT add a known-affected
+  feeds list (both were removed in the ADR §1.6 revision).
+- New-install default is OFF (strict); migration sets EXISTING installs to 'on'.
+- The Phase-1 oracle tests must pass WITHOUT modification.
+- Per-feed summary WARNING is emitted ONCE per feed (not per skipped line).
+- PHP tabs; PHP 8.3; `str_ends_with()` is fine (8.0+).
+- Modify only `pfblockerng.inc`, `pfblockerng_general.php`, `pfblockerng_install.inc`,
+  `tests/php/` (+ `tests/php/pfsense_doubles.php` if a log double is needed).
+- ADR-21 `||`/`@@||` guard: NOT touched. `pfb_filter()`: NOT touched.
+
+VERIFICATION (must all pass before the phase is done)
+- `php -l` on each modified PHP file → no syntax errors.
+- `vendor/bin/phpunit` → green (Phase-1 oracles + all new tests).
+- `python -m pytest` → unchanged.
+- `ruff check . && ruff format .` → clean.
+- `git diff origin/devel...HEAD` shows ONLY the files listed in CONSTRAINTS (+ Phase-1 files).
+
+EXPECTED RESULT
+`pfb_dnsbl_lenient='on'` preserves today's parsing exactly (no skips, no new log);
+unchecked (strict) validates schemes per RFC 3986, rejects URL paths, and logs every skip
+per-line (parse-error log) + once-per-feed (main log). New installs default strict; existing
+installs are migrated to lenient on upgrade. PHPUnit proves every branch + the migration +
+the logging, before-and-after.
+
+COMMIT (single)
+    pfblockerng: lenient DNSBL parsing toggle + RFC 3986 validation + migration (ADR-22 P2)
+Push to `adr/22-dnsbl-parser-scheme-anchored-host`; update the PR.
+
+HANDOFF — write `.ADRs/ADR_22_DNSBL_Parser_Scheme_Anchored_Host/RESULTS/02_Results.txt`
+(plain .txt)
+Record: final helper signature + body; config key name + exact read path; UI field name +
+help text; call-site code (resolution + skip + counter); per-feed WARNING code + which
+main-log function/level; migration code location + the existing-vs-fresh detection used;
+PHPUnit test class + all method names; `php -l`/PHPUnit/`python -m pytest` outcome; any edge
+case; go-ahead for Phase 3 (DoD smoke).

@@ -1,0 +1,76 @@
+================================================================================
+PHASE 2 PROMPT — Pin pf precedence + prove the anchor model (the kill-gate)
+Target model: Claude Sonnet 4.6 (orchestrator gate at a higher model)
+ADR: .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md   (read §1.3, §2, §6 Phase 2, §7 reject)
+================================================================================
+
+ROLE
+First line of your reply: run /ponytail:ponytail <level> IFF ponytail is active; otherwise
+/caveman. You are the Phase-2 investigator for ADR-41, on branch
+`adr/41-immutable-user-firewall-rules`. This is a MEASUREMENT / DESIGN-PROOF phase: NO production
+code. You establish the real pf evaluation model on the live VM and PROVE (or falsify) that a
+single insertion anchor per pass_order reproduces the intended pfB-vs-user precedence without
+touching user rules. This is the ADR-01 "prove the premise before building" gate.
+
+WHY THIS PHASE EXISTS
+pass_order is a firewall-precedence (security) control. The immutable-user design (Phase 3) splices
+the pfB rule block at ONE anchor per pass_order; that only works if pf precedence is per-interface
+first-match (so inter-interface order is irrelevant and the anchor controls only same-interface
+pfB-vs-user precedence). This MUST be verified on real pf, not assumed — a wrong anchor is a
+block-bypass or a LAN lockout.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/01_Results.txt — confirm the emission helper +
+  oracle fixtures exist. If missing, Phase 1 is incomplete; STOP and report.
+- .ADRs/ADR_41_Immutable_User_Firewall_Rules/ADR.md (§1.3 load-bearing facts, §2 Placement row,
+  §6 Phase 2, §7 reject criteria).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — the ORDER table comment ~:14640 and the current
+  emission so you know the INTENDED precedence per order.
+- tests/smoke/test_smoke_lan_rule_preserve.py and tests/smoke/helpers.py — the live-VM harness,
+  php_eval / write_local_feed / force_ip_refetch / reload; CLAUDE.md "Smoke tests" (drive the guest
+  via /bin/sh; pfctl -sr / rules.debug reading).
+- docs/misc/local-smoke-debian.md — running smoke locally (no CI workflow spent).
+
+ACTION PLAN (investigation; record everything in RESULTS)
+1. On the live VM, for representative configs (a LAN Deny_Outbound list + the factory user rules;
+   plus a config with a pfB Permit_* so pfB pass rules exist), set each pass_order and dump the
+   GENERATED ruleset: `pfctl -sr` and /tmp/rules.debug. Record whether interface rules carry
+   `quick` (first-match) and how floating rules are emitted/ordered. CONFIRM the evaluation model —
+   cite the actual output, do not assume.
+2. From that, build the pass_order -> insertion-anchor mapping: where the pfB pass/match block and
+   the pfB block/reject block sit relative to the kept user rules, for order_0..order_4 (and the
+   absent default). Express it as a rule: e.g. "order_0/3: pfB block before all user rules;
+   order_1: pfB block after user pass/match, before user block; ..." grounded in the ORDER table
+   AND the live precedence.
+3. PROVE the anchor reproduces intended precedence PER INTERFACE for every order, including a
+   config with BOTH pfB permit and pfB deny rules on a managed interface (the case where the
+   pfB-pm-vs-pfB-br split matters). Show that user rules need NOT be split (pass vs block) to
+   achieve it — or, if they must be, that is the falsification (see step 4).
+4. KILL / RE-SCOPE: if a single contiguous anchor per order cannot express some order's precedence
+   without splitting/reordering user rules, record it as the falsification and recommend the
+   re-scope per ADR §7 (keep immutability + nearest faithful precedence, or limit which orders are
+   reworked, or non-float-only). The verdict + the live evidence + the anchor mapping table are the
+   deliverable.
+
+CONSTRAINTS
+- NO production code, NO config schema changes. Investigation + a throwaway probe only (do not
+  commit the probe to src/; a tests/smoke probe is acceptable but mark it throwaway or remove it).
+- Drive the guest via /bin/sh (tcsh mangles metachars). Read effective state from pf's own CLI.
+
+VERIFICATION
+- The RESULTS file contains: the confirmed pf evaluation model with cited `pfctl -sr`/rules.debug
+  excerpts; the pass_order -> anchor mapping table; a per-order precedence proof (or falsification);
+  and an explicit GO / RE-SCOPE verdict for Phase 3.
+
+EXPECTED RESULT
+A proven, live-evidenced anchor model that Phase 3 implements verbatim — or a documented re-scope.
+
+COMMIT (single — docs/RESULTS only this phase)
+    docs: ADR-41 Phase 2 pf-precedence gate results (ADR-41 P2)
+Push directly to the branch (RESULTS handoff is the deliverable); no src/ change to PR.
+
+HANDOFF — write `.ADRs/ADR_41_Immutable_User_Firewall_Rules/RESULTS/02_Results.txt` (plain .txt)
+Record: the confirmed pf evaluation model (with evidence); the pass_order->anchor mapping table;
+the per-order precedence proof or the falsification + re-scope; and the GO/RE-SCOPE go-ahead for
+Phase 3.

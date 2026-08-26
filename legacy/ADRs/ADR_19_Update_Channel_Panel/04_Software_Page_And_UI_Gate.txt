@@ -1,0 +1,93 @@
+================================================================================
+PHASE 4 PROMPT — The "Software" page (display + actions) + ADR-14 ui_render gate
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_19_Update_Channel_Panel/ADR.md
+     (read §1.5 tabs/priv, §2 "Page / tab"/"Update now"/"Repo bootstrap", §3 risks FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/19-update-channel-panel` branch performing Phase 4 of ADR-19. Add
+the shipped GUI: a new `pfblockerng_software.php` page that renders the Phase-3 cache
+and offers Check now / Update now (same-channel) / Bootstrap repo, plus the tab + priv
++ pkg-plist wiring. Work in this ADR's worktree, one commit, push directly (rebase-only
+PR — touches src/ + tests/). This is the FIRST shipped src/ GUI in this ADR — it MUST
+clear the ADR-14 Tier-A `ui_render` PR gate.
+
+WHY THIS PHASE EXISTS
+The notice (Phase 3) tells the operator a build exists; this page lets them SEE the
+detail and act. It reuses the proven cache + helpers; the only new runtime surface is
+PHP rendering + button handlers. The `ui_render` gate (page 200, no PHP error markers,
+a page marker, no new php_error.log line) is the PR blocker — design the page to pass it
+on first GET even before any check has run (empty/“unknown” cache must render cleanly).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_19_Update_Channel_Panel/RESULTS/03_Results.txt — the cache path/shape +
+  wrapper/orchestrator fn names + config field. If missing, STOP and report.
+- .ADRs/ADR_19_Update_Channel_Panel/ADR.md (§1.5 tab/priv, §2 "Page / tab"/"Update
+  now"/"Repo bootstrap"/"Notify default", the contract, §3 risks).
+- src/usr/local/www/pfblockerng/pfblockerng_general.php — the `$tab_array[]` block
+  (:209-218): the tab pattern + page scaffold (Form, sections, save) to mirror.
+- src/usr/local/www/pfblockerng/pfblockerng_update.php — the LIVE TERMINAL streaming
+  mechanic (`header("X-Accel-Buffering: no")`, the JS output textarea) to reuse for
+  "Update now"; do NOT collide its "Update" (feeds) tab — the new tab is "Software".
+- src/etc/inc/priv/pfblockerng.priv.inc — add a `match[]` line for the new page.
+- scripts/add-repo.sh — the channel arg + what "Bootstrap repo" runs.
+- [[feedback_new_shipped_file_chroot_plist]] — a new www/ file needs a FreeBSD-ports
+  pkg-plist line (../FreeBSD-ports). NOTE: www/ pages are NOT chroot-copied (that is
+  only the Unbound module) — so plist ONLY, no chroot wiring. PR CI won't build the
+  .pkg, so this stays green locally; add the plist line anyway (the source of truth).
+- CLAUDE.md — "Smoke tests (ADR-04)" ui_render gate, "Code standards" (PHP, help text
+  brevity), "Naming", "Test coverage".
+
+ACTION PLAN (ordered)
+1. `src/usr/local/www/pfblockerng/pfblockerng_software.php`:
+   - require the usual includes + pfblockerng.inc; `pfb_global()`.
+   - Render from the Phase-3 cache: current channel, installed version, our-repo latest,
+     last-checked, and an "update available" indicator (via the Phase-2 helper). If the
+     cache is empty/unknown, render a clean "not checked yet" state (NO warning/notice).
+   - The `pfb_software_notify` knob (default|on|off) as a Form_Select with brief help
+     matching neighbour fields; persist to `installedpackages/pfblockerng`.
+   - Buttons: "Check now" -> `pfb_software_update_check(true)` then redisplay;
+     "Update now" -> same-channel `pkg upgrade -y <currentpkg>` streamed via the
+     reused terminal mechanic; "Bootstrap repo" -> `add-repo.sh <current-channel>`
+     streamed/sumarised. Guard destructive buttons behind a POST + confirm.
+   - Add `$tab_array[]` = ('Software', <active>, '/pfblockerng/pfblockerng_software.php')
+     to EVERY pfBlockerNG page's tab block (consistent ordering across pages).
+2. priv: add the page to `page-firewall-pfblockerng` `match[]` in pfblockerng.priv.inc.
+3. pkg-plist: add the new www page to the FreeBSD-ports plist (record the path in the
+   handoff; the ports repo is separate — note it for the maintainer if not present here).
+4. ADR-14 Tier-A `ui_render` test in tests/smoke/ui/ (one agent -> one test_<page>.py):
+   GET pfblockerng_software.php -> 200, body free of Fatal/Parse/Warning/Notice/
+   Uncaught, a page-specific MARKER present (assert the marker, not just 200), AND no
+   new on-box php_error.log line. Use the `smoke_vm` fixture + helpers per ADR-14.
+
+CONSTRAINTS
+- PHP 8.3, TABS, no die()/exit() in library code (page-level control flow is fine but
+  prefer the pfSense page idiom). Web help text brief, neighbour-matching.
+- Element ids / field name follow `pfb_*` (e.g. `pfb_software_notify`) — not ad-hoc.
+- v1 selector is READ-ONLY for channel (display current). Do NOT implement cross-channel
+  SWITCH (deferred, §2) — "Update now" is SAME-channel only.
+- Destructive actions (Update/Bootstrap) only via POST behind a confirm; never on GET
+  (the ui_render gate GETs the page and must not trigger pkg).
+
+VERIFICATION (must all pass before the phase is done)
+- ui_render tier GREEN:
+  `python -m pytest tests/smoke/ui -m ui_render --override-ini="addopts="`
+  (SMOKE_ADMIN_PASSWORD set) — capture the run id (or dispatch via ui-tests.yml).
+- php -l on the new page → clean ; phpstan clean (stub any new pfSense fn used).
+- python -m pytest → UNCHANGED ; ruff/markdownlint as relevant.
+- diff-read: GET renders cleanly with an empty cache; no pkg op fires on GET.
+
+EXPECTED RESULT
+A "Software" tab on every pfBlockerNG page; the page shows channel/installed/latest +
+the notify knob and (POST-guarded) Check/Update/Bootstrap actions; ui_render green.
+
+COMMIT (single)
+    pfblockerng: add Software update/channel page + tab + priv (ADR-19 P4)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_19_Update_Channel_Panel/RESULTS/04_Results.txt` (plain .txt)
+Record: the page path + marker string; the tab label/order; the priv match line; the
+pkg-plist line (and whether the ports repo edit is pending); the button handlers +
+their POST/confirm guards; the ui_render run id; and the go-ahead for Phase 5.

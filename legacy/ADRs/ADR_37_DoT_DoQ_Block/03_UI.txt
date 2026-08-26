@@ -1,0 +1,128 @@
+================================================================================
+PHASE 3 PROMPT — UI control on DNSBL settings page + PFBL-01 validation
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_37_DoT_DoQ_Block/ADR.md   (read §2.1, §4, §5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/37-dot-doq-block. Phase 3 adds the UI control block
+to pfblockerng_dnsbl.php, the server-side PFBL-01 validation, and the ADR-14 ui_render test.
+One commit, push directly.
+
+REQUIRED READING (FIRST — read before writing a single line of code)
+FIRST, read the prior phase's handoff:
+    .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/02_Results.txt
+and the ADR-36 UI implementation in src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php around
+line 2921 — the Form_Group('Permit Firewall Rules') block + pfb_build_if_list(FALSE, FALSE)
+multi-select pattern that this ADR mirrors exactly. If either is missing, STOP and report.
+
+Then read:
+- .ADRs/ADR_37_DoT_DoQ_Block/ADR.md — §2.1 (UI location, naming), §4, §5 (PFBL-01 constraint).
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php — the existing DoH/DoT/DoQ blocking
+  section (grep for 'DoT' or 'DoH' to find it); the ADR-36 redirect UI block if present;
+  the Form_Group('Permit Firewall Rules') pattern at ~2921. Read the surrounding ~100 lines
+  for style, field naming, help-text wording length, and PfbConfig::read/write call sites.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — pfb_build_if_list() signature (grep ~3374).
+- tests/php/ — existing UI/validator test style; CLAUDE.md §"Test coverage" BDD mandate.
+- tests/smoke/ui/ — ADR-14 ui_render test pattern (existing tests for pfblockerng_dnsbl.php).
+
+ACTION PLAN
+
+1. ADD the DoT/DoQ block UI control block to pfblockerng_dnsbl.php. Place it adjacent to:
+   - The ADR-36 redirect control block (if present — check), AND
+   - The existing DoH/DoT/DoQ blocking section (grep for 'DoT'/'DoH' to locate).
+   Mirror the exact Form_Group structure from the ADR-36 redirect block and the existing
+   dnsbl_allow_int Form_Group('Permit Firewall Rules') at ~2921. The new block contains:
+
+   a. Enable checkbox — field: dnsbl_dot_block; read via PfbConfig::read('dnsbl_dot_block');
+      save via PfbConfig::write('dnsbl_dot_block', ...) on POST. Label: e.g. "Block
+      DNS-over-TLS / DNS-over-QUIC (port 853)" — match the wording style of neighbouring
+      controls.
+
+   b. Interface multi-select — field: dnsbl_dot_block_int; built from pfb_build_if_list(FALSE,
+      FALSE) (WAN-excluded); pre-selected from PfbConfig::read('dnsbl_dot_block_int') (split
+      on comma); size = count of available interfaces (match the dnsbl_allow_int pattern
+      exactly). Save the selected values as a comma-joined string via PfbConfig::write().
+
+   c. Quick-fill — a button or link that, when clicked (JS), populates the interface
+      multi-select with the union of the current inbound_interface + outbound_interface values
+      (the pfBlockerNG fw-rule interface set). Mirror the ADR-36 quick-fill implementation
+      exactly — read how it works in that block first.
+
+   d. Exception alias field — text input; field: dnsbl_dot_block_exclude; read/save via
+      PfbConfig. Default empty. Label: e.g. "DoT/DoQ Exception Alias".
+
+   e. Help text — one short paragraph, style matching the neighbouring DoH/DoT/DoQ help text.
+      Must include all four of these notes (terse; do not out-prose neighbours):
+      - Blocks standard-port DoT (TCP 853) and DoQ (UDP 853) only.
+      - DoH (port 443) is NOT blocked here — blocking 443 would break all HTTPS; DoH is
+        addressed by the DoH-IP feed (IP-alias layer) and DNSBL domain blocking.
+      - The exception alias must exist in Firewall > Aliases before use.
+      - The firewall itself is always exempt and will never have its own port-853 traffic
+        blocked.
+
+2. ADD server-side POST validation (PFBL-01 surface):
+   - Write a new validation function (or inline in the POST handler) that:
+     - Validates each selected interface name against pfb_build_if_list(FALSE, FALSE) output
+       (only known, non-WAN interfaces are accepted).
+     - Validates the exception alias name via pfb_filter() / is_validaliasname() when non-empty.
+       Empty string is always valid (means no exception alias).
+     - Returns the validated values; rejects and re-displays the form on invalid input.
+   - Add this function (or the enclosing POST handler function) to the PHPCS RequirePfbFilter
+     scopeFunctions allow-list in phpcs.xml.dist (PFBL-01 scope — it handles user-controlled
+     input that feeds into config writes adjacent to rule builds).
+   - Save validated values via PfbConfig::write() for all three fields.
+
+3. WRITE PHPUnit tests for the server-side validator in tests/php/DotDoQBlockUiValidatorTest.php:
+   a. test_valid_interface_name_accepted: a name returned by pfb_build_if_list() is accepted.
+   b. test_invalid_interface_name_rejected: a name not in the list is rejected; return indicates
+      failure; no PfbConfig::write() is called.
+   c. test_empty_alias_accepted: empty string passes alias validation.
+   d. test_valid_alias_name_accepted: a name passing is_validaliasname() is accepted.
+   e. test_invalid_alias_name_rejected: a name failing is_validaliasname() is rejected.
+   Before-state assertions: for the rejection tests, assert that nothing is written (the
+   write is not called) — mock or spy PfbConfig::write as needed using the test double pattern
+   in tests/php/pfsense_doubles.php.
+
+4. ADD or extend the ADR-14 ui_render test for pfblockerng_dnsbl.php in tests/smoke/ui/:
+   - GET the DNSBL settings page -> assert HTTP 200.
+   - Assert body is free of 'Fatal error', 'Parse error', 'Warning:', 'Notice:', 'Uncaught'.
+   - Assert a page-specific marker is present (grep the page for its existing marker string;
+     or add one if absent — but prefer an existing one).
+   - Assert no new php_error.log line was added during the GET.
+   If a ui_render test for this page already exists (check tests/smoke/ui/), extend it rather
+   than creating a duplicate.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; uppercase TRUE/FALSE (ADR-28); no die()/exit() in library code.
+- PfbConfig::read/write for all three registered fields; direct config_*_path is NOT used here
+  (the UI only reads/writes the pfblockerngdnsblsettings config keys — registered fields).
+- PFBL-01: the POST handler / validator is in scope — add to scopeFunctions; validate before
+  any write or rule build reference.
+- Do NOT modify the Phase-1 or Phase-2 tests — they must remain green.
+- Do NOT implement smoke test infrastructure (no test_dot_doq_block.py) — that is Phase 4.
+- Markdown lint: no unescaped pipes in any Markdown file you touch. Language tag on all fences.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> ALL tests green (Phase 1 + 2 + new UI validator tests).
+- php -l src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php -> no syntax errors.
+- PHPStan -> no new errors.
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green (PFBL-01 scopeFunctions updated;
+  ADR-28 UppercaseBooleanLiteral clean; ADR-29 RequireConfigGateway clean).
+- python -m pytest -> green.
+- ADR-14 ui_render test for pfblockerng_dnsbl.php -> green (requires SMOKE_ADMIN_PASSWORD in
+  env; if not set, the test SKIPs cleanly — document the skip in the handoff).
+
+EXPECTED RESULT
+DoT/DoQ block control block on the DNSBL settings page; server-side PFBL-01 validation; all
+unit tests green; ui_render green or documented skip.
+
+COMMIT (single)
+    pfblockerng: add DoT/DoQ block UI control and validation (ADR-37 P3)
+Push directly to adr/37-dot-doq-block.
+
+HANDOFF — write .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/03_Results.txt (plain .txt)
+Record: exact location in pfblockerng_dnsbl.php where the block was inserted (file:line range);
+the scopeFunctions entry added to phpcs.xml.dist; ui_render result (green or skip reason);
+list of new validator test methods; PHPUnit/PHPStan/PHPCS/pytest pass counts; any deviation
+from the plan; go-ahead for Phase 4.

@@ -1,0 +1,102 @@
+ADR-35 Phase 1 — Pin Current Behaviour (Oracle Tests)
+======================================================
+
+STATUS: COMPLETE — all gates green.
+BRANCH: adr/35-managed-firewall-objects
+COMMIT: (see git log)
+
+ADR-RESUME: branch=adr/35-managed-firewall-objects next-phase=2
+
+────────────────────────────────────────────────────────────────────────────────
+WHAT WAS DONE
+────────────────────────────────────────────────────────────────────────────────
+
+Created tests/php/FwobjCurrentBehaviourTest.php — 11 golden PHPUnit tests
+(cases a–k) pinning today's VIP and NAT behaviour before any Phase 2 refactor.
+
+Added doubles to tests/php/pfsense_doubles.php (existing file, no new files):
+  - interface_vip_bring_down()    — records calls for VIP teardown assertions
+  - interface_ipalias_configure() — records calls for VIP bring-up assertions
+  - is_service_running()          — reads $GLOBALS['pfb_test_service_running']
+  - restart_service()             — no-op double
+  - stop_service()                — no-op double
+  - cert_create()                 — emits empty base64 blobs, returns TRUE
+  - get_configured_vip_list()     — reads $GLOBALS['pfb_test_vip_list']
+  - get_specialnet()              — derives from pfb_test_vip_list or explicit seed
+  - where_is_ipaddr_configured()  — always returns [] (no overlap off-appliance)
+  - SPECIALNET_VIPS constant (12) — pfSense globals.inc constant, needed at runtime
+
+ZERO production code changes — final diff touches only tests/php/*.
+
+────────────────────────────────────────────────────────────────────────────────
+TEST CASES (FwobjCurrentBehaviourTest)
+────────────────────────────────────────────────────────────────────────────────
+
+a. testVipFindByMarkerV4          — pfb_find_marked_vip finds v4 VIP by PFB_AUTO_VIP_DESCR_V4
+b. testVipFindByMarkerV6          — pfb_find_marked_vip finds v6 VIP by PFB_AUTO_VIP_DESCR_V6
+c. testVipFindReturnsNullWhenAbsent — returns null when no VIP matches marker
+d. testVipCreateIsIdempotent      — enable+enable does not create duplicate VIPs
+e. testVipDisableRemovesMarkedVipWithMatchingIp — disable removes pfB VIP when IP matches
+f. testVipDisableDoesNotRemoveVipWithNonMatchingIp — IP guard: different IP leaves VIP untouched
+g. testVipDisableNeverTouchesUserVip — non-pfB descr VIP never removed on disable
+h. testNatAddWritesPfbDnslDescr   — enable writes 'pfB DNSBL - DO NOT EDIT' descr
+i. testNatStripsOnDisable         — disable strips pfB NAT rules, preserves user rules
+j. testNatStripsLegacyPfbDnsblPrefix — strips legacy 'pfB DNSBL' prefix variant too
+k. testNatNeverTouchesUserRule    — user NAT rules never removed on enable or disable
+
+────────────────────────────────────────────────────────────────────────────────
+GATE RESULTS
+────────────────────────────────────────────────────────────────────────────────
+
+vendor/bin/phpunit:
+  Tests: 1143, Assertions: 4403, Warnings: 31 (pre-existing pfb_global noise),
+  Skipped: 3. All 11 new FwobjCurrentBehaviourTest cases PASS.
+
+php -l:
+  No syntax errors in FwobjCurrentBehaviourTest.php or pfsense_doubles.php.
+
+vendor/bin/phpstan analyse (level 1):
+  No errors.
+
+vendor/bin/phpcs --standard=phpcs.xml.dist src/:
+  0 errors (no src/ files changed).
+
+python -m pytest:
+  1930 passed, 2 skipped.
+
+────────────────────────────────────────────────────────────────────────────────
+KEY DESIGN NOTES FOR PHASE 2
+────────────────────────────────────────────────────────────────────────────────
+
+1. pfb_create_dnsbl('enabled') calls pfb_global() on entry which re-reads ALL
+   $pfb keys from config. For the NAT test (h) to work, the config must contain
+   a valid VIP that passes pfb_validate_vips() — otherwise pfb_global() silently
+   force-sets $pfb['dnsbl'] = '' and the NAT block never fires.
+
+   Test h seeds: pfb_dnsvip4 = '_vip_test_nat4', dnsbl_interface = 'opt-double'
+   (matching get_configured_vip_interface's '_vip_test_*' → 'opt-double' double),
+   and $GLOBALS['pfb_test_vip_list'] = ['_vip_test_nat4' => '10.10.10.53'].
+
+2. pfb_manage_dnsbl_vip()'s double-guard on delete: pfb_find_marked_vip() must
+   find the marker AND get_configured_vip_ipv4(stored_vip_id) must return an IP
+   matching $pfb['dnsbl_vip4']. The get_configured_vip_ipv4 double handles
+   '_vip_test_*' prefix → returns '192.0.2.1' (see pfsense_doubles.php).
+
+3. Pre-existing warnings (31): pfb_global() reads $pfb['pfb_min'], $pfb['pfb_hour'],
+   $pfb['pfb_dailystart'] and many other $pfb[] keys that may be absent when called
+   off-appliance. These are Undefined array key notices — E_WARNING in PHP 8+. Not
+   fatal since phpunit.xml has displayDetailsOnTestsThatTriggerWarnings but NOT
+   failOnWarning. Left as-is: suppressing them would hide real regressions.
+
+────────────────────────────────────────────────────────────────────────────────
+FUNCTIONS COVERED
+────────────────────────────────────────────────────────────────────────────────
+
+  pfb_find_marked_vip()   — pfblockerng.inc ~line 1134
+  pfb_manage_dnsbl_vip()  — pfblockerng.inc ~line 1178
+  pfb_create_dnsbl()      — pfblockerng.inc ~line 3778
+
+Files added/modified:
+  tests/php/FwobjCurrentBehaviourTest.php  (new — 11 tests, ~650 lines)
+  tests/php/pfsense_doubles.php            (modified — 114 lines added)
+  .ADRs/ADR_35_Managed_Firewall_Objects/RESULTS/01_Results.txt  (this file)

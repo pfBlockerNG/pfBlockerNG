@@ -1,0 +1,168 @@
+ADR-28 Phase 9 Results — Shell conventions (short-circuit + string-ops over regex)
+===================================================================================
+Branch: claude/adr-28-review-xmodhb
+Date: 2026-06-17
+
+ADR-RESUME: branch=claude/adr-28-review-xmodhb next-phase=10
+
+
+1. STRING-OPS OVER REGEX (item 4) — SWAPS MADE
+------------------------------------------------
+
+Five sites changed in pfblockerng.sh; no changes to list_scripts/ (see §3).
+
+a) Dispatch block (lines 1299-1302, was 1300-1303):
+   BEFORE: 4 × `if [ "$(echo "${1}" | grep -c '_255')" -gt 0 ]; then ...`
+   AFTER:  4 × `case "${1}" in *_255*) ... ;; esac`
+   Rationale: each grep-c is a FIXED SUBSTRING check on a scalar $1 value;
+   case glob-pattern is exactly equivalent and avoids four subshells + four
+   grep invocations on every `_*` dispatch.
+
+b) whoisconvert() host_check (line 640-691):
+   BEFORE: host_check="$(echo "${host}" | grep '\.')"
+           if [ -n "${host_check}" ]; then ... else ... fi
+   AFTER:  case "${host}" in
+           *.*) domain arm ;;
+           *)   ASN arm    ;;
+           esac
+   Rationale: grep '\.' (BRE escaped dot) matches any string containing a
+   literal '.'. POSIX case pattern '*.*' is exactly equivalent — same
+   semantics, same anchoring (none), same empty/no-dot edge case (no match).
+   Eliminates a subshell, an echo, and a grep invocation per host iteration.
+
+c) reputation_max() header extraction (line 848):
+   BEFORE: header="$(echo "${alias##*/}" | cut -d '.' -f1)"
+   AFTER:  header="${alias##*/}"; header="${header%%.*}"
+   Rationale: the echo|cut pipeline extracts the first dot-separated field of
+   the basename. ${%%.*} strips from the first '.' to end — exactly equivalent,
+   including the edge case where no '.' is present (both return the full
+   basename unchanged). Eliminates a subshell + echo + cut.
+
+d) reputation_dmax() blfile header extraction (line 977):
+   BEFORE: header="$(echo "${blfile##*/}" | cut -d '.' -f1)"
+   AFTER:  header="${blfile##*/}"; header="${header%%.*}"
+   Same equivalence argument as (c). This is inside the inner while loop that
+   iterates blocklist files per repeat-offender IP — eliminates per-iteration
+   subshell overhead.
+
+e) reputation_pmax() blfile header extraction (line 1065):
+   BEFORE: header="$(echo "${blfile##*/}" | cut -d '.' -f1)"
+   AFTER:  header="${blfile##*/}"; header="${header%%.*}"
+   Same as (d).
+
+
+2. SHORT-CIRCUIT REORDERS (item 2) — ZERO REORDERS
+----------------------------------------------------
+
+Zero reorders made. Audit of &&/|| chains and `grep` call order:
+
+- suppress():  `[ -e "${pfbsuppression}" ] && [ -s ... ]` — already cheap first
+  (file-exist before stat check); correct order.
+- cidr_aggregate(): `[ ! -x "${pathaggregate}" ]` guard is a single fast -x test;
+  no reorder possible.
+- pfb_aggregate(): mtime-gate guards are ordered: file existence (-f/-s) before
+  cmp -s content comparison — already cheap-first. The inner find/newer check
+  is the only slightly expensive op and already correctly last.
+- reputation_max / reputation_dmax / reputation_pmax: the `[ -n "${data}" ]`
+  guards wrap the entire loop; no `&&`/`||` chains with reorderable guards inside.
+- whoisconvert(): the `[ -z "${host}" ] && continue` fast-path is already first;
+  the inner `[ ! -f "${pathasncsv}" ]` guards are already in correct order.
+- dispatch case: the new `case "${1}" in *_...*) ... esac` tests are all O(1)
+  string ops on the same $1 — no ordering concern (each is independent).
+
+No genuinely reorderable, side-effect-free, order-independent &&/|| chain was
+found beyond what already exists.
+
+
+3. list_scripts/ INVENTORY
+---------------------------
+
+aws_region_prefixes.sh (the shared script; the 25 wrappers are out of scope):
+- `if [ "${prefix}" = '_v4' ]` and `if [ -n "${region}" ]` — string equality
+  comparisons, already the correct form; no grep/sed involved.
+- `jq -r "${jqfilter}"` — jq invocation with a user-assembled filter string;
+  the filter itself is a literal string built from safe constants. No regex/sed
+  on the jq output; no string-op candidate.
+- `if ! iprange < ...` / `if [ -s "${tempfile}" ]` — file-size / command-exit
+  guards; no reordering opportunity.
+- Zero changes to aws_region_prefixes.sh. Zero changes to any ip_pre_AWS_*.sh.
+
+
+4. CONSTRUCTS LEFT AND WHY
+---------------------------
+
+a) `ls "${etdir}" | sed 's/\.txt//'` (processet, ~line 1145):
+   Strips the .txt suffix from a list of ET category filenames to build a
+   space-separated list for a downstream `for` loop. A parameter-expansion
+   replacement would require a glob-loop that builds a variable across
+   iterations — more code, different whitespace/ordering behaviour for the `for`
+   consumer. Not equivalent in shape; left as-is.
+
+b) `grep -cv '^#\|^$'` (multiple sites):
+   Multi-alternation BRE pattern — comments OR blank lines. No single param-
+   expansion or case idiom can replicate counting non-matching lines from a
+   file; left as-is.
+
+c) `grep -v ':' ... | grep -v '\.'` (whoisconvert IPv4/v6 filter):
+   File-content filters (grep over lines of a file), not scalar string
+   comparisons. param-expansion cannot filter file lines; left as-is.
+
+d) `grep -aoEw "(...IP octet...)" | LC_ALL=C sort -u` (processxlsx):
+   Genuine ERE IP address extraction from XML content. No param-expansion
+   equivalent; left as-is.
+
+e) `sed 's/^.* //'`, `sed 's/$/0\/24/'`, `sed 's/^/\!/'` etc. (multiple sites):
+   Substitutions on file content (piped/redirected), not on a single scalar
+   variable. param-expansion operates on variables only; left as-is.
+
+f) `grep -c '_255'` etc. in the ASN asn variable build and elsewhere that are
+   genuine content searches over files — left as-is.
+
+g) `ip_placeholder2` sed-escape and `ip_placeholder3` cut (~lines 98-99):
+   sed 's/\./\\\./g' on ip_placeholder to build a regex-safe version — this is
+   PRODUCING a regex escape, not doing a match; a case equivalent doesn't exist
+   for producing regex-escaped strings. Left as-is.
+
+
+5. ADR-26 LC_ALL=C CONFIRMATION
+---------------------------------
+
+EXPLICIT CONFIRMATION: NO ADR-26 LC_ALL=C prefix was moved, removed, or altered.
+
+All existing inline LC_ALL=C prefixes in pfblockerng.sh are intact:
+  - pfb_list_orig_by_mtime(): LC_ALL=C sort -n (line ~188)
+  - pfb_list_orig_by_mtime(): LC_ALL=C date (lines ~191, ~193)
+  - pfb_aggregate():          LC_ALL=C sort -u (line ~507)
+  - duplicate():              LC_ALL=C sort -u (line ~571 and ~559)
+  - reputation_max():         LC_ALL=C sort -u (line ~787, ~881)
+  - closingprocess():         LC_ALL=C sort -o (line ~1208)
+  - processxlsx():            LC_ALL=C sort -u (line ~1186)
+
+Zero of these were touched.
+
+
+6. VERIFICATION GATES
+----------------------
+
+  shellcheck pfblockerng.sh     clean (0 errors/warnings)    ✓
+  sh -n pfblockerng.sh          clean                         ✓
+  python -m pytest              1674 passed                   ✓
+  ruff check .                  All checks passed             ✓
+
+
+7. SELF-REVIEW VERDICT
+-----------------------
+
+  - 5 string-op swaps: dispatch grep-c×4 → case; host_check grep → case; 3
+    header echo|cut chains → two-step param expansion. All provably equivalent.
+  - 0 short-circuit reorders: no safe, side-effect-free reordering found.
+  - 0 LC_ALL=C prefixes touched.
+  - 0 add-on/privileged binary paths altered.
+  - No bashisms; all expansions in changed blocks are quoted.
+  - 25 AWS wrapper scripts untouched; aws_region_prefixes.sh untouched.
+  - Alignment: opportunistic within touched blocks only.
+  - Minimal diff: 1 file changed, ~15 lines.
+  CLEAN.
+
+
+Go-ahead for Phase 10.

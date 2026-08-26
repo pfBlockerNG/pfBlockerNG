@@ -1,0 +1,133 @@
+================================================================================
+PHASE 1 PROMPT — Config fields (PfbConfig registry) + golden rule-builder tests
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_37_DoT_DoQ_Block/ADR.md   (read §1, §2.1, §2.2, §5 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/37-dot-doq-block (off devel; create off the latest
+devel if absent). Phase 1 is ORACLE-FIRST: register config fields and write golden PHPUnit
+tests pinning the exact rule shape BEFORE any builder implementation. One commit, push directly.
+
+WHY THIS PHASE EXISTS
+The golden tests are the specification. The builder (Phase 2) must pass them all; if it cannot,
+that is a Phase 2 bug — not a reason to relax the tests. Writing the tests before the
+implementation removes any unconscious bias toward the implementation rather than the ground
+truth.
+
+REQUIRED READING
+- .ADRs/ADR_37_DoT_DoQ_Block/ADR.md — full document; focus on §2.1, §2.2 (ground-truth XML),
+  §4 (requirements), §5 (constraints).
+- src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc — pfb_cfg_registry() (the PfbConfig
+  field registry); the existing toggle/plain adapter entries for style reference; PfbConfig
+  class definition.
+- tests/phpcs/PfBlockerNG/Sniffs/Config/RequireConfigGatewaySniff.php — the $registeredPaths
+  property; add all three new keys here.
+- tests/php/CfgGatewayTest.php — round-trip + default-absent test pattern; add three new test
+  cases following the existing style.
+- tests/php/RollbackContractTest.php — $inventory; add the three new field names.
+- tests/php/ — general PHPUnit style; CLAUDE.md §"Test coverage" for branch + BDD mandate.
+- .ADRs/ADR_36_DNS_Redirection/ADR.md §2.1 + §2.2 — sibling feature for naming consistency.
+
+ACTION PLAN (ordered — tests FIRST)
+
+1. REGISTER the three new PfbConfig fields in pfb_cfg_registry() in pfblockerng_extra.inc:
+   - dnsbl_dot_block         toggle adapter  stored 'on'/'', default ''
+   - dnsbl_dot_block_int     plain adapter   stored comma-joined string, default ''
+   - dnsbl_dot_block_exclude plain adapter   stored string, default ''
+   Section path for all three: installedpackages/pfblockerngdnsblsettings/config/0/<key>
+   since: '4.0.0' for all three (new in this ADR).
+   Verify the adapter pairs: toggle uses pfb_cfg_toggle_read/write; plain uses NULL/NULL.
+
+2. ADD the three new full paths to $registeredPaths in RequireConfigGatewaySniff.php.
+   Exact format: 'installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_dot_block' etc.
+
+3. ADD three new test cases to CfgGatewayTest.php following the existing pattern:
+   - dnsbl_dot_block: round-trip 'on' -> PfbToggle::On -> 'on'; round-trip '' -> PfbToggle::Off
+     -> ''; default-absent returns PfbToggle::Off.
+   - dnsbl_dot_block_int: round-trip 'lan,opt1' -> 'lan,opt1'; default-absent returns ''.
+   - dnsbl_dot_block_exclude: round-trip 'DoT_Exceptions' -> 'DoT_Exceptions'; default-absent ''.
+
+4. UPDATE $inventory in RollbackContractTest.php to include the three new field names.
+
+5. WRITE a skeleton pfb_build_dot_block_rule($iface, $exclude_alias) function in pfblockerng.inc
+   (or a new helper include if the implementer judges that cleaner given the file size — read the
+   file first). The skeleton may return an empty array or throw; it exists only so the tests can
+   call it. The implementation is Phase 2.
+   Place it near the ADR-36 DNS redirect builder when that exists, or near pfb_firewall_rule()
+   otherwise — grep pfblockerng.inc for the nearest sibling.
+
+6. WRITE PHPUnit golden tests for pfb_build_dot_block_rule() in a new test file
+   tests/php/DotDoQBlockRuleTest.php. Tests are ORACLE-FIRST — they MUST FAIL against the
+   skeleton and PASS only against a correct implementation. Required branches (all must be
+   independent test methods with descriptive names):
+
+   a. test_source_is_any_when_no_exception_alias
+      Call pfb_build_dot_block_rule('lan', '') — assert source element is <any/>.
+
+   b. test_source_is_negated_alias_when_exception_alias_set
+      Call pfb_build_dot_block_rule('lan', 'DoT_Exceptions') — assert source has <address>
+      containing 'DoT_Exceptions' AND <not/> present in source.
+
+   c. test_type_is_block
+      Assert rule['type'] === 'block'.
+
+   d. test_ipprotocol_is_inet46
+      Assert rule['ipprotocol'] === 'inet46'.
+
+   e. test_protocol_is_tcp_udp
+      Assert rule['protocol'] === 'tcp/udp'.
+
+   f. test_destination_has_self_not_and_port_853
+      Assert destination['network'] === '(self)'; destination has <not/> present; destination
+      port === '853'. Both with alias set and alias empty (call both; assert destination is
+      identical regardless of alias).
+
+   g. test_statetype_is_keep_state
+      Assert rule['statetype'] === 'keep state'.
+
+   h. test_descr_marker_contains_iface
+      Call pfb_build_dot_block_rule('opt2', '') — assert descr starts with 'pfB_DoT_Block_'
+      and contains 'opt2'.
+
+   i. test_multiple_interfaces_produce_independent_rules
+      Call the builder for 'lan' and 'opt1' separately — assert each rule has the correct
+      interface value and its own distinct marker; they do not share state.
+
+   All assertions must be on the exact field values from §2.2 — not substring contains unless
+   the field is a CDATA string. Assert the before-state where applicable (e.g. assert the
+   skeleton returns empty-or-throws before describing what a correct implementation must return
+   — use @depends or the test ordering to make the oracle nature clear in comments).
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- Do NOT implement pfb_build_dot_block_rule() — skeleton only. Phase 2 implements.
+- Do NOT wire the builder into sync_package_pfblockerng() — that is Phase 2.
+- Do NOT add UI code — that is Phase 3.
+- Do NOT change any existing config field, marker string, or adapter.
+- Tests MUST fail against the skeleton and be designed to pass only against a correct
+  implementation (oracle-first discipline).
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> CfgGatewayTest + RollbackContractTest green; DotDoQBlockRuleTest
+  MAY be red (the builder is a skeleton) — but all other tests must be green.
+- php -l src/ tests/php/DotDoQBlockRuleTest.php -> no syntax errors.
+- PHPStan -> no new errors (the skeleton function is typed; tests load via bootstrap).
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/ -> green (RequireConfigGateway sniff sees
+  the new registered paths; UppercaseBooleanLiteral sniff clean).
+- python -m pytest -> green (no Python changes; existing suite must pass).
+
+EXPECTED RESULT
+Three PfbConfig fields registered + round-trip tested; the RequireConfigGateway sniff updated;
+a skeleton builder function; PHPUnit golden tests that specify the exact rule shape and fail
+against the skeleton.
+
+COMMIT (single)
+    pfblockerng: add DoT/DoQ block config fields and golden rule tests (ADR-37 P1)
+Push directly to adr/37-dot-doq-block; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_37_DoT_DoQ_Block/RESULTS/01_Results.txt (plain .txt)
+Record: the three field names + adapter types + stored vocabulary + since values confirmed in
+registry; the $registeredPaths entries added to the sniff; the builder function signature +
+file location; the list of golden test method names; which tests are red (expected — skeleton)
+vs green; PHPUnit/PHPStan/PHPCS/pytest pass counts; go-ahead for Phase 2.

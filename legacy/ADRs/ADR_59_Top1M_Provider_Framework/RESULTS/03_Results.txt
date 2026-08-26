@@ -1,0 +1,199 @@
+================================================================================
+PHASE 3 RESULTS — Header auth in pfb_download() (behaviour-preserving)
+================================================================================
+
+WHAT CHANGED
+
+1. New pure helper `pfb_download_http_headers(array $extra_headers, string
+   $conditional_header = ''): array` (pfblockerng.inc, just above pfb_download())
+   — merges caller-supplied header strings with the ADR-42 conditional-GET
+   header into one list, in order [conditional_header?, ...extra_headers],
+   dropping non-string/empty entries defensively. Pure / no I/O, so it is
+   directly PHPUnit-testable even though pfb_download() itself is not
+   (tests/php/README.md "Out of scope" — curl/exec surface has no off-box
+   double). Extracted specifically so the merge behaviour required by this
+   phase's VERIFICATION section could be pinned without exercising curl.
+
+2. `pfb_download()` (pfblockerng.inc:9874) — new trailing param
+   `array $extra_headers = array()`. Placed AFTER the existing by-ref
+   `&$response_meta = NULL` (the true last parameter) so every existing
+   positional call site (the change-detect probe in pfblockerng.php:554,
+   and the two full-arg IP/DNSBL feed downloads at pfblockerng.inc:16213/
+   17916, none of which reach past `$srcint`) needs NO edit — they simply
+   get the array() default. Only pfblockerng_download_extras()'s call
+   needed a caller-supplied value, wired via a PHP 8.3 named argument
+   (`extra_headers: $feed['headers'] ?? array()`) rather than the ~10-token
+   change positional insertion would have needed across 3 unrelated call
+   sites (ADR-59 explicitly scoped this thread to
+   pfblockerng_download_extras() only, per the phase's ACTION PLAN item 1).
+
+3. Inside the cURL branch's conditional-GET block: the etag branch now sets
+   a local `$conditional_header` string instead of calling
+   curl_setopt(CURLOPT_HTTPHEADER, ...) directly; right after that block,
+   `$http_headers = pfb_download_http_headers($extra_headers,
+   $conditional_header)` is computed once and curl_setopt(CURLOPT_HTTPHEADER,
+   ...) is called ONLY when the merged list is non-empty — reproducing the
+   pre-Phase-3 code path exactly when $extra_headers is empty (today, always
+   — no caller passes anything).
+
+4. `pfblockerng_download_extras()` (pfblockerng.php:635) — threads a new
+   per-feed `$feed['headers']` field (via `$feed['headers'] ?? array()`,
+   since no `$pfb['extras']` row sets it yet) into the new named argument.
+   No descriptor row (tranco/cisco/geoip/asn) sets 'headers' — this is pure
+   plumbing for Phase 5's Cloudflare descriptor.
+
+HOW THE MERGE PRESERVES If-None-Match
+
+The conditional-GET header is computed FIRST into $conditional_header (still
+gated by `$type === 'change_detect'` + a stored ETag, exactly as before), then
+handed to pfb_download_http_headers() as the FIRST list element ahead of
+$extra_headers — so a caller header can never displace it, and vice-versa: the
+helper only ever appends, never overwrites. The pinning test
+(testConditionalGetAndCallerHeaderBothSurviveTheMerge) asserts both strings are
+present simultaneously in the returned list given a synthetic
+'If-None-Match: "etag123"' + a synthetic 'Authorization: Bearer x'.
+
+NO SECRET IS LOGGED
+
+No pfb_logger/log_info call was added or touched to read $extra_headers,
+$conditional_header, or $http_headers — grep confirms the only pfb_logger
+lines inside the touched hunks are the pre-existing srcint-interface log and
+the download-failure log, both untouched by this diff. The existing retry
+logger (pfblockerng.inc ~10199, unchanged this phase) already redacts the URL
+via pfb_redact_url() (#890, confirmed merged into this branch's history at
+commits da4916a5/5c1dd35e). A future caller's Bearer token never reaches
+CURLOPT_HTTPHEADER's log-adjacent code path because CURLOPT_HTTPHEADER values
+are never logged anywhere in pfb_download() — only curl_error()/http_status/
+the redacted URL are.
+
+TESTS
+
+New tests/php/DownloadHttpHeadersTest.php (5 tests, #[CoversFunction
+('pfb_download_http_headers')]), BDD-style Given/When/Then:
+
+  testConditionalGetAndCallerHeaderBothSurviveTheMerge — the phase's mandated
+    pinning case: both a conditional-GET header and a caller Bearer header
+    survive together, exactly 2 elements, neither dropped.
+  testConditionalGetHeaderAloneIsUnchanged — no extra headers + a
+    conditional-GET header -> the SAME single-element list pfb_download()
+    built directly pre-Phase-3 (byte-identical existing-probe behaviour).
+  testCallerHeaderAloneWithNoConditionalGet — the future Cloudflare shape:
+    a caller header with no conditional-GET header rides alone.
+  testBothEmptyProducesEmptyList — every feed today outside an in-flight
+    change_detect probe: empty in, empty out (so pfb_download() skips the
+    curl_setopt entirely, matching pre-Phase-3 exactly).
+  testNonStringAndEmptyEntriesAreDropped — defensive branch: a non-string
+    (int/NULL) or empty-string entry is silently dropped rather than
+    corrupting the CURLOPT_HTTPHEADER list.
+
+This is genuinely new function/behaviour (pfb_download_http_headers() did not
+exist pre-Phase-3), so there is no meaningful "red-before" run against prior
+code (calling a nonexistent function is a fatal error, not a red assertion) —
+consistent with how Phase 2's synthetic-descriptor test was the true
+red/green case and this phase's own VERIFICATION section only asks for the
+merge-list pinning test, not a fail-before/pass-after against old code. The
+BEHAVIOUR-PRESERVING guarantee for every EXISTING caller is what
+testConditionalGetHeaderAloneIsUnchanged + testBothEmptyProducesEmptyList
+pin (the two shapes every real feed hits today).
+
+VERIFICATION (all run inside the worktree)
+
+1. `/opt/homebrew/bin/php -l` on pfblockerng.inc and pfblockerng.php -> both
+   "No syntax errors detected" (same pre-existing unrelated Deprecated
+   notices for other functions' param ordering as Phase 1/2, e.g.
+   pfb_download's own $pflex-before-$logtype — untouched by this phase).
+
+2. `/opt/homebrew/bin/php vendor/bin/phpunit`:
+   Tests: 2311, Assertions: 18450, Failures: 3, Skipped: 4.
+   The 3 failures are exactly the same pre-existing, environment-only
+   `open_basedir` sandbox failures named in Phase 1/2's handoffs
+   (DnsblPrefetchTest::test_prefetch_leaves_the_store_unseeded_when_a_grep_pass_pattern_file_cannot_be_created,
+   IpPrefetchTest::test_grep_lines_returns_null_when_the_pattern_file_cannot_be_created,
+   IpPrefetchTest::test_prefetch_leaves_the_miss_round_unseeded_when_round_a_pattern_file_cannot_be_created)
+   — no other failures. `--filter DownloadHttpHeadersTest` alone: 5/5 green.
+   2311 total = Phase 2's 2306 + 5 new tests here.
+
+3. `php -d memory_limit=1G vendor/bin/phpcs --standard=phpcs.xml.dist src/`
+   -> clean (exit 0, no output). Default 128M OOMs as in prior phases
+   (environmental, not a violation). PFBL-01 (`pfblockerng.inc` scope) stays
+   green — this phase adds no exec/json_encode/path-build call needing
+   pfb_filter() coverage.
+
+4. `php -d memory_limit=1G vendor/bin/phpstan analyse --memory-limit=1G` ->
+   `[OK] No errors`.
+
+5. Python untouched — `python -m pytest` not run (no src/**/*.py or
+   tests/*.py changed).
+
+SELF-REVIEW (git diff vs phase objectives)
+
+- `$extra_headers` param (pfb_download, trailing, typed `array`, default
+  `array()`) + `$feed['headers']` per-feed field (read via `?? array()` in
+  pfblockerng_download_extras()) are both threaded exactly as the ACTION PLAN
+  specifies.
+- The merge preserves If-None-Match AND adds a supplied header — neither
+  clobbers the other: pfb_download_http_headers() always places the
+  conditional-GET header first (when present) and appends every valid extra
+  header after it; there is no code path where setting one discards the
+  other (the OLD code's single curl_setopt(CURLOPT_HTTPHEADER, [etag]) call
+  is now the ONLY curl_setopt(CURLOPT_HTTPHEADER, ...) call in the function,
+  fed the merged list).
+- No existing feed's auth or URL changed: `git diff` touches zero URL
+  literals or `CURLOPT_USERPWD`/username/password logic (both left byte-
+  identical, still gated by `!empty($username) && !empty($password)`
+  unchanged at its original line). The three real call sites that don't
+  pass $extra_headers (pfblockerng.php:554 change-detect probe;
+  pfblockerng.inc:16213 IP feed; pfblockerng.inc:17916 DNSBL feed) are
+  UNCHANGED — the new trailing optional param needs no edit there.
+- No header value is logged (see "NO SECRET IS LOGGED" above) — confirmed
+  by grepping the diff hunks for pfb_logger/log_info calls: only the two
+  pre-existing untouched lines (srcint-interface note, download-failure
+  note) appear, neither reads $extra_headers/$conditional_header/
+  $http_headers.
+- Basic-auth (MaxMind, CURLOPT_USERPWD) and query-param (asn, appended URL
+  token) paths are completely untouched — confirmed by diff: no lines near
+  CURLOPT_USERPWD (pfblockerng.inc ~10148 post-edit) or the asn
+  rawurlencode() call (pfblockerng.php:664) changed.
+- `pfb_top1m_providers()`'s `auth` field (currently always 'none' for
+  tranco/cisco) is still unread by any runtime code path — Phase 3 stays
+  pure plumbing in pfb_download()/pfblockerng_download_extras(), exactly as
+  the Phase 2 handoff's go-ahead predicted; Phase 5 wires Cloudflare's
+  descriptor to actually populate `$feed['headers']`.
+
+DEVIATIONS / JUDGMENT CALLS
+
+- Used a PHP 8.3 named argument (`extra_headers: ...`) at the
+  pfblockerng_download_extras() call site instead of positionally inserting
+  `$extra_headers` before `$srcint`/`&$response_meta` in the signature. The
+  ADR/phase text doesn't mandate a parameter position; placing it after
+  `&$response_meta` (the true last param) means the three OTHER real call
+  sites (pfblockerng.php:554, pfblockerng.inc:16213, pfblockerng.inc:17916)
+  require zero edits, versus a positional insertion which would have forced
+  editing all three (each would need an explicit `array()`/`FALSE` filler
+  argument inserted to keep `$srcint`/`$response_meta` in their old slots).
+  Smaller, safer diff for a purely-additive, no-callers-yet phase.
+- No PHPUnit test exercises pfb_download()'s own curl_setopt(CURLOPT_
+  HTTPHEADER, ...) call directly (only the extracted pfb_download_http_
+  headers() helper is tested) — matches this phase's own VERIFICATION text
+  verbatim ("extract the header-assembly into a testable helper if needed")
+  and the documented tests/php/README.md "Out of scope" boundary for
+  pfb_download()'s curl/exec surface (same boundary Phase 1/2 and the
+  pre-existing ConditionalGetHelpersTest.php already operate under — that
+  file's own docblock states the curl wiring is exercised by live-VM smoke,
+  not PHPUnit).
+
+GO-AHEAD FOR PHASE 4
+
+Ready. Phase 4 ("Add the keyless providers — DomCop, Majestic") adds two new
+descriptor rows (zip/col-2/header for DomCop; plain/col-3/header + CC BY 3.0
+attribution for Majestic) plus their UI options and a Tier-A render
+assertion. It does NOT need $extra_headers (both are keyless, `auth: 'none'`)
+— Phase 3's header-merge plumbing sits dormant until Phase 5's Cloudflare
+descriptor sets `headers`. Phase 4 exercises Phase 2's `container`/`parse`/
+`header`/`domain_col` knobs end-to-end for the first time with LIVE (non-
+synthetic) sample data — the fail-before/pass-after proof Phase 2's own
+go-ahead deferred to Phase 4.
+
+COMMIT
+
+pfblockerng: support caller request headers in pfb_download (ADR-59 P3)

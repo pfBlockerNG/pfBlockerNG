@@ -1,0 +1,19 @@
+ADR-47 Phase 1 — Shared idempotent ports-prep (DONE)
+
+STATUS: LANDED on devel (a5ca1d90, PR #591). This file is the handoff baseline for P2+.
+
+WHAT LANDED
+- scripts/sparse-clone-ports.sh is now the single shared "prepare the FreeBSD-ports tree at REF"
+  step for both CI and local: absent DEST -> fresh blobless+sparse clone (CI, unchanged); an
+  existing git work-tree -> point origin at the canonical URL + fetch+checkout REF (corrects a
+  tree left on the wrong branch instead of silently building the empty-stub .pkg); a non-git DEST
+  -> refused. Detection uses `[ -e "${DEST}/.git" ]` (a linked worktree's .git is a file).
+- tests/shell/sparse_clone_ports_spec.sh pins it (fresh-clone / reuse-fixes / refuse-foreign),
+  red on the old clone-only script. It is the EXEMPLAR for every ADR-47 shellspec: a fake-bin
+  stub on PATH, the mandatory `unset GIT_*` in setup() (the pre-commit-hook footgun that corrupted
+  the shared bare repo this session), and before/after assertions.
+
+HANDOFF TO P2
+- Mirror sparse_clone_ports_spec.sh's structure + conventions in select_box_spec.sh.
+- The shared-script + run-id-keyed + ssh-only-into-containers principle from ADR §2/§5 governs
+  everything from here. No host, no `lxc` — boxes are reached over ssh from a provided PFB_BOXES list.

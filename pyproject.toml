@@ -1,0 +1,174 @@
+# Dev/CI Python environment (issue #2513). NOT a shipped package: releases contain
+# only src/, and `package = false` keeps uv from trying to build this tree.
+#
+# requires-python tracks the appliance's Python 3.11 minor. `.python-version`
+# additionally pins the exact patch used for reproducible dependency-package
+# artifacts.
+[project]
+name = "pfblockerng-dev"
+version = "0"
+requires-python = "==3.11.*"
+
+[tool.uv]
+package = false
+
+# PEP 735 groups. `uv sync --locked` resolves against uv.lock, which pins the
+# TRANSITIVE graph as well -- the gap a requirements file of direct `==` pins leaves
+# open, and the one that let a gate move with no diff.
+[dependency-groups]
+# Lint, type and unit gates: what every non-VM job needs.
+dev = [
+    "ruff==0.16.0",
+    "mypy==2.3.0",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    # Parallel unit suite (CI wall-clock is this job). Smoke/UI override
+    # addopts and stay serial. Pin exact like the rest of the group.
+    "pytest-xdist==3.8.0",
+    # Import-time deps that decide whether tests RUN or importorskip-skip:
+    # dnspython gates the shard-splitter oracle (#861), charset-normalizer the
+    # feed-encoding converter test (#1797), PyYAML the workflow-structure specs.
+    "dnspython==2.8.0",
+    "charset-normalizer==3.4.9",
+    "PyYAML==6.0.3",
+]
+
+# Reproducible PEP-517 dependency-package builder. The builder rejects any
+# interpreter/tool drift and disables build isolation; uv.lock supplies hashes.
+dep-pkg-build = [
+    "pip==26.2.1",
+    "setuptools==75.6.0",
+    "wheel==0.45.1",
+    "zstandard==0.25.0",
+    "uv==0.12.6",
+]
+
+# ADR-04 live-VM harness. Formerly tests/smoke/requirements.txt.
+smoke = [
+    "dnspython==2.8.0",
+    # Per-test wall-clock ceiling so a wedged VM op fails fast instead of hanging.
+    "pytest-timeout==2.4.0",
+    # >=2.33.0 fixes CVE-2026-25645 (predictable tmp filenames in extract_zipped_paths).
+    "requests==2.34.2",
+    # Transitive pin (via requests): >=3.15 fixes CVE-2026-45409.
+    "idna==3.18",
+    # Transitive pin (via pytest): >=2.20.0 fixes CVE-2026-4539 (ReDoS).
+    "pygments==2.20.0",
+    # ADR-14 Tier-B browser tier. The wheel is the bindings only -- the Chromium
+    # BINARY is a separate `playwright install chromium` step.
+    "playwright==1.61.0",
+]
+
+# The manual-only benchmarks job (ADR-01). Formerly legacy/benchmarks/requirements.txt.
+bench = [
+    "pytest-benchmark==5.2.3",
+    "pympler==1.1",
+    "pygments==2.20.0",
+]
+
+[tool.pytest.ini_options]
+# Run pytest from the repo root; no 'cd' needed in CI or locally.
+testpaths = ["tests"]
+# --ignore=tests/smoke keeps the default `python -m pytest` byte-for-byte as it
+# was before ADR-04 Phase 3: the smoke package (VM fixture, mock feed server,
+# its third-party deps) is NEVER imported during default collection, so a
+# checkout without the `smoke` dependency group installed still collects
+# cleanly and runs the exact same unit set. The smoke workflow re-enables it
+# with `pytest -m smoke --override-ini="addopts=" tests/smoke` (or
+# `-p no:cacheprovider tests/smoke -m smoke`); see tests/smoke/conftest.py.
+# --durations=25 surfaces the 25 slowest setup/call/teardown phases each run (issue
+# #605 Layer A) — cheap signal on which unit tests/fixtures dominate, no plugin.
+addopts   = "-v --ignore=tests/smoke --durations=25 -n auto"
+markers = [
+    "smoke: live-VM end-to-end smoke test (ADR-04); needs KVM + the GHCR pfSense image; deselected from the default run",
+    "ui_render: live-VM Web-UI render-smoke (ADR-14 Tier A); authenticated HTTP; deselected from the default run",
+    "ui_e2e: live-VM Web-UI functional flow (ADR-14 Tier B, HTTP POST); deselected from the default run",
+    "ui_browser: live-VM Web-UI browser/JS test (ADR-14 Tier B, Playwright); deselected from the default run",
+    "repo: live-VM release->repository install flow (ADR-17); distinct from -m smoke; deselected from the default run",
+    "safesearch: live-VM SafeSearch CNAME redirect (issue #149); ALSO marked smoke (runs under -m smoke); focused dispatch via -m safesearch",
+    "upstream: live-VM upstream/external-block detection (issue #267); ALSO marked smoke (runs under -m smoke); focused dispatch via -m upstream",
+    "reboot: live-VM guest-reboot regression (issue #334); REBOOTS the shared session VM, so distinct from -m smoke; deselected from the default run",
+    "pfctl_bench: ADR-40 Phase 2 pfctl table benchmark; two-VM topology required; dispatch-only, NEVER PR-gating",
+    "tick: live-VM due-ledger trigger-tick (ADR-43); ALSO marked smoke; focused dispatch via -m tick",
+    "apply_on_change: live-VM apply-on-change + quiet-hours window (ADR-43 P5); ALSO marked smoke; focused dispatch via -m apply_on_change",
+    "two_vm: live-VM test that boots the civm LAN client (two-VM topology); AUTO-applied at collection from the client_vm/lan_interface fixture dependency — never hand-applied. The lane orchestrator partitions civm-needing vs civm-less lanes via -m two_vm / -m 'not two_vm'.",
+    "timeout: per-test budget override (pytest-timeout); the plugin is installed in the smoke env only, so register the mark here to keep off-appliance imports of smoke modules (unit pins, the shard union oracle) warning-free",
+]
+
+# coverage.py (issue #38). BRANCH coverage is the point of the sweep -- line
+# coverage hides one-sided decision branches (a feature's ON path tested, its OFF
+# path not). The canonical invocation is
+#   python -m pytest --cov=pfb_unbound --cov-branch --cov-report=term-missing
+# (pytest-cov drives coverage.py); these knobs make a bare `coverage run` branchy
+# too and keep the TYPE_CHECKING-only import block out of the denominator. The
+# report is INFORMATIONAL in CI -- no enforced floor yet (mirrors the shell kcov /
+# PHP pcov informational coverage; #38 decides later whether to gate on a floor).
+[tool.coverage.run]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+]
+
+[tool.ruff]
+# Minimum Python supported: pfSense CE 2.8 ships Python 3.11 (FreeBSD 15).
+target-version = "py311"
+line-length    = 120
+# Historical records are retained byte-for-byte.
+extend-exclude = ["legacy"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle  F = pyflakes  I = isort
+select = ["E", "F", "W", "I"]
+# pfb_unbound.py places a few imports inside try/except optional-dependency
+# guards (not at the top of the file); suppress only that. F401 (unused import)
+# IS enforced -- the TYPE_CHECKING / runtime-stub imports ruff already counts as
+# used, so nothing legitimate trips it.
+ignore = [
+    "E402",  # module-level import not at top of file (intentional try/except guards)
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Cross-module pytest fixture re-export: these files import the ``repo_vm`` fixture from
+# ``test_repo_install`` so their cases can request it (pytest resolves fixtures per-module).
+# Each case param then "redefines" the imported name from ruff's view — the standard
+# re-export idiom, not real shadowing. F811 is suppressed only for these files.
+"tests/smoke/test_software_update.py"              = ["F811"]
+"tests/smoke/test_upgrade_config_stability.py"  = ["F811"]
+"tests/smoke/test_pkg_op_teardown.py"           = ["F811"]
+"tests/smoke/test_lifecycle_hook_visibility.py" = ["F811"]
+"tests/smoke/test_hook_stream_visibility.py"    = ["F811"]
+# issue #999: imports the `clean_ledger` fixture from test_render_widget_ledger.py
+"tests/smoke/ui/test_widget_clear_failed.py"    = ["F811"]
+# issue #1014/#1019: imports the `clean_ledger` fixture from test_render_widget_ledger.py
+"tests/smoke/ui/test_category_ledger_close.py"  = ["F811"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pfb_unbound", "pfb_dnsbl_regex_rules"]
+
+[tool.mypy]
+python_version       = "3.11"
+warn_unused_configs  = true
+ignore_missing_imports = true
+# Resolve `unboundmodule` (Unbound's runtime-injected API) to the dev/test stub
+# in stubs/python/ so the TYPE_CHECKING import in pfb_unbound.py type-checks.
+mypy_path            = "stubs/python"
+# pfb_unbound.py predates type annotations; add hints incrementally rather
+# than requiring full coverage up-front. follow_imports = silent so that running
+# `mypy tests/` (the gate below) loads production modules the tests import (e.g.
+# pfb_unbound.py) for their types but does NOT fail on their own incremental-typing
+# errors -- the gate judges the test suite, not production.
+follow_imports       = "silent"
+# tests/smoke is the dispatch-only live-VM suite (ADR-04), but its annotations
+# remain checkable without importing its runtime-only third-party dependencies.
+
+# The complete test suite IS fully type-annotated, and `mypy tests/` is a CI
+# + pre-commit gate (see .github/workflows/test.yml, .githooks/pre-commit) that
+# keeps it that way. This override makes that requirement explicit/strict for the
+# test modules only; production stays incremental (above).
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = true
+disallow_incomplete_defs = true

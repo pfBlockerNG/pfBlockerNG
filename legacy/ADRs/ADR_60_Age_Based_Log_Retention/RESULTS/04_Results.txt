@@ -1,0 +1,352 @@
+ADR-60 Phase 4 -- Uniform timestamp for dnslog/dnsreplylog (Python writer + PHP twin writer) -- RESULTS
+================================================================================
+
+VERDICT: DONE
+
+--------------------------------------------------------------------------------
+WHAT CHANGED
+--------------------------------------------------------------------------------
+Commit: 519e6b20
+Branch: adr/60-age-based-log-retention (pushed directly, no PR needed)
+
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py
+  - make_timestamp() (:2702): format string "%b %-d %H:%M:%S" -> "%Y-%m-%d
+    %H:%M:%S". Retry shape (`for _ in range(2): try/except TypeError`) and the
+    "" fallback kept byte-identical.
+  - Deleted the now-fully-redundant iso_timestamp() helper Phase 1 added
+    beside it (verified: its only other reference was its own now-deleted
+    test) -- one canonical timestamp function, not two.
+
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  - pfb_log_event() (:13769, the §1.8 twin writer to the SAME dnsbl.log file):
+    `$datereq = date('M j H:i:s', time());` -> `$datereq =
+    pfb_log_iso_timestamp();` (Phase 2's helper). Nothing else in the function
+    touched.
+
+- tests/test_pfb_unbound_log_timestamp_baseline.py
+  - test_make_timestamp_matches_no_year_format -> renamed
+    test_make_timestamp_matches_iso8601_format, flipped to assert the new
+    year-bearing shape.
+  - test_iso_timestamp_matches_iso8601_format deleted (function gone).
+  - test_make_timestamp_returns_empty_string_after_two_type_errors kept
+    unchanged (still passes -- proves the fallback path untouched).
+  - Module docstring updated (Phase 4 has landed; iso_timestamp() reference
+    removed).
+
+- tests/php/LogTimestampBaselineTest.php
+  - Class docblock + #[CoversFunction('pfb_log_event')] added.
+  - New: seedLogEventSandbox() -- seeds a real temp dnsbl.log + two real temp
+    SQLite3 DBs (table 1 'dnsbl' counter via $pfb['dnsbl_info'], table 2
+    'lastevent' via $pfb['dnsbl_resolver']), pre-seeding the lastevent row so
+    pfb_log_event() takes its "duplicate entry" branch and never calls
+    pfb_dnsbl_parse() (a real-DNS/on-disk-grep dependency wholly unrelated to
+    this phase's timestamp-only change -- see DEVIATIONS below for why this
+    matters).
+  - New: callCapturingUnexpectedWarnings() -- captures PHP warnings/notices,
+    filtering pfb_open_sqlite()'s @chown/@chgrp-to-'unbound' dev-box noise
+    (same filter DnsblParseComputeMetacharTest already established).
+  - New: testPfbLogEventWritesIsoTimestamp() -- calls pfb_log_event() FOR REAL
+    (no mocking of the function itself) and asserts the written dnsbl.log
+    line carries the new ISO-8601 timestamp, with zero unexpected PHP
+    warnings.
+  - New: testDnsblLogUniformAcrossBothWritersAfterFix() -- the concrete §1.8
+    "mixed-format" failure mode, now closed: a real pfb_log_event() call plus
+    a synthetic python-writer-shaped CSV line (format pinned by a source
+    tripwire on pfb_unbound.py's make_timestamp()) land in the SAME dnsbl.log
+    file; asserts every line's timestamp field (index 1 in both writers'
+    schemas) matches the identical ISO-8601 regex.
+
+- tests/php/UnifiedFormatTest.php
+  - New: testUnifiedDnsblPassesThroughNewIsoTimestampUnmodified() and
+    testUnifiedDnsreplyPassesThroughNewIsoTimestampUnmodified() -- feed a NEW
+    ISO-8601 'datetime' value through pfb_unified_format_dnsbl()/
+    pfb_unified_format_dnsreply() and assert byte-identical passthrough. This
+    is the executed verification of the "unilog needs zero further change"
+    claim for the python-sourced DNSBL/DNS-reply rows specifically (distinct
+    from Phase 3's IP-row verification), not just an assertion of it.
+
+--------------------------------------------------------------------------------
+GATES RUN (final tree, commit 519e6b20)
+--------------------------------------------------------------------------------
+
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(the 5 "Deprecated: optional-before-required-parameter" notices are the SAME
+pre-existing ones Phase 1-3 already noted -- unrelated functions, unaffected.)
+
+$ vendor/bin/phpunit
+............................................................. 2440 / 2457 ( 99%)
+.................                                             2457 / 2457 (100%)
+Time: 00:09.774, Memory: 38.00 MB
+OK, but there were issues!
+Tests: 2457, Assertions: 19127, PHPUnit Deprecations: 2, Skipped: 4.
+(2457 = Phase 3's 2453 baseline + 4 net-new tests this phase: 2 in
+LogTimestampBaselineTest + 2 in UnifiedFormatTest. FULL suite green.)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output, exit 0 -- clean)
+
+$ python3 -m pytest
+======================= 2436 passed, 4 skipped in 41.46s =======================
+(2436 = Phase 3's 2437 baseline - 1 (test_iso_timestamp_matches_iso8601_format
+deleted, its function gone) = 2436. Matches exactly.)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+198 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 84 source files
+
+$ python3 scripts/check_comment_narration.py --diff HEAD   -> exit 0, clean
+$ python3 scripts/check_version_literals.py --diff HEAD    -> exit 0, clean
+$ python3 scripts/check_appliance_python.py --diff HEAD     -> exit 0, clean
+
+--------------------------------------------------------------------------------
+CALL-SITE COUNTS -- RE-DERIVED THIS SESSION (not trusted from the prompt)
+--------------------------------------------------------------------------------
+$ grep -n "make_timestamp(\|pfb_log_event(" src/usr/local/pkg/pfblockerng/pfb_unbound.py src/usr/local/pkg/pfblockerng/pfblockerng.inc
+pfb_unbound.py:2245   _db_seed_upstream_row() -- SQLite dnsbl.timestamp seed
+pfb_unbound.py:2615   dnsbl.log CSV writer (block)
+pfb_unbound.py:2654   dnsbl.log CSV writer (IDN/Homoglyph alert)
+pfb_unbound.py:2684   dnsbl.log CSV writer (upstream block)
+pfb_unbound.py:2702   def make_timestamp()
+pfb_unbound.py:2969   dns_reply.log CSV writer
+pfblockerng.inc:13495 pfb_log_event() caller (pfb_daemon_dnsbl, HTTPS branch A)
+pfblockerng.inc:13542 pfb_log_event() caller (pfb_daemon_dnsbl, HTTPS branch B)
+pfblockerng.inc:13605 pfb_log_event() caller (pfb_daemon_dnsbl_index)
+pfblockerng.inc:13769 def pfb_log_event()
+5 make_timestamp() call sites confirmed (matches the planner's verified note,
+NOT the phase-prompt .txt file's stale "4"). All 5 converted (the function
+itself changed; every call site inherits the new format automatically). 3
+pfb_log_event() callers confirmed, all inside stdin-daemon loops (same
+uncallable-daemon family as pfb_daemon_filterlog() from Phase 3) -- not
+directly testable, but pfb_log_event() ITSELF takes plain scalar args and IS
+directly callable, which is what the new tests exercise for real.
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- PYTHON WRITER (make_timestamp())
+--------------------------------------------------------------------------------
+Procedure: pfb_unbound.py reverted to its pre-Phase-4 content (via `git show
+HEAD:<path>` into a scratch copy, HEAD = Phase 3's tip 6c913ba7) with the
+Phase-4 test file left in its NEW state; then restored.
+
+RED (pre-Phase-4 pfb_unbound.py, new test):
+$ python3 -m pytest tests/test_pfb_unbound_log_timestamp_baseline.py -v
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_matches_iso8601_format FAILED
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_returns_empty_string_after_two_type_errors PASSED
+FAILED ...::test_make_timestamp_matches_iso8601_format - AssertionError: Jul 8 16:51:11
+assert None
+ +  where None = <function match at ...>('^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$', 'Jul 8 16:51:11')
+1 failed, 1 passed in 0.02s
+(failed for the exact expected reason -- old no-year "Jul 8 16:51:11" shape;
+the untouched TypeError-fallback test stayed green.)
+
+GREEN (restore Phase-4 pfb_unbound.py):
+$ python3 -m pytest tests/test_pfb_unbound_log_timestamp_baseline.py -v
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_matches_iso8601_format PASSED
+tests/test_pfb_unbound_log_timestamp_baseline.py::test_make_timestamp_returns_empty_string_after_two_type_errors PASSED
+2 passed in 0.01s
+
+--------------------------------------------------------------------------------
+RED -> GREEN PROOF -- PHP TWIN WRITER (pfb_log_event())
+--------------------------------------------------------------------------------
+Same procedure: pfblockerng.inc reverted to pre-Phase-4 content (HEAD =
+6c913ba7), Phase-4 test file left NEW; then restored.
+
+RED (pre-Phase-4 pfblockerng.inc, new tests):
+$ vendor/bin/phpunit --filter LogTimestampBaselineTest --testdox
+ ✔ (13 pre-existing tests unaffected)
+ ✘ Pfb log event writes iso timestamp
+   Failed asserting that 'DNSBL-HTTPS,Jul 8 14:52:40,predetails,-\n' matches
+   PCRE pattern "/^DNSBL-HTTPS,\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},predetails,-\n$/".
+ ✘ Dnsbl log uniform across both writers after fix
+   every dnsbl.log line's timestamp field must be ISO-8601 regardless of
+   writer; got line: DNSBL-Full,Jul 8 14:52:40,predetails,-
+   Failed asserting that 'Jul 8 14:52:40' matches PCRE pattern
+   "/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/".
+ ✔ Pfb log iso timestamp matches iso 8601 format
+Tests: 17, Assertions: 73, Failures: 2, PHPUnit Deprecations: 2.
+(both failures for the exact expected reason -- old 'Jul 8 14:52:40'
+no-year shape; every pre-existing test stayed green, i.e. no collateral
+breakage.)
+
+GREEN (restore Phase-4 pfblockerng.inc):
+$ vendor/bin/phpunit --filter LogTimestampBaselineTest --testdox
+ ✔ (all 17 tests, all checkmarks)
+Tests: 17, Assertions: 74, PHPUnit Deprecations: 2.
+
+--------------------------------------------------------------------------------
+UNILOG PASSTHROUGH -- RE-VERIFIED THIS SESSION (not chain-trusted from Phase 3
+or the phase-prompt/brief)
+--------------------------------------------------------------------------------
+Phase 3's carry-forward claimed unilog's IP-row passthrough (pfb_unified_
+format_ip()) needs no Phase-4 change. Re-read that function myself: still a
+pure 4-field comma-join, unchanged this phase, confirmed correct (irrelevant
+to Phase 4 -- Phase 4 never touches IP-log timestamps).
+
+The ACTUALLY relevant Phase-4 unilog claim is different: unilog's
+DNSBL-python/DNS-reply ROWS (the ones sourced from pfb_unbound.py's dnslog/
+dnsreplylog writers this phase touches) do NOT go through
+pfb_unified_format_ip() at all -- I verified this myself by reading
+pfb_daemon_filterlog() (pfblockerng.inc:12444-12503): a line prefixed
+'DNSBL-python,' is routed to pfb_unified_format_dnsbl(); a line prefixed
+'DNS-reply,' is routed to pfb_unified_format_dnsreply(). Read both formatters
+(pfblockerng_extra.inc:2097-2141): both are pure comma-joins over their named
+keys, with zero awareness of the 'datetime' field's internal shape --
+identical in kind to pfb_unified_format_ip(). CONFIRMED, not assumed: added
+testUnifiedDnsblPassesThroughNewIsoTimestampUnmodified() and
+testUnifiedDnsreplyPassesThroughNewIsoTimestampUnmodified() (both executed,
+green) feeding a NEW ISO-8601 'datetime' value through each formatter and
+asserting byte-identical passthrough -- this is the verification the phase
+prompt asked for ("a PHP-side UnifiedFormatTest.php case... confirming... zero
+further change required"), not just a restated assumption.
+
+Separately noted (NOT a Phase-4 defect, out of scope, flagged for visibility
+only): pfb_log_event()'s own dnsbl.log lines (type='DNSBL-HTTPS'/'DNSBL-Full'/
+'DNSBL-JS'/'DNSBL-1x1'/'DNSBL-Unknown') never match the 'DNSBL-python,'
+prefix pfb_daemon_filterlog() checks for -- this was ALREADY true before this
+phase (the type prefix, not the timestamp, is what's checked) and is wholly
+independent of the timestamp-format change this phase makes. Not something
+Phase 4's action plan asks to fix (action item 3 only asks to verify the
+TIMESTAMP-format passthrough, which holds); raising it here per CLAUDE.md's
+"a confirmed-real finding... is still a finding" -- this is pre-existing
+behavior older than ADR-60, not introduced or worsened by this phase, so it
+is NOT filed as a new tracking issue by this handoff (no new regression to
+track), but the planner may want to note it for future investigation.
+
+--------------------------------------------------------------------------------
+SQLITE DISJOINT-ROWS FINDING -- RE-VERIFIED THIS SESSION
+--------------------------------------------------------------------------------
+$ grep -n "dnsbl_alias_update(" src/usr/local/pkg/pfblockerng/pfblockerng.inc
+5377  function dnsbl_alias_update(...)   [definition]
+7742  dnsbl_alias_update('update', $alias, $pfb['dnsdir'], $lists_dnsbl_current, $data['count'])
+16651 dnsbl_alias_update('update', $alias, $pfbfolder, $lists_dnsbl_current, $alias_cnt)
+16664 dnsbl_alias_update('disabled', $alias, '', '', '')
+16687 dnsbl_alias_update('update', 'DNSBL_IDN', '', '', $idn_cnt)
+16691 dnsbl_alias_update('update', 'DNSBL_Homoglyph', '', '', 1)
+16693 dnsbl_alias_update('update', 'DNSBL_Homoglyph_Suspect', '', '', 1)
+16707 dnsbl_alias_update('update', 'DNSBL_TLD_Allow', '', '', $pytld_cnt)
+16734 dnsbl_alias_update('update', 'DNSBL_Regex', '', '', $regex_cnt)
+8 call sites confirmed, NONE pass 'Upstream' as $alias (7742/16651 pass a
+loop variable over real feed aliases; the rest pass fixed synthetic group
+names, none of which is 'Upstream'). Cross-checked against pfb_unbound.py:
+'Upstream' appears ONLY at _db_seed_upstream_row()'s INSERT (:2242-:2244,
+groupname='Upstream' literal) and its comment at :2350 -- never written by
+any dnsbl_alias_update() call. CONFIRMED disjoint: converting
+make_timestamp() to ISO makes ONLY the 'Upstream' row's dnsbl.timestamp
+column ISO; every other groupname's row (written exclusively by
+dnsbl_alias_update(), untouched this phase, Phase-10 scope) stays 'M j H:i:s'
+until Phase 10 lands. Also re-verified pfb_iso_timestamp()
+(pfblockerng.inc:702-711, the widget's reformatter for this column):
+unchanged this phase, still round-trips an already-ISO value harmlessly
+(strtotime() parses ISO fine, date('Y-m-d H:i:s', ...) reformats to the
+identical shape) -- confirmed by reading the function body, no test change
+needed since the function itself is untouched and was already exercised
+elsewhere.
+
+No discrepancy found versus the planner's brief on either the unilog claim
+or the SQLite disjoint-rows claim -- both independently reconfirmed from
+source, not chain-trusted.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX -- all 10 log types' timestamp format now uniform
+--------------------------------------------------------------------------------
+| logtype                          | writer(s)                          | test                                                                          |
+| --------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------- |
+| log                                | PHP pfb_logger()                    | testLogAlwaysStampedWithIsoTimestamp (Phase 2)                                |
+| extraslog                         | PHP pfb_logger()                    | testExtrasLogAlwaysStampedWithIsoTimestamp (Phase 2)                          |
+| errlog                             | PHP pfb_logger() + pfb_open_sqlite() bypass | testErrlogAndMainLogBothStampedSameFormat / testErrlogBypassWriteAlwaysStamped (Phase 2) |
+| ip_blocklog/ip_permitlog/ip_matchlog | PHP pfb_daemon_filterlog()        | testFilterlogBsdBranchYearInfersFromNow / testFilterlogSyslogBranchKeepsRealYear (Phase 3) |
+| dnsbl_parse_err                    | PHP pfb_parsed_fail()               | testParsedFailWritesIsoTimestampFormat (Phase 3)                              |
+| dnslog                             | TWO writers: python make_timestamp() (pfb_unbound.py) AND PHP pfb_log_event() (pfblockerng.inc) -- BOTH converted this phase | test_make_timestamp_matches_iso8601_format (python) + testPfbLogEventWritesIsoTimestamp (PHP) + testDnsblLogUniformAcrossBothWritersAfterFix (both writers, same file, this phase) |
+| dnsreplylog                        | python make_timestamp() (pfb_unbound.py) | test_make_timestamp_matches_iso8601_format (shared function; the 5th call site at pfb_unbound.py:2969 writes dns_reply.log) |
+| unilog                             | PHP pfb_daemon_filterlog(), passthrough of IP/DNSBL-python/DNS-reply rows | Phase 3: testUnifiedIpFidelity (IP rows, unchanged this phase). Phase 4 (new): testUnifiedDnsblPassesThroughNewIsoTimestampUnmodified / testUnifiedDnsreplyPassesThroughNewIsoTimestampUnmodified -- verifies the DNSBL-python/DNS-reply rows specifically, which this phase's writers feed |
+| SQLite dnsbl.timestamp ('Upstream' row only, _db_seed_upstream_row()) | python make_timestamp() | Re-verified read-based proof (see SQLITE DISJOINT-ROWS section above) -- disjoint from every dnsbl_alias_update()-written row (Phase 10 scope), documented not silently skipped |
+| TypeError-twice -> "" fallback (make_timestamp()) | python | test_make_timestamp_returns_empty_string_after_two_type_errors -- unchanged, still green, proves the format change didn't touch this path |
+
+--------------------------------------------------------------------------------
+DEVIATIONS / JUDGMENT CALLS
+--------------------------------------------------------------------------------
+1. The brief offered a choice for pfb_log_event()'s test coverage: drive it
+   for real, or fall back to Phase 1's "source tripwire + formula
+   reproduction" convention if disproportionate mocking would be needed. I
+   drove it for real. The one nuance discovered during construction:
+   pfb_log_event()'s "not duplicate" branch has a PRE-EXISTING, out-of-scope
+   bug -- `$req_agent = $data[2];` reads an undefined array offset, because
+   pfb_dnsbl_parse('daemon', ...) only ever returns a 2-element array
+   (`array($pfb_group, $details)`). Calling pfb_log_event() down that branch
+   would raise an unrelated PHP warning having nothing to do with this
+   phase's timestamp change, and touching it would be scope creep (the brief's
+   constraint: "only the timestamp string's format"). Resolved by pre-seeding
+   the lastevent SQLite row so pfb_log_event() takes its OTHER branch (the
+   "duplicate entry" path, which never calls pfb_dnsbl_parse()) -- a
+   legitimate, real production code path (a repeat block of the same
+   domain+src_ip), not a workaround around the function's real behaviour.
+   This exercises the REAL pfb_log_event() function, unmodified, with zero
+   mocking of it. Not filed as a new tracking issue: it is pre-existing,
+   unrelated to any log-timestamp ADR, and out of this phase's stated scope;
+   flagged here for visibility per CLAUDE.md's finding-transparency rule.
+2. Widened the unilog re-verification beyond the brief's own framing: the
+   brief said "re-verify unilog's python-row passthrough" without
+   distinguishing that Phase 3's carry-forward was about IP rows
+   (pfb_unified_format_ip()) while Phase 4's own dnslog/dnsreplylog writers
+   feed a DIFFERENT pair of formatters (pfb_unified_format_dnsbl()/
+   pfb_unified_format_dnsreply()) that neither this phase's brief nor Phase
+   3's carry-forward had tested with an ISO-shaped fixture. Added the two
+   UnifiedFormatTest.php cases above to close that gap for real, rather than
+   silently reusing Phase 3's IP-row verification as if it covered this
+   phase's own writers too.
+None of the above weakens any CLAUDE.md MUST rule.
+
+--------------------------------------------------------------------------------
+CARRY-FORWARD FOR PHASE 5 (fix the in-repo consumers of the new log format)
+--------------------------------------------------------------------------------
+- All 10 log types now share exactly one timestamp format ('Y-m-d H:i:s')
+  and position (line-start prefix for free-text logs; CSV field 0/1 as
+  before for the CSV logs) -- Phase 5 can now assume this uniformly.
+- ADR.md §1.8's HIGH PRIORITY in-repo consumers Phase 5 must fix (verified
+  present, unchanged by this phase, still byte-coupled to the OLD 3-space-
+  token shape):
+  - www/index.php:45,51,52 -- DNSBL block page's dnsbl.log correlation grep
+    key, byte-coupled to make_timestamp()'s OLD "Jan 5 14:30:45" shape. Now
+    BROKEN (this phase's own change): the grep will never match once this
+    phase lands, until Phase 5 rebuilds the key for the ISO shape. This is
+    the EXPECTED transient state the ADR's own Phase 4/5 split anticipates,
+    not a Phase-4 regression -- Phase 5 fixes it next, BEFORE Phase 6 (the
+    age-cutoff feature) lands.
+  - pfblockerng_alerts.php:1837 (day-bucket stats, `cut -d ',' -f{col} |
+    cut -d ' ' -f1-2`) and :1782/:1850 (hourly chart-label `awk`) -- same
+    "now broken until Phase 5" status, for the SAME reason (2-space-token
+    ISO vs the old 3-token format the cut/awk pipelines assume).
+  - pfblockerng_alerts.php:1841/:1844 (`dnsbldatehr`/`dnsbldatehrmin`,
+    ':'-split) -- ADR.md/§1.8 already noted these are NOT broken (ISO's
+    date part uses only dashes, so a ':'-split still isolates the hour
+    correctly); Phase 5 still needs its own regression test proving this,
+    per the phase-5 prompt.
+- pfb_log_iso_timestamp() is now called from 5 sites (pfb_logger(),
+  pfb_open_sqlite(), pfb_parsed_fail(), pfb_daemon_filterlog()'s BSD-branch
+  FALSE-fallback, and now pfb_log_event()) -- any future format change to it
+  needs re-verification of all 5, not just a subset.
+- make_timestamp() (Python) is now called from all 5 of its own sites
+  (verified this phase, see CALL-SITE COUNTS above) -- the function itself
+  changed, so every call site inherited the new format with no per-site
+  edit needed. iso_timestamp() is gone; do not reintroduce a second
+  Python-side timestamp helper.
+- The 'Upstream' SQLite dnsbl.timestamp row is ISO now; every other
+  groupname's row (dnsbl_alias_update(), 8 call sites, none 'Upstream')
+  stays 'M j H:i:s' until Phase 10 -- a real, DOCUMENTED, non-conflicting
+  mixed state inside the SAME SQLite column across DIFFERENT rows (not a
+  regression: they were never coupled, disjoint groupname sets).
+- Full `vendor/bin/phpunit` (2457 tests) and `python3 -m pytest` (2436
+  tests) both green this phase with ZERO unenumerated downstream consumers
+  breaking. Phase 5 should still re-run both full suites regardless, per
+  standing gate discipline -- www/index.php and pfblockerng_alerts.php have
+  no existing PHPUnit coverage today (they are page-render files, not
+  covered by the .inc-focused suite), so Phase 5's own new tests are the
+  first real coverage of the two consumers this carry-forward names.

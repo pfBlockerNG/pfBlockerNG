@@ -1,0 +1,225 @@
+ADR-14 — Phase 2 RESULTS: Tier-A HTTP render-smoke sweep + the real oracle
+==========================================================================
+
+Status: Implemented (pending smoke test). The parametrized ui_render sweep + the
+oracle are landed and lint/type/collection-clean LOCALLY; the pure-logic oracle
+proof RUNS AND PASSES locally (no VM). The LIVE per-page sweep runs only inside
+CI on the ADR-04 smoke VM (this dev machine cannot boot/reach it). Every marker
+below is CONFIRMED from the page source on disk; the live 200+marker+log behaviour
+is CI-PENDING (the ui_render sweep is the confirmation; it executes in CI).
+
+Builds on Phase 1: reuses the authenticated `webui` fixture (CSRF login + get())
+and `looks_like_login_page` (tests/smoke/ui/webui.py); NO second login / VM boot.
+
+--------------------------------------------------------------------------------
+1) THE ORACLE (load-bearing; ADR §1 fact 3 — NOT HTTP 200)
+--------------------------------------------------------------------------------
+
+New module tests/smoke/ui/render_oracle.py. A page PASSES iff ALL of:
+
+  (a) HTTP 200.
+  (b) Body contains NONE of the PHP-diagnostic substrings:
+        FORBIDDEN_SUBSTRINGS = ('Fatal error', 'Parse error', 'Warning',
+                                'Notice', 'Uncaught', 'Stack trace')
+      (case-sensitive plain substrings — PHP emits these with this exact casing;
+      this is exactly the ADR §1/§2 list. 'Deprecated' was considered and DROPPED
+      to match the ADR's prescribed set and avoid false-positive surface; add it
+      back only if a Deprecated regression is the target. NOTE/RISK below.)
+  (c) A page-SPECIFIC content marker is present AND the body is NOT the login form
+      (looks_like_login_page) — so a blank body, a redirect to the dashboard, or a
+      logged-out 200 (pfSense renders login in place at 200, no 302) cannot pass.
+  (d) The on-box php_error.log gained NO new bytes DURING the sweep (sweep-level,
+      not per-page) — the source-of-truth log, catching a diagnostic that was
+      logged but not echoed into a body.
+
+API (reusable by Phases 3/4):
+  FORBIDDEN_SUBSTRINGS: tuple[str, ...]
+  body_has_php_error(body) -> first forbidden token present, or None
+  evaluate_render(path, status_code, body, markers) -> RenderResult(ok, reasons, …)
+      applies (a)-(c); reasons lists EVERY failing condition (specific msgs).
+  class PhpErrorLogGuard(vm, candidates=PHP_ERROR_LOG_CANDIDATES):
+      .snapshot()         — record byte size of each existing candidate log
+      .assert_no_growth() — fail if any grew; message includes the appended tail
+
+php_error.log diff mechanism (d):
+  - Candidate paths, in pfSense order: PHP_ERROR_LOG_CANDIDATES =
+      ('/var/log/php_error.log', '/var/log/php-fpm.log').
+    pfSense's webConfigurator FPM pool logs PHP errors to /var/log/php_error.log;
+    php-fpm.log is the daemon log on some builds. The guard snapshots WHICHEVER
+    EXIST (missing => size 0), so a log CREATED mid-sweep also registers growth
+    (0 -> N). Path is NOT hard-trusted: size is read on-box via
+    `stat -f %z <path> 2>/dev/null || echo 0` (BSD/pfSense stat). [CLAUDE.md: read
+    effective state, don't assume a path. CI VERIFICATION ITEM: confirm which of
+    the two exists on the image from the smoke-diagnostics /var/log capture; if
+    pfSense uses a different path, add it to PHP_ERROR_LOG_CANDIDATES.]
+  - Snapshot ONCE before the parametrized sweep, assert ONCE after — a module-
+    scoped fixture (php_error_log_guard) brackets the whole sweep. Each sweep test
+    requests it, enrolling in the (d) check; growth from ANY page fails teardown.
+
+--------------------------------------------------------------------------------
+2) THE PAGE TABLE (path + marker; tests/smoke/ui/test_render_smoke.py PAGE_TABLE)
+--------------------------------------------------------------------------------
+
+Markers are stable strings from each file's $pgtitle crumb and/or a
+Form_Section('…') panel title (rendered verbatim into the HTML). Any one present
+(and not the login form) proves the real page rendered. ALL are HERMETIC (render
+from local config; no feed download to produce chrome).
+
+  name                 path                                                  marker(s)
+  -------------------- ----------------------------------------------------- ---------------------------------------------
+  general              /pfblockerng/pfblockerng_general.php                  "pfBlockerNG", "General Settings"
+  ip                   /pfblockerng/pfblockerng_ip.php                       "IP Configuration", "ASN configuration"
+  dnsbl                /pfblockerng/pfblockerng_dnsbl.php                    "DNSBL Webserver Configuration",
+                                                                              "DNSBL Configuration"
+  feeds                /pfblockerng/pfblockerng_feeds.php                    "Pre-defined Alias/Group/Feeds"
+  alerts               /pfblockerng/pfblockerng_alerts.php                  "Alert Settings"
+  log                  /pfblockerng/pfblockerng_log.php                      "Log/File Browser selections"
+  sync                 /pfblockerng/pfblockerng_sync.php                     "XMLRPC Sync Settings"
+  safesearch           /pfblockerng/pfblockerng_safesearch.php              "SafeSearch settings", "DNSBL SafeSearch"
+  update               /pfblockerng/pfblockerng_update.php                  "Update Settings"
+  blacklist            /pfblockerng/pfblockerng_blacklist.php               "DNSBL Category Feeds are processed first",
+                                                                              "DNSBL Category"
+  category_ip          /pfblockerng/pfblockerng_category.php?type=ipv4       "Summary", "pfBlockerNG"
+  category_dnsbl       /pfblockerng/pfblockerng_category.php?type=dnsbl      "Summary", "DNSBL"
+  category_edit_ip     /pfblockerng/pfblockerng_category_edit.php?type=ipv4  "Advanced Tuneables"
+  category_edit_dnsbl  /pfblockerng/pfblockerng_category_edit.php?type=dnsbl "Advanced Tuneables"
+  threats              /pfblockerng/pfblockerng_threats.php?domain=example.com  "Threat Domain", "Source IP"
+  widget               /widgets/widgets/pfblockerng.widget.php              'id="pfblockerngack"', "Alias"
+
+Per-page notes (each cost real source reading):
+  - 14 servable main .php files under src/usr/local/www/pfblockerng/ (the ADR's
+    "18 pages" counts mode variants + per-continent views; the on-disk servable
+    set is 14 — confirmed by directory listing; pfblockerng_asn.txt and
+    pfblockerng_feeds.json are data, not pages).
+  - pfblockerng.php is NOT in the table (see EXCLUSIONS): it is a CLI dispatcher +
+    a TEMPLATE that GENERATES the per-continent/Reputation pages; a direct web GET
+    runs the template path, not a settings page.
+  - category.php / category_edit.php are MULTI-MODE (default IP view; DNSBL view
+    under ?type=dnsbl). BOTH modes are probed (CLAUDE.md branch coverage), so the
+    page's mode switch is exercised on each side, not just the default.
+  - threats.php REQUIRES a host/domain/port param: with none it print_info_box()es
+    and exit()s before $pgtitle. ?domain=example.com renders the lookup-page chrome
+    (panel-title "Threat Domain:"); the threat links it draws are <a href> ONLY (no
+    server-side network call), so it stays HERMETIC. (example.com is RFC-2606
+    reserved; the page just renders its name into the chrome — no resolution.)
+  - widget (pfblockerng.widget.php) is auth-gated (require_once guiconfig.inc) and
+    sets $nocsrf=true; a plain GET renders the full alias-table panel. Its hidden
+    inputs id="pfblockerngack"/…clear… are stable. The AJAX getNewFailed/getNewWidget
+    paths need a query param, so the bare GET exercises the FULL-render branch.
+  - feeds.php marker is the <h2 class="panel-title"> "Pre-defined Alias/Group/Feeds"
+    (it uses panel-title, not Form_Section).
+
+A coverage guard (test_page_table_covers_every_pfblockerng_page) asserts the table
+covers all 14 main paths + the widget and that both exclusions are recorded — a new
+src page added without a Tier-A entry fails it.
+
+--------------------------------------------------------------------------------
+3) PAGES EXCLUDED FROM THE HERMETIC TIER A (recorded, NOT dropped)
+--------------------------------------------------------------------------------
+
+tests/smoke/ui/test_render_smoke.py EXCLUDED_FROM_TIER_A — each with reason +
+Phase-5 access note:
+
+  (i) geoip_continent_views — pfblockerng_<Continent>.php (Top Spammers, Africa,
+      Antarctica, Asia, Europe, North America, Oceania, South America,
+      Proxy_and_Satellite) + pfblockerng_reputation.php.
+      WHY OUT: pfblockerng.php generates these via file_put_contents ONLY AFTER a
+      MaxMind GeoIP update — which needs a network download + a MaxMind key. They
+      do NOT exist on a fresh box, so they cannot render HERMETICALLY.
+      PHASE 5: in an egress-allowed Tier-B leg, run a GeoIP update so the pages are
+      generated, then render-smoke them. (Direct GET of pfblockerng.php = template
+      path, not a Tier-A target.)
+
+  (ii) dnsbl_vip_sinkhole_pages — www/index.php + www/dnsbl_default.php.
+      WHY OUT: served by the DNSBL SINKHOLE lighttpd on the DNSBL VIP (ports
+      8081/8443), NOT the main webConfigurator — no guiconfig auth. index.php
+      exit()s unless HTTP_HOST is a valid hostname AND REQUEST_URI=='/' (else it
+      returns a 1x1 GIF); the full block page includes dnsbl_active.php which
+      includes dnsbl_default.php (a TEMPLATE, never served standalone). The
+      authenticated :8080 session CANNOT reach them.
+      PHASE 5: fetch the VIP sinkhole directly — http://<DNSBL_VIP>:8081/ with a
+      Host header set to a blocked hostname and REQUEST_URI '/' to get the
+      DNSBL-Full block page; marker "Site blocked via DNSBL" (dnsbl_default.php
+      <title>). No webConfigurator login. The harness already injects the DNSBL VIP
+      (ensure_dnsbl_vip) and sets ports 8081/8443 (helpers.DNSBL_PORT/_SSL), so the
+      address/ports are known.
+
+--------------------------------------------------------------------------------
+4) PROVING THE ORACLE (a bare 200 NEVER passes) — runs LOCALLY (no VM)
+--------------------------------------------------------------------------------
+
+tests/smoke/ui/test_render_oracle.py — PURE LOGIC against evaluate_render, so it
+EXECUTES off-box (no smoke_vm). It is under tests/smoke/ui/ (so the default
+`python -m pytest` ignores it — count stays 1019) and runs under the smoke/ui
+override AND requires no VM. Branch coverage (CLAUDE.md): EVERY case first asserts
+the GOOD body PASSES (before-state), THEN the broken variant is REJECTED:
+  - test_good_body_passes                — healthy 200+marker body passes (the baseline).
+  - test_php_diagnostic_in_body_is_rejected[token] — for EACH FORBIDDEN_SUBSTRINGS
+    token: the same body passes WITHOUT it, then FAILS once the token is injected.
+  - test_non_200_is_rejected             — 500 fails though body is clean+marker.
+  - test_missing_marker_is_rejected      — 200 with the WRONG page (no marker) fails.
+  - test_login_form_body_is_rejected     — logged-out 200 (login form) fails.
+  - test_multiple_failures_are_all_reported — 404 + Warning + no marker => ≥2 reasons.
+=> a 200 alone, a 200 with a PHP warning, a blank/redirected 200, and the login
+form are ALL rejected — the oracle is proven load-bearing, not an always-pass.
+
+VERIFIED LOCALLY: `pytest tests/smoke/ui/test_render_oracle.py
+test_page_table_covers_every_pfblockerng_page -m ui_render --override-ini="addopts="`
+=> 12 passed (no VM needed).
+
+--------------------------------------------------------------------------------
+5) DEFAULT SUITE — byte-identical (verified locally)
+--------------------------------------------------------------------------------
+- `python -m pytest --collect-only` => 1019 tests collected (UNCHANGED vs baseline).
+- All new files live under tests/smoke/ui/, which pyproject's
+  addopts="-v --ignore=tests/smoke" excludes from default collection. No new
+  top-level test => default count BYTE-IDENTICAL at 1019.
+- Markers already registered in pyproject (Phase 1): ui_render used here.
+
+--------------------------------------------------------------------------------
+6) GATES (local)
+--------------------------------------------------------------------------------
+- python -m pytest --collect-only => 1019 collected (== baseline).        [VERIFIED]
+- ruff check .                     => All checks passed!                   [VERIFIED]
+- ruff format --check .            => 45 files already formatted.          [VERIFIED]
+- mypy (new 3 files)               => Success: no issues found.            [VERIFIED, informational]
+- Pure-logic oracle + table tests  => 12 passed (no VM).                   [VERIFIED]
+- NO src/ change (git status --porcelain src/ empty).                      [VERIFIED]
+
+--------------------------------------------------------------------------------
+7) REAL WARNINGS RECORDED (none yet — CI-pending)
+--------------------------------------------------------------------------------
+- The per-page LIVE sweep runs only in CI. No real PHP Warning/Notice has been
+  observed yet (this machine can't boot the VM). If a page renders a real
+  diagnostic in CI, RECORD it here and DO NOT fix it in this phase (a fix is its
+  own change) — the oracle is designed to surface it, not hide it.
+- NOTE/RISK to watch in the FIRST CI run: FORBIDDEN_SUBSTRINGS are bare substrings.
+  pfSense CHROME (head.inc menus/footer/help) wraps every page; if any chrome copy
+  legitimately contains 'Warning'/'Notice' as plain text, a page could false-fail.
+  No such copy exists in the pfBlockerNG page bodies themselves (grep-checked), but
+  the surrounding pfSense chrome was NOT exhaustively audited. If the first CI sweep
+  false-fails on chrome text, tighten (b) to anchor on the PHP diagnostic shape
+  (e.g. 'PHP Warning'/'<b>Warning</b>'/'on line') rather than the bare word — record
+  the exact offending string here before changing the list.
+
+--------------------------------------------------------------------------------
+8) FILES
+--------------------------------------------------------------------------------
+- tests/smoke/ui/render_oracle.py     — the reusable oracle (evaluate_render,
+  FORBIDDEN_SUBSTRINGS, body_has_php_error, PhpErrorLogGuard). NEW.
+- tests/smoke/ui/test_render_smoke.py — PAGE_TABLE + EXCLUDED_FROM_TIER_A, the
+  parametrized ui_render sweep (test_page_renders_clean), the php_error_log_guard
+  module fixture, the coverage guard. NEW.
+- tests/smoke/ui/test_render_oracle.py — the prove-the-oracle pure-logic tests. NEW.
+No src/ change; default pytest unchanged.
+
+--------------------------------------------------------------------------------
+9) GO-AHEAD FOR PHASE 3
+--------------------------------------------------------------------------------
+Proceed. Tier A (cheap, hermetic, standalone-valuable) is in place: the oracle
+(body + marker + login-form + php_error.log) is reusable, the page table covers
+every hermetic pfBlockerNG page (both modes of the multi-mode pages), the two
+non-hermetic classes are recorded with Phase-5 access notes, and the oracle is
+proven to reject a broken 200. Phase 3 (Tier B functional, HTTP POST) reuses the
+Phase-1 session + extract_csrf_token to drive forms and assert EFFECTIVE
+config.xml/pfctl/unbound state via helpers.config_get — not the HTTP response.

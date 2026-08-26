@@ -1,0 +1,78 @@
+================================================================================
+PHASE 3 PROMPT — PHP: extract the reusable feed download/stage seam
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §1.2, §2.1, §5 first)
+================================================================================
+
+ROLE
+Branch adr/31-dnswl-allow-feeds (off devel). Phase 3 of 6. BEHAVIOUR-PRESERVING:
+a pure refactor/extraction of the existing DNSBL download loop + its regression test;
+no functional change. Work in the worktree, one commit, push to the branch.
+
+WHY THIS PHASE EXISTS
+Phase 4 must download/stage a SECOND feed section (DNSWL) exactly like the DNSBL
+section but tagging mode='permit'. Rather than copy ~140 lines, we first extract the
+per-row download + raw-stage + manifest-entry body into ONE reusable seam
+parameterised by section + mode, with the deny path proven byte-identical. Extraction
+before reuse keeps the risky new-section wiring small and the regression net tight
+(ADR §6).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/02_Results.txt — the manifest-entry shape PHP
+  must emit (mode='permit') and the absent⇒deny contract. If missing, STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§1.2 pipeline, §2.1 PHP-download row)
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+    the DNSBL feed loop :11014-11036 (reads pfblockerngdnsbl/config) and the per-row
+    body :11054-11191 (pfb_download :11165, .orig staging, raw stage to pfb_py_raw,
+    logging_type :11079-11106); the manifest writer pfb_unbound_py_atomic_write()
+    :4784 and $pfb['unbound_py_sources'] :108.
+- tests/php/README.md + an existing PHPUnit test that loads the real .inc off-box via
+  shims/doubles (tests/php/pfsense_doubles.php).
+- CLAUDE.md (PHP: tabs, uppercase TRUE/FALSE, no die()/exit(); PFBL-01 sniff;
+  RequireConfigGateway sniff; Naming — follow the established pattern).
+
+ACTION PLAN (pin FIRST, then extract)
+1. Add a PHPUnit test pinning the CURRENT manifest-entry output for a representative
+   deny row (header/group/log/format/provenance fields) — the behaviour the extraction
+   must preserve. (If the body is not yet unit-reachable off-box, extract the smallest
+   pure helper that builds a single feed's manifest entry, and pin THAT.)
+2. Extract the per-row download + raw-stage + manifest-entry body into a function
+   parameterised by (section, mode) — e.g. pfb_feed_row_stage(...$mode='deny'). The
+   existing DNSBL loop calls it with mode='deny'. Behaviour-preserving:
+   - deny ⇒ identical .orig/raw staging and an identical manifest entry. DECIDE +
+     PIN: a deny entry either omits `mode` or sets mode='deny' — Phase 2 treats both
+     as deny; pick the one that keeps the manifest byte-identical for existing configs
+     (prefer OMIT to avoid a diff in every entry) and assert it.
+3. No new config section yet; no permit caller yet (that is Phase 4).
+
+CONSTRAINTS
+- Pure extraction — NO change to what a deny row produces on disk or in the manifest.
+- Feed header/url handling stays behind the input-validation contract (pfb_filter()/
+  pfb_sanitise_feed_header()) — keep the PFBL-01 sniff green; do not move a build past
+  its validation.
+- Do NOT register the dynamic per-row section in PfbConfig (it is foreign/section-level,
+  like pfblockerngdnsbl). No RequireConfigGateway violations.
+- Do NOT touch Python/UI.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit                 -> green incl. the new manifest-entry pin
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc
+- vendor/bin/phpstan analyse src/usr/local/pkg/pfblockerng/pfblockerng.inc
+- php -l on the edited file
+- python -m pytest                   -> still green (manifest contract unchanged)
+- diff-read: confirm a sample deny manifest entry is byte-identical pre/post extraction.
+
+EXPECTED RESULT
+The DNSBL loop delegates to a (section, mode) seam; deny output is byte-identical;
+pinned by PHPUnit. No permit producer yet.
+
+COMMIT (single)
+    pfblockerng: extract reusable feed download/stage seam (ADR-31 P3)
+Push to adr/31-dnswl-allow-feeds; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/03_Results.txt
+State: the extracted function name + signature (section, mode params); the deny
+manifest-entry decision (omit `mode` vs mode='deny') and the test pinning it; what
+Phase 4 must pass to stage a permit row; any sniff/validation seam touched. Go-ahead
+for Phase 4.

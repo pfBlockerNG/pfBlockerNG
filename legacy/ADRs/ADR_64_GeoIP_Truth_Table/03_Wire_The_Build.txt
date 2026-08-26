@@ -1,0 +1,79 @@
+================================================================================
+PHASE 3 PROMPT -- Wire the country/continent build onto the table (behaviour-CHANGING: deltas D1 + D2 only)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch adr/64-geoip-truth-table (off the
+latest devel; create if absent). You implement yourself with Read/Edit/Write/Bash -- you NEVER
+spawn sub-agents. Phase 3 is the swap: identity comes from the table, the provider supplies network -> ISO.
+Test mode: RED->GREEN against the Phase-1 oracle. The oracle is UPDATED to the new expected values ONLY where the ADR's delta table (D1, D2) permits; every other difference is a defect. Author the delta assertions FIRST (they fail on today's code), then make them pass.
+Blast-radius note for the gate: The GeoIP country/continent build. If this phase lands alone: the ~5 corrected country names (D1) and the 5 new unknown-country entries (D2) are user-visible; nothing in config.xml moves.
+Follow CLAUDE.md in full.
+
+WHY THIS PHASE EXISTS
+This is the phase the ADR exists for. Everything before it was scaffolding; everything after is
+notices, tracking and coverage.
+
+REQUIRED READING
+- .ADRs/ADR_64_GeoIP_Truth_Table/ADR.md IN FULL -- especially SS1.3/SS1.4 (the measured facts),
+  SS2.1 (the table + its sources), SS2.2 (per-continent unknown buckets), SS2.3 (notices),
+  "Accepted user-visible deltas" (D1-D4: the ONLY permitted output changes) and "Semantics that
+  MUST be preserved".
+- Issue #1235 IN FULL, including every comment (`gh issue view 1235 --comments`) -- the design
+  record this ADR was distilled from. Read it, not just the ADR summary.
+- CLAUDE.md in full -- PHP standards, Test coverage mandate, the delegation contract.
+- src/usr/local/www/pfblockerng/pfblockerng.php -- pfblockerng_uc_countries() (~:855-1460),
+  $pfb_geoip_all (~:941-1191), $top_20 (~:883), the two hardcoded
+  continent-level buckets (~:935-938), the Locations parse gate (~:898), the Blocks parse
+  (~:1223-1330).
+- src/usr/local/pkg/pfblockerng/pfblockerng_geoip.inc -- pfblockerng_get_countries(),
+  pfb_build_reputation_tab() (package-owned generated-page writers).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- $pfb['continents'] / $pfb['continent_list']
+  (~:160-171): the FROZEN structural bindings (alias prefixes, config-section roots).
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before implementation; the live
+tree and any prior RESULTS/ file override this prompt on any conflict -- verify each claim before
+acting, and flag contradictions loudly in the handoff. The ADR's measured facts came from a real
+licensed dataset on the maintainer's box; if the live code disagrees, the CODE wins and you
+ESCALATE rather than patch around it.
+
+ACTION PLAN (ordered)
+1. Read the Phase-1 and Phase-2 RESULTS files first. If either is missing, STOP and report.
+2. pfblockerng_uc_countries(): identity (which countries exist, their names, their continents) comes
+   from the committed table. MaxMind's Locations CSV degrades to a `geoname_id -> ISO` lookup and
+   NOTHING else. Delete $pfb_geoip_all. Keep $top_20 but validate every entry against the table
+   (a code not in the table is a hard error, not a silent skip).
+3. The per-continent unknown-country buckets (ADR SS2.2): generic across all seven, keyed by the
+   continent's GeoNames id. The two live keys (6255147 Asia, 6255148 Europe) MUST keep their exact
+   stored values -- a changed key is a config break, i.e. a phase failure.
+4. Localized names come from the table (ADR SS2.1). The provider's locale files are no longer
+   required for any locale we ship.
+5. Re-run the Phase-1 oracle. The diff must be EXACTLY D1 + D2 (ADR "Accepted user-visible
+   deltas"). Anything else -- a changed alias name, a changed cc/*.txt filename, a changed
+   membership, a lost country -- is a DEFECT. Do not update the oracle to accommodate it; ESCALATE.
+
+CONSTRAINTS
+- The "Semantics that MUST be preserved" list in the ADR is the contract: stored keys, alias
+  names, config-section roots, page filenames, per-country membership, XK, and "(0) not vanished".
+- ADR-28: no config migration. If you find yourself needing one, STOP -- that means a key moved.
+- PHP: tabs, PHP 8.3, TRUE/FALSE, PfbConfig for registered keys, no die()/exit() in library code.
+
+VERIFICATION (executed -- paste the output, never "reasoned through")
+- The delta assertions RED on today's code (paste), GREEN after the swap (paste), with the test
+  files' `git hash-object` at red time (the Test-coverage #1 freeze).
+- The Phase-1 oracle re-run: paste the FULL diff of its output and account for EVERY line against
+  D1/D2. A line you cannot map to a delta is a defect.
+- `vendor/bin/phpunit`, `composer phpstan`, `composer phpcs -- --standard=phpcs.xml.dist src/`,
+  `php -l` on each touched file.
+- The live-VM leg: `scripts/local-smoke.sh --marker smoke --filter geoip` + `--marker ui_render`.
+- `scripts/agent/run-gates.sh --diff origin/devel`.
+
+HANDOFF
+Write .ADRs/ADR_64_GeoIP_Truth_Table/RESULTS/03_Results.txt with the fixed fields from
+CLAUDE.md "THE HANDOFF": Verdict; What changed (files + one-line why each + commit hash); Gates
+(exact commands + pasted output tails); the RED->GREEN proof (delta assertions failing BEFORE the production edit, passing after, unchanged, with their red-time `git hash-object`) AND the full Phase-1 oracle diff with every line mapped to D1/D2; Coverage matrix (every row of this prompt's
+ACTION PLAN ticked, or an explicit justified deferral); Deviations / judgment calls (or "none");
+Carry-forward for the next phase.

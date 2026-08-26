@@ -1,0 +1,128 @@
+ADR-43 Phase 2 — Due-Ledger Library
+=====================================
+Branch: adr/43-update-and-scheduling-revamp
+Status: COMPLETE — pure library added, wired into nothing.
+
+## Ledger API signatures (pfblockerng_extra.inc)
+
+  // Pure: no I/O, no globals.
+  pfb_due_ledger_seeded_jitter(string $job_key, string $seed, int $max): int
+  pfb_due_ledger_is_due_from_entry(?array $entry, int $now): bool
+
+  // I/O helpers.
+  pfb_due_ledger_read_entry(string $job_key, string $ledger_dir): ?array
+  pfb_due_ledger_write_entry(string $job_key, array $entry, string $ledger_dir): void
+
+  // Composite (I/O + decision). Clock and seed are INJECTABLE.
+  pfb_due_ledger_is_due(
+      string $job_key, int $interval, int $now,
+      string $seed, int $jitter_max, string $ledger_dir
+  ): bool
+  pfb_due_ledger_mark_ran(
+      string $job_key, int $interval, int $now,
+      string $seed, int $jitter_max, string $ledger_dir
+  ): void
+
+## On-disk file layout
+
+  Path: $pfb['dbdir'] . '/pfb_due_ledger.json'
+  i.e.  /var/db/pfblockerng/pfb_due_ledger.json on a live box.
+
+  Format: JSON object, one key per job_key:
+    {
+        "dcc": {"last_run": 1752537600, "next_due": 1752659079, "jitter": 35079},
+        "bl":  {"last_run": 1752537600, "next_due": 1752703070, "jitter": 79870}
+    }
+
+  Write path: content written to pfb_due_ledger.json.tmp with LOCK_EX,
+  then rename() to pfb_due_ledger.json (atomic on FreeBSD same-fs rename).
+  Read path:  fopen + flock(LOCK_SH) + stream_get_contents.
+
+## Jitter scheme
+
+  seeded_jitter(job_key, seed, max):
+    result = (abs(crc32(seed . ':' . job_key)) % max) + 1   [when max > 0]
+    result = 0                                                [when max == 0]
+
+  Range: [1, max] for max > 0 — guaranteed non-zero.
+  Deterministic: same (job_key, seed, max) always returns the same value.
+  Spread:  different job keys produce different offsets with high probability.
+
+  Seed source (Phase 4's job): a per-install string derived at install-time
+  (e.g. from a stored config field or hostname hash). The seed must be stable
+  across reboots so the spread is preserved when the ledger is restored.
+
+  Concrete example (seed='test-seed', max=86400 seconds):
+    seeded_jitter('dcc', ...) = 35079 s ≈ 9.7 h
+    seeded_jitter('bl',  ...) = 79870 s ≈ 22.2 h
+
+  For dcc/bl, max = 23 * 3600 = 82800 s (23-hour spread) mirrors rand(0,23)
+  but is stable and per-install. Phase 4 will choose the concrete max.
+
+## Absent/corrupt handling
+
+  - No file          → read_entry returns NULL   → is_due returns TRUE (due now)
+  - Empty/corrupt    → read_entry returns NULL   → is_due returns TRUE (fail-safe)
+  - Key absent       → read_entry returns NULL   → is_due returns TRUE (due now)
+  - Malformed entry  → read_entry returns NULL   → is_due returns TRUE (fail-safe)
+
+  Fail-safe rule: any read failure is treated as absent = due now.
+  The seeded jitter is applied on mark_ran (after is_due returns TRUE),
+  spreading next_due values so subsequent ticks do not all fire together.
+
+## How Phase 4 should call it
+
+  In the tick function (once per tick for each scheduled job):
+
+    // Decide.
+    if (pfb_due_ledger_is_due($job_key, $interval, time(), $seed, $jitter_max, $pfb['dbdir'])) {
+        // ... run the job ...
+        // Record completion.
+        pfb_due_ledger_mark_ran($job_key, $interval, time(), $seed, $jitter_max, $pfb['dbdir']);
+    }
+
+  The seed comes from a thin outer wrapper that reads a per-install value
+  (to be defined in Phase 4). Job key examples: 'cron', 'dcc', 'bl', 'ss_refresh'.
+  Interval examples: 86400 for daily, 604800 for weekly, 900 for 15-min.
+  jitter_max examples: 82800 (23 h) for dcc/bl, 0 for ss_refresh (no spread needed).
+
+## Issue #468 persist/restore integration point
+
+  Location in pfblockerng.inc: around line 8803 in pfb_earlyshellcmd() (IP side)
+  and pfb_dnsbl_cache() (~line 8909, DNSBL side). Both register earlyshellcmd
+  entries that restore /var/db/pfblockerng data after a RAM-disk reboot.
+
+  The IP side uses: pfblockerng.sh aliastables (archives IP alias tables).
+  The DNSBL side uses: pfblockerng.sh dnsbl_cache restore.
+
+  Phase 4 action: add pfb_due_ledger.json to the IP-side archive (pfblockerng.sh
+  aliastables) so it is backed up alongside the alias tables and restored by the
+  same earlyshellcmd on boot. The absent-entry fail-safe is defence-in-depth for
+  the case where the archive is missing or the ledger entry is stale.
+
+  The ledger file is a single path so the archive addition is one line in the
+  shell script's aliastables function.
+
+## Verification output
+
+  php -l src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc  → No syntax errors
+  php -l tests/php/DueLedgerTest.php                          → No syntax errors
+  vendor/bin/phpunit --filter DueLedgerTest                   → 24 tests, 50 assertions, OK
+  vendor/bin/phpunit                                           → 1449 tests, 5425 assertions, 3 skipped, OK
+  vendor/bin/phpstan analyse --memory-limit=1G                → No errors
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/             → (clean)
+  python -m pytest -q                                         → 1882 passed, 4 skipped
+  ruff check .                                                → All checks passed
+
+## Files changed
+
+  src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc  (6 new functions added)
+  tests/php/DueLedgerTest.php                          (new — 24 tests, 50 assertions)
+
+## Go-ahead for Phase 3
+
+  Phase 3 (trigger API + deprecated verb adapters) may proceed.
+  The due-ledger library is completely isolated from production scheduling code.
+  No existing behaviour was changed; only additions to pfblockerng_extra.inc.
+
+ADR-RESUME: branch=adr/43-update-and-scheduling-revamp next-phase=3

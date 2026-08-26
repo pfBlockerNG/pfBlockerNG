@@ -1,0 +1,169 @@
+ADR-40 Phase 5 — Smoke matrix + docs + Definition of Done
+==========================================================
+
+Branch: adr/40-content-addressed-alias
+Prior HEAD entering this phase: 7212db9
+
+─────────────────────────────────────────────────────────────────────────────
+SMOKE CASES ADDED
+─────────────────────────────────────────────────────────────────────────────
+
+File: tests/smoke/test_smoke_adr40.py
+Marker: pytest.mark.smoke (dispatch-only; excluded from default pytest run by
+  --ignore=tests/smoke in pyproject.toml addopts).
+
+The file now covers four scenarios in one module (adr40_vm fixture, shared
+deploy):
+
+Scenario A — test_adr40_content_gate_idempotence  (Phase 3, already existed)
+  WHAT IT PINS: a second update over unchanged feed content emits an empty
+    PFB_CHANGED_IP_ALIASES.  The content-gate short-circuits the reload.
+  BEFORE-STATE ASSERTION: pf table holds the settled IP before the second
+    update — proves the empty result is NOT "table never loaded".
+  AFTER-STATE ASSERTION: pf table still holds the IP (no phantom flush).
+  RED->GREEN: FAILS on pre-Phase-3 code (alias always emitted regardless of
+    content change); PASSES after pfb_alias_set_different() gates the write.
+
+Scenario B — test_adr40_content_gate_fires_on_change  (Phase 3, already existed)
+  WHAT IT PINS: when feed content changes, alias appears in PFB_CHANGED_IP_ALIASES
+    AND pf table reflects the new set (old IP absent).
+  BEFORE-STATE ASSERTION: pf table holds old_ip only; new_ip absent — proves the
+    later change is attributable to the content change, not a stale state.
+  AFTER-STATE ASSERTION: pf table holds new_ip; old_ip removed.
+
+Scenario C — test_adr40_delta_apply_small_churn  (Phase 4, NEW)
+  WHAT IT PINS: with pfb_alias_delta_mode='delta', a one-IP feed change applies
+    as pfctl -T add / -T delete (not replace); end-state == new feed content.
+  BEFORE-STATE ASSERTION: pf table holds old_ip (192.0.2.210) only.
+  AFTER-STATE ASSERTION: pf table holds new_ip (192.0.2.211) only; old_ip gone.
+  Mechanism: _set_delta_mode(vm, 'delta') persists the mode via CFG_IP_SETTINGS
+    before the reload; mode is restored to 'auto' after.
+  PINS CONTRACT 1 (ADR-40 §2): after a delta apply, pfctl -T show membership ==
+    canonical desired set (identical to what a full replace would load).
+
+Scenario D — test_adr40_delta_replace_mode  (Phase 4, NEW)
+  WHAT IT PINS: with pfb_alias_delta_mode='replace' forced, the same one-IP
+    change applies as a full pfctl -T replace; end-state is still correct.
+  BEFORE-STATE ASSERTION: pf table holds old_ip (192.0.2.220) only.
+  AFTER-STATE ASSERTION: pf table holds new_ip (192.0.2.221) only; old_ip gone.
+  PINS CONTRACT 1 for the replace path; together with Scenario C proves that
+    delta and replace produce identical pf table membership (no drift).
+
+Helper added:
+  _set_delta_mode(vm, mode) — persists pfb_alias_delta_mode via
+    config_set_path(CFG_IP_SETTINGS/pfb_alias_delta_mode).  Module-private (not
+    a helpers.py export) because no other smoke module needs it yet.
+
+─────────────────────────────────────────────────────────────────────────────
+DOCS UPDATED
+─────────────────────────────────────────────────────────────────────────────
+
+docs/misc/architecture-notes.md
+  - Added "ADR-40 — content-addressed alias-table reload gating + forward-delta
+    apply" subsection under the DNSBL/ABP pipeline section (after ADR-11).
+  - Describes: the content-gate mechanism (pfb_alias_set_different vs mirror),
+    the forward-delta apply path (pfctl -T add/-T delete vs replace fallback),
+    the PFB_DELTA_CHURN_THRESHOLD, the two registered config fields with their
+    types and defaults, the cross-list correctness scope, and the smoke coverage
+    (4 scenarios listed).
+  - Notes #517/#519 as the "signal-not-reload" precedent.
+  - Notes cross-list dedup/reputation and latency measurement deferred to
+    maintainer manual smoke.
+  - Feed-tracking reload description replaced: the old model (gating on
+    $pfb_alias_lists populated from the download loop) is not mentioned; only
+    the shipped content-gate model is described.
+
+CLAUDE.md
+  - Added "IP alias-table reload model (ADR-40)" paragraph before the "Aggregated
+    Uber aliases" paragraph (under Running tests section).
+  - Describes: content-gate, forward-delta apply, fallback to replace, both
+    registered PfbConfig fields (pfb_alias_delta_mode / pfb_alias_delta_batch),
+    and cross-references architecture-notes.md for the cross-list scope rules.
+
+─────────────────────────────────────────────────────────────────────────────
+DoD CHECKLIST (ADR-40 §7)
+─────────────────────────────────────────────────────────────────────────────
+
+[DONE] All §4 requirements met (pinned by unit tests across Phases 1-4):
+  - Single-feed change → only that table reloads (surgical): pinned by
+    AliasContentGateTest + smoke Scenario A/B.
+  - Feed-A change shifts sibling table B (dedup) → B reloads in same pass:
+    pinned by AliasContentGateTest::testCrossListScopeWidensDuplicateList.
+  - Reputation on → only moved tables reload: same unit test.
+  - After delta apply: pfctl -T show == canonical desired set: pinned by
+    AliasDeltaApplyTest::testEndStateEqualsFullReplace + smoke C/D.
+  - PFB_IP_CHANGED=1 exactly when ≥1 table changed: preserved (#519 signal).
+  - filter_configure() only for rule changes: unchanged, no new call added.
+  - Idempotence (same input → empty delta): pinned by AliasDeltaApplyTest +
+    smoke Scenario A.
+
+[DONE] Phase 2 benchmark recorded with methodology, numbers, verdict (02_Results.txt).
+  Verdict: BUILD Phase 4. The delta path is confirmed.
+
+[DONE] Reload-scope decision reduced to single content-diff rule.
+  $pfb_alias_lists_all / repcheck demoted to the hybrid-scope guard only
+  (pfb_cross_list_scope() — not the main gate).
+
+[DONE] Determinism/idempotence test green (AliasDeltaApplyTest + AliasContentGateTest).
+  No new filter_configure()/network/pkg on the content path.
+  ADR-12 signal fidelity preserved (#519 ip_unlock path unchanged).
+
+[DONE] Docs updated (this phase).
+
+[PENDING — maintainer manual smoke, CE + Plus fan-out]:
+  The live-VM smoke fan-out (CE + Plus) has NOT run yet (lab VM was occupied
+  during this phase).  This is the ONLY remaining gate before ADR-40 flips
+  Proposed → Accepted.
+
+─────────────────────────────────────────────────────────────────────────────
+DEFERRED TO MAINTAINER MANUAL-SMOKE CHECKLIST
+─────────────────────────────────────────────────────────────────────────────
+
+1. Live-VM fan-out (CE + Plus): dispatch the smoke workflow once the VM is
+   free — `gh workflow run smoke.yml -f pytest_k=adr40` (or scope=full for
+   the full regression).  The four scenarios in test_smoke_adr40.py must all
+   pass on both editions.
+
+2. Multi-million-entry data-plane latency measurement: confirm the lock-hold
+   drop from -T replace to -T add/-T delete on a real box with a large deny
+   alias under live traffic.  Not reproducible in CI.
+
+3. Cross-list dedup live leg: with enable_dup ON across overlapping feeds,
+   confirm a removal in one feed that frees an IP realigns the sibling table
+   in the same pass.  Requires additional harness helpers (enable_dup toggle
+   + multi-list injection) not yet in the smoke fixture set.  The correctness
+   property is unit-pinned in AliasContentGateTest; the live confirmation is
+   the remaining piece.
+
+4. Reputation live leg: with reputation ON, confirm a single-feed change does
+   not reload every table (observe the reload set / timing).  Same gap as #3.
+
+─────────────────────────────────────────────────────────────────────────────
+STATUS
+─────────────────────────────────────────────────────────────────────────────
+
+ADR-40 is IMPLEMENTED (pending live-VM smoke fan-out).
+
+Ready to flip Proposed → Accepted ONCE the CE + Plus smoke fan-out is green.
+The only open gate is item 1 above (dispatch the workflow).  Items 2-4 are
+documented out-of-CI limitations (ADR-40 §7 "Manual smoke checklist"), not
+acceptance blockers.
+
+─────────────────────────────────────────────────────────────────────────────
+VERIFICATION RESULTS (all non-live gates)
+─────────────────────────────────────────────────────────────────────────────
+
+python -m pytest (non-smoke)     PASS  1882 passed / 4 skipped
+ruff check .                     PASS  "All checks passed!"
+ruff format --check .            PASS  "141 files already formatted"
+npx markdownlint-cli2            PASS  "0 error(s)"
+smoke collection (--co -q):      PASS  4 smoke tests collected in test_smoke_adr40.py
+                                        (excluded from default run; smoke marker only)
+
+─────────────────────────────────────────────────────────────────────────────
+NEXT STEPS
+─────────────────────────────────────────────────────────────────────────────
+
+1. PR via /pr-merge-flow (standard landing flow for the branch).
+2. Once PR lands: dispatch `gh workflow run smoke.yml -f pytest_k=adr40` on
+   the CE + Plus legs.  Green → flip ADR-40 status Proposed → Accepted.

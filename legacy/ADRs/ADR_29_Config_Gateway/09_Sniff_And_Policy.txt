@@ -1,0 +1,62 @@
+================================================================================
+PHASE 9 PROMPT — Enforcement sniff + CLAUDE.md reconcile
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_29_Config_Gateway/ADR.md   (read §2.1, §4 first)
+================================================================================
+
+ROLE
+You implement Phase 9 of ADR-29 on branch `adr/29-config-gateway`. Add the enforcement sniff that
+makes "all registered-key access goes through PfbConfig" a CI-checked rule, and reconcile CLAUDE.md.
+Work inline, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+Phases 4-8 routed every pfblockerng* site through the gateway; without enforcement, new code would
+drift back to raw config_*_path and re-open the #281 class. A targeted sniff freezes the win.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff: .ADRs/ADR_29_Config_Gateway/RESULTS/08_Results.txt — it must
+  confirm no stray pfblockerng* raw config access remains (the grep evidence). If missing, STOP.
+- .ADRs/ADR_29_Config_Gateway/ADR.md (§2.1, §4 acceptance).
+- tests/phpcs/PfBlockerNG/ — the existing custom sniffs (PFBL-01 RequirePfbFilter + the ADR-28
+  UppercaseBooleanLiteral); tests/php/RequirePfbFilterSniffTest.php + UppercaseBooleanLiteralSniffTest.php
+  + tests/phpcs/fixtures/ — the sniff + fixture-test pattern to mirror.
+- phpcs.xml.dist — how sniffs are wired/scoped.
+- CLAUDE.md — the "Linting -> PHP -> PHPCS" section listing the sniffs; the Phase-1/3 gateway policy text.
+
+ACTION PLAN
+1. Add a targeted PHPCS sniff (e.g. PfBlockerNG.Config.RequireConfigGateway) that flags a raw
+   config_get_path/config_set_path/config_del_path call whose path targets a REGISTERED
+   installedpackages/pfblockerng* key, when it appears OUTSIDE the PfbConfig gateway internals (and
+   not in the allow-listed foreign-key set / the gateway file itself). Keep it precise — do not flag
+   foreign keys or the gateway's own wrappers. Wire it into phpcs.xml.dist + CI scope.
+2. Pin behaviour with a fixture test (tests/php/RequireConfigGatewaySniffTest.php +
+   tests/phpcs/fixtures/) mirroring the existing sniff tests: a violating fixture (raw access on a
+   registered key) flags; the gateway internals + a foreign-key fixture do not.
+3. Reconcile CLAUDE.md: add the sniff to the PHPCS list with its scope; finalise the gateway policy
+   (registry owns defaults/adapters/migrations/since-version; rollback contract; the foreign-key
+   exclusion list; the registry inventory pointer).
+
+CONSTRAINTS
+- The sniff must be PRECISE (no false positives on foreign keys / gateway internals) and run green on
+  the current tree (Phases 4-8 already removed all violations).
+- PHP tabs/uppercase literals; keep the other sniffs green.
+
+VERIFICATION (all must pass)
+- vendor/bin/phpunit            -> green incl. the new sniff fixture test
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> clean (0 violations of the new sniff on src/)
+- vendor/bin/phpstan analyse    -> clean
+- python -m pytest              -> green
+- npx markdownlint-cli2         -> clean (CLAUDE.md edits)
+- diff-read: new sniff + fixture test + phpcs.xml.dist wiring + CLAUDE.md reconcile only
+
+EXPECTED RESULT
+A green, precise enforcement sniff prevents raw registered-key config access; CLAUDE.md documents the
+final gateway policy.
+
+COMMIT (single)
+    pfblockerng: enforce config-gateway access with a PHPCS sniff (ADR-29 P9)
+Push directly to adr/29-config-gateway; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_29_Config_Gateway/RESULTS/09_Results.txt
+Record: the sniff name/scope/allow-list, the fixture-test cases, the CLAUDE.md changes, and the
+go-ahead for Phase 10.

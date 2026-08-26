@@ -1,0 +1,134 @@
+ADR-28 Phase 5 Results — Enum adoption: remaining www/ config-flag compare sites
+=================================================================================
+Branch: claude/adr-28-review-xmodhb
+Commit: f9660d5
+Date: 2026-06-17
+
+
+1. SCOPE
+---------
+
+Converted every config-derived two-state checkbox compare from raw string equality
+to the pfb_cfg_toggle_read() adapter.  Adoption criteria applied uniformly:
+
+    ADOPT when all of:
+        (a) value is config-derived (not from $_POST or a write sink)
+        (b) stored vocabulary is strictly 'on' / '' (PfbToggle's canonical set)
+        (c) compare is a boolean decision (==/===/'on', !=/!=='on')
+        (d) JS context: absent
+        (e) byte-identity for all stored vocab: confirmed
+
+    EXCLUDE when any of:
+        - value is $_POST-derived or write-adjacent
+        - field is pfb_idn / dnsbl_idn (Override C — old ternary passes '' unchanged;
+          adapter gives 'off'; not byte-identical — exclusion from Phase 4 stands)
+        - JS context (string interpolated into a JS var assignment)
+        - field uses mixed vocabulary ('on' / 'off' instead of 'on' / '')
+
+
+2. PER-FILE TABLE
+------------------
+
+File                                  Lines Adopted  Lines Excluded  Notes
+------------------------------------  -------------  --------------  ---------
+pfblockerng_alerts.php                11             1               Excl. JS context (line 5130: var is_supp=...)
+pfblockerng.php                        8             0
+pfblockerng_category_edit.php          6             4               Excl. lines 619,624,664,690 ($_POST context)
+pfblockerng_dnsbl.php                 26             3               Excl. line 63 (pfb_idn Override C),
+                                                                        line 502 ($_POST), line 557 ($_POST-derived)
+pfblockerng_general.php                3             2               Excl. lines 165,170 (save handler / POST-write)
+pfblockerng_hooks.php                  1             2               Excl. lines 96,149 ($_POST / value from POST)
+pfblockerng_ip.php                     7             0
+pfblockerng_sync.php                   2             2               Excl. lines 76,124 ($_POST / write-adjacent)
+pfblockerng_update.php                 3             0
+pfblockerng.widget.php                 5             3               Excl. lines 418,426 sortmix (mixed vocab: 'on'/'off'),
+                                                                        line 436 sortmix == 'off', line 956 popup (mixed vocab)
+pfblockerng_wizard.inc                 2             1               Excl. line 115 ($_POST)
+pfblockerng_install.inc                0             all             Entire file excluded: migration code, write-adjacent;
+                                                                        gates on old config values then writes new ones
+pfblockerng_extra.inc                  0             n/a             Contains adapter internals — no compare sites
+pfb_unbound_include.inc                0             n/a             No 'on' compare sites present
+------------------------------------  -------------  --------------  ---------
+TOTAL                                 74             ~18+all-install
+
+
+3. DOMINANT EXCLUSION REASONS
+-------------------------------
+
+(1) $_POST read or immediately write-adjacent: pfblockerng_install.inc (entire),
+    plus individual lines in alerts, category_edit, dnsbl, general, hooks, sync, wizard.
+(2) Override C — pfb_idn/dnsbl_idn: line 63 of dnsbl.php (pfb_cfg_idn_mode_read('')
+    would give 'off', old code passes '' unchanged — not byte-identical).
+(3) Mixed vocabulary ('on'/'off' default, not 'on'/''): widget.php sortmix and popup.
+(4) JS context: alerts.php line 5130 (string interpolated into a JS var).
+
+
+4. CONFIG.XML BYTE-IDENTITY CONFIRMATION
+------------------------------------------
+
+Every adopted site is a READ/COMPARE boundary only.  The substitution changes only
+the PHP expression that evaluates the stored value to a bool; it never changes:
+    - how the value is written to config.xml
+    - what value config_set_path() receives
+    - any serialization sink
+
+Substitution pattern:
+    EXPR == 'on'                                 →  pfb_cfg_toggle_read(EXPR) === PfbToggle::On
+    EXPR === 'on' ? TRUE:FALSE,                  →  pfb_cfg_toggle_read(EXPR) === PfbToggle::On,
+    EXPR != 'on'                                 →  pfb_cfg_toggle_read(EXPR) !== PfbToggle::On
+    isset(K) && EXPR === 'on' ? TRUE:FALSE       →  isset(K) && pfb_cfg_toggle_read(EXPR) === PfbToggle::On,
+
+Byte-identity for PfbToggle over all stored vocab:
+    Input 'on'  → old true,  adapter === PfbToggle::On → true   ✓
+    Input ''    → old false, adapter === PfbToggle::On → false  ✓
+    Input null  → old false, adapter === PfbToggle::On → false  ✓
+    Input 'off' → old false, adapter === PfbToggle::On → false  ✓ (junk → Off)
+    Input 'yes' → old false, adapter === PfbToggle::On → false  ✓
+
+No stored value in config.xml was modified.  No $_POST path was altered.
+
+
+5. EQUIVALENCE TESTS ADDED
+----------------------------
+
+Two new methods added to tests/php/CfgAdaptersTest.php:
+
+    testP5ReadBoundaryPatternMatchesOldCompare()
+        Pins that pfb_cfg_toggle_read($v) === PfbToggle::On produces the same bool
+        as ($v == 'on') for all stored vocab ('on', '', 'off', null).
+        Asserts before-state (old expression) AND after-state (adapter) for each input.
+        Covers negation pattern (!== PfbToggle::On ≡ != 'on') too.
+
+    testP5FormCheckboxPatternMatchesOldTernary()
+        Pins that the Form_Checkbox bool-arg pattern ($v === 'on') ? true : false
+        is byte-identical to pfb_cfg_toggle_read($v) === PfbToggle::On
+        across all four stored-vocab values ('on', '', 'off', null).
+
+Both methods are falsifiable: they fail if the adapter's mapping diverges from
+the old comparison for any stored vocab value.
+
+PHPUnit: 591 tests, 1240 assertions (up from 555 / 1204 before this phase) — all OK.
+
+
+6. SELF-REVIEW
+---------------
+
+Reviewed git diff -- src/ : every +line in src/ contains only:
+    pfb_cfg_toggle_read(...)  ===  PfbToggle::On
+    pfb_cfg_toggle_read(...)  !==  PfbToggle::On
+No debug logging, no dead code, no gratuitous reformatting, no stored/serialized
+value changed, no $_POST path touched, no JS context altered, no new file created.
+
+
+7. VERIFICATION GATES
+----------------------
+
+    vendor/bin/phpunit        591 tests, 1240 assertions, OK           ✓
+    vendor/bin/phpstan        0 errors                                  ✓
+    vendor/bin/phpcs          0 errors (PFBL-01 green)                  ✓
+    php -l (all 12 touched)   No syntax errors                          ✓
+    python -m pytest          1691 passed                               ✓
+    ruff check .              All checks passed                         ✓
+
+
+Go-ahead for Phase 6.

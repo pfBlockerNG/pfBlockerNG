@@ -1,0 +1,111 @@
+ADR-02 Phase 2 Results — Web UI: remove mode selector + native-only controls
+=============================================================================
+
+File changed: src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php  (only this file)
+
+STATE AFTER THIS PHASE
+-----------------------
+The DNSBL settings page no longer posts dnsbl_mode or pfb_py_block, and no longer
+renders any mode selector, the "DNSBL Blocking (py)" (pfb_py_block) checkbox, the
+.dnsbl_unbound_tld native-only help spans, or the TLD Whitelist field. pfb_tld
+("Wildcard Blocking (TLD)") and all python feature controls remain. The page
+saves and renders with no dependency on the removed config keys.
+
+IMPORTANT for Phase 3 — dnsbl_py_blacklist handling changed plan:
+  dnsbl.php READ $pfb['dnsbl_py_blacklist'] in two spots. I collapsed both to the
+  TRUE (python) branch here (it is always TRUE since Phase 1). This was a
+  deliberate extension beyond the literal Phase-2 list, because Phase 3 plans to
+  DELETE the $pfb['dnsbl_py_blacklist'] variable, which would otherwise break
+  dnsbl.php mid-sequence.
+  => CONSEQUENCE: do NOT remove the $pfb['dnsbl_py_blacklist'] variable DEFINITION
+     in Phase 3. alerts.php and widget.php still read it and are not collapsed
+     until Phase 5. Keep the definition (constant TRUE, set in pfblockerng.inc
+     pfb_global) alive through Phases 3 and 4; remove the definition only in
+     Phase 5 after alerts/widget are collapsed. Collapse each file's USES as you
+     touch that file. (Rule: collapse uses per-file; delete the variable last.)
+
+EXACT CHANGES (25 edits, applied via a count-asserted script; see WATCH-OUTS)
+----------------------------------------------------------------------------
+Removed (PHP):
+- pconfig: the dnsbl_mode block + legacy `pfb_python` shim (old L57-64); the
+  pfb_py_block pconfig line (old L67); the tldwhitelist pconfig line (old L114).
+- $options_dnsbl_mode definition (old L118).
+- global_log help: collapsed `if ($pfb['dnsbl_py_blacklist']) {…} else {…}`
+  (old L125-147) to the TRUE branch, de-indented.
+- POST: the "Remove DNSBL blocking files, when user changes blocking mode" block
+  and the pfb_py_block + dnsbl_mode assignments (old L610-622); the tldwhitelist
+  base64 save (old L594).
+- select_options validation array: the `'dnsbl_mode' => 'dnsbl_unbound'` entry
+  (old L356).
+- customlist validation: the `'tldwhitelist' => 'tldwhite'` foreach entry and the
+  `case 'tldwhite':` switch arm.
+- Form_Select 'dnsbl_mode' (old L769-783); Form_Checkbox 'pfb_py_block'
+  (old L833-846).
+- $dnsbl_text (help for the KEPT pfb_tld checkbox): removed the 4
+  `<span class="dnsbl_unbound_tld">…</span>` native-only spans (low-mem warning,
+  resolver-reload warning, TLD-Whitelist mention, TLD-domain-limit/RAM table).
+  Renamed its container div id `dnsbl_unbound_tld_info` -> `dnsbl_tld_info`.
+- TLD section: renamed Form_Section title 'TLD Blacklist/Whitelist' ->
+  'TLD Blacklist' (id 'TLD_BW_list' kept to avoid JS churn); removed the
+  whitelist-only note sentences; removed $tld_whitelist_text + its
+  `if ($pfb['dnsbl_py_blacklist'])` warning; removed the 'tldwhitelist'
+  Form_Textarea.
+
+JS rewrites:
+- enable_python(): now just `hideCheckbox('pfb_dnsbl_sync', true);` (python is the
+  only mode, so the per-field hideCheckbox(...,!python) gating is gone — fields
+  render shown by default; the `.dnsbl_unbound_tld` and #tldwhitelist toggles are
+  gone).
+- enable_python_pytld / _regex / _noaaaa / _gp: unwrapped the
+  `dnsbl_mode == 'dnsbl_python'` guard (always true).
+- events: removed the `$('#dnsbl_mode').click(...)` and `$('#pfb_py_block').click(...)`
+  handlers; kept the standalone `enable_python();` on-load call.
+
+KEPT (verified present): pfb_tld, pfb_control, pfb_py_reply, pfb_hsts, pfb_idn,
+pfb_regex(+list), pfb_noaaaa(+list), pfb_cname, pfb_gp(+bypass list), pfb_pytld
+(+sort, pfb_python multiclass, dnsbl_python_tld_allow_text), pfb_py_nolog,
+tldblacklist, tldexclusion, and the DNSBL VIP/IP/webpage controls.
+
+VERIFICATION RESULTS
+--------------------
+- php -l: NOT AVAILABLE (no php in env; not installed — Phase 1 was the same).
+  Mitigations used instead:
+    * All 25 edits applied by a script that ASSERTS each pattern matched exactly
+      the expected count (1, except the 4 spans) and refuses to write otherwise.
+    * Brace balance gate: `{}` delta unchanged (0) and `[]` delta unchanged (0)
+      before vs after — code blocks intact. (`()` file-delta shifted +3, fully
+      explained by removed help-text string literals with deliberately unbalanced
+      parens, e.g. the old `(Replace x.x.x.x …` line; not a code change.)
+    * Every edited region re-read by eye for syntactic integrity.
+- grep sweep: ZERO matches for dnsbl_mode, pfb_py_block, options_dnsbl_mode,
+  dnsbl_unbound_tld, dnsbl_py_blacklist, tldwhitelist, #dnsbl_mode, #pfb_py_block.
+- pytest: 163 passed (sanity; no python touched).
+
+WATCH-OUTS / DEVIATIONS
+------------------------
+1. dnsbl_py_blacklist: collapsed in dnsbl.php this phase (see "IMPORTANT for
+   Phase 3" above). Variable definition must NOT be deleted until Phase 5.
+2. pfb_dnsbl_sync ("Resolver Live Sync") field was NOT removed — out of this
+   phase's stated scope. It is native-only (live update without reload) and is
+   now ALWAYS hidden via enable_python() (matching prior python-block behavior).
+   Recommend removing the field in a later phase alongside the dnsbl_sync backend
+   removal (Phase 3 removes the backend; the UI field can be dropped then or in 5).
+3. TLD Whitelist: only the UI is removed here. The backend plumbing (static
+   local-zone generation, gated by !dnsbl_py_blacklist) is still in
+   pfblockerng.inc and is Phase 3's job. The stored `tldwhitelist` config value is
+   intentionally left untouched (no POST save now writes it, so existing data is
+   preserved, not wiped).
+4. TLD Blacklist (tldblacklist) was KEPT — confirmed honored in python mode
+   (pfblockerng.inc ~L2815 "DNSBL python - TLD Blacklist").
+5. Minor stale help wording: the TLD section StaticText still reads
+   "TLD Blacklist/Whitelist: A static zone entry … no Alerts will be generated."
+   Left as-is (informational only); fold into a help-text pass with Phase 3 if
+   desired.
+6. A few cosmetic double-blank-lines remain where blocks were removed (harmless).
+
+GO-AHEAD FOR PHASE 3
+---------------------
+UI is clean and mode-free. The core can now collapse the native branches in
+pfblockerng.inc per the §2 deletion rule. Remember constraint (1): collapse
+dnsbl_py_blacklist USES in inc, but keep the variable DEFINITION (constant TRUE)
+until Phase 5.

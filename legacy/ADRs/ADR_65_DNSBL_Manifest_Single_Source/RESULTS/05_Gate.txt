@@ -1,0 +1,87 @@
+ADR-65 Phase 5 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (verifier verdict PASS, zero blockers; no orchestrator
+remediation needed)
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently)
+--------------------------------------------------------------------------------
+- python3 -m pytest (whole suite, wrapper): 2933 passed, 2 skipped -- matches
+  the handoff exactly (count moved 2951 -> 2933: tests driving the DELETED
+  legacy loaders were removed with them, new fail-loud tests added).
+- ruff check / ruff format --check / mypy tests/ (wrapper): clean.
+- php -l on every touched PHP file: clean; vendor/bin/phpunit whole suite:
+  green (environmental notes only); composer phpstan [OK]; phpcs clean.
+- sh scripts/agent/run-gates.sh --diff origin/devel: GATE PASS x16,
+  GATES: PASS.
+- Narration/version-literal checkers: clean. check_retired_tokens.py: 19
+  warn-only findings (2 documented in P4, 11 pre-existing from P1-4, 6 new
+  this phase), all the common-word/format-string false-positive class --
+  honestly reported this time, none actionable.
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE (re-executed by the verifier)
+--------------------------------------------------------------------------------
+verify-red-proof.sh --base-ref 02a33121 over BOTH frozen red-set files
+(tests/test_adr65_fallback_characterization.py inversions + the new
+tests/php/DnsblManifestPublishFailureNoticeTest.php): FREEZE-OK (hashes match
+the handoff's red-time git hash-object values), RED-OK against base src, PASS
+after restore. Oracle A (test_adr65_decision_oracle.py): green at ZERO edits
+-- good-manifest decisions byte-identical (Semantic 1 / D3 budget held).
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read the full diff)
+--------------------------------------------------------------------------------
+- Legacy loaders (_load_ndjson_row_into_db/_load_zone_db/_load_data_db/
+  _load_whitelist_db) deleted; wrapper functions keep names/signatures with
+  unconditional ledger-close bodies; ALL init-path interchange-file reads
+  gone (tree grep) -- PASS.
+- HSTS load survives independent of manifest state (Semantic 4), pinned by
+  the new TestFactDHstsIndependence -- PASS.
+- dnsbl_build_from_manifest absent arm now OPENS the ADR-61 ledger (was
+  close-only) per the brief; unparseable/threw arms unchanged -- PASS.
+- PHP: pfb_unbound_python_sources() checks the atomic-write return and fires
+  pfb_logger + file_notice on failure (covers both callers); new
+  pfb_dnsbl_manifest_failure_notice() reads the ledger and raises the
+  dashboard notice, seated beside its pfb_dnsbl_* convergence siblings --
+  PASS.
+- Watcher rebuild path (_dnsbl_rebuild_snapshot) untouched: a None build
+  keeps the live snapshot (never read the interchange files) -- PASS.
+- Test honesty: inversions strengthen assertions (empty-DB equality instead
+  of populated membership); every no-notice negative has a would-fire
+  fixture -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+All brief rows ticked: three build-failure arms (absent/unparseable/threw)
+each -> empty DBs + ledger + notice path; HSTS independence; good-manifest
+zero-delta (Oracle A); PHP publish-failure notice (root-skip guarded) +
+success no-notice; ledger-reader hostile rows (absent/corrupt/wrong item/
+wrong stage). Deferrals: none.
+
+--------------------------------------------------------------------------------
+BRIEF VALIDATION (orchestrator, non-vacuous)
+--------------------------------------------------------------------------------
+Spot-checked the brief's central enumeration during gating: the interchange
+reads all lived inside the deleted loader block (the phase-0 rework derived
+the same facts independently); HEAD == origin branch tip confirmed by the
+verifier. No drift_flags.
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Live-VM fail-loud smoke (manifest removed on a real box -> empty DNSBL +
+  bell + no stale block + self-heal): ADR-65 SS7 / Phase 7 territory.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+Deviations accepted (all disclosed): handoff follow-up commits after the
+functional commit (self-referential hash problem, same as P1); the
+python_blacklist gate drop in _load_whitelist_and_hsts_dbs (decision-neutral
+-- hstsDB consulted only on block paths separately gated); five test renames
+so no name claims behaviour its body no longer pins. #1245 dissolves with
+this phase (the stale-zone read path no longer exists); the issue itself
+closes in Phase 7.

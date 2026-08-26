@@ -1,0 +1,261 @@
+================================================================================
+PHASE 4 RESULTS — Add the keyless providers: DomCop top-10M + Majestic Million
+================================================================================
+
+WHAT CHANGED
+
+1. `Top1mSource` enum (pfblockerng_extra.inc ~212) — two new cases:
+   `DomCop = 'domcop'` and `Majestic = 'majestic'`. Legacy `fromLegacy()` still
+   coalesces only the dead `'alexa'` token (and any unknown token) to Tranco;
+   `domcop`/`majestic` are live canonical tokens resolved directly by
+   `self::tryFrom()` in `PfbStoredEnumAdapter::fromStored()` (generic — no
+   per-token code needed).
+
+2. `pfb_top1m_providers()` (pfblockerng_extra.inc ~244) — two new descriptor
+   rows, verified against the LIVE files (fetched during this phase, see
+   "VERIFIED AGAINST LIVE DATA" below):
+
+   DomCop:
+     'url'        => 'https://www.domcop.com/files/top/top10milliondomains.csv.zip'
+     'container'  => 'zip'
+     'parse'      => 'csv'
+     'header'     => TRUE
+     'domain_col' => 1   -- Domain is the 2nd CSV field ("Rank","Domain","Open
+                            Page Rank") -> 0-indexed str_getcsv() position 1
+                            (SAME index Tranco/Cisco's rank_domain parse uses)
+     'auth'       => 'none'
+     'licence'    => ''
+
+   Majestic:
+     'url'        => 'https://downloads.majestic.com/majestic_million.csv'
+     'container'  => 'plain'   -- uncompressed CSV, NOT zipped
+     'parse'      => 'csv'
+     'header'     => TRUE
+     'domain_col' => 2   -- Domain is the 3rd CSV field
+                            (GlobalRank,TldRank,Domain,TLD,...) -> index 2
+     'auth'       => 'none'
+     'licence'    => 'CC BY 3.0 — attribution required'
+
+3. `pfb_cfg_field_vocab()['top1m_source']` (pfblockerng_extra.inc ~1626) and
+   its surrounding docblocks — extended from `['tranco', 'cisco']` to
+   `['tranco', 'cisco', 'domcop', 'majestic']` (the write-side vocabulary the
+   RollbackContractTest rollback contract checks against). The `alexa_type`
+   registry entry (pfb_cfg_registry(), same key/section/default) and
+   `docs/misc/config-gateway.md` comments were updated to match — no new
+   registered field, so the `RequireConfigGateway` sniff's `$registeredPaths`
+   needs no edit (confirmed: phpcs stays clean, see GATES below).
+
+4. `pfblockerng_dnsbl.php`:
+   - `$options_alexa_type` (~197): added `'domcop' => 'DomCop TOP1M'` and
+     `'majestic' => 'Majestic Million TOP1M'`.
+   - `$top1m_text` (~3213 "Whitelist(s) available" list): added a DomCop link
+     and a Majestic link + its CC BY 3.0 attribution sentence (same
+     "distributed under the ... License by: <link>" phrasing already used for
+     GeoIP/ASN attributions in pfblockerng_ip.php, for consistency).
+
+5. Download/extract path (pfblockerng.inc, `pfb_download()`'s post-processor)
+   — CONFIRMED, no code change needed (ACTION PLAN item 3 was a "confirm", not
+   an "implement"): the decompression branch is chosen by the ACTUAL MIME type
+   `pfb_filter(..., PFB_FILTER_FILE_MIME, ...)` returns for the downloaded
+   bytes (libmagic-based), not by the provider's 'container' label or the
+   fixed `file_dwn` extension. The `else` "Uncompressed file format" branch
+   (pfblockerng.inc ~10593) already renames a `type=='top1m'` plain body
+   straight to `top-1m.csv` — this is exactly Majestic's path, wired since
+   Phase 2 (its zip/gz-only extractor generalization). Verified by reading the
+   code; no test needed beyond what the parse tests below already exercise
+   (they feed `top-1m.csv` directly, which is the builder's actual input
+   regardless of which extraction branch produced it).
+
+VERIFIED AGAINST LIVE DATA (not guessed)
+
+Per CLAUDE.md's "don't guess — investigate" principle, both provider URLs were
+fetched live during this phase to confirm the real CSV shape before writing
+descriptor rows + fixture samples:
+  - DomCop (`curl` the zip, `unzip`): header row is
+    `"Rank","Domain","Open Page Rank"` (quoted, no header period) — Domain at
+    str_getcsv() index 1.
+  - Majestic (`curl -r 0-300` a byte range): header row is
+    `GlobalRank,TldRank,Domain,TLD,RefSubNets,RefIPs,IDN_Domain,IDN_TLD,
+    PrevGlobalRank,PrevTldRank,PrevRefSubNets,PrevRefIPs` (unquoted, 12 cols)
+    — Domain at str_getcsv() index 2. Confirms Phase 2's 0-indexed domain_col
+    convention: DomCop's "2nd column" (human/1-indexed) = index 1; Majestic's
+    "3rd column" = index 2 (matches Phase 2 RESULTS/02's explicit statement
+    that domain_col is 0-indexed, not human column count).
+
+TESTS
+
+PHP config-adapter/round-trip (per CLAUDE.md's mandate that a new enum value
+touches its round-trip suite):
+  - tests/php/CfgAdaptersTest.php — Scenario E extended: new
+    testTop1mSourceReadDomCopReturnsDomCop / ...ReadMajesticReturnsMajestic;
+    testTop1mSourceRoundTripCanonicalTokens now loops over all four tokens;
+    testTop1mSourceWriteAcceptsEnumOrString extended to domcop/majestic.
+  - tests/php/CfgGatewayTest.php — testReadPassesThroughLiveTop1mSourceTokens
+    extended with domcop/majestic seed+read assertions.
+  - tests/php/RollbackContractTest.php —
+    testAlexaTypeForwardCoalescesLegacyAndBackwardNeverReemitsAlexa's $cases
+    extended with 'domcop'=>DomCop and 'majestic'=>Majestic (FORWARD: reads as
+    their own enum, not coalesced; BACKWARD: writes their own token, still
+    never 'alexa').
+  - tests/php/Top1mProvidersTest.php (Phase 1's oracle) — renamed/adjusted for
+    the now-4-provider table: testFourKeylessProvidersAreDescribed (array_keys
+    == tranco/cisco/domcop/majestic), testDomCopAndMajesticUrlsMatchTheAdrTable
+    (URL pins), testTrancoAndCiscoDescribeTodaysZipRankDomainNoAuthShape
+    (renamed from testBothProvidersDescribeTodaysZipRankDomainNoAuthShape,
+    scoped to just tranco/cisco since domcop/majestic have a DIFFERENT shape
+    on purpose), testDomCopAndMajesticDescribeTheirOwnCsvShape (pins
+    container/parse/header/domain_col/auth/licence for both new rows,
+    including Majestic's 'plain' container and CC BY 3.0 licence string).
+
+FAIL-BEFORE/PASS-AFTER parse tests (tests/php/Top1mPreserveOnEmptyFeedTest.php,
+reusing Phase 2's `pfblockerng_top1m($provider_override)` seam + fixture
+harness):
+
+  - testMajesticRealShapeSampleMisreadsOnLegacyColumnAndParsesCorrectlyViaItsDescriptor
+    Given a REAL-shape Majestic sample (12-col header + 2 real .com domains).
+    BEFORE: `pfblockerng_top1m(array())` — this literally reproduces the
+    pre-ADR-59-Phase-2 hardcoded shape (every knob resolves to its default:
+    parse=rank_domain, header=false, domain_col=1). RED: domain_col=1 reads
+    Majestic's TldRank column (a bare digit) as "domain" instead of the real
+    Domain field at index 2 — neither digit contains a '.', so NO TLD matches
+    and the whitelist ends up completely EMPTY despite two real matching
+    domains being present. AFTER: the actual registered Majestic descriptor
+    (domain_col=2) — GREEN, both domains correctly extracted. This is the
+    phase's literal "would mis-read on the pre-P2 col-1 parser" proof.
+
+  - testDomCopRealShapeSampleMisreadsOnWrongColumnAndParsesCorrectlyViaItsDescriptor
+    Given a REAL-shape DomCop sample (quoted 3-col header + 2 real .com
+    domains). NOTE (transparency, not a shortcut): DomCop's real Domain column
+    happens to sit at the SAME index (1) the pre-P2 legacy default already
+    used, so literally replaying `array()` against DomCop's real sample would
+    NOT diverge (I verified this by hand-tracing the code — the header row
+    also lacks a '.', so it's filtered by the pre-existing generic content
+    check either way) — it would prove nothing about domain_col. To still
+    assert "the col index matters" for DomCop specifically, the BEFORE run
+    instead uses a DELIBERATELY WRONG column (domain_col=2, i.e. Majestic's
+    own index — the "Open Page Rank" field) against DomCop's real sample. RED:
+    misreads "10.00" as domain -> tld "00" -> no match -> empty whitelist.
+    AFTER: the actual registered DomCop descriptor (domain_col=1) — GREEN,
+    both domains correctly extracted (with 'www.' stripped per the existing
+    whitelist convention). This proves the per-provider domain_col wiring is
+    genuinely read from the table (not hardcoded), which is the substantive
+    claim behind "col index matters" even though DomCop's OWN correct value
+    happens to coincide with the historical default.
+
+Tier-A UI (tests/smoke/ui/test_render_smoke.py):
+  test_dnsbl_top1m_source_options_exclude_alexa — extended (not duplicated,
+  same GET) to assert all FOUR live source labels ("Tranco TOP1M", "Cisco
+  Umbrella TOP1M", "DomCop TOP1M", "Majestic Million TOP1M") render, PLUS the
+  Majestic "CC BY" + "3.0" attribution text is present, while the dead
+  "Alexa TOP1M" label / `value="alexa"` stay absent (regression guard
+  unchanged from #877).
+
+GATES (all run inside the worktree)
+
+1. `/opt/homebrew/bin/php -l` on every touched .inc/.php/test file -> "No
+   syntax errors detected" for all.
+
+2. `/opt/homebrew/bin/php vendor/bin/phpunit`:
+   Tests: 2317, Assertions: 18515, Failures: 3, Skipped: 4.
+   The 3 failures are the SAME pre-existing, environment-only `open_basedir`
+   sandbox failures named in every prior phase's handoff (DnsblPrefetchTest /
+   IpPrefetchTest) — no other failures. 2317 total = Phase 3's 2311 + 6 new
+   tests here (2 Top1mProvidersTest, 2 CfgAdaptersTest read tests, 2
+   Top1mPreserveOnEmptyFeedTest parse tests) net of the 1 renamed/removed
+   Phase-1 test (testOnlyTrancoAndCiscoAreDescribedInPhase1 ->
+   testFourKeylessProvidersAreDescribed, same slot).
+
+3. `php -d memory_limit=1G vendor/bin/phpcs --standard=phpcs.xml.dist src/` ->
+   clean (exit 0, no output). `RequireConfigGateway` stays green — no new
+   `config_*_path` call, `alexa_type` is an existing registered key.
+
+4. `php -d memory_limit=1G vendor/bin/phpstan analyse --memory-limit=1G` ->
+   `[OK] No errors`.
+
+5. `python3 -m pytest tests/smoke/ui/test_render_smoke.py --collect-only -q
+   --override-ini="addopts="` -> 61 tests collected, including the extended
+   `test_dnsbl_top1m_source_options_exclude_alexa`.
+
+6. `ruff check tests/smoke/ui/test_render_smoke.py` -> "All checks passed!".
+   `ruff format --check tests/smoke/ui/test_render_smoke.py` -> already
+   formatted.
+
+7. `npx markdownlint-cli2 docs/misc/config-gateway.md` -> 0 errors (the small
+   doc-accuracy update to the vocabulary description).
+
+SELF-REVIEW (git diff vs phase objectives)
+
+- 4 options render on the DNSBL page ($options_alexa_type has exactly
+  tranco/cisco/domcop/majestic) — confirmed by the extended Tier-A test.
+- DomCop/Majestic descriptor rows: container correct (DomCop zip, Majestic
+  PLAIN — verified NOT zip, per the ADR §2.2 table and the live fetch);
+  domain_col indices verified against the LIVE files and cross-checked against
+  Phase 2's explicit 0-indexed convention (RESULTS/02_Results.txt line ~157);
+  header:TRUE for both (both real files ship a header row).
+- The parse tests prove column+header matter via a genuine fail-before/
+  pass-after (Majestic: the literal pre-P2 default column; DomCop: a
+  deliberately wrong column, with the coincidence honestly documented rather
+  than silently claimed as a real regression).
+- Majestic CC BY 3.0 attribution shown in both the help text (www/) and
+  asserted by the Tier-A test.
+- No `top1m_token` field, no Cloudflare descriptor, no auth change — grepped
+  the full diff for "token"/"cloudflare": every "token" hit is the
+  pre-existing `alexa_type` STORED-VALUE vocabulary language, none is a new
+  field. Tranco/Cisco descriptor rows are byte-identical (pinned tests still
+  green: testTrancoUrlIsPinnedToThePreChangeLiteral,
+  testCiscoUrlIsPinnedToThePreChangeLiteral,
+  testTrancoAndCiscoDescribeTodaysZipRankDomainNoAuthShape).
+- Tabs / uppercase TRUE/FALSE preserved throughout (matches surrounding style;
+  phpcs's UppercaseBooleanLiteral sniff stays clean).
+
+DEVIATIONS / JUDGMENT CALLS
+
+- DomCop's fail-before/pass-after does NOT use the literal pre-P2 default
+  (`array()`) as its "before" state, because that would not actually fail for
+  DomCop's real sample (its Domain column coincidentally sits at the same
+  index, 1, the legacy default already used, and its header row happens to
+  lack a '.' so it's filtered by the pre-existing generic content check
+  regardless of the header flag). Using `array()` there would be coverage
+  theater (green before AND after, proving nothing). Instead the "before"
+  state deliberately applies a WRONG column (2, Majestic's own index) to
+  DomCop's real sample, which DOES demonstrably mis-read — a stronger, still
+  load-bearing proof that domain_col is read per-provider from the table
+  (documented transparently in the test's own docblock, not hidden).
+- Small doc-accuracy touch-ups (docs/misc/config-gateway.md, a couple of
+  `pfblockerng_extra.inc` comments) beyond the phase's strict action-plan text
+  — kept minimal (a few lines each) so the vocabulary table and the enum's own
+  comments don't read as stale/wrong immediately after this phase lands.
+- pfb_download()'s decompression path (ACTION PLAN item 3) required NO code
+  change — confirmed by reading pfblockerng.inc's post-processor: it already
+  branches on the ACTUAL downloaded MIME type (libmagic), not the descriptor's
+  'container' label or a fixed filename extension, and Phase 2 already wired
+  the `type=='top1m'` uncompressed-body rename path Majestic needs.
+- `scripts/misc/check_top1m_providers.py` (the CI health-check script) still
+  greps `pfblockerng.php` for a literal `$pfb['extras'][2]['url'] = '...'`
+  string assignment — that assignment became a `pfb_top1m_providers()[...]`
+  function-call expression back in Phase 1, so the script's `_URL_RE` no
+  longer matches anything for the top1m slot. This is PRE-EXISTING (broken
+  since Phase 1, not introduced by this phase) and outside Phase 4's action
+  plan/verification gates (no Python file is in this phase's scope) — flagging
+  it here rather than silently leaving it for a future session to rediscover.
+  Left untouched.
+
+GO-AHEAD FOR PHASE 5
+
+Ready. Phase 5 ("Cloudflare + the token field") adds:
+  - a registered masked `top1m_token` PfbConfig field (section=dnsbl) +
+    PFB_FILTER_TOKEN validator + round-trip test + sniff/inventory entries;
+  - the Cloudflare Radar descriptor (header auth via Phase 3's
+    `$feed['headers']` plumbing, JSON/CSV parse, bucket URL builder);
+  - UI: a JS-toggled token field (shown only when the selected provider's
+    `auth` needs one) + the CC BY-NC non-commercial note;
+  - safe-on-missing/invalid-token behaviour (preserve + warn per #886, no
+    token in logs — Phase 3's `pfb_download_http_headers()` never logs headers,
+    so this should carry through cleanly);
+  - Tier-A + a Tier-B save->reload persistence check for the token field.
+Phase 3's header-auth plumbing (`$extra_headers`/`$feed['headers']`) is fully
+wired and dormant, exactly as predicted — Phase 5 is the first real consumer.
+
+COMMIT
+
+pfblockerng: add DomCop + Majestic keyless TOP1M providers (ADR-59 P4)

@@ -1,0 +1,136 @@
+ADR-29 Phase 6 — www Group A (General / IP / DNSBL pages)
+==========================================================
+
+## Status: DONE — gates green; go-ahead for Phase 7
+
+---
+
+## Pages routed
+
+### pfblockerng_general.php
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerng/config/0', [])` → `PfbConfig::readSection('installedpackages/pfblockerng/config/0')`
+- `pfb_keep` page-local default (`isset(…) ? … : 'on'`) REMOVED; replaced with
+  `PfbConfig::read('pfb_keep')->value` — registry default 'on' matches prior page default.
+  Note: returns PfbToggle enum → `.value` extracts the string.
+- `pfb_feed_internal_filter` page-local default (`isset(…) ? … : 'on'`) REMOVED; replaced with
+  `PfbConfig::read('pfb_feed_internal_filter')` — registry default 'on' matches prior page
+  default. NULL adapter returns string directly.
+
+SAVE:
+- `config_set_path('installedpackages/pfblockerng/config/0', $pfb['gconfig'])` →
+  `PfbConfig::writeSection('installedpackages/pfblockerng/config/0', $pfb['gconfig'])`
+
+Foreign keys annotated (left on direct config_*_path):
+- `installedpackages/pfblockerng/pfb_wizard_skip` (config_set_path in 'disable' wizard action)
+- `installedpackages/pfblockerng/pfb_wizard_skip` (config_get_path in pfb_wizard_suppress_autolaunch call)
+- `installedpackages/pfblockerng/config/0` second arg of pfb_wizard_suppress_autolaunch (section
+  existence check, not a scalar read)
+
+---
+
+### pfblockerng_ip.php
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngipsettings/config/0', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngipsettings/config/0')`
+- All per-field defaults kept unchanged: all IP sub-keys (`suppression`, `enable_dup`,
+  `enable_agg`, `pass_order`, `enable_float`, `enable_log`, `killstates`, `v4suppression`,
+  `maxmind_key`, `maxmind_locale`, `database_cc`, `asn_reporting`, `asn_token`,
+  `maxmind_account`, `inbound_deny_action`, `outbound_deny_action`, `autorule_suffix`,
+  `ip_placeholder`) are all in `$out_of_scope` per CfgGatewayTest — NOT in the registry.
+
+SAVE:
+- `config_set_path('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig'])` →
+  `PfbConfig::writeSection('installedpackages/pfblockerngipsettings/config/0', $pfb['iconfig'])`
+
+No foreign keys annotated (all remaining reads/writes are within the ipsettings section via
+the section array).
+
+---
+
+### pfblockerng_dnsbl.php
+
+LOAD:
+- `config_get_path('installedpackages/pfblockerngdnsblsettings/config/0', [])` →
+  `PfbConfig::readSection('installedpackages/pfblockerngdnsblsettings/config/0')`
+- `pfb_idn_block_malicious` page-local default (`isset(…) ? … : 'on'`) REMOVED; replaced with
+  `PfbConfig::read('pfb_idn_block_malicious')` — registry default 'on' matches prior page
+  default. NULL adapter returns string directly.
+- `pfb_cache`, `pfb_py_reply`, `pfb_hsts` page-local `isset(…) ? … : 'on'` defaults KEPT:
+  registry defaults are `''` (not 'on') — removing them would change behaviour.
+
+SAVE:
+- `config_set_path('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig'])` →
+  `PfbConfig::writeSection('installedpackages/pfblockerngdnsblsettings/config/0', $pfb['dconfig'])`
+
+Foreign keys annotated (left on direct config_*_path):
+- `system/domain` (two config_get_path calls for local TLD derivation)
+- `aliases/alias` (config_get_path for port/network alias enumeration)
+- `installedpackages/pfblockerngdnsblsettings/config/0/dnsbl_webpage` per-field config_set_path
+  in the dnsbl_webpage save handler (dnsbl_webpage is in $out_of_scope per CfgGatewayTest)
+
+---
+
+## Tests — tests/php/WwwGroupAGatewayTest.php (new file)
+
+11 tests, 28 assertions — all pass.
+
+Group A — load default parity (registry default matches prior page default):
+- testGeneralPfbKeepAbsentDefaultMatchesPriorPageDefault
+  PfbConfig::read('pfb_keep') absent → PfbToggle::On, .value = 'on'
+- testGeneralPfbFeedInternalFilterAbsentDefaultMatchesPriorPageDefault
+  PfbConfig::read('pfb_feed_internal_filter') absent → 'on'
+- testDnsblPageLocalDefaultsNotRemovedWhenRegistryDefaultDiffers
+  registry defaults for pfb_cache, pfb_py_reply, pfb_hsts are '' (not 'on') — page defaults
+  correctly NOT removed
+- testDnsblPfbIdnBlockMaliciousAbsentDefaultMatchesPriorPageDefault
+  PfbConfig::read('pfb_idn_block_malicious') absent → 'on'
+
+Group B — save round-trip identity:
+- testGeneralSectionWriteReadRoundTrip
+  Full representative General settings array write → readSection round-trip (9 keys)
+- testGeneralSectionPfbKeepOffRoundTrips
+  Before 'on' asserted, write '', after '' asserted
+- testGeneralPfbFeedInternalFilterOffRoundTrips
+  Before 'on' asserted, write 'off', after 'off' asserted
+- testIpSectionWriteReadRoundTrip
+  Full representative IP settings array write → readSection round-trip (5 keys)
+- testIpSectionSuppressionOffRoundTrips
+  Before 'on' asserted, write '', after '' asserted
+- testDnsblSectionWriteReadRoundTrip
+  Full representative DNSBL settings array write → readSection round-trip (7 keys)
+- testDnsblPfbIdnBlockMaliciousOffRoundTrips
+  Before 'on' asserted, write '', after '' asserted
+
+---
+
+## Verification gates
+
+phpunit:    741 tests, 2690 assertions — OK (+11 tests, +28 assertions vs Phase 5 baseline of 730/2662)
+phpstan:    No errors
+phpcs:      Clean (PFBL-01 RequirePfbFilter + ADR-28 UppercaseBooleanLiteral)
+php -l:     No syntax errors (all three pages)
+pytest:     1733 passed
+ruff check: All checks passed
+ruff format: 112 files already formatted
+
+---
+
+## Diff summary
+
+Only config access changed:
+- 3 readSection() calls (one per page, replacing config_get_path section reads)
+- 3 writeSection() calls (one per page, replacing config_set_path section writes)
+- 2 PfbConfig::read() calls (pfb_keep + pfb_feed_internal_filter in General; pfb_idn_block_malicious in DNSBL)
+- 5 foreign-key inline comments added (pfb_wizard_skip ×2, config/0 existence check, system/domain, aliases/alias, dnsbl_webpage)
+
+No visible form field, label, help text, option value, or page behaviour changed.
+No stored values changed.
+
+---
+
+## Go-ahead for Phase 7
+
+Phase 6 complete. All gates green. Proceed to Phase 7 (next www group or remaining pages).

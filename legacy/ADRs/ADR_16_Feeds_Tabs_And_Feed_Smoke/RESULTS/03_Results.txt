@@ -1,0 +1,183 @@
+ADR-16 — Phase 3 Results
+THE SPLIT: IPv4/IPv6/DNSBL sub-tabs + type-scoped save + UI-test retarget
+
+STATUS: DONE (local gates green; live ui-tests CI run PENDING — see LIVE PASS below).
+Part A ships here. One src/ file changed (pfblockerng_feeds.php); three smoke test
+files retargeted/extended. NO parser/.inc/.sh/pfb_unbound.py change.
+
+================================================================================
+WHAT SHIPPED (Part A)
+================================================================================
+pfblockerng_feeds.php is now three ?type sub-tabs (IPv4/IPv6/DNSBL), mirroring
+pfblockerng_category.php exactly:
+  - a second display_top_tabs row [IPv4 | IPv6 | DNSBL] -> pfblockerng_feeds.php?type=…
+  - the Feeds TOP tab stays active; breadcrumb is Firewall ▸ pfBlockerNG ▸ Feeds ▸ <type>
+  - only the ACTIVE type renders (Feed Settings alias inputs + predefined-feeds table +
+    the "Unknown user defined Feeds" table), via the Phase-1 helpers called once for $gtype
+  - the save is TYPE-SCOPED (the load-bearing clobber fix).
+
+================================================================================
+?type VALUES + DEFAULT
+================================================================================
+$gtype read from $_REQUEST['type'] via pfb_filter(…, PFB_FILTER_HTML, 'feeds'),
+accepted ONLY if in_array($gtype, array('ipv4','ipv6','dnsbl')); else DEFAULT 'ipv4'.
+  ?type=ipv4   -> IPv4 tab  (DEFAULT; a bare URL with no ?type lands here)
+  ?type=ipv6   -> IPv6 tab
+  ?type=dnsbl  -> DNSBL tab
+Bare URL CONFIRMED to default to ipv4: $gtype is initialised to 'ipv4' before the
+$_REQUEST guard, and the guard only overrides it on a valid value. The other ~12
+pages' plain "/pfblockerng/pfblockerng_feeds.php" links therefore keep working (A4)
+— those pages were NOT edited.
+
+Self-refs all preserve ?type: the form action (action="…?type=<gtype>"), the hidden
+'type' field, the post-save redirect (header Location …?type={$gtype}), $pglinks
+(the Feeds crumb -> …?type={$gtype}), and the second sub-tab row entries. The page's
+OWN top $tab_array Feeds entry stays bare (true) — that is the canonical tab link,
+matching how the IP/DNSBL top tabs link to their canonical pages without ?type.
+
+================================================================================
+TYPE MARKERS USED IN PAGE_TABLE (test_render_smoke.py)
+================================================================================
+The single `feeds` entry was replaced by feeds_ipv4 / feeds_ipv6 / feeds_dnsbl,
+each path "?type=…". Per-entry markers (both must be present in the body):
+  shared : "Pre-defined Alias/Group/Feeds"   (the predefined-feeds panel title)
+  type-specific (the distinguishing marker — derived from the ACTIVE type's Feed
+  Settings alias-name StaticText label, which renders ONLY for the active type):
+    feeds_ipv4  -> "IPv4 Alias name(s):"
+    feeds_ipv6  -> "IPv6 Alias name(s):"
+    feeds_dnsbl -> "DNSBL Alias name(s):"
+The second sub-tab row prints all three labels (IPv4/IPv6/DNSBL) on EVERY tab, so a
+bare "IPv4" would NOT distinguish the views — the "<TYPE> Alias name(s):" StaticText
+label is emitted by pfb_feeds_render_aliasname_inputs($section, $gtype, …) for the
+active type only, making it the correct type-specific oracle marker.
+
+COVERAGE GUARD (test_page_table_covers_every_pfblockerng_page) STILL PASSES:
+the guard does {p.path.split("?",1)[0]} — it strips the query string and counts BASE
+paths. All three typed entries collapse to "/pfblockerng/pfblockerng_feeds.php", the
+one base path already in expected_main. Verified locally: the guard test passes
+(1 passed), and the three feeds_* params collect.
+
+================================================================================
+HOW THE SAVE WAS SCOPED (the fix) + NON-CLOBBER RESULT
+================================================================================
+Hidden field: <input type="hidden" name="type" id="type" value="<gtype>"/> inside
+the form; the active type therefore rides every POST. The save re-derives $gtype
+from $_REQUEST['type'] (which includes $_POST) with the same validate-or-default
+'ipv4' guard.
+
+Loop change: the rename loop NO LONGER loops `foreach ($pfb['feeds_list'] as $type)`
+over ALL types. It now builds
+    $type_data = $pfb['feeds_list'][$gtype] (guarded; [] if absent)
+and loops ONLY `foreach ($type_data as $o_aliasname => $aliasname)`. So the
+config_set_path("…/feed_{$l_aliasname}", …) write only ever touches the ACTIVE
+type's feed_<alias> nodes; an absent type's fields are never iterated, so they are
+never reset to ''. The alt_selected CSV is emitted AFTER the (single-type) predefined
+loop, so it is naturally scoped to the rendered type (Phase-1/Phase-2 handoff note);
+the alt save block is unchanged and gated on isset($_POST['alt_selected']).
+
+Length-guard correctness under scoping: $feeds_list is initialised with all three
+keys empty and only the ACTIVE type is populated. The >24-char guard's
+`!in_array(…, $feeds_list['dnsbl'])` check therefore: on the IPv4/IPv6 tabs
+$feeds_list['dnsbl'] is [] -> the guard APPLIES (correct, those are PF aliases); on
+the DNSBL tab $feeds_list['dnsbl'] holds the DNSBL aliases -> the guard is SKIPPED
+(correct, DNSBL group names have no 24-char PF cap). Behaviour preserved.
+
+NON-CLOBBER TEST (the headline contract guarantee), BOTH DIRECTIONS:
+  tests/smoke/ui/test_feeds.py::test_feed_rename_cross_type_save_does_not_clobber
+  (marker ui_e2e). True transition asserting before AND after, both ways:
+   - GIVEN seed an IPv4 rename (PRI1, feed_pri1) on ?type=ipv4 AND a DNSBL rename
+     (ADs, feed_ads) on ?type=dnsbl; assert BOTH present (the before-state).
+   - WHEN POST the IPv4 tab changing ONLY feed_pri1 -> THEN feed_pri1 took the new
+     value AND feed_ads is UNCHANGED (IPv4 save did not touch DNSBL).
+   - WHEN POST the DNSBL tab changing ONLY feed_ads -> THEN feed_ads took the new
+     value AND feed_pri1 is UNCHANGED (DNSBL save did not touch IPv4).
+  Restore in finally (_config_del both nodes). Oracle is config.xml over SSH, never
+  the POST body. This case is only possible because the split makes a partial,
+  single-type POST exist (WebUI.post GETs the typed page, re-scrapes only that type's
+  fields + the hidden 'type', and re-POSTs to the typed URL).
+  RESULT: PENDING the live ui-tests CI run (the live VM is not available on this
+  machine; not fabricated). Logic verified by trace + the scoped-loop self-review;
+  collects cleanly.
+
+================================================================================
+RETARGETED + NEW TEST FUNCTIONS
+================================================================================
+test_render_smoke.py (ui_render):
+  feeds_ipv4 / feeds_ipv6 / feeds_dnsbl PAGE_TABLE entries (replacing `feeds`).
+  test_page_table_covers_every_pfblockerng_page — UNCHANGED, still passes.
+
+test_feeds.py (ui_e2e) — the five Phase-2 oracles RETARGETED to the typed URLs
+(constants FEEDS_PAGE_IPV4/IPV6/DNSBL = "…?type=…"), MUST stay green:
+  test_feed_rename_save_changes_effective_config                 -> ?type=ipv4
+  test_feed_rename_invalid_alias_is_rejected_config_unchanged    -> ?type=ipv4
+  test_feed_rename_ipv6_save_changes_effective_config            -> ?type=ipv6
+  test_feed_rename_dnsbl_save_changes_effective_config           -> ?type=dnsbl
+  test_feed_rename_dnsbl_invalid_alias_is_rejected_config_unchanged -> ?type=dnsbl
+  NEW: test_feed_rename_cross_type_save_does_not_clobber (above).
+
+test_browser_misc.py (ui_browser):
+  the Feeds alt-URL flow (test_feeds_alt_radio_submit_wiring) now targets
+  FEEDS_PAGE = "/pfblockerng/pfblockerng_feeds.php?type=ipv4" — the IPv4 tab carries
+  the bulk of the pre-defined feeds (and so any Alternate-URL radios). Still skips
+  cleanly when no alt radios render (data-dependent, no false pass).
+
+================================================================================
+LIVE RENDER / FUNCTIONAL / BROWSER PASS STATUS
+================================================================================
+PENDING the `ui-tests`-labeled CI run on the ADR-04 live pfSense VM. The live VM is
+NOT available on the implementer's machine, so the authoritative green is NOT
+produced locally and is NOT fabricated here:
+  - render  (feeds_ipv4/ipv6/dnsbl, Tier-A oracle + type marker)  : PENDING ui-tests CI
+  - functional (per-type rename round-trips + the cross-type non-clobber, both dirs) : PENDING ui-tests CI
+  - browser (alt-URL flow on the typed URL)                       : PENDING ui-tests CI
+Best-effort local validation (below) is green.
+
+================================================================================
+UX NOTE
+================================================================================
+Counts per type (ADR §1): IPv4 17 groups / 88 feeds, IPv6 8 / 10, DNSBL 21 / 134.
+IPv6's 10 feeds now live on their own ?type=ipv6 tab (previously buried in the middle
+of one long all-types scroll). Each tab shows only its type's Feed Settings alias
+inputs, its predefined-feeds table, and its unknown-user-defined-feeds table — the
+same clear IPv4/IPv6/DNSBL organisation as the IP/DNSBL/Reports pages. The aggregate
+"Number of Feeds per Category Type" dl (all three counts) still prints on every tab,
+so the per-type totals stay visible.
+
+================================================================================
+VERIFICATION GATES (local)
+================================================================================
+- php -l pfblockerng_feeds.php : "No syntax errors detected" (exit 0). The PHP 8.5
+  local "Deprecated: url_compare() optional-before-required param" notices are
+  PRE-EXISTING (untouched function signature) and do not fail php -l.
+- vendor/bin/phpstan analyse --no-progress --memory-limit=1G : [OK] No errors.
+- python -m pytest -q : 1115 passed (UNCHANGED — the whole tests/smoke tree is
+  --ignore'd in default collection).
+- ruff check . : All checks passed!   ruff format --check . : 69 files already formatted.
+- mypy tests/ : Success: no issues found in 22 source files.
+- pytest --collect-only on the 3 changed smoke files (override addopts): collects
+  cleanly — feeds_ipv4/ipv6/dnsbl present, the new non-clobber ui_e2e present
+  (6 ui_e2e total). test_browser_misc collects 0 (playwright importorskip — clean
+  skip, not a code error).
+
+================================================================================
+SELF-REVIEW (read the FULL diff)
+================================================================================
+- Only pfblockerng_feeds.php changed in src/ (the other ~12 pages untouched; A4 OK).
+- The save loop is genuinely scoped to ONE type ($type_data = $pfb['feeds_list'][$gtype]);
+  NO remaining `foreach ($pfb['feeds_list'] as $type)` over-all-types `?: ''` write.
+- Form_Section id ('feedsettings'), field names (feed_<alias>, alt_<header>,
+  alt_selected), and config keys (installedpackages/pfblockerngglobal/feed_*,
+  feed_alt_*) are UNCHANGED. Only the tab chrome, the active-type body, and the save
+  SCOPE changed.
+- Non-clobber test asserts BEFORE and AFTER in BOTH directions; restore in finally.
+- PAGE_TABLE coverage-guard logic still holds (strip-? collapse to the one base path).
+- Bare-URL default path ('ipv4') intact.
+VERDICT: PASS.
+
+================================================================================
+GO-AHEAD FOR PHASE 4
+================================================================================
+Cleared. Part A is complete and shippable independent of Parts B/C. Phase 4 authors
+the representative inert sample feeds under tests/smoke/fixtures/ (IP {plain+CIDR,
+range, IPv6}, DNSBL {plain-domain, hosts, ABP/EasyList}); no test wiring yet
+(Phase 5 falsifies the HTTP-fetch path first, then expands).

@@ -1,0 +1,203 @@
+================================================================================
+ADR-21 Phase 3 RESULTS -- Live-VM smoke (per-line ABP detection in a NON-ABP feed)
++ ADR badfilter wording fix + DoD evidence
+Branch: adr/21-abp-header-agnostic-detection   (FINAL phase)
+================================================================================
+
+GATE: Phases 1 & 2 confirmed COMPLETE.
+  - RESULTS/01_Results.txt -> Python per-line routing in build(), 8 tests,
+    red->green proven (4 reds against unmodified source), GO recorded.
+  - RESULTS/02_Results.txt -> PHP download loop + manifest builder verbatim
+    pass-through + broadened header sniff (pfb_dnsbl_is_abp_header) + 18-case
+    PHPUnit, GO recorded.
+  Carry-forward honoured: $badfilter is a FEED-only SAME-STREAM prune inside the
+  frozen reconcile() (cancels a matching ABP Rule, NOT a plain-path block). No
+  smoke/DoD expectation requires cross-pipeline badfilter cancel.
+
+
+SUMMARY
+-------
+Phase 3 adds ONE live-VM smoke case proving the full ADR-21 pipeline end-to-end on
+a real pfSense CE VM, applies the Phase-1-recommended ADR wording fix (badfilter
+same-stream vs cross-pipeline), and records the consolidated DoD evidence. No
+production code changed in Phase 3 (the Phase-2 inline ADR-21 comments are already
+sufficient; prompt step 3 = touch only if unclear -> not needed).
+
+
+CHANGES (Phase 3)
+-----------------
+1. tests/smoke/test_smoke_feeds.py  (+~90 lines, 1 new test)
+   NEW: test_abp_perline_detection_in_plain_feed  (@pytest.mark.smoke +
+        @pytest.mark.timeout(300))
+
+   Scenario: a HEADER-LESS DNSBL feed row (no '[Adblock'/'! Title:' header -> stays
+   format_hint='plain') carrying mixed entries:
+       ||<block>^                  (ABP block anchor in a non-ABP feed -> §4.1)
+       @@||<allow>^  +  <allow>    (@@ allow alongside a SAME-FEED plain block -> §4.2)
+       <plain>                     (bare plain block, must be unaffected -> §4.5)
+   Body built inline from helpers.unique_domain() (runtime uuids -> a LOCAL feed via
+   write_local_feed, the test_smoke_abp.py delivery; a static HTTP fixture cannot
+   carry runtime uuids).
+
+   Before-state (real, observable; CLAUDE "assert the before-state" rule): with the
+   feed NOT loaded, all three names RESOLVE via the controlled stub upstream
+   (STUB_DNS_A, use_system_dns_upstream) -> asserted resolves_to(STUB_DNS_A) and
+   not is_vip BEFORE entering the case.
+
+   After-state (inside CaseContext, egress OPEN for the resolve probe; per-name
+   cache flush + dns_probe_until for the TTL-bounded async swap, ADR-10):
+       <block>  -> VIP block, no longer resolves   (||block^ reached parse_abp from
+                                                     a NON-ABP feed -- the ADR-21 win)
+       <allow>  -> RESOLVES via the stub            (its @@ allow beat the SAME-FEED
+                                                     plain block -- proves @@|| parsed
+                                                     and won; a regression leaves it
+                                                     VIP-blocked by the plain entry)
+       <plain>  -> VIP block                        (plain pipeline untouched)
+
+   Delivery rationale recorded in the docstring: the entries ride a normal FEED row,
+   NOT the GUI Custom_List field -- a Custom_List entry is provenance='user' (band-5
+   sovereign block) and would beat a feed @@ allow, defeating the §4.2 override under
+   test. Feed-level ABP semantics (feed-allow band 2 beats feed-block band 1) are
+   exactly what per-line detection must reproduce, so the feed row is faithful.
+
+   RESOLVE-PROOF (no false-green): the "resolves" assertions reach the stub via the
+   MATCHER's allow/non-block path -- NO host override (an override is served as
+   local-data ahead of the matcher and would resolve the name regardless). Mirrors
+   the module's existing RESOLVE-PROOF NOTE + test_dnsbl_http_abp_feed_loads.
+
+2. .ADRs/ADR_21_ABP_Header_Agnostic_Detection/ADR.md  (wording fix; ADR text only)
+   §2.3.5 and §4.4 reworded: $badfilter cancels a matching SAME-STREAM ABP block
+   (a ||domain^ routed to abp_rules, whole-feed OR per-line-detected), NOT a
+   plain-path block (a bare-domain line is materialised straight to data_db/zone_db,
+   never a Rule -> reconcile() has no signature to match). Cross-pipeline cancel is
+   named out of scope (would require modifying the frozen reconcile()/build()).
+   This is the Phase-1 RECOMMENDATION (RESULTS/01 "EDGE CASE DISCOVERED"); it
+   corrects an inaccuracy, changes NO behaviour, and matches the frozen ADR-07
+   architecture + Phase-1 test (d) which already pins the same-stream semantic.
+   markdownlint-cli2 -> 0 errors.
+
+3. Debris removed: a leftover tests/smoke/fixtures/dnsbl_abp_perline.txt (a static
+   hardcoded-uuid fixture from a prior aborted Phase-3 attempt) was UNTRACKED in the
+   worktree; it is unreferenced by the chosen inline-unique_domain() design and was
+   deleted (not committed). Final diff is minimal.
+
+
+DoD EVIDENCE (ADR §7)
+=====================
+
+Phase 1 (Python per-line detection) -- from RESULTS/01:
+  - python -m pytest tests/test_adr21_abp_per_line.py: RED run vs UNMODIFIED source
+    = 4 failed, 4 passed (the 4 behaviour-pinning tests (a)-(d) FAIL pre-change
+    because ||/@@|| lines are dropped by the plain validator; (e)-(h) regression
+    pins pass on both sides). GREEN with the build() change = 8 passed.
+  - Regression pins named: (e) test_plain_path_unchanged_no_abp_lines,
+    (f) test_abp_header_feed_unchanged, (g) test_wildcard_and_path_anchors_skipped,
+    (h) test_page_context_option_skipped.
+  - test_adr07_* frozen: git diff origin/devel...HEAD -- tests/test_adr07_*.py EMPTY.
+
+Phase 2 (PHP companion) -- from RESULTS/02:
+  - php -l pfblockerng.inc -> No syntax errors detected.
+  - vendor/bin/phpunit -> OK (411 tests, 788 assertions); new DnsblIsAbpHeaderTest
+    18/18 green.
+  - vendor/bin/phpstan analyse -> [OK] No errors.
+  - vendor/bin/phpcs -> exit 0 (PFBL-01 clean; pure predicate needs no scope entry).
+  - Red->green: the broadened/mid-line sniff cases are genuine reds vs the legacy
+    4-magic-string strpos() (e.g. '! Title: HaGeZi' was FALSE pre-change; mid-line
+    'data ! Title: AdGuard' was TRUE under strpos, now correctly FALSE).
+  - EXEMPT off-appliance simulation named: test_manifest_builder_mixed_feed
+    (re-implements the PHP manifest-builder rule in Python -> cannot go red against
+    the PHP change; pins the SHAPE; live proof is the Phase-3 smoke).
+
+Phase 3 (this run) -- all gates RE-RUN green in the worktree container:
+  - python -m pytest -q                          -> 1575 passed (baseline; the new
+                                                    smoke test is deselected from the
+                                                    default run, --ignore=tests/smoke).
+  - smoke collection (no VM here):
+      python -m pytest tests/smoke/test_smoke_feeds.py -m smoke
+        --override-ini="addopts=" --co
+      -> 7 tests collected (incl. test_abp_perline_detection_in_plain_feed), 0 errors.
+      (The only warning is PytestUnknownMarkWarning for mark.timeout because
+      pytest-timeout is a tests/smoke/requirements.txt dep NOT installed in this
+      container -- identical to every other smoke file using the marker; resolved in
+      CI where the smoke deps are installed. NOT an error, NOT a regression.)
+  - ruff check .                                  -> All checks passed!
+  - ruff format --check .                         -> 98 files already formatted.
+  - mypy tests/                                   -> Success: no issues (40 files).
+  - php -l pfblockerng.inc                         -> No syntax errors detected.
+  - vendor/bin/phpunit                            -> OK (411 tests, 788 assertions).
+  - vendor/bin/phpstan analyse                    -> [OK] No errors.
+  - vendor/bin/phpcs                              -> exit 0.
+  - markdownlint-cli2 (ADR.md)                     -> 0 errors.
+
+ALL CI GATES: PASS (locally; CI is the final authority).
+
+ABP-header feed regression guard (DoD): test_adr21_abp_per_line.py::
+test_abp_header_feed_unchanged is GREEN (Phase 1, regression pin) and the smoke
+module's test_dnsbl_http_abp_feed_loads (whole-feed ABP body) remains GREEN in
+collection -> the ABP-header path is an unbroken green regression guard. The new
+per-line case is ORTHOGONAL (header-less feed) and ADDITIVE.
+
+
+LIVE SMOKE RUN STATUS
+---------------------
+PENDING -- this Phase-3 worktree container has NO live pfSense/Unbound VM, so the
+smoke case cannot execute here (expected: smoke is marker-gated/CI-only). The test
+COLLECTS cleanly and is authored to the verified smoke contract (probe on-box via
+drill @127.0.0.1, first response authoritative, block shapes VIP/NULL never NXDOMAIN
+for a feed match, stub resolve-proof, per-name cache flush for the TTL-bounded swap).
+
+Maintainer: dispatch the smoke workflow to capture the run ID + per-case PASS:
+    gh workflow run smoke.yml -f pytest_marker=smoke
+Then record the run ID, per-case PASS/FAIL, and the exact drill outputs for
+<block>->VIP, <allow>->STUB_DNS_A (203.0.113.99), <plain>->VIP back into this file.
+The two DoD smoke criteria (§7) -- "||domain^ in a feed produces a DNSBL block" and
+"@@||domain^ cancels a plain-entry block" -- are exactly what this case asserts.
+
+
+§7 MANUAL SMOKE CHECKLIST (maintainer, live CE box) -- status: PENDING
+---------------------------------------------------------------------
+Run on a live pfSense CE box and record PASS/FAIL:
+  1. Create a DNSBL Group with a Custom_List entry containing:
+       ||block-me-abp.com^
+       @@||allow-me-abp.com^
+       plain-block.com
+       @@||plain-block.com^
+  2. Run pfBlockerNG -> DNSBL update; verify NO parse errors in the log.
+  3. drill @127.0.0.1 block-me-abp.com -> sinkhole VIP / NULL (blocked).
+  4. drill @127.0.0.1 allow-me-abp.com -> NOERROR + real IP (allowed).
+  5. drill @127.0.0.1 plain-block.com  -> NOERROR + real IP (allow overrides plain).
+  6. Add ||block-me-abp.com^$important to a 2nd Custom_List entry; run update;
+     confirm block-me-abp.com is STILL blocked (important preserved, no regression).
+  7. Point a DNSBL feed at a '! Title:'-led ABP list carrying NONE of the four legacy
+     magic strings (e.g. a HaGeZi ABP-format list); run update; verify the feed is
+     detected as ABP (no parse errors; || entries block).
+
+  Note (consistency, not a defect): §7 checklist item 3 says "NXDOMAII or sinkhole
+  VIP". On devel (python-mode-only) a FEED match is VIP/NULL, never NXDOMAIN (NXDOMAIN
+  is SafeSearch-only). The automated smoke asserts the VIP shape accordingly. A live
+  maintainer on devel should read item 3 as the sinkhole VIP (or NULL); the NXDOMAIN
+  alternative applies only to a per-list nxdomain logging mode, not the default.
+
+
+SCOPE / DEVIATIONS
+------------------
+- One smoke test added (prompt: add to test_smoke_feeds.py if it fits -> it fits;
+  the module already owns the stub resolve-proof + the whole-feed ABP case, so the
+  per-line case sits naturally beside test_dnsbl_http_abp_feed_loads).
+- Custom_List vs feed-row: the prompt suggested the Custom_List mechanism; it was
+  deliberately NOT used because Custom_List is band-5 sovereign user-block and would
+  defeat the @@-overrides-plain assertion (§4.2). A header-less FEED row is the
+  faithful mechanism for feed-level ABP semantics; rationale recorded in the test
+  docstring. This is the "fix the test to the real architecture" rule, same spirit
+  as Phase-1's test (d) adjustment.
+- ADR.md wording fix applied here (Phase-1 recommendation, in Phase-3 ADR-finalization
+  scope) -- ADR text is a dev-only doc (no PR; commits to the branch with the rest).
+- No production code change in Phase 3.
+
+
+COMMIT (single)
+    tests: ADR-21 P3 smoke -- per-line ABP detection in plain feed (ADR-21 P3)
+Pushed to adr/21-abp-header-agnostic-detection; PR against devel.
+
+ADR STATUS: complete pending maintainer sign-off of the manual smoke (§7) + the
+live smoke workflow run -> then flip ADR.md Status to Accepted.

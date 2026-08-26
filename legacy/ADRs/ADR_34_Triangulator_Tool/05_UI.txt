@@ -1,0 +1,68 @@
+================================================================================
+PHASE 5 PROMPT — UI: Diagnostics page + Alerts entry + contextual links + ACL
+Target model: Claude Sonnet 5
+ADR: .ADRs/ADR_34_Triangulator_Tool/ADR.md   (read SS2.1, SS2.3 first)
+================================================================================
+
+ROLE
+Work in the per-ADR worktree on branch adr/34-triangulator-tool. Phase 5 surfaces the engine in
+the UI (read-only v1: links, not in-place writes). One commit, push directly.
+MODE: behaviour change — every new behaviour proves red->green (executed runs, output pasted in the handoff).
+
+WHY THIS PHASE EXISTS
+The engine (Phases 2-4) is headless. v1 gives it two entry points (a Reports Diagnostics form +
+an Alerts per-row icon) and presents the report with contextual LINKS to existing whitelist/
+config pages -- no in-place whitelisting (that is v2).
+
+REQUIRED READING
+- FIRST, read .ADRs/ADR_34_Triangulator_Tool/RESULTS/04_Results.txt. If missing, STOP and
+  report.
+- .ADRs/ADR_34_Triangulator_Tool/ADR.md (SS2.1 entry-points/remediation rows, SS2.3 out-of-scope).
+- src/usr/local/www/pfblockerng/pfblockerng_alerts.php (per-row icon pattern; the existing
+  whitelist/threat icons); pfblockerng_threats.php (a diagnostic-page pattern); the Reports
+  tab/menu wiring; src/etc/inc/priv/ (existing pfBlockerNG .priv.inc entries).
+- tests/smoke/ui/ test_render_smoke.py (ADR-14 Tier A); tests/php/ for an extracted decider.
+- CLAUDE.md — Naming, PHP standards, Web UI help text, Smoke (ui_render), PFBL-01.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims in this prompt were written before earlier phases
+ran; the prior RESULTS files and the live tree override this prompt on any conflict —
+verify each claim before acting on it, and flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Add a Reports -> Diagnostics sub-tab: a free-text input (IP/domain/URL) -> calls
+   pfb_triangulate -> renders a colour-coded results panel (resolution path green, blocking
+   reasons red) + a "copy report" (text/JSON) control. Validate input server-side (PFBL-01).
+2. Add a per-row "Triangulate" icon to the Alerts DNSBL/IP/Unified views that links to the
+   Diagnostics page pre-filled with the row context (dst IP / domain / feed). Additive -- do
+   NOT change existing Alerts output.
+3. Remediation = contextual LINKS to the existing whitelist/config pages pre-filled where
+   possible (NO in-place POST/writes in v1).
+4. Add a .priv.inc ACL entry for the new page following existing pfBlockerNG privilege entries.
+5. Extract any non-trivial input-detect/render logic into a pure decider (testable off-box).
+6. Tests: PHPUnit for the decider (input detection IP/domain/URL; report -> rendered sections);
+   ADR-14 ui_render for the new page (200; no Fatal/Parse/Warning/Notice/Uncaught; marker; no
+   new php_error.log line); confirm the Alerts page still renders with the new icon.
+
+CONSTRAINTS
+- PHP tabs; PHP 8.3; no die()/exit().
+- READ-ONLY v1: the page MUST NOT write config/whitelist in place -- links only.
+- New input-handling save/detect fn -> PFBL-01 validator + PHPCS scopeFunctions.
+- ui_render asserts MORE than HTTP 200.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit -> green; php -l; PHPStan + phpcs clean (incl. PFBL-01).
+- python -m pytest -> green.
+- ADR-14 ui_render green for the new page (SMOKE_ADMIN_PASSWORD set; else SKIP); Alerts renders.
+
+EXPECTED RESULT
+Admins can triangulate from a Reports form and from Alerts rows; the report renders cleanly with
+contextual links; no in-place writes.
+
+COMMIT (single)
+    pfblockerng: add Triangulator diagnostics UI + Alerts entry (ADR-34 P5)
+Push directly to adr/34-triangulator-tool; open a PR only if the direct push is rejected.
+
+HANDOFF — write .ADRs/ADR_34_Triangulator_Tool/RESULTS/05_Results.txt (plain .txt)
+Record: the new page file + element ids; the Alerts icon wiring; the extracted decider; the ACL
+entry; the ui_render marker; verification numbers; go-ahead for Phase 6.

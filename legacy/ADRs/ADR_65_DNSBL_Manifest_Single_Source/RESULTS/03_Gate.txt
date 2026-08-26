@@ -1,0 +1,76 @@
+ADR-65 Phase 3 -- GATE RECORD
+================================================================================
+
+VERDICT: PASS (verifier verdict PASS, zero blockers; no orchestrator
+remediation needed)
+
+--------------------------------------------------------------------------------
+COMMANDS + RESULTS (verifier re-ran independently; orchestrator confirmed the
+transaction)
+--------------------------------------------------------------------------------
+- php -l on pfblockerng_extra.inc + tests/php/DnsblQueryClientTest.php: clean.
+- vendor/bin/phpunit tests/php/DnsblQueryClientTest.php: 19/19, 47 assertions.
+- vendor/bin/phpunit (whole suite): 3427 tests, 21161 assertions, 4 skipped --
+  byte-identical between implementer and verifier runs; baseline re-measured
+  with the new file held out = 3408, delta exactly this phase's 19.
+- composer phpstan: [OK] No errors; composer phpcs (src/): clean.
+- sh scripts/agent/run-gates.sh --diff origin/devel (mypy PATH-shimmed):
+  GATES: PASS.
+- Frozen P1 oracles: 29 passed at zero edits (git diff --stat empty).
+- Narration/version-literal/retired-token checkers --diff origin/devel: clean.
+- Push: implementer's --force-with-lease succeeded this phase
+  (2f39ef72..a3d7c7f5); orchestrator confirmed remote in sync (0 ahead).
+
+--------------------------------------------------------------------------------
+RED/GREEN EVIDENCE
+--------------------------------------------------------------------------------
+Brand-new production-dormant code (pfb_dnsbl_query has zero callers --
+Test coverage #1's brand-new-code exception, correctly invoked). Real
+assertions: round-trip verdicts via a background PHP responder process,
+timeout-to-NULL, and the full hostile-reply row set, each with an X-shaped
+fixture the verifier probed empirically (php -r runs pasted in its record).
+
+--------------------------------------------------------------------------------
+PER-ITEM DIFF VERDICTS (verifier read the full diff)
+--------------------------------------------------------------------------------
+- pfb_dnsbl_query(): 94 added lines, single insertion point, zero existing
+  lines touched; every plan step present (rtrim + pfb_filter choke point,
+  uniqid fresh id, json_encode FALSE guard, atomic root-owned 0660 publish,
+  bounded poll with hard deadline, id-match + shape validation, cleanup, NULL
+  on every failure path) -- PASS.
+- Test suite mirrors UnboundPyControlWriteTest's sandbox pattern; 19 methods
+  map 1:1 to the coverage matrix -- PASS.
+- Test honesty + conventions (pfb_dnsbl_* naming beside 25+ siblings, typed
+  signatures, docblock under the function-contract carve-out) -- PASS.
+
+--------------------------------------------------------------------------------
+COVERAGE MATRIX
+--------------------------------------------------------------------------------
+All hostile-reply rows (timeout, truncated JSON, non-JSON, id mismatch,
+blocked=false, oversized, missing field), rejection rows (invalid domain
+classes from PFB_FILTER_DOMAIN), and write/encode-failure rows ticked to
+named tests. No deferrals.
+
+--------------------------------------------------------------------------------
+BRIEF VALIDATION (orchestrator, non-vacuous)
+--------------------------------------------------------------------------------
+Spot-checked: pfb_dnsbl_query defined at pfblockerng_extra.inc:3785 with the
+brief-pinned signature; RESULTS/03_Results.txt committed; remote in sync.
+No drift_flags.
+
+--------------------------------------------------------------------------------
+SKIPPED
+--------------------------------------------------------------------------------
+- Python gates beyond the frozen oracles: no .py file in this phase's diff
+  (run-gates.sh covered the branch cumulatively anyway).
+- Live-VM smoke: dormant client; live round-trip lands in ADR-65 SS7.
+
+--------------------------------------------------------------------------------
+NOTES
+--------------------------------------------------------------------------------
+Environment self-correction recorded in the handoff: this worktree's vendor/
+was stale (PHPStan 2.2.1 vs the composer.lock-pinned 2.2.5), producing a
+transient phpstan false-positive in unrelated code; fixed with composer
+install, root-caused against a clean clone, and the mid-investigation
+tracking issue #1347 was closed as not-a-bug with the explanation
+(orchestrator confirmed CLOSED).

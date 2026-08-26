@@ -1,0 +1,180 @@
+================================================================================
+PHASE 2 RESULTS — variant-aware manifest deps + ci-metadata variant field
+ADR-20 CE/Plus variant-aware pkg distribution
+Date: 2026-06-10
+================================================================================
+
+VERDICT: GO — all verification steps pass, tests green, lint clean.
+
+--------------------------------------------------------------------------------
+PART A — ci-metadata changes
+--------------------------------------------------------------------------------
+
+Branch: ci-metadata-adr20-p2 (already existed and contained the correct changes)
+Base: origin/ci-metadata
+
+Fields added to supported-versions.json:
+  - "variant": "CE"    added to the 2.8.x entry
+  - "variant": "Plus"  added to the 26.03 entry
+  - "status": "active" set on both entries (replaces legacy "GA" value)
+
+Both entries now have the full field set:
+  pfsense_version, channel, freebsd_version, freebsd_major, php_version,
+  py_flavor, variant, status, ci
+
+JSON validated: python -m json.tool → well-formed.
+
+No PR number — push to ci-metadata-adr20-p2 branch only (per instructions);
+PR against ci-metadata to be opened by maintainer.
+
+--------------------------------------------------------------------------------
+PART B — read-version-matrix.sh --variant interface
+--------------------------------------------------------------------------------
+
+Option: --variant CE|Plus  (case-insensitive via tr '[:upper:]' '[:lower:]' + jq ascii_downcase)
+
+Behaviour:
+  --variant CE   → BUILD matrix contains only entries where .variant == "CE" (case-insensitive)
+  --variant Plus → BUILD matrix contains only entries where .variant == "Plus"
+  (no --variant)  → all entries returned, UNCHANGED from pre-Phase-2 behaviour
+
+Returns ALL matching entries — during a transition window (two CE entries with
+different FreeBSD versions) both are returned. Caller iterates over them.
+
+CI matrix: built from the variant-filtered BUILD matrix (ci:true CE entries only).
+CI sanity check skipped when --variant Plus is used (Plus is always ci=false by policy).
+
+New output (--github-output): variant
+  - JSON array of distinct .variant values in the BUILD matrix
+  - e.g. ["CE"] when --variant CE is used, ["CE","Plus"] when unfiltered with both variants
+
+Output shape example (--variant CE):
+  [{"pfsense_version":"2.8.x","channel":"CE","freebsd_version":"15.0-RELEASE",
+    "freebsd_major":"15","php_version":"8.3","py_flavor":"py311","variant":"CE",
+    "status":"active","ci":true}]
+
+Status filtering: NOT performed by the script — all entries (including any future
+"legacy" entries) are returned unless --variant is used. Status-based filtering
+is the caller's responsibility.
+
+--------------------------------------------------------------------------------
+PART C — build-pkg-portable.py _resolve_variant_deps
+--------------------------------------------------------------------------------
+
+Signature:
+  def _resolve_variant_deps(php_version: str, py_flavor: str) -> list[str]
+
+Location: scripts/build-pkg-portable.py (before apply_repo_catalogue)
+
+Behaviour:
+  - Pure function, no I/O, no side effects
+  - Derives PHP dep name: php_version.replace(".", "") prepended with "php"
+    e.g. "8.3" → "php83", "8.5" → "php85", "8.4" → "php84"
+  - Uses py_flavor verbatim as the Python dep name: "py311" → "py311"
+  - Returns: [php_dep, py_flavor]  e.g. ["php83", "py311"] for CE 2.8.x
+
+Dep-name derivation rule:
+  php_version "X.Y" → strip dot → "phpXY"
+  php_version "8.3" → "php83"
+  php_version "8.5" → "php85"
+  Implemented as: "php" + php_version.replace(".", "")
+
+The derivation is NOT hardcoded for "8.3" or "8.5" — driven by the php_version
+field in ci-metadata, so updating ci-metadata is the only change needed when
+CE or Plus bumps their PHP version.
+
+--variant flag in build-pkg-portable.py:
+  When --variant is present: _resolve_variant_deps(php_ver, py_flavor) result
+  is injected as RUN_DEPENDS entries (via deps.setdefault — never overrides USES deps).
+  When --variant is absent: behaviour UNCHANGED (backward-compatible).
+
+--------------------------------------------------------------------------------
+PART D — build-pkg-linux.yml changes
+--------------------------------------------------------------------------------
+
+New inputs added (both workflow_dispatch and workflow_call):
+  variant:
+    required: false
+    default: ""
+
+Build step uses BUILD_VARIANT env var (avoids shell quoting issues):
+  if [ -n "$BUILD_VARIANT" ]; then
+    python3 scripts/build-pkg-portable.py ... --variant "$BUILD_VARIANT" ...
+  else
+    python3 scripts/build-pkg-portable.py ... (no --variant, legacy path)
+  fi
+
+Backward-compatible: old matrix entries without variant field produce no --variant
+flag → old dep logic applies.
+
+--------------------------------------------------------------------------------
+PART E — Tests added
+--------------------------------------------------------------------------------
+
+File: tests/test_build_pkg_portable.py
+
+Tests added (5 new):
+  1. test_ce_manifest_has_php83_dep
+     _resolve_variant_deps("8.3", "py311") → "php83" in result, "php85" NOT in result
+
+  2. test_plus_manifest_has_php85_dep
+     _resolve_variant_deps("8.5", "py311") → "php85" in result, "php83" NOT in result
+
+  3. test_wrong_variant_dep_absent
+     CE result lacks "php85"; Plus result lacks "php83".
+     Covers both sides of the mutual-exclusion guarantee.
+
+  4. test_no_variant_flag_unchanged
+     End-to-end build of the synthetic classic port WITHOUT --variant.
+     Asserts: only RUN_DEPENDS deps present (foo), no php8*/py3* variant guards added.
+     Before-state check: variant guards are absent when flag is omitted.
+
+  5. test_two_simultaneous_ce_entries
+     Simulates transition-window matrix: CE 2.8.x (php83) AND CE 2.9.x (php84).
+     Calls _resolve_variant_deps for each; asserts each gets correct php dep,
+     lacks the other's dep, both have py311, and the two lists are distinct.
+
+All tests: typed (from __future__ import annotations; type hints), mypy clean.
+All 62 tests in test_build_pkg_portable.py pass; full suite 1463/1463 green.
+
+--------------------------------------------------------------------------------
+VERIFICATION RESULTS
+--------------------------------------------------------------------------------
+
+python3 -m pytest tests/test_build_pkg_portable.py -q  → 62 passed
+python3 -m pytest tests/ --ignore=tests/smoke -q       → 1463 passed
+ruff check + ruff format --check                       → clean (All checks passed)
+mypy tests/ --ignore-missing-imports                   → Success: no issues (31 files)
+sh -n scripts/read-version-matrix.sh                   → no syntax error
+shellcheck scripts/read-version-matrix.sh              → clean (no output)
+
+Manual verification:
+  ./scripts/read-version-matrix.sh --ref origin/ci-metadata-adr20-p2 --variant CE
+    → returns only CE entry (2.8.x, php83)
+  ./scripts/read-version-matrix.sh --ref origin/ci-metadata-adr20-p2 --variant Plus
+    → returns only Plus entry (26.03, php85)
+  ./scripts/read-version-matrix.sh --ref origin/ci-metadata-adr20-p2
+    → returns both entries (backward-compatible)
+
+--------------------------------------------------------------------------------
+COMMIT
+--------------------------------------------------------------------------------
+
+Branch: adr/20-ce-plus-variant-distribution
+Commit: 5963b2c
+Message: ci: variant-aware manifest deps (--variant CE|Plus) + ci-metadata variant field (ADR-20 P2)
+Pushed: yes → origin/adr/20-ce-plus-variant-distribution
+
+ci-metadata branch: ci-metadata-adr20-p2 (already had correct changes; no new commit needed)
+
+--------------------------------------------------------------------------------
+GO-AHEAD FOR PHASE 3
+--------------------------------------------------------------------------------
+
+Phase 3 can proceed. The variant field is in ci-metadata (ci-metadata-adr20-p2),
+_resolve_variant_deps is available in build-pkg-portable.py, and the --variant
+flag wires through the build matrix → workflow → script chain. Phase 3
+(build-repo-portable.py catalog split CE/Plus) should:
+  - Read variant from BUILD_MATRIX entries (now present)
+  - Bucket .pkg files by (ABI + variant): ce/${ABI}/ and plus/${ABI}/
+  - Each bucket serves only its variant's pkg guard deps

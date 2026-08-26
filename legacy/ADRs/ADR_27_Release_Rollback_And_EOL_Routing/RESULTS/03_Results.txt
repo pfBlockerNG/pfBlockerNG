@@ -1,0 +1,236 @@
+ADR-27 Phase 3 Results — Publish wiring: docs + CLI dry-run
+==============================================================
+
+Status: COMPLETE — go-ahead for Phase 4.
+
+ADR-RESUME: branch=adr/27-release-rollback-and-eol-rou next-phase=4
+
+------------------------------------------------------------------------
+Input contract (generator public API — final, no rename)
+------------------------------------------------------------------------
+
+CLI flags (scripts/build-repo-portable.py --build-matrix):
+
+  --release-keep-devel N   (int, default 1)
+      Retain the N newest devel releases per (version, arch) in the
+      release catalog. Default 1 = latest-only (inert; today's behaviour).
+      0 = unbounded sentinel (keep all).
+
+  --release-keep-stable M  (int, default 1)
+      Same for the stable channel.
+
+  --release-extra-pkgs PATH  (repeatable; default empty)
+      Pre-built older-release .pkg to fold into the release pool
+      alongside the freshly built devel + optional stable (repeatable —
+      publish.yml passes one flag per downloaded .pkg file).
+      Pruned by --release-keep-devel / --release-keep-stable after folding.
+
+Python API (build_repo_matrix keyword-only arguments — unchanged from Phase 2):
+
+  release_keep_devel: int = 1
+  release_keep_stable: int = 1
+  release_extra_pkgs: list[Path] | None = None
+
+The contract is the clean public one for publish.yml. A repeatable path
+flag (one flag per file) is simpler to drive from a shell loop than a
+directory path: publish.yml knows the exact filenames from the GitHub API,
+and the generator handles the pool-and-prune internally.
+
+No renaming or refactoring was needed — the Phase 2 contract is adopted as-is.
+
+------------------------------------------------------------------------
+Docs updated
+------------------------------------------------------------------------
+
+README.md
+  Added "Rolling back a stable or devel release" subsection inside the
+  nightly-channel section (Option 2), documenting the pinned-version pkg
+  install command, newest-wins default, retention-window limit, and the
+  config-schema caveat.
+
+scripts/README.md
+  Added "Catalog generator — release retention and rollback" section:
+  - Flag reference table (--release-keep-devel/stable/extra-pkgs)
+  - How publish.yml uses these flags
+  - CLI rollback procedure (pkg install <name>-<version>)
+  - Config-schema caveat
+
+Both files: markdownlint-cli2 — 0 error(s).
+
+------------------------------------------------------------------------
+Tests added (tests/test_build_repo_portable.py)
+------------------------------------------------------------------------
+
+3 new test functions under the ADR-27 Phase 3 block, all exercising
+brp.main([--build-matrix, ...]) (CLI path) with --release-extra-pkgs:
+
+Helper:
+  _with_stub_builder(monkeypatch)
+    Patches brp.build_repo_matrix to inject builder=_stub_builder so
+    the CLI path runs end-to-end without spawning a real subprocess.
+
+1. test_cli_release_extra_pkgs_default_is_latest_only
+   - 3 devel extras (3.0.1..3.0.3) + 3 stable extras (2.0.1..2.0.3)
+     passed as --release-extra-pkgs; no keep override (default 1)
+   - Before-state confirmed (6 files created, correct versions)
+   - Asserts: exactly 1 devel + 1 stable in catalog; retained version
+     is the highest (3.0.3 / 2.0.3) — default is latest-only
+
+2. test_cli_release_extra_pkgs_keeps_newest_n
+   - 4 devel extras (3.0.1..3.0.4) + 4 stable (2.0.1..2.0.4)
+   - BEFORE-state run (keep=1): exactly 1 devel + 1 stable in catalog
+   - AFTER-state run (keep=3): 3 devel + 3 stable; 3.0.1 and 2.0.1 absent;
+     3.0.2/3/4 and 2.0.2/3/4 all present
+   - Proves the CLI wiring delivers the correct before-and-after behaviour
+
+3. test_cli_release_extra_pkgs_newest_wins
+   - 4 devel (3.0.1..3.0.4) + 4 stable (2.0.1..2.0.4), keep=2
+   - Asserts: exactly 2 devel + 2 stable; highest retained devel >= 3.0.4;
+     highest retained stable >= 2.0.4; no duplicate (name, version) pairs
+   - Proves newest-wins: pkg install <name> (no version) resolves the
+     highest catalog entry
+
+------------------------------------------------------------------------
+Gate outputs
+------------------------------------------------------------------------
+
+python -m pytest -q:
+  1750 passed in 16.52s  (+ 3 new; 0 failures)
+
+ruff check .:
+  All checks passed!
+
+ruff format --check .:
+  112 files already formatted
+
+npx markdownlint-cli2 README.md scripts/README.md:
+  0 error(s)
+
+------------------------------------------------------------------------
+publish.yml spec — verbatim YAML steps for pfBlockerNG/pkg
+------------------------------------------------------------------------
+
+Apply these steps in pfBlockerNG/pkg's .github/workflows/publish.yml,
+inside the build job, after the "Build current devel .pkg" step and
+before the "Build repository catalog" step.
+
+Assumptions:
+  - RELEASE_KEEP_DEVEL and RELEASE_KEEP_STABLE are env vars or
+    workflow_dispatch inputs (recommended default: 10)
+  - The GitHub token is available as ${{ github.token }}
+  - build-repo-portable.py is run via the checked-out pfBlockerNG source
+  - The builder's out dir for the current devel .pkg is $DEVEL_PKG_PATH
+
+--- CUT HERE ---
+
+      - name: Enumerate and download older release .pkg assets
+        id: fetch-older-releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_KEEP_DEVEL: ${{ inputs.release_keep_devel || 10 }}
+          RELEASE_KEEP_STABLE: ${{ inputs.release_keep_stable || 10 }}
+        run: |
+          mkdir -p /tmp/older-pkgs
+
+          # Enumerate GitHub Releases; bucket by prerelease flag.
+          # prerelease=true  → devel channel; prerelease=false → stable channel.
+          # Select the newest RELEASE_KEEP_DEVEL devel + RELEASE_KEEP_STABLE stable,
+          # then download each release's *.pkg asset.
+
+          gh api repos/${{ github.repository_owner }}/pfBlockerNG/releases \
+            --paginate --jq '
+              [.[] | {tag: .tag_name, pre: .prerelease,
+                      assets: [.assets[] | select(.name | endswith(".pkg"))
+                               | {name: .name, url: .browser_download_url}]}]
+            ' > /tmp/releases.json
+
+          python3 - <<'EOF'
+          import json, os, sys
+
+          releases = json.load(open("/tmp/releases.json"))
+          keep_devel  = int(os.environ["RELEASE_KEEP_DEVEL"])
+          keep_stable = int(os.environ["RELEASE_KEEP_STABLE"])
+
+          # Bucket by channel; preserve declaration order (newest-first from API).
+          devel  = [r for r in releases if     r["pre"]]
+          stable = [r for r in releases if not r["pre"]]
+
+          # Take newest keep_N of each (0 = unbounded).
+          selected_devel  = devel[:keep_devel]  if keep_devel  else devel
+          selected_stable = stable[:keep_stable] if keep_stable else stable
+
+          urls = []
+          for r in selected_devel + selected_stable:
+              for a in r["assets"]:
+                  urls.append(a["url"])
+
+          with open("/tmp/older-pkg-urls.txt", "w") as f:
+              f.write("\n".join(urls) + ("\n" if urls else ""))
+          print(f"Selected {len(selected_devel)} devel + {len(selected_stable)} stable releases", flush=True)
+          EOF
+
+          # Download each asset.
+          while IFS= read -r url; do
+              [ -z "$url" ] && continue
+              fname="$(basename "$url")"
+              curl -fsSL -H "Authorization: Bearer ${GH_TOKEN}" \
+                  -o "/tmp/older-pkgs/${fname}" "$url"
+          done < /tmp/older-pkg-urls.txt
+
+          # Emit the --release-extra-pkgs flags for the generator.
+          flags=""
+          for f in /tmp/older-pkgs/*.pkg; do
+              [ -f "$f" ] || continue
+              flags="${flags} --release-extra-pkgs ${f}"
+          done
+          echo "extra_pkg_flags=${flags}" >> "$GITHUB_OUTPUT"
+
+      - name: Build repository catalog with release retention
+        env:
+          RELEASE_KEEP_DEVEL: ${{ inputs.release_keep_devel || 10 }}
+          RELEASE_KEEP_STABLE: ${{ inputs.release_keep_stable || 10 }}
+        run: |
+          python3 scripts/build-repo-portable.py \
+            --build-matrix \
+            --matrix-json <path-to-matrix.json> \
+            --out <path-to-site-dir> \
+            --release-keep-devel "${RELEASE_KEEP_DEVEL}" \
+            --release-keep-stable "${RELEASE_KEEP_STABLE}" \
+            ${{ steps.fetch-older-releases.outputs.extra_pkg_flags }}
+
+--- END CUT ---
+
+Notes:
+  - The generator is the backstop: even if publish.yml passes more .pkg
+    files than RELEASE_KEEP_N, the generator prunes to the newest N.
+  - workflow_dispatch inputs expose RELEASE_KEEP_DEVEL / RELEASE_KEEP_STABLE
+    for one-off overrides (e.g. --release-keep-devel 0 keeps all).
+  - The current-devel .pkg built by publish.yml is folded in automatically
+    by build_repo_matrix (the fresh build is always included in the pool
+    before retain_by_channel prunes).
+
+------------------------------------------------------------------------
+Drift-pin status
+------------------------------------------------------------------------
+
+Existing conf-byte drift pins in tests/test_add_repo_conf.py and
+tests/test_build_repo_portable.py are UNCHANGED — the new Phase 3
+tests use brp.main() with CLI flags and do not touch the catalog
+format or conf template.
+
+Phase 2 tests (test_release_default_is_latest_only,
+test_release_subtree_retains_devel_and_stable,
+test_release_catalog_lists_all_kept_versions) all pass unchanged.
+
+------------------------------------------------------------------------
+What is NOT done (Phase 4 scope)
+------------------------------------------------------------------------
+
+publish.yml in pfBlockerNG/pkg has NOT been updated — it is a different
+repo. Phase 4 will apply the verbatim YAML steps above plus wire up:
+  * workflow_dispatch inputs for retention depth overrides
+  * the --stable-tag / --stable-src flags for the stable build
+  * a verify step asserting the deployed catalog lists the expected
+    retention depth
+  * any EOL routing changes (the --eol subtree and Worker routing rules)
+    if in scope for that phase

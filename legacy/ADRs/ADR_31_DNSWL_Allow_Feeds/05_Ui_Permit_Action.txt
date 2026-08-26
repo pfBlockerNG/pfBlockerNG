@@ -1,0 +1,79 @@
+================================================================================
+PHASE 5 PROMPT — UI: Deny/Permit action select on the DNSBL feed editor
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md   (read §2.1 UI row, §4 first)
+================================================================================
+
+ROLE
+Push branch claude/gh-issue-324-vmn4aw (managed-remote pin; replaces adr/31-...).
+Phase 5 of 6. Adds the operator-facing control for the per-row action wired in Phase 4
+— a single select on the EXISTING DNSBL feed-row editor. NO new page. One commit, push.
+
+WHY THIS PHASE EXISTS
+Phase 4 made the engine read a per-row Deny/Permit action; operators need a control to
+set it. Per the ADR (§2 — issue #324 maintainer decision), this is a Deny/Permit select
+on the existing DNSBL feed-row editor, mirroring the IP-side per-list action — NOT a new
+page or section. This deliberately ships nothing new in pkg-plist (the rejected
+separate-page design 404'd because its pages were never packaged).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/04_Results.txt — the exact per-row field name +
+  Deny/Permit vocabulary the UI must round-trip. If missing, STOP and report.
+- .ADRs/ADR_31_DNSWL_Allow_Feeds/ADR.md (§2.1 UI row, §4 acceptance)
+- src/usr/local/www/pfblockerng/pfblockerng_category_edit.php — the DNSBL feed-row
+  editor: how its existing Form_Select fields (e.g. state, logging) are built, loaded
+  from the row, validated, and saved back to pfblockerngdnsbl/config. Mirror that idiom
+  exactly for the new action select.
+- tests/smoke/ui/test_render_smoke.py — the existing entry for the DNSBL category edit
+  page (its marker); you are NOT adding a new Page entry (no new page), just keeping the
+  existing one green.
+- CLAUDE.md (PHP UI rules; Web-UI help text — brief, match neighbours; Naming;
+  ADR-14 ui_render Tier-A gate).
+
+ACTION PLAN
+1. Add a `Deny`/`Permit` action Form_Select to pfblockerng_category_edit.php, default
+   `Deny`, placed near the related per-row controls. Load its value from the row and
+   save it back to the per-row `action` key (the exact name/vocab from RESULTS/04) via
+   the SAME direct config_*_path path the editor already uses for per-row fields. Do NOT
+   route it through PfbConfig (dynamic per-row key).
+2. Help text: brief, matching neighbouring help wording — state that Permit makes the
+   feed an ALLOW list that overrides BLOCK FEEDS, while the manual DNSBL whitelist and
+   manual blocks still win (band 2). Do not out-prose the neighbours.
+3. Optionally surface the action in the feed grid (pfblockerng_category.php) column if
+   it fits the existing grid cheaply; skip if it would be invasive (engine doesn't need
+   it).
+4. Do NOT add a new page, menu entry, privilege, or pkg-plist line. Do NOT touch the
+   Python/PHP engine (P2/P4) — presentation + round-trip only.
+
+CONSTRAINTS
+- Mirror the existing editor's Form_Select idiom + validation (Naming + established
+  pattern). Uppercase TRUE/FALSE; tabs; no die()/exit().
+- The per-row action stays on direct config_*_path (RequireConfigGateway stays green).
+
+VERIFICATION (all must pass; ui_render needs a live VM — see note)
+- vendor/bin/phpcs --standard=phpcs.xml.dist src/   -> clean
+- vendor/bin/phpstan analyse src/usr/local/www/pfblockerng/pfblockerng_category_edit.php -> clean
+- php -l on the edited .php
+- ui_render (Tier A): the EXISTING DNSBL category-edit page must still GET 200, body free
+  of Fatal/Parse/Warning/Notice/Uncaught, marker present, the new select renders, and a
+  saved row carries action='Permit'. Runs in CI (orchestrator dispatches ui-tests.yml);
+  locally it SKIPs when SMOKE_ADMIN_PASSWORD/VM are absent — that is EXPECTED, not a
+  failure. Rely on php -l + phpcs + phpstan + faithful mirroring locally.
+- python -m pytest / vendor/bin/phpunit -> still green.
+
+EXPECTED RESULT
+An operator sets a DNSBL feed row to Permit from the existing feed editor; the saved
+action feeds the Phase-4 engine; no new page is shipped; the editor still passes
+ui_render with the new select + precedence help text.
+
+COMMIT (single)
+    www: add Deny/Permit action select to the DNSBL feed editor (ADR-31 P5)
+Push to claude/gh-issue-324-vmn4aw.
+
+HANDOFF — write .ADRs/ADR_31_DNSWL_Allow_Feeds/RESULTS/05_Results.txt
+State: the edited file(s); the select's name/values + how it round-trips to the per-row
+action key; the help-text wording; the ui_render result (SKIP reason locally); whether
+you added the grid column. Note for Phase 6: the exact UI steps (or config shape) to
+mark a feed row Permit for the smoke journey. Carry the line
+`ADR-RESUME: branch=claude/gh-issue-324-vmn4aw next-phase=6`. Go-ahead for Phase 6.

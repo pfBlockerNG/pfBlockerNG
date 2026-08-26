@@ -1,0 +1,293 @@
+ADR-53 Phase 3 — v4 engine swap: iprange --except (red->green)
+================================================================
+
+STATUS: Done. Core v4 BEHAVIOUR CHANGE landed. Containing-entry defect fixed
+and proven red->green; every other pinned suppress() semantic stays green
+(oracle preserved where the engine's observable contract is unchanged).
+
+New suppress() shape (filter -> iprange -> rc-gated publish)
+--------------------------------------------------------------
+suppress() (pfblockerng.sh:492-581) is now:
+
+  1. Missing-binary guard on `${pathaggregate}` (iprange), not `${pathgrepcidr}`
+     -- mirrors the old guard's position/shape exactly (pfblockerng.sh:494-498).
+  2. Unchanged: the "-e"/"-s" gate on ${pfbsuppression}, the `suppressheader`
+     stats-table early return, `LC_ALL=C sort -u` dedup of the suppression
+     data, the `countg` Pre-count read.
+  3. NEW core -- two independent strict-shape pre-filters, both writing into
+     the EXISTING scratch vars (no new tmp files needed):
+       - `${dupfile}` <- suppression-list entries passing `pfb_is_cidr_token`
+         (requires a mask -- every UI-accepted entry is /32 or /24 today).
+         A rejected non-empty token is DROPPED AND LOGGED (" Suppression
+         ${alias}: dropping malformed suppression entry [ ${ip} ]") via
+         `tee -a "${errorlog}"` -- this is the DNS-resolution-hazard defense
+         (ADR §1.2): iprange treats anything not in strict IP/CIDR shape as a
+         HOSTNAME and DNS-resolves it (rc=0, no opt-out flag).
+       - `${dedupfile}` <- deny member-file lines passing the NEW
+         `pfb_is_ip_or_cidr_token` (bare host OR CIDR; pfb_is_cidr_token
+         alone can't be reused here since it REQUIRES a mask and member
+         lines are a mix). Silent drop (defense-in-depth only -- feed data
+         is already sanitised upstream, so no log noise expected in practice).
+  4. Single call: `"${pathaggregate}" "${dedupfile}" --except "${dupfile}" >
+     "${tempfile2}"`. iprange merges the files before `--except` (ipset A =
+     the member set) and subtracts every IP in the files after it (ipset B =
+     the suppression set), printing the minimal covering-CIDR remainder.
+  5. rc-gated atomic publish: `irc=$?`; `irc -eq 0` -> `mv -f "${tempfile2}"
+     "${pfbfolder}${alias}.txt"` (INCLUDING a legitimately-empty result --
+     iprange has no grepcidr-style "rc=1=empty" quirk, so there is nothing
+     to special-case); any other rc -> `rm -f "${tempfile2}"` + log
+     `"iprange error (rc=${irc}) suppressing [ ${alias} ]; keeping previous
+     list"` (the #713 fail-safe pattern, same shape as the old grepcidr gate).
+  6. Unchanged: the `dedup='on'` masterfile resync block (byte-identical --
+     grep the alias's stale rows out, awk-dedup gate on its own exit status,
+     re-append the fresh post-suppression list, `cut` the mastercat) and the
+     final `printf` stats row.
+
+DELETED entirely: the `grep -F "${iptrim}.0/24"` exact-/24 detection, the
+`for i in $(seq 255)` host-explode loop, the `${dupfile}`-as-per-hole-dedup-
+guard ("dcheck") bookkeeping, the trailing `${pathgrepcidr} -vf` whole-token
+pass, and the `counter` variable (the "Suppress" stats column is now simply
+the post-publish `countx`, since there is no artificial host-count delta to
+subtract -- verified against case g's Pre=3/Suppress=2 expectation, unchanged).
+`${dupfile}`/`${dedupfile}` are REPURPOSED (filtered-suppression-scratch /
+filtered-member-scratch) rather than dropped, so no new tmp-file plumbing
+was needed. Net effect: suppress() shrank from 115 to 92 lines (`awk` line-
+count check on the function body, devel vs this branch).
+
+New helper: `pfb_is_ip_or_cidr_token()` (pfblockerng.sh:180-197), placed
+right after `pfb_is_cidr_token()`. Bare host (digits/dots only) OR CIDR
+(digits/dots + exactly one '/' + non-empty numeric mask) -- unlike
+`pfb_is_cidr_token`, the mask is optional. `pfb_is_cidr_token`'s own
+docstring was updated (it no longer describes a caller that compares the
+mask with `-eq`, since that comparison is gone).
+
+Red->green evidence
+--------------------
+Ran a THREE-STAGE proof (adjusted from the literal phase-prompt gate because
+my "final" spec rewrite also swapped every case's binary plumbing from
+pathgrepcidr to pathaggregate, which would make old code fail for "missing
+grepcidr" rather than for its actual wrong behaviour -- not a fair red proof):
+
+1. Isolated the ASSERTION flip from the wiring flip. Took `git show
+   7c393089:tests/shell/pfblockerng_suppress_spec.sh` (the exact Phase-1
+   committed file, OLD pathgrepcidr wiring untouched) into a scratch copy,
+   changed ONLY case (c)'s two It-block assertions (254/253 hosts -> 8/12
+   covering CIDRs) and case (d)'s It-block assertion (byte-identical /16 ->
+   carved, 16 covering CIDRs, sample lines present) -- setup()/wiring left
+   exactly as Phase 1 wrote it. Ran that scratch file (temporarily placed at
+   tests/shell/zz_phase1_redcheck_spec.sh, deleted again after) against the
+   UNCHANGED (stashed) src via `git stash push -- src/.../pfblockerng.sh`.
+   Result: **11 examples, 3 failures** -- cases a/b/e/f/g stayed green
+   (proving nothing else broke), and the 3 flipped assertions failed for the
+   EXACT right reason:
+     - case (c) #1: `linecount should equal 8` -> `got: 254` (old explode
+       still produces 254 host lines)
+     - case (c) #2: `linecount should equal 12` -> `got: 253` (old
+       explode+dedup still produces 253, not the new two-hole carve)
+     - case (d): `The contents of file ... should not include '10.0.0.0/16'`
+       -> `expected "10.0.0.0/16" not to include "10.0.0.0/16"` (old code's
+       containing-/16 no-op survives byte-identical -- THE defect, caught
+       live) + `linecount should equal 16` -> `got: 1`.
+   Full captured output archived at the scratchpad path used this session
+   (not committed -- reproducible any time from the 7c393089 spec + a rerun
+   of the same two edits); key excerpts quoted above are the load-bearing
+   evidence.
+2. `git stash pop` restored the src rewrite.
+3. Ran the FULL final spec (all cases converted to pathaggregate wiring)
+   against the NEW src -> green (see Gate results below).
+
+One iteration bug found and fixed along the way: my first `have_iprange()`
+used a bare `command -v iprange`, which found `tests/shell/bin/iprange` --
+an EXISTING test-only stand-in (`exec sort -u`, built for the AWS
+pre-script tests, no `--except`/aggregation semantics) that `spec_helper.sh`
+deliberately prepends onto `PATH`. This made `no_iprange` false even on this
+Mac (which has no REAL iprange), so `Skip if` never skipped, and the real
+cases called the AWS stub instead of the real binary -- "Example aborted"
+(the stub's `sort -u` tried to open the literal argv token `--except` as a
+file). Fixed with `pfb_real_iprange()`: resolves `command -v iprange` against
+`PATH` with `PFB_SHIMS` stripped out, so it finds the REAL binary (or
+nothing) regardless of the AWS shim. Recorded as a "beyond ADR §1.2" iprange
+environment fact for future readers: **a project's own test-shim directory
+on PATH can silently shadow a "is the real tool installed" probe -- always
+resolve past known shim dirs, don't trust a bare `command -v`.**
+
+On-box empirical green (real FreeBSD, shipped binaries)
+----------------------------------------------------------
+Per the task's adjusted protocol (no local iprange on this Mac), ran the
+NEW suppress() standalone on the reachable FreeBSD box (root@10.0.0.1:2223,
+via `/bin/sh -s`, per the tcsh-login-shell rule) with its REAL
+`/usr/local/bin/iprange` (1.0.4) + `/usr/local/bin/grepcidr`. Copied
+pfblockerng.sh + a small driver (sources it with PFB_SOURCED=1, sets
+`pathaggregate=/usr/local/bin/iprange` since the sourced-for-test path skips
+the top-level init that would otherwise set it) to /tmp on the box; cleaned
+up afterward (`rm -rf /tmp/adr53p3 /tmp/adr53`). Results, byte-for-byte
+matching every shellspec expectation:
+
+  c-exact-24-carve       : 10.9.8.0/24 - 10.9.8.4/32 -> 8 lines (10.9.8.0/30,
+                            10.9.8.5, 10.9.8.6/31, 10.9.8.8/29, 10.9.8.16/28,
+                            10.9.8.32/27, 10.9.8.64/26, 10.9.8.128/25); .4
+                            absent; rc=0; errorlog empty.
+  c-two-holes-in-24      : same /24 minus {.4/32, .55/32} -> 12 lines, both
+                            holes absent, no duplicate lines.
+  d-containing-16-carve  : 10.0.0.0/16 - 10.0.3.4/32 -> 16 lines (10.0.0.0/23
+                            .. 10.0.128.0/17); the /16 line itself GONE (was
+                            byte-identical pre-Phase-3 -- the defect, now
+                            fixed); .4 host absent.
+  j-full-suppression     : member == suppression (203.0.113.7) -> member
+                            published EMPTY, rc=0, errorlog empty (the
+                            legitimate-empty-result contract, no grepcidr-
+                            style rc=1 quirk needed).
+  h-hostname-token       : suppression = {203.0.113.7/32, evil.example.com}
+                            -> dupfile (filtered suppression scratch) holds
+                            ONLY '203.0.113.7/32'; errorlog shows " Suppression
+                            TestList_v4: dropping malformed suppression entry
+                            [ evil.example.com ]"; member ends at {.5, .9}
+                            (.7 correctly suppressed despite the noise
+                            token) -- the hostname NEVER reached iprange.
+  b-bare-host-removed    : {.5,.7,.9} - .7/32 -> {.5,.9} (parity with the old
+                            grepcidr whole-token removal, now via iprange).
+  i-missing-binary       : pathaggregate pointed at a nonexistent path ->
+                            "Application [ iprange ] Not found. Cannot
+                            proceed."; member file unchanged; errorlog shows
+                            the guard message. (This exercises the SHELL-level
+                            executable guard, not iprange's own rc=1-on-
+                            unloadable-file behaviour -- that fact was
+                            independently empirically verified during this
+                            session's design investigation: `iprange
+                            /path/does-not-exist --except supp.txt` -> rc=1,
+                            "No such file or directory" / "Cannot load
+                            ipset". suppress()'s rc-gate treats ANY non-zero
+                            `irc` from iprange identically to this shell-
+                            level guard's outcome -- keep-previous + log --
+                            so both failure shapes are covered by the same
+                            gate; the shellspec stub-based case (i) proves
+                            the gate mechanically, this on-box run proves the
+                            guard position, and the earlier design-session
+                            probe proves iprange's own rc semantics.)
+
+Additional iprange behaviour discovered beyond ADR §1.2
+----------------------------------------------------------
+- An EMPTY `--except` file (0 valid suppression entries survived the
+  pre-filter) leaves the haystack UNCHANGED (rc=0) -- confirmed empirically
+  before writing the engine, so an all-malformed suppression list degrades
+  gracefully to "no suppression happened" rather than erroring.
+- An EMPTY haystack file (nothing to suppress from) also just publishes
+  empty, rc=0 -- same "no special-case" contract as the full-suppression case.
+- Multiple holes in ONE containing block are subtracted in a SINGLE
+  `--except` call with no per-hole bookkeeping needed on the caller's side --
+  this is what let the old dupfile/"dcheck" dedup-guard machinery be deleted
+  outright rather than adapted.
+- `tests/shell/spec_helper.sh` prepends its OWN `iprange` test stand-in onto
+  `PATH` for the (unrelated) AWS pre-script tests -- a project-specific
+  shimming gotcha (see "Red->green evidence" above), not an ADR-53 iprange
+  fact, but load-bearing for anyone writing a "is the real binary present"
+  probe in this test suite going forward.
+
+Spec counts (final state)
+--------------------------
+tests/shell/pfblockerng_suppress_spec.sh: 12 It blocks (was 11 in Phase 1),
+lettered a,b,c(x2),d,f,g(x2),h,i,j (reordered so the letters stay sequential
+after h/i/j were appended and the old letter (e) was retired -- its role
+split into the new (i) rc-gate case and the new (j) real-iprange
+legitimate-empty case, since suppress() no longer calls grepcidr at all so
+(e)'s original two Its had no engine left to exercise):
+  a - suppression file absent/empty: early return (unchanged assertions,
+      pathaggregate wiring)
+  b - bare-host + matching /32: removed (unchanged assertion, now via the
+      address-equality iprange STUB)
+  c - exact-/24: FLIPPED to 8/12-covering-CIDR carve assertions, REAL iprange,
+      skip-if-absent
+  d - containing-/16: FLIPPED to the 16-covering-CIDR carve (THE defect fix),
+      REAL iprange, skip-if-absent
+  f - masterfile resync under dedup=on: unchanged assertion, STUB
+  g - Suppression Stats table: unchanged assertions (Pre=3/Suppress=2/
+      Master=0 pattern still holds -- confirms the counter-removal refactor
+      preserved the stats-column semantics), STUB
+  h - NEW: hostname-shaped suppression token never reaches iprange (identity
+      STUB; asserts dupfile content directly + errorlog)
+  i - NEW: iprange rc!=0 (missing/unloadable) -> keep-previous + log
+      (fail-shim STUB)
+  j - NEW: full suppression -> empty publish, rc=0, no error (REAL iprange,
+      skip-if-absent)
+
+tests/shell/pfblockerng_fail_open_redirect_spec.sh: suppress()'s Class A (3
+Its -> 2 Its, the grepcidr-specific "rc=1 legitimate empty" case dropped --
+iprange has no equivalent quirk to simulate, it is covered by the primary
+spec's case j instead) and Class B (2 Its, unchanged assertions) switched
+from pathgrepcidr/GREPCIDR_MODE to pathaggregate/IPRANGE_MODE. duplicate()'s
+Class A/B, remove(), process255(), reputation_max() -- ALL untouched (grepcidr
+producer, unaffected by this ADR).
+
+tests/shell/pfblockerng_adr26_locale_spec.sh: one now-meaningless It block
+removed ("uses a portable seq for the 1..255 range" -- the `seq 255` call
+site it pinned was suppress()'s own explode loop, now deleted entirely, not
+reverted to `/usr/bin/jot`; `seq` no longer appears anywhere in
+pfblockerng.sh). All 5 `LC_ALL=C` sink-prefix gates re-verified still `has`
+their exact strings (the suppression-dedup sink line
+`data="$(LC_ALL=C sort -u "${pfbsuppression}")"` is untouched, byte-identical).
+
+CI tool wiring
+--------------
+.github/workflows/test.yml, `shell-tests` job: added an "Install iprange"
+step (`sudo apt-get install -y iprange`) right after the existing "Install
+jq" step, before "Install shellspec" -- same style/pattern. Verified this is
+ONE continuous job (not a separate job) so the later informational
+`shellspec --kcov --shell bash` re-run (further down the same job) also
+inherits the installed binary. Confirmed locally that the spec's skip-guard
+correctly triggers when iprange is absent (this Mac) via
+`pfb_real_iprange()`.
+
+Gate results
+------------
+- shellspec (full suite)     -> 259 examples, 0 failures, 8 skips (Phase 1/2
+  baseline was 260 examples/4 skips; this phase removed 1 stale ADR-26 It
+  block and added 4 new real-iprange skips: 260 - 1 = 259; 4 baseline skips +
+  4 new = 8). All 4 NEW skips report "needs the real iprange binary (apt-get
+  install iprange in CI; absent locally)" -- the house missing-tool pattern.
+- Red-check run (scratch, not committed) -> 11 examples, 3 failures, the
+  right 3, for the right reasons (see above).
+- shellcheck --severity=info src/usr/local/pkg/pfblockerng/pfblockerng.sh ->
+  clean, no output.
+- sh -n src/usr/local/pkg/pfblockerng/pfblockerng.sh -> clean.
+- sh scripts/git-env-scrub-guard.sh (meta-assertion) -> clean (one comment
+  wording in the sibling spec's docstring accidentally embedded the literal
+  substring "git " inside "empty-but-legit too" -- the guard's own documented
+  heuristic false-positive; reworded to "an empty result too", re-verified
+  clean).
+- .venv/bin/python -m pytest -q -> 2042 passed, 4 skipped (identical to
+  Phase 1/2's baseline; no Python touched this phase).
+- vendor/bin/phpunit -> 1861 tests, 15478 assertions, 1 failure, 4 skipped --
+  the exact documented environmental baseline (IpAddrDoublesTest::
+  testIsIpaddrv4 "leading-zero octets rejected", macOS inet_pton vs glibc).
+  No PHP touched this phase; sanity-only run.
+- On-box empirical (FreeBSD, real binaries) -> all 7 driven scenarios match
+  the shellspec expectations byte-for-byte (see above).
+
+Scope confirmation
+-------------------
+`git status --porcelain` (working tree, on top of the Phase 1+2 commits):
+exactly 5 files touched --
+  .github/workflows/test.yml
+  src/usr/local/pkg/pfblockerng/pfblockerng.sh
+  tests/shell/pfblockerng_adr26_locale_spec.sh
+  tests/shell/pfblockerng_fail_open_redirect_spec.sh
+  tests/shell/pfblockerng_suppress_spec.sh
+No v6 path touched (pfb_suppress_file_v6 doesn't exist yet -- Phase 5's job).
+No UI touched (pfblockerng_ip.php's `/32 or /24 only` validation and help
+text are unchanged -- Phase 4's job). No caller-gating change in
+pfblockerng.inc (16700-16711 region untouched -- v4-only invocation stays
+until Phase 6). grepcidr's OTHER call sites (duplicate(), the standalone
+whole-token removal elsewhere) untouched -- only suppress()'s own producer
+changed.
+
+Go-ahead for Phase 4
+---------------------
+Phase 3 is complete and green (locally + on real FreeBSD hardware + the CI
+tool wiring in place for the fan-out). Phase 4 (v4 UI mask lift, `/8`-`/32`,
+pure PHP -- `pfb_validate_suppression_line()` + `pfblockerng_ip.php` +
+PHPUnit red->green) can proceed independently: it touches
+`pfblockerng_extra.inc`/`pfblockerng_ip.php`/PHPUnit, none of which this
+phase touched. The engine now accepts ANY mask already (iprange is
+mask-agnostic, per the ADR) -- Phase 4 is purely about lifting the UI's
+input-validation ceiling and updating help text, with no suppress() changes
+needed.

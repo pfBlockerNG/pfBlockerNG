@@ -1,0 +1,337 @@
+================================================================================
+PHASE 6 RESULTS (FINAL) -- Health-check for token providers + docs
+================================================================================
+
+WHAT CHANGED
+
+1. `scripts/misc/check_top1m_providers.py` -- REWRITTEN to read the real
+   source of truth. Phase 4 flagged (and left, out of its own scope) that the
+   extractor's `_URL_RE` still greped pfblockerng.php for a literal
+   `$pfb['extras'][2]['url'] = '...'` assignment that Phase 1 replaced with an
+   expression (`pfb_top1m_providers()[...]['url']`) -- the extractor had been
+   silently finding ZERO providers since Phase 1. Fixed:
+   - `DEFAULT_DESCRIPTOR_FILE` now points at
+     `src/usr/local/pkg/pfblockerng/pfblockerng_extra.inc`.
+   - `extract_providers()` locates each `Top1mSource::<Case>->value =>
+     array(...)` block via `_PROVIDER_ENTRY_RE` + a paren-balance scanner
+     (`_matching_paren()` -- handles Cloudflare's nested `'auth' =>
+     array(...)`), then reads `url`/`label`/`container`/`auth` per block.
+     Grepped the whole file: `->value` appears exactly 5 times, all inside
+     `pfb_top1m_providers()` (the enum body's `$this->value` doesn't match
+     this pattern) -- no risk of matching an unrelated block.
+   - Auth classification (ACTION PLAN item 1): a structured `'auth' =>
+     array('header' => ..., 'scheme' => ...)` marks a TOKEN provider; the
+     string `'none'` (or anything else unrecognized -- same fail-open-to-
+     no-header default as `pfb_top1m_auth_headers()`) marks KEYLESS. Each
+     extracted provider now carries `auth` ('none'/'token'), `secret_env`,
+     `auth_header`, `auth_scheme` (all `''` for keyless).
+   - **`_secret_env_from_label()`** derives the CI secret env-var name from
+     the provider's own `'label'` field -- "Cloudflare Radar" ->
+     "CLOUDFLARE_RADAR_TOKEN", matching the ADR's own example (S2.7)
+     verbatim, with NO separate provider->secret-name mapping table. A
+     future token provider needs no change to this function: name its repo
+     secret the same way its label derives.
+   - `--check-url` gained `--container {zip,plain}` (default zip, backward
+     compatible), `--secret-env NAME`, `--auth-header NAME` (default
+     Authorization), `--auth-scheme SCHEME` (default Bearer).
+   - `main()`: when `--secret-env` is given and `os.environ.get(NAME)` is
+     unset/empty, prints `SKIP <url>: needs token, no secret configured (env
+     NAME)` and returns 0 -- never fails the run for a missing secret, never
+     silent (ACTION PLAN item 1). When the secret IS present, builds
+     `{header: "{scheme} {token}".strip()}` and calls `check_url()` with it.
+     The token is NEVER printed -- confirmed by a dedicated test asserting a
+     mock token string is absent from BOTH the healthy-OK output and an
+     unhealthy-FAIL report's reasons.
+
+2. NECESSARY FIX beyond the phase's literal ACTION PLAN text (disclosed, same
+   category as Phase 5's comma-relaxation fix): the health-check's row/
+   container validation was ALSO silently broken for 3 of the 5 real
+   providers, discovered while proving the phase's own "REAL --check-url on
+   domcop/majestic should pass" verification gate:
+   - `_scan_csv()` unconditionally treated every fetched body as a ZIP. Two
+     of the five real providers are NOT zips (`container: 'plain'` --
+     Majestic, Cloudflare) -- a real `--check-url` against Majestic's live
+     URL would have failed with "expected a valid non-empty ZIP archive"
+     even though the feed itself is perfectly healthy plain CSV. Fixed:
+     `_scan_csv(body, container)` branches on the caller-supplied
+     `container` (from the descriptor, threaded via `--container`) --
+     'plain' scans the raw body as CSV text directly, no zip unwrap.
+   - `_is_valid_row()` required EXACTLY 2 columns with column 0 an int rank.
+     DomCop's real CSV is 3 columns (Rank,Domain,OpenPageRank) and
+     Cloudflare's is a single `domain` column with no rank at all -- under
+     the old rule, EVERY real row from either shape reads as invalid (valid
+     count stays 0), a hard health-check failure regardless of a correct
+     descriptor. Generalized to `_looks_like_domain()`: a row is valid iff
+     ANY field looks like a dotted domain, provider-agnostic across every
+     descriptor's column layout. A header row's field names ("Domain",
+     "GlobalRank", ...) have no dot, so header rows are naturally excluded
+     with no separate header-skip parameter needed.
+   - Verified this doesn't regress Tranco/Cisco (the only 2 providers this
+     script correctly validated before Phase 1 broke discovery): the
+     generalized row check yields the SAME valid/invalid verdict for every
+     existing malformed-row test case (bare rank/no-dot-domain, bare ".");
+     confirmed via the full green pre-existing-test rerun below.
+
+3. `.github/workflows/top1m-healthcheck.yml` (ACTION PLAN item 2):
+   - `check` job's step now builds `--check-url $URL --container $CONTAINER`
+     and, only when `matrix.secret_env` is non-empty, appends `--secret-env
+     --auth-header --auth-scheme`. `CLOUDFLARE_RADAR_TOKEN: ${{
+     secrets.CLOUDFLARE_RADAR_TOKEN }}` rides the step's `env:` -- a no-op
+     env var for every keyless leg, the actual secret only for the Cloudflare
+     leg (which alone passes `--secret-env CLOUDFLARE_RADAR_TOKEN`). A
+     comment documents the "add one line here, matching the label-derived
+     name" convention for a future token provider.
+   - `alert` job's re-check loop reads the same 4 new JSON fields per
+     provider and builds the same conditional args; a leg whose script exits
+     0 with a `SKIP ` line is now reported as `SKIPPED **name**` (not `OK`)
+     in the tracking-issue body -- distinguishes "genuinely validated
+     healthy" from "not actually checked, no secret" even in the alert
+     report, keeping the "never silently skip" ethos visible end-to-end, not
+     just in the per-leg CI log.
+   - The overall run still goes red only for a genuinely unhealthy leg (a
+     keyless provider that fails, or a token provider whose secret IS
+     present but the fetch/validation still fails) -- a missing secret alone
+     never turns the run red, per the ACTION PLAN.
+
+4. Docs:
+   - `docs/misc/config-gateway.md`'s `top1m_token` inventory entry -- VERIFIED
+     already in place (added by Phase 5, per its own handoff's GO-AHEAD note);
+     re-read it (S2.2's "Adapter inventory", the field-vocabulary table's
+     `top1m_source` row) and confirmed it accurately describes the finished
+     framework with no update needed. NOT duplicated.
+   - New `docs/misc/top1m-providers.md`: the descriptor table's field
+     meanings, a per-provider format/container/auth/licence table (all 5),
+     the Majestic CC BY 3.0 + Cloudflare CC BY-NC 4.0 obligations (and where
+     they render in the UI), how a user supplies the Cloudflare token (the
+     masked `top1m_token` field + its JS toggle + round-trip contract), the
+     CI health-check's auth classification + the secret-naming convention +
+     how to wire a future token provider's secret, and a short "adding a
+     provider" runbook. Sibling of `docs/misc/tld-lists.md` in style/scope
+     (a similarly maintained, non-vendored external-list reference).
+
+TESTS (tests/test_check_top1m_providers.py -- REWRITTEN)
+
+The old suite's PHP fixtures targeted the STALE `$pfb['extras'][2]['url'] =
+'...'` shape; replaced with fixtures mirroring the real descriptor table
+(`_PHP_DESCRIPTOR_TABLE`: 2 keyless zip rows with no label/container --
+exercises the fallback defaults --, 1 keyless plain-CSV row, 1 token row).
+
+FAIL-BEFORE/PASS-AFTER (verified by hand, per CLAUDE.md's revert/stash
+allowance -- `git stash push -- scripts/misc/check_top1m_providers.py` then
+rerun): 16 of the 33 tests FAIL against the pre-Phase-6 script (the extractor
+tests fail because it still parses the old pflockerng.php shape and finds
+nothing; the `--secret-env`/`--container` tests fail with argparse
+"unrecognized arguments" since those flags didn't exist yet); all 33 PASS
+after. Exact counts recorded in GATES below.
+
+New/extended coverage:
+- `test_extract_providers_finds_every_row_in_the_descriptor_table` /
+  `_reads_label_and_container_per_row` -- the rewritten extractor reads the
+  real table shape.
+- `test_extract_providers_classifies_keyless_providers_as_auth_none` /
+  `_classifies_a_token_provider_and_derives_its_secret_env` -- the auth
+  classification + the label->secret-env derivation (pins
+  "Cloudflare Radar" -> "CLOUDFLARE_RADAR_TOKEN" exactly).
+- `test_extract_providers_auto_covers_a_newly_added_descriptor_row` -- the
+  #884 add/remove guarantee, now against the descriptor table: a 5th row
+  (Quad9-shaped) is picked up with zero script changes.
+- `test_extract_providers_skips_a_commented_out_row` -- the pre-existing
+  comment-stripping guarantee, ported to the new fixture shape.
+- `test_extract_providers_falls_back_to_url_netloc_and_zip_container_when_absent`
+  -- a descriptor row missing 'label'/'container' still extracts sanely.
+- `test_validate_top1m_passes_a_plain_container_body_with_no_zip_wrapper` --
+  FAIL-BEFORE/PASS-AFTER for the container-awareness fix (item 2 above): the
+  pre-fix script would have misread a real plain-CSV response as "not a
+  valid ZIP archive".
+- `test_validate_top1m_skips_a_header_row_in_a_plain_wide_csv_with_domain_not_in_column_zero`
+  -- DomCop/Majestic-shaped: header + domain in a non-zero/non-one column,
+  found anywhere in the row.
+- `test_validate_top1m_fails_a_plain_container_body_with_too_few_domain_rows`
+  -- a plain-container garbage body fails via the row-count floor, NOT the
+  "ZIP" message (proves 'plain' never attempts a zip parse).
+- `test_validate_top1m_single_domain_only_column_cloudflare_shape_passes` --
+  Cloudflare's real single-column shape (no rank at all) validates.
+- `test_check_url_passes_the_caller_supplied_headers_through_to_the_request`
+  -- a token's Authorization header actually reaches the outgoing request
+  object, alongside the User-Agent.
+- `test_main_never_calls_check_url_for_a_keyless_provider_and_behaves_as_before`
+  -- before-state: a keyless provider takes the unchanged path (no headers
+  built, check_url called exactly as pre-Phase-6).
+- `test_main_skips_a_token_provider_with_no_reason_to_fail_when_its_secret_is_absent`
+  -- the new skip-not-fail behaviour: `check_url` is asserted NEVER CALLED
+  (raises if it is) when the secret is absent; exit 0; "SKIP"/"needs
+  token"/the env-var name all appear in the output.
+- `test_main_validates_a_token_provider_once_its_mocked_secret_is_present` --
+  the after-state of the SAME scenario (secret present via
+  `monkeypatch.setenv`, standing in for a real repo secret in CI): the
+  provider IS validated, with the exact expected container + header built;
+  the mock token value is asserted absent from the printed output.
+- `test_main_never_prints_the_token_on_an_unhealthy_token_provider_result` --
+  the token stays out of a FAIL report too, not just a healthy one.
+- All pre-existing zip/staleness/is_stale/check_url/main tests kept, ported
+  to the new fixture/message text where the wording changed (e.g. "valid
+  domain rows" replacing the now-inaccurate "valid 'rank,domain' rows" since
+  a valid row is no longer defined as exactly 2 columns).
+
+GATES (all run inside the worktree)
+
+1. `ruff check scripts/misc/check_top1m_providers.py
+   tests/test_check_top1m_providers.py` -> All checks passed.
+2. `ruff format --check` (same two files) -> both already formatted.
+3. `python3 -m mypy tests/test_check_top1m_providers.py
+   scripts/misc/check_top1m_providers.py` -> Success: no issues found in 2
+   source files (required a `list[tuple[str, ...]]` annotation on 6
+   pre-existing `rows = [...]` lines -- mypy's list invariance rejected the
+   narrower `list[tuple[str, str]]` inference against `_zip_of`'s widened
+   signature; no behaviour change, annotation only).
+4. `python3 -m pytest tests/test_check_top1m_providers.py -q` -> 33 passed.
+   Fail-before check (`git stash` the script only, same test file): 16
+   failed / 17 passed -- the 16 are exactly the new-behaviour tests (proves
+   real red->green, not coverage theater).
+5. `python3 -m pytest -q` (full suite) -> 2211 passed, 4 skipped (same 4
+   pre-existing skips as every prior phase).
+6. `python3 -c "import yaml; yaml.safe_load(open('.github/workflows/top1m-
+   healthcheck.yml'))"` -> no error.
+7. `actionlint .github/workflows/top1m-healthcheck.yml` (with
+   `-shellcheck=shellcheck`, both installed) -> no output, exit 0.
+8. `npx markdownlint-cli2 docs/misc/top1m-providers.md` -> 0 errors.
+
+REAL (LIVE NETWORK) VERIFICATION
+
+`--extract` against the real `pfblockerng_extra.inc` on this branch lists
+all 5 providers with the expected auth classification:
+
+  Tranco            auth=none
+  Cisco Umbrella    auth=none
+  DomCop            auth=none
+  Majestic Million  auth=none
+  Cloudflare Radar  auth=token  secret_env=CLOUDFLARE_RADAR_TOKEN
+                    auth_header=Authorization  auth_scheme=Bearer
+
+`--check-url` against the real, live URLs (no vendoring, per this script's
+whole design):
+
+  Tranco (zip)            -> OK  healthy (>= 100000 rows, not stale)
+  Cisco Umbrella (zip)     -> OK  healthy (>= 100000 rows, not stale)
+  DomCop (zip)             -> FAIL -- expected Last-Modified within 30 days
+                              of 2026-07-06T14:55:28Z, found 'Sun, 29 Mar
+                              2026 11:30:31 GMT' (99 days old)
+  Majestic Million (plain) -> OK  healthy (>= 100000 rows, not stale)
+
+DomCop's failure is a REAL, EXTERNAL staleness finding against the live
+DomCop server at test time (system clock independently confirmed via `date
+-u` = 2026-07-06, matching the script's own UTC `now`) -- NOT a parsing/
+extraction bug: the fetch succeeded, the body parsed as a valid zip, and the
+row count comfortably cleared the floor (no "ZIP"/"found 0" error at all,
+only the staleness reason). This is the health-check correctly doing its
+job (#884's whole purpose) on DomCop's top-10M list, which apparently
+refreshes less often than daily. NOT loosened/masked -- that would defeat
+the point of a staleness gate. Flagging this transparently rather than
+tuning `MAX_AGE_DAYS` to force a pass: a per-provider staleness threshold
+(or accepting DomCop is simply slower-cadence) is a policy call for the
+maintainer, out of this phase's scope.
+
+`--check-url` against the real Cloudflare Radar URL with NO
+`CLOUDFLARE_RADAR_TOKEN` set in this environment (confirmed via `unset
+CLOUDFLARE_RADAR_TOKEN` first):
+
+  SKIP https://api.cloudflare.com/client/v4/radar/datasets/
+       ranking_top_1000000: needs token, no secret configured (env
+       CLOUDFLARE_RADAR_TOKEN)
+  exit=0
+
+Exactly the required behaviour: visible, never silent, never fails the leg.
+
+SELF-REVIEW (git diff vs phase objectives)
+
+- Extractor reads the descriptor table, not the stale pflockerng.php literal
+  -- confirmed: `DEFAULT_DESCRIPTOR_FILE` points at pfblockerng_extra.inc;
+  `--extract` on the real file lists all 5 providers (was silently 0 before
+  this phase, per Phase 4's flagged staleness).
+- Token providers skip-with-reason without a secret, validate with one --
+  confirmed by both the unit tests (mock env var) AND the two real runs
+  above (no-secret skip; the secret-present path is unit-tested since no
+  real Cloudflare token exists in this environment -- consistent with every
+  prior phase's disclosed residual gap, ultimately the ADR S7 manual-smoke
+  item).
+- Keyless unchanged in outward contract ("GET-validate as today") --
+  Tranco/Cisco's real health-check verdict is unchanged (both OK, as they
+  would have been had the extractor not been silently broken since Phase 1);
+  DomCop/Majestic are NEWLY and CORRECTLY covered for the first time (their
+  "today" was silently never-run, so there is no prior behaviour to regress)
+  -- the container/row-validity generalization was REQUIRED to make that
+  coverage real rather than a false-failing no-op, verified not to change
+  any existing zip/rank-domain test's pass/fail verdict.
+- The discover-floor guard (from #884, `[ "$COUNT" -ge 1 ]`) -- untouched;
+  still fires if the extractor ever regresses to finding zero providers.
+- Docs record the framework + licences + token setup -- new
+  docs/misc/top1m-providers.md covers the descriptor fields, the 5-provider
+  table, both licence obligations, the token-setup path, the CI
+  classification + secret-naming convention, and an "adding a provider"
+  runbook; config-gateway.md's top1m_token entry verified already present
+  (Phase 5), not duplicated.
+- No secret ever printed -- grepped every `print(...)` call site in
+  main()/check_url(); the token only ever reaches the `headers` dict passed
+  straight to `urllib.request.Request`, never a log/print argument. A
+  dedicated test asserts a mock token string is absent from stdout on both
+  a healthy and an unhealthy token-provider run.
+
+DEVIATIONS / JUDGMENT CALLS
+
+- Generalized `_scan_csv()`'s container handling (zip vs plain) and
+  `_is_valid_row()`'s column assumption (exactly 2 columns, rank-then-
+  domain) beyond the phase's literal ACTION PLAN text (which named only
+  "auth" extraction) -- REQUIRED because the phase's own verification gate
+  ("REAL --check-url on domcop/majestic should pass") cannot hold otherwise:
+  Majestic/Cloudflare are plain CSV (the old code unconditionally assumed
+  zip) and DomCop/Majestic/Cloudflare all have more than 2 columns or the
+  domain outside column 1 (the old code required exactly 2 columns with
+  column 0 numeric). Same category and justification as Phase 5's comma-
+  relaxation fix in `pfblockerng_top1m()` -- a necessary fix surfaced by
+  making a previously-dead code path (the extractor, broken since Phase 1)
+  live again, not scope creep. Verified byte-for-byte behaviour preservation
+  for every pre-existing zip/rank-domain test case.
+- DomCop's real feed is currently 99 days stale against this script's
+  30-day `MAX_AGE_DAYS` default -- NOT adjusted. Loosening the threshold to
+  force a green real-world check would defeat the point of a staleness
+  gate; this is a genuine external-data finding to hand to the maintainer,
+  not a code defect in this phase's diff. Disclosed prominently above rather
+  than silently working around it.
+- `_secret_env_from_label()` derives the CI secret name from the
+  descriptor's `label` field rather than a hardcoded per-provider mapping
+  table -- chosen because it needs ZERO code change for a future token
+  provider (only a new repo secret + one workflow env line), matches the
+  ADR's own example name exactly for Cloudflare, and avoids a second place
+  (beyond the descriptor itself) that could drift out of sync with a
+  provider's actual name.
+- The workflow's `check`/`alert` `run:` blocks use a bash array
+  (`args=(...)`) rather than string concatenation for the conditional
+  `--secret-env`/`--auth-header`/`--auth-scheme` args -- avoids word-
+  splitting/quoting hazards entirely (correct-by-construction over correct-
+  by-convention); GitHub Actions' default shell on ubuntu-latest is bash, so
+  this is not a POSIX-sh violation (CLAUDE.md's POSIX-sh rule targets
+  `#!/bin/sh` *.sh scripts, not workflow YAML `run:` blocks, which already
+  use bash-availabe constructs like `<<<` heredocs elsewhere in this same
+  file).
+
+ADR-59 DEFINITION OF DONE (S7) -- REMAINING MANUAL ITEMS
+
+All six phases are now merged. Per S7, the following remain the maintainer's
+own manual-smoke acceptance gate (CI cannot exercise these):
+  - A live per-provider download + resolve check on a real pfSense box for
+    DomCop, Majestic, and Cloudflare (with a real Cloudflare token): run an
+    Update and confirm "Building TOP1M Whitelist ... Found N" with N > 0,
+    and that a blocked-then-whitelisted popular domain resolves.
+  - For Cloudflare specifically: after a forced download failure (e.g. an
+    invalid/expired token), confirm `extras.log` shows NO token value in
+    either the main or error log.
+  - Licence notes visible in the live UI for Majestic + Cloudflare (already
+    covered by Tier-A render assertions per Phase 4/5, but S7 asks for a
+    final human look on a real box).
+This phase's CI health-check (`top1m-healthcheck.yml`) complements, but does
+not replace, that manual gate -- it validates the DOWNLOAD URLs are alive and
+fresh; it does not exercise pfBlockerNG's own DNSBL build/resolve pipeline.
+
+COMMIT
+
+ci: health-check token TOP1M providers + document the provider framework (ADR-59 P6)

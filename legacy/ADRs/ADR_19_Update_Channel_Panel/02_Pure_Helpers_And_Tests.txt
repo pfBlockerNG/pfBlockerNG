@@ -1,0 +1,90 @@
+================================================================================
+PHASE 2 PROMPT — Pure decision core + PHPUnit oracle (behaviour-additive, no wiring)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_19_Update_Channel_Panel/ADR.md
+     (read §2 "Helper seam", "Semantics that MUST be preserved", §4 FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/19-update-channel-panel` branch performing Phase 2 of ADR-19. This
+phase is BEHAVIOUR-ADDITIVE and PURE: add the version/channel/notify DECISION helpers
+to pfblockerng.inc with NO GUI, NO cron, NO `pkg` IO — strings in, decisions out — and
+pin every branch with PHPUnit. Work in this ADR's worktree, one commit, push directly
+(rebase-only PR — touches src/ + tests/).
+
+WHY THIS PHASE EXISTS
+The risky logic of ADR-19 is not the shellout — it is the DE-DUPE + channel-default +
+knob state machine that decides WHETHER to notify. Per the ADR-01 prep doctrine, pin
+that as a pure, oracle-tested core BEFORE any IO/GUI wiring, so the later phases cannot
+silently break it. These helpers are usable off-appliance (the PHPUnit suite loads the
+real pfblockerng.inc via doubles — tests/php/README.md).
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_19_Update_Channel_Panel/RESULTS/01_Results.txt — it must confirm GO on the
+  read + notice mechanics and give the proven de-dupe pattern + notice id/category. If
+  it is missing or says REJECT, STOP and report.
+- .ADRs/ADR_19_Update_Channel_Panel/ADR.md (§2 "Helper seam" + decision table, the
+  contract, §4 acceptance).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc — where pfBlockerNG helpers live;
+  match the `pfb_*` naming + tab-indent + no-die style of neighbours.
+- tests/php/README.md, tests/php/bootstrap.php, tests/php/pfsense_doubles.php — how the
+  real .inc is loaded off-appliance; add a faithful double for `pkg_version_compare`
+  (and `file_notice` if a helper references it) if a tested path reaches it.
+- stubs/pfsense/ — if `pkg_version_compare`/`file_notice` are unstubbed, ADD a real
+  stub (from upstream source) — do NOT add a phpstan-baseline suppression
+  (CLAUDE.md "Resolving pfSense-provided PHP functions"; [[feedback_stub_over_phpstan_baseline]]).
+- CLAUDE.md — "Code standards" (PHP), "Test coverage (mandatory)", "Naming".
+
+ACTION PLAN (ordered — pure functions, then exhaustive PHPUnit)
+1. Add PURE helpers to pfblockerng.inc (no IO):
+   - `pfb_channel_from_pkgname($name)` -> 'stable' | 'devel' | 'nightly' | null.
+     Map `pfSense-pkg-pfBlockerNG` -> stable, `…-devel` -> devel, `…-NIGHTLY` ->
+     nightly (the ADR-18 name); unknown -> null.
+   - `pfb_update_available($installed, $latest)` -> bool via `pkg_version_compare`
+     (latest > installed). Handle empty/invalid inputs safely (no update).
+   - `pfb_notify_default_for_channel($channel)` -> bool: nightly => true, else false.
+   - `pfb_should_notify($installed, $latest, $last_notified, $knob, $channel)` -> bool:
+     the state machine. Resolve effective-notify = ($knob==='on') ? true :
+     ($knob==='off') ? false : pfb_notify_default_for_channel($channel). Notify ONLY
+     when effective-notify AND pfb_update_available($installed,$latest) AND
+     ($latest !== $last_notified). (De-dupe is by last-notified version, per P1.)
+2. PHPUnit (tests/php/) — EVERY branch, before-state asserted (CLAUDE.md "Test
+   coverage"; [[feedback_tests_validate_not_cover]]). Trivial maps get plain
+   intent-named asserts; the de-dupe machine gets a BDD Scenario + Given/When/Then:
+   - channel map: each of the three names -> channel; an unknown -> null.
+   - available: newer->true, equal->false, older->false, empty->false.
+   - default-by-channel: nightly->true; stable->false; devel->false.
+   - should_notify matrix: knob on/off/default x channel x available/not — assert the
+     OFF default for stable/devel (no notify even when available) PAIRED WITH the ON
+     default for nightly (notify when available) so green proves it is a real branch,
+     not an always-value path.
+   - de-dupe lifecycle (BDD): GIVEN last_notified empty + a newer latest -> notify;
+     WHEN last_notified set to that latest, same tick repeats -> do NOT notify; WHEN a
+     yet-newer latest arrives -> notify again. Assert the before-state each step.
+
+CONSTRAINTS
+- PHP 8.3, TABS indent, no die()/exit() — return values only. stdlib/pfSense funcs via
+  stubs/doubles, never `require_once` pfSense files in tests.
+- PURE only: NO `exec`/`mwexec`/`pkg`/file IO/`file_notice` CALLS in these helpers
+  (that is Phase 3). Do NOT add the page, the cron wiring, or the config field yet.
+- Do NOT touch www/, the cron path, or scripts/.
+
+VERIFICATION (must all pass before the phase is done)
+- vendor/bin/phpunit → green (the new cases) ; php -l on the touched .inc → clean.
+- vendor/bin/phpstan (composer) → no new errors (stub, don't baseline).
+- python -m pytest → UNCHANGED ; ruff/markdownlint as relevant.
+- diff-read: the four helpers are pure (grep them for exec/mwexec/file_notice — none).
+
+EXPECTED RESULT
+A pure, fully-unit-tested decision core in pfblockerng.inc; no observable runtime
+change yet (nothing calls the helpers).
+
+COMMIT (single)
+    pfblockerng: add pure software-update decision helpers + PHPUnit (ADR-19 P2)
+Push directly to the branch; open a PR only if the direct push is rejected.
+
+HANDOFF — write `.ADRs/ADR_19_Update_Channel_Panel/RESULTS/02_Results.txt` (plain .txt)
+Record: the four helper signatures + exact channel/knob/default semantics chosen; any
+stub/double added; the PHPUnit case names; and the go-ahead for Phase 3 (which wires
+these to real pkg IO + cron).

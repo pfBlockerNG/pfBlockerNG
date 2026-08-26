@@ -1,0 +1,806 @@
+<?php
+
+declare(strict_types=1);
+
+use PHPUnit\Framework\Attributes\CoversFunction;
+use PHPUnit\Framework\TestCase;
+
+/**
+ * ADR-19 Phase 3 — the cron-driven software-update orchestrator pfb_software_update_check()
+ * + the cache helpers, with the pkg IO INJECTED (no real `pkg` off-appliance).
+ *
+ * Scenario: a cron tick reads installed-vs-our-repo-latest, writes a cache, and raises a
+ * de-duped file_notice — but ONLY on a build that is page-displayable (provenance_ok).
+ *
+ * Background: the pure decision core (Phase 2) is already pinned; here we pin the
+ * SIDE-EFFECTS — the provenance gate (no-op on a non-displayable build), the pkg-lock /
+ * no-DNS short-circuits (serve cache, no network, no error), the cache contents, and the
+ * per-version de-dupe across ticks. Every branch asserts the BEFORE-state (cache present?
+ * notice fired?) and the AFTER-state so green proves the side-effect was CAUSED by the
+ * input, not pre-existing.
+ *
+ * The IO is doubled by passing $io = ['installed_name','installed','installed_repo',
+ * 'provenance_ok','latest'] to the orchestrator (its documented unit-test seam).
+ * 'provenance_ok' (bool) replaces the old repo-string gate: the orchestrator delegates
+ * repo-string discrimination to pfb_software_provenance_ok() (the page-displayability
+ * predicate); per-repo branch coverage for pfb_software_is_our_build() lives in
+ * SoftwareUpdateDecisionTest. 'installed_repo' is the `pkg query %R` origin the four-channel
+ * cutover (#2148) made authoritative for BOTH which catalogue latest is read from and which
+ * channel the cache reports. file_notice / is_subsystem_dirty / get_dnsavailable are doubled
+ * in pfsense_doubles.php, driven via $GLOBALS (pfb_test_file_notices / pfb_test_pkg_locked /
+ * pfb_test_dns_available).
+ */
+#[CoversFunction('pfb_software_update_check')]
+#[CoversFunction('pfb_software_cache_file')]
+#[CoversFunction('pfb_software_read_cache')]
+#[CoversFunction('pfb_software_write_cache')]
+#[CoversFunction('pfb_pkg_latest')]
+#[CoversFunction('pfb_software_check_enabled')]
+final class SoftwareUpdateCheckTest extends TestCase
+{
+	private string $dbdir = '';
+
+	/** Saved bootstrap-seeded globals, RESTORED in tearDown (issue #1063: an
+	 *  unset here leaked into later suites under --order-by=random). */
+	private bool $hadDbdir    = false;
+	private mixed $savedDbdir = null;
+	private bool $hadConfig    = false;
+	private mixed $savedConfig = null;
+
+	protected function setUp(): void
+	{
+		// Each test gets a private temp dbdir so the cache file is isolated and the
+		// orchestrator's $pfb['dbdir'] lookup resolves there.
+		$this->dbdir = sys_get_temp_dir() . '/pfb_adr19_' . uniqid('', true);
+		mkdir($this->dbdir, 0755, true);
+		$this->hadDbdir   = isset($GLOBALS['pfb']) && array_key_exists('dbdir', $GLOBALS['pfb']);
+		$this->savedDbdir = $GLOBALS['pfb']['dbdir'] ?? null;
+		$GLOBALS['pfb']['dbdir'] = $this->dbdir;
+
+		// Reset the test-driveable doubles to their permissive defaults.
+		$GLOBALS['pfb_test_file_notices'] = [];
+		$GLOBALS['pfb_test_pkg_locked']   = false;
+		$GLOBALS['pfb_test_dns_available'] = true;
+
+		// No saved setting unless a test overrides it — exercises the DEFAULT (enabled)
+		// state of "Check for new versions" (pfb_software_check unset => enabled).
+		$this->hadConfig   = array_key_exists('config', $GLOBALS);
+		$this->savedConfig = $GLOBALS['config'] ?? null;
+		$GLOBALS['config'] = [];
+	}
+
+	protected function tearDown(): void
+	{
+		$file = $this->dbdir . '/software_update.json';
+		if (is_file($file)) {
+			unlink($file);
+		}
+		if (is_dir($this->dbdir)) {
+			rmdir($this->dbdir);
+		}
+		unset(
+			$GLOBALS['pfb_test_file_notices'],
+			$GLOBALS['pfb_test_pkg_locked'],
+			$GLOBALS['pfb_test_dns_available']
+		);
+		if ($this->hadDbdir) {
+			$GLOBALS['pfb']['dbdir'] = $this->savedDbdir;
+		} else {
+			unset($GLOBALS['pfb']['dbdir']);
+		}
+		if ($this->hadConfig) {
+			$GLOBALS['config'] = $this->savedConfig;
+		} else {
+			unset($GLOBALS['config']);
+		}
+	}
+
+	private function cacheFile(): string
+	{
+		return $this->dbdir . '/software_update.json';
+	}
+
+	private function readCache(): ?array
+	{
+		$file = $this->cacheFile();
+		if (!is_file($file)) {
+			return null;
+		}
+		$data = json_decode((string) file_get_contents($file), true);
+		return is_array($data) ? $data : null;
+	}
+
+	private function setCheck(string $value): void
+	{
+		$GLOBALS['config'] = [
+			'installedpackages' => ['pfblockerng' => ['config' => [0 => ['pfb_software_check' => $value]]]],
+		];
+	}
+
+	private function ourBuildIo(string $installed, string $latest, string $name = 'pfSense-pkg-pfBlockerNG-devel'): array
+	{
+		return [
+			'installed_name' => $name,
+			'installed'      => $installed,
+			'provenance_ok'  => TRUE,
+			'latest'         => $latest,
+		];
+	}
+
+	/*
+	 * ---- Provenance gate — BOTH sides ----
+	 *
+	 * The gate is now pfb_software_provenance_ok() — the same predicate that controls
+	 * whether the Software PAGE is displayable — injected as $io['provenance_ok'] (bool).
+	 * Per-repo branch coverage for pfb_software_is_our_build() lives in
+	 * SoftwareUpdateDecisionTest; here we pin the ORCHESTRATOR's behaviour on each side
+	 * of the boolean, including the real-world case (enabled flag left over from a prior
+	 * our-repo install, user has since switched back to Netgate).
+	 */
+
+	/**
+	 * Given a page-displayable build (provenance_ok=true) with a newer version available,
+	 * When the check runs,
+	 * Then it writes the cache AND reaches a notify decision (a notice fires under an
+	 * ON knob). This is the "feature present" side of the gate.
+	 */
+	public function testOurBuildRunsCheckWritesCacheAndCanNotify(): void
+	{
+		// Given: no cache yet, no notice yet (before-state).
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file should exist');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice raised');
+
+		// When.
+		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		// Then: cache written with the read values, and a notice fired (update available).
+		$onDisk = $this->readCache();
+		$this->assertNotNull($onDisk, 'after: cache file must be written for our build');
+		$this->assertSame('devel', $onDisk['channel']);
+		$this->assertSame('3.2.0_1', $onDisk['installed']);
+		$this->assertSame('3.2.0_9', $onDisk['latest']);
+		$this->assertSame('3.2.0_9', $onDisk['last_notified']);
+		$this->assertArrayHasKey('last_checked', $onDisk);
+		$this->assertSame($onDisk, $cache, 'returns the freshly written cache');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice fired');
+		$this->assertStringContainsString('3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+		$this->assertSame(1, $GLOBALS['pfb_test_file_notices'][0]['priority'], 'priority is the real 5th file_notice() arg (warning-level)');
+		$this->assertFalse($GLOBALS['pfb_test_file_notices'][0]['local_only'], 'local_only defaults false — no call site passes a 6th arg');
+	}
+
+	/**
+	 * Given a non-displayable build (provenance_ok=false) with a newer version nominally
+	 * available and "Check for new versions" ON,
+	 * When the check runs,
+	 * Then it is a COMPLETE no-op: no cache is written and no notice is raised. This is the
+	 * "feature absent" side of the gate. Per-repo discrimination (which repo strings yield
+	 * false) is pinned in SoftwareUpdateDecisionTest::testSoftwareIsOurBuild.
+	 */
+	public function testNonDisplayableBuildIsCompleteNoOp(): void
+	{
+		// Given: ON knob (would notify if the gate let it through), clean before-state.
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When: an update IS nominally available, but the build is not page-displayable.
+		$io = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.2.0_9',
+		];
+		pfb_software_update_check(false, $io);
+
+		// Then: nothing happened — no cache write, no notice.
+		$this->assertNull($this->readCache(), 'after: non-displayable build must NOT write a cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: non-displayable build raises NO notice');
+	}
+
+	/**
+	 * Regression test: a user who was on our build (so "Check for new versions" is
+	 * still 'on') switches back to the Netgate-installed build. The enabled flag persists
+	 * in config but provenance_ok is now false — the background check must be a complete
+	 * no-op regardless of the enabled setting.
+	 *
+	 * Given: "Check for new versions" ON (persisted from the prior our-repo install),
+	 *        a newer version nominally available,
+	 *        but provenance_ok=false (the build is no longer ours).
+	 * When the background check runs,
+	 * Then it is a complete no-op (no cache written, no notice raised) — the enabled flag
+	 * is irrelevant once the provenance gate closes.
+	 */
+	public function testEnabledButNotDisplayableDoesNotCheckOrNotify(): void
+	{
+		// Given: setting is still ON from the prior our-repo install; clean before-state.
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When: provenance gate is closed (user moved back to Netgate's build).
+		$io = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.2.0_9',
+		];
+		pfb_software_update_check(false, $io);
+
+		// Then: complete no-op — neither the cache nor any notice was written.
+		$this->assertNull($this->readCache(), 'after: no cache despite enabled flag (gate is closed)');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice despite enabled flag');
+	}
+
+	/**
+	 * Transition test — proves the provenance gate is a real branch, not an always-on path.
+	 *
+	 * BEFORE (provenance_ok=false): same enabled + update-available inputs → complete no-op.
+	 * AFTER  (provenance_ok=true):  same inputs → cache written + notice raised.
+	 *
+	 * Green proves the gate flip (not pre-existing state) caused the behaviour change.
+	 */
+	public function testProvenanceGateTransition(): void
+	{
+		$this->setCheck('on');
+
+		// BEFORE: gate closed → complete no-op.
+		$this->assertNull($this->readCache(), 'before gate flip: no cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before gate flip: no notice');
+
+		$closedIo = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.2.0_9',
+		];
+		pfb_software_update_check(false, $closedIo);
+		$this->assertNull($this->readCache(), 'gate closed: no cache written');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'gate closed: no notice raised');
+
+		// AFTER: gate open → cache written + notice raised.
+		$openIo = [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		];
+		pfb_software_update_check(false, $openIo);
+		$this->assertNotNull($this->readCache(), 'gate open: cache must be written');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'gate open: notice must fire');
+	}
+
+	/*
+	 * ---- issue #2148: the INSTALLED REPOSITORY is authoritative ----
+	 *
+	 * Four-channel cutover: all four catalogues publish the ONE canonical identity
+	 * 'pfSense-pkg-pfBlockerNG', so the package NAME can no longer say which channel a box
+	 * is on. The orchestrator reads latest from the repo the package was INSTALLED from
+	 * (`pkg query %R`, injected here as $io['installed_repo']) — under single-repository
+	 * subscription that is the only repo it can upgrade within — and labels the cache
+	 * repo, then build-record, then leftover name suffix (issue #2395).
+	 */
+
+	/**
+	 * Given a CANONICAL install ('pfSense-pkg-pfBlockerNG', no channel in the name) whose
+	 * recorded origin is the EDGE catalogue,
+	 * When the check runs,
+	 * Then latest is read from that catalogue and the cache + notice report channel 'edge'.
+	 * Before #2148 these exact inputs reported 'stable' (name-derived) and read the shared
+	 * 'pfblockerng' repo — an edge subscriber was offered stable's versions.
+	 */
+	public function testCanonicalNameOnEdgeCatalogueReportsEdgeChannel(): void
+	{
+		// Given: clean before-state.
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When.
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-edge',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		// Then: the installed catalogue is the one read, and it names the channel.
+		$this->assertSame('pfblockerng-edge', $cache['repo'], 'latest must be read from the INSTALLED repo, not a channel->repo mapping');
+		$this->assertSame('edge', $cache['channel'], 'channel must follow the installed repo, not the channel-less package name');
+		$this->assertSame($this->readCache(), $cache, 'the on-disk cache carries the same repo/channel');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertStringContainsString('3.2.0_9 available (edge)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/**
+	 * The name-FALLBACK half of the same rule. Given a legacy '-devel' install whose origin
+	 * is the LEGACY SHARED repo 'pfblockerng' (which carries two package identities, so the
+	 * repo cannot name a channel),
+	 * When the check runs,
+	 * Then latest is read from that shared repo and the channel falls back to the package
+	 * name — 'devel', unchanged. Pairs with the edge case above so repo-first is proven a
+	 * real branch rather than a blanket repo-only rule that would break legacy boxes.
+	 */
+	public function testLegacySharedRepoFallsBackToPackageNameChannel(): void
+	{
+		$this->setCheck('on');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		$this->assertSame('pfblockerng', $cache['repo'], 'the legacy shared repo is still the repo read');
+		$this->assertSame('devel', $cache['channel'], 'the legacy shared repo names no channel -> fall back to the package name');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: exactly one notice');
+		$this->assertStringContainsString('3.2.0_9 available (devel)', $GLOBALS['pfb_test_file_notices'][0]['notice']);
+	}
+
+	/**
+	 * Transition proof for a NIGHTLY subscriber that moved onto the stable catalogue while
+	 * keeping the canonical identity.
+	 *
+	 * BEFORE: origin 'pfblockerng-nightly' -> cache channel 'nightly', repo read = nightly.
+	 * AFTER:  same package name, origin now 'pfblockerng-stable' -> channel 'stable', repo
+	 *         read = the stable catalogue.
+	 * Green proves the repo string (not the package name, which never changed) drives both.
+	 */
+	public function testChannelAndRepoFollowARepositorySwitch(): void
+	{
+		$this->setCheck('on');
+
+		// BEFORE: subscribed to the nightly catalogue.
+		$before = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-nightly',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+		$this->assertSame('nightly', $before['channel'], 'before: nightly catalogue names the channel');
+		$this->assertSame('pfblockerng-nightly', $before['repo'], 'before: nightly catalogue is the repo read');
+
+		// AFTER: the very same package name, now recorded against the stable catalogue.
+		$after = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-stable',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+		$this->assertSame('stable', $after['channel'], 'after: the repo switch moved the reported channel');
+		$this->assertSame('pfblockerng-stable', $after['repo'], 'after: latest is read from the new catalogue');
+	}
+
+	/**
+	 * The cache-reuse scope must follow the REPO too, not just the package name (#2148).
+	 *
+	 * Pre-cutover the cached latest/last_notified were reused whenever the installed NAME
+	 * matched — safe while each channel had its own name. Now all four catalogues publish
+	 * the SAME canonical identity, so a catalogue switch keeps the name identical and the
+	 * name-only scope would carry the OLD catalogue's version across.
+	 *
+	 * Given a cache written for the canonical package on the EDGE catalogue (latest
+	 *       3.2.0_99, already notified),
+	 * When the box is now recorded against the STABLE catalogue and the live read is
+	 *      unavailable (pkg locked, no injected latest),
+	 * Then the edge latest is NOT served as stable's, and the de-dupe state is reset so the
+	 *      first genuine stable notice is not swallowed.
+	 */
+	public function testCatalogueSwitchUnderOneNameDoesNotReuseStaleCache(): void
+	{
+		// Given: a prior tick on the edge catalogue announced 3.2.0_99.
+		$this->setCheck('on');
+		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'repo'          => 'pfblockerng-edge',
+			'channel'       => 'edge',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_99',
+			'last_checked'  => 100,
+			'last_notified' => '3.2.0_99',
+		]);
+		$before = $this->readCache();
+		$this->assertSame('3.2.0_99', $before['latest'], 'before: the edge catalogue latest is cached');
+		$this->assertSame('pfSense-pkg-pfBlockerNG', $before['pkgname'], 'before: cached under the canonical name the new catalogue also uses');
+
+		// When: same canonical name, now on the stable catalogue, live read unavailable.
+		$GLOBALS['pfb_test_pkg_locked'] = true;
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.2.0_1',
+			'installed_repo' => 'pfblockerng-stable',
+			'provenance_ok'  => TRUE,
+			// no 'latest' -> the guarded live read returns '' (pkg locked).
+		]);
+
+		// Then: nothing from the edge catalogue leaks into the stable cache.
+		$this->assertSame('stable', $cache['channel'], 'after: cache rekeyed to the stable catalogue');
+		$this->assertSame('', (string) ($cache['latest'] ?? ''), "after: edge's latest must NOT be served as stable's");
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: de-dupe state reset for the new catalogue');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice (no known latest yet)');
+	}
+
+	/*
+	 * ---- pkg-lock / no-DNS short-circuit — serve cache, no network, no error ----
+	 *
+	 * These exercise the LIVE pfb_pkg_latest() path (no injected 'latest'), so the
+	 * is_subsystem_dirty('pkg') / get_dnsavailable() guards inside it are hit. Because
+	 * the guard returns '' (no live read) and there is no injected latest, the
+	 * orchestrator preserves the cached latest.
+	 */
+
+	/**
+	 * Given a pre-existing cache (an earlier tick found 3.2.0_9) and the pkg subsystem
+	 * locked,
+	 * When the check runs without an injected latest,
+	 * Then the cached latest is preserved, no notice fires (it already de-duped), and no
+	 * error is thrown.
+	 */
+	public function testPkgLockedServesCacheNoNetworkNoNotice(): void
+	{
+		// Given: seed a cache as if a prior tick already notified for 3.2.0_9 (a real prior
+		// tick records the pkgname it was for, so the same-package reuse path is taken).
+		$this->setCheck('on');
+		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG-devel',
+			'channel'       => 'devel',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_checked'  => 100,
+			'last_notified' => '3.2.0_9',
+		]);
+		$before = $this->readCache();
+		$this->assertSame('3.2.0_9', $before['latest'], 'before: cache holds the prior latest');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice this run yet');
+
+		// When: pkg locked; no injected latest -> pfb_pkg_latest() short-circuits to ''.
+		$GLOBALS['pfb_test_pkg_locked'] = true;
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			// note: NO 'latest' key -> forces the guarded live read.
+		]);
+
+		// Then: cached latest preserved, last_notified intact, last_checked NOT advanced,
+		// no NEW notice (issue #2379).
+		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cached latest preserved when pkg locked');
+		$this->assertSame('3.2.0_9', $cache['last_notified'], 'after: de-dupe state intact');
+		$this->assertSame(100, $cache['last_checked'], 'after: last_checked must not advance on a failed live read');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice while locked');
+	}
+
+	/**
+	 * Given the same pre-existing cache but DNS unavailable,
+	 * When the check runs without an injected latest,
+	 * Then identical behaviour to the locked case — the cache is served, no network read,
+	 * no notice.
+	 */
+	public function testNoDnsServesCacheNoNetworkNoNotice(): void
+	{
+		$this->setCheck('on');
+		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG-devel',
+			'channel'       => 'devel',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_checked'  => 100,
+			'last_notified' => '3.2.0_9',
+		]);
+		$this->assertSame('3.2.0_9', $this->readCache()['latest'], 'before: cache holds prior latest');
+
+		$GLOBALS['pfb_test_dns_available'] = false;
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+		]);
+
+		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cached latest preserved when no DNS');
+		$this->assertSame(100, $cache['last_checked'], 'after: last_checked must not advance on a failed live read');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice without DNS');
+	}
+
+	/**
+	 * Given a cache left by a DIFFERENT installed package (a prior nightly build) and a
+	 * live read that comes back empty (pkg locked) for the now-installed devel build,
+	 * When the check runs,
+	 * Then the stale nightly latest/last_notified are NOT reused — latest regresses to ''
+	 * and last_notified resets — so a channel switch can neither show a wrong version nor
+	 * suppress the first valid notice for the new package. Paired with the pkg-locked test
+	 * above (same-package reuse) so the pkgname-match branch is proven both ways.
+	 */
+	public function testChannelSwitchDoesNotReuseStaleCache(): void
+	{
+		// Given: a cache from a nightly build that had announced a nightly version.
+		$this->setCheck('on');
+		pfb_software_write_cache([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG-nightly',
+			'channel'       => 'nightly',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_99',
+			'last_checked'  => 100,
+			'last_notified' => '3.2.0_99',
+		]);
+		$this->assertSame('3.2.0_99', $this->readCache()['latest'], 'before: stale nightly latest present');
+
+		// When: now a DEVEL build is installed and the live read is unavailable (pkg locked).
+		$GLOBALS['pfb_test_pkg_locked'] = true;
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG-devel',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			// no 'latest' -> guarded live read returns '' (pkg locked).
+		]);
+
+		// Then: the stale nightly values are discarded, not carried into the devel cache.
+		$this->assertSame('devel', $cache['channel'], 'after: cache rekeyed to the devel build');
+		$this->assertSame('', (string) ($cache['latest'] ?? ''), 'after: stale nightly latest NOT reused');
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: stale last_notified reset');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice (no known latest yet)');
+	}
+
+	/*
+	 * ---- "Check for new versions" gating: enabled vs disabled, background vs manual ----
+	 */
+
+	/**
+	 * Given an our-repo build with an update available but the setting DISABLED ('off'),
+	 * When the BACKGROUND check runs (force=false, the cron path),
+	 * Then it is a COMPLETE no-op: no cache is written and no notice fires — the disabled
+	 * setting stops background checking entirely. Paired with the default-enabled and the
+	 * manual-force tests so the gate is proven a real branch, not an always-run path.
+	 */
+	public function testDisabledBackgroundCheckIsNoOp(): void
+	{
+		// Given: disabled, clean before-state (no cache, no notice).
+		$this->setCheck('off');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When: a background (non-forced) check with an update nominally available.
+		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		// Then: nothing happened — no cache write, no notice.
+		$this->assertNull($this->readCache(), 'after: disabled background check writes NO cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: disabled background check raises NO notice');
+	}
+
+	/**
+	 * Given the same disabled setting but a MANUAL "Check now" (force=true),
+	 * When the check runs,
+	 * Then the cache IS refreshed (the explicit one-off check always runs) but NO notice fires
+	 * (notifications still require the setting enabled). Pairs with the background no-op above
+	 * to prove force bypasses ONLY the enable-gate, not the notify gate.
+	 */
+	public function testDisabledManualForceRefreshesCacheButSuppressesNotice(): void
+	{
+		$this->setCheck('off');
+		$this->assertNull($this->readCache(), 'before: no cache file');
+
+		$cache = pfb_software_update_check(true, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		$this->assertNotNull($this->readCache(), 'after: a forced manual check writes the cache');
+		$this->assertSame('3.2.0_9', $cache['latest'], 'after: cache refreshed to latest');
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: last_notified NOT advanced');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: disabled setting suppresses the notice');
+	}
+
+	/**
+	 * Given an our-repo build with the setting UNSET (never saved) and an update available,
+	 * When the background check runs,
+	 * Then it behaves as ENABLED by default: the cache is refreshed AND a notice fires. Proves
+	 * the default-enabled path (no explicit 'on' needed) is the real out-of-the-box behaviour.
+	 */
+	public function testDefaultUnsetIsEnabledAndNotifies(): void
+	{
+		// Given: no setting at all (setUp left config empty), clean before-state.
+		$this->assertNull($this->readCache(), 'before: no cache');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice');
+
+		// When.
+		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+
+		// Then: default-enabled => cache written and a notice raised.
+		$this->assertSame('3.2.0_9', $cache['latest'], 'after: default-enabled refreshes the cache');
+		$this->assertSame('3.2.0_9', $cache['last_notified'], 'after: default-enabled advances last_notified');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'after: default-enabled raises the notice');
+	}
+
+	/**
+	 * Given an our-repo build already at the latest (no update) with checking enabled,
+	 * When the check runs,
+	 * Then the cache is refreshed but no notice fires (nothing newer to announce).
+	 */
+	public function testNoUpdateAvailableRefreshesCacheNoNotice(): void
+	{
+		$this->setCheck('on');
+
+		$cache = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_9', '3.2.0_9'));
+
+		$this->assertSame('3.2.0_9', $cache['installed']);
+		$this->assertSame('3.2.0_9', $cache['latest']);
+		$this->assertSame('', (string) ($cache['last_notified'] ?? ''), 'after: no notify when not newer');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'after: no notice when up to date');
+	}
+
+	/*
+	 * ---- De-dupe lifecycle across ticks (the §2 "persist last-notified" contract) ----
+	 *
+	 * GIVEN a fresh our-repo build at 3.2.0_1, knob ON, no cache;
+	 * WHEN tick 1 sees latest 3.2.0_9       -> notify ONCE, persist last_notified=3.2.0_9;
+	 * WHEN tick 2 sees the SAME 3.2.0_9     -> NO renotify (de-duped);
+	 * WHEN tick 3 sees a newer 3.2.0_10     -> notify AGAIN, persist last_notified=3.2.0_10;
+	 * WHEN tick 4 sees the SAME 3.2.0_10    -> NO renotify.
+	 * The persisted last_notified is asserted BEFORE each tick so each (no-)notify is
+	 * proven CAUSED by the version change, not coincidence.
+	 */
+	public function testNoticeDeDupesPerVersionAcrossTicks(): void
+	{
+		$this->setCheck('on');
+
+		// Tick 1: first sight of 3.2.0_9 -> one notice, last_notified advanced.
+		$this->assertNull($this->readCache(), 'before tick 1: no cache');
+		$c1 = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 1: exactly one notice');
+		$this->assertSame('3.2.0_9', $c1['last_notified']);
+
+		// Tick 2: same latest, already notified -> NO new notice.
+		$this->assertSame('3.2.0_9', $this->readCache()['last_notified'], 'before tick 2: 3.2.0_9 recorded');
+		$c2 = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_9'));
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'tick 2: still one notice (de-duped)');
+		$this->assertSame('3.2.0_9', $c2['last_notified']);
+
+		// Tick 3: a newer latest -> notify AGAIN (re-assert tick-2 suppression first).
+		$this->assertSame('3.2.0_9', $this->readCache()['last_notified'], 'before tick 3: still at 3.2.0_9');
+		$c3 = pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_10'));
+		$this->assertCount(2, $GLOBALS['pfb_test_file_notices'], 'tick 3: a second notice for the newer version');
+		$this->assertSame('3.2.0_10', $c3['last_notified']);
+		$this->assertStringContainsString('3.2.0_10 available', $GLOBALS['pfb_test_file_notices'][1]['notice']);
+
+		// Tick 4: same newer latest -> NO renotify.
+		$this->assertSame('3.2.0_10', $this->readCache()['last_notified'], 'before tick 4: 3.2.0_10 recorded');
+		pfb_software_update_check(false, $this->ourBuildIo('3.2.0_1', '3.2.0_10'));
+		$this->assertCount(2, $GLOBALS['pfb_test_file_notices'], 'tick 4: still two notices total (de-duped)');
+	}
+
+	/*
+	 * ---- A cache written BEFORE #2148 belongs to this install, not a foreign one ----
+	 *
+	 * The reuse scope gained a `repo` component so a catalogue switch cannot serve the old
+	 * catalogue's latest as the new one's. Every cache written before that change has NO
+	 * `repo` key, which is not a catalogue change — it is the one-time upgrade every
+	 * existing box performs. Reading it as foreign would re-announce a version the box has
+	 * already been notified about and drop the cached latest the offline guard preserves.
+	 */
+	public function testPreCutoverCacheIsAdoptedAndDoesNotReNotify(): void
+	{
+		$this->setCheck('on');
+		// A cache in the pre-#2148 shape: no 'repo' key, already notified for 3.2.0_9.
+		file_put_contents($this->cacheFile(), json_encode([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'channel'       => 'stable',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_notified' => '3.2.0_9',
+			'last_checked'  => 1,
+		]));
+		$this->assertArrayNotHasKey('repo', (array) $this->readCache(), 'before: the cache predates the repo scope');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed_repo' => 'pfblockerng',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		$this->assertSame('3.2.0_9', $cache['last_notified'], 'the already-announced version must survive the upgrade');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'an existing box must not be re-notified once');
+		$this->assertSame('pfblockerng', $cache['repo'], 'the tick records the repo the cache was missing');
+	}
+
+	/**
+	 * pfb_pkg_latest() must force-refresh the named catalog and pick newest via the
+	 * compare helper — not `$out[0]` and not `pkg update -r` without `-f` (issue #2379).
+	 */
+	public function testPkgLatestSourceForcesRefreshAndPicksNewest(): void
+	{
+		$src = (string) file_get_contents(
+			dirname(__DIR__, 2) . '/src/usr/local/pkg/pfblockerng/pfblockerng.inc'
+		);
+		$start = strpos($src, 'function pfb_pkg_latest(');
+		$this->assertNotFalse($start, 'pfb_pkg_latest() is missing');
+		$end = strpos($src, "\nfunction ", $start + 1);
+		$body = $end === false ? substr($src, $start) : substr($src, $start, $end - $start);
+		$this->assertStringContainsString('update -f -r', $body, 'Software catalog reads must force-refresh');
+		$this->assertStringContainsString('pfb_pkg_newest_version($out)', $body, 'rquery lines must go through the newest-version picker');
+		$this->assertStringNotContainsString('$out[0]', $body, 'pfb_pkg_latest must not return the first rquery line');
+	}
+
+	/**
+	 * Same pre-#2148 cache, but the live read is unavailable (pkg locked / no DNS).
+	 * The cached latest must be served rather than regressing to '' — the exact
+	 * regression the offline guard exists to prevent.
+	 */
+	public function testPreCutoverCacheStillServesLatestWhenTheLiveReadFails(): void
+	{
+		$this->setCheck('on');
+		file_put_contents($this->cacheFile(), json_encode([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'channel'       => 'stable',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_notified' => '3.2.0_9',
+			'last_checked'  => 1,
+		]));
+		$this->assertSame('3.2.0_9', $this->readCache()['latest'], 'before: a last-known latest is cached');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed_repo' => 'pfblockerng',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '',
+		]);
+
+		$this->assertSame('3.2.0_9', $cache['latest'], 'the last-known latest must not regress to empty');
+		$this->assertSame(1, $cache['last_checked'], 'a failed live read must not rewrite last_checked');
+	}
+
+	/**
+	 * A sideloaded canonical package with a testing build-record must not be labelled
+	 * stable, and the injected annotation must reach the cache (issue #2395).
+	 */
+	public function testCanonicalNameUsesInjectedBuildRecordChannel(): void
+	{
+		$this->setCheck('on');
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed'      => '3.3.2',
+			'installed_repo' => '',
+			'record_channel' => 'testing',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.3.2',
+		]);
+		$this->assertSame('testing', $cache['channel'], 'annotation must beat the empty-suffix name');
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'up to date: no notice');
+	}
+
+	/**
+	 * The scope still does its job: a cache carrying a DIFFERENT repo is foreign, so its
+	 * latest and last_notified are dropped. This is the case the repo component was added
+	 * for, and it must survive the pre-cutover carve-out above.
+	 */
+	public function testCacheFromAnotherCatalogueIsStillDiscarded(): void
+	{
+		$this->setCheck('on');
+		file_put_contents($this->cacheFile(), json_encode([
+			'pkgname'       => 'pfSense-pkg-pfBlockerNG',
+			'repo'          => 'pfblockerng-stable',
+			'channel'       => 'stable',
+			'installed'     => '3.2.0_1',
+			'latest'        => '3.2.0_9',
+			'last_notified' => '3.2.0_9',
+			'last_checked'  => 1,
+		]));
+		$this->assertSame('pfblockerng-stable', $this->readCache()['repo'], 'before: the cache is stable-scoped');
+
+		$cache = pfb_software_update_check(false, [
+			'installed_name' => 'pfSense-pkg-pfBlockerNG',
+			'installed_repo' => 'pfblockerng-edge',
+			'installed'      => '3.2.0_1',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.2.0_9',
+		]);
+
+		$this->assertSame('pfblockerng-edge', $cache['repo'], 'the cache is rescoped to the new catalogue');
+		$this->assertCount(1, $GLOBALS['pfb_test_file_notices'], 'the new catalogue gets its own first notice');
+	}
+}

@@ -1,0 +1,50 @@
+ADR-60 Phase 10 — Gate record (FINAL PHASE)
+================================================================================
+Verdict: PASS
+
+Independent verifier (Sonnet 5, fresh context) ran the mandatory 6 checks
+against commit 81c4c8fe (code+tests) / fa660cc8 (handoff):
+
+1. handoff-fields — PASS.
+2. gate-rerun — PASS. php -l x4, vendor/bin/phpunit (2388 tests, 18619
+   assertions — 16 new), phpstan, phpcs, python3 -m pytest (2439 passed —
+   3 new), ui smoke collect-only (292 tests — 2 new), ruff, mypy, 4 policy
+   checkers — all clean, all matched.
+3. red-proof — PASS, independently re-executed for BOTH genuine wrong-year
+   bugs plus the cosmetic sites: reverted the touched src files to
+   pre-Phase-10 -> 8 PHPUnit failures (both dnsbl_alias_update() tests
+   showing "got: Jul 8 19:01:35" with no year, both clearsqlite tests
+   identically, the debug-filename/MaxMind/schedule-seconds tests) + 1
+   Python failure (source tripwire); restored -> all green (16/16 PHPUnit,
+   3/3 Python). Pre-existing oracles (DnsblAliasUpdateChangedTest.php,
+   PfbIsoTimestampTest.php) re-confirmed unbroken.
+4. diff-vs-plan — PASS, all 12 plan items ticked against the full diff.
+   pfb_iso_timestamp() confirmed byte-identical (zero hunks) — the KEEP
+   decision was honored, not silently reversed. www/index.php's Expires
+   header confirmed byte-identical. No 10-managed-log-type surface touched
+   (verified via hunk-by-hunk diff review).
+5. test-honesty — PASS. Every assertion independently proven failable via
+   the real checkout-revert dance (not monkeypatched). The new
+   is_process_running() PHPUnit double is legitimate (reached for real,
+   documented, matches every off-appliance box's actual state). www/
+   changes carry Tier-A ui_render coverage (written, statically verified,
+   live execution honestly deferred — same precedent as Phases 5/8/9a).
+6. conventions — PASS. New test/file names match 3+ sibling patterns.
+   UpdatePageLoader.php correctly adapted from AlertsPageLoader.php's shape
+   for a genuinely different file structure.
+
+Skipped: none.
+
+--------------------------------------------------------------------------------
+ADR-60 — COMPLETE
+--------------------------------------------------------------------------------
+All 10 phases landed and independently gated. Phases 1-9 flipped Status to
+Accepted (Phase 9, commit cd6686d2) on a real CE+Plus live-VM fan-out.
+Phase 10 (this phase) is the non-gating follow-on §1.8 sweep — done, clean,
+no further work remains for this ADR.
+
+Commits this phase (in order):
+- 81c4c8fe — pfblockerng: normalize remaining non-ISO timestamps outside
+  the 10 managed logs (ADR-60 P10)
+- fa660cc8 — docs: ADR-60 phase 10 handoff (final phase)
+- (this gate-record commit)

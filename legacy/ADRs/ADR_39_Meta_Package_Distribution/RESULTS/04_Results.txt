@@ -1,0 +1,111 @@
+ADR-39 Phase 4 — Results (smoke + docs + DoD / acceptance)
+==========================================================
+
+Branch: adr/39-meta-package-distribution (landed via PR #448, rebase-merged to devel
+        2026-06-21). Implementation now on devel; this phase records the acceptance gate.
+Spec:   .ADRs/ADR_39_Meta_Package_Distribution/04_Smoke_Docs_DoD.txt
+
+
+ACCEPTANCE SMOKE — repo-marker fan-out (CE + Plus)
+--------------------------------------------------
+
+Workflow:  repo-install.yml (ADR-17/ADR-20 distribution gate — pytest -m repo on the
+           live ADR-04 pfSense VM, fanned out over every ci:true leg, CE AND Plus,
+           fail-fast: false, AND-gate green only if every leg passed).
+Run:       27918859068 on devel @ c31272b
+           https://github.com/pfBlockerNG/pfBlockerNG/actions/runs/27918859068
+Result:    GREEN — all 7 jobs success.
+
+  Gate (devel changed) ................................. success
+  Read CI matrix (ci-metadata) ........................ success
+  CE 2.8   / build pfBlockerNG .pkg (portable) ........ success
+  Plus 26.03 / build pfBlockerNG .pkg (portable) ...... success
+  CE 2.8   / pytest -m repo (live VM) ................. success  (22:04:46 -> 22:09:22)
+  Plus 26.03 / pytest -m repo (live VM) .............. success  (22:04:52 -> 22:10:36)
+  All repo-install legs passed (AND gate) ............. success
+
+(A prior post-merge run, 27908783932, was also green at 15:22Z — this run re-confirms
+on the current devel tip.)
+
+
+PER-CASE COVERAGE (tests/smoke/test_repo_install.py, marker `repo`)
+------------------------------------------------------------------
+
+Fresh install + precedence + catalog acceptance:
+  test_install_from_our_repo_lands_all_files          fresh install lands every file
+  test_shipped_add_repo_sh_bootstrap_installs         add-repo.sh (no Worker) bootstraps
+  test_precedence_ours_higher_priority_wins           priority 100 dominates a decoy
+  test_precedence_decoy_higher_priority_wins          inverse — proves it's a real branch
+  test_pkg_upgrade_moves_to_our_newer_build           pkg upgrade picks our newer build
+  test_build_repo_script_catalog_is_accepted          build-repo.sh catalog accepted
+  test_portable_catalog_is_accepted                   build-repo-portable.py catalog accepted
+  test_install_from_variant_catalog                   correct <varver>/<arch> resolves
+  test_wrong_variant_catalog_fails                    opposite-edition guard (negative)
+  test_eol_route_only_install_from_frozen_catalog     EOL/route-only frozen subtree resolves
+
+rc.d conf-regenerator hook (the ADR-39 mechanism):
+  test_generate_hook_safety_absent_conf_exits_0       ORPHAN GUARD: conf absent -> exit 0,
+                                                      no file created (self-guarding no-op).
+  test_generate_hook_rewrites_stale_varver_and_resolves
+                                                      REGENERATE PATH, before+after:
+        BEFORE: seeded conf url carries stale "stale-9.9/<arch>"; assert the real
+                <varver>/<arch> is NOT present.
+        WHEN:   fire the hook (PFB_BASE_URL=file://<base>).
+        AFTER:  url flips to the box's REAL <varver>/<arch> (stale gone) + canonical
+                marker; `pkg update` accepts; our package installs with its files.
+        ORACLE: the hook's folded detection is cross-checked against an independent
+                Python oracle (_box_real_catalog) — disagreement => catalog unreachable
+                => pkg install fails loud.
+        IDEMPOTENCE: a second hook run leaves the conf byte-identical (pure regenerate).
+
+Off-box (unit) gates already green on devel (Phase 2/3):
+  tests/test_add_repo_conf.py            four-way conf byte-identity (3 --print-conf gens
+                                         + the hook), incl. the marker first line; negative
+                                         guard that workers.dev is NOT in the emitted conf.
+  tests/test_build_repo_portable.py      catalog gen without routing.json.
+  tests/test_matrix_collision_guard.py   fail-closed: real matrix has no (fbsd_major,arch)
+                                         collision with differing (php,py); colliding
+                                         fixture is detected.
+
+
+DOCS RECONCILED (already on devel)
+----------------------------------
+
+- CLAUDE.md / README.md / docs/misc/architecture-notes.md: Worker/routing.json bullets
+  removed or marked retired; the rc.d conf-regenerator mechanism + the "ABI is NOT 1:1"
+  hard rule documented; bootstrap is the direct Pages URL.
+- ADR-20 ADR.md: dated amendment "Routing layer superseded by ADR-39" present (line 3).
+- Cross-repo pfBlockerNG/pkg (origin/main): publish.yml Worker retirement complete
+  (commits fd92eb6, c1e16c3) — landing base-url is the direct Pages origin
+  https://pfblockerng.github.io/pkg, no routing.json generation. gen_landing.py direct-URL.
+
+
+DEFINITION OF DONE (§7)
+-----------------------
+
+[x] All §4 requirements met.
+[x] repo-marker smoke (fresh install, cross-repo precedence, pkg upgrade, conf
+    regeneration + end-to-end resolve, EOL routing) green on the live-VM fan-out (CE+Plus)
+    — run 27918859068.
+[x] Worker / routing.json / meta-package prep + their CI/tests removed; suite green
+    without them; no dangling references (Phase 3).
+[x] All four conf producers byte-identical against the resolved URL + marker.
+[x] Matrix-collision guard wired into CI; green on the real matrix.
+[x] Docs updated; ADR-20 carries the supersession amendment.
+
+Cross-repo / ops follow-ups (§7 post-merge — NOT acceptance blockers):
+[x] (a) pfBlockerNG/pkg publish.yml + gen_landing.py reconciled to the direct-URL world
+        (origin/main: fd92eb6, c1e16c3).
+[x] (b) Live Cloudflare Worker deployment + *.workers.dev route + CF_API_TOKEN/
+        CF_ACCOUNT_ID secrets torn down — done by the maintainer (2026-06-21).
+
+Out-of-CI (maintainer smoke — documented limitations, not acceptance blockers):
+- A true cross-major OS upgrade (or CE->Plus) that changes <varver>, then reboot, to
+  confirm the conf regenerates to the new <varver>/<arch> on a real box. CI simulates
+  regeneration by firing the hook against a stale conf (test above).
+- rc.d hook survives the boot-environment clone across that upgrade (maintainer-confirmed
+  from operational use; /usr/local rides the BE clone).
+- Live pfblockerng.github.io/pkg URL resolve from a real box (gated SMOKE_REPO_LIVE_URL
+  leg, post-merge).
+
+STATUS: ADR-39 acceptance gate met -> ADR.md flipped Proposed -> Accepted.

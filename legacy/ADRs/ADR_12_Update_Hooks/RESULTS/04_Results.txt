@@ -1,0 +1,136 @@
+ADR-12 PHASE 4 RESULTS — HAProxy recipe + update-hooks docs + DoD (FINAL)
+=========================================================================
+
+STATUS: DONE. Docs-only phase. README + CLAUDE.md document the feature + the worked
+HAProxy recipe; ADR §7 finalised. ADR-12 is IMPLEMENTATION-COMPLETE (Phases 1-4 on
+adr/12); Status stays PROPOSED pending the maintainer live smoke (incl. HAProxy
+recipe end-to-end). No code/Python touched — pure documentation.
+
+Files changed (single commit):
+  - README.md                          (+100 — new "Update Hooks (pre/post …, ADR-12)"
+                                         section after the DNSBL VIP section: feature
+                                         overview, env-var table, the HAProxy recipe)
+  - CLAUDE.md                           (+20  — concise "Update Hooks (ADR-12)" feature
+                                         paragraph after the ADR-07 summary)
+  - .ADRs/ADR_12_Update_Hooks/ADR.md    (+50/-14 — §7 finalised: DoD marked done per
+                                         phase, shipped context contract, reject criteria
+                                         decided, the documented reload command + source
+                                         citations, the actionable maintainer smoke list)
+
+
+1. THE DOCUMENTED HAPROXY RELOAD COMMAND (the recipe's post hook)
+-----------------------------------------------------------------
+  [ "$PFB_IP_CHANGED" = "1" ] && echo 'require_once("haproxy/haproxy.inc"); haproxy_check_run(1);' | /usr/local/sbin/pfSsh.php
+
+  - Guarded on the ACCURATE flag PFB_IP_CHANGED (=1 only when IP-side data changed).
+  - GRACEFUL reload, not a hard restart: haproxy_check_run(1) (haproxy.inc:2491; wrapped
+    by haproxy_configure() at :1347-1350) re-writes the config — which re-emits the -f
+    ACL files including ipalias_pfB_Aggregate_v4.lst — and restarts with -sf (finish
+    existing connections; hitless). It is the package's own supported reload entry.
+  - Why pfSsh.php, NOT `php -r`: haproxy.inc opens with bare require_once("functions.inc")
+    etc. that resolve only via pfSense's PHP include_path. /usr/local/sbin/pfSsh.php
+    bootstraps the pfSense env (globals.inc/functions.inc/config.inc/util.inc — verified
+    against upstream pfSsh.php) so require_once("haproxy/haproxy.inc") + its dependency
+    chain load; pfSsh.php evals PHP piped on stdin (php://stdin fgets — verified upstream).
+    Install path /usr/local/sbin/pfSsh.php (verified, shebang #!/usr/local/bin/php-cgi -f).
+  - POSIX-sh-safe: single-quoted PHP literal (no shell expansion of the metacharacters),
+    `[ … ] && cmd` short-circuit. Runs on the node that performs the update (CARP: each
+    node reloads its own HAProxy).
+  - SOURCE FACTS verified against
+    /Users/andre/git/FreeBSD-ports/net/pfSense-pkg-haproxy-devel/files/usr/local/pkg/haproxy/haproxy.inc:
+      :2491  haproxy_check_run($reload, $keep_server_state=true) — the reload core
+             (:2504 haproxy_writeconf re-emits ACL files; :2557-2569 -sf hitless reload).
+      :1347-1350 haproxy_configure() => return haproxy_check_run(1) (the public wrapper).
+      :1084-1092 ipalias_{value}.lst emitted ONLY for a source_ip ACL whose value is_alias;
+                 written as `src -f $configpath/ipalias_<alias>.lst`.
+                 $configpath = {$g['varetc_path']}/haproxy = /var/etc/haproxy (:2496).
+      :1562  stats socket /tmp/haproxy.socket level admin (+expose-fd listeners) — socket
+             is stats + hitless-reload only; CANNOT inject ACL data => reload required.
+
+2. THE DOCUMENTED HAPROXY CONFIG PATTERN (hack-free)
+----------------------------------------------------
+  - One source_ip ACL (type "Source IP matches IP or Alias") on the alias pfB_Aggregate_v4
+    (ADR-11) — purely so the HAProxy package emits + maintains
+    /var/etc/haproxy/ipalias_pfB_Aggregate_v4.lst (:1084-1092).
+  - A custom header ACL matching the CF real-client IP against that file:
+      acl cf_blocked req.hdr_ip(CF-Connecting-IP) -f /var/etc/haproxy/ipalias_pfB_Aggregate_v4.lst
+      http-request deny if cf_blocked
+    (XFF variant: req.hdr_ip(X-Forwarded-For)).
+  - SECURITY note documented: CF-Connecting-IP / XFF is spoofable unless the TCP source is
+    a Cloudflare edge range — gate the deny on a Cloudflare-range source ACL first.
+  - HACK-FREE: ADR-11's never-empty pfB_Aggregate_* consumer file means an empty aggregate
+    still validates + reloads, so NO /../../ path trick and NO dummy-IP hack is needed.
+    Documented explicitly; reject-criterion "recipe can't be made hack-free" = NOT triggered.
+
+3. FEATURE DOCS ADDED
+---------------------
+  README.md — "Update Hooks (pre/post update commands, ADR-12)" (after the DNSBL VIP
+    section): once-per-pass semantics + disambiguation from per-feed ip_pre_*.sh; the
+    config model + list order; run-AS-ROOT trust (= shellcmd/cron) + admin-only tab;
+    /usr/bin/timeout (SIGTERM->SIGKILL, per-hook seconds, blank=60s default) +
+    log-and-continue (non-zero/timeout never aborts; no enabled hooks => byte-identical);
+    a truthful env-var TABLE (PFB_WHEN, PFB_TRIGGER=cron|update|force-reload with the
+    force-update->cron collapse, post-only PFB_IP_CHANGED/PFB_DNSBL_CHANGED accurate,
+    PFB_STATUS=ok / PFB_CHANGED_ALIASES='' reserved placeholders — don't branch on value);
+    HA/CARP replicate-and-run-on-updating-node note; then the full HAProxy recipe (config
+    + security note + the reload-command code block + the pfSsh.php rationale).
+  CLAUDE.md — concise "Update Hooks (ADR-12, PHP/shell — no Python)" paragraph after the
+    ADR-07 summary: pfb_run_hooks mechanism + config path + run-as-root/timeout/
+    log-and-continue, the UI page + priv, the exact env-var set with the same truthful
+    caveats, HA double-run, the HAProxy-recipe one-liner pointer, and validation = lint +
+    maintainer smoke (no pytest oracle). Both end with a See .ADRs/ADR_12_Update_Hooks/.
+
+4. ADR §7 FINALISED (Status still Proposed)
+-------------------------------------------
+  - Added an "Implementation status (2026-06-04): code + docs complete (Phases 1-4 …);
+    Status stays Proposed pending the maintainer live smoke" banner. The Status line in
+    the header is UNCHANGED (still **Proposed**).
+  - Each DoD bullet annotated (Done — with the mechanism/phase) except the final
+    Accept-gate which stays maintainer-owned.
+  - "Shipped context contract" subsection: the REAL emitted values — PFB_TRIGGER set
+    cron|update|force-reload with the force-update->cron collapse; PFB_IP_CHANGED/
+    PFB_DNSBL_CHANGED accurate; PFB_STATUS/PFB_CHANGED_ALIASES stable reserved placeholders
+    (names stable, don't branch on value); aligns the doc with the code, not §2's nominal.
+  - Reject/pivot criteria marked DECIDED: (a) safe-from-the-pass NOT triggered (FreeBSD
+    timeout process-group kill verdict from Phase 1; no detached-exec pivot); (b) recipe
+    hack-free NOT triggered (ADR-11 never-empty file; no /../../ or dummy-IP), to be
+    confirmed by the live smoke.
+  - Documented-reload-command subsection (the one-liner + the graceful + pfSsh.php
+    rationale + source citations).
+  - Manual-smoke checklist rewritten to be actionable: no-op; pre/post fire+context across
+    cron/save/Force Update(=cron)/Force Reload IP|DNSBL(=force-reload) asserting the right
+    flags; safety non-zero AND timeout (pre & post); HA sync; HAProxy recipe end-to-end
+    (assert allowed-before / denied-after listing + empty-aggregate still validates + no
+    hack), with where to read results (pfBlockerNG log).
+
+5. GATE RESULTS
+---------------
+  python -m pytest          PASS  (1019 passed — unchanged baseline; no Python touched)
+  ruff check .              PASS  (All checks passed)
+  markdownlint-cli2         PASS  (0 errors; full tree 38 files, incl. the 3 touched .md)
+  php -l                    N/A   (no PHP file touched this phase)
+  PHPStan                   N/A   (no PHP file touched this phase)
+  ShellCheck                N/A   (no shell file shipped — the recipe is documented sh,
+                                   not a committed script)
+
+6. SELF-REVIEW (Phase-4 plan + ADR §2/§7)
+-----------------------------------------
+  [x] Recipe command POSIX-sh-safe, uses the REAL package reload entry (haproxy_check_run(1),
+      cited :2491 / :1347-1350), guards on PFB_IP_CHANGED, needs NO /../../ or dummy-IP hack.
+  [x] HAProxy config pattern complete: source_ip ACL -> ipalias_pfB_Aggregate_v4.lst
+      (:1084-1092) + header ACL (req.hdr_ip(CF-Connecting-IP)/XFF -f) + CF-range trust note;
+      ADR-11 never-empty file removes the hacks.
+  [x] Feature docs in BOTH README + CLAUDE: env vars TRUTHFUL (only what the code emits;
+      placeholders flagged), run-as-root, timeout/log-and-continue, HA-sync.
+  [x] §7 finalised; Status stays PROPOSED ("implementation-complete, pending maintainer smoke").
+  [x] markdownlint clean; did NOT edit other ADRs' docs or benchmarks/README.md.
+  [x] No Python / pytest / code change (3 .md files only; git diff confirms).
+
+7. READY TO FLIP Proposed -> Accepted?
+--------------------------------------
+  NOT YET — by design. ADR-12 is implementation-complete (runner+wiring+UI+docs+recipe all
+  landed, all automated gates green). The remaining gate is the MAINTAINER live-box manual
+  smoke in §7 — specifically the HAProxy recipe end-to-end (IP update -> post hook ->
+  graceful reload -> fresh ipalias_pfB_Aggregate_v4.lst -> a CF-fronted listed IP denied,
+  an unlisted IP allowed, empty aggregate still validates, no hack). On a clean pass the
+  maintainer flips Status to Accepted.

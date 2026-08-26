@@ -1,0 +1,183 @@
+ADR-30 Phase 5 Results — Live-VM Smoke + Validation
+=====================================================
+
+Branch: adr/30-scheduled-log-reset
+Phase:  5 of 5 (final — smoke suite landed; all gates green)
+Status: DONE (ADR Status set to "Implemented (pending live-VM smoke)")
+
+FILE CHANGED
+------------
+
+  tests/smoke/test_log_rotate.py   (new — 4 smoke scenarios, pytest.mark.smoke)
+  .ADRs/ADR_30_Scheduled_Log_Reset/ADR.md  (Status updated + §7 maintainer
+                                            acceptance steps added)
+
+WHY STATUS IS NOT YET "ACCEPTED"
+---------------------------------
+
+The live-VM smoke is dispatch-only (``smoke-fanout.yml`` on a booted pfSense VM;
+no VM is available in this session). Status is set to "Implemented (pending
+live-VM smoke)" — it flips to "Accepted" once the fan-out runs green on the
+merged devel tip. The automated cases already implement the full §2.2 contract
+with before-and-after assertions; no manual review gate is required beyond the
+smoke run itself.
+
+SMOKE SUITE OVERVIEW
+---------------------
+
+  File: tests/smoke/test_log_rotate.py
+  Mark: pytest.mark.smoke  (deselected from default pytest run via pyproject.toml)
+  Fixture: module-scoped ``deployed_vm`` (deploy once, run all 4 cases)
+
+  Dispatch:
+    python -m pytest tests/smoke/test_log_rotate.py -m smoke --override-ini="addopts="
+
+SMOKE SCENARIOS (§2.2 contract)
+---------------------------------
+
+Case 1 — boundary reset + inode preserved + per-log independence
+  (test_boundary_reset_inode_preserved_and_per_log_independence)
+
+  Given:
+    - ip_blocklog schedule = daily; marker = yesterday (stale).
+    - ip_permitlog schedule = off; no marker entry.
+    - Both logs seeded with inert RFC 5737 content.
+    - ip_blocklog inode captured via ``ls -i``.
+  Before-state asserted: ip_blocklog non-empty; ip_permitlog non-empty;
+    marker ip_blocklog = stale key; no ip_permitlog marker entry.
+  When: ``h.reload(vm, "update")`` (pfblockerng.php update → pfb_log_reset).
+  Then:
+    - ip_blocklog EMPTY.
+    - ip_blocklog inode UNCHANGED (in-place ``/bin/cp /dev/null`` truncation).
+    - ip_permitlog UNTOUCHED (schedule=off; per-log independence proved).
+    - marker ip_blocklog = today's daily key.
+    - marker ip_permitlog absent.
+
+Case 2 — same-period idempotency
+  (test_same_period_is_idempotent)
+
+  Given:
+    - ip_blocklog schedule = daily; marker = today's key (current period).
+    - Log seeded with inert content after the marker write.
+  Before-state asserted: ip_blocklog non-empty; marker = today's key.
+  When: ``h.reload(vm, "update")``.
+  Then:
+    - ip_blocklog NOT emptied (content identical to before).
+    - marker ip_blocklog still = today's key.
+
+Case 3 — chrooted python log (dnslog) reset + inode + unbound ownership
+  (test_chrooted_python_log_reset_preserves_inode_and_ownership)
+
+  Given:
+    - dnslog schedule = daily; marker = yesterday (stale).
+    - dnslog seeded with inert content at the effective host path
+      (/var/unbound/var/log/pfblockerng/dnsbl.log when chroot dir exists,
+       else /var/log/pfblockerng/dnsbl.log — mirrors pfb_log_reset logic).
+    - File chowned to unbound:unbound (production state).
+    - inode captured; owner asserted = 'unbound'.
+  When: ``h.reload(vm, "update")``.
+  Then:
+    - dnslog EMPTY.
+    - dnslog inode UNCHANGED.
+    - dnslog owner still 'unbound' (pfb_log_reset re-chowns after truncation).
+    - marker dnslog = today's daily key.
+
+Case 4 — all schedules off (no reset, stale markers preserved)
+  (test_all_off_no_log_emptied)
+
+  Given:
+    - ALL 10 log_rotate_<type> = 'off'.
+    - ip_blocklog and ip_permitlog seeded with inert content.
+    - Marker entries for both set to yesterday (would trigger reset if enabled).
+  Before-state asserted: both logs non-empty; stale markers present.
+  When: ``h.reload(vm, "update")``.
+  Then:
+    - ip_blocklog UNTOUCHED (content identical to before).
+    - ip_permitlog UNTOUCHED.
+    - Marker file UNCHANGED (pfb_log_reset only writes when $changed is TRUE).
+
+SEED DATA
+---------
+
+  All inert — RFC 5737 IPs only (192.0.2.x, 198.51.100.x, 203.0.113.x).
+  No RFC 6761 TLDs, no HSTS-preload names, no real domain names.
+
+LIVE-VM RUN ID
+--------------
+
+  Not yet dispatched (no VM in this session). Run ``smoke-fanout.yml`` on the
+  merged devel tip to obtain the run ID and confirm the CE + Plus legs.
+
+GATE RESULTS
+------------
+
+  ruff check .
+    -> All checks passed (clean)
+
+  ruff format --check .
+    -> 118 files already formatted (clean)
+
+  python -m pytest tests/smoke/test_log_rotate.py --collect-only --override-ini="addopts="
+    -> 4 tests collected (import + collect clean)
+
+  vendor/bin/phpunit
+    -> OK (975 tests, 3714 assertions) [unchanged from Phase 4]
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/
+    -> (no output — 0 errors) [unchanged from Phase 4]
+
+  vendor/bin/phpstan analyse src/
+    -> [OK] No errors [unchanged from Phase 4]
+
+  php -l src/usr/local/www/pfblockerng/pfblockerng_general.php
+    -> No syntax errors detected [unchanged from Phase 4]
+
+MANUAL CHECKLIST STATUS
+------------------------
+
+  Documented in ADR.md §7 (out-of-CI; real calendar rollover required):
+
+  1. Set ip_blocklog=daily; confirm log empties at the first cron tick after
+     midnight; Off logs untouched; inode unchanged; remote syslog shipper
+     does NOT re-ship.
+  2. Repeat with weekly (ISO week boundary) and monthly on different logs to
+     confirm per-log independence.
+  3. Toggle back to Off; confirm no further resets.
+
+  These cannot be simulated in CI (no real time advance). They are the
+  documented out-of-CI limitation per CLAUDE.md "ADR acceptance".
+
+ADR STATUS
+----------
+
+  Updated to: "Implemented (pending live-VM smoke)" (2026-06-20)
+
+  Flips to "Accepted" when smoke-fanout.yml runs green on the merged devel tip
+  (CE + Plus matrix, all legs). The maintainer acceptance steps are documented
+  in ADR.md §7 → "Maintainer acceptance steps".
+
+SELF-REVIEW VERDICT: DONE
+--------------------------
+
+Checklist:
+  [x] 4 smoke scenarios implemented (Given/When/Then; before-state asserted)
+  [x] §2.2 contract fully covered:
+        default off (Case 4), inode preserved (Cases 1 + 3), idempotent (Case 2),
+        per-log independence (Case 1), ownership re-set for python logs (Case 3)
+  [x] Inert seed data only (RFC 5737; no RFC 6761 / HSTS-preload)
+  [x] DESELECTED from default pytest via pyproject.toml --ignore=tests/smoke
+  [x] Mark: pytest.mark.smoke; collect-only clean (4 tests)
+  [x] ruff check + ruff format --check: clean
+  [x] phpunit: OK (975 tests, 3714 assertions) — unchanged
+  [x] ADR.md Status updated; §7 maintainer acceptance steps added
+  [x] Smoke suite is dispatch-only (smoke-fanout.yml); no VM present here
+  [x] _write_log_line dead code removed before commit
+  [x] Scope: test_log_rotate.py + ADR.md + this handoff only
+
+NEXT STEPS
+----------
+
+  1. Land the PR (use ``/pr-merge-flow`` with "Fixes #341" in the PR body).
+  2. Dispatch ``smoke-fanout.yml`` on the merged devel tip.
+  3. When all legs green, update ADR.md Status → Accepted.
+  4. Run the §7 manual checklist at the next natural daily boundary.

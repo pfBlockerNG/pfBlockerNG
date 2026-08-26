@@ -1,0 +1,263 @@
+# ADR-10: Zero-downtime DNSBL updates (background build + atomic snapshot swap)
+
+- **Status:** **Accepted** (2026-06-15; implemented 2026-06-02; revised 2026-06-04/05 — see Errata) — the zero-downtime functional envelope (no-restart feed/cron + #51 swap, config-change→restart fork, flip correctness/caches, fail-closed) is automated by the ADR-04 matrix, green on **CE 2.8 + Plus 26.03** (fanout run 27547011086). The load/concurrency items (zero-drop under *continuous* traffic, `num-threads>1` shared-global visibility, smallest-box RAM gate) are not stressable in CI and are **maintainer-attested**. (Originally Implemented — automated live-VM smoke green.)
+- **Date:** 2026-06-02
+- **Branch:** `adr/10` (off **`devel`** — `next` was retired 2026-06-04, so this branches off `devel`; depends on **ADR-07 "Full ABP-style DNSBL support"** having landed: the snapshot must bundle ADR-07's final matcher strata, and the build is heavier post-ABP, which is *why* the swap goes off-thread) / **Component(s):** `src/usr/local/pkg/pfblockerng/pfb_unbound.py` (the build/swap site + the query-time matcher + a new reload-watcher thread), `pfblockerng.inc` (`pfb_reload_unbound`/`pfb_stop_start_unbound`, the manifest writer, the DNSBL-IP/queries-daemon coordination), `pfb_unbound_include.inc`/shell (atomic publish + sentinel).
+- **Target runtime:** Python 3.11+ inside Unbound's `pythonmod`, **stdlib only** (no subprocess, no out-of-stdlib deps; `select.kqueue`/`os` for the watcher); PHP 8.3; POSIX `sh`.
+- **Test suite:** `tests/test_pfb_unbound.py`, `tests/conftest.py`, the **retained** `tests/test_adr06_*` and `tests/test_adr07_*` decision oracles (must stay green — the swap changes *when* structures change, never *what decision* they yield); new `tests/test_adr10_*` (single-snapshot equivalence, rebuild-and-swap atomicity/fail-closed, watcher logic). The peak-RAM kill-gate reuses `benchmarks/spike_adr06_build.py`.
+
+> **Errata (2026-06-04).** This ADR was authored on `next` before the decision-cache
+> unification and the stop-caching-blocks change landed on `devel`. Two Context
+> premises were rewritten to match the current tree, and the cache scope shrank
+> accordingly. The body below reflects the corrected facts; this note records why:
+>
+> 1. **Context 6 — one `decisionDB`, not four caches.** `excludeDB`/`dnsblDB`/
+>    `excludeAAAADB`/`excludeSS` were folded into a single, LRU-capped `decisionDB`
+>    (#67/#70, capped in #72). The swap clears **one** cache: `decisionDB.clear()`.
+> 2. **Context 7 — DNSBL blocks are NO LONGER C-cached.** #43 set
+>    `qstate.no_cache_store = 1` on the block path, so C-cache staleness is now
+>    **one-directional**: *allow→block* is TTL-stale (the prior real answer is cached),
+>    *block→allow* is **immediate** (the block reply was never cached). The C-cache
+>    flush is *allow→block only*; the original "both directions / blocks are cached"
+>    framing is obsolete.
+> 3. **Scope add — user custom lists apply instantly (#51).** The alerts **Lock/Unlock**
+>    buttons and "add to whitelist" patch the manifest in place
+>    (`pfb_unbound_python_sources_unlock`/`_whitelist`) and today call `pfb_reload_unbound`
+>    → restart. They are **DNSBL-data updates** and take the same no-restart zero-downtime
+>    fast path: unlock (block→allow) needs only the `decisionDB` clear; lock (allow→block)
+>    needs the allow→block C-cache flush.
+>
+> Line numbers in the body are as-of-authoring and may have drifted; symbols are the
+> reliable handle (grep them in the current tree).
+
+---
+
+## 1. Context
+
+### Today (verified on `devel`, post-ADR-06/07 and the #43/#67/#70/#72 cache work — see Errata)
+
+A DNSBL list update in **Python DNSBL mode** (the default since ADR-02 dropped Unbound mode) is applied by **restarting Unbound** — that restart *is* the downtime this ADR removes.
+
+1. **Update path = full Unbound restart.** `pfb_reload_unbound($mode, $cache, $pfbpython)` (`pfblockerng.inc:3095`) **always** calls `pfb_stop_start_unbound($type)` (`:3118`, again `:3138`), which `sigkillbypid("{$g['varrun_path']}/unbound.pid", 'TERM')` (`:3055-3061`) — i.e. **TERMs and restarts unbound**. The resolver cache is optionally `dump_cache`'d before and `load_cache`'d after (`:3113`, `:3153`) to avoid re-resolving, **but the service is down for the stop→start window**: in-flight queries are dropped/refused and, on restart, `init_standard` re-runs the **entire** (now ABP-heavy) build before answering again.
+2. **Even the "Live sync" path restarts.** The comment "'Live sync' new DNSBL updates utilizing unbound-control" (`:3258`) precedes `pfb_reload_unbound($mode, TRUE, …)` (`:3259`) — the `unbound-control` live-sync only ever applied to **legacy** mode (blocklist = unbound `local_data`). In **Python** mode the blocklist lives in the module's in-memory dicts, which `unbound-control` cannot touch → the restart is the only way to apply it today.
+3. **The build is already swap-ready.** `dnsbl_build_from_manifest(manifest_path) -> BuildResult | None` (`pfb_unbound.py:2118`) calls the pure, reentrant `build()` (`:1966`; docstring "reentrant / zero-downtime-ready", `:1984`) which **mutates no global**. The init-time application is a plain reassignment of four module globals (`pfb_unbound.py:555-562`: `dataDB`, `zoneDB`, `feedGroupIndexDB`, `whiteDB`), explicitly flagged "the build call site is the future zero-downtime swap point" (`:552`) and "a future zero-downtime reload can run it on a background thread and atomically swap in" (`:1678`, `:2122`).
+4. **The matcher reads several globals per query — assigned separately today.** `evaluate_domain` (`pfb_unbound.py:2251`) reads a `containers` dict assembled per query (`:2661-2671`) from `dataDB`/`zoneDB`/`whiteDB`/`regexDB` (+ ADR-07's `allowRegexDB`, `important_rules`). These are **four-plus independent module globals** (`:87-96`, init `:383-390`) — reassigned one-by-one at `:559-562`. A naive background swap that reassigns them individually lets a mid-swap query read **new `dataDB` + old `whiteDB`** (a torn, inconsistent decision).
+5. **Existing background-thread infrastructure.** The module already runs daemon worker threads — `pfb_db_worker` (`:1052`, started `:728-733`) and `pfb_async_worker` (`:165`, started `:739-744`) — gated on `pfb["mod_threading"]`, with DB access serialized by `_db_lock` (`:917`). So spawning **one more** daemon thread (the reload-watcher) is established-safe.
+6. **Python-side caches.** (a) `pfb_py_cache.sqlite` (`pfb["pfb_py_cache"]`, `:361`) is the **Reports-tab log** (`dnsblcache` table, `:1060`), written *after* a block decision (`pfb_db_enqueue("cache", …)`, `:4162`) and **removed at init** today (`:366-367`); it is **never read by the matcher** (not a decision cache). (b) `evaluate_domain` **itself** is cacheless — it re-reads the snapshot every query (at ≈1 µs/lookup a per-domain memo would be pointless). **BUT its `operate()` wrapper memoizes decisions per query in ONE module global, `decisionDB`, reset ONLY in `init()`** (`:412`, re-created empty). `decisionDB` is the **unified** query-time decision cache: the former `excludeDB`/`dnsblDB`/`excludeAAAADB`/`excludeSS` (allow short-circuit, block reuse, noAAAA, SafeSearch) were all folded into it (#67/#70), and it is **LRU-capped** (`_LruCache`, `pfb["decisiondb_max"]`, default 10000; #72). It **is** a decision cache: a name once decided reuses that verdict on later queries — a name newly **added** to a list would stay unblocked, a name newly **removed** would stay blocked. Today's restart-based reload clears it by re-running `init()`; **a no-restart swap that does not re-run `init()` MUST clear it too** — a single `decisionDB.clear()`. → Python-side state to handle on a swap is therefore: (i) the Reports sqlite (parity with the restart's `os.remove`, cleared **through `_db_lock`/the db-queue** so it doesn't race `pfb_db_worker`; the async per-block write path is itself benchmarked, §2 Bonus 2), **and (ii) the single `decisionDB` — `.clear()`ed as part of the atomic swap.**
+7. **Unbound's C-side message cache — blocks are NOT cached (one-directional staleness).** Since #43 the DNSBL block path sets **`qstate.no_cache_store = 1`** (`:4203`), so the synthetic block reply is **not** stored in Unbound's C message cache (the module's other `no_cache_store=1` is the SafeSearch CNAME path, `:3928`). Resolved (non-block) answers still cache normally. Two consequences: **(a) staleness is one-directional** — a newly-**added** name (allow→block) keeps serving its previously-**resolved real answer** from the C-cache until that answer's TTL, while a **removed** name (block→allow) is **immediate**: the block was never cached, so once `decisionDB` is cleared the next query resolves the real name with no stale reply to flush. Today's restart `dump_cache`/`load_cache`s the resolved answers, so today's *allow→block* is TTL-stale too — the swap can improve it with a targeted flush; *block→allow* is already immediate on both paths. **(b) Block stats are fully attributed** — because a block is never served from the C-cache, every block traverses `operate()` → the feed-attributed `dnsbl.log`/counter (`get_details_dnsbl`) always runs, so #43's earlier cached-block under-count no longer applies (the prior `dnsblDB`-as-sidecar concern is moot).
+8. **The manifest is written by PHP/shell** to `/var/unbound/pfb_py_sources.json` (`inc:114`, `pfb["pfb_py_sources"]` `:333`) plus per-feed raw. Nothing today guarantees the plugin can't read a **half-written** manifest during an update — today it doesn't matter because the plugin only reads it at init (post-restart). A no-restart swap makes concurrent read/write a live hazard.
+9. **User custom lists are data updates too (#51).** The alerts **Lock/Unlock** buttons and the "add to whitelist" action edit the user's custom allow/block state without re-enumerating feeds: they **patch the manifest in place** — `pfb_unbound_python_sources_unlock()` rewrites `config.user_unlock` from the live temporary-unlock store, `pfb_unbound_python_sources_whitelist()` rewrites `config.user_whitelist` — and then call **`pfb_reload_unbound`**, which today **restarts** Unbound (#51 even added a resolver-cache flush on unlock to make the unblock land). These are pure **DNSBL-data** edits whose query-time effect (`whiteDB`, the band-6 user allows) is rebuilt from the manifest on the next reload — exactly what the zero-downtime swap applies. So they belong on the **no-restart fast path** alongside feed/cron updates (lock = allow→block, unlock = block→allow — Context 6/7).
+
+### Load-bearing premise to falsify FIRST (Phase 1)
+
+**Unbound `pythonmod` threading/visibility model.** Unbound serves queries on `num-threads` worker threads. The whole approach — *one* background build + *one* atomic global-ref swap serving *all* query threads — holds **iff those threads share one Python interpreter and one set of module globals** (so a reassignment on the watcher thread is visible to every query thread under the GIL). If instead each worker has **isolated** globals (separate interpreters / per-thread module state), a single swap is invisible to the other workers and the design **breaks**. This must be confirmed (Unbound docs + a live-box probe — there is no live Unbound in CI) **before** any phase is built. This is the ADR-01 trap guard: do not build the machinery on an unproven concurrency premise.
+
+---
+
+## 2. Decision
+
+Apply DNSBL updates **without restarting Unbound**: the running module rebuilds the matcher structures **on a background thread** off the existing live structures, then **atomically swaps in a single immutable snapshot reference** — GIL-atomic, so every query thread sees either the whole old snapshot or the whole new one, never a mix. PHP stops restarting Unbound for a **data-only** update and instead **atomically publishes** the new manifest and **flips a single sentinel**; a watcher thread inside the module wakes on it and runs the rebuild+swap. The swap also **clears the single query-time decision cache** (`decisionDB` — `init()`-reset today, Context 6), **clears the Python report cache**, and **flushes the Unbound C-cache for the newly-blocked names** (allow→block; the prior resolved answer is still cached — block→allow is already immediate since blocks aren't cached, #43/Context 7). The same fast path serves **user custom-list edits** (alerts Lock/Unlock and "add to whitelist", #51), not only feed/cron updates. The premise (shared-interpreter visibility) and the cost (≈2× transient RAM) are **falsified first (Phase 1)**; a config change, a failed build, or a constrained/unsupported box **falls back to today's restart** (fail-safe).
+
+| Area | Decision |
+| --- | --- |
+| **Publish protocol (the safety barrier)** | PHP/shell writes the new manifest + per-feed raw into a **staging dir**, `fsync`s, then **atomically `rename`s** into place, and finally **flips a single sentinel file** (`mtime` bump / write of the new generation id). The sentinel flip is the **all-or-nothing commit**: the plugin only ever reads a **fully-written, immutable** manifest set. This — *not* notify latency — is what guarantees "never read a file mid-write" (Context 8). |
+| **Trigger / watch** | A new **reload-watcher daemon thread** (started in `init_standard` next to `pfb_db_worker`/`pfb_async_worker`, `:728-744`) waits on the sentinel: **`select.kqueue` `EVFILT_VNODE`** on the sentinel's directory where available (FreeBSD; **`inotify` is Linux-only, not present on pfSense**), with a **low-frequency `mtime` poll fallback**. Notification is **best-effort**; correctness rides on the atomic publish + the generation id, so a missed/coalesced event only delays, never corrupts. On trigger → `rebuild_and_swap()`. |
+| **Atomic swap shape (single snapshot)** | Replace the four-plus separate globals (`:559-562`) with **one module-level reference** to a **frozen `Snapshot`** bundling *all* ADR-07 strata: `dataDB`, `zoneDB`, `whiteDB`, `regexDB`, `allowRegexDB`, `feedGroupIndexDB`, the `important_rules` flag, and the counts. `evaluate_domain`/`op` capture the **one** reference at query start and read every field off it — so a query is internally consistent even if a swap lands mid-query. The swap is a single `STORE_NAME` (GIL-atomic). **No lock in the per-query hot path.** |
+| **Background rebuild** | `rebuild_and_swap()` runs `build()`/`dnsbl_build_from_manifest()` (already pure, `:1966`/`:2118`) **on the watcher thread**, off the live snapshot. Query threads keep serving the **old** snapshot throughout the build (seconds for a big ABP list) → **zero downtime, briefly stale by design**. Only on a **successful** build is the snapshot ref rebound. Concurrent triggers are **coalesced** (a rebuild-in-progress flag / single-flight); a trigger during a build re-checks the generation id and rebuilds once more if it advanced. |
+| **Fail-closed** | If the build returns `None`/raises (bad/partial manifest, OOM), **keep the old snapshot live** — never swap to an empty or partial set, never "fail open" to no blocking. Log + leave the last-good snapshot serving. (Mirrors the existing `build_result is not None` guard at `:558`.) |
+| **Cache model — snapshot authority + query-memo invalidation (Bonus 2)** | No per-domain memo is **added** to `evaluate_domain` (at ≈1 µs/lookup it's pointless), so the *matcher structures* have one authority: the swapped snapshot. **BUT `operate()` already memoizes decisions** in the single `decisionDB` (LRU-capped, reset only in `init()`, Context 6) — it **must be cleared on every swap** (`decisionDB.clear()`, a cheap GIL-atomic call), or a newly-added name stays unblocked and a newly-removed name stays blocked. So a swap invalidates **this one query-time cache** and handles two non-decision caches below: the **Reports sqlite** (telemetry) and **Unbound's C message cache** (network-latency, not matcher cost — flushed allow→block only). |
+| **Reports-log on swap (Bonus 1 — restructure)** | Today the restart `os.remove`s `pfb_py_cache.sqlite` (`:366-367`). On a no-restart swap, either (a) **clear** it through `_db_lock`/the db-queue (parity, simplest), or — cleaner — (b) **generation-key** the log (add a `generation` column; the Reports UI reads the current generation) so a swap is a metadata bump, not a destructive wipe, and history survives. Phase 3 picks the cleaner one that the Reports UI can read. **Bonus 2:** Phase 1 also benchmarks whether the per-block async write path (`pfb_db_enqueue("cache", …)` `:4162`) earns its keep at all vs the µs matcher — if negligible, simplify/drop it. |
+| **C-cache flip (benchmark-driven)** | **One-directional staleness** (blocks are NOT cached since #43, Context 7): only **allow→block** is TTL-stale (the cached real answer serves until its TTL); **block→allow** is **immediate** (the block reply was never cached — a `decisionDB` clear is all it needs). Decide the allow→block handling by Phase-1/5 measurement: **targeted delta `flush`** of the newly-blocked names (correct, one control round-trip) vs **accept TTL-bounded staleness** (do nothing — **not a regression**: today's restart preserves the resolved-answer cache, so today's allow→block is stale too) vs a bounded `flush_zone`. Coalesced + coordinated with the DNSBL-queries-daemon `unbound-control` marker (`:3211`) to avoid control-socket collisions. |
+| **PHP reload fork (data fast-path + restart fallback)** | `pfb_reload_unbound` gains a **data-only** path: a **DNSBL-data** update in Python mode → **atomic publish + flip sentinel, NO `pfb_stop_start_unbound`**. **Data-only covers feed/cron updates AND user custom-list edits** — the alerts **Lock/Unlock** buttons and "add to whitelist" (#51), which patch the manifest in place (`pfb_unbound_python_sources_unlock`/`_whitelist`) and today restart via `pfb_reload_unbound`; they now publish + flip with **no restart**. A **config** change (unbound.conf/VIP/mode toggle) → **still the restart** (`:3118`). The restart also remains the **fallback** when zero-downtime is unavailable (premise/RAM gate failed, feature off, or a swap errored). One `$mode`/flag drives the fork. |
+| **Concurrency / consistency** | Single-ref swap = no torn read (vs today's `:559-562`). The build mutates nothing global (`:1984`). The watcher is the only writer of the snapshot ref; query threads are readers; the GIL makes the rebind atomic. The report-cache clear is serialized by `_db_lock`. ADR-07's runtime regex **eviction** (which mutates `regexDB` in place) is reconciled: eviction targets the **current** snapshot's `regexDB`; a swap replaces it with a freshly-compiled set (any evicted-pattern state is rebuilt from the manifest + the static cap — acceptable, documented). |
+| **Counts** | After a swap, re-emit `pfb_py_count` + the `DNSBL_Regex` alias count from the **new** snapshot in the formats the UI reads (`inc:3149`, `:8329`) so the dashboard reflects the live lists without a restart. |
+
+### Semantics that MUST be preserved (the contract — pin with tests before swapping)
+
+- **Idle decision-identity.** When no swap is in flight, every DNS decision is **byte-for-byte** what ADR-06/ADR-07 produce — the single-snapshot refactor (Phase 2) and the extracted `rebuild_and_swap` (Phase 3) are **behaviour-preserving**, pinned by the **retained** `tests/test_adr06_*` + `tests/test_adr07_*` oracles.
+- **Atomic + consistent swap.** No query ever observes a torn mix of old/new strata; a query in flight during a swap resolves entirely against one snapshot. No query ever reads a **half-written** manifest (atomic publish + sentinel commit).
+- **Fail-closed.** A failed/partial/aborted build leaves the **last-good** snapshot live and serving — never an empty set, never "no blocking", never a corrupted partial.
+- **Zero dropped queries.** Through a swap under live traffic, **no query is refused, dropped, or stalled** beyond the agreed budget (the headline goal; the baseline is the current restart's dropped-query window, measured Phase 1).
+- **Live matcher gates (learned in implementation — load-bearing).** A swap must refresh `operate()`'s query-time **gate flags**, not just the snapshot ref. `operate()` reads its DNSBL gates from `pfb[...]` booleans — the per-stratum presence gates (`pfb["dataDB"]`/`zoneDB`/`regexDB`/`whiteDB`/`allowRegexDB`/`hstsDB`/`important_rules`) and the **master** `pfb["python_blacklist"]` — which were written **only in `init_standard`**. A background swap that changes *which* strata are non-empty (e.g. a regex-only feed into a previously-empty module, or a first feed where init had none) would otherwise leave those gates frozen at the last restart, so `operate()` skips the new stratum (or all DNSBL eval) and **the swapped lists never block even though the snapshot dicts are correct** (no error — the lists simply aren't consulted). Fix: `operate()` derives the per-query presence gates from the **captured snapshot** (`snap.*`, decision-identical at idle), and `rebuild_and_swap` refreshes `pfb["python_blacklist"]` when the new snapshot bears any block/allow stratum (parity with init; a runtime `python_control` disable still wins). Pinned by `tests/test_adr10_swap.py::TestSwapGatesFromSnapshot` + the master-gate test, and proven on the live smoke (feed/cron + regex/custom-list updates block after a no-restart swap).
+- **Cache coherence.** Post-swap the Reports sqlite reflects the new lists (cleared or generation-bumped, parity with restart); only **allow→block** is C-cache-stale (blocks are NOT cached since #43, Context 7) and is handled per the Phase-1 decision (allow→block delta C-cache flush *or* an accepted, documented TTL bound — no worse than today, whose allow→block is stale too), while **block→allow** is immediate. No collision with the DNSBL-queries-daemon control socket. The **single query-time decision cache** (`decisionDB`) is **cleared on the swap** (Context 6), so no stale block/allow *decision* survives it on a cache miss (the allow→block C-cache flush handles the cached *real reply*).
+- **User sovereignty + ABP precedence (inherited from ADR-07) are untouched** — this ADR changes *when/how* the structures are installed, never *what decision* a given snapshot yields.
+- **Restart fallback is intact.** Config changes still restart; a forced/failed path still restarts; legacy/non-python flows are unchanged.
+
+### Explicitly kept / out of scope
+
+- **Changing what a snapshot decides** — out. ADR-07 owns DNS semantics; ADR-10 only swaps snapshots atomically.
+- **Reverting to legacy `local_data`/`unbound-control` blocklists** — out (ADR-02 dropped Unbound mode; the in-memory matcher is the point).
+- **Incremental/delta in-place mutation of the live dicts** — out: a full rebuild + single-ref swap is simpler and the only thing that keeps `$badfilter`/precedence/regex-reduction (ADR-07) globally consistent. (Considered and rejected as a simpler-looking but more-fragile alternative.)
+- **`unbound-control reload_keep_cache`** as the mechanism — out: it re-execs config and re-runs the heavy init build inline → still a stall, not zero-downtime.
+- **Zero-downtime for *config* changes** (unbound.conf, interfaces, mode) — out; those keep the restart. Only DNSBL **data** updates are zero-downtime.
+- **A new on-disk format / IPC daemon** — out; reuse the existing manifest + a sentinel + the existing thread/`_db_lock` infrastructure.
+- **ADDING a Python decision/resolution cache** — out: the ≈1 µs matcher makes per-domain memoization pointless; we do **not** add one. (The existing `operate()`-level `decisionDB` query memo is **not** a new cache — it exists today and is simply **cleared on the swap**, Context 6; adding a *further* memo would only create more to invalidate.)
+
+---
+
+## 3. Consequences
+
+**Positive**
+
+- **No DNS outage on a DNSBL update.** The most frequent disruptive operation (scheduled feed updates, alerts "add to whitelist" and Lock/Unlock #51, cron) stops dropping queries and restarting the resolver.
+- **Faster apply, less churn.** No `dump_cache`/restart/`load_cache` dance for data updates; the build runs off-thread while queries keep flowing.
+- **The swap seam ADR-06/07 deliberately left is finally used** — `build()` reentrancy pays off; the single-snapshot refactor also makes the matcher's container plumbing cleaner.
+- **Cache correctness improves over today** — *block→allow* is already immediate (#43 stopped caching blocks; the `decisionDB` clear completes it), and the *allow→block* TTL-staleness that the restart's preserve-cache never fixes is closed by the targeted delta flush.
+
+**Negative / risks**
+
+- **Premise risk (ADR-01-class):** if `pythonmod` worker threads do **not** share module globals (per-interpreter isolation), one swap can't serve all workers → the whole design fails. **Falsified first (Phase 1, premise gate).**
+- **≈2× transient RAM during a build.** The new structures exist alongside the live ones until the swap + GC (≈274 B/entry × millions). On a small box (e.g. a 1 GB appliance) a multi-million-entry ABP DNSBL could **OOM** mid-swap. **Measured Phase 1** (reuse `benchmarks/spike_adr06_build.py`) with a kill-threshold; mitigations: feature-gate on available RAM (fall back to restart), or a lower-peak build.
+- **C-cache flush cost / collision.** Flushing a large newly-blocked delta via `unbound-control` has a cost and can collide with the DNSBL-queries daemon's control use (`inc:3211`). Bounded in Phase 5 (targeted delta flush, coalesced, marker-coordinated).
+- **Added concurrency surface.** A new watcher thread + a background build mutating-then-swapping shared state. Mitigated by: single-ref atomic swap (no hot-path lock), single-flight coalescing, fail-closed, and the build's existing purity.
+- **ABP regex-eviction interaction.** ADR-07's runtime eviction mutates the live `regexDB`; a swap replaces it. Reconciled (eviction acts on the current snapshot; rebuild restores from manifest+cap) and documented — not a regression, but a behaviour note.
+- **No live Unbound in CI.** The headline guarantee (zero dropped queries, shared-global visibility, C-cache flush) is only fully provable on a **live box** → a mandatory maintainer smoke gate (§7), like every prior ADR.
+
+---
+
+## 4. Requirements (acceptance)
+
+1. **Premise confirmed (Phase 1):** `pythonmod` query threads share one interpreter + module globals so a single atomic swap is visible to all (doc + live-box probe). If not → the ADR is **rejected** (or re-scoped to a per-thread variant) before any machinery is built.
+2. **RAM within budget (Phase 1):** peak RSS of *build-while-old-live + swap* fits a realistic min-spec box, or a documented mitigation (RAM-gated fallback / lower-peak build) is taken.
+3. **Zero dropped queries (live smoke):** under continuous traffic, a DNSBL update applies with **no** refused/dropped/over-budget-stalled query — versus the measured restart baseline.
+4. **Atomic + consistent + fail-closed:** no torn read, no half-written-manifest read; a deliberately-broken build keeps the last-good snapshot serving (no swap, no outage).
+5. **Cache coherence:** the single query-time decision cache (`decisionDB`) is **cleared on the swap** (Context 6); Reports sqlite cleared/generation-bumped on swap (no `_db_lock` race); the **allow→block** direction is handled per the Phase-1 decision (delta C-cache flush *or* documented TTL bound) and **block→allow** is immediate (blocks not cached since #43, Context 7); no DNSBL-queries-daemon control collision.
+6. **Data fast-path vs restart fork:** a DNSBL-data update — including user custom-list edits (alerts Lock/Unlock and "add to whitelist", #51) — takes the no-restart path; a config change and any failed/disabled swap fall back to the restart.
+7. **Idle decision-identity + green suite:** `tests/test_adr06_*` + `tests/test_adr07_*` pass **unchanged**; new `tests/test_adr10_*` pass; `ruff`/`php -l`/ShellCheck clean; no new shipped deps (stdlib only).
+
+---
+
+## 5. Constraints (from `CLAUDE.md`)
+
+- **Plugin: stdlib only, Python 3.11+** (watcher uses `select.kqueue`/`os`/`threading` only), 4-space, type hints on new fns, no bare `except`, `from __future__ import annotations`. New build/swap/watcher code referencing a new injected Unbound symbol → declare it in `stubs/python/unboundmodule.py`; keep `evaluate_domain`/`build`/`rebuild_and_swap` unit-testable without a live Unbound.
+- **PHP:** tabs, 8.3, no `die()`/`exit()` in library code, pfSense fns via stubs; the atomic publish uses pfSense-available primitives.
+- **Shell:** POSIX `sh`, quoted, absolute binary paths, ShellCheck-clean; the staging-write + `rename` + sentinel flip is atomic on the target FS.
+- Run `python -m pytest` after any `pfb_unbound.py`/`tests/` change; `ruff check .`/`ruff format .` clean each commit.
+- Commit style `<scope>: <imperative summary>`; **work inline on `adr/10`, one commit per phase, push directly** (PR only if rejected); promote up the linear chain (`main` ← `devel`) by **rebase + `--force-with-lease`**, never merge (the `next` tier was retired 2026-06-04). PR bodies via `--body-file`.
+- **Docs:** README/CLAUDE.md updated when the update/reload contract or test commands change (final phase).
+
+---
+
+## 6. Action plan
+
+Each phase = one commit, leaves `python -m pytest` (default) green, and **preserves idle decision-identity** (the retained ADR-06/07 oracles). The **premise + cost are falsified first (Phase 1)**; the **behaviour-preserving prep (Phases 2–3)** — single snapshot + extracted swap — lands **before** the background swap (Phase 4) and the PHP boundary (Phase 5), and each prep phase retains standalone value even if the swap is later rejected.
+
+### Phase 1 — Spike & kill-gate: shared-interpreter visibility, ≈2× RAM, restart-downtime baseline — de-risk
+
+Prompt: `01_Spike_Visibility_RAM_Baseline.txt`
+
+- **Premise probe (live box, owner: maintainer; CI can't reach Unbound):** confirm `pythonmod` query threads share one interpreter + module globals — e.g. set a sentinel on the module from one thread/`init` and observe it from another worker under `num-threads>1`. Document the result. **NO-GO if isolated** (record the per-thread fallback or the rejection).
+- **RAM:** reuse `benchmarks/spike_adr06_build.py` to measure **peak RSS of build-while-old-live + swap** at ABP feed scale; compare to a realistic min-spec box. Propose the kill-threshold + the RAM-gated-fallback / lower-peak mitigation.
+- **Baseline:** measure the **current** restart path's downtime — dropped/refused queries + latency spike during a Python-mode DNSBL update — as the number the swap must beat (target: zero dropped).
+- **Cache benchmarks (Bonus):** (a) measure the per-block Reports-sqlite enqueue/write overhead (`pfb_db_enqueue("cache", …)` `:2721`) vs the ≈1 µs matcher — is the async log path overkill / droppable / generation-keyable? (b) measure a targeted C-cache **delta-flush** cost vs accepting **TTL-bounded** staleness — typical newly-blocked delta sizes + real feed TTLs. Feed both into the Phase-3/5 cache decisions.
+- **Gate:** GO only if the threading premise holds **and** the RAM cost has a viable bound. Land the numbers + the demo benchmark in `RESULTS/01_Results.txt`. Miss → STOP / re-scope / reject (record it, ADR-01 discipline).
+
+### Phase 2 — PREP (behaviour-preserving): bundle the matcher strata into one immutable `Snapshot`
+
+Prompt: `02_Single_Snapshot_Refactor.txt`
+
+- Define a frozen `Snapshot` holding `dataDB`/`zoneDB`/`whiteDB`/`regexDB`/`allowRegexDB`/`feedGroupIndexDB`/`important_rules`/counts. Replace the four-plus separate globals (`:559-562`, `:383-390`) with **one** module-level ref; `init_standard` builds the `Snapshot` and assigns the single ref. `evaluate_domain`/`op` capture the **one** ref per query and read all fields off it (replacing the per-query `containers` assembly `:2661-2671`). **MUST be decision-identical** — pinned by the retained ADR-06 + ADR-07 oracles. Pure refactor; standalone-valuable (atomic-swap-ready even if the rest is rejected). New `tests/test_adr10_snapshot_*` proving field-for-field equivalence.
+
+### Phase 3 — PREP (behaviour-preserving): extract `rebuild_and_swap()` + explicit cache-clear, fail-closed
+
+Prompt: `03_Rebuild_Swap_Extract.txt`
+
+- Factor the build→install into `rebuild_and_swap()`: run the pure `build()`/`dnsbl_build_from_manifest()`, and **only on success** (a) rebind the single snapshot ref atomically, (b) **clear the single query-time decision cache** `decisionDB` (`decisionDB.clear()`; parity with the `init()` re-create at `:412`, Context 6 — without this the swap serves stale block/allow decisions), (c) reset the Reports sqlite via `_db_lock`/the db-queue — clear (parity with `:366-367`) **or** generation-bump per the Phase-1 benchmark, whichever the Reports UI reads cleaner (Bonus 1), and drop the per-block write path entirely if Phase 1 found it overkill (Bonus 2), (d) re-emit counts. On failure → keep the old snapshot **and** leave the caches intact (fail-closed; mirrors `:558`). Called **synchronously by `init_standard`** for now (no behaviour change at init). Unit-test: success swaps + clears `decisionDB` + resets the report cache; a build returning `None`/raising leaves the old snapshot AND the caches intact.
+
+### Phase 4 — Reload-watcher thread + background swap (no restart, zero-downtime active)
+
+Prompt: `04_Watcher_Background_Swap.txt`
+
+- Add a reload-watcher daemon thread (started next to the existing workers, gated on `pfb["mod_threading"]`): wait on the sentinel via `select.kqueue` `EVFILT_VNODE` on the sentinel dir, **mtime-poll fallback**; on a generation-id advance → run `rebuild_and_swap()` **off the query threads**, single-flight/coalesced. The Phase-2 single-ref swap + Phase-3 fail-closed make it safe; queries serve the old snapshot during the build. Unit-test the watcher logic with a stubbed build (sentinel/generation detection, coalescing, build-fail-keeps-old, clean join on `deinit`). Reconcile ADR-07 regex-eviction vs swap (documented).
+
+### Phase 5 — PHP/shell: atomic publish + sentinel + data-only fast path + C-cache delta flush
+
+Prompt: `05_PHP_Publish_FastPath_Flush.txt`
+
+- Manifest writer: stage → `fsync` → atomic `rename` → flip the sentinel (generation id) — the all-or-nothing commit. `pfb_reload_unbound` gains the **data-only** fork: a DNSBL-data update in Python mode → publish + flip, **no `pfb_stop_start_unbound`**; config change / failed / disabled → restart fallback. **Data-only includes the user custom-list edits** — route the alerts Lock/Unlock and "add to whitelist" reloads (#51; `pfb_unbound_python_sources_unlock`/`_whitelist`) through the same no-restart fast path. Compute the **newly-blocked delta** (allow→block) and flush those names from Unbound's C-cache (`unbound-control flush`/`flush_zone`, coalesced, coordinated with the DNSBL-queries-daemon marker `:3211`); **block→allow needs no flush** (blocks not cached since #43, Context 7 — the `decisionDB` clear suffices). `php -l` + ShellCheck clean; default `pytest` unchanged.
+
+### Phase 6 — Validation, benchmark, manual smoke, DoD
+
+Prompt: `06_Validation_Smoke_DoD.txt`
+
+- Re-run the Phase-1 RAM/latency benchmark on `adr/10` vs threshold. Full idle-equivalence (ADR-06/07 oracles) + the new ADR-10 suite. Finalise README/CLAUDE.md (the update/reload contract: data = zero-downtime swap, config = restart). **Manual smoke (live box, owner: maintainer):** zero dropped queries through a swap under traffic; add/remove a name mid-traffic flips correctly (allow→block needs the C-cache flush; block→allow is immediate — #43); a user Lock/Unlock (#51) applies instantly with no restart; fail-closed (broken manifest keeps the old lists serving, no outage); data update takes the no-restart path while a config change still restarts; Reports tab + counts reflect the new lists. Finalise the reject criteria.
+
+---
+
+## 7. Definition of done
+
+- `python -m pytest` green incl. the new `tests/test_adr10_*` **and** the retained `tests/test_adr06_*`/`tests/test_adr07_*` oracles (idle decision-identity); `ruff` clean; `php -l` + ShellCheck clean; no new shipped deps (stdlib only).
+- A DNSBL-data update applies with **zero dropped queries** and **no restart**; a config change still restarts; a failed swap falls back fail-closed to the last-good snapshot (and, if needed, the restart).
+- The swap is atomic + consistent (no torn read, no half-written-manifest read); caches are coherent (Reports cleared, allow→block C-cache flushed, `decisionDB` cleared; block→allow immediate — blocks not cached since #43).
+- Status is **Implemented (pending live-box smoke)** once the above hold on the branch; it flips to **Accepted** only after the maintainer confirms the manual smoke below on a live pfSense CE box.
+
+### Reject criteria (decided cheaply in Phase 1; two settled there, one is the live-smoke gate)
+
+- **Threading premise fails:** if `pythonmod` workers have **isolated** globals (a single swap is invisible to other workers) and no cheap per-thread variant works → **reject** the zero-downtime swap; keep the restart. **Settled in Phase 1 — HELD** (CI/source-provable: one process-wide CPython interpreter, one shared `__main__` module dict, GIL-serialised callbacks → a single `_snapshot` rebind is visible to every query worker; RESULTS/01 §1). The live-box `num-threads>1` confirmation is the first smoke item below.
+- **RAM premise fails:** if ≈2× transient RAM OOMs a realistic min-spec box and no lower-peak build is feasible → **do not ship the swap as default**; gate it on available RAM with the restart as the fallback (or reject). **Settled in Phase 1 — RAM-GATED (not default-on for constrained boxes).** Measured: **785.9 MiB both-resident** (old + new live) at ABP scale (1.49M entries, 276 B/entry) **vs the 358 MiB budget** (35% of a 1 GB min-spec box) → **over-budget** (re-confirmed on `adr/10` in Phase 6, identical 785.9 MiB). The mandated mitigation is **built**: a **PHP RAM gate** (`pfb_unbound_py_swap_fits_ram`: `2 × loaded_entries × 276 + 64 MiB headroom ≤ hw.usermem`, fail-closed on an unknown count / unreadable sysctl) is the **primary** decision, and the **Python watcher**'s free-page probe is the **secondary** net; either declining → fall back to today's restart, which never doubles RAM (the old set dies before the rebuild). The 276 B/entry + 64 MiB headroom are one contract shared by both ends — keep them in step.
+- **Swap can't beat the restart on a live box:** if a swap still drops/stalls queries beyond budget (e.g. GIL contention from the in-process build starves query threads) → reject the in-process background build; keep the restart. **NOT yet decided — this is the headline live-smoke gate** (CI has no live Unbound): the "zero dropped queries under load" smoke item below settles it before Accept.
+
+### Manual smoke (owner: maintainer) — required before Accept
+
+> **Now largely automated.** The ADR-04 live-VM smoke (`smoke.yml`, run 26984168211) runs on a real pfSense CE VM with the live Unbound Python loader and **already covers the FUNCTIONAL items below** — flip correctness (allow→block / block→allow, incl. the matcher-gate-refresh), the **no-restart pid invariant** for feed/cron **and** #51, the data-vs-config fork, and fail-closed. (The old "CI can't reach the Python loader" caveat was wrong — `smoke.yml` does.) **What remains genuinely maintainer-manual** is the **load/concurrency** envelope the functional matrix does not stress: zero dropped queries under *continuous* traffic, shared-global visibility at `num-threads>1`, and RAM on the smallest supported box. Status flips to Accepted once those pass. Throughout, watch `/var/log/pfblockerng/*` + the Unbound log, and track Unbound's **pid** (`cat /var/run/unbound.pid`) — an unchanged pid is the no-restart proof.
+
+- [ ] **Shared-global visibility.** With **`num-threads>1`** (DNS Resolver > Advanced), a single swap is observed by **every** query thread (a name's decision flips on all workers, not just one). Settles the load-bearing premise's live half (the source half is proven in RESULTS/01 §1).
+- [ ] **Atomic publish + sentinel flip.** A feed/cron update writes `/var/unbound/pfb_py_sources.json` via a temp + `rename` (**no `.pfbpub_*` staging file left behind**) and then writes the **next integer** into `/var/unbound/pfb_py_reload`; the watcher logs a no-restart swap; the per-feed raw files all exist before the manifest names them.
+- [ ] **Zero dropped queries.** A scheduled/forced DNSBL update under load applies with **no** refused/dropped/over-budget-stalled query and **no** Unbound restart (**pid unchanged**). This is the §reject "swap can't beat the restart" gate — measure against today's restart's dropped-query window.
+- [ ] **Flip correctness + caches.** A name **queried before** the update then **added** to a feed (allow→block) starts blocking promptly — this needs BOTH the `decisionDB` clear (the prior query memoized it as not-blocked, which would otherwise short-circuit the matcher) AND the Unbound C-cache handling of the prior real answer (feed/cron = **TTL-bounded**, documented, not a regression); a name **queried-and-blocked then removed** (block→allow) resolves promptly — this needs **only** the `decisionDB` clear (else `operate()` re-blocks it on the next cache miss), with **no C-cache flush** because blocks are not cached since #43 (Context 7 — block→allow is immediate); the Reports tab + `pfb_py_count`/`DNSBL_Regex` counts reflect the new lists (block stats now fully feed-attributed since blocks always traverse `operate()`, #43).
+- [ ] **User custom lists apply instantly (#51).** A name **Lock**ed (user block, allow→block) starts blocking promptly with **no restart** (the `decisionDB` clear **plus** the **targeted delta C-cache flush** of that one name + its `www.` sibling clears the prior resolved answer at once — not TTL-bounded, unlike feed/cron); an **Unlock** (block→allow) resolves promptly with no restart (the `decisionDB` clear suffices); the same for "add to whitelist" and customlist add/delete. Unbound's **pid is unchanged** across each toggle.
+- [ ] **Fail-closed.** A deliberately broken/partial manifest does **not** swap — the last-good lists keep serving, the resolver stays up, an error is logged. (The build returns `None`/raises → the watcher keeps the old `_snapshot` and the caches intact.)
+- [ ] **Fork (data vs config).** A pure DNSBL-data update takes the no-restart path (pid unchanged); a **config** change (`unbound.conf`/mode/Resolver toggle) still **restarts** (pid changes); with python mode off, Unbound down, a staged config change present, or after a swap/sentinel error, the data update **falls back to the restart** so the new lists still load.
+- [ ] **No control collision.** The allow→block C-cache flush does not collide with the DNSBL-Queries daemon's `unbound-control` use — verify the `.sync` stand-off marker is set across the flip + flush.
+- [ ] **RAM gate on the smallest box.** On the smallest supported box, a full ABP-scale rebuild+swap **either** fits **or** the **RAM-gated fallback engages as designed** — the **PHP gate** (`pfb_unbound_py_swap_fits_ram`, primary) declines and the update **restarts** (so the new lists still load), with the **Python watcher's free-page probe** as the secondary net. Confirm a constrained box (and the `pfb_py_count`-absent / `hw.usermem`-unreadable cases) takes the restart, **not** an OOM. Peak RSS at ABP scale is ≈2.6 GiB process / **785.9 MiB DNSBL-structure both-resident** (Phase 6 benchmark) — well over the 358 MiB 1 GB-box budget, so the gate **must** fire on a 1 GB appliance.
+
+---
+
+## Post-acceptance addendum (2026-07-15 — issue #1349)
+
+Issue #1349 retired the unconsumed `pfb_py_cache.sqlite` reports writer/table and
+its swap-reset machinery. The only Python decision cache handled by a swap is the
+LRU-capped `decisionDB`; the resolver/DNSBL counter worker and Unbound C-cache rules
+are unchanged. All reports-cache requirements in the accepted context, decision,
+phases, acceptance criteria, DoD, and smoke checklist are historical.
+
+For C-cache coherence, the TTL-bounded choice applies only to feed/cron
+allow→block updates. User-triggered allow→block changes (Lock/custom-block add or
+whitelist removal) always perform an immediate targeted delta flush. User-triggered
+block→allow changes need only the `decisionDB` clear because blocked answers are not
+stored in Unbound's C cache. This addendum supersedes broader wording in the accepted
+body without changing the original record.
+
+---
+
+## Post-acceptance addendum (2026-07-15 — issue #1357)
+
+Issue #1357 hardened the accepted publish protocol without changing DNSBL decisions
+or the sentinel apply contract. PHP serializes full and scalar manifest writers with
+one publication lock, writes each accepted feed into a unique sibling staging
+directory, and publishes the complete raw set as an immutable content-addressed
+`pfb_py_raw.<xxh128>` generation. Atomic replacement of
+`pfb_py_sources.json` is the sole on-disk visibility commit; the later sentinel flip
+remains the notification/apply step. The previous generation remains available until
+a confirmed watcher or restart convergence, after which strict-name garbage
+collection may remove unreferenced generations and stages.
+
+The implementation claims runtime rename atomicity, not power-loss durability. The
+live FreeBSD probe confirmed that directory-stream `fsync()` is supported, but the
+shared atomic-write helper does not fsync the parent directory after rename.
+
+---
+
+## Post-acceptance amendment (2026-07-22 — issue #1615)
+
+Bulk feed/cron data updates no longer accept TTL-bounded native-cache staleness. After the Python
+applied-generation handshake succeeds, the bulk caller clears Unbound's full message and RRset
+caches with `flush_zone +c .`; a restart fallback does not restore the pre-update cache. Normal
+settings-page whitelist changes remain config-class updates and restart Unbound.
+
+The generic `pfb_reload_unbound()` API no longer carries a newly-blocked-name delta. The Alerts
+callers apply directional policy after reload returns: Custom_List add, exact whitelist deletion,
+and Lock flush the validated domain plus its `www.` sibling; wildcard whitelist deletion flushes
+the full cache because it can re-block an unknown set of subdomains; whitelist add and Unlock need
+no flush because blocked answers are not cached. This amendment supersedes the C-cache policy in
+the accepted body and the 2026-07-15 addendum without altering either historical record.

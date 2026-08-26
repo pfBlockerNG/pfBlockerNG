@@ -1,0 +1,52 @@
+ADR-28 Phase 3 Results — PHP TRUE/FALSE literal uppercasing in pfBlockerNG web UI
+===================================================================================
+
+Scope: src/usr/local/www/**/*.php
+Task: Uppercase PHP boolean VALUE literals (true→TRUE, false→FALSE).
+      Leave: type declarations, JS blocks, quoted strings, identifiers, HTML attrs, NULL/null.
+
+Per-file literal count (total 279 normalised):
+-----------------------------------------------
+src/usr/local/www/pfblockerng/www/index.php              :  1
+src/usr/local/www/pfblockerng/pfblockerng_general.php    : 13
+src/usr/local/www/pfblockerng/pfblockerng_hooks.php      : 14
+src/usr/local/www/pfblockerng/pfblockerng_ip.php         : 22
+src/usr/local/www/pfblockerng/pfblockerng_log.php        : 10
+src/usr/local/www/pfblockerng/pfblockerng_safesearch.php : 13
+src/usr/local/www/pfblockerng/pfblockerng_software.php   : 12
+src/usr/local/www/pfblockerng/pfblockerng_sync.php       : 11
+src/usr/local/www/pfblockerng/pfblockerng_update.php     : 15
+src/usr/local/www/pfblockerng/pfblockerng_blacklist.php  : 13
+src/usr/local/www/pfblockerng/pfblockerng_feeds.php      : 10
+src/usr/local/www/pfblockerng/pfblockerng_category.php   : 14
+src/usr/local/www/pfblockerng/pfblockerng_category_edit.php : 23
+src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php      : 37
+src/usr/local/www/pfblockerng/pfblockerng_alerts.php     : 20
+src/usr/local/www/pfblockerng/pfblockerng.php            : 44
+src/usr/local/www/widgets/widgets/pfblockerng.widget.php :  7
+                                                   Total : 279
+
+Confirmations:
+--------------
+- JS left lowercase: all inline <script> blocks in all files left untouched.
+  Examples verified: `var disable_move = false` (pfblockerng.php:2092+),
+  `.prop('checked', false)` (pfblockerng_update.php), `.prop("disabled", false)`
+  (pfblockerng_log.php), `scrollToEl.scrollIntoView(true)` (pfblockerng_category.php),
+  `"enabled": true` JS object literals (pfblockerng_alerts.php JS blocks).
+- Type declarations untouched: no `string|false`, `: false`, `: true` return types
+  present in www/ files (no typed PHP functions); no such constructs changed.
+- Quoted strings untouched: `'true'`/`'false'`/`"true"`/`"false"` string values
+  (e.g. `$_POST['dnsbl_wildcard'] == 'true'` in pfblockerng_alerts.php) left as-is.
+- NULL/null: not touched.
+- No logic changed: pure case normalisations only (279 removed = 279 added lines).
+
+Verification gates passed:
+--------------------------
+- php -l: all 17 files clean (no parse errors)
+- python -m pytest: 1691 passed
+- ruff check .: all checks passed
+- vendor/bin/phpunit: 585 tests, 1177 assertions, OK
+- vendor/bin/phpstan analyse: 0 errors
+- vendor/bin/phpcs: clean
+
+Go-ahead for Phase 4.

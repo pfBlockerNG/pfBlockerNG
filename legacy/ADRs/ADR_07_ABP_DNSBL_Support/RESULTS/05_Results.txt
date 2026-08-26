@@ -1,0 +1,221 @@
+================================================================================
+ADR-07 -- PHASE 5 RESULTS / HANDOFF FOR PHASE 6
+Stage-B reconcile (pure): $badfilter prune + regex reduction + classify + bands
+Branch: adr/07   Commit: pfb_unbound: ADR-07 P5 -- Stage-B reconcile ($badfilter prune + regex reduction + bands)
+================================================================================
+
+VERDICT (headline): DONE. The pure, reentrant Stage-B `reconcile()` is landed in
+pfb_unbound.py. It consumes the typed Rule stream from Stage-A (parse_abp, P4) and
+produces the banded, $badfilter-pruned, reduced, classified PRE-EMIT rule sets +
+the irreducible-regex candidate list -- proven decision-equivalent to the Phase-2
+oracle decide()/reconcile()/reduce_regex(). NOT wired into build()/init; NEVER
+compiles or executes a regex (the irreducible patterns are handed to Phase 6 RAW).
+ADDITIVE + PURE: no global mutation, no PHP/shell/UI touched, nothing deleted.
+GO-AHEAD to Phase 6 (Stage-C emit + wire build() + live 6-band matcher).
+
+GATES (this phase):
+  python -m pytest   -> 868 passed (was 825 after P4; +43 are the new reconcile
+                        tests). ADR-06 golden oracle + Phase-2 ABP decision spec
+                        + P3 strata + P4 parser tests ALL unchanged-green.
+  ruff check .       -> All checks passed!
+  ruff format .      -> 25 files left unchanged (clean).
+  php -l / ShellCheck-> N/A (Python-only phase; no .php/.inc/.sh changed).
+
+Files changed:
+  M src/usr/local/pkg/pfblockerng/pfb_unbound.py  (reduce + bands + ReconcileResult
+                                                   + reconcile(); +256 lines)
+    (also: `from dataclasses import dataclass, field` -- `field` added for the
+     default_factory lists on ReconcileResult.)
+  A tests/test_adr07_reconcile.py                  (43 tests; the P5 entry points)
+
+================================================================================
+1. THE reconcile() API  (what Phase 6 consumes)
+================================================================================
+  reconcile(rules: Iterable[Rule],
+            tlds: dict[str, dict[str, str]],
+            exclusion: set[str]) -> ReconcileResult
+
+PURE + REENTRANT: builds + returns a FRESH ReconcileResult; mutates no argument
+and no module global; never compiles/executes a regex. Two calls on equal inputs
+yield equal results (test_reconcile_twice_equal; test_reconcile_does_not_mutate_
+inputs; test_no_global_mutation).
+
+INPUTS:
+  * rules     -- the Stage-A Rule stream (parse_abp output, P4). Each caller (the
+                 Phase-6 build()) supplies feed/group/log/provenance on the Rule;
+                 reconcile does NOT re-derive them. USER-provenance rules
+                 (settings block list, user regex, whitelist, TOP1M) MUST be
+                 parsed with provenance=RULE_PROV_USER so they reach bands 5/6 and
+                 are $badfilter-immune (fact 7).
+  * tlds      -- the public-suffix oracle, EXACTLY the shape build() already holds:
+                 _dnsbl_load_tld_master(...) -> tlds[tld][full-suffix]. Pass the
+                 SAME `tlds` build() computes (build():2329).
+  * exclusion -- the TLD-exclusion set, EXACTLY build()'s
+                 `exclusion = {e.strip(".") for e in tld_exclusion}` (build():2327).
+  tlds/exclusion are the classify() inputs; reconcile reuses the ADR-06 classify()
+  unchanged (no reimplementation).
+
+================================================================================
+2. ReconcileResult SHAPE  (the pre-emit rule sets Phase 6 emits)
+================================================================================
+@dataclass ReconcileResult (all lists default-empty; counts default 0):
+
+  block_domains: list[BlockDomainRule]
+  allow_domains: list[AllowDomainRule]
+  block_regex_irreducible: list[RegexRule]
+  allow_regex_irreducible: list[RegexRule]
+  important_rules: bool       # THE fast-path gate (SS5)
+  pruned: int                 # feed rules removed by a feed $badfilter (diag)
+  reduced: int                # regex rules folded to domain rules (diag)
+  skipped_badfilter: int      # $badfilter rules that emitted nothing (diag)
+
+@dataclass(frozen=True) BlockDomainRule -> dataDB/zoneDB:
+  cls: str            DNSBL_CLASS_DATA (exact) | DNSBL_CLASS_ZONE (wildcard)
+  key: str            registrable parent (ZONE) | exact domain (DATA), from classify
+  band: int           PRIO_* band (1/3/5)
+  important: bool     carried $important (set the dataDB/zoneDB payload `important`)
+  provenance: str     RULE_PROV_FEED | RULE_PROV_USER
+  feed: str           } manifest-row metadata -> feed_group_index_db + the payload
+  group: str          }
+  log: str            } -> the payload "log" flag
+
+@dataclass(frozen=True) AllowDomainRule -> whiteDB ({wildcard, important}):
+  domain: str
+  wildcard: bool      True -> domain + subdomains; False -> exact
+  band: int           PRIO_* band (2/4/6)
+  important: bool     -> the whiteDB[d]["important"] field
+  provenance: str
+
+@dataclass(frozen=True) RegexRule -> regexDB (block) / allowRegexDB (allow):
+  pattern: str        the RAW inner regex pattern -- NOT compiled (Phase 6 compiles)
+  kind: str           DNSBL_KIND_BLOCK | DNSBL_KIND_ALLOW
+  band: int           PRIO_* band
+  important: bool     -> the {"re","important"} payload (P3 widened both DBs accept
+                        this shape; or carry band directly for the numeric branch)
+  provenance: str
+  feed/group/log: str manifest-row metadata for the "DNSBL_Regex" group + counts
+
+================================================================================
+3. HOW $badfilter / REDUCTION / CLASSIFY / BANDING ARE ENCODED
+================================================================================
+$BADFILTER PRUNE (Step 1, feed-only):
+  bad_sigs = {r.signature for r in rules if r.badfilter and r.provenance==FEED}
+  Then: drop every rule with r.badfilter (it emits nothing -> skipped_badfilter++);
+  drop every FEED rule whose r.signature in bad_sigs (-> pruned++). USER rules are
+  NEVER in bad_sigs and NEVER pruned (immune, fact 7). Matches oracle reconcile().
+  Signature recap (P4 SS1): (key_or_pattern, sorted DNS-opts) MINUS $badfilter, so
+  ||x^$badfilter (sig ("x",())) prunes ||x^ but NOT ||x^$important (sig
+  ("x",("important",))) -- different option = different sig.
+
+REGEX REDUCTION (Step 2):
+  _dnsbl_reduce_regex(inner) -> (wildcard, domain) | None, mirroring the oracle
+  reduce_regex + spike reduce_pattern EXACTLY (cross-checked in
+  test_reduction_matches_oracle_and_spike). Grammar:
+    ^(.+\.)?D$ | (^|\.)D$ | ^(?:.+\.)?D$  -> (True,  D)  wildcard ZONE
+    ^D$ | ^(www\.)?D$ (www stripped)      -> (False, D)  exact DATA
+  where D = [a-z0-9-] labels joined by ESCAPED dots (\.). Anything else -> None
+  (IRREDUCIBLE -> stays a RegexRule with the raw pattern). A reduced regex BLOCK
+  folds to a BlockDomainRule (classify decides data/zone); a reduced regex ALLOW
+  folds to an AllowDomainRule (wildcard from the fold). reduced++ on each fold.
+
+CLASSIFY (Step 3): for a domain BLOCK, reuse classify(domain, tlds, exclusion):
+    wildcard rule (||domain^ / hosts / plain / reduced-wildcard-regex) ->
+      classify() -> (ZONE, registrable-parent) or (DATA, deeper-sub).
+    exact rule (a reduced /^D$/ with wildcard=False) is FORCED to
+      (DATA, domain) -- never wildcarded into a zone (test_exact_fold_forces_data).
+  ALLOW domains do NOT classify (they go to whiteDB as {wildcard, important}).
+
+BANDING (Step 4): _dnsbl_rule_band(rule) wraps the P3 helpers:
+    _allow_priority(rule.important, user=(prov==USER))  for ALLOW
+    _block_priority(rule.important, user=(prov==USER))  for BLOCK
+  -> 1 feed block / 2 feed allow / 3 feed block+imp / 4 feed allow+imp /
+     5 user block / 6 user allow. Equals oracle priority() for every band
+  (test_band_matches_oracle_priority). This wires the user-block -> band 5 the
+  P3 handoff (SS3) flagged as un-wired: provenance now drives it via _dnsbl_rule_band.
+
+================================================================================
+4. THE IRREDUCIBLE-REGEX SET HANDED TO PHASE 6  (raw, NOT compiled)
+================================================================================
+block_regex_irreducible / allow_regex_irreducible : list[RegexRule]. Each carries
+the RAW `pattern` (the inner /re/ string, NEVER compiled in Stage B -- proven by
+test_reconcile_does_not_compile_regex: even a SYNTACTICALLY-BROKEN pattern survives
+Stage B as a raw RegexRule), plus kind/band/important/provenance/feed/group/log.
+
+PHASE 6 MUST:
+  * re.compile() each pattern (wrap in try/except re.error -> log + skip a broken
+    one, mirroring the existing regexDB init at pfb_unbound.py:472-489).
+  * load BLOCK patterns into regexDB, ALLOW patterns into allowRegexDB (the P3
+    container; values may be a bare compiled pattern OR {"re": compiled,
+    "important": bool} -- the matcher accepts both, P3 SS1). Carry the band/
+    important so the numeric 6-band branch resolves them.
+  * recompute the DNSBL_Regex alias count from the ADMITTED (compiled, cap-passing
+    in Phase 7) regex total -- value changes by design (ADR.md SS2 "Emit + counts",
+    RESULTS/01 SS1i).
+  * Stage B does NOT apply the static cap or runtime warn/evict -- that is Phase 7;
+    Phase 6 just compiles + loads.
+
+================================================================================
+5. THE important_rules FAST-PATH FLAG  (build() must emit it)
+================================================================================
+ReconcileResult.important_rules is the build-emitted gate the P3 matcher reads as
+cfg["important_rules"] (P3 SS2). reconcile sets it True iff ANY surviving rule
+engages the numeric 6-band branch:
+    * any rule with $important (feed block/allow + $important), OR
+    * any FEED ALLOW (@@) -- a feed exception the fast path's "allow beats block"
+      seam handles only via whiteDB; with bands it needs numeric resolution, OR
+    * any FEED irreducible regex (block or allow).
+It is FALSE for a pure plain/hosts/||domain^ FEED-block set (today's corpus) AND
+for a USER-only rule set (the fast path already handles user whitelist + user
+blocks; P3 SS3) -- pinned by TestImportantRulesFlag (5 cases). So:
+  PHASE 6: emit pfb["important_rules"] = ReconcileResult.important_rules, and
+  pfb["allowRegexDB"] = bool(allow_regex_irreducible OR any allow_domains). When
+  important_rules is False the matcher stays byte-for-byte today (ADR-06 oracle).
+
+================================================================================
+6. PURITY / REENTRANCY + ADR-06 ORACLE STATUS
+================================================================================
+* PURE/REENTRANT: confirmed. reconcile() builds a fresh ReconcileResult, mutates
+  no input (rules list / tlds / exclusion all unchanged after the call) and no
+  module global (dataDB/zoneDB untouched). Two calls -> equal results
+  (TestPurityReentrancy, 4 tests).
+* NEVER compiles/executes a regex in Stage B (test_reconcile_does_not_compile_
+  regex; broken pattern survives raw).
+* ADR-06 GOLDEN ORACLE: UNCHANGED-green (no matcher/build wiring changed this
+  phase; reconcile is additive + not yet called by build()/init). The non-ABP net
+  DNS decision contract is intact.
+
+================================================================================
+7. GO-AHEAD + WHAT PHASE 6 SHOULD DO
+================================================================================
+GO-AHEAD: emit + wire + go live. No reject-criterion (ADR.md SS7) tripped --
+$badfilter, reduction, classify and the 6-band assignment all reproduce the
+Phase-2 oracle (TestPrecedenceVsOracle incl. $important inversion + user
+sovereignty; TestCorpusEquivalence over the whole corpus). The pieces precedence
+and $badfilter need are now all encoded in the pre-emit sets.
+
+Phase 6 (06_Emit_Wire_Matcher.txt) -- Stage-C emit + WIRE + LIVE:
+  * In build(): for a feed_row with format_hint=='abp', route raw lines through
+    parse_abp(line, provenance=FEED, feed=.., group=.., log=..) (P4) instead of
+    the lite parse() branch; collect the Rule stream; ALSO parse the USER rules
+    (settings block list / user regex / whitelist / TOP1M) with provenance=USER.
+    Call reconcile(rules, tlds, exclusion) (SS1 inputs).
+  * EMIT from the ReconcileResult:
+      - BlockDomainRule -> dataDB/zoneDB[key] = {"log", "index" (via index_for(
+        feed,group)), "important"} (set important from the rule).
+      - AllowDomainRule -> whiteDB[domain] = {"wildcard", "important"}.
+      - block/allow_regex_irreducible -> compile -> regexDB / allowRegexDB (SS4).
+      - pfb["important_rules"] = result.important_rules; pfb["allowRegexDB"] flag.
+      - counts: keep pfb_py_count = loaded total; recompute the DNSBL_Regex alias
+        from the admitted regex set (SS4).
+  * Extend evaluate_domain to APPLY allowRegexDB + the full 6-band resolution LIVE
+    (the P3 numeric branch is already written + unit-pinned; flip it on via the
+    important_rules flag). Reduce the production DnsblDecision to the spec's
+    {block,resolve,pass} label (mapping in RESULTS/02 SS1 NOTE) and diff against
+    decide() -- the production resolver should match the test helper _resolve() in
+    tests/test_adr07_reconcile.py (which already mirrors decide()).
+  * Decision-equivalent OFF (ADR-06 oracle, important_rules False) AND ABP-correct
+    ON (Phase-2 oracle). Phases 7 (regex safety) + 8 (slim PHP boundary) follow.
+
+GATES TO KEEP GREEN: python -m pytest (ADR-06 oracle + ADR-07 spec/strata/parser/
+reconcile), ruff check/format, php -l + ShellCheck on any PHP/shell touched.
+================================================================================

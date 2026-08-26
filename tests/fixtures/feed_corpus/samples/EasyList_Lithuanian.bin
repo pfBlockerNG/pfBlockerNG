@@ -1,0 +1,199 @@
+[Adblock Plus 2.0]
+! Title: EasyList Lithuania
+! Prisidėjo: Imre Eilertsen (Dandelion Sprout), iibett. (Anksčiau: Algimantas Margevičius, Mantas Malcius)
+! Apie neužblokuotas reklamas ar kitas bėdas praneškite https://github.com/EasyList-Lithuania/easylist_lithuania/issues arba forume https://forums.lanik.us/viewforum.php?f=101
+! Licencija: Šis turinys yra pateikiamas pagal GNU GPL3 licenciją - https://www.gnu.org/licenses/gpl-3.0.txt
+! Description: Removes ads on Lithuanian-language websites.
+! Homepage: https://github.com/EasyList-Lithuania/easylist_lithuania
+! Version: 17June2026v1
+! Expires: 7 days
+
+##.baneriai
+##.reklamos_nuorodos
+##.reklamos_tarpas
+##.top_reklama
+##img[alt="Dedikuoti.lt serveriai"]
+##img[alt="Hostingas Serveriai.lt"]
+##img[alt="Reklaminis skydelis"]
+1588.lt###headerBanner
+15min.lt##.top-banner
+15min.lt##script + div:not(.header):has(+ .wrapper)
+15min.lt##.dfp
+15min.lt##.ads-cnt
+15min.lt##.article-0
+15min.lt##.col-right-small > .widget-group:first-of-type
+15min.lt##.page-item-lazyload
+15min.lt##.widget-ad
+15min.lt##div[class*=" "][style^="top: "]
+aciu.lt###adrotate_2
+aciu.lt##.parama
+aciu.lt###adrotate_1
+aina.lt##div[data-vc-full-width]:has(div[id^=aina_lt_300x250_])
+aina.lt##.vc_col-sm-4 a:not([href*=aina])
+aina.lt###warp > div[style^=text-align]
+aina.lt##.sticky_side_el
+aina.lt##.non_sticky_side_el > div[style]
+aina.lt##.bdaia-widget:has(a[href*=farming])
+akmensmagija.lt###top
+alfa.lt##.block_text_links
+alfa.lt##.cosite_block
+alfa.lt##div[class="col-xs-12 col-sm-12 col-md-4 col-lg-3 sidebar-block "]
+alfa.lt##.reklamaTopFilled
+alfa.lt##div[id*=_300x250_inarticle_]
+alfa.lt##._reklamaTopR
+alfa.lt##.reklamaTopTop
+alio.lt###advert_right
+alio.lt###banner-top
+alio.lt###rssReader_b
+alio.lt##.fl.marginb10.vipadvertise
+alio.lt##.margint10
+alio.lt###main-content-right
+alio.lt##.mobilehide[style="min-height: 250px"]
+alkas.lt##.content-inner > iframe[style*=" width: 300px"]
+alkas.lt##.wpb_raw_html iframe
+alkas.lt##div[style^="text-align: center; margin: 10px 0"]:not([class], [id])
+alkas.lt##.widget_custom_html
+alytus-tourism.lt###banner_cont
+anglija.lt###top_veliavos
+anglija.lt###weather
+anglija.lt##.main-right.m-hide
+anglija.lt##.outer.bg-rhomb-grey-light.flag-block-wrapper.m-hide
+anglija.lt##.right_veliava
+anglija.lt,kamane.lt##.right_banner
+anglija.today##a[href^="/redirect/ad/"] > *
+apiterapija.lt##a[href$="://www.octenisept.lt"]
+archyvai.lt##.right_block
+aruodas.lt##.luminor-list-link-add
+aruodas.lt##.result-item-info-v4 > .result-item-luminor-container-button
+aruodas.lt##.luminor-banner-container
+aruodas.lt##.offer-banner-panel
+aruodas.lt##.elesen_container
+aruodas.lt###advertStatisticHolder
+aruodas.lt##.content-universal-block--advert1
+asvyras.lt##.ad1
+asvyras.lt##.ad2
+atvfanai.lt###banner-placeholder-1.banner-placeholder
+auto-loads.lt##.js-autotaurage-banner
+auto-loads.lt##div[class^=banner_container_corner_]
+autobilis.lt###citadele-box
+autogidas.lt##.header-ann
+autogidas.lt##.no-print:not([class*=" "])
+autogidas.lt##.reklama-300x250
+automokyklos.lt##.reklamaadd
+automokyklos.lt##.header > .container
+automokyklos.lt##.col-md-4.col-sm-6:has(> ._slot)
+autoplius.lt##.ap-loan-calculator-native
+autoplius.lt##.apl-content-calculator
+autoplius.lt##.apl-example-note
+autoplius.lt##.head-small
+autoplius.lt##.ket-rules
+autoplius.lt##.leader-board-wrapper
+autoplius.lt##.bigbank-price-leasing-button
+autoplius.lt##.superdedes-inannouncement
+autoplius.lt##.gallery-loan-opacity
+autoplius.lt##.gallery-loan-wrapper
+autoplius.lt##div[class*=bigbank-slideshow]
+autoplius.lt##.ads-items
+autoplius.lt##.partner-banner-wrapper
+m.autoplius.lt##.bigbank-leasing-button
+m.autoplius.lt##.bigbank-price-calculators-container
+m.autoplius.lt##.bigbank-button
+m.autoplius.lt##.ad
+m.autoplius.lt##.middle-banner-label
+basketnews.lt##.showWhenBlocked
+basketnews.lt##[style="margin-bottom: 10px; height: 100px; padding-left: 10px; padding-right: 10px; text-align: center;"]
+basketnews.lt##img[alt=Olybet]
+beatosvirtuve.lt##.archive.tax-recipe-categories.term-velykos.term-82[style="overflow: hidden;"]:last-child
+beatosvirtuve.lt##.dialogBg
+beatosvirtuve.lt##.valdiklis_reklama.clearfix [alt="probiotic valikliai"]
+bernardinai.lt###marquee
+bernardinai.lt###paremk-panel
+beta.lt##.hook.roof-placeholder
+basketnews.lt,cs-servers.lt,delfi.lt,racas.lt,rinkaplius.lt,strazdaneles.lt,pasikeisk.lt,priekavos.lt,1588.lt,sodobaldai.lt,ekopirk.lt,zaislaivaikams.lt,kcci.lt,m.autogidas.lt,tikrojilietuva.com##.banner
+cvmarket.lt##.top_banner.banner
+domoplius.lt##.visibankai-calculator
+imones.lt###brandpage
+tikrojilietuva.com##.col-sm-4.sidebar-column
+bigbenas.lt,infodiena.com###sidebar-primary-sidebar
+cagsolution.blogspot.com##marquee img
+chatas.lt##.textwidget.custom-html-widget
+domoplius.lt##.headtop
+moteris.lt,panele.lt,tavovaikas.lt##.banner-wide-border
+moteris.lt,panele.lt,tavovaikas.lt##.banner-desktop
+moteris.lt,panele.lt,tavovaikas.lt##.banner-mobile
+myheritage.lt###promotional_banner_root
+dainos.lt##.standartinisSarasas.sriftas13
+dainos.lt##a[href$="ttp://egu.lt"]
+danguje.lt##a[href^="/component/banners/click/"] > img
+danielius.net##div[style="width: 80%; font-size: 12px; padding: 5px; border: 1px dashed #CCF5CC; background: #F0FCF0; margin: 0 auto;"]
+day.lt##[style="line-height: 25px; margin: 15px 8px 2px auto;"]
+delfi.lt###alio_block
+delfi.lt##.revolut-juosta
+delfi.lt##iframe[src*="alio.lt/posPages.html"]
+delfi.lt##iframe[src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="]
+delfi.lt##.col-xs-9 a[href*="ttps://bit.ly/"]
+delfi.lt##.col-xs-9.left + div[class]:not([class*=" "])
+delfi.lt##body > div[style*="height:"][style*="z-index:"]
+delfi.lt##body > .container > .row > .left ~ :not(.right) > :not(.delfi-ads-block)
+delfi.lt##.hero
+delfi.lt##div[class^=col-xs-][style^="float: left; "]:first-of-type + div[class]:not([class*=" "]):last-of-type
+delfi.lt##.C-banner
+depresijosklubas.lt##img[src$="rozmarinas.gif"]
+15min.lt##div > em
+15min.lt##body > i
+15min.lt##body > label
+15min.lt##body > em
+15min.lt##body > span
+15min.lt##div > abbr
+15min.lt##body > strong
+15min.lt##body > div[class][style="display: block;"]
+diena.lt###komentaru-top-left
+diena.lt###sticky-reklama
+diena.lt##.article_showcase_1
+diena.lt##div[class^=header-reklama-]
+diena.lt##div[id*=ado-]
+diena.lt##iframe[src*="diena.lt/cview.php"]
+pokernews.com##.ads
+diskusijos.darnipora.lt##.post.bg3
+diskusijos.darnipora.lt##img[onclick="Set_Cookie( 'popunder31254', 'true', 3, '/', '', '' );document.getElementById('myBtn').style.display='none';"]
+domo.plius.lt##.dialog.facebook-dialog > *
+domo.plius.lt##.widget-overlay
+donoryste.eu##[alt="Klipas Donorystė"]
+dovanos.lt##.middle[style="border:none;padding:5px 0px;"] *
+dratas.lt##img[title="Poko.lt = (lietuviški blogai + socialiniai tinklai) * vienas kitas algoritmas"]
+draugas.lt##.row.dr-ad-top
+drauge.org##.side-body > TABLE[bgcolor="#87B6D9"]
+drg.lt##.module-content A > img
+dumblas.com##.content.citems.banner
+ecoland.lt###sotewsadds
+efarma.lt##.footer-container > *
+ekopirk.lt###friends_block
+ekopirk.lt###lojalumas_block
+ekspresas.co.uk##.hometakeover.gofollow
+elektronika.lt##.randomcontent.group1 + * + * + * > *
+elektronika.lt##[style="border:1px solid #000000;padding:6px;"]
+elektronika.lt##td[bgcolor="#FFFFFF"][align=center][style="border:1px solid #000000;"]
+elta.lt##td[style^="TEXT-ALIGN: "]
+enorca.blogspot.com###Image2_img
+eurobasket.lt##.adsbygoogle
+fightclub.lt##.advert
+fortuna.draugas.lt##.rkl
+fotofabrikas.lt###popup-w
+fotofaze.lt##.xoxo.blogroll a[href="/"] > img
+fotofaze.lt##a[href$="ttp://www.fotofaze.lt"] > img
+fotoservisas.lt##div[style="text-align: center"]
+friendsclub.lt##[src*="ttp://www.friendsclub.lt/banners/"] + *
+g-taskas.lt##a[href$="ttp://www.vilniausgidas.lt"]
+gamtosnamai.lt###marquee > .tickercontainer img
+gedulas.lt###ct_testimonials-4
+geoturgus.lt##.geoturgus-ad
+gintarinesvajone.lt##.xoxo.blogroll img
+grokiskis.lt##.add-2
+grozionamai.lt###sideRight.sidebarRigt
+grozionamai.lt##.jspContainer[style="width: 550px; height: 299px;"]
+grozionamai.lt##.menu.draugailinks
+grozionamai.lt##.vp[style="height: 249px;"]
+grozioperlas.lt##img[alt="JPEG baneris"][title="JPEG baneris"]
+grupinis.lt###product2
+grupinis.lt##.block.villa
+gy

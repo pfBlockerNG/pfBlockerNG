@@ -1,0 +1,143 @@
+ADR-45 Phase 2 Results — Wire pfb_validate_archive() into pfb_download()'s archive branches
+============================================================================================
+
+## Four insertion points
+
+All four probes are the FIRST statement inside their respective archive branches in
+pfb_download() (src/usr/local/pkg/pfblockerng/pfblockerng.inc). The uncompressed `else`
+path is NOT touched.
+
+  gzip  (application/x-gzip | application/gzip) — probe at the new L8321
+         Branch opener: `if ($file_type == 'application/x-gzip' || $file_type == 'application/gzip') {`
+         Probe inserted immediately before the existing `if ($type == 'geoip')` sub-dispatch.
+
+  bzip2 (application/x-bzip2) — probe at the new L8384
+         Branch opener: `elseif ($file_type == 'application/x-bzip2') {`
+         Probe inserted before the existing `pfb_filter(…, PFB_FILTER_FILE_MIME_COMPRESSED, …)` call.
+
+  zip   (application/zip) — probe at the new L8396
+         Branch opener: `elseif ($file_type == 'application/zip') {`
+         Probe inserted before the existing `// Extras - MaxMind/TOP1M` comment and
+         `if ($type == 'geoip' || $type == 'top1m')` sub-dispatch.
+         The existing tar -tf member-count / xlsx logic (L8406-8434) is untouched.
+
+  7z    (application/x-7z-compressed) — probe at the new L8453
+         Branch opener: `elseif ($file_type == 'application/x-7z-compressed') {`
+         Probe inserted before the existing `pfb_filter(…, PFB_FILTER_FILE_MIME_COMPRESSED, …)` call.
+
+  uncompressed else — NOT touched (no probe; plain-text path is an ADR §7 reject criterion).
+
+Each probe passes the RAW $file_download path (not $file_dwn_esc) — pfb_validate_archive()
+escapes internally via its default runner; double-escaping would silently break the path.
+
+Probe block (identical in all four branches, tabs preserved):
+
+    if (!pfb_validate_archive($file_download, $file_type)) {
+        pfb_logger("\n[pfb_download] Corrupt or unreadable {$file_type} archive (structural probe failed): [" . htmlspecialchars($file_download) . "]", 2);
+        unlink_if_exists($file_download);
+        return FALSE;
+    }
+
+---
+
+## ArchiveValidateWiringTest — names + results
+
+File: tests/php/ArchiveValidateWiringTest.php  (#[CoversFunction('pfb_validate_archive')])
+
+  [PASS] test_gzip_valid_accepted_and_corrupt_rejected
+         gzencode() → valid.gz → pfb_validate_archive($path, 'application/gzip') === TRUE
+         8-byte truncated copy → pfb_validate_archive($corrupt, 'application/gzip') === FALSE
+
+  [PASS] test_gzip_x_gzip_alias_valid_accepted
+         same valid.gz → pfb_validate_archive($path, 'application/x-gzip') === TRUE
+         (proves the x-gzip alias routes to the same gunzip -t probe)
+
+  [PASS] test_bzip2_valid_accepted_and_corrupt_rejected
+         bzip2 -k input.txt → valid.bz2 → pfb_validate_archive($path, 'application/x-bzip2') === TRUE
+         10-byte truncated copy → pfb_validate_archive($corrupt, 'application/x-bzip2') === FALSE
+
+  [PASS] test_zip_valid_accepted_and_corrupt_rejected
+         ZipArchive → valid.zip → pfb_validate_archive($path, 'application/zip') === TRUE
+         20-byte truncated copy → pfb_validate_archive($corrupt, 'application/zip') === FALSE
+
+  [SKIP] test_7z_valid_accepted_and_corrupt_rejected
+         Reason: /usr/local/bin/7z not available on this host (macOS dev / CI)
+         Guard: markTestSkipped('/usr/local/bin/7z not available on this host')
+
+Formats run vs skipped:
+  gzip  — RAN (gunzip at /usr/bin/gunzip present on macOS)
+  bzip2 — RAN (bzip2 at /usr/bin/bzip2 present on macOS)
+  zip   — RAN (tar at /usr/bin/tar present on macOS)
+  7z    — SKIPPED (/usr/local/bin/7z absent on macOS dev + CI Linux hosts)
+
+On FreeBSD/pfSense, 7z IS at /usr/local/bin/7z (it is in the smoke image via RUN_DEPENDS),
+so the Phase 4 smoke will exercise the 7z probe in the live-VM run.
+
+---
+
+## End-to-end pfb_download() limit — Phase 4 smoke
+
+pfb_download() is NOT off-appliance unit-testable (ADR §5): it calls file(1) for MIME
+detection, shells out to platform decompressors, and writes to pfSense-specific paths — none
+reachable in a PHPUnit run. The TRUE end-to-end red→green (pfb_download() rejects a corrupt
+archive before extraction) is pinned by the Phase 4 smoke test (test_smoke_adr45.py), which
+installs a corrupt archive as a feed download on the live CE VM and asserts pfb_download()
+returns FALSE with the probe-failed log line, red on a fix-reverted pkg and green on the
+patched one.
+
+---
+
+## PHPUnit summary
+
+  Tests: 1574, Assertions: 14944, Skipped: 4, Failures: 0, Errors: 0
+  (Was 1569/14932/3 in Phase 1; added 5 new tests: 4 run + 1 skipped 7z)
+  Full suite green.
+
+## php -l
+
+  No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  (Pre-existing PHP 8.3 Deprecated notices on optional-before-required params in
+  pfb_parsed_fail / pfb_download / pfb_dnsbl_parse / pfb_unlock — not introduced here.)
+
+## phpcs
+
+  vendor/bin/phpcs --standard=phpcs.xml.dist src/usr/local/pkg/pfblockerng/pfblockerng.inc
+  → Clean (no output / exit 0). RequirePfbFilter: pfb_validate_archive() IS the validation
+  layer — no new exec() at the call site, so the sniff is not triggered.
+  UppercaseBooleanLiteral: FALSE literal is uppercase throughout. No issues.
+
+---
+
+## Diff stat
+
+  src/usr/local/pkg/pfblockerng/pfblockerng.inc |  20 ++
+  tests/php/ArchiveValidateWiringTest.php        | 251 +++++++++++++++++++++++++++
+
+  No other files changed.
+
+---
+
+## Commit + push
+
+  Commit: 7e3def78  pfb_download: structural-probe archives before extraction (ADR-45 P2)
+  Push:   adr/45-structural-integrity-tests → origin (fast-forward, c0d24beb..7e3def78)
+
+---
+
+## Watch-outs for Phase 3 (octet-stream recovery)
+
+1. The 7z branch (L8454-8464) is currently reachable only once Phase 3 can set $file_type to
+   'application/x-7z-compressed' via recovery. The probe is already in place there — Phase 3
+   just needs to route to the branch, not add another probe.
+
+2. Phase 3 recovery iterates over the supported canonical types and calls pfb_validate_archive()
+   on each to identify the actual format. pfb_archive_probe() returns NULL for
+   'application/octet-stream' (by design — it's not a probed type). Recovery must pass one of
+   the four canonical types (application/gzip, application/x-bzip2, application/zip,
+   application/x-7z-compressed) to pfb_validate_archive() in its probing loop, not the raw
+   octet-stream type.
+
+3. pfb_download() at L8294 already filters/rejects 'application/octet-stream' unless Phase 3
+   adds it to the allow-list for recovery. Phase 3 must touch the MIME gate to unlock
+   octet-stream as a pass-through to the recovery path; the probe calls already added in this
+   phase will fire on whichever branch the recovery routes to.

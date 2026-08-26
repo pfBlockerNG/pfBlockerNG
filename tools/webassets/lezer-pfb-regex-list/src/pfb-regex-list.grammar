@@ -1,0 +1,55 @@
+// Lezer grammar for the pfBlockerNG regex-list textarea format (issue #1669 slice B).
+// Mirrors pfblockerng.inc's pfb_text_area_decode() (the custom-entry textarea decoder)
+// EXACTLY: per line, a line whose TRIMMED start is "#" is a whole-line Comment (dropped
+// by the decoder, never stored); otherwise the FIRST "#" anywhere in the line splits it
+// into Pattern (mounts the Python-re grammar from @pfblockerng/lezer-regexp via
+// parseMixed -- see src/index.js) and a trailing Comment running to end-of-line. A line
+// with no "#" at all is Pattern-only. A mid-pattern "#" therefore visibly becomes a
+// Comment in the editor -- that is intended, it surfaces the decoder's real split.
+//
+// This is a HIGHLIGHTER grammar, not a validator: server-side validation
+// (pfb_text_area_decode() itself, plus preg_match/re.compile on the split pattern half)
+// stays authoritative.
+//
+// A trailing @precedence { Comment, Pattern } (below) is still required: lezer-generator
+// flags Comment/Pattern as "overlapping tokens used in same context" (a leading whitespace
+// run is a viable prefix of both) even though longest-match alone already picks the right
+// one at runtime -- the generator can't prove that statically, so the precedence
+// declaration just states the same fact explicitly (Comment wins the tie when both are
+// reachable, which is exactly the trimmed-# case: Comment's match is then strictly longer,
+// swallowing the whole line, vs Pattern stopping at the "#").
+@skip {}
+
+@top RegexList { line (newline line)* }
+
+line { (Pattern Comment? | Comment)? }
+
+@tokens {
+  newline { "\n" }
+
+  // A run of optional leading whitespace then "#" to end-of-line. Reached mid-line (right
+  // after a Pattern) it can never carry a leading-whitespace run -- Pattern already
+  // consumed any leading non-"#" characters -- so in practice this token's ws* prefix only
+  // ever fires at line-start, exactly the "trim($line) starts with '#'" case.
+  Comment { $[ \t]* "#" ![\n]* }
+
+  // Everything up to the first UNESCAPED "#", or the newline. Whitespace is significant
+  // here (it's part of the regex pattern the outer grammar mounts inside via parseMixed).
+  //
+  // issue #1867: a backslash consumes the character after it, so "\#" is one pattern
+  // char and the "#" never reaches Comment -- while "\\#" (an escaped BACKSLASH) leaves
+  // the following "#" free to start the Comment, because the first alternative already
+  // ate both backslashes as a pair. That parity is the whole rule, and it matches
+  // pfb_split_regex_line() in PHP and pfb_dnsbl_regex_rules.py byte for byte.
+  //
+  // The dangling-backslash case (a line ENDING in "\\") is a trailing OPTION on Pattern,
+  // never a patternChar alternative: as an alternative it would let the tokenizer take a
+  // lone backslash mid-line and re-pair the rest, and since Lezer resolves a token by
+  // LONGEST match it would then read "a\\#desc" as one whole-line Pattern -- the escaped
+  // BACKSLASH would wrongly protect the "#". After the repetition it can only ever apply
+  // at end of input, where no re-pairing is possible.
+  Pattern { patternChar+ "\\"? }
+  patternChar { "\\" ![\n] | ![#\n\\] }
+
+  @precedence { Comment, Pattern }
+}

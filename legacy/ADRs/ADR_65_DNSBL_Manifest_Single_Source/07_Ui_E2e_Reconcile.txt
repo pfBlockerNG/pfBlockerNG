@@ -1,0 +1,68 @@
+================================================================================
+PHASE 7 PROMPT -- Reconcile the six re-check ui_e2e tests to the logged-fields model (test maintenance)
+Target model: Sonnet 5 implementer under an orchestrator gate (xhigh adversarial review)
+ADR: .ADRs/ADR_65_DNSBL_Manifest_Single_Source/ADR.md   (read the D2 delta row first)
+================================================================================
+
+ROLE
+You are the IMPLEMENTER. Work in the per-ADR worktree on branch
+adr/65-dnsbl-manifest-single-source. Implement yourself; never spawn sub-agents. Inline, one
+commit, push directly. Test mode: behaviour-preserving test maintenance -- six EXISTING live-VM ui_e2e tests pin the
+render-time re-check that the consumer-rewire phase removed (delta D2); they will fail on-box
+until reconciled to the logged-fields model. No off-appliance red/green run exists for ui_e2e;
+the executed proof is the DEFERRED live-VM fan-out (the ADR acceptance step).
+Blast-radius note for the gate: NONE. Tests only; no production file is edited.
+
+WHY THIS PHASE EXISTS
+The alerts/reports DNSBL rows now render their own logged feed/group verbatim; the
+"currently-listed / drift / re-derive" semantics these six tests assert no longer exist. The
+fan-out cannot go green until they pin the NEW contract.
+
+REQUIRED READING
+- FIRST, read RESULTS/06_Results.txt and RESULTS/04_Results.txt (its carry-forward names the
+  six tests). If either is missing, STOP and report.
+- ADR.md -- the D2 delta row + Semantic 6.
+- tests/smoke/ui/test_alerts_render_verify.py -- the six tests to reconcile:
+  test_d1_cache_hit_drift_renders_cache_groupname, test_d2_data_hit_drift_renders_data_feed,
+  test_d3_zone_hit_renders_tld_mode, test_d4_delisted_renders_unknown,
+  test_d7_uncovered_metachar_domain_renders_unknown,
+  test_d8_covered_metachar_domain_found_via_per_row_fallback. Verify the list from source
+  (grep for the re-check assertions) -- the live tree overrides this prompt on any conflict.
+- tests/php/AlertsDnsblLoggedFieldsRenderTest.php -- the off-appliance pins of the same
+  contract; the ui_e2e rows must assert the SAME logged-fields outcomes end-to-end.
+
+REALITY OVERRIDE (standing rule)
+Line numbers and code-state claims predate implementation; the prior RESULTS files and the
+live tree override this prompt on any conflict -- flag contradictions loudly in the handoff.
+
+ACTION PLAN (ordered)
+1. Reconcile the six tests: each now asserts its row renders the LOGGED feed/group (and
+   'Unknown' where the logged fields say so) with NO strike/drift markup; rename each so the
+   name states the new pinned outcome. Keep the S-series/IP-side tests and the upstream tests
+   byte-untouched (they assert no rewrite and are already correct).
+2. Sweep tests/smoke/ + tests/smoke/ui/ for any OTHER assertion/comment still pinning the
+   removed re-check or the retired interchange files (grep, enumerate in the handoff).
+
+CONSTRAINTS
+- Tests only; do NOT touch production files or the S-series/upstream/IP tests.
+- No ADR phase numbers in committed comments ('ADR-65:' style only).
+
+VERIFICATION (executed -- paste output; only gates runnable off-appliance)
+- pytest collection of the touched modules succeeds (python3 -m pytest --collect-only via a
+  wrapper avoiding the sandbox substring quirk).
+- sh scripts/agent/run-gates.sh --diff origin/devel.
+- DEFERRED (record verbatim, never claim run): the reconciled tests execute on the live-VM
+  CE+Plus fan-out in the ADR acceptance step.
+
+EXPECTED RESULT
+The six tests pin the logged-fields contract; nothing in tests/smoke/** still asserts the
+removed re-check.
+
+COMMIT (single)
+    tests: reconcile the alerts ui_e2e rows to the logged-fields model (ADR-65 P7)
+Push directly to adr/65-dnsbl-manifest-single-source; open a PR only if the push is rejected.
+
+HANDOFF -- write RESULTS/07_Results.txt with the fixed fields (CLAUDE.md "THE HANDOFF"):
+Verdict; What changed (+ commit); Gates (pasted tails); the collection proof; the sweep
+enumeration; Coverage-matrix (six tests ticked + sweep rows); Deviations (or "none");
+Carry-forward for the smoke-rows phase.

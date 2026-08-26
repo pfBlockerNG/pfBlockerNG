@@ -1,0 +1,231 @@
+ADR-08 — Phase 1 Results (Inventory + IDN corpus + FP/TP measurement, de-risk)
+==============================================================================
+Status: GO. No production code changed. Outputs: this handoff, the labelled
+corpus tests/fixtures/adr08_corpus/corpus.json, and the throwaway measurement
+script tests/fixtures/adr08_corpus/measure_fp_tp.py.
+
+NOTE on the ADR header: it says "Branch: adr/08 (off next)". STALE. `next` is
+retired; base is `devel`; branch is `adr/08-homoglyph-protection`. Line numbers
+in the ADR/phase prompts drifted — the real symbols (verified) are listed below.
+
+
+1. THE CONTRACT TO PRESERVE (existing IDN feature, end-to-end, VERIFIED)
+------------------------------------------------------------------------
+Verified locations (current, not the prompt's stale line numbers):
+
+  PYTHON  src/usr/local/pkg/pfblockerng/pfb_unbound.py
+    - default                : pfb["python_idn"] = False                 (~711)
+    - ini load               : config.getboolean("MAIN","python_idn")    (~862-863)
+    - blacklist-enable side-effect: if pfb["python_idn"]: pfb["python_blacklist"]=True (~931)
+    - detector               : is_idn_domain(q_name) ->                   (~1321-1322)
+                               q_name.startswith("xn--") or ".xn--" in q_name
+                               (PURE PREFIX MATCH; NEVER decodes punycode)
+    - matcher IDN branch     : in evaluate_domain, the FEED stratum       (~4342-4345)
+        if not is_found and cfg["python_idn"] and is_idn_domain(q_name):
+            is_found = True; feed = "IDN"; group = "DNSBL_IDN"
+      Ordering in the feed stratum (do NOT change for Off/All-IDN):
+        data(exact) -> zone(wildcard) -> TLD-Allow -> *** IDN *** -> block-regex.
+      IDN fires only when none of data/zone/TLD-Allow matched, BEFORE regex.
+      The whitelist (whiteDB) override applies AFTER is_found, unchanged.
+    - cfg passthrough        : "python_idn": pfb["python_idn"]            (~4786)
+
+  PHP  src/usr/local/pkg/pfblockerng/pfblockerng.inc
+    - read config            : $pfb['dnsbl_idn'] = $pfb['dnsblconfig']['pfb_idn'] (~1228)
+    - ini WRITE              : $python_idn='off'; if ($pfb['dnsbl_idn']=='on') $python_idn='on';
+                               emitted as `python_idn = {$python_idn}` in [MAIN] (~3556-3559, ~3628)
+    - alias/count (widget)   : if ($pfb['dnsbl_idn']=='on') { $idn_cnt=1;
+                               $pfb['alias_dnsbl_all'][]='DNSBL_IDN';
+                               dnsbl_alias_update('update','DNSBL_IDN','','',$idn_cnt); } (~9617-9621)
+                               DNSBL_IDN is an ALWAYS-REBUILT special (alongside
+                               DNSBL_TLD_Allow / DNSBL_Regex) — see the comments
+                               at ~7780 / ~9576 / ~11685.
+    - idn_to_ascii (input normalization, UNRELATED to detection — leave as-is):
+                               ~1514-1535 (feed/line parse), ~6678 (ASN), ~9416 (alerts build)
+
+  UI  src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php
+    - POST read              : pfb_filter($_POST['pfb_idn'], PFB_FILTER_ON_OFF,'dnsbl') ?: '' (~534)
+    - pconfig                : $pconfig['pfb_idn'] = $pfb['dconfig']['pfb_idn'] ?: '' (~59)
+    - control                : Form_Checkbox 'pfb_idn' "IDN Blocking" value 'on'  (~2422-2428)
+      help (verbatim): "Enable the IDN blocking feature (not Regex based). This
+      will block all IDN's and domains that include 'xn--'."
+
+  UI  src/usr/local/www/pfblockerng/pfblockerng_alerts.php
+    - display decode         : if (strpos($d,'xn--')!==FALSE)
+                               $d = "{$d} [".idn_to_utf8($d)."]"; at ~2253-2254,
+                               ~2266-2267, ~2275-2276 (p_domain / f2 / f7=CNAME).
+      => the alerts page ALREADY shows the decoded Unicode in brackets. The new
+         homoglyph alert reuses this; Phase 5/6 add the offending char/script.
+
+  OFF / ALL-IDN behaviour the mode selector MUST preserve BYTE-FOR-BYTE:
+    - OFF  (pfb_idn empty/'off'): python_idn=off; is_idn_domain never consulted;
+      no IDN action; every xn-- query resolves normally.
+    - ALL-IDN (pfb_idn=='on'):   python_idn=on; EVERY xn-- query (prefix match,
+      no decode) -> is_found, feed="IDN", group="DNSBL_IDN"; DNSBL_IDN alias
+      count=1; alerts show idn_to_utf8.
+
+  MINIMAL config change to make pfb_idn = Off | All-IDN | Confusable:
+    - pfb_idn becomes a 3-value SELECT (not a checkbox): '' (Off) | 'all' |
+      'confusable'. MIGRATION: legacy 'on' MUST map to All-IDN (today's exact
+      behaviour) — Phase 3/6 read 'on' as All-IDN. Empty/'off' -> Off.
+    - PHP ini write becomes mode-aware: keep emitting python_idn=on for All-IDN
+      (so the Python All-IDN path is unchanged); add a NEW key for Confusable
+      mode (proposed `python_idn_mode = off|all|confusable`, MAIN section,
+      pattern: the existing python_* keys) read in pfb_unbound.py alongside
+      python_idn. Naming follows the python_* convention (Code-standards: match
+      neighbours) — finalise the exact key in Phase 3.
+    - Sub-toggles (Phase 5/6): block-malicious (default ON) + suspicious->block
+      (default OFF/alert). New MAIN keys following python_* naming.
+
+
+2. THE CORPUS  (tests/fixtures/adr08_corpus/corpus.json)
+--------------------------------------------------------
+One JSON file, fully labelled, generated from UCD 15.1.0 (matches the stdlib
+unicodedata.unidata_version on the dev box). Each entry carries: A-label (xn--),
+decoded Unicode, label_class/mix, resolved_scripts (per-label, Script_Extensions
+preferred, Common/Inherited dropped), and expected_severity. Sections:
+
+  legit_single_label   (15): latin-accented (münchen=xn--mnchen-3ya,
+      café=xn--caf-dma), single Cyrillic (россия), single Greek (ελλάδα),
+      JAPANESE katakana (テスト), Japanese Han (日本語), Japanese Han+Katakana
+      (ドメイン名=xn--eckwd4c7c777u), KOREAN Hangul (한국어), Korean Hangul+Han
+      (도메인名), CHINESE Han (中文), Arabic (موقع), Thai (ไทย), Hebrew (עברית),
+      Devanagari (भारत), ASCII digit/hyphen (a1-b2).
+
+  legit_multi_label    (2): the PER-LABEL IDN-ccTLD cases — example.рф
+      (example.xn--p1ai) and site.中国 (site.xn--fiqs8s). Each stores the
+      WRONG whole-name union to document the trap: example.рф union =
+      {Cyrillic,Latin} => union-rule WOULD flag it malicious; per-label = legit.
+
+  homograph_single_label (5): аpple (xn--pple-43d, Latin+Cyrillic), paypaӏ
+      (xn--paypa-iof, Latin+Cyrillic via palochka U+04CF), ѕcope (xn--cope-f9d,
+      Latin+Cyrillic), gοοgle (xn--ggle-0nda, Latin+Greek), сαр (xn--mxa00ab,
+      PURE Cyrillic+Greek — NO Latin, proves the rule isn't Latin-anchored).
+
+  homograph_multi_label (1): раypal.example.com (xn--ypal-43d9g.example.com) —
+      malicious SUBDOMAIN label (registries can't validate subdomains; per-label
+      catches it).
+
+  suspicious_single_label (3): bանk (Latin+Armenian), bᎠnk (Latin+Cherokee),
+      bⲁnk (Latin+Coptic) — confusable-with-Latin but OUTSIDE the {Latin,
+      Cyrillic,Greek} trio => SUSPICIOUS (alert), not malicious.
+
+  limitation_whole_script (1): аррӏе (xn--80ak6aa92e) — all-Cyrillic 'apple'
+      look-alike, single-script => NOT caught (documented out-of-scope, ADR §7).
+
+  edge_decode (7): xn-- (->'' ok), xn--a (->'\x80' ok), xn--zz (UnicodeDecodeError
+      CAUGHT), xn--pple-43d (ok), xn--ls8h (->💩 ok), xn--0 (UnicodeDecodeError
+      CAUGHT), xn--google (->CJK junk ok). Proves malformed labels are handled.
+
+  Inert data only (no real brand traffic; the homographs are textbook PoCs).
+
+
+3. THE FINALISED RULE
+---------------------
+  CONFUSABLE SCRIPT SET = { Latin, Cyrillic, Greek }   (the mutually-confusable trio)
+
+  MALICIOUS (default block): a single label whose RESOLVED script set contains
+    >= 2 of {Latin, Cyrillic, Greek}. i.e. Latin+Cyrillic OR Latin+Greek OR
+    Cyrillic+Greek (NOT Latin-anchored — Cyrillic+Greek qualifies). Verified TP
+    on all 5 homograph labels incl. the pure Cyrillic+Greek xn--mxa00ab.
+
+  PER-LABEL GRANULARITY (load-bearing): analyze EACH dot-separated label with
+    its OWN resolved set; a name is malicious iff SOME label is. NEVER union
+    scripts across the dot. Proven necessary by example.рф: per-label legit,
+    whole-name union = {Cyrillic,Latin} = malicious (a false positive). Also
+    catches subdomain homographs (раypal.example.com).
+
+  LEGIT ALLOW-SET (UTS#39 Highly Restrictive): single script (incl. all-Latin/
+    -Cyrillic/-Greek) OR Latin + CJK companions {Han, Hiragana, Katakana,
+    Hangul, Bopomofo} (Jpan/Kore/Hanb). Common/Inherited transparent (digits/
+    hyphen contribute no script). These NEVER blocked in Confusable mode.
+
+  SUSPICIOUS (alert; block opt-in, default OFF): multi-script that fails Highly-
+    Restrictive but isn't the malicious pair — e.g. Latin+Armenian, Latin+
+    Cherokee, Latin+Coptic.
+
+  CHEROKEE / ARMENIAN / COPTIC DECISION: kept OUT of the malicious set ->
+    SUSPICIOUS tier. Rationale: they confuse with Latin but (a) are not part of
+    the high-confidence mutually-confusable trio the authorities single out, and
+    (b) have legitimate single-script use; folding them into "block by default"
+    risks FP without a measured TP need. Suspicious/alert is the safe home;
+    operators can escalate. (Revisit only if a future FP/TP corpus shows a real
+    attack class we miss.)
+
+
+4. SCRIPT vs SCRIPT_EXTENSIONS DECISION
+---------------------------------------
+  Use SCRIPT_EXTENSIONS when a codepoint has it, else the Script property; then
+  drop Common + Inherited as TRANSPARENT (they carry no script identity). This
+  is the UTS#39 resolved-script-set definition.
+
+  WHY it matters for our cases: a char shared by several scripts (e.g. many
+  punctuation/diacritic codepoints, the Arabic/Syriac shared marks, CJK shared
+  punctuation) is Common/Inherited under the plain Script property but carries a
+  Script_Extensions LIST. Taking the plain Script alone would either (a) mis-
+  attribute a shared mark to a single script, or (b) leave it Common when it
+  should narrow. For THIS corpus the two agree on every LETTER (each letter has
+  a single owning script), and the only Common chars are digits/hyphen (dropped
+  either way) — so the corpus numbers are identical under both. But the shipped
+  Phase-4 analyzer MUST implement Script_Extensions: the intersection-with-the-
+  running-set semantics (a char "belongs" if ANY of its extension scripts keeps
+  the set restrictive) is what prevents a future FP on a legit name using a
+  shared mark. Ship BOTH tables; resolve via Script_Extensions-first.
+
+
+5. PUNYCODE DECODE CONFIRMATION + EDGE HANDLING
+-----------------------------------------------
+  Decoder: label[4:].encode("ascii").decode("punycode")  — the RAW 'punycode'
+  codec (NOT 'idna'; 'idna' adds IDNA2003 validation that THROWS on analyzable
+  attack labels). Confirmed on EVERY corpus label.
+
+  Edge behaviour (measured, edge_decode section):
+    - xn--          -> '' (empty, ok)
+    - xn--a         -> '\x80' (control char, ok — flagged downstream as Unknown)
+    - xn--zz        -> raises UnicodeDecodeError ("incomplete punycode string")
+    - xn--0         -> raises UnicodeDecodeError
+    - xn--ls8h      -> '💩' (ok)
+    - xn--google    -> '䕮䕵䕶䕱' (decodes to junk CJK, ok)
+    - a non-ASCII byte in the A-label (cannot occur on the DNS wire) raises
+      UnicodeEncodeError at .encode("ascii").
+  CONTRACT for the shipped analyzer: wrap decode in
+    try: ... except (UnicodeDecodeError, UnicodeError, ValueError): flag+skip.
+  These are the exception types observed; the resolver MUST NEVER propagate a
+  decode error. The measurement gate fails if any label raises an UNCAUGHT
+  exception — it does not.
+
+
+6. FP / TP MEASUREMENT  (run: python tests/fixtures/adr08_corpus/measure_fp_tp.py)
+---------------------------------------------------------------------------------
+  FP (legit/suspicious wrongly -> malicious): 0 / 20 legit-tier labels
+  TP (homographs caught):                     6 / 6
+  CJK FP (MUST be 0):                         0
+  IDN-ccTLD per-label FP (MUST be 0):         0
+  Punycode decode safe (no uncaught raise):   True
+  Analyzer cost per xn-- label:               ~0.7 us (negligible; runs only on
+                                              xn-- queries, a small traffic frac)
+
+  KILL-THRESHOLD: GO requires malicious-tier FP == 0 on the legit set (CJK +
+  IDN-ccTLD MUST be 0) AND TP == all homographs AND decode-safe. A miss => narrow
+  the malicious script-set / move borderline scripts to suspicious / or reject
+  (ADR §7). Threshold MET with margin on a representative corpus.
+
+
+7. GATE: ** GO **
+-----------------
+  Malicious-tier FP = 0 on the legit set (Japanese/Korean/Chinese = 0; the two
+  IDN-ccTLD per-label cases = 0), TP = 6/6 including the pure Cyrillic+Greek and
+  the subdomain homograph, decode is safe and cheap (~0.7us/label). The premise
+  (mixed confusable scripts => malicious) holds with ~zero FP under the per-label
+  Highly-Restrictive rule. No pivot needed.
+
+  GO-AHEAD FOR PHASE 2: author the TR39 decision spec + golden oracle
+  (label -> resolved-script-set -> restriction-level -> severity -> action) as
+  pure pytest fixtures + a pure oracle. Carry forward, exactly as finalised here:
+    - confusable set {Latin,Cyrillic,Greek}; malicious = >=2 in ONE label;
+    - PER-LABEL, never union across the dot (the example.рф / site.中国 cases);
+    - legit allow = Highly Restrictive (single OR Latin+{Jpan/Kore/Hanb});
+    - Cherokee/Armenian/Coptic => SUSPICIOUS (alert), not malicious;
+    - Script_Extensions-first resolution (ship both tables);
+    - raw 'punycode' codec; catch (UnicodeDecodeError, UnicodeError, ValueError);
+    - the whole-script-Cyrillic case is the documented NOT-caught limitation.
+  Reuse corpus.json directly as Phase-2 fixtures where possible.

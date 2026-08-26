@@ -1,0 +1,390 @@
+ADR-62 Phase 4 -- Broaden the PHP capture + universal skip -- HANDOFF
+====================================================================
+
+VERDICT: DONE
+
+WORKTREE BASE CHECK
+--------------------
+git fetch origin; git rev-list --count HEAD..origin/devel = 1 at session start
+(branch was 1 commit behind origin/devel: 2cbfff16 "pfblockerng: correct pfb_idn
+registry comment -- canonical token is 'on', not 'all'", touching ONLY
+pfblockerng_extra.inc's PfbConfig registry comment -- confirmed via `git show
+--stat` before rebasing, no overlap with the DNSBL parse loop / ADR-62 predicate
+cluster). Rebased cleanly onto origin/devel (no conflicts), force-with-lease
+pushed. rev-list count = 0 after. All work in this phase is against the
+freshly-rebased base.
+
+WHAT CHANGED
+--------------
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc -- the 3 wiring sites named by
+  the brief, each a one-line condition swap (comment updated alongside):
+  1. Download-loop verbatim-capture guard (inc:16478, was @16480-16481):
+     `!$easylist && (str_starts_with($line,'||') || str_starts_with($line,'@@||'))`
+     -> `!$easylist && pfb_dnsbl_is_abp_rule_line($line)`. The `!$easylist &&`
+     prefix is untouched -- ABP-classified feeds still take the $easylist
+     branch below, unaffected.
+  2. Manifest writer (inc:7180, was @7179): same swap for `$rawline`.
+  3. Universal control-line skip (inc:16564, was the '!'/'//'-only check at
+     @16562): `str_starts_with($line,'!') || str_starts_with($line,'//')` ->
+     `pfb_dnsbl_is_skippable_control_line($line)`, positioned exactly where
+     Phase 2's own "NOT WIRED THIS PHASE" investigation identified as the
+     correct site (this exact line was already grepped and reasoned about in
+     Phase 2's handoff -- reused, not re-derived).
+  - Two function-header comments (pfb_dnsbl_is_skippable_control_line @6684,
+    pfb_dnsbl_is_abp_rule_line @6700) reconciled: dropped the stale
+    "not-yet-wired"/"not-yet-broadened" framing now that both are wired.
+- tests/fixtures/dnsbl_corpus/txt/mixed_plain.txt + txt/permit_feed.txt --
+  hand-traced (per Phase 1's established methodology, now against the NEW loop
+  code I just wrote) documented per-feed ".txt" output: the D2/D4 trigger
+  line's REPRESENTATION flips from a '#'-truncated 6-col CSV row to the
+  verbatim captured line; mixed_plain gains 3 new trigger lines ('/re/',
+  '/re/$important', bare '@@/re/').
+- tests/fixtures/dnsbl_corpus/raw/mixed_plain.raw + raw/permit_feed.raw --
+  REGENERATED via the real (now-broadened) pfb_unbound_python_sources(), never
+  hand-edited (throwaway PHP script mirroring Adr62DnsblCorpusManifestTest's
+  setUp(), discarded after use -- see CORPUS EVIDENCE). Every OTHER corpus
+  feed's raw confirmed byte-UNCHANGED by the same run.
+- tests/fixtures/dnsbl_corpus/feeds.json -- updated the 2 changed rows' "row"
+  description text only (documentation, no shape change).
+- tests/fixtures/dnsbl_corpus/tld/pfb_dnsbl_plain.txt -- added ONE new line
+  ('sneaky.zzsuffix.example##.ad', a D2-shape verbatim line) to prove the
+  TLD-pass interaction is clean (see TLD-PASS INTERACTION FINDING).
+- tests/fixtures/dnsbl_corpus/README.md -- doc-only: corpus description no
+  longer claims every row pins "today's" behaviour (D2/D4 now hold their NEW
+  outcome).
+- tests/php/Adr62DnsblCorpusManifestTest.php -- doc-only: class docstring
+  reconciled (D2/D4 no longer described as "TODAY's behaviour").
+- tests/php/Adr62TldAnalysisCorpusTest.php -- +1 new test
+  (testBroadenedCaptureVerbatimLineInPlainFeedIsSkippedNotMangled).
+- tests/test_adr62_byte_identity_corpus.py -- the 2 D2/D4 delta tests renamed
+  and flipped to their NEW-outcome assertion
+  (test_mixed_plain_feed_hash_truncation_false_positive_fixed_delta_d2,
+  test_permit_feed_hash_truncation_accidental_allow_fixed_delta_d4); +3 new
+  tests for the new mixed_plain trigger lines (regex block, regex+$important,
+  bare-@@ regex allow); module docstring reconciled (D1 stays TODAY, D2/D4 now
+  NEW).
+- tests/test_adr62_parity_oracle.py -- Section 1's `_GOLDEN_PER_FEED` entries
+  for mixed_plain/permit_feed updated to the NEW corpus-real outcome (the
+  golden set this section asserts against IS the corpus, which just changed);
+  module + 2 test docstrings reconciled (no longer "no delta flips here" /
+  "contrast with TODAY" -- now "corroborated corpus-real by").
+
+Commit hash: f6e3487bbbf222a6345cecd361463d0d9b813222 (pre-push amend to
+backfill this field into the same single commit -- same accepted pattern as
+Phases 1-3's handoffs).
+
+GATES (exact commands + pasted tails)
+----------------------------------------
+$ php -l src/usr/local/pkg/pfblockerng/pfblockerng.inc
+No syntax errors detected in src/usr/local/pkg/pfblockerng/pfblockerng.inc
+(same pre-existing "Optional parameter declared before required" deprecation
+notices prior phases already flagged as unrelated -- 4 lines, ZERO new ones)
+
+$ php -l tests/php/Adr62DnsblCorpusManifestTest.php tests/php/Adr62TldAnalysisCorpusTest.php
+No syntax errors detected in tests/php/Adr62DnsblCorpusManifestTest.php
+No syntax errors detected in tests/php/Adr62TldAnalysisCorpusTest.php
+
+$ vendor/bin/phpunit
+Tests: 2650, Assertions: 19383, Warnings: 1, Skipped: 4.
+OK, but there were issues!
+(2650 = Phase-3's 2649 baseline + 1 new TLD-interaction test; the 1 warning is
+the SAME pre-existing $tlds-uninitialised notice prior phases flagged; 0
+failures/errors)
+
+$ vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+[OK] No errors
+
+$ vendor/bin/phpcs -d memory_limit=1G --standard=phpcs.xml.dist src/
+(no output -- 0 violations)
+
+$ python3 -m pytest -q
+2591 passed, 4 skipped in 50.62s
+(2591 = Phase-3's 2588 baseline + 3 new mixed_plain trigger-shape tests; 2 D2/D4
+tests were RENAMED not added net-new; 0 failures)
+
+$ ruff check .
+All checks passed!
+
+$ ruff format --check .
+210 files already formatted
+
+$ python3 -m mypy tests/
+Success: no issues found in 89 source files
+
+$ git add -A && python3 scripts/check_comment_narration.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_retired_tokens.py --staged ; echo exit:$?
+exit:0
+
+$ python3 scripts/check_version_literals.py --staged ; echo exit:$?
+exit:0
+
+$ npx markdownlint-cli2 tests/fixtures/dnsbl_corpus/README.md
+Summary: 0 error(s)
+
+CORPUS EVIDENCE -- per-delta red->green (EXECUTED, pasted)
+-----------------------------------------------------------
+(a) Manifest-writer surface (b), D2 -- RED before regenerating raw/mixed_plain.raw
+    (ran testEveryCorpusFeedRawMatchesGolden AFTER updating txt/mixed_plain.txt
+    but BEFORE copying the produced .raw back over the golden fixture):
+    $ vendor/bin/phpunit --filter 'Adr62DnsblCorpusManifestTest::testEveryCorpusFeedRawMatchesGolden'
+    1) Adr62DnsblCorpusManifestTest::testEveryCorpusFeedRawMatchesGolden
+    manifest-writer .raw output drifted for [ mixed_plain ] (...)
+    Failed asserting that two strings are identical.
+    --- Expected
+    +++ Actual
+    @@ @@
+     'mixedhost.example
+     ||anchor.mixed.example^
+    -falsepositive.example
+    +falsepositive.example##.ad
+    +/^regexplain\.mixed\.example$/
+    +/^importantregex\.mixed\.example$/$important
+    +@@/^allowregex\.mixed\.example$/
+     '
+    Tests: 1, Assertions: 22, Failures: 1.
+    -> regenerated raw/mixed_plain.raw + raw/permit_feed.raw via a throwaway
+    PHP script mirroring the test's own setUp() (bootstrap.php + the real
+    pfb_unbound_python_sources() over ALL 14 corpus feeds -- ONLY mixed_plain
+    and permit_feed changed; the other 12 fed back UNCHANGED, confirmed by a
+    byte comparison inside the script before overwriting):
+    UNCHANGED  plain_hosts / csv_pt / csv_bbc / csv_h3x / csv_otx / csv_pon /
+               csv_et / custom_list / abp_feed / oversized_feed /
+               wirecap_feed / reused_manifest_abp
+    CHANGED    mixed_plain / permit_feed
+    $ vendor/bin/phpunit --filter 'Adr62DnsblCorpusManifestTest'
+    OK (4 tests, 96 assertions)
+
+(b) Python build() surface (a), D2 -- RED before flipping the pytest assertion
+    (ran against the REGENERATED raw/ bytes, BEFORE editing the test file):
+    $ python3 -m pytest tests/test_adr62_byte_identity_corpus.py -v
+    FAILED test_mixed_plain_feed_hash_truncation_false_positive_delta_d2
+    AssertionError: delta D2: TODAY's '#'-truncation false-positive block must still occur
+    assert False
+     +  where False = _blocked(BuildResult(... no 'falsepositive.example' key
+     anywhere in data_db/zone_db ...), 'falsepositive.example')
+    FAILED test_permit_feed_hash_truncation_accidental_allow_delta_d4
+    AssertionError: delta D4: TODAY's permit-mode accidental allow from '##'-truncation must still occur
+    assert False
+     +  where False = _allowed(..., 'accidentalallow.example')
+    2 failed, 17 passed in 0.05s
+    -> flipped both assertions to `not _blocked(...)`/`not _allowed(...)`
+    (renamed *_fixed_delta_d2/_fixed_delta_d4), added 3 new tests for the
+    regex/important/allow-regex trigger lines:
+    $ python3 -m pytest tests/test_adr62_byte_identity_corpus.py -v
+    22 passed
+
+(c) Parity-oracle Section 1 (corpus-set aggregate/per-format), D2/D4 -- RED
+    before updating _GOLDEN_PER_FEED (ran unmodified against the regenerated
+    corpus):
+    $ python3 -m pytest tests/test_adr62_parity_oracle.py -v
+    FAILED test_corpus_domain_set_is_byte_identical_aggregate
+      Extra items in the left (actual) set: 'importantregex.mixed.example',
+      'regexplain.mixed.example'
+      Extra items in the right (golden) set: 'falsepositive.example'
+    FAILED test_corpus_domain_set_is_byte_identical_per_format
+      mixed_plain: expected blocked domain(s) missing (golden still expected
+      'falsepositive.example')
+    2 failed, 21 passed in 0.06s
+    -> updated _GOLDEN_PER_FEED['mixed_plain']/['permit_feed'] to the NEW
+    outcome:
+    $ python3 -m pytest tests/test_adr62_parity_oracle.py -v
+    23 passed
+
+D1-DID-NOT-MOVE PROOF (executed)
+------------------------------------
+1. The regen script's own byte comparison (CORPUS EVIDENCE (a) above) reports
+   `UNCHANGED abp_feed` -- D1's corpus row (bare-domain.abp.example, the
+   $easylist-branch feed) produced byte-IDENTICAL .raw before and after this
+   phase's PHP change, because `!$easylist && pfb_dnsbl_is_abp_rule_line(...)`
+   still routes ABP-classified feeds through the untouched $easylist branch.
+2. The D1 test itself, UNTOUCHED by this phase's diff, still passes:
+   $ python3 -m pytest tests/test_adr62_byte_identity_corpus.py::test_abp_feed_bare_domain_is_wildcard_zone_delta_d1 -v
+   PASSED
+3. Every other corpus row (12 of 14 feeds) confirmed byte-UNCHANGED by the
+   same regen run (CORPUS EVIDENCE (a)) -- the delta budget is EXACTLY D2/D4
+   (D3/D5 have no dedicated corpus row per Phase 1's design: D3 is
+   diagnostics-only/log-noise, no domain-set row; D5 is a UI line-count
+   statistic, DEFERRED below).
+
+D5 -- EXPLICITLY DEFERRED
+----------------------------
+D5 (.txt line counts / "No Domains Found" emptiness) has no off-appliance
+driver for the download loop (same constraint Phase 1 established for every
+loop-only row) -- not faked. Remains a Phase 7 live-VM smoke row per the ADR's
+own SS7 acceptance criteria; this phase does not claim to prove it.
+
+FINAL SKIP/CAPTURE/CLASSIFIER ORDERING (executed trace, both required lines)
+-----------------------------------------------------------------------------
+Order in the download loop (line numbers post-edit): (1) BOM strip -> (2) ABP
+header sniff (unchanged, $validate_header) -> (3) CRLF/invalid-char trim ->
+(4) capture guard `!$easylist && pfb_dnsbl_is_abp_rule_line($line)` @16478 ->
+(5) `if ($easylist) {...}` branch (untouched) -> (6) plain `else` branch:
+tab/%20 munge -> `#`-classifier (side effects, @16538) -> universal skip
+`pfb_dnsbl_is_skippable_control_line($line)` @16564 -> CSV/host pipeline ->
+unbracket+IP-collect (@~16787/16794, unmodified this phase).
+
+Executed probe (php -r against the live bootstrap, both traced lines +
+adjacent controls):
+$ php -r '... pfb_dnsbl_is_abp_rule_line($l), pfb_dnsbl_is_skippable_control_line($l), pfb_dnsbl_unbracket_ip6($l) for each $l ...'
+line='##.ad'                is_abp_rule_line=TRUE  is_skippable_control_line=FALSE unbracket=##.ad
+line='[2604:2dc0::]'        is_abp_rule_line=FALSE is_skippable_control_line=FALSE unbracket=2604:2dc0::
+line='[Adblock Plus 2.0]'   is_abp_rule_line=FALSE is_skippable_control_line=TRUE  unbracket=[Adblock Plus 2.0]
+line='[not-an-ip]'          is_abp_rule_line=FALSE is_skippable_control_line=TRUE  unbracket=[not-an-ip]
+line='example.com##.ad'     is_abp_rule_line=TRUE  is_skippable_control_line=FALSE unbracket=example.com##.ad
+
+'##.ad' trace: is_abp_rule_line('##.ad')=TRUE, and the capture guard @16478 is
+POSITIONED BEFORE the plain-path's '#'-classifier (@16538) and the universal
+skip (@16564) in the loop's linear flow -- so '##.ad' (and any '#'-prefixed
+element-hiding line) is CAPTURED VERBATIM and `continue`s at @16478/16481,
+NEVER reaching the '#'-classifier at all. Confirmed CAPTURED, not skipped --
+Python's parse_abp() then skips the element-hiding marker itself (no domain).
+
+'[2604:2dc0::]' trace: is_abp_rule_line=FALSE (no '||'/'@@' prefix, no
+element-hiding substring, no '/' prefix) -> falls through the capture guard
+into the plain `else` branch; is_skippable_control_line=FALSE (its own
+internal `pfb_dnsbl_unbracket_ip6($line) === $line` check is FALSE because
+unbracketing DOES change the value: '[2604:2dc0::]' -> '2604:2dc0::') -> NOT
+skipped by the universal skip either -> proceeds through the CSV/host pipeline
+to the loop's OWN unbracket call (@~16787, unmodified) which reassigns
+$line = '2604:2dc0::', then the is_ipaddrv6() IP-collection check (@~16794,
+unmodified) catches it. Confirmed: reaches unbracket+IP-collect, never
+skipped as a comment (Semantics #3).
+
+SEMANTICS #2/#3 TEST RESULTS
+--------------------------------
+Both predicates are Phase-2 PURE FUNCTIONS, UNCHANGED this phase (only their
+CALL SITES moved) -- their existing fail-on-mutation oracles stay authoritative
+and were re-run to confirm zero drift:
+$ vendor/bin/phpunit --filter 'Adr62DnsblIsSkippableControlLineTest|Adr62DnsblIsAbpRuleLineTest|Adr62DnsblCollectFeedIpTest'
+OK (50 tests, 71 assertions)
+(50 = Phase-2's own baseline, byte-identical -- testBracketedIpv6LiteralIsNeverSkipped
+and testBreakingTheIpv6CarveOutTurnsBracketedLiteralSkippable, the two
+Semantics #3 fail-on-mutation tests, are among these 50 and pass unchanged.)
+ABP-anchored IP still collected: unaffected by this phase -- the $easylist
+branch's `pfb_dnsbl_abp_extract_ip()`/`pfb_dnsbl_collect_feed_ip()` call
+(inc:16498-16503) is inside `if ($easylist)`, never reached by the plain-path
+edits; Phase 2's Adr62DnsblCollectFeedIpTest (8 tests, in the 50 above) pins
+it directly. The ADR-21 pre-existing case -- a `||1.2.3.4^` line in a PLAIN
+feed -- is unaffected too: it already matched the OLD narrow predicate
+(`starts('||')`), so it is STILL captured verbatim by the broadened guard
+(unchanged routing) and reaches Python's own IP-anchor no-leak skip, exactly
+as before Phase 4 (confirmed by the corpus regen showing abp_feed/plain_hosts
+etc. byte-unchanged, and by Phase 3's own hostile-input table entry for
+'||1.2.3.4^').
+
+TLD-PASS INTERACTION FINDING -- CLEAN (not BLOCKED)
+--------------------------------------------------------
+Read tld_analysis() (inc:7719-7987) in full. The PR #1066 guard at inc:7887,
+`if (strncmp($line, ',', 1) !== 0) { continue; }`, is UNCONDITIONAL -- it
+skips ANY raw line that does not start with a comma, INDEPENDENT of the
+`$abp_feeds` marker-glob mechanism (which only gates a SECOND, narrower case
+further down, @7890-7896). Every shape `pfb_dnsbl_is_abp_rule_line()` captures
+('||', '@@', '/re/', '##'-family) by construction never starts with ',', so
+this guard ALREADY protects a broadened-capture verbatim line landing in a
+PLAIN feed's raw -- no CSV-mangling, marker-mechanism-independent. This was
+NOT touched this phase (out of the brief's explicit "do NOT touch the TLD
+pass" constraint) and did not need to be.
+Proven, not just traced: added ONE line to
+tests/fixtures/dnsbl_corpus/tld/pfb_dnsbl_plain.txt
+('sneaky.zzsuffix.example##.ad', a D2-shape verbatim line simulating what
+Phase 4's broadened writer now produces for a plain feed) and a new dedicated
+test:
+$ vendor/bin/phpunit --filter 'Adr62TldAnalysisCorpusTest'
+OK (3 tests, 7 assertions [+1 pre-existing warning])
+-- testDataAndZoneClassificationMatchesGolden stayed GREEN UNCHANGED (the new
+line produces ZERO output, so golden_pfb_py_data.txt/golden_pfb_py_zone.txt
+needed no regeneration -- confirmed by the test itself, which would have
+failed loudly with a diff had the line leaked through) and the new
+testBroadenedCaptureVerbatimLineInPlainFeedIsSkippedNotMangled asserts
+'sneaky' never appears in either output file.
+
+UnboundPythonSourcesTest.php CHECK (brief's explicit ask)
+--------------------------------------------------------------
+Read its fixtures (grep for '||'/'@@'/'##'/regex shapes): it only uses
+'||ads.example^' / '@@||good.example^' -- both ALREADY captured by the OLD
+narrow predicate (`starts('||')`/`starts('@@||')`), so the broadened predicate
+routes them IDENTICALLY. `git diff --stat HEAD -- tests/php/UnboundPythonSourcesTest.php`
+is EMPTY (untouched) and its 20 tests/55 assertions pass unchanged (see full
+phpunit run above). No flip needed -- confirmed empirically, not assumed.
+
+DEVIATIONS
+------------
+1. Universal-skip PLACEMENT judgment call: placed
+   `pfb_dnsbl_is_skippable_control_line()` at the EXACT position Phase 2's own
+   "NOT WIRED THIS PHASE" note flagged as the correct site (the existing
+   '!'/'//' check, inc:~16562 pre-edit) rather than at the very top of the
+   plain `else` branch (mirroring the $easylist branch's control-skip
+   position literally). This preserves the '#'-classifier's side effects
+   running FIRST (brief's explicit requirement) and matches Phase 2's own
+   prior investigation almost verbatim -- not a new judgment, reusing
+   Phase 2's.
+2. A blank raw line reaching this position now short-circuits BEFORE the
+   CSV-type-sniff logic (elseif (!$run_once) {...}) instead of after it
+   (previously dropped 2 lines later at the existing `if (empty($line))
+   continue;`, inc:16593 pre-edit, UNCHANGED this phase and now effectively
+   dead for the raw-line case, still live for a CSV-column-extraction-produced
+   blank). Traced (not executed against a live loop, which has no
+   off-appliance driver): this changes ONLY whether a blank raw line
+   consumes the ONE-SHOT CSV-sniff opportunity and whether it triggers a
+   `pfb_parsed_fail()` diagnostic-log write in an ALREADY-CSV-typed feed --
+   diagnostics-only, no domain/IP-set effect, same class of change as D3
+   ("the parse-error log loses noise, not signal"). Phase 2's handoff
+   ("NOT WIRED THIS PHASE" section) already flagged this exact scenario as
+   "a no-op either way" before I widened the check; I re-derived the same
+   conclusion independently via trace and flag it here per the brief's
+   "note it" clause, since I could not execute the download loop
+   off-appliance to prove it empirically (Phase 1's established, unremoved
+   constraint).
+3. Added ONE new corpus fixture line (tld/pfb_dnsbl_plain.txt) beyond the
+   brief's explicit "mixed-plain and permit corpus feeds" instruction, to make
+   the TLD-pass interaction finding proven rather than merely traced -- judged
+   in-scope (same corpus asset, same "regenerate via the real function"
+   discipline, directly serves the brief's own required-reading interaction
+   warning).
+4. The `'[…]'-non-IPv6`/bracketed-IPv6 trigger shapes named in action item 3
+   were NOT added as `mixed_plain`/`permit_feed` .txt lines: traced (see
+   D1-DID-NOT-MOVE / SEMANTICS sections) that both shapes are consumed by the
+   download loop BEFORE any line ever reaches `.txt` (a valid bracketed-IPv6
+   is unbracketed+collected as an IP with a `continue`, inc:~16800; a genuine
+   non-IPv6 `[…]` is now caught by the universal skip with its own
+   `continue`) -- a `.txt` fixture literally cannot represent either input's
+   "output" because there IS no output line for them. Covered instead by:
+   Phase 2's unchanged pure-function oracle (Semantics #2/#3, re-run above)
+   + this phase's own executed `php -r` ordering trace. Matches Phase 1's own
+   precedent (coverage-matrix row 13: "genuinely no off-appliance surface").
+
+CARRY-FORWARD for Phase 5
+------------------------------
+1. D1 is now the ONLY remaining unflipped delta -- Phase 5 deletes
+   `$easylist`/`pfb_dnsbl_is_abp_header()`/`$validate_header`, which is what
+   finally lets a formerly-ABP-classified feed's bare domain line take the
+   plain `classify()` path instead of `parse_abp()`'s wildcard-ZONE route.
+   The corpus's `abp_feed` row (bare-domain.abp.example) is Phase 5's target;
+   every other row in this corpus must stay exactly as this phase leaves it.
+2. The manifest writer's ABP-format branch (`if ($format === 'abp') {...}`,
+   inc:7164-7173) and the loop's `if ($easylist) {...}` branch (inc:16484-
+   16523) are UNTOUCHED by this phase and are exactly what Phase 5 collapses
+   into the single verbatim path per ADR SS6 Phase 5's own text ("collapse
+   16317/16324 into one verbatim path").
+3. The `.abp` marker (writer @16897ish, reuse-path read @16182ish, and the
+   TLD-pass glob @7871-7874) is UNTOUCHED this phase -- confirmed still
+   present and load-bearing for `$abp_feeds` (though now provably REDUNDANT
+   with the unconditional comma-prefix guard for the CSV-mangling concern;
+   Phase 5's own text already plans its unconditional-empty-feed-column
+   rewrite, so this redundancy is expected and resolves itself there).
+4. Deviation #2 above (blank-line CSV-sniff timing) is a pre-existing,
+   diagnostics-only edge case with no corpus/off-appliance proof possible at
+   this layer -- if Phase 7's live-VM smoke work ever wants to pin CSV-header
+   sniffing behaviour with a leading blank line, this is the relevant code
+   path (inc:~16564 skip, inc:~16575-16589 CSV-sniff).
+5. tests/fixtures/dnsbl_corpus/ now has 2 feeds (mixed_plain, permit_feed)
+   whose `.txt` carries the Phase-4 NEW (broadened-capture) shapes and 12
+   feeds untouched -- Phase 5, when it flips D1, extends `abp_feed`'s `.txt`/
+   golden per the SAME regenerate-never-hand-edit discipline (this phase's
+   throwaway regen script pattern -- bootstrap.php + a temp corpus copy + the
+   real function + a byte-diff gate before overwriting -- is reusable).
+
+RETIRED-TOKEN / COMMENT-NARRATION / VERSION-LITERAL checks: all 3 run clean
+against --staged (see GATES above).

@@ -1,0 +1,97 @@
+================================================================================
+PHASE 2 PROMPT — Logging subsystem: QueueListener + WatchedFileHandler
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_03_Persistent_IO/ADR.md   (read §2 "Logging" row + the contract)
+================================================================================
+
+ROLE
+You are on `adr/03` performing Phase 2 of ADR-03. Replace the per-line
+open/write/close in pfb_unbound.py's `log_entry` with a persistent, well-tested
+stdlib logging pipeline (one thread, persistent file handles), keeping every log
+LINE byte-identical to the same file. BEHAVIOUR-PRESERVING for log output. Inline
+on `adr/03`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+`log_entry()` does open(append)+write+close per line for dnsbl.log / dns_reply.log /
+unified.log. stdlib `logging` already powers py_error.log here, and gives us exactly
+the pieces we want: QueueHandler (off the DNS path) → QueueListener (its own thread)
+→ WatchedFileHandler (holds the fd open, BUT re-stats and reopens on external inode
+change). That last property is REQUIRED, not cosmetic: the existing line-cap trim
+(`pfb_log_mgmt` → `tail -n N > tmp; mv`) and the viewer "clear" (`unlink`+`touch`)
+both change the inode, and WatchedFileHandler tolerates both without us modifying
+them.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_03_Persistent_IO/RESULTS/01_Results.txt — confirms the DB worker is in
+  place and that logging is still on the OLD pfb_async worker. If it is missing,
+  Phase 1 is not complete; STOP and report.
+- .ADRs/ADR_03_Persistent_IO/ADR.md
+- src/usr/local/pkg/pfblockerng/pfb_unbound.py:
+    * log_entry()                    ~L1029 (open(a)+write+close per line).
+    * its call sites: pfb_async(log_entry, csv_line, "/var/log/pfblockerng/<f>.log")
+      ~L1014/1015 (dnsbl + unified) and ~L1213/1214 (dns_reply + unified).
+    * the EXISTING stdlib-logging setup for py_error.log: class log_stderr ~L235,
+      logging.basicConfig(...) ~L250, sys.stderr reassignment ~L256 — match this style.
+    * pfb_async() / pfb_async_worker() ~L158–191 and deinit() ~L1347 — after this
+      phase, logging no longer uses pfb_async; decide whether the old combined worker
+      still has any user (DB moved off it in P1) and remove it if now unused.
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc: pfb_log_mgmt() ~L1227 (trim via mv).
+- src/usr/local/www/pfblockerng/pfblockerng_log.php: the "clear" action ~L308
+  (ftruncate for py_error; unlink+touch for the three app logs).
+- tests/conftest.py, tests/test_pfb_unbound.py.
+- CLAUDE.md.
+
+ACTION PLAN (ordered — golden tests FIRST)
+1. GOLDEN ORACLE: add a test that drives the CURRENT log_entry over a fixed sequence
+   of lines to each of the three files (in a tmp dir) and captures exact file bytes.
+   This is the equivalence oracle.
+2. LOGGING PIPELINE: build one stdlib Logger per target file
+   (dnsbl.log / dns_reply.log / unified.log), each with a WatchedFileHandler and a
+   RAW formatter ("%(message)s") so the emitted line is EXACTLY `line` + newline —
+   no level, no timestamp, no extra encoding. Feed them via a QueueHandler whose
+   QueueListener runs on a dedicated log-worker thread. Use a BOUNDED queue with
+   drop-on-full to preserve today's never-block-DNS-path floor (subclass/configure so
+   a full queue drops silently rather than emitting handler errors).
+3. SWAP: replace the `pfb_async(log_entry, line, path)` call sites with a thin
+   `pfb_log(path, line)` that routes to the right logger. Remove `log_entry` (or keep
+   only as the QueueListener's sink if convenient). Ensure mapping path→logger is
+   exact for all four call sites (dnsbl, unified×2, dns_reply).
+4. LIFECYCLE: start the QueueListener in init (idempotent, like the worker guard);
+   stop it in deinit (listener.stop() flushes queued records) BEFORE exit. If the old
+   pfb_async worker now has no users, retire it; otherwise keep it.
+5. COEXISTENCE (verify, do NOT modify): with WatchedFileHandler, the line-cap trim
+   (`mv`) and the viewer clear (`unlink`+`touch`) cause an inode change that the
+   handler detects on its next emit and reopens — no writes land in the orphaned
+   inode. Add a test that renames/unlinks the target mid-sequence and asserts
+   subsequent lines land in the new file. (Optional cleanliness, only if trivially
+   safe: align the dnsbl/dns_reply/unified branch of the viewer clear to
+   ftruncate-in-place like py_error — not required.)
+
+CONSTRAINTS
+- Python: stdlib only; 4-space; type hints; no bare except. Lines must be
+  byte-identical (raw formatter, single "\n", same path). Never block the DNS path
+  (bounded queue, drop-on-full). Do NOT touch the DB subsystem (Phase 1) or the
+  line-cap config/trim (`pfb_log_mgmt`, `log_max_*`).
+
+VERIFICATION
+- `python -m pytest` → green incl. the new golden byte-equivalence test and the
+  reopen-after-rename/unlink test.
+- `ruff check .` / `ruff format .` clean.
+- Diff-read: all four log call sites route to the correct file; no extra formatting.
+
+EXPECTED RESULT
+- dnsbl/dns_reply/unified logs are written through a single persistent-fd stdlib
+  logging pipeline on its own thread; lines byte-identical to before; the existing
+  line-cap and clear keep working via WatchedFileHandler's reopen.
+
+COMMIT (single)
+    pfb_unbound: route app logs through stdlib QueueListener + WatchedFileHandler (ADR-03 P2)
+Push directly to `adr/03`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_03_Persistent_IO/RESULTS/02_Results.txt` (plain .txt)
+Handoff for the NEXT phase (03_Validation.txt). Include: the logger-per-file mapping
++ queue size/drop policy; whether the old pfb_async worker was retired; the
+reopen-on-inode-change behaviour you confirmed; golden/pytest/ruff results; any
+deviation; and the list of integration scenarios P3 still needs (concurrency, fault
+injection, perf, shutdown drain, smoke).

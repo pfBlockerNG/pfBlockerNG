@@ -1,0 +1,28 @@
+ADR-26 — Phase 4: Definition of Done
+
+GATES (all must hold before the ADR is Accepted)
+1. Every HIGH + MEDIUM collation sink from ADR §1.3 carries an inline LC_ALL=C prefix; L479
+   unchanged; the collation-insensitive numeric/display sinks deliberately left alone.
+2. No `export LC_ALL` / `export LANG` anywhere in pfblockerng.sh (grep to confirm).
+3. The locale policy is recorded in CLAUDE.md (Shell standards) + docs/misc/architecture-notes.md
+   (the three rules + the C vs C.UTF-8 availability table), citing ADR-26.
+4. The ls-column parses (1226/1230) are replaced with a locale-/ls-layout-independent metadata
+   listing that PRESERVES the diagnostic output format; `jot` (327) replaced with a portable
+   sequence and the hardcoded /usr/bin/jot path removed.
+5. shellcheck + `sh -n` clean on pfblockerng.sh; markdownlint clean on the docs;
+   scripts/check_url_encoding.py unaffected (no new URL interpolation).
+6. ADR-04 smoke green — the dedup/aggregate, masterfile, and reputation/.orig paths still
+   produce identical block sets and the diagnostic dump still renders. Read smoke-diagnostics
+   on any failure.
+7. Diff is minimal (ADR "clean the diff" rule): only the prefixes, the helper/policy, the two
+   construct rewrites, and their docs/tests — no incidental reformatting.
+
+PROCESS
+- Phases 1, 2, 3 touch src/ + tests/ + CI-relevant docs => full PR flow (worktree +
+  rebase-only PR via /pr-merge-flow). The ADR TEXT itself (this directory) is dev-only and
+  lands per the repo's ADR-doc rule.
+- Flip ADR.md Status Proposed -> Accepted once gates 1-7 hold and the implementation PR merges.
+
+HANDOFF
+RESULTS/ADR26_Phase4_Results.txt: the gate checklist with evidence (shellcheck output, the
+`export LC_` grep, smoke run link), and the final Status flip.

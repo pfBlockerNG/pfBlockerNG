@@ -1,0 +1,57 @@
+================================================================================
+PHASE 4 PROMPT — Rollback smoke (live VM, -m repo)
+Target model: Claude Sonnet 4.6
+ADR: .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md   (read §2.2 contract, §4, §6 Phase 4, §7 reject)
+================================================================================
+
+ROLE
+Branch adr/27-release-rollback-and-eol-rou (off devel). Phase 4 of 5. Proves the rollback UX end-to-end
+on a REAL pfSense VM. Inline, one commit, push directly. This is the phase that can REJECT Part 1
+(ADR §7): if pkg cannot pin-install a retained older version with dep resolution, say so.
+
+WHY THIS PHASE EXISTS
+The premise — "a multi-version release catalog lets pkg roll back" — must be proven on a real box, not
+assumed. The off-box tests pin catalog SHAPE; only the live VM proves pkg's CLIENT behaviour
+(newest-wins default + pinned older install + dep resolution from our repo).
+
+REQUIRED READING
+- FIRST, read RESULTS/03_Results.txt — confirm the generator input contract. If missing, STOP.
+- .ADRs/ADR_27_Release_Rollback_And_EOL_Routing/ADR.md  (§2.2.1/.2, §4, §7 reject criteria)
+- tests/smoke/test_repo_install.py — the `repo` marker; the existing re-version helper that forges
+  lower→higher .pkg for the pkg-upgrade test; build_repo_via_portable_named + own_variant() (matrix-
+  derived, ADR-27 predecessor); _ssh_check / pkg_installed_version / pkg_repo_origin helpers.
+- tests/smoke/_matrix.py — matrix-derived ABI/variant (do not hardcode).
+- CLAUDE.md "Smoke tests" + "Repo smoke flow".
+
+ACTION PLAN (BDD; assert BEFORE + AFTER — a real lifecycle, contract §2.2)
+1. Build a multi-version release catalog on the runner (reuse the re-version helper to forge two
+   versions of the box's OWN variant package, e.g. _lo and _hi), ship + add-repo.
+2. GIVEN: pkg update; THEN `pkg install <name>` (no version) installs the HIGHER version (newest-wins).
+3. WHEN: `pkg install <name>-<loversion>` (pinned older); THEN the LOWER version is now active
+   (pkg_installed_version), origin is our repo (pkg_repo_origin), and RUN_DEPENDS resolved (no
+   "Missing dependency"). This is the rollback assertion.
+4. THEN re-upgrade: `pkg upgrade` returns to the higher version (lifecycle closed).
+5. If step 3 cannot work via the catalog (only `pkg add <raw-url>` with no dep resolution does), record
+   it explicitly in the handoff as a REJECT/rescope trigger (ADR §7) — do NOT fake a pass.
+
+CONSTRAINTS
+- Matrix-derived ABI/variant only (tests/smoke/_matrix.py); never hardcode FreeBSD:15/php83.
+- The case carries the `repo` marker (dispatch-only; deselected from -m smoke).
+- Off-box collection must stay clean (the live body is guarded by the repo_vm fixture).
+
+VERIFICATION
+- python -m pytest / ruff / mypy tests/   → green/clean (off-box collection unaffected)
+- Live proof (dispatch): gh workflow run smoke.yml -f pytest_marker=repo — the rollback case green on
+  the CE (and Plus) leg. Read smoke-diagnostics on any failure.
+
+EXPECTED RESULT
+A live-VM case proving install-newest → pin-rollback-to-older → re-upgrade, deps resolved from our repo.
+
+COMMIT (single)
+    test: prove release rollback to a retained older version (ADR-27 P4)
+Push directly to the branch; PR only if the push is rejected.
+
+HANDOFF — write RESULTS/04_Results.txt
+State: the exact pkg command that performs the rollback (the documented UX); whether dep resolution
+worked via the catalog (premise holds?) or only via raw pkg add (REJECT trigger); the live run id +
+result. Go-ahead for Phase 5.

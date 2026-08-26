@@ -1,0 +1,27 @@
+name: Feature request
+description: Propose a new user-facing pfBlockerNG capability.
+type: feature
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the user need or limitation, not an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: What new capability do you want?
+      description: Describe the observable outcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add examples, alternatives, or constraints if useful.
+    validations:
+      required: false

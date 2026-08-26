@@ -1,0 +1,72 @@
+================================================================================
+PHASE 3 PROMPT — IPv6-mandatory validation when the resolver listens on IPv6
+Target model: Claude Opus 4.8
+ADR: .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md   (read §2 "Scope: IPv6 / mandatory rule" + reject criteria FIRST)
+================================================================================
+
+ROLE
+You are on the `adr/13` branch performing Phase 3 of ADR-13. This phase enforces the
+correctness rule: when the DNS Resolver listens on IPv6, a v6 sinkhole VIP becomes
+mandatory — auto mode provisions it, manual mode requires it. Work inline on `adr/13`,
+one commit, push directly (PR only if rejected).
+
+WHY THIS PHASE EXISTS
+A blocked AAAA needs a real v6 sinkhole when the resolver answers over/returns IPv6;
+silently lacking one is a latent gap. The detection helper (pfb_unbound_listens_v6) already
+exists (Phase 1). This phase consumes it in validation + provisioning. NOTE the reject/pivot
+lever in §7: if forcing v6 on existing manual, v6-listening setups proves too disruptive,
+soften manual mode to a non-blocking WARNING (auto mode still provisions). Decide here.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/02_Results.txt — it must confirm pfb_manage_dnsbl_vip's
+  v6 provisioning hook + the pfb_dnsvip_auto key. Also re-confirm 01_Results.txt's
+  pfb_unbound_listens_v6() predicate. If 02_Results.txt is missing, STOP and report.
+- .ADRs/ADR_13_Auto_DNSBL_VIP/ADR.md (§2 IPv6 row, §3 risks, §7 reject criteria).
+- src/usr/local/pkg/pfblockerng/pfblockerng.inc:
+  * pfb_validate_vips() :727 — extend it: when pfb_unbound_listens_v6() is true, an empty v6
+    VIP must be invalid (currently v6 is optional — :749 only validates when $enabled6).
+  * pfb_global() :826-836 — the force-disable-on-invalid path; v6-missing-while-listening must
+    feed the same force-disable (DNSBL off + logged) so a misconfig can't half-work.
+- src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php:466-475 — the save-time validator call;
+  the new requirement must surface as an input_error there (manual mode).
+- CLAUDE.md (investigate-live-system: confirm the v6-listen predicate on-box; no die()/exit()).
+
+ACTION PLAN (ordered)
+1. VALIDATION RULE in pfb_validate_vips(): add a parameter or internal check so that when the
+   resolver listens on IPv6 (pfb_unbound_listens_v6()), a missing/empty v6 VIP is an error
+   ("IPv6 VIP required: the DNS Resolver is listening on IPv6"). Preserve ALL existing behaviour
+   when v6 is not listened-on (v6 stays optional; v4 + interface/overlap checks unchanged).
+2. FORCE-DISABLE PARITY in pfb_global(): the same condition must force-disable DNSBL (as the
+   existing invalid-VIP path does, :831-834) so an enabled-but-v6-missing config does not run
+   half-configured. Log a clear reason.
+3. AUTO-MODE PROVISION: ensure Phase 2's pfb_manage_dnsbl_vip provisions the v6 marked VIP when
+   pfb_dnsvip_auto is on AND pfb_unbound_listens_v6() is true (wire the v6 branch you flagged in
+   02_Results.txt). Auto mode must satisfy the new rule with zero user friction.
+4. MANUAL-MODE DECISION: default = hard input error (mandatory). IF you judge (with evidence)
+   that this breaks too many existing setups, implement the softened WARNING pivot instead and
+   RECORD the decision + rationale in the handoff. Pick one; do not ship both.
+
+CONSTRAINTS
+- Behaviour when the resolver does NOT listen on v6 is unchanged (v6 optional). No regressions to
+  v4-only or manual-with-v6 setups. No die()/exit() in lib. PHP tabs/8.3. New fns → stubs.
+- Do NOT touch Python/tests or the UI layout (Phase 4) beyond the validator wiring already at :472.
+
+VERIFICATION (must all pass before the phase is done)
+- python -m pytest -> green/unchanged.
+- php -l + PHPStan + ShellCheck -> clean.
+- Reason through the matrix: {resolver v6 on/off} x {auto on/off} x {v6 VIP present/absent} —
+  confirm the only new failure is (v6-listening, no v6 VIP, manual) and that auto provisions it.
+
+EXPECTED RESULT
+When the resolver listens on IPv6: auto mode provisions fd00::53-style v6 VIP; manual mode without
+a v6 VIP errors on save and force-disables in pfb_global. v4-only / non-v6 setups unchanged.
+
+COMMIT (single)
+    pfblockerng: require a DNSBL v6 VIP when the resolver listens on IPv6 (ADR-13 P3)
+Push directly to `adr/13`; PR only if rejected. PR body via --body-file.
+
+HANDOFF — write `.ADRs/ADR_13_Auto_DNSBL_VIP/RESULTS/03_Results.txt` (plain .txt)
+State: how pfb_validate_vips signals the v6-required error; the pfb_global force-disable wiring;
+the manual-mode decision (hard error vs softened warning) + rationale; confirmation the v6
+auto-provision branch is live; the non-v6 no-regression argument; the go-ahead for Phase 4.

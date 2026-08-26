@@ -1,0 +1,60 @@
+================================================================================
+PHASE 6 PROMPT — Validation, manual smoke, Definition of Done
+Target model: Claude Opus 4.8 (effort xhigh)
+ADR: .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md
+     (read §4 acceptance, §7 DoD + reject + manual smoke first)
+================================================================================
+
+ROLE
+You are on `adr/06` (off `next`), Phase 6 of ADR-06 — the cross-cutting validation
+phase. Confirm behaviour-equivalence + the init/memory budget, finalise docs, and lay
+out the maintainer manual-smoke checklist (no live Unbound in CI). Work inline on
+`adr/06`, one commit, push directly.
+
+WHY THIS PHASE EXISTS
+The move is complete only when it is provably equivalent AND within the init/memory
+budget that gated it (Phase 1). This phase produces the evidence for Accept and the
+human checklist for what CI cannot reach.
+
+REQUIRED READING
+- FIRST, read the prior phase's handoff:
+  .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/05_Results.txt — what was removed
+  and what remains; whitelist/counts confirmation. If missing, STOP and report.
+- .ADRs/ADR_06_DNSBL_Preprocessing_To_Python/ADR.md (§4, §7) and RESULTS/01 (the
+  kill-threshold + baseline numbers).
+- tests/test_pfb_unbound.py + the golden fixtures (Phase 2).
+- benchmarks/ (re-run the Phase-1 init/mem measurement on adr/06).
+- README.md, CLAUDE.md (docs to update).
+
+ACTION PLAN
+1. Full golden equivalence across all formats incl. basic-ABP and the whitelist/TLD/
+   TOP1M removal cases; confirm feed/group attribution + Python-emitted counts.
+2. Re-run the Phase-1 init-time + peak-RAM benchmark on adr/06's build path at the
+   agreed large corpus; record the numbers vs the kill-threshold. State pass/fail.
+3. Update README (how the new DNSBL build/contract works; how to run the golden + bench
+   tests) and CLAUDE.md if the build/test workflow changed.
+4. Finalise §7 manual-smoke checklist and the explicit reject criteria with the recorded
+   numbers.
+
+CONSTRAINTS
+- No new behaviour; validation + docs only. stdlib only; ruff/php -l/ShellCheck clean.
+- Do not flip Status to Accepted — that happens after the maintainer runs the live smoke.
+
+VERIFICATION (must all pass before the phase is done)
+- `python -m pytest` → green incl. all golden/equivalence + build unit tests. ruff clean.
+- The init/mem benchmark numbers are recorded and meet the threshold (or the ADR is
+  flagged for the boundary pivot per §7).
+- README/CLAUDE.md updated and accurate.
+
+EXPECTED RESULT
+Recorded equivalence + init/mem evidence, updated docs, and a maintainer manual-smoke
+checklist — everything needed to move Status → Accepted after the live smoke.
+
+COMMIT (single)
+    docs: ADR-06 P6 — DNSBL preprocessing move validation + DoD
+Push directly to `adr/06`; PR only if rejected.
+
+HANDOFF — write `.ADRs/ADR_06_DNSBL_Preprocessing_To_Python/RESULTS/06_Results.txt`
+Final summary: equivalence result, the init/mem numbers vs threshold (GO confirmed or
+pivot taken), docs updated, and the maintainer manual-smoke checklist with the explicit
+"Accept only after live smoke passes" gate.
