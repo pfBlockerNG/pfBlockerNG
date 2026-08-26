@@ -963,6 +963,7 @@ def test_main_returns_1_and_reports_refusal_on_stderr(
 ) -> None:
     ports_root = tmp_path / "ports"
     _write_port(ports_root, no_arch_line="")  # missing NO_ARCH -> refusal, no network involved
+    monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         bdp.bpp,
