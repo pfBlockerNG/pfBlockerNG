@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from hashlib import sha256
 from typing import Any
 
@@ -100,7 +101,19 @@ def test_handoff_accepts_complete_build_and_route_rows() -> None:
 
     assert handoff["kind"] == "nightly-handoff"
     assert handoff["pkg_version"] == VERSION
-    assert isinstance(handoff["input_digest"], str) and len(handoff["input_digest"]) == 64
+    handoff_inputs = json.dumps(
+        {
+            "matrix_digest": "c" * 64,
+            "source_date_epoch": 1_800_000_000,
+            "dependency_builder": DEPENDENCY_BUILDER,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    nested_digest = sha256(handoff_inputs).hexdigest()
+    expected_digest = sha256("\0".join((SOURCE_SHA, PORTS_SHA, nested_digest)).encode("ascii")).hexdigest()
+    assert handoff["input_digest"] == expected_digest
     assert handoff["source_date_epoch"] == 1_800_000_000
     assert handoff["dependency_builder"] == DEPENDENCY_BUILDER
     assert handoff["tools_sha"] == "e" * 40
