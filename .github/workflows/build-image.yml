@@ -388,7 +388,7 @@ jobs:
           chmod 600 smoke_key
 
       - name: Download the built pfBlockerNG package
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           name: ${{ needs.build-pkg.outputs.artifact }}
           path: pkg

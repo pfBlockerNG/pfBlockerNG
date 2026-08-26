@@ -283,7 +283,7 @@ jobs:
 
       - name: Upload package
         if: always()
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.artifact_name }}
           path: ${{ steps.build.outputs.pkg_dir }}/*.pkg
@@ -297,7 +297,7 @@ jobs:
         # major) — or by the caller-supplied dep_artifact_name (W1) when the
         # caller's own fan-out is per-version and needs a per-row-unique name.
         if: steps.build.outputs.has_dep_pkgs == '1'
-        uses: actions/upload-artifact@v8
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.build.outputs.dep_artifact_name }}
           path: ${{ steps.build.outputs.dep_pkg_dir }}/*.pkg

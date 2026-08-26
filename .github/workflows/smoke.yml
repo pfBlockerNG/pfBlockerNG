@@ -421,7 +421,7 @@ jobs:
       - name: Download per-shard selection-status markers
         if: needs.smoke.result == 'success'
         continue-on-error: true
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v7
         with:
           pattern: smoke-shard-status-*
           path: shard-status
