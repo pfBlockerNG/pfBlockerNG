@@ -457,6 +457,105 @@ class TestCatastrophicShapeHeuristic:
         assert _regex_is_catastrophic_shape(r"^(?i:[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$") is True
         assert _regex_is_catastrophic_shape(r"^(?i:[a-z])+(?i:[a-z])+(?i:[a-z])+@x\.com$") is True
 
+    def test_conditional_branches_are_scanned_as_independent_bodies(self) -> None:
+        for pat in (
+            r"^([a-z])(?(1)[a-z]+[a-z]+[a-z]+[a-z]+|b)@x\.com$",
+            r"^(a)?(?(1)b|[a-z]+[a-z]+[a-z]+[a-z]+)@x\.com$",
+            r"^(?P<flag>a)?(?(flag)(?i:[a-z]+[a-z]+[a-z]+)|b)$",
+            r"^(a)(?(1)(?P<body>[a-z]+[a-z]+[a-z]+)|b)$",
+            r"^(a)(?(1)(?=[a-z])[a-z]+[a-z]+[a-z]+|b)$",
+            r"^(a)(?(1)\([a-z]+[a-z]+[a-z]+\)|b)$",
+            r"^(a)(?(1)[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+|b)$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # Branches are separate patterns: two runs on each side of `|` never join.
+        for pat in (
+            r"^(?P<flag>a)?(?(flag)b|c)$",
+            r"^(a)?(?(1)[a-z]+[a-z]+|[a-z]+[a-z]+)$",
+            r"^(a)(?(1)(?>[a-z]+[a-z]+[a-z]+)|b)$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_multi_character_opaque_bodies_bridge_only_when_their_language_overlaps(self) -> None:
+        for pat in (
+            r"^[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?>ab)+[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(foo|foobar)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?:foo|foobar)+[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?i:foo|foobar)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(?i:(?>ab))[a-z]+[a-z]+@x\.com$",
+            r"^\w+\w+(?>éé)\w+\w+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        for pat in (
+            r"^[a-z]+[a-z]+(?>12)[a-z]+[a-z]+$",
+            r"^[a-z]+[a-z]+(?>a\.)[a-z]+[a-z]+$",
+            r"^[a-z]+[a-z]+(\.|,)[a-z]+[a-z]+$",
+            r"^[a-z]+[a-z]+(?i:12|34)[a-z]+[a-z]+$",
+            r"^[a-z]+[a-z]+(?>\(\[)[a-z]+[a-z]+$",
+            r"^[a-z]+[a-z]+(?>\N{BULLET})[a-z]+[a-z]+$",
+            r"^(?>ab)[a-z]+$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+
+    def test_alternation_shortcut_distinguishes_quantifiers_from_syntax_markers(self) -> None:
+        for pat in (
+            r"^[a-z]+[a-z]+(a|(?:b))[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?P<g1>b))[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?i:b))[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?>b))[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?=b)a)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?!x)b)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|\+)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|\*)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|\N{BULLET})[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\.com$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is True, pat
+        # Marker characters that are literals do not manufacture an overlapping atom.
+        for pat in (
+            r"^[a-z]+[a-z]+(\+|\*)[a-z]+[a-z]+$",
+            r"^[a-z]+[a-z]+(?:\N{BULLET}|\*)[a-z]+[a-z]+$",
+            r"^(a+|b)$",
+        ):
+            assert _regex_is_catastrophic_shape(pat) is False, pat
+        # A genuine run in a branch is entered and scanned rather than hidden by the shortcut.
+        assert _regex_is_catastrophic_shape(r"^([a-z]+[a-z]+[a-z]+|x)@x\.com$") is True
+
+    def test_conditional_branch_scan_stops_at_the_shared_depth_bound(self) -> None:
+        run = "[a-z]+[a-z]+[a-z]+"
+        prefix = "(?P<flag>a)?"
+        at_bound = "(?(flag)" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + run
+        past_bound = "(?(flag)" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1) + run
+        assert (
+            _regex_is_catastrophic_shape(prefix + at_bound + "|b)" * pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX)
+            is True
+        )
+        assert (
+            _regex_is_catastrophic_shape(
+                prefix + past_bound + "|b)" * (pfb_dnsbl_regex_rules._REGEX_NESTED_SCAN_MAX + 1)
+            )
+            is False
+        )
+        flood = prefix + "(?(flag)" * 2000 + "a" + "|b)" * 2000
+        assert isinstance(_regex_is_catastrophic_shape(flood), bool)
+
+    def test_issue2364_shapes_are_dropped_by_the_feed_loader_with_both_cap_modes(self) -> None:
+        unsafe = (
+            r"^([a-z])(?(1)[a-z]+[a-z]+[a-z]+[a-z]+|b)@x\.com$",
+            r"^[a-z]+[a-z]+(?>ab)[a-z]+[a-z]+@x\.com$",
+            r"^[a-z]+[a-z]+(a|(?:b))+[a-z]+[a-z]+@x\.com$",
+        )
+        safe = r"^[a-z]+\.[a-z]+\.[a-z]+$"
+        for cap in (False, True):
+            db, admitted = _dnsbl_compile_regex_rules(
+                [*(_block_rule(pattern) for pattern in unsafe), _block_rule(safe)],
+                static_cap=cap,
+            )
+            assert admitted == 1, cap
+            assert len(db) == 1, cap
+            assert next(iter(db.values()))["re"].pattern == safe
+
     def test_newline_repeat_is_not_read_as_a_named_unicode_escape(self) -> None:
         # The two spellings are different regexes and each pins one half of the scanner.
         # Lowercase `\n{2,}` is a newline carrying an open-ended REPEAT; reading it as the
