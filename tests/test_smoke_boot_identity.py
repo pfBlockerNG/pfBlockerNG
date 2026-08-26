@@ -122,20 +122,25 @@ def _identity_stdout(
     return "\n".join(lines) + "\n"
 
 
-def test_log_guest_identity_raises_on_abi_os_major_mismatch(
+def test_log_guest_identity_allows_pkg_abi_drift_when_userland_major_matches(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # issue #2242: live pfSense repository metadata rewrote the effective ABI mid-run
+    """issue #2730: rc.update_pkg_metadata can flip `pkg config ABI` to 16
+    on a CE 2.8 guest whose kernel and freebsd-version stay 15.0-CURRENT.
+
+    Row 2 (userland major) is the wrong-image abort. A parseable pkg-ABI drift
+    with a matching userland must not refuse the boot — install-pkg.sh then
+    adds with ``pkg -o ABI=$SMOKE_ABI``.
+    """
     monkeypatch.setenv("SMOKE_ABI", "FreeBSD:15:amd64")
     vm = _IdentityVM(_identity_stdout("abi=FreeBSD:16:amd64"))
 
-    with pytest.raises(RuntimeError) as exc_info:
-        smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))
+    smoke_conftest._log_guest_identity(cast(smoke_conftest.SmokeVM, vm))  # must not raise
 
-    assert "FreeBSD:16:amd64" in str(exc_info.value)
-    assert "FreeBSD:15:amd64" in str(exc_info.value)
     printed = capsys.readouterr().out
-    assert "PFB_GUEST_IDENTITY abi=FreeBSD:16:amd64" in printed, "diagnostics must survive the raise"
+    assert "PFB_GUEST_IDENTITY abi=FreeBSD:16:amd64" in printed
+    assert "PFB_GUEST_IDENTITY freebsd_version=15.0-CURRENT" in printed
+    assert "forcing_add_abi=FreeBSD:15:amd64" in printed
 
 
 def test_log_guest_identity_allows_matching_abi_os_major(monkeypatch: pytest.MonkeyPatch) -> None:
