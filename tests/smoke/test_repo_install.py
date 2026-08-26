@@ -1449,6 +1449,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     prior_hosts = pin_pages_hosts(repo_vm, host)
     try:
         pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
+        pkg_delete(repo_vm, pkg_name=PKG_NAME)
         pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         write_live_repo_conf(repo_vm, base_url, varver, priority=pfsense_prio + 100)
 
@@ -1477,6 +1478,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
         assert_live_package(repo_vm, CANONICAL_PKG_NAME, expected_version, expected_source_sha, expected_channel)
     finally:
+        pkg_delete(repo_vm, pkg_name=PKG_NAME)
         pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
         _ssh_check(repo_vm, "/bin/rm", "-f", REPO_CONF)
         restore_pages_hosts(repo_vm, prior_hosts)
@@ -1493,9 +1495,11 @@ def test_live_nightly_downgrade_requires_selected_semantic_repo(repo_vm: SmokeVM
     ``install.sh --channel <channel>`` must then move the canonical package to the selected
     Stable, Testing, or Edge repository and its lower version.
     """
+    from .test_nightly_install import _live_nightly_url
+
     semantic_url = _live_base_url()
-    nightly_url = os.environ.get(LIVE_NIGHTLY_URL_ENV, "").rstrip("/")
-    if semantic_url is None or not nightly_url:
+    nightly_url = _live_nightly_url()
+    if semantic_url is None or nightly_url is None:
         pytest.skip(f"{LIVE_BASE_URL_ENV} and {LIVE_NIGHTLY_URL_ENV} are required for the live downgrade")
     assert semantic_url is not None
     expected_semantic_source = os.environ.get(LIVE_EXPECTED_SOURCE_SHA_ENV)

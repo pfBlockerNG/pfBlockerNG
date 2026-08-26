@@ -88,6 +88,37 @@ def test_live_nightly_requires_expected_identity(monkeypatch: MonkeyPatch, missi
         nightly.test_install_from_live_nightly_url(cast(SmokeVM, object()))
 
 
+def test_live_nightly_url_boolean_one_uses_default(monkeypatch: MonkeyPatch) -> None:
+    """The boolean shorthand selects the deployed Nightly root, never the literal ``1``."""
+    monkeypatch.setenv(nightly.LIVE_NIGHTLY_URL_ENV, "1")
+
+    assert nightly._live_nightly_url() == nightly.DEFAULT_LIVE_NIGHTLY_URL
+
+
+def test_live_nightly_downgrade_expands_boolean_live_urls(monkeypatch: MonkeyPatch, tmp_path: Path) -> None:
+    """Both live boolean shorthands reach the downgrade as their current default URLs."""
+    polled: list[str] = []
+
+    def stop_after_urls(base_url: str, _catalog_path: str) -> None:
+        polled.append(base_url)
+        if len(polled) == 2:
+            raise RuntimeError("stop after URL expansion")
+
+    monkeypatch.setenv(repo.LIVE_BASE_URL_ENV, "true")
+    monkeypatch.setenv(repo.LIVE_NIGHTLY_URL_ENV, "true")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_SOURCE_SHA_ENV, "c" * 40)
+    monkeypatch.setenv(repo.LIVE_EXPECTED_VERSION_ENV, "4.0.0")
+    monkeypatch.setenv(repo.NIGHTLY_EXPECTED_SOURCE_SHA_ENV, "b" * 40)
+    monkeypatch.setenv(repo.NIGHTLY_EXPECTED_VERSION_ENV, "20260810_2")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", stop_after_urls)
+
+    with pytest.raises(RuntimeError, match="stop after URL expansion"):
+        repo.test_live_nightly_downgrade_requires_selected_semantic_repo(cast(SmokeVM, object()), tmp_path)
+
+    assert polled == [repo.DEFAULT_LIVE_BASE_URL, nightly.DEFAULT_LIVE_NIGHTLY_URL]
+
+
 def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) -> None:
     """The deployed channel catalog is queried and installed by its canonical package identity."""
     seen: dict[str, list[str] | str] = {"delete": []}
@@ -101,6 +132,8 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
             ssh_calls.append(args)
             return subprocess.CompletedProcess([], 0, "", "")
 
+    suffixed_name = f"{repo.CANONICAL_PKG_NAME}-edge"
+    monkeypatch.setattr(repo, "PKG_NAME", suffixed_name)
     monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_SOURCE_SHA", expected_source)
     monkeypatch.setenv("SMOKE_REPO_EXPECTED_VERSION", expected_version)
@@ -147,12 +180,59 @@ def test_live_pages_install_targets_canonical_package(monkeypatch: MonkeyPatch) 
     repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
 
     assert seen == {
-        "delete": [repo.CANONICAL_PKG_NAME, repo.CANONICAL_PKG_NAME],
+        "delete": [
+            suffixed_name,
+            repo.CANONICAL_PKG_NAME,
+            suffixed_name,
+            repo.CANONICAL_PKG_NAME,
+        ],
         "query": repo.CANONICAL_PKG_NAME,
         "install": repo.CANONICAL_PKG_NAME,
         "origin": repo.CANONICAL_PKG_NAME,
     }
     assert assertions == [(repo.CANONICAL_PKG_NAME, expected_version, expected_source, "edge")]
+    assert ("/bin/rm", "-f", repo.REPO_CONF) in ssh_calls
+
+
+def test_live_pages_cleanup_deletes_both_names_after_install_failure(monkeypatch: MonkeyPatch) -> None:
+    """Setup and exceptional cleanup remove both the branch and canonical package identities."""
+    deleted: list[str] = []
+    ssh_calls: list[tuple[str, ...]] = []
+    suffixed_name = f"{repo.CANONICAL_PKG_NAME}-edge"
+
+    class FakeVM:
+        def ssh(self, *args: str, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            ssh_calls.append(args)
+            return subprocess.CompletedProcess([], 0, "", "")
+
+    def fail_install(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise RuntimeError("install failed")
+
+    monkeypatch.setattr(repo, "PKG_NAME", suffixed_name)
+    monkeypatch.setattr(repo, "_live_base_url", lambda: "https://example.test/pkg/edge")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_SOURCE_SHA_ENV, "a" * 40)
+    monkeypatch.setenv(repo.LIVE_EXPECTED_VERSION_ENV, "4.0.0.a21")
+    monkeypatch.setenv(repo.LIVE_EXPECTED_CHANNEL_ENV, "edge")
+    monkeypatch.setattr(repo, "_box_real_varver", lambda _vm: "ce-current")
+    monkeypatch.setattr(repo, "poll_catalog_served", lambda *_args: None)
+    monkeypatch.setattr(repo, "pin_pages_hosts", lambda *_args: "prior")
+    monkeypatch.setattr(repo, "restore_pages_hosts", lambda *_args: None)
+    monkeypatch.setattr(repo, "repo_priority", lambda *_args: 0)
+    monkeypatch.setattr(repo, "pkg_delete", lambda _vm, *, pkg_name, **_kwargs: deleted.append(pkg_name))
+    monkeypatch.setattr(repo, "write_live_repo_conf", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(repo, "pkg_update", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_installed_version_of", lambda *_args: None)
+    monkeypatch.setattr(repo, "pkg_install_from_repo", fail_install)
+
+    with pytest.raises(RuntimeError, match="install failed"):
+        repo.test_install_from_live_pages_url(cast(SmokeVM, FakeVM()))
+
+    assert deleted == [
+        suffixed_name,
+        repo.CANONICAL_PKG_NAME,
+        suffixed_name,
+        repo.CANONICAL_PKG_NAME,
+    ]
     assert ("/bin/rm", "-f", repo.REPO_CONF) in ssh_calls
 
 
