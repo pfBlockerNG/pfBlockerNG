@@ -18,7 +18,7 @@ Describe 'install-pkg.sh'
 
   setup() {
     scrub_git_env
-    unset SMOKE_DEP_PKGS FAIL_PKG_ADD_MATCH EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT
+    unset SMOKE_DEP_PKGS SMOKE_ABI FAIL_PKG_ADD_MATCH EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/instpkgspec.XXXXXX")"
     FAKE_BIN="${WORK}/bin"
     mkdir -p "$FAKE_BIN"
@@ -54,7 +54,7 @@ esac
 # decrements it and fails with the REAL guest lock signature (observed verbatim
 # in run 31229687348) -- the transient/persistent lock cases drive this.
 case "$_a" in
-    *"pkg add"*)
+    *"pkg add"* | *"pkg -o ABI="*)
         if [ -f "${WORK}/lock.remaining" ]; then
             _n=$(cat "${WORK}/lock.remaining")
             if [ "$_n" -gt 0 ]; then
@@ -120,6 +120,15 @@ SCPEOF
     The contents of file "$SCP_LOG" should equal "$PKGFILE"
     The result of function pkg_add_count should equal 1
     The contents of file "$SSH_LOG" should include "$(basename "$PKGFILE")"
+  End
+
+  It 'SMOKE_ABI set -> pkg add forces that ABI (issue #2730)'
+    SMOKE_ABI=FreeBSD:15:amd64
+    export SMOKE_ABI
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should be present
+    The line 1 of contents of file "$SSH_LOG" should include 'pkg -o ABI=FreeBSD:15:amd64 add'
   End
 
   It 'logs pkg identity in the same remote shell immediately before pkg add'

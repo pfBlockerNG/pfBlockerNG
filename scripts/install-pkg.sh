@@ -23,6 +23,10 @@
 #   SMOKE_DEP_PKGS   space-separated absolute paths of extra dep .pkg files,
 #                    scp'd + `pkg add`ed BEFORE the branch .pkg, in the given
 #                    order. Unset/empty (the default) -> skipped entirely.
+#   SMOKE_ABI        when set, each `pkg add` is `pkg -o ABI=$SMOKE_ABI add`
+#                    so a guest whose `pkg config ABI` drifted after
+#                    rc.update_pkg_metadata still accepts the matrix-built
+#                    local .pkg (issue #2730). Unset -> plain `pkg add`.
 #
 # POSIX sh; quoted expansions; absolute binary paths where it matters.
 
@@ -114,7 +118,12 @@ pkg_add_lock_retry() {
         _rc=0
         # Same-shell probe: a separate SSH round-trip can observe a different ABI
         # while first-boot metadata settles. The final pkg command supplies status.
-        _out=$(ssh_t "printf 'PFB_PKG_CONTEXT utc='; date -u '+%Y-%m-%dT%H:%M:%SZ'; printf 'PFB_PKG_CONTEXT absolute_abi='; /usr/local/sbin/pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT path_pkg='; command -v pkg 2>&1 || true; printf 'PFB_PKG_CONTEXT path_abi='; pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT boot_pkg_processes='; ps axww -o pid= -o comm= -o args= 2>&1 | awk '((\$2 == \"sh\" && \$3 == \"/bin/sh\" && (\$4 == \"/etc/rc.update_pkg_metadata\" || \$4 == \"/usr/local/sbin/pfSense-upgrade\" || \$4 == \"/usr/local/libexec/pfSense-upgrade\")) || (\$2 == \"lockf\" && \$0 ~ /\/tmp\/pfSense-upgrade\.lock/) || \$2 == \"pkg\" || \$2 == \"pkg-static\") { found=1; print } END { if (!found) print \"none\" }'; env ASSUME_ALWAYS_YES=yes pkg add '${_pkg_remote}'" 2>&1) || _rc=$?
+        if [ -n "${SMOKE_ABI:-}" ]; then
+            _pkg_add="pkg -o ABI=${SMOKE_ABI} add"
+        else
+            _pkg_add="pkg add"
+        fi
+        _out=$(ssh_t "printf 'PFB_PKG_CONTEXT utc='; date -u '+%Y-%m-%dT%H:%M:%SZ'; printf 'PFB_PKG_CONTEXT absolute_abi='; /usr/local/sbin/pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT path_pkg='; command -v pkg 2>&1 || true; printf 'PFB_PKG_CONTEXT path_abi='; pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT boot_pkg_processes='; ps axww -o pid= -o comm= -o args= 2>&1 | awk '((\$2 == \"sh\" && \$3 == \"/bin/sh\" && (\$4 == \"/etc/rc.update_pkg_metadata\" || \$4 == \"/usr/local/sbin/pfSense-upgrade\" || \$4 == \"/usr/local/libexec/pfSense-upgrade\")) || (\$2 == \"lockf\" && \$0 ~ /\/tmp\/pfSense-upgrade\.lock/) || \$2 == \"pkg\" || \$2 == \"pkg-static\") { found=1; print } END { if (!found) print \"none\" }'; env ASSUME_ALWAYS_YES=yes ${_pkg_add} '${_pkg_remote}'" 2>&1) || _rc=$?
         if [ -n "$_out" ]; then printf '%s\n' "$_out"; fi
         if [ "$_rc" -eq 0 ]; then return 0; fi
         case "$_out" in

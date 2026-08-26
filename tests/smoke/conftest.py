@@ -388,25 +388,30 @@ def _log_guest_identity(vm: SmokeVM) -> None:
             observed_pkg_client = line[len("pkg_client=") :]
         elif line.startswith("pkg_pkg="):
             observed_pkg_pkg = line[len("pkg_pkg=") :]
-    # issue #2242 row 1: live pfSense repository metadata rewrote the effective ABI
-    # mid-run; fail before pkg add rather than let a stale/foreign package land. Arch is
-    # deliberately not compared — only OS/major.
+    # issue #2730: `pkg config ABI` can flip (15→16) after rc.update_pkg_metadata on a
+    # guest whose kernel and freebsd-version stay on the matrix major. Row 2 (userland
+    # major) is the wrong-image abort. A parseable pkg-ABI drift with a matching
+    # userland is not a refuse — install-pkg.sh adds with `pkg -o ABI=$SMOKE_ABI`.
+    # Unreadable/placeholder pkg ABI still fails closed. Arch is not compared.
     expected_abi = os.environ.get("SMOKE_ABI", "")
-    if expected_abi and _abi_os_major(observed_abi) != _abi_os_major(expected_abi):
-        raise RuntimeError(
-            f"guest pkg ABI {observed_abi} does not match expected SMOKE_ABI {expected_abi} "
-            "(OS/major mismatch; issue #2242 — live pfSense repository metadata rewrote the "
-            "effective ABI, refusing to pkg add)"
-        )
     if expected_abi:
-        # row 2: the userland major itself, independent of what pkg claims its ABI is.
+        expected_os_major = _abi_os_major(expected_abi)
+        observed_os_major = _abi_os_major(observed_abi)
         expected_major = _abi_major(expected_abi)
+        if observed_os_major != expected_os_major and (observed_abi in {"", "?"} or ":" not in observed_abi):
+            raise RuntimeError(
+                f"guest pkg ABI {observed_abi} does not match expected SMOKE_ABI {expected_abi} "
+                "(unreadable pkg ABI; issue #2242)"
+            )
+        # row 2: the userland major itself, independent of what pkg claims its ABI is.
         if _dot_major(observed_freebsd_version) != expected_major:
             raise RuntimeError(
                 f"guest /bin/freebsd-version {observed_freebsd_version} does not match expected "
                 f"SMOKE_ABI {expected_abi} (major mismatch; issue #2242 — a foreign FreeBSD "
                 "userland replaced the guest's own, refusing to pkg add)"
             )
+        if observed_os_major != expected_os_major:
+            print(f"PFB_GUEST_IDENTITY pkg_abi_drift={observed_abi} forcing_add_abi={expected_abi}")
         # row 3: the pkg CLIENT binary's own major vs the major of the pkg PACKAGE it
         # thinks it has installed — a foreign pkg binary can replace the client without
         # updating pkg's own package record, or vice versa.
