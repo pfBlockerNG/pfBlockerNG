@@ -148,7 +148,7 @@ def _has_justification(body: str) -> bool:
 
 
 _FROZEN_RED_HEADER = ("frozen red test", "git hash-object", "red run tail")
-_GIT_HASH = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+_GIT_HASH = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 _DELIMITER = re.compile(r":?-{3,}:?")
 
 
@@ -236,7 +236,7 @@ def _parse_frozen_red(body: str) -> tuple[list[tuple[str, str]], list[str]]:
         if not tail:
             errors.append(f"Frozen RED record for {path} has no RED run tail")
             continue
-        records.append((path, digest.lower()))
+        records.append((path, digest))
     if not records and not errors:
         errors.append("Frozen RED table has no evidence rows")
     return records, errors

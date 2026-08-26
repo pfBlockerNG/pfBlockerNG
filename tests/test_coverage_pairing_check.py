@@ -400,6 +400,17 @@ def test_matching_frozen_red_record_passes(tmp_path: Any) -> None:
     assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 0
 
 
+def test_frozen_red_hash_must_be_lowercase(tmp_path: Any, capsys: Any) -> None:
+    body = tmp_path / "pr-body.md"
+    digest = _working_tree_hash(_RELEASE_TEST)
+    body.write_text(_frozen_red_body(_RELEASE_TEST, digest.upper()), encoding="utf-8")
+
+    assert ccp.main(["--pr-body-file", str(body), _RELEASE_SCRIPT, _RELEASE_TEST]) == 1
+    output = capsys.readouterr().out
+    assert _RELEASE_TEST in output
+    assert "Git object ID" in output
+
+
 def test_frozen_red_record_must_name_a_changed_test_and_carry_a_tail(tmp_path: Any, capsys: Any) -> None:
     body = tmp_path / "pr-body.md"
     body.write_text(
