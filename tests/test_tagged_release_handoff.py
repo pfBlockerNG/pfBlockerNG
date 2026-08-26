@@ -375,8 +375,8 @@ def _write_dependency_package(
         member.gid = 0
         member.uname = "root"
         member.gname = "wheel"
-        for name, value in (member_changes or {}).items():
-            setattr(member, name, value)
+        for field, field_value in (member_changes or {}).items():
+            setattr(member, field, field_value)
         tf.addfile(member, io.BytesIO(payload))
     path.write_bytes(lzma.compress(archive.getvalue()))
 
