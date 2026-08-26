@@ -12,6 +12,15 @@ from scripts import nightly_provenance as np
 SOURCE_SHA = "a" * 40
 PORTS_SHA = "b" * 40
 VERSION = f"20260814153045.{SOURCE_SHA[:7]}"
+DEPENDENCY_BUILDER = {
+    "python": "3.11.15",
+    "pip": "26.2.1",
+    "setuptools": "75.6.0",
+    "wheel": "0.45.1",
+    "zstandard": "0.25.0",
+    "uv": "0.12.6",
+    "uv_lock_sha256": "d" * 64,
+}
 
 
 def _row() -> dict[str, object]:
@@ -44,6 +53,7 @@ def test_build_record_binds_stateless_snapshot_identity() -> None:
         ports_sha=PORTS_SHA,
         matrix_row=_row(),
         source_date_epoch=1_800_000_000,
+        dependency_builder=DEPENDENCY_BUILDER,
     )
 
     assert record["canonical_package_version"] == VERSION
@@ -59,6 +69,7 @@ def test_build_record_rejects_version_for_different_source() -> None:
             ports_sha=PORTS_SHA,
             matrix_row=_row(),
             source_date_epoch=1_800_000_000,
+            dependency_builder=DEPENDENCY_BUILDER,
         )
 
 

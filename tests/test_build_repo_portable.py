@@ -43,6 +43,16 @@ from typing import Any
 import pfb_pkg
 import pytest
 
+DEPENDENCY_BUILDER = {
+    "python": "3.11.15",
+    "pip": "26.2.1",
+    "setuptools": "75.6.0",
+    "wheel": "0.45.1",
+    "zstandard": "0.25.0",
+    "uv": "0.12.6",
+    "uv_lock_sha256": "d" * 64,
+}
+
 # --------------------------------------------------------------------------- #
 # Load the hyphen-named tool as a module.
 # --------------------------------------------------------------------------- #
@@ -1391,6 +1401,7 @@ def _build_record_for(entry: dict[str, Any], channel: str, version: str) -> dict
         "freebsd_ports_sha": "b" * 64,
         "route": f"{channel}/ce-2.8",
         "source_date_epoch": 1_700_000_000,
+        "dependency_builder": DEPENDENCY_BUILDER,
         "build_input_digest": "",
     }
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)
@@ -1946,6 +1957,7 @@ def _canonical_retention_record(channel: str, version: str) -> dict[str, object]
         "freebsd_ports_sha": "b" * 64,
         "route": f"{channel}/ce-2.8",
         "source_date_epoch": 1_700_000_000,
+        "dependency_builder": DEPENDENCY_BUILDER,
         "build_input_digest": "",
     }
     record["build_input_digest"] = pfb_pkg.build_input_digest(record)

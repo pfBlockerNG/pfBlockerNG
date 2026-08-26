@@ -21,15 +21,13 @@ Pool is `pfb-box-1` … `pfb-box-8`, Debian 13 (trixie), x86_64.
   `oras`, `python3`, `ssh`, `qemu-system-x86_64`, `qemu-img`, `dig`, `iptables`, `zstd`,
   `tar`, `unzip`. On Debian those come from `git`, `jq`, `curl`, `qemu-system-x86` +
   `qemu-utils`, `dnsutils` (`dig`), `iptables`, `openssh-client`, `zstd`, `tar`, `unzip`,
-  and `python3` + `python3-venv` + `python3-pip` (`build-dep-pkg-portable.py` falls back
-  to `python -m venv`, and Debian ships `ensurepip` in a separate package). The leg runs
-  against the box's own toolchain (issue #2513); `smoke-on-box.sh` refuses loudly when one
-  is missing rather than falling back. Python dependencies come from
-  `uv sync --locked --group smoke`.
+  and `python3`. Dependency package builds use the repository's exact Python and
+  packaging toolchain rather than Debian's ambient pip; prepare it with
+  `uv sync --locked --group smoke --group dep-pkg-build`.
 - Everything but `uv` and `oras` comes from apt. Those two are not packaged for Debian:
   install them from their release tarballs, SHA-256 verified, into `/usr/local/bin`.
-  Boxes currently carry **uv 0.12.3** and **oras 1.3.3** — the same oras pin the
-  workflows use, so a box and a runner agree.
+  Boxes currently carry **uv 0.12.3** and **oras 1.3.3**. Release workflows pin
+  uv separately; the locked environment is what fixes dependency-package bytes.
 - Guest SSH key (baked into smoke images) at `/root/smoke-ssh-key`.
 - pfBlockerNG clone at `/root/pfBlockerNG`, with its remote named `origin` (the
   default unless `--git-remote`/`PFB_GIT_REMOTE` says otherwise). The orchestrator's

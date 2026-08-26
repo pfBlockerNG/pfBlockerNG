@@ -10,6 +10,11 @@ import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 
+try:
+    from scripts.pfb_pkg import PkgError, validate_dependency_builder
+except ImportError:
+    from pfb_pkg import PkgError, validate_dependency_builder
+
 _GIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _RELEASE_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:\.[abr][1-9][0-9]*)?$")
 _FIELDS = {
@@ -19,6 +24,8 @@ _FIELDS = {
     "source_sha",
     "ci_metadata_sha",
     "ports_sha",
+    "source_date_epoch",
+    "dependency_builder",
     "route_matrix",
 }
 
@@ -60,6 +67,8 @@ def build_handoff(
     ci_metadata_sha: str,
     ports_sha: str,
     route_matrix: object,
+    source_date_epoch: int,
+    dependency_builder: object,
 ) -> dict[str, object]:
     """Build the canonical handoff attached to a draft tagged release."""
     if not isinstance(release_tag, str) or not _RELEASE_TAG_RE.fullmatch(release_tag):
@@ -68,6 +77,12 @@ def build_handoff(
     ci_metadata_sha = _git_sha(ci_metadata_sha, "ci_metadata_sha")
     ports_sha = _git_sha(ports_sha, "ports_sha")
     rows = _route_matrix(route_matrix)
+    if type(source_date_epoch) is not int or source_date_epoch < 0:
+        raise HandoffError("source_date_epoch must be a non-negative integer")
+    try:
+        normalized_dependency_builder = validate_dependency_builder(dependency_builder)
+    except PkgError as exc:
+        raise HandoffError(str(exc)) from exc
     return {
         "schema": 1,
         "kind": "tagged-release-handoff",
@@ -75,6 +90,8 @@ def build_handoff(
         "source_sha": source_sha,
         "ci_metadata_sha": ci_metadata_sha,
         "ports_sha": ports_sha,
+        "source_date_epoch": source_date_epoch,
+        "dependency_builder": normalized_dependency_builder,
         "route_matrix": rows,
     }
 
@@ -106,6 +123,8 @@ def load_handoff(
         ci_metadata_sha=raw["ci_metadata_sha"],
         ports_sha=raw["ports_sha"],
         route_matrix=raw["route_matrix"],
+        source_date_epoch=raw["source_date_epoch"],
+        dependency_builder=raw["dependency_builder"],
     )
     if validated["release_tag"] != expected_release_tag:
         raise HandoffError("release_tag does not match the selected Release")
@@ -122,6 +141,8 @@ def validate_build_records(handoff: Mapping[str, object], records: Sequence[Mapp
         "source_tag": handoff.get("release_tag"),
         "source_sha": handoff.get("source_sha"),
         "freebsd_ports_sha": handoff.get("ports_sha"),
+        "source_date_epoch": handoff.get("source_date_epoch"),
+        "dependency_builder": handoff.get("dependency_builder"),
     }
     for index, record in enumerate(records):
         if not isinstance(record, Mapping):
@@ -137,6 +158,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--source-sha", required=True)
     parser.add_argument("--ci-metadata-sha", required=True)
     parser.add_argument("--ports-sha", required=True)
+    parser.add_argument("--source-date-epoch", required=True, type=int)
+    parser.add_argument("--dependency-builder", required=True, type=Path)
     parser.add_argument("--route-matrix", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     return parser.parse_args(argv)
@@ -146,12 +169,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
     try:
         route_matrix = json.loads(args.route_matrix.read_text(encoding="utf-8"))
+        dependency_builder = json.loads(args.dependency_builder.read_text(encoding="utf-8"))
         handoff = build_handoff(
             release_tag=args.release_tag,
             source_sha=args.source_sha,
             ci_metadata_sha=args.ci_metadata_sha,
             ports_sha=args.ports_sha,
             route_matrix=route_matrix,
+            source_date_epoch=args.source_date_epoch,
+            dependency_builder=dependency_builder,
         )
         args.output.write_text(
             json.dumps(handoff, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",

@@ -140,7 +140,11 @@ jobs:
         # the appliance carries, and uv provisions + activates it.
         uses: astral-sh/setup-uv@v7 # v7.6.0
         with:
+          version: "0.12.6"
           activate-environment: true
+
+      - name: Sync the locked dependency-package toolchain
+        run: uv sync --locked --only-group dep-pkg-build
 
       - name: Require a zstd encoder
         # ubuntu-24.04 ships zstd, and its version cannot change a .pkg's contents,
@@ -232,6 +236,8 @@ jobs:
           ORIGIN_COUNT="$(printf '%s' "${EXTRA_PKGS:-[]}" | jq 'length // 0')"
           if [ "$ORIGIN_COUNT" -gt 0 ]; then
             PORTS_DIR="${PFB_RUN_ROOT}/${RUN_ID}/ports"
+            PORTS_SHA="$(git -C "$PORTS_DIR" rev-parse HEAD)"
+            SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
             mkdir -p "$DEP_PKG_DIR"
             I=0
             while [ "$I" -lt "$ORIGIN_COUNT" ]; do
@@ -244,9 +250,11 @@ jobs:
               git -C "$PORTS_DIR" sparse-checkout add "$ORIGIN"
               python3 scripts/build-dep-pkg-portable.py \
                 --ports "$PORTS_DIR" \
+                --ports-sha "$PORTS_SHA" \
                 --port "$ORIGIN" \
                 --py-flavor "$PY_FLAVOR" \
                 --freebsd-major "$FREEBSD_MAJOR" \
+                --source-date-epoch "$SOURCE_DATE_EPOCH" \
                 --out-dir "$DEP_PKG_DIR"
               I=$((I + 1))
             done

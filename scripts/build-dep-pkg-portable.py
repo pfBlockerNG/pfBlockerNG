@@ -9,43 +9,46 @@
 #
 # pfSense CE's own repo does not carry every py3xx- dependency our port needs
 # (Netgate builds some only for Plus). Rather than vendor the wheel, this tool
-# builds the REAL upstream sdist the port's distinfo pins (verified sha256+size),
-# via the port's own BUILD_DEPENDS toolchain (pip wheel, using py-setuptools/
-# py-wheel exactly like `make package` would), and emits a libpkg archive with
-# a real ${PYTHON_PKGNAMEPREFIX}-prefixed name — so a real pfSense box's
-# `pkg install` resolves the RUN_DEPENDS from OUR repo (build-repo-portable.py
-# --dep-pkgs folds the result into the release/nightly catalogs).
+# builds the REAL upstream sdist the port's distinfo pins (verified sha256+size)
+# with the exact Python/pip/setuptools/wheel environment installed from uv.lock,
+# then emits a libpkg archive with a real ${PYTHON_PKGNAMEPREFIX}-prefixed name.
+# A real pfSense box therefore resolves the RUN_DEPENDS from OUR repo
+# (build-repo-portable.py --dep-pkgs folds the result into the release/nightly
+# catalogs).
 #
 # Steps: (1) parse the port Makefile (reusing build-pkg-portable.py's Makefile
 # class) for PORTNAME/PORTVERSION/DISTNAME/COMMENT/WWW/LICENSE/MASTER_SITES,
 # requiring NO_ARCH=yes + USE_PYTHON containing pep517; (2) read distinfo for
 # the pinned sha256+size; (3) fetch the sdist from a MASTER_SITES-derived URL
 # (PYPI -> the pypi.io redirector; anything else -> the literal site + distfile)
-# and verify it byte-for-byte against distinfo; (4) `pip wheel --no-deps` the
-# sdist and assert the result is a single pure (py3-none-any) wheel; (5) unzip
-# it to its site-packages install paths + generate the wheel's [console_scripts]
+# and verify it byte-for-byte against distinfo; (4) `pip wheel
+# --no-build-isolation --no-deps` the sdist and require pure py3-none-any metadata;
+# (5) unzip it to its site-packages install paths + generate the wheel's [console_scripts]
 # entry-point stubs; (6) emit via build-pkg-portable.py's Build/Dep/StagedFile/
 # write_pkg (NO_ARCH -> abi/arch wildcarded on CPU, python<NNN> RUN_DEPENDS).
 #
-# Requires: python3 (stdlib) + pip (BUILD_DEPENDS equivalent) + a zstd encoder
-# (see build-pkg-portable.py). Network is required (sdist fetch + pip's own
-# fetch of its build backend). Developer tool — not shipped in release archives.
+# Requires the exact `.python-version` environment from
+# `uv sync --locked --only-group dep-pkg-build`. Network is used only to fetch the
+# distinfo-verified sdist; backend packages and zstd come from uv.lock.
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.metadata
 import importlib.util
+import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import urllib.request
 import zipfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -71,6 +74,48 @@ def _load_build_pkg_portable() -> Any:
 
 
 bpp = _load_build_pkg_portable()
+
+_REPO_ROOT = _THIS_DIR.parent
+_BUILD_TOOLCHAIN = {
+    "python": "3.11.15",
+    "pip": "26.2.1",
+    "setuptools": "75.6.0",
+    "wheel": "0.45.1",
+    "zstandard": "0.25.0",
+}
+_UV_VERSION = "0.12.6"
+
+
+def _installed_build_toolchain() -> dict[str, str]:
+    return {
+        "python": ".".join(str(part) for part in sys.version_info[:3]),
+        **{name: importlib.metadata.version(name) for name in ("pip", "setuptools", "wheel", "zstandard")},
+    }
+
+
+def build_toolchain_identity() -> dict[str, str]:
+    lock = _REPO_ROOT / "uv.lock"
+    return {
+        **_BUILD_TOOLCHAIN,
+        "uv": _UV_VERSION,
+        "uv_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+    }
+
+
+def validate_build_toolchain() -> dict[str, str]:
+    try:
+        installed = _installed_build_toolchain()
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise DepPkgError(
+            "dependency build toolchain is incomplete; run `uv sync --locked --only-group dep-pkg-build`"
+        ) from exc
+    for name, expected in _BUILD_TOOLCHAIN.items():
+        if installed.get(name) != expected:
+            raise DepPkgError(
+                f"{name} build tool is {installed.get(name)!r}, expected {expected!r}; run "
+                "`uv sync --locked --only-group dep-pkg-build`"
+            )
+    return build_toolchain_identity()
 
 
 class DepPkgError(Exception):
@@ -259,50 +304,49 @@ def _run_relayed(cmd: list[str], **kwargs: Any) -> None:
         raise subprocess.CalledProcessError(result.returncode, cmd, output=result.stdout, stderr=result.stderr)
 
 
-# W4 (supply chain, honest middle ground): `pip wheel` builds the sdist's
-# pep517 backend in an ISOLATED build env by default — with no pin, that env
-# fetches whatever is newest on PyPI for the backend itself (setuptools/wheel),
-# a version-drift supply-chain gap this narrows. PIP_CONSTRAINT (below) makes
-# pip apply this EXACT-version pin to the isolated build env too, not just the
-# top-level install. This does NOT close the gap: PyPI is still trusted to
-# serve these exact, named versions honestly (no hash pin) — a deliberate
-# middle ground, not a hermetic build. Bump these periodically.
+# The PEP-517 backend versions are installed from uv.lock and verified above.
+# PIP_CONSTRAINT also prevents a future accidental removal of
+# --no-build-isolation from silently resolving different backend versions.
 _BUILD_BACKEND_CONSTRAINTS = "setuptools==75.6.0\nwheel==0.45.1\n"
 
 
-def _pip_python(work_dir: Path) -> str:
-    """A python executable with a working ``pip`` module.
-
-    ``sys.executable`` (the fast path — true on every CI runner) when it
-    already has one. Some build hosts (the PFB_BOXES minimal Debian pool) ship
-    ``python3-venv`` but not ``pip`` on the system interpreter; there, bootstrap
-    a throwaway venv under ``work_dir`` (a venv's own pip is always present)
-    and return ITS python instead. A venv-creation failure too is a loud
-    refusal, never a silent fall-through.
-    """
-    probe = subprocess.run([sys.executable, "-m", "pip", "--version"], capture_output=True)
-    if probe.returncode == 0:
-        return sys.executable
-    venv_dir = work_dir / "pip-venv"
-    sys.stderr.write(f"==> {sys.executable} has no pip module; bootstrapping a venv at {venv_dir}\n")
-    try:
-        _run_relayed([sys.executable, "-m", "venv", str(venv_dir)])
-    except subprocess.CalledProcessError as e:
-        raise DepPkgError(f"{sys.executable} has no pip and venv creation failed: {e}") from e
-    return str(venv_dir / "bin" / "python")
-
-
-def build_wheel(sdist: Path, work_dir: Path) -> Path:
+def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int | None = None) -> Path:
     wheel_dir = work_dir / "wheel"
     wheel_dir.mkdir(parents=True, exist_ok=True)
-    python = _pip_python(work_dir)
-    # W4: PIP_CONSTRAINT applies to pip's OWN isolated pep517 build env too (not
-    # just this top-level install), pinning the sdist's build backend
-    # (setuptools/wheel) to the exact versions above.
+    validate_build_toolchain()
+    python = sys.executable
     constraints_file = work_dir / "build-constraints.txt"
     constraints_file.write_text(_BUILD_BACKEND_CONSTRAINTS)
-    env = dict(os.environ, PIP_CONSTRAINT=str(constraints_file))
-    cmd = [python, "-m", "pip", "wheel", "--no-deps", str(sdist), "-w", str(wheel_dir)]
+    blocked_env_prefixes = ("LC_", "PIP_", "PYTHON", "SETUPTOOLS_", "SOURCE_DATE_EPOCH", "TZ", "WHEEL_")
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("LANG",) and not key.startswith(blocked_env_prefixes)
+    }
+    env.update(
+        LANG="C",
+        LC_ALL="C",
+        PIP_CONFIG_FILE=os.devnull,
+        PIP_CONSTRAINT=str(constraints_file),
+        PIP_DISABLE_PIP_VERSION_CHECK="1",
+        PIP_NO_INDEX="1",
+        PYTHONHASHSEED="0",
+        TZ="UTC",
+    )
+    if source_date_epoch is not None:
+        env["SOURCE_DATE_EPOCH"] = str(source_date_epoch)
+    cmd = [
+        python,
+        "-m",
+        "pip",
+        "wheel",
+        "--no-cache-dir",
+        "--no-build-isolation",
+        "--no-deps",
+        str(sdist),
+        "-w",
+        str(wheel_dir),
+    ]
     sys.stderr.write(f"==> building wheel: {' '.join(cmd)}\n")
     _run_relayed(cmd, env=env)
     wheels = sorted(wheel_dir.glob("*.whl"))
@@ -338,7 +382,7 @@ def python_dotted_version(py_flavor: str) -> str:
     return f"{m.group(1)}.{m.group(2)}"
 
 
-_ENTRY_POINT_RE = re.compile(r"^([^=\s]+)\s*=\s*([A-Za-z0-9_.]+):([A-Za-z0-9_.]+)\s*$")
+_ENTRY_POINT_RE = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)\s*=\s*([A-Za-z0-9_.]+):([A-Za-z0-9_.]+)\s*$")
 
 
 def parse_console_scripts(entry_points_text: str) -> dict[str, tuple[str, str]]:
@@ -376,23 +420,59 @@ if __name__ == '__main__':
 """
 
 
+def _validated_wheel_files(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
+    files = [info for info in zf.infolist() if not info.is_dir()]
+    names = [info.filename for info in files]
+    if len(names) != len(set(names)):
+        raise DepPkgError("wheel contains duplicate member names")
+
+    compiled_suffixes = (".dll", ".dylib", ".pyc", ".pyd", ".so")
+    for info in files:
+        path = PurePosixPath(info.filename)
+        if (
+            not info.filename
+            or info.filename.startswith("/")
+            or "\\" in info.filename
+            or any(part in ("", ".", "..") for part in path.parts)
+        ):
+            raise DepPkgError(f"wheel contains unsafe member path: {info.filename!r}")
+        if stat.S_ISLNK(info.external_attr >> 16):
+            raise DepPkgError(f"wheel contains symlink member: {info.filename!r}")
+        if info.filename.lower().endswith(compiled_suffixes):
+            raise DepPkgError(f"wheel contains compiled member: {info.filename!r}")
+
+    wheel_metadata = [info for info in files if info.filename.endswith(".dist-info/WHEEL")]
+    if len(wheel_metadata) != 1:
+        raise DepPkgError(f"wheel must contain exactly one .dist-info/WHEEL member, got {len(wheel_metadata)}")
+    try:
+        metadata = zf.read(wheel_metadata[0]).decode("utf-8")
+    except UnicodeDecodeError:
+        raise DepPkgError("wheel .dist-info/WHEEL metadata is not UTF-8") from None
+    root_is_purelib = [
+        line.partition(":")[2].strip().lower()
+        for line in metadata.splitlines()
+        if line.lower().startswith("root-is-purelib:")
+    ]
+    tags = [line.partition(":")[2].strip() for line in metadata.splitlines() if line.lower().startswith("tag:")]
+    if root_is_purelib != ["true"]:
+        raise DepPkgError("wheel metadata must declare Root-Is-Purelib: true")
+    if tags != ["py3-none-any"]:
+        raise DepPkgError(f"wheel metadata Tag must be exactly py3-none-any, got {tags!r}")
+    return sorted(files, key=lambda info: info.filename)
+
+
 def stage_wheel(wheel: Path, stage_dir: Path, py_dotted: str) -> tuple[list[Path], list[Path]]:
-    """Unzip ``wheel`` into ``stage_dir`` at its real install paths (site-packages
-    for every wheel member, ``/usr/local/bin/<name>`` for each console-script
-    entry point). Returns ``(site_package_files, script_files)`` — absolute
-    Paths under ``stage_dir`` the caller turns into ``StagedFile`` entries."""
+    """Unzip a validated pure wheel into target site-packages and script paths."""
     site_root = stage_dir / "usr/local/lib" / f"python{py_dotted}" / "site-packages"
     site_root.mkdir(parents=True, exist_ok=True)
 
     site_files: list[Path] = []
     entry_points_text = ""
     with zipfile.ZipFile(wheel) as zf:
-        for info in zf.infolist():
-            if info.is_dir():
-                continue
+        for info in _validated_wheel_files(zf):
             target = site_root / info.filename
             target.parent.mkdir(parents=True, exist_ok=True)
-            data = zf.read(info.filename)
+            data = zf.read(info)
             target.write_bytes(data)
             site_files.append(target)
             if info.filename.endswith(".dist-info/entry_points.txt"):
@@ -400,7 +480,7 @@ def stage_wheel(wheel: Path, stage_dir: Path, py_dotted: str) -> tuple[list[Path
 
     bin_root = stage_dir / "usr/local/bin"
     script_files: list[Path] = []
-    for name, (module, func) in parse_console_scripts(entry_points_text).items():
+    for name, (module, func) in sorted(parse_console_scripts(entry_points_text).items()):
         bin_root.mkdir(parents=True, exist_ok=True)
         script = bin_root / name
         script.write_text(_SCRIPT_STUB.format(py_dotted=py_dotted, module=module, func=func))
@@ -416,21 +496,67 @@ def stage_wheel(wheel: Path, stage_dir: Path, py_dotted: str) -> tuple[list[Path
 # --------------------------------------------------------------------------- #
 
 
+def _source_date_epoch(args: argparse.Namespace) -> int:
+    epoch = bpp._checked_mtime(args.source_date_epoch, "--source-date-epoch")
+    if "SOURCE_DATE_EPOCH" in os.environ:
+        raw = os.environ["SOURCE_DATE_EPOCH"].strip()
+        try:
+            ambient = int(raw)
+        except ValueError:
+            raise DepPkgError("ambient SOURCE_DATE_EPOCH must match --source-date-epoch") from None
+        if ambient != epoch:
+            raise DepPkgError("ambient SOURCE_DATE_EPOCH must match --source-date-epoch")
+    return epoch
+
+
+def _dep_build_record(
+    args: argparse.Namespace,
+    port: PortFacts,
+    *,
+    distfile: str,
+    distfile_sha256: str,
+    distfile_size: int,
+) -> str:
+    record = {
+        "schema": 1,
+        "freebsd_ports_sha": args.ports_sha,
+        "port_origin": args.port,
+        "port_version": port.portversion,
+        "distfile": distfile,
+        "distfile_sha256": distfile_sha256,
+        "distfile_size": distfile_size,
+        "py_flavor": args.py_flavor,
+        "freebsd_major": args.freebsd_major,
+        "abi": f"FreeBSD:{args.freebsd_major}:*",
+        "source_date_epoch": args.source_date_epoch,
+        "toolchain": build_toolchain_identity(),
+    }
+    return json.dumps(record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
 def build_dep_pkg(args: argparse.Namespace) -> Path:
+    epoch = _source_date_epoch(args)
+    if not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", args.ports_sha):
+        raise DepPkgError("--ports-sha must be a lowercase 40- or 64-character Git SHA")
     port_dir = Path(args.ports).resolve() / args.port
     port = read_port(port_dir)
+    validate_build_toolchain()
     py_dotted = python_dotted_version(args.py_flavor)  # validates the flavor too
 
     distfile = f"{port.distname}.tar.gz"
     sha256, size = read_distinfo(port_dir, distfile)
 
+    if getattr(args, "attest_ports", False):
+        bpp._attest_checkout(Path(args.ports), args.ports_sha, "FreeBSD-ports")
     with tempfile.TemporaryDirectory(prefix="pfbng-deppkg-") as td:
         tmp = Path(td)
         sdist = fetch_verified_sdist(port, tmp, sha256=sha256, size=size)
-        wheel = build_wheel(sdist, tmp)
+        wheel = build_wheel(sdist, tmp, source_date_epoch=epoch)
 
         stage = tmp / "stage"
         site_files, script_files = stage_wheel(wheel, stage, py_dotted)
+        for staged_file in site_files + script_files:
+            os.utime(staged_file, (epoch, epoch))
         if not site_files:
             raise DepPkgError(f"{wheel.name}: wheel contained no files")
 
@@ -462,6 +588,15 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
                 bpp.Dep(name=f"python{pyv}", origin=f"lang/python{pyv}", version=args.python_dep_version),
             ],
             files=files,
+            annotations={
+                "pfb_dep_build_record": _dep_build_record(
+                    args,
+                    port,
+                    distfile=distfile,
+                    distfile_sha256=sha256,
+                    distfile_size=size,
+                )
+            },
         )
 
         out_dir = Path(args.out_dir)
@@ -473,6 +608,9 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
 
 
 def main(argv: list[str]) -> int:
+    if argv == ["--print-toolchain"]:
+        print(json.dumps(build_toolchain_identity(), ensure_ascii=False, sort_keys=True, separators=(",", ":")))
+        return 0
     ap = argparse.ArgumentParser(
         prog="build-dep-pkg-portable.py",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -485,7 +623,8 @@ def main(argv: list[str]) -> int:
         epilog=(
             "example:\n"
             "  build-dep-pkg-portable.py --ports ../FreeBSD-ports \\\n"
-            "      --port textproc/py-charset-normalizer --py-flavor py311 \\\n"
+            "      --ports-sha <40-hex SHA> --port textproc/py-charset-normalizer \\\n"
+            "      --py-flavor py311 --source-date-epoch <source commit epoch> \\\n"
             "      --freebsd-major 15 --out-dir /tmp\n"
         ),
     )
@@ -509,9 +648,18 @@ def main(argv: list[str]) -> int:
             "deliberately avoids. Pass an explicit version only if a caller has one."
         ),
     )
+    ap.add_argument("--ports-sha", required=True, dest="ports_sha", help="exact FreeBSD-ports Git SHA")
+    ap.add_argument(
+        "--source-date-epoch",
+        required=True,
+        type=int,
+        dest="source_date_epoch",
+        help="source-derived package timestamp in whole Unix seconds",
+    )
     ap.add_argument("--out-dir", required=True, dest="out_dir", help="output directory for the .pkg")
     ap.add_argument("--compression", choices=("zstd", "xz"), default="zstd", help="output compression (default: zstd)")
     args = ap.parse_args(argv)
+    args.attest_ports = True
 
     try:
         out_path = build_dep_pkg(args)

@@ -100,10 +100,11 @@ Notes:
   RUN_DEPENDS from Netgate's mirror. Our self-hosted pkg repo (ADR-17) builds it,
   designed to serve it itself: `supported-versions.json`'s CE entry carries
   `extra_pkgs: ["textproc/py-charset-normalizer"]` (Plus entry carries
-  `extra_pkgs: []` — Netgate already ships it there), `scripts/build-dep-pkg-portable.py`
-  builds NO_ARCH `.pkg` for it straight from FreeBSD-ports port definition
-  (no FreeBSD host needed), and `build-repo-portable.py --dep-pkgs` folds
-  result into release/nightly catalogs of every matching FreeBSD major.
+  `extra_pkgs: []` — Netgate already ships it there),
+  `scripts/build-dep-pkg-portable.py` builds its reproducible NO_ARCH `.pkg`
+  from the Ports-pinned sdist and locked Python toolchain, and
+  `build-repo-portable.py --dep-pkgs` folds the result into release/nightly
+  catalogs of every matching FreeBSD major.
   Release-verification CI gate (release.yml's smoke-suite/ui-suite) proves this
   end to end against built artifacts, and dep `.pkg` IS deliberate
   GitHub Release asset — `attach-pkgs`'s existing `pfBlockerNG-relpkg-*` sweep

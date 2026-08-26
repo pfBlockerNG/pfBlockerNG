@@ -186,6 +186,10 @@ def test_build_step_builds_and_hands_off_dependency_packages() -> None:
     assert "--port" in step
     assert "--py-flavor" in step
     assert "--freebsd-major" in step
+    assert "--ports-sha" in step
+    assert "--source-date-epoch" in step
+    assert '"$DEP_PYTHON"' in step
+    assert "--dependency-builder dependency-builder.json" in step
     assert "--out-dir" in step
 
     # W2: loop driven by the matrix row's extra_pkgs, sparse-checkout add per origin.
@@ -199,6 +203,14 @@ def test_build_step_builds_and_hands_off_dependency_packages() -> None:
     # W4: result.json construction includes dep_artifacts.
     assert "dep_artifacts" in step
     assert "DEP_ARTIFACTS_JSON" in step
+
+
+def test_dependency_builder_toolchain_is_locked_and_handed_off() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert 'version: "0.12.6"' in text
+    assert "uv sync --project trusted --locked --only-group dep-pkg-build" in text
+    assert "plan/dependency-builder.json" in text
+    assert "--dependency-builder plan/dependency-builder.json" in text
 
 
 def test_handoff_step_has_no_durable_completion() -> None:

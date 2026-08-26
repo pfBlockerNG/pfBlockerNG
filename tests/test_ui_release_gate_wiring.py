@@ -470,6 +470,18 @@ def test_build_pkgs_portable_leg_step_carries_row_identity_and_abi() -> None:
     assert "matrix.arch" not in job_text
 
 
+def test_release_dependency_builder_receives_every_reproducibility_input() -> None:
+    job_text = "\n".join(_jobs(RELEASE_WORKFLOW)["build-pkgs-portable"])
+    for value in (
+        'version: "0.12.6"',
+        "uv sync --locked --only-group dep-pkg-build",
+        '--ports-sha "$PORTS_SHA"',
+        '--source-date-epoch "$CREATED"',
+        '"dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"])',
+    ):
+        assert value in job_text
+
+
 # --------------------------------------------------------------------------- #
 # attach-pkgs: merges every per-leg artifact by pattern
 # --------------------------------------------------------------------------- #

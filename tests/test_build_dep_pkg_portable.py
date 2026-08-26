@@ -113,6 +113,11 @@ def _write_wheel(path: Path, *, files: dict[str, bytes], entry_points: str | Non
     with zipfile.ZipFile(path, "w") as zf:
         for name, data in files.items():
             zf.writestr(name, data)
+        if not any(name.endswith(".dist-info/WHEEL") for name in files):
+            zf.writestr(
+                "mypkg-1.0.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            )
         if entry_points is not None:
             zf.writestr("mypkg-1.0.dist-info/entry_points.txt", entry_points)
 
@@ -341,11 +346,7 @@ def test_build_wheel_refuses_platform_wheel(tmp_path: Path, monkeypatch: pytest.
 def test_build_wheel_sets_pip_constraint_pinning_setuptools_and_wheel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """W4 (supply chain, honest middle ground): `pip wheel`'s pep517 isolated
-    build env otherwise fetches whatever's newest on PyPI for the build backend
-    itself (setuptools/wheel) -- PIP_CONSTRAINT pins it to exact versions.
-    Assert the env var is actually passed on the pip call, pointing at a real
-    constraints file naming both packages."""
+    """The locked backend is used without isolated network resolution."""
     captured_envs: list[dict[str, str]] = []
 
     def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
@@ -359,8 +360,7 @@ def test_build_wheel_sets_pip_constraint_pinning_setuptools_and_wheel(
 
     bdp.build_wheel(tmp_path / "sdist.tar.gz", tmp_path)
 
-    # The pip-wheel call (the last of the two subprocess.run calls: the pip
-    # probe in _pip_python, then the actual build) carries PIP_CONSTRAINT.
+    # The pip-wheel call carries the exact fallback constraint as defense in depth.
     pip_wheel_env = captured_envs[-1]
     assert "PIP_CONSTRAINT" in pip_wheel_env, "pip wheel call was not given PIP_CONSTRAINT"
     constraints_path = Path(pip_wheel_env["PIP_CONSTRAINT"])
@@ -368,53 +368,6 @@ def test_build_wheel_sets_pip_constraint_pinning_setuptools_and_wheel(
     text = constraints_path.read_text()
     assert "setuptools==" in text
     assert "wheel==" in text
-
-
-# --------------------------------------------------------------------------- #
-# _pip_python — venv fallback when the interpreter has no pip module
-# (issue #1806: the PFB_BOXES minimal Debian pool ships python3-venv but not
-# pip on /usr/bin/python3; a venv's own bootstrapped pip is always present).
-# --------------------------------------------------------------------------- #
-
-
-def test_pip_python_falls_back_to_venv_when_direct_pip_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[list[str]] = []
-
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        calls.append(cmd)
-        if cmd[1:3] == ["-m", "pip"]:
-            return subprocess.CompletedProcess(cmd, 1)  # no pip module on sys.executable
-        if cmd[1:3] == ["-m", "venv"]:
-            return subprocess.CompletedProcess(cmd, 0)  # venv created fine
-        raise AssertionError(f"unexpected subprocess.run call: {cmd}")
-
-    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
-    python = bdp._pip_python(tmp_path)
-
-    assert python == str(tmp_path / "pip-venv" / "bin" / "python")
-    assert python != sys.executable
-    assert any(c[1:3] == ["-m", "venv"] for c in calls), f"venv path was not exercised: {calls}"
-
-
-def test_pip_python_uses_sys_executable_when_pip_already_present(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The fast path (CI runners): a direct pip probe success skips the venv entirely."""
-    monkeypatch.setattr(bdp.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
-    assert bdp._pip_python(tmp_path) == sys.executable
-
-
-def test_pip_python_raises_when_venv_creation_also_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    def fake_run(cmd: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
-        if cmd[1:3] == ["-m", "pip"]:
-            return subprocess.CompletedProcess(cmd, 1)
-        if cmd[1:3] == ["-m", "venv"]:
-            raise subprocess.CalledProcessError(1, cmd)
-        raise AssertionError(f"unexpected subprocess.run call: {cmd}")
-
-    monkeypatch.setattr(bdp.subprocess, "run", fake_run)
-    with pytest.raises(bdp.DepPkgError, match="no pip"):
-        bdp._pip_python(tmp_path)
 
 
 # --------------------------------------------------------------------------- #
@@ -505,7 +458,49 @@ def test_stage_wheel_without_entry_points_yields_no_scripts(tmp_path: Path) -> N
     stage = tmp_path / "stage"
     site_files, script_files = bdp.stage_wheel(wheel, stage, "3.11")
     assert script_files == []
-    assert len(site_files) == 1
+    assert len(site_files) == 2
+
+
+@pytest.mark.parametrize(
+    ("member", "data", "message"),
+    [
+        ("mypkg-1.0.dist-info/WHEEL", b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: cp311-cp311-any\n", "Tag"),
+        ("mypkg-1.0.dist-info/WHEEL", b"Wheel-Version: 1.0\nRoot-Is-Purelib: false\nTag: py3-none-any\n", "Pure"),
+        ("mypkg/native.so", b"compiled", "compiled"),
+        ("../escaped.py", b"escape", "unsafe"),
+    ],
+)
+def test_stage_wheel_refuses_nonportable_members(tmp_path: Path, member: str, data: bytes, message: str) -> None:
+    wheel = tmp_path / "mypkg-1.0-py3-none-any.whl"
+    files = {
+        "mypkg/__init__.py": b"X = 1\n",
+        "mypkg-1.0.dist-info/WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        member: data,
+    }
+    _write_wheel(wheel, files=files, entry_points=None)
+
+    with pytest.raises(bdp.DepPkgError, match=message):
+        bdp.stage_wheel(wheel, tmp_path / "stage", "3.11")
+
+
+def test_stage_wheel_refuses_missing_or_duplicate_metadata(tmp_path: Path) -> None:
+    missing = tmp_path / "missing-1.0-py3-none-any.whl"
+    with zipfile.ZipFile(missing, "w") as archive:
+        archive.writestr("missing/__init__.py", b"")
+    with pytest.raises(bdp.DepPkgError, match="exactly one.*WHEEL"):
+        bdp.stage_wheel(missing, tmp_path / "missing-stage", "3.11")
+
+    duplicate = tmp_path / "duplicate-1.0-py3-none-any.whl"
+    with pytest.warns(UserWarning, match="Duplicate name"):
+        with zipfile.ZipFile(duplicate, "w") as archive:
+            archive.writestr("duplicate/__init__.py", b"first")
+            archive.writestr("duplicate/__init__.py", b"second")
+            archive.writestr(
+                "duplicate-1.0.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            )
+    with pytest.raises(bdp.DepPkgError, match="duplicate"):
+        bdp.stage_wheel(duplicate, tmp_path / "duplicate-stage", "3.11")
 
 
 # --------------------------------------------------------------------------- #
@@ -522,7 +517,7 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
         dest.write_bytes(b"mocked sdist bytes -- fetch is not exercised here")
         return dest
 
-    def fake_build_wheel(sdist: Path, work_dir: Path) -> Path:
+    def fake_build_wheel(_sdist: Path, work_dir: Path, **_kwargs: Any) -> Path:
         wheel_dir = work_dir / "wheel"
         wheel_dir.mkdir(parents=True, exist_ok=True)
         wheel = wheel_dir / "charset_normalizer-3.4.4-py3-none-any.whl"
@@ -531,6 +526,9 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
             files={
                 "charset_normalizer/__init__.py": b"__version__ = '3.4.4'\n",
                 "charset_normalizer-3.4.4.dist-info/METADATA": b"Metadata-Version: 2.1\n",
+                "charset_normalizer-3.4.4.dist-info/WHEEL": (
+                    b"Wheel-Version: 1.0\nGenerator: bdist_wheel (0.45.1)\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
+                ),
             },
             entry_points=console_scripts,
         )
@@ -538,6 +536,7 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
 
     monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
     monkeypatch.setattr(bdp, "build_wheel", fake_build_wheel)
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
 
 
 def _build_args(ports_root: Path, out_dir: Path) -> argparse.Namespace:
@@ -547,6 +546,8 @@ def _build_args(ports_root: Path, out_dir: Path) -> argparse.Namespace:
         py_flavor="py311",
         freebsd_major="15",
         python_dep_version="3.11.13",
+        ports_sha="d" * 40,
+        source_date_epoch=1_700_000_000,
         out_dir=str(out_dir),
         compression="zstd",
     )
@@ -573,6 +574,21 @@ def test_build_dep_pkg_emits_correct_manifest(tmp_path: Path, monkeypatch: pytes
     assert manifest["categories"] == ["textproc", "python"]
     assert manifest["licenses"] == ["MIT"]
     assert manifest["deps"] == {"python311": {"origin": "lang/python311", "version": "3.11.13"}}
+    dep_record = json.loads(manifest["annotations"]["pfb_dep_build_record"])
+    assert dep_record == {
+        "schema": 1,
+        "freebsd_ports_sha": "d" * 40,
+        "port_origin": "textproc/py-charset-normalizer",
+        "port_version": "3.4.4",
+        "distfile": "charset_normalizer-3.4.4.tar.gz",
+        "distfile_sha256": "94537985111c35f28720e43603b8e7b43a6ecfb2ce1d3058bbe955b73404e21a",
+        "distfile_size": 129418,
+        "py_flavor": "py311",
+        "freebsd_major": "15",
+        "abi": "FreeBSD:15:*",
+        "source_date_epoch": 1_700_000_000,
+        "toolchain": bdp.build_toolchain_identity(),
+    }
 
     # File listing + perms live in the FULL +MANIFEST, not the compact one.
     full = _read_full_manifest(out_path)
@@ -636,6 +652,8 @@ def test_main_prints_out_path_as_last_stdout_line(
             "--port", "textproc/py-charset-normalizer",
             "--py-flavor", "py311",
             "--freebsd-major", "15",
+            "--ports-sha", "d" * 40,
+            "--source-date-epoch", "1700000000",
             "--python-dep-version", "3.11.13",
             "--out-dir", str(out_dir),
         ]
@@ -654,10 +672,9 @@ def test_main_stdout_is_only_the_pkg_path_line(
     build-dep-pkg-portable.py ...)"``); pip's "Processing ...", "Created wheel
     ..." lines leaking onto an inherited stdout got word-split into that
     captured value as garbage (issue #1806 live-leg RED #4). The real
-    build_wheel()/_pip_python() run here (not mocked out) so the actual
-    subprocess-output-relay path is exercised; ``--compression xz`` sidesteps
-    the ALSO-real zstd_compress() subprocess call (stdlib lzma, no subprocess)
-    so only the two calls under test need a fake.
+    build_wheel() runs here (not mocked out), so the actual subprocess-output
+    relay path is exercised; ``--compression xz`` sidesteps the ALSO-real
+    zstd_compress() subprocess call (stdlib lzma), leaving one child call.
     """
     ports_root = tmp_path / "ports"
     _write_port(ports_root)
@@ -696,6 +713,7 @@ def test_main_stdout_is_only_the_pkg_path_line(
 
     monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
     monkeypatch.setattr(bdp.subprocess, "run", fake_run)
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
 
     out_dir = tmp_path / "out"
     rc = bdp.main(
@@ -704,6 +722,8 @@ def test_main_stdout_is_only_the_pkg_path_line(
             "--port", "textproc/py-charset-normalizer",
             "--py-flavor", "py311",
             "--freebsd-major", "15",
+            "--ports-sha", "d" * 40,
+            "--source-date-epoch", "1700000000",
             "--compression", "xz",
             "--out-dir", str(out_dir),
         ]
@@ -739,6 +759,8 @@ def test_main_defaults_python_dep_version_to_0_when_omitted(tmp_path: Path, monk
             "--port", "textproc/py-charset-normalizer",
             "--py-flavor", "py311",
             "--freebsd-major", "15",
+            "--ports-sha", "d" * 40,
+            "--source-date-epoch", "1700000000",
             "--out-dir", str(out_dir),
         ]
     )  # fmt: skip
@@ -756,9 +778,80 @@ def test_main_returns_1_and_reports_refusal_on_stderr(tmp_path: Path, capsys: py
             "--port", "textproc/py-charset-normalizer",
             "--py-flavor", "py311",
             "--freebsd-major", "15",
+            "--ports-sha", "d" * 40,
+            "--source-date-epoch", "1700000000",
             "--python-dep-version", "3.11.13",
             "--out-dir", str(tmp_path / "out"),
         ]
     )  # fmt: skip
     assert rc == 1
     assert "NO_ARCH" in capsys.readouterr().err
+
+
+def test_freebsd_majors_retain_target_specific_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ports_root = tmp_path / "ports"
+    _write_port(ports_root)
+    _mock_network(monkeypatch, console_scripts=None)
+    first = bdp.build_dep_pkg(_build_args(ports_root, tmp_path / "major-15"))
+    second_args = _build_args(ports_root, tmp_path / "major-16")
+    second_args.freebsd_major = "16"
+    second = bdp.build_dep_pkg(second_args)
+
+    assert hashlib.sha256(first.read_bytes()).digest() != hashlib.sha256(second.read_bytes()).digest()
+    assert pfb_pkg.read_compact_manifest(first)["abi"] == "FreeBSD:15:*"
+    assert pfb_pkg.read_compact_manifest(second)["abi"] == "FreeBSD:16:*"
+
+
+@pytest.mark.parametrize("name", ["pip", "setuptools", "wheel"])
+def test_build_toolchain_rejects_backend_constraint_drift(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    installed = dict(bdp._BUILD_TOOLCHAIN)
+    installed[name] = "999.0"
+    monkeypatch.setattr(bdp, "_installed_build_toolchain", lambda: installed)
+
+    with pytest.raises(bdp.DepPkgError, match=name):
+        bdp.validate_build_toolchain()
+
+
+def test_source_epoch_and_ports_identity_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    args = _build_args(tmp_path / "ports", tmp_path / "out")
+    for invalid in (-1, bdp.bpp._USTAR_MAX_MTIME + 1):
+        args.source_date_epoch = invalid
+        with pytest.raises(bdp.bpp.BuildError, match="source-date-epoch"):
+            bdp._source_date_epoch(args)
+
+    args.source_date_epoch = 1_700_000_000
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1700000001")
+    with pytest.raises(bdp.DepPkgError, match="must match"):
+        bdp._source_date_epoch(args)
+    monkeypatch.delenv("SOURCE_DATE_EPOCH")
+
+    args.ports_sha = "not-a-sha"
+    with pytest.raises(bdp.DepPkgError, match="ports-sha"):
+        bdp.build_dep_pkg(args)
+
+
+def test_cli_requires_an_explicit_source_epoch(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        bdp.main(
+            [
+                "--ports",
+                str(tmp_path / "ports"),
+                "--ports-sha",
+                "d" * 40,
+                "--port",
+                "textproc/py-charset-normalizer",
+                "--py-flavor",
+                "py311",
+                "--freebsd-major",
+                "15",
+                "--out-dir",
+                str(tmp_path / "out"),
+            ]
+        )
+
+
+def test_print_toolchain_binds_the_lock_file(capsys: pytest.CaptureFixture[str]) -> None:
+    assert bdp.main(["--print-toolchain"]) == 0
+    identity = json.loads(capsys.readouterr().out)
+    assert identity == bdp.build_toolchain_identity()
+    assert identity["uv_lock_sha256"] == hashlib.sha256((bdp._REPO_ROOT / "uv.lock").read_bytes()).hexdigest()

@@ -10,10 +10,22 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 try:
-    from scripts.pfb_pkg import PkgError, build_input_digest, validate_build_matrix_row, validate_build_record
+    from scripts.pfb_pkg import (
+        PkgError,
+        build_input_digest,
+        validate_build_matrix_row,
+        validate_build_record,
+        validate_dependency_builder,
+    )
     from scripts.release_version import combined_nightly_input_digest, validate_nightly_version
 except ImportError:  # script directory is also a direct import root
-    from pfb_pkg import PkgError, build_input_digest, validate_build_matrix_row, validate_build_record
+    from pfb_pkg import (
+        PkgError,
+        build_input_digest,
+        validate_build_matrix_row,
+        validate_build_record,
+        validate_dependency_builder,
+    )
     from release_version import combined_nightly_input_digest, validate_nightly_version
 
 
@@ -113,6 +125,7 @@ def make_build_record(
     ports_sha: str,
     matrix_row: Mapping[str, object],
     source_date_epoch: int,
+    dependency_builder: Mapping[str, object],
 ) -> dict[str, object]:
     """Create one digest-bound portable-builder record for a Nightly leg."""
     try:
@@ -138,6 +151,7 @@ def make_build_record(
         "freebsd_ports_sha": ports_sha,
         "route": f"nightly/{str(row['variant']).lower()}-{major_minor}",
         "source_date_epoch": source_date_epoch,
+        "dependency_builder": validate_dependency_builder(dict(dependency_builder)),
         "build_input_digest": "",
     }
     record["build_input_digest"] = build_input_digest(record)
@@ -158,6 +172,7 @@ def build_handoff(
     tools_sha: str,
     matrix_sha: str,
     matrix_digest: str,
+    dependency_builder: Mapping[str, object],
     run_id: str,
     source_ref: str = "",
     ports_repo: str = "",
@@ -175,6 +190,7 @@ def build_handoff(
         raise ProvenanceError("handoff matrix_sha is malformed")
     if not _DIGEST.fullmatch(matrix_digest):
         raise ProvenanceError("handoff matrix_digest is malformed")
+    normalized_dependency_builder = validate_dependency_builder(dict(dependency_builder))
     input_digest = combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
     if not build_rows or not route_rows:
         raise ProvenanceError("BUILD and ROUTE matrices must not be empty")
@@ -219,6 +235,7 @@ def build_handoff(
             record["canonical_package_version"] != pkg_version
             or record["source_sha"] != source_sha
             or record["freebsd_ports_sha"] != ports_sha
+            or record["dependency_builder"] != normalized_dependency_builder
         ):
             raise ProvenanceError("BUILD result provenance does not match Nightly snapshot")
         artifact = _validate_artifacts([result["artifact"]])[0]
@@ -261,6 +278,7 @@ def build_handoff(
         "tools_sha": tools_sha,
         "matrix_sha": matrix_sha,
         "matrix_digest": matrix_digest,
+        "dependency_builder": normalized_dependency_builder,
         "build_matrix": normalized_build_rows,
         "route_matrix": normalized_route_rows,
         "builds": sorted(builds, key=lambda item: str(item["matrix_row"]["freebsd_major"])),
@@ -301,6 +319,7 @@ def _command_record(args: argparse.Namespace) -> int:
         ports_sha=args.ports_sha,
         matrix_row=row_raw,
         source_date_epoch=args.source_date_epoch,
+        dependency_builder=_read_json(Path(args.dependency_builder)),
     )
     _write_json(Path(args.output), record)
     return 0
@@ -328,6 +347,7 @@ def _command_handoff(args: argparse.Namespace) -> int:
         tools_sha=args.tools_sha,
         matrix_sha=args.matrix_sha,
         matrix_digest=args.matrix_digest,
+        dependency_builder=_read_json(Path(args.dependency_builder)),
         run_id=args.run_id,
         source_ref=args.source_ref,
         ports_repo=args.ports_repo,
@@ -346,6 +366,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     record_parser.add_argument("--ports-sha", required=True)
     record_parser.add_argument("--matrix-row", required=True)
     record_parser.add_argument("--source-date-epoch", required=True, type=int)
+    record_parser.add_argument("--dependency-builder", required=True)
     record_parser.add_argument("--output", required=True)
     record_parser.set_defaults(handler=_command_record)
     handoff_parser = subparsers.add_parser("handoff")
@@ -358,6 +379,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     handoff_parser.add_argument("--tools-sha", required=True)
     handoff_parser.add_argument("--matrix-sha", required=True)
     handoff_parser.add_argument("--matrix-digest", required=True)
+    handoff_parser.add_argument("--dependency-builder", required=True)
     handoff_parser.add_argument("--run-id", required=True)
     handoff_parser.add_argument("--source-ref", default="")
     handoff_parser.add_argument("--ports-repo", default="")

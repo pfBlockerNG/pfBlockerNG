@@ -80,8 +80,9 @@ Pass `--build-record JSON|PATH` for a project build. The builder validates one
 normalized record carrying `channel`, `release_line`, `classification`,
 `source_tag`, `source_sha`, `canonical_package_version`, native and emitted
 identities, the complete row emitted by `read-version-matrix.sh --print-build`,
-FreeBSD-ports SHA, route, `source_date_epoch`, and a deterministic build-input
-digest. It then emits exactly
+FreeBSD-ports SHA, route, `source_date_epoch`, the dependency-builder
+Python/backend/zstd/uv-lock identity, and a deterministic build-input digest.
+It then emits exactly
 `pfSense-pkg-pfBlockerNG` regardless of the native recipe. The record's source
 channel must match its canonical tag: prereleases targeting `X.Y.0` are Edge;
 prereleases targeting `X.Y.Z` with `Z != 0` are Testing. The record's source
