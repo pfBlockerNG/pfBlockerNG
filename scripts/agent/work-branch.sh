@@ -212,7 +212,7 @@ main() {
 			branch_attempt=$((branch_attempt + 1))
 			continue
 		fi
-		if git branch "$candidate" "$base" >/dev/null 2>&1; then
+		if git branch -- "$candidate" "$base" >/dev/null 2>&1; then
 			if [ "$path_set" -eq 0 ]; then
 				path="$worktree_root/${kind}-${candidate#*/}"
 				if [ -e "$path" ] || [ -L "$path" ]; then
@@ -235,13 +235,28 @@ main() {
 		exit 1
 	done
 
-	git worktree add "$path" "$branch" >/dev/null
-	worktree_status=$?
-	if [ "$worktree_status" -ne 0 ]; then
+	while true; do
+		git worktree add "$path" "$branch" >/dev/null
+		worktree_status=$?
+		[ "$worktree_status" -eq 0 ] && break
+		if [ "$path_set" -eq 1 ] && [ "$absolute_path" -eq 0 ] &&
+		   { [ -e "$path" ] || [ -L "$path" ]; }; then
+			while true; do
+				path_attempt=$((path_attempt + 1))
+				if [ "$path_attempt" -eq 1 ]; then
+					path_epoch=$(date +%s) || exit 1
+					path="$path_base-$path_epoch"
+				else
+					path="$path_base-$path_epoch-$path_attempt"
+				fi
+				[ ! -e "$path" ] && [ ! -L "$path" ] && break
+			done
+			continue
+		fi
 		git branch -D "$branch" >/dev/null 2>&1 ||
 			echo "work-branch.sh: failed to delete reserved branch '$branch' after worktree creation failure" >&2
 		exit "$worktree_status"
-	fi
+	done
 	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
 	sh "$initializer" "$path"
 	initializer_status=$?

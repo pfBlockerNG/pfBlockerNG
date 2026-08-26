@@ -39,7 +39,7 @@ For matching Worktrunk placement, set:
 worktree-path = "{{ repo_path }}/../.{{ repo }}_worktrees/{{ branch | sanitize }}"
 ```
 
-The tracked `.config/wt.toml` initializes tools during `wt switch --create <branch>`
+The tracked `.config/wt.toml` initializes tools during `wt --yes switch --create <branch>`
 and prunes metadata after merge/removal. `wt remove` deletes only branches it verifies
 as integrated; landing observes the foreground result.
 
