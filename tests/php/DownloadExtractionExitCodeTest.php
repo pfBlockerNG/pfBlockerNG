@@ -132,6 +132,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+		// issue #2735: success must return, not fall through into @touch($orig_download).
+		$this->assertStringContainsString('return PfbDownloadResult::success();', $scope);
 	}
 
 	/**
