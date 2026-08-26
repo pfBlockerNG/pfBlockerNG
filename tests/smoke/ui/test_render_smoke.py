@@ -2026,7 +2026,47 @@ def test_category_page_renders_reorder_wiring(
 # its PRESENCE needs one seeded no-sort row (dual-marked ui_e2e, like the
 # maxmind_key never-leak test above -- it mutates config.xml as setup).
 _CATEGORY_EDIT_IPV4_PAGE = "/pfblockerng/pfblockerng_category_edit.php?type=ipv4"
+_CATEGORY_EDIT_IPV6_PAGE = "/pfblockerng/pfblockerng_category_edit.php?type=ipv6"
 _CATEGORY_EDIT_DNSBL_PAGE = "/pfblockerng/pfblockerng_category_edit.php?type=dnsbl"
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        pytest.param(_CATEGORY_EDIT_IPV4_PAGE, id="ipv4"),
+        pytest.param(_CATEGORY_EDIT_IPV6_PAGE, id="ipv6"),
+        pytest.param(_CATEGORY_EDIT_DNSBL_PAGE, id="dnsbl"),
+    ),
+)
+def test_category_edit_flex_help_states_certificate_verification_disabled(
+    path: str, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:  # noqa: ARG001
+    """issue #2661: Flex help names what the TLS retry actually disables.
+
+    Given a category-edit Feeds page (IPv4, IPv6, or DNSBL — the State guideline
+    is shared across all three),
+    When GET,
+    Then the Guidelines infoblock says Flex retries with certificate verification
+    disabled, and the old 'Downgrade the SSL Connection' wording is gone.
+
+    Fail-before / pass-after: the new phrases are absent and the old sentence is
+    present on devel; the production edit inverts both.
+    """
+    resp = webui.get(path)
+    body = resp.text
+    result = evaluate_render(path, resp.status_code, body, ("Advanced Tuneables",))
+    assert result.ok, f"{path}: category-edit render oracle failed: {result.detail}"
+    assert "certificate verification disabled" in body, (
+        f"{path} is missing Flex help that certificate verification is disabled (issue #2661)"
+    )
+    assert "widened cipher list" in body, f"{path} is missing Flex help that the cipher list is widened (issue #2661)"
+    assert "Not Recommended" in body, f"{path} dropped the Flex 'Not Recommended' framing (issue #2661)"
+    assert "unauthenticated" in body, (
+        f"{path} is missing Flex help that the feed contents are then unauthenticated (issue #2661)"
+    )
+    assert "Downgrade the SSL Connection" not in body, (
+        f"{path} still uses the unspecific Flex 'Downgrade the SSL Connection' wording (issue #2661)"
+    )
 
 
 @pytest.mark.parametrize(
