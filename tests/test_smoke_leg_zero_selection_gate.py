@@ -106,7 +106,7 @@ def _shard_status_upload_step() -> list[str]:
 
 def test_smoke_single_uploads_shard_selection_status_marker() -> None:
     step_text = "\n".join(_shard_status_upload_step())
-    assert "uses: actions/upload-artifact@v7" in step_text, step_text
+    assert "uses: actions/upload-artifact@" in step_text, step_text
     assert re.search(r"if:\s*always\(\)", step_text), f"upload must run unconditionally, got:\n{step_text}"
     name_line = next(line for line in _shard_status_upload_step() if line.strip().startswith("name:"))
     assert "inputs.image_name" in name_line and "inputs.pfsense_version" in name_line and "inputs.shard" in name_line, (

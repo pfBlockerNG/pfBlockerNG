@@ -472,9 +472,6 @@ _KNOWN_ARTIFACT_MAJORS: dict[str, frozenset[int]] = {
     "download": frozenset({3, 4, 5, 6, 7, 8}),
 }
 _HIGHEST_COMMON_ARTIFACT_MAJOR = max(_KNOWN_ARTIFACT_MAJORS["upload"] & _KNOWN_ARTIFACT_MAJORS["download"])
-_LIVE_ARTIFACT_USES = re.compile(
-    r"uses:\s+actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)(?:\.[0-9]+){0,2}"
-)
 _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
 _UNRESOLVED_EXPRESSION = re.compile(r"<unresolved:(?P<expression>[^>]+)>")
 
@@ -863,6 +860,65 @@ def test_artifact_action_majors_match_per_producer_consumer_chain() -> None:
     assert not offences, "artifact chain hygiene failed:\n  " + "\n  ".join(offences)
 
 
+def _live_yaml_sources() -> dict[str, str]:
+    return {str(path.relative_to(ROOT)): path.read_text(encoding="utf-8") for path in _workflow_files()}
+
+
+def _iter_step_uses(document: Mapping[object, object], where: str) -> list[tuple[str, object]]:
+    """Step ``uses:`` from a workflow ``jobs.*.steps`` or a composite ``runs.steps``."""
+    found: list[tuple[str, object]] = []
+    jobs = document.get("jobs")
+    if isinstance(jobs, dict):
+        for job_name, job in jobs.items():
+            if not isinstance(job, dict):
+                continue
+            steps = job.get("steps")
+            if not isinstance(steps, list):
+                continue
+            for index, step in enumerate(steps):
+                if isinstance(step, dict) and "uses" in step:
+                    found.append((f"{where}:{job_name}:step-{index}", step.get("uses")))
+    runs = document.get("runs")
+    if isinstance(runs, dict):
+        steps = runs.get("steps")
+        if isinstance(steps, list):
+            for index, step in enumerate(steps):
+                if isinstance(step, dict) and "uses" in step:
+                    found.append((f"{where}:runs:step-{index}", step.get("uses")))
+    return found
+
+
+def _live_artifact_offences(sources: dict[str, str]) -> list[str]:
+    """issue #2725: every live upload/download-artifact pin must exist upstream
+    and sit at the highest major both actions publish.
+
+    Walks parsed YAML so quoted ``uses:``, folded scalars, and composite-action
+    steps are visible; comment lines are not pins.
+    """
+    offences: list[str] = []
+    for name, text in sources.items():
+        document = _workflow_document(text, name)
+        for location, uses in _iter_step_uses(document, name):
+            match = _artifact_action_match(uses, location)
+            if match is None:
+                continue
+            kind = match.group("kind")
+            major = int(match.group("major"))
+            known = _KNOWN_ARTIFACT_MAJORS[kind]
+            if major not in known:
+                offences.append(
+                    f"{location}: actions/{kind}-artifact@v{major} is not a known "
+                    f"upstream major (known: {sorted(known)})"
+                )
+            elif major != _HIGHEST_COMMON_ARTIFACT_MAJOR:
+                offences.append(
+                    f"{location}: pin actions/{kind}-artifact to "
+                    f"v{_HIGHEST_COMMON_ARTIFACT_MAJOR} (highest common existing major), "
+                    f"not v{major}"
+                )
+    return offences
+
+
 def test_live_artifact_actions_use_highest_common_existing_major() -> None:
     """issue #2725: producer/consumer major matching does not prove the pin
     exists upstream. ``upload-artifact@v8`` matched ``download-artifact@v8``
@@ -873,28 +929,54 @@ def test_live_artifact_actions_use_highest_common_existing_major() -> None:
     resolvable ref. Fixture YAML in this file is out of scope — those literals
     exercise the scanner, not GitHub's tag namespace.
     """
-    assert _HIGHEST_COMMON_ARTIFACT_MAJOR == 7
-    offences: list[str] = []
-    for name, text in _workflow_sources().items():
-        for line_no, line in enumerate(text.splitlines(), start=1):
-            match = _LIVE_ARTIFACT_USES.search(line)
-            if match is None:
-                continue
-            kind = match.group("kind")
-            major = int(match.group("major"))
-            known = _KNOWN_ARTIFACT_MAJORS[kind]
-            if major not in known:
-                offences.append(
-                    f"{name}:{line_no}: actions/{kind}-artifact@v{major} is not a known "
-                    f"upstream major (known: {sorted(known)})"
-                )
-            elif major != _HIGHEST_COMMON_ARTIFACT_MAJOR:
-                offences.append(
-                    f"{name}:{line_no}: pin actions/{kind}-artifact to "
-                    f"v{_HIGHEST_COMMON_ARTIFACT_MAJOR} (highest common existing major), "
-                    f"not v{major}"
-                )
+    offences = _live_artifact_offences(_live_yaml_sources())
     assert not offences, "live artifact pins failed:\n  " + "\n  ".join(offences)
+
+
+def test_live_artifact_gate_sees_quoted_uses_refs() -> None:
+    """Quoted ``uses:`` is a real workflow shape (this file's own fixtures) and
+    is the original #2725 incident with quotes added. A line regex that requires
+    an unquoted value misses it; a comment line is not a pin.
+    """
+    sources = {
+        "quoted.yml": """\
+on: workflow_dispatch
+jobs:
+  up:
+    steps:
+      - uses: "actions/upload-artifact@v8"
+        with: {name: pkg}
+  down:
+    needs: up
+    steps:
+      - uses: 'actions/download-artifact@v8'
+        with: {name: pkg}
+""",
+        "comment.yml": """\
+on: workflow_dispatch
+jobs:
+  x:
+    steps:
+      - run: "true"
+#      - uses: actions/upload-artifact@v8
+""",
+        ".github/actions/example/action.yml": """\
+runs:
+  using: composite
+  steps:
+    - uses: actions/upload-artifact@v8
+      with: {name: pkg}
+""",
+    }
+    offences = _live_artifact_offences(sources)
+    assert any("quoted.yml" in item and "upload-artifact@v8" in item and "not a known" in item for item in offences), (
+        offences
+    )
+    assert any("quoted.yml" in item and "download-artifact" in item and "not v8" in item for item in offences), offences
+    assert any("action.yml" in item and "upload-artifact@v8" in item and "not a known" in item for item in offences), (
+        offences
+    )
+    assert not any("comment.yml" in item for item in offences), offences
 
 
 def test_artifact_scanner_follows_needs_reusable_inputs_outputs_and_workflow_run() -> None:
