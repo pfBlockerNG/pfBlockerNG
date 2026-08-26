@@ -141,6 +141,10 @@ def test_issue_2387_tagged_build_uses_one_pinned_route_and_ports_identity() -> N
         ), f"read-matrix must expose the build-time {output}"
     assert "ref: ${{ steps.pins.outputs.ci_metadata_sha }}" in read_matrix
     assert read_matrix.count("git ls-remote https://github.com/pfBlockerNG/FreeBSD-ports") == 1
+    builder_checkout = extract_step(release, "Check out pinned dependency-builder source")
+    assert "uses: actions/checkout@v6" in builder_checkout
+    assert "ref: ${{ steps.destinations.outputs.source_sha }}" in builder_checkout
+    assert "path: pinned-builder" in builder_checkout
 
     assert "git ls-remote" not in build
     build_step = extract_step(release, "Build the .pkg via build-leg.sh")
