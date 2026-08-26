@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -200,7 +201,21 @@ def build_handoff(
     if type(source_date_epoch) is not int or source_date_epoch < 0:
         raise ProvenanceError("handoff source_date_epoch must be a non-negative integer")
     normalized_dependency_builder = validate_dependency_builder(dict(dependency_builder))
-    input_digest = combined_nightly_input_digest(source_sha, ports_sha, matrix_digest)
+    handoff_inputs = json.dumps(
+        {
+            "matrix_digest": matrix_digest,
+            "source_date_epoch": source_date_epoch,
+            "dependency_builder": normalized_dependency_builder,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    input_digest = combined_nightly_input_digest(
+        source_sha,
+        ports_sha,
+        hashlib.sha256(handoff_inputs).hexdigest(),
+    )
     if not build_rows or not route_rows:
         raise ProvenanceError("BUILD and ROUTE matrices must not be empty")
 

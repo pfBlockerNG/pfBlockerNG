@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
+import lzma
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 from typing import Any
 
+import pfb_pkg
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -222,3 +226,72 @@ def test_build_records_accept_exact_handoff_identities() -> None:
     ]
 
     module.validate_build_records(_payload(), records)
+
+
+def _canonical_record(**changes: object) -> dict[str, object]:
+    record: dict[str, object] = {
+        "schema": 1,
+        "channel": "edge",
+        "release_line": "release/4.0",
+        "classification": "beta",
+        "source_tag": TAG,
+        "source_sha": SOURCE_SHA,
+        "canonical_package_version": "4.0.0.b1",
+        "native_recipe_identity": "pfSense-pkg-pfBlockerNG-edge",
+        "emitted_identity": pfb_pkg.CANONICAL_EMITTED_IDENTITY,
+        "matrix_row": ROW,
+        "freebsd_ports_sha": PORTS_SHA,
+        "route": "edge/ce-2.8",
+        "source_date_epoch": SOURCE_DATE_EPOCH,
+        "dependency_builder": DEPENDENCY_BUILDER,
+        "build_input_digest": "",
+    }
+    record.update(changes)
+    record["build_input_digest"] = pfb_pkg.build_input_digest(record)
+    return record
+
+
+def _write_package(path: Path, record: dict[str, object], *, name: str) -> None:
+    manifest = {
+        "name": name,
+        "version": "4.0.0.b1",
+        "origin": "net/pfSense-pkg-pfBlockerNG",
+        "abi": "FreeBSD:15:*",
+        "arch": "freebsd:15:*",
+        "prefix": "/usr/local",
+        "annotations": {pfb_pkg.PFB_BUILD_RECORD_KEY: json.dumps(record)},
+    }
+    payload = json.dumps(manifest).encode()
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w") as tf:
+        member = tarfile.TarInfo("+COMPACT_MANIFEST")
+        member.size = len(payload)
+        tf.addfile(member, io.BytesIO(payload))
+    path.write_bytes(lzma.compress(archive.getvalue()))
+
+
+@pytest.mark.parametrize(
+    ("changes", "field"),
+    [
+        ({"source_date_epoch": SOURCE_DATE_EPOCH + 1}, "source_date_epoch"),
+        ({"dependency_builder": {**DEPENDENCY_BUILDER, "wheel": "0.45.2"}}, "dependency_builder"),
+    ],
+)
+def test_actual_package_records_must_match_tagged_handoff(
+    tmp_path: Path,
+    changes: dict[str, object],
+    field: str,
+) -> None:
+    module = _module()
+    exact = tmp_path / "exact.pkg"
+    dependency = tmp_path / "dependency.pkg"
+    drifted = tmp_path / "drifted.pkg"
+    _write_package(exact, _canonical_record(), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+    _write_package(dependency, {}, name="py311-charset-normalizer")
+    _write_package(drifted, _canonical_record(**changes), name=pfb_pkg.CANONICAL_EMITTED_IDENTITY)
+
+    module.validate_packages(_payload(), [exact, dependency])
+    with pytest.raises(module.BuildRecordIdentityError, match=field):
+        module.validate_packages(_payload(), [drifted])
+    with pytest.raises(module.HandoffError, match="no canonical"):
+        module.validate_packages(_payload(), [dependency])

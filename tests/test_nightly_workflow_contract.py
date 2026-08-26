@@ -1,6 +1,8 @@
 """Static contract for the branch-independent Nightly workflow."""
 
 import itertools
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -204,6 +206,105 @@ def test_build_step_builds_and_hands_off_dependency_packages() -> None:
     # W4: result.json construction includes dep_artifacts.
     assert "dep_artifacts" in step
     assert "DEP_ARTIFACTS_JSON" in step
+
+
+def _continued_command_ending_with(script: str, suffix: str) -> str:
+    lines = script.splitlines()
+    end = next(index for index, line in enumerate(lines) if suffix in line)
+    start = end
+    while start > 0 and lines[start - 1].rstrip().endswith("\\"):
+        start -= 1
+    return "\n".join(lines[start : end + 1])
+
+
+def test_build_step_executes_dependency_builder_with_locked_python(tmp_path: Path) -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    step = next(item for item in workflow["jobs"]["build"]["steps"] if item.get("name") == "Build and verify package")
+    command = _continued_command_ending_with(step["run"], '--out-dir "$DEP_PKG_DIR"')
+    trusted = tmp_path / "trusted"
+    locked_python = trusted / ".venv/bin/python"
+    locked_python.parent.mkdir(parents=True)
+    locked_log = tmp_path / "locked-argv"
+    locked_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$LOCKED_LOG"\n', encoding="utf-8")
+    locked_python.chmod(0o755)
+    ambient_bin = tmp_path / "ambient"
+    ambient_bin.mkdir()
+    ambient_log = tmp_path / "ambient-argv"
+    ambient_python = ambient_bin / "python3"
+    ambient_python.write_text('#!/bin/sh\nprintf \'%s\\0\' "$@" > "$AMBIENT_LOG"\n', encoding="utf-8")
+    ambient_python.chmod(0o755)
+    env = os.environ | {
+        "DEP_PYTHON": str(locked_python),
+        "TRUSTED_DIR": str(trusted),
+        "PORTS_DIR": "/pinned/ports",
+        "PORTS_SHA": "a" * 40,
+        "ORIGIN": "textproc/py-charset-normalizer",
+        "PY_FLAVOR": "py311",
+        "FREEBSD_MAJOR": "15",
+        "SOURCE_DATE_EPOCH": "1700000000",
+        "DEP_PKG_DIR": "/output",
+        "LOCKED_LOG": str(locked_log),
+        "AMBIENT_LOG": str(ambient_log),
+        "PATH": f"{ambient_bin}:{os.environ['PATH']}",
+    }
+
+    completed = subprocess.run(["dash", "-c", command], env=env, capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not ambient_log.exists()
+    assert locked_log.read_bytes().split(b"\0")[:-1] == [
+        str(trusted / "scripts/build-dep-pkg-portable.py").encode(),
+        b"--ports",
+        b"/pinned/ports",
+        b"--ports-sha",
+        b"a" * 40,
+        b"--port",
+        b"textproc/py-charset-normalizer",
+        b"--py-flavor",
+        b"py311",
+        b"--freebsd-major",
+        b"15",
+        b"--source-date-epoch",
+        b"1700000000",
+        b"--out-dir",
+        b"/output",
+    ]
+
+
+def test_prepare_executes_exact_pinned_toolchain_generation(tmp_path: Path) -> None:
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    step = next(
+        item
+        for item in workflow["jobs"]["prepare"]["steps"]
+        if item.get("name") == "Resolve pinned source, Ports, and live matrices"
+    )
+    command = _continued_command_ending_with(step["run"], "> plan/dependency-builder.json")
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    toolchain_log = tmp_path / "toolchain-argv"
+    python = fake_bin / "python3"
+    python.write_text(
+        '#!/bin/sh\nprintf \'%s\\0\' "$@" > "$TOOLCHAIN_LOG"\nprintf \'{"locked":true}\\n\'\n',
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    (tmp_path / "plan").mkdir()
+    env = os.environ | {
+        "TRUSTED_DIR": str(trusted),
+        "TOOLCHAIN_LOG": str(toolchain_log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    completed = subprocess.run(["dash", "-c", command], cwd=tmp_path, env=env, capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert toolchain_log.read_bytes().split(b"\0")[:-1] == [
+        str(trusted / "scripts/build-dep-pkg-portable.py").encode(),
+        b"--print-toolchain",
+    ]
+    assert (tmp_path / "plan/dependency-builder.json").read_text(encoding="utf-8") == '{"locked":true}\n'
 
 
 def test_dependency_builder_toolchain_epoch_and_handoff_are_structurally_locked() -> None:

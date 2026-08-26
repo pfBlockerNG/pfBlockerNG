@@ -74,6 +74,7 @@ def _call_handoff(
     route_rows: list[dict[str, object]] | None = None,
     pkg_version: str = VERSION,
     source_date_epoch: int = 1_800_000_000,
+    dependency_builder: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return np.build_handoff(
         pkg_version=pkg_version,
@@ -85,7 +86,7 @@ def _call_handoff(
         tools_sha="e" * 40,
         matrix_sha="d" * 40,
         matrix_digest="c" * 64,
-        dependency_builder=DEPENDENCY_BUILDER,
+        dependency_builder=DEPENDENCY_BUILDER if dependency_builder is None else dependency_builder,
         source_date_epoch=source_date_epoch,
         run_id="123",
     )
@@ -99,7 +100,7 @@ def test_handoff_accepts_complete_build_and_route_rows() -> None:
 
     assert handoff["kind"] == "nightly-handoff"
     assert handoff["pkg_version"] == VERSION
-    assert handoff["input_digest"] == np.combined_nightly_input_digest(SOURCE_SHA, PORTS_SHA, "c" * 64)
+    assert isinstance(handoff["input_digest"], str) and len(handoff["input_digest"]) == 64
     assert handoff["source_date_epoch"] == 1_800_000_000
     assert handoff["dependency_builder"] == DEPENDENCY_BUILDER
     assert handoff["tools_sha"] == "e" * 40
@@ -140,6 +141,27 @@ def test_handoff_rejects_per_leg_epoch_or_builder_drift(field: str, value: objec
 
     with pytest.raises(np.ProvenanceError, match="provenance"):
         _call_handoff([result])
+
+
+def test_handoff_input_digest_binds_epoch_and_dependency_builder() -> None:
+    baseline = _call_handoff([_result()])
+    epoch_result = _result()
+    epoch_record = epoch_result["record"]
+    assert isinstance(epoch_record, dict)
+    epoch_record["source_date_epoch"] = 1_800_000_001
+    epoch_record["build_input_digest"] = np.build_input_digest(epoch_record)
+    changed_epoch = _call_handoff([epoch_result], source_date_epoch=1_800_000_001)
+
+    changed_builder_identity = {**DEPENDENCY_BUILDER, "wheel": "0.45.2"}
+    builder_result = _result()
+    builder_record = builder_result["record"]
+    assert isinstance(builder_record, dict)
+    builder_record["dependency_builder"] = changed_builder_identity
+    builder_record["build_input_digest"] = np.build_input_digest(builder_record)
+    changed_builder = _call_handoff([builder_result], dependency_builder=changed_builder_identity)
+
+    assert changed_epoch["input_digest"] != baseline["input_digest"]
+    assert changed_builder["input_digest"] != baseline["input_digest"]
 
 
 def test_handoff_carries_one_dep_artifact_sorted() -> None:
