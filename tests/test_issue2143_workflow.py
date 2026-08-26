@@ -40,14 +40,23 @@ def _republish_validate_script() -> str:
 
 def test_manual_republish_validates_decimal_release_identity(tmp_path: Path) -> None:
     script = _republish_validate_script()
-    cases = (("v4.0.0", False, 0), ("v4.0.1", False, 1), ("v4.0.0", True, 1))
-    for index, (tag, draft, expected_returncode) in enumerate(cases):
+    cases = (
+        ("v4.0.0", False, True, 0),
+        ("v4.0.1", False, True, 1),
+        ("v4.0.0", True, True, 1),
+        ("v4.0.0", False, False, 1),
+    )
+    for index, (tag, draft, immutable, expected_returncode) in enumerate(cases):
         bin_dir = tmp_path / f"case-{index}"
         bin_dir.mkdir()
+        gh_log = tmp_path / f"case-{index}.log"
         gh = bin_dir / "gh"
-        payload = f'{{"tag_name":"v4.0.0","draft":{str(draft).lower()},"prerelease":false,"immutable":true}}'
+        payload = (
+            f'{{"tag_name":"v4.0.0","draft":{str(draft).lower()},'
+            f'"prerelease":false,"immutable":{str(immutable).lower()}}}'
+        )
         gh.write_text(
-            f"#!/bin/sh\nprintf '%s\\n' '{payload}'\n",
+            f"#!/bin/sh\nprintf '%s\\n' \"$*\" > '{gh_log}'\nprintf '%s\\n' '{payload}'\n",
             encoding="utf-8",
         )
         gh.chmod(0o755)
@@ -66,3 +75,33 @@ def test_manual_republish_validates_decimal_release_identity(tmp_path: Path) -> 
             check=False,
         )
         assert completed.returncode == expected_returncode, completed.stdout + completed.stderr
+        assert gh_log.read_text(encoding="utf-8").strip() == ("api repos/owner/repo/releases/12345")
+
+
+def test_manual_republish_rejects_non_decimal_selector_before_api(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh_log = tmp_path / "gh.log"
+    gh = bin_dir / "gh"
+    gh.write_text(
+        f"#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{gh_log}'\nexit 99\n",
+        encoding="utf-8",
+    )
+    gh.chmod(0o755)
+    completed = subprocess.run(
+        ["sh", "-c", _republish_validate_script()],
+        cwd=ROOT,
+        env=os.environ
+        | {
+            "PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+            "RELEASE_ID": "tags/v4.0.0",
+            "RELEASE_TAG": "v4.0.0",
+            "SOURCE_REPOSITORY": "owner/repo",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 1
+    assert "release_id must be decimal" in completed.stdout + completed.stderr
+    assert not gh_log.exists()

@@ -32,6 +32,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   stage-pkg:
@@ -90,7 +91,6 @@ jobs:
     if: needs.stage-pkg.outputs.noop != 'true'
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
-      leg_count: ${{ steps.build.outputs.leg_count }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -124,7 +124,6 @@ jobs:
               raise SystemExit(f"untestable={untestable} drifted={drifted} matrix={matrix}")
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
               output.write("matrix=" + json.dumps(matrix, separators=(",", ":")) + "\n")
-              output.write(f"leg_count={len(matrix)}\n")
           PY
 
   validate-live-pages-install:

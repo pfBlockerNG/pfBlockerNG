@@ -1,7 +1,7 @@
-"""live_gate_matrix.py — pure matrix-building logic for release-published.yml's
-prepare-live-gate job (issue #2389): cross-reference what publish-pkg-repo.sh's
-``stage`` mode actually touched against the ci-metadata CI matrix's testable legs,
-so validate-live-pages-install fans out exactly one live-VM install test per
+"""live_gate_matrix.py — pure matrix-building logic for the tagged ingestion
+prepare-live-gate job (issue #2389): cross-reference what the pkg-owned stage
+operation actually touched against the ci-metadata CI matrix's testable legs, so
+validate-live-pages-install fans out exactly one live-VM install test per
 (destination channel, testable varver) pair -- never more, never silently fewer.
 
 Import-able normally (unlike build-repo-portable.py, which is hyphen-named): this

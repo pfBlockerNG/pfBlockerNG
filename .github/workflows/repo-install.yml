@@ -23,7 +23,7 @@ name: Repo install (live pfSense VM)
 # TRIGGERS: workflow_dispatch (always runs) + a nightly `schedule`. The scheduled run
 # is GATED — it only proceeds when `devel` actually moved since the previous nightly
 # (no point rebuilding the branch .pkg + booting VMs to re-test unchanged code; the
-# real version push, publish-pkg-repo, runs only on a published Release). Not an every-PR gate (a
+# source publication dispatch runs only on a published Release). Not an every-PR gate (a
 # live VM under KVM is ~15 min/leg). Secrets + required config are smoke-single.yml's
 # (SMOKE_IMAGE_* / SMOKE_GHCR_* / SMOKE_SSH_PRIV_KEY, plus the Plus-leg SMOKE_PLUS_*
 # identity secrets); `secrets: inherit` forwards them.
@@ -140,8 +140,8 @@ jobs:
       pytest_marker: repo
       # issue #2389: do NOT pass smoke_*_live_url here. This schedule is 08:00,
       # before nightly publish at 09:00. A live Nightly URL would hit yesterday's
-      # tree or 404. Live Pages validation belongs on nightly.yml after
-      # publish-pkg-repo.
+      # tree or 404. Live Pages validation belongs in the pkg publication flow
+      # after ingestion.
       extra_pkgs: ${{ toJson(matrix.extra_pkgs) }}
     secrets: inherit
 

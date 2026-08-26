@@ -329,12 +329,12 @@ USAGE
 # pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository
 # copy this is a STUB that fails loud: the standalone
 # src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh is the source of truth, used
-# directly from a checkout via HOOK_SRC. The website build
-# (gen_landing.py) replaces the body between the PFB_EMBED markers with the hook in a
-# single-quoted heredoc, producing the self-contained install.sh served at
-# <base>/install.sh for `fetch | sh`.
+# directly from a checkout via HOOK_SRC. The pkg-owned website renderer replaces
+# the body between the PFB_EMBED markers with the hook in a single-quoted
+# heredoc, producing the self-contained install.sh served at <base>/install.sh
+# for `fetch | sh`.
 pfb_emit_embedded_hook() {
-    # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by gen_landing.py at website-build time.
+    # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by the pkg-owned website renderer.
     printf 'install.sh: no embedded hook in this copy — run from a checkout, or use the published %s/install.sh\n' "https://${PFB_REPO_HOST}" >&2
     return 1
     # PFB_EMBED_HOOK_END
