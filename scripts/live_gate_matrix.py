@@ -35,7 +35,7 @@ def _load_build_repo_portable() -> Any:
     # with scripts/ on sys.path. Only tests/conftest.py puts it there -- a bare
     # `python3 -c "from scripts.live_gate_matrix import ..."` (release-published.yml's
     # own prepare-live-gate step) has no conftest, so this insert is load-bearing
-    # outside pytest, same idiom as scripts/publish_release.py's own sys.path guard.
+    # outside pytest, same idiom as the other path-loaded script helpers.
     if str(_THIS_DIR) not in sys.path:
         sys.path.insert(0, str(_THIS_DIR))
     spec = importlib.util.spec_from_file_location("build_repo_portable", _BUILD_REPO_PORTABLE_PATH)

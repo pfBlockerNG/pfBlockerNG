@@ -14,7 +14,6 @@ FORMAT_SURFACES = (
     "scripts/README.md",
     "scripts/build-pkg-portable.py",
     "scripts/build-repo-portable.py",
-    "scripts/gen_landing.py",
     "scripts/release_version.py",
 )
 
