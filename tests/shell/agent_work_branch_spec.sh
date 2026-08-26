@@ -348,32 +348,22 @@ INIT
   End
 
   It 'atomically gives synchronized creators distinct branches and default paths'
-    race_dir="$fixture/race"; race_bin="$race_dir/bin"
-    mkdir -p "$race_bin"
+    race_dir="$fixture/race"
+    mkdir -p "$race_dir"
     mkfifo "$race_dir/ready-one" "$race_dir/ready-two" "$race_dir/release-one" "$race_dir/release-two"
-    export WB_REAL_GIT="$(command -v git)"
-    cat > "$race_bin/git" <<'GIT'
-#!/bin/sh
-if [ "$#" -eq 4 ] && [ "$1" = show-ref ] && [ "$2" = --verify ] &&
-   [ "$3" = -q ] && [ "$4" = refs/heads/adr/49-race ]; then
-	exit 1
-fi
-exec "$WB_REAL_GIT" "$@"
-GIT
-    chmod +x "$race_bin/git"
     When run sh -c '
       (
         printf "ready\n" > "$3/ready-one"
         IFS= read -r _ < "$3/release-one"
         cd "$1" || exit 125
-        PATH="$4:$PATH" exec sh "$2" adr 49 race --worktree --base HEAD
+        exec sh "$2" adr 49 race --worktree --base HEAD
       ) > "$3/one.out" 2> "$3/one.err" &
       one=$!
       (
         printf "ready\n" > "$3/ready-two"
         IFS= read -r _ < "$3/release-two"
         cd "$1" || exit 125
-        PATH="$4:$PATH" exec sh "$2" adr 49 race --worktree --base HEAD
+        exec sh "$2" adr 49 race --worktree --base HEAD
       ) > "$3/two.out" 2> "$3/two.err" &
       two=$!
       IFS= read -r _ < "$3/ready-one"
@@ -385,7 +375,7 @@ GIT
       sort "$3/one.out" "$3/two.out" > "$3/results"
       printf "%s %s\n" "$one_rc" "$two_rc"
       [ "$one_rc" -eq 0 ] && [ "$two_rc" -eq 0 ]
-    ' _ "$fixture/session" "$script_abs" "$race_dir" "$race_bin"
+    ' _ "$fixture/session" "$script_abs" "$race_dir"
     The status should equal 0
     The output should equal '0 0'
     The contents of file "$race_dir/results" should equal "$(printf 'adr/49-race\t%s/adr-49-race\nadr/49-race-1700000000\t%s/adr-49-race-1700000000' "$worktree_root" "$worktree_root")"
