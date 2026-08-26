@@ -1,5 +1,3 @@
-"""Source-complete skip-gate wiring for every blocking workflow test row (#2369)."""
-
 from __future__ import annotations
 
 import re
@@ -133,17 +131,20 @@ def _step(workflow: dict[str, object], row: Row) -> dict[str, object] | None:
 def _discovered_rows(texts: dict[str, str]) -> Counter[tuple[str, str, str]]:
     found: Counter[tuple[str, str, str]] = Counter()
     command = re.compile(
-        r"^(?:uv run pytest --junitxml|vendor/bin/phpunit|shellspec --shell|node --test|"
-        r"npm run test:(?:grammar|listgrammar|bundle)|sh scripts/run-smoke\.sh)"
+        r"^(?:uv run(?: --locked)? pytest\b|vendor/bin/phpunit|shellspec --shell|"
+        r"(?:command )?node --test\b|npm run test:(?:grammar|listgrammar|bundle)|"
+        r"sh scripts/run-smoke\.sh)"
     )
     for filename, text in texts.items():
         workflow = yaml.safe_load(text)
         for job_name, job in workflow.get("jobs", {}).items():
             for step in job.get("steps", []):
                 step_name = step.get("name", "")
+                if "informational" in step_name.lower():
+                    continue
                 for raw in str(step.get("run", "")).splitlines():
                     line = raw.strip()
-                    if command.match(line):
+                    if "skip-allowlist-node-canary.test.mjs" not in line and command.match(line):
                         found[(filename, job_name, step_name)] += 1
     return found
 
@@ -167,10 +168,21 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
             errors.append(f"{row.workflow}/{row.job}: missing step {row.step!r}")
             continue
         run = str(step.get("run", ""))
-        if row.producer not in run:
+        run_lines = [line.strip() for line in run.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+        producer_lines = [line for line in run_lines if row.producer in line]
+        if not producer_lines:
             errors.append(f"{row.suite}: producer command is missing")
-        if row.report not in run:
-            errors.append(f"{row.suite}: producer does not write {row.report}")
+
+        producer_flags = {
+            "pytest": ("--junitxml=/tmp/pytest-junit.xml",),
+            "phpunit": ("--log-junit /tmp/phpunit-junit.xml",),
+            "shellspec": ("-o junit", "--reportdir /tmp/shellspec-report"),
+            "ports-parity": ("-o junit", "--reportdir /tmp/ports-parity-junit"),
+            "ui": ('set -- "$@" --junitxml=/tmp/ui-junit.xml',),
+            "smoke": ('set -- "$@" --junitxml=smoke-diag/pytest-junit.xml',),
+        }
+        if any(not any(flag in line for line in run_lines) for flag in producer_flags.get(row.suite, ())):
+            errors.append(f"{row.suite}: JUnit producer flags are missing")
 
         if row.same_step:
             gate = run
@@ -180,22 +192,32 @@ def _validation_errors(texts: dict[str, str]) -> list[str]:
             gate = str(gate_step.get("run", "")) if gate_step else ""
 
         prefix = f"check_skip_allowlist.py --suite {row.suite} --allowlist tests/skip-allowlist.txt "
-        checks = [line.strip().rstrip(" \\") for line in gate.splitlines() if prefix in line]
+        gate_lines = gate.splitlines()
+        check_rows = [(index, line.strip().rstrip(" \\")) for index, line in enumerate(gate_lines) if prefix in line]
+        checks = [line for _, line in check_rows]
         if len(checks) != 2:
             errors.append(f"{row.suite}: expected canary and real checker calls, got {len(checks)}")
             continue
         if row.node:
-            if "skip-allowlist-node-canary" not in gate or "--test-reporter=junit" not in gate:
+            canary_report = checks[0].split()[-1]
+            if "canary" not in canary_report or not any(
+                f"--test-reporter-destination={canary_report}" in line and "skip-allowlist-node-canary.test.mjs" in line
+                for line in run_lines
+            ):
                 errors.append(f"{row.suite}: native Node canary reporter is missing")
         elif "tests/fixtures/skip-allowlist-canary.xml" not in checks[0]:
             errors.append(f"{row.suite}: known-skip canary is missing")
         if row.report not in checks[1]:
             errors.append(f"{row.suite}: checker reads a different report")
-        if "&& { echo 'red canary failed:" not in gate:
+        canary_index = check_rows[0][0]
+        canary_guard = gate_lines[canary_index + 1].strip() if canary_index + 1 < len(gate_lines) else ""
+        if not canary_guard.startswith("&& { echo 'red canary failed:"):
             errors.append(f"{row.suite}: canary does not require nonzero")
-        if row.node and (
-            f"--test-reporter-destination={row.report}" not in run
-            or "--test-reporter=spec --test-reporter-destination=stdout" not in run
+        if row.node and not any(
+            row.producer in line
+            and f"--test-reporter-destination={row.report}" in line
+            and "--test-reporter=spec --test-reporter-destination=stdout" in line
+            for line in run_lines
         ):
             errors.append(f"{row.suite}: native JUnit and live reporter destinations are incomplete")
     return errors

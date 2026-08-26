@@ -345,6 +345,14 @@ def _exit5_mapper_script() -> str:
     return _step_run_script(target[0])
 
 
+def test_ui_run_block_writes_and_checks_the_same_junit_report() -> None:
+    script = _exit5_mapper_script()
+    assert "--junitxml=/tmp/ui-junit.xml" in script
+    assert script.count("scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt") == 2
+    assert "tests/fixtures/skip-allowlist-canary.xml" in script
+    assert script.index("tests/fixtures/skip-allowlist-canary.xml") < script.index("--junitxml=/tmp/ui-junit.xml")
+
+
 def _run_exit5_mapper(
     tmp_path: Path, run_smoke_rc: int, pytest_filter: str, scope: str
 ) -> subprocess.CompletedProcess[str]:

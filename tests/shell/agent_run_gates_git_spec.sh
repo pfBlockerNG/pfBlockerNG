@@ -280,6 +280,7 @@ Describe 'run-gates.sh over a C-quoted path'
       The output should include 'GATES: PASS'
       The output should not include 'TOOL-MISSING'
       The contents of file "$repo/uv.log" should include 'UV run --locked pytest'
+      The contents of file "$repo/uv.log" should include '--junitxml='
       The contents of file "$repo/uv.log" should include 'UV run --locked mypy tests/'
       rm -rf "$stub"
     End
