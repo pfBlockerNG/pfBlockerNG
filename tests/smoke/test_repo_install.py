@@ -1419,6 +1419,54 @@ def _install_trusted_fingerprint(vm: SmokeVM, *, timeout: float = 60.0) -> None:
         raise RuntimeError(f"could not install the trusted fingerprint: {put.stderr!r}")
 
 
+def _raise_live_pages_errors(context: str, errors: list[tuple[str, Exception]]) -> None:
+    if not errors:
+        return
+    details = "; ".join(f"{operation}: {type(error).__name__}: {error}" for operation, error in errors)
+    raise RuntimeError(f"{context}: {details}") from errors[0][1]
+
+
+def _ensure_live_pages_packages_absent(vm: SmokeVM) -> None:
+    package_names = (PKG_NAME,) if PKG_NAME == CANONICAL_PKG_NAME else (PKG_NAME, CANONICAL_PKG_NAME)
+    errors: list[tuple[str, Exception]] = []
+    for package_name in package_names:
+        try:
+            pkg_delete(vm, pkg_name=package_name)
+        except Exception as error:
+            errors.append((f"delete {package_name}", error))
+
+    try:
+        installed = installed_pfblockerng_names(vm)
+        remaining = [package_name for package_name in package_names if package_name in installed]
+        if remaining:
+            raise AssertionError(
+                f"live Pages packages still installed: expected absent {list(package_names)!r}; "
+                f"remaining {remaining!r}; installed {installed!r}"
+            )
+    except Exception as error:
+        errors.append(("verify package absence", error))
+
+    _raise_live_pages_errors("live Pages package cleanup failed", errors)
+
+
+def _cleanup_live_pages(vm: SmokeVM, prior_hosts: str) -> None:
+    errors: list[tuple[str, Exception]] = []
+    try:
+        _ensure_live_pages_packages_absent(vm)
+    except Exception as error:
+        errors.append(("package cleanup", error))
+    try:
+        _ssh_check(vm, "/bin/rm", "-f", REPO_CONF)
+    except Exception as error:
+        errors.append(("remove repo conf", error))
+    try:
+        restore_pages_hosts(vm, prior_hosts)
+    except Exception as error:
+        errors.append(("restore Pages hosts", error))
+
+    _raise_live_pages_errors("live Pages teardown failed", errors)
+
+
 @pytest.mark.timeout(900)  # live deploy/DNS/cert can lag + pkg update + install over the public URL.
 def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     """Install the canonical package from the selected live Pages repository."""
@@ -1449,8 +1497,7 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
     prior_hosts = pin_pages_hosts(repo_vm, host)
     try:
         pfsense_prio = repo_priority(repo_vm, NETGATE_REPO_NAME)
-        pkg_delete(repo_vm, pkg_name=PKG_NAME)
-        pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
+        _ensure_live_pages_packages_absent(repo_vm)
         write_live_repo_conf(repo_vm, base_url, varver, priority=pfsense_prio + 100)
 
         # WHEN: pkg update must ACCEPT the live HTTPS catalog (a rejected catalog — bad
@@ -1478,10 +1525,13 @@ def test_install_from_live_pages_url(repo_vm: SmokeVM) -> None:
         assert origin == expected_origin, f"installed from {origin!r}, expected selected repo {expected_origin!r}"
         assert_live_package(repo_vm, CANONICAL_PKG_NAME, expected_version, expected_source_sha, expected_channel)
     finally:
-        pkg_delete(repo_vm, pkg_name=PKG_NAME)
-        pkg_delete(repo_vm, pkg_name=CANONICAL_PKG_NAME)
-        _ssh_check(repo_vm, "/bin/rm", "-f", REPO_CONF)
-        restore_pages_hosts(repo_vm, prior_hosts)
+        body_error = sys.exception()
+        try:
+            _cleanup_live_pages(repo_vm, prior_hosts)
+        except Exception as cleanup_error:
+            if body_error is None:
+                raise
+            body_error.add_note(f"live Pages cleanup also failed: {cleanup_error}")
 
 
 @pytest.mark.timeout(1800)
