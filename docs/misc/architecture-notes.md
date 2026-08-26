@@ -1098,149 +1098,74 @@ strictly simpler than diffing and patching one in place, and never wrong. Key pr
     the boot-environment clone, so a non-package hook placed there persists across the very
     upgrade it heals (maintainer-confirmed from long operational use).
 
-**Published one-file bootstrap (`site/install.sh`, issue #2416 follow-up) — the SOLE client
-entry point.** One script, `--channel <stable|testing|edge|nightly>` parameterized — the
-predecessor four `install-<channel>.sh` wrappers + shared `install-common.sh` split is
-retired; unifying them was an owner ruling (2026-08). The repository copy
-(`scripts/install.sh`) shells out to the shipped
-`src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh`, resolved via `dirname "$0"`, which
-fails when **piped** into `sh` (`$0` is then `sh`, not the
-script path). `gen_landing.py`'s `build_site_tree()` — the generic pkg-site/ tree-build
-pass (issue #2450) — applies TWO splices to install.sh's site-tree copy: `_bake_base_url`
-points install.sh's own `PFB_BASE_URL` default at the site's own base first (issue #2416
-B3/F3), then the hook body is spliced into THAT text's `PFB_EMBED_HOOK` block — a
-single-quoted heredoc (`cat <<'PFB_HOOK_HEREDOC'`) so
-none of the hook's dollar-signs or backticks are expanded. Published at
-`pkg.pfblockerng.com/install.sh`, what the README's one-liners
-(`fetch -qo - <base>/install.sh | sh -s -- --channel <ch>`) point to.
+**Published one-file bootstrap (`pkg.pfblockerng.com/install.sh`, issue #2416) — the
+SOLE client entry point.** The source repository retains `scripts/install.sh` and
+`src/usr/local/etc/rc.d/pfblockerng_repo_generate.sh` as package/client inputs.
+The `pfBlockerNG/pkg` repository owns the production site source and renderer,
+which bake the site base and splice the hook through a single-quoted heredoc.
+Source smoke coverage assembles those two inputs directly and exercises the same
+published `fetch | sh -s -- --channel <ch>` form without executing pkg code.
 
 Full design: ADR-39.
 
 ### Publish pipeline, generators, and repo smoke (ADR-17/20)
 
-- **Publish pipeline:** `pfBlockerNG/pkg` is the served tree only — GitHub Pages publishes it
-  straight from that repo's `main`, and it carries no workflow of its own. **This** repo does the
-  publishing: `release-published.yml`'s `publish-pkg-repo` job (on the real `release: published`
-  event) and `pkg-republish.yml` (manual dispatch of the same flow) mint a GitHub App token
-  scoped to `pfBlockerNG/pkg` with `contents: write` (`actions/create-github-app-token@v3`,
-  secrets **`PKG_GITHUB_APP_ID`** + **`PKG_GITHUB_APP_PRIVATE_KEY`**), clone `pkg`, download the
-  Release's `.pkg` assets with an independent sha256 sidecar taken from the Releases API's own
-  per-asset `digest`, and run `scripts/publish-pkg-repo.sh`. That script calls
-  `scripts/publish_release.py` (structured intake, per-asset and whole-run verification,
-  catalogue assembly via `scripts/catalogue_assembly.py` and per-channel retention — never git),
-  then commits and force-free pushes the touched catalogue directories — nothing else; the site
-  around the catalogue is `pkg-render-site.yml`'s job, called after (issue #2450, below). Routing
-  comes from the dispatch's ordered `destinations` tuple; there is no latest-release discovery.
-  `nightly.yml`'s own `publish-pkg-repo` job runs the same script with `PUBLISH_KIND=nightly`
-  (`scripts/publish_nightly.py`) off the verified nightly handoff.
-- **Gate-before-announce for tagged publishes (issue #2389):** `docs/` on `pkg` `main` IS the
-  Pages site, so a plain publish announces the moment it pushes. `release-published.yml` therefore
-  runs `publish-pkg-repo.sh` with `PUBLISH_STAGE=stage`: the publisher runs against the real tree
-  (containment-aware pruning stays correct), every touched `<channel>/<varver>` is relocated under
-  `docs/staging/<run_id>-<attempt>/` with the original bytes restored in place, one push (never a
-  site render — that is never this job's concern, staged or not). `prepare-live-gate`
-  (`scripts/live_gate_matrix.py`) fans the CI legs
-  whose varver was touched out per destination; `validate-live-pages-install` runs `smoke-single.yml`
-  (`pytest_marker: repo`, `test_install_from_live_pages_url`) per leg against
-  `https://pkg.pfblockerng.com/staging/<seg>/<channel>` with expected version = portversion and
-  expected `pfb_build_record.source_sha` = the tag commit — the staged URL's last segment is the
-  channel, so `build-repo-portable.py --print-conf` derives the real `pfblockerng-<channel>` repo
-  name and the box's `%R` matches. `promote-pkg-repo` (`always()`, only when the stage succeeded and
-  was not a no-op) runs `PUBLISH_STAGE=promote` on green (staged dirs moved into place, staging
-  tree dropped, one push — the announce) or `PUBLISH_STAGE=discard` on any red leg (staging tree
-  dropped, run fails). A stage-mode run whose catalogue is a no-op reports `noop=true`, which skips
-  the gate and `promote-pkg-repo` entirely. A target the publisher reports as updated but whose
-  bytes did not change (`git status --porcelain` empty) is dropped from staging; a target whose only
-  change is a fresh randomised ECDSA signature is dropped in EVERY mode, ahead of both of those
-  decisions, by `filter_signature_only_touched` (issue #2675 — it restores the archives from `HEAD`,
-  so the stage filter and the direct `git diff --cached` each see an ordinary clean target); a
-  promote whose prefix holds no `<channel>/<varver>` fails loudly. Workflow-level `concurrency` serialises
-  publishes. `render-site` (`pkg-render-site.yml`, issue #2450) runs after regardless — `if:
-  always() && needs.publish-pkg-repo.result == 'success'` — so a promote, a discard, and a
-  catalogue no-op alike still get a current site; it never gates on `promote-pkg-repo`'s own
-  result. `PUBLISH_STAGE=direct` (default) keeps today's single-push path for `nightly.yml`
-  (publish-then-gate, PR #2404) and `pkg-republish.yml`; nightly with any other value is a usage
-  error. `smoke-single.yml` exposes the generic `smoke_repo_live_url` /
-  `smoke_repo_expected_source_sha` / `smoke_repo_expected_version` /
-  `smoke_repo_expected_channel` inputs beside the nightly trio
-  (`SMOKE_REPO_EXPECTED_CHANNEL` is required when a live URL is set);
-  `DEFAULT_LIVE_BASE_URL` in `tests/smoke/test_repo_install.py` is Stable.
+- **Ownership boundary (issue #2456):** `pfBlockerNG/pfBlockerNG` produces immutable
+  inputs and never checks out, commits, or pushes `pfBlockerNG/pkg`. It mints an App
+  token narrowed to `Actions:write` on pkg and dispatches
+  `scripts/dispatch-pkg-publication.sh`. The pkg repository checks out only itself;
+  its own workflow, publisher, renderer, site source, tests, and `GITHUB_TOKEN`
+  perform every catalogue/Pages commit. No floating source ref supplies executable
+  publisher or renderer code.
+- **Tagged Release intake:** `release-published.yml` and `pkg-republish.yml` call
+  the shared `pkg-tagged-ingest.yml` orchestrator with exact Release id/tag, source
+  SHA, ordered destinations, channel, and version. pkg queries that immutable
+  Release, requires GitHub's `sha256:` digest for every `.pkg`, downloads the exact
+  assets, and validates their embedded provenance. New Releases carry the immutable
+  tagged handoff; already-published pre-handoff Releases use pkg's checked-in
+  compatibility ROUTE matrix and remain republishable without asset mutation.
+- **Gate-before-announce for tagged publishes (issue #2389):** pkg first commits
+  only `docs/staging/<run-id>-<attempt>/<channel>/<varver>`. The source orchestrator
+  derives live-test legs from the exact touched result artifact and runs
+  `test_install_from_live_pages_url` against the staged URL. A green gate dispatches
+  pkg promotion, which commits the live catalogue and rendered website atomically.
+  Every other outcome dispatches discard; failed staging never changes a live
+  channel or rendered page. A catalogue NOOP skips gate and promotion.
+- **Nightly transport:** `nightly.yml` still builds and validates every BUILD result
+  plus `nightly-handoff.json`, then pushes both as one OCI artifact with explicit
+  pfBlockerNG media types. The authoritative locator is
+  `ghcr.io/pfblockerng/pfblockerng-nightly@sha256:<digest>`; pkg rejects tags,
+  validates the manifest/layer types and the complete handoff/payload provenance,
+  and atomically commits the Nightly catalogue plus site. Source then performs the
+  existing live validation. Ingestion or validation failure retains the exact OCI
+  manifest for retry; only a green live validation dispatches exact-digest cleanup
+  through pkg.
+- **Retry and guards:** pkg's manual workflow dispatch accepts the same exact
+  immutable inputs. Source dispatch correlation uses the unique operation/run title,
+  bounded dispatch attempts, bounded run lookup, and a validated result artifact.
+  pkg reruns the entire publish/render cycle after a genuine non-fast-forward race,
+  rejects other push failures, stages only allowed paths, and verifies the renderer
+  did not change catalogue input. Catalogue or site NOOPs create no commit.
 - **Four-channel catalogue model (issue #2147):** the served tree is
-  `<channel>/<varver>/` with channels exactly `stable` / `testing` / `edge` / `nightly`
-  (`scripts/catalogue_assembly.py`'s closed set; the legacy bundled `release/<varver>/` layout is
-  retired). Every channel serves the ONE canonical `pfSense-pkg-pfBlockerNG` — channel is
-  catalogue placement, never a package-name suffix. A tagged release fans out to the destination
-  tuple `scripts/release_version.py:derive_destinations` computes, unconditionally by tag shape
-  alone (issue #2251): a final tag always lands in `(stable, testing, edge)`, a nonzero-patch
-  prerelease always in `(testing, edge)`, a patch-zero prerelease always in `(edge,)` — Stable/
-  Testing/Edge may intentionally share the same version and bytes. Every channel catalogue
-  strictly contains its slower channels' packages (edge ⊇ testing ⊇ stable), and this is safe
-  because `pkg` orders versions numerically, component-wise, never by release date: an
-  older-family artifact back-filled into Edge (e.g. publishing `3.2.17` after Edge already holds
-  `4.0.0.a2`) never moves Edge's latest backward — the same containment doubles as in-repo
-  rollback material on a faster channel. A box therefore subscribes to exactly one project
-  channel repo rather than several (issue #2251); Nightly is untagged and independent. Per
-  `<channel>/<varver>/`, retention keeps the newest
-  `DEFAULT_RETENTION_KEEP = 5` canonical packages, PLUS (containment-aware retention, PR #2253
-  review) any canonical version one of that channel's slower channels (`_SLOWER_CHANNELS` —
-  stable has none, testing's is stable, edge's is stable+testing, nightly has none) still
-  retains for the same varver: without that exception, Edge receives the union of every
-  tagged stream and would rotate through its 5 slots faster than Stable/Testing, silently
-  evicting a version they still serve and breaking the containment guarantee above. Dependency
-  `.pkg`s are never pruned.
-  Deployment is atomic per run: `publish-pkg-repo.sh` stages ONLY the touched
-  `(channel, varver)` dirs (never `git add -A`) and aborts before any git mutation on a
-  publisher failure, so a partial or failed run cannot erase another channel
-  (pinned by `tests/shell/publish_pkg_repo_spec.sh`). It never touches the site around
-  the catalogue any more (issue #2450): that split into its own renderer. `pkg-site/`
-  (this repo) is the declared site tree — `install.sh` (`{base}`-substituted, hook
-  embedded via the same bake-and-splice idiom as before) and `recipes/<channel>.sh`
-  (the verbatim card text each channel's landing card shows) — mirrored 1:1 into
-  `pkg`'s `docs/`. `scripts/render-pkg-site.sh` renders it plus the dynamic pages
-  (landing `index.html`, `browse.html`, and `browse/<channel>/<varver>/index.html`)
-  entirely OUTSIDE the catalogue trees, via `gen_landing.py --site-tree`, and
-  commits + pushes only if something changed (a NOOP writes nothing; rendering never
-  reads a file's mtime, so byte-identical inputs never manufacture a commit). It is
-  wired into CI as `pkg-render-site.yml`: a `workflow_call` every catalogue publisher
-  (`release-published.yml`, `pkg-republish.yml`, `nightly.yml`) invokes AFTER its own
-  catalogue commit, or a bare `workflow_dispatch` to re-render on demand. Ownership of
-  `docs/` is two disjoint prefixes — the publisher writes only
-  `docs/{stable,testing,edge,nightly,staging}/**`, the renderer writes everything
-  else — each enforced by its own `git diff --cached` guard before any commit, so a
-  regressed renderer can never silently touch a catalogue path or vice versa. One
-  operator step remains manual, once, after the first successful render: delete the
-  legacy per-directory `index.html` autoindexes still sitting inside the live catalogue
-  dirs by hand — that cleanup is deliberately not script logic (a renderer that could
-  reach into a catalogue-owned path to delete something is the exact hazard the guard
-  exists to prevent). Catalogues published by the workflows are
-  ECDSA-signed (issue #2675 — `secp384r1`, private half in the `PFB_PKG_SIGNING_KEY` secret), and
-  the client conf verifies them: `signature_type: fingerprints` against a trusted fingerprint the
-  boot `rc.d` hook installs, fetched over plain HTTP because `pkg`'s CA store is Netgate-pinned on
-  Plus. Only the project host is treated that way — a fork or `file://` base keeps its own scheme
-  and `signature_type: none`; the landing
-  page (`scripts/gen_landing.py`) documents the channel audiences, shared-bytes fan-out,
-  single-repository subscription, and the explicit repository-qualified downgrade rule. The
-  arch-less per-varver catalog (issue #1806) is still generated by
-  `scripts/build-repo-portable.py`, and the FreeBSD `pkg repo` fidelity path
-  (`scripts/build-repo.sh`) is retained as a script only. **extra_pkgs dep .pkgs (issue #1806,
-  e.g. CE's `textproc/py-charset-normalizer`) ARE deliberate release assets** —
-  `release.yml`'s `build-pkgs-portable` job builds + uploads each release row's dep .pkg as its own
-  `pfBlockerNG-relpkg-deppkgs-<Variant>-<pfsense_version>` artifact; `attach-pkgs`'s existing
-  `pfBlockerNG-relpkg-*` sweep picks it up and attaches it to the GitHub Release alongside the
-  branch `.pkg`s (frozen together — the EOL/route-only story wants this); the draft healthcheck
-  counts one main asset per release row plus the total `extra_pkgs` entries. The publisher folds
-  those attached dep `.pkg` assets into the served catalogue itself — `publish_catalogues.py`
-  verifies each one against its ROUTE row's ABI. **A dependency `.pkg`'s identity is its
-  filename alone** (`<name>-<version>.pkg`, from the pinned ports tree) — never its bytes:
-  publishers place a dependency only when it is missing at a destination, and never
-  byte-compare or overwrite one already there. A tagged run's dependency assets are per-row
-  Release assets, each routed to its OWN row's varver by its `-<Variant>-<pfsense_version>`
-  suffix — never by ABI-matching every same-major declaring row, so two rows on the same
-  FreeBSD major can each carry their own build without colliding. Canonical packages keep the
-  strict byte-conflict check (`DestinationConflictError` on a same-name, different-bytes
-  destination). Nightly rebuilds its dependency every run and reuses the identical
-  place-if-missing rule, so a byte-only rebuild under an unchanged name-version is expected,
-  not an error (issue #2468).
+  `<channel>/<varver>/` for `stable`, `testing`, `edge`, and `nightly`, always serving
+  the canonical `pfSense-pkg-pfBlockerNG` identity. Tagged destinations still come
+  from `scripts/release_version.py:derive_destinations`: final tags fan to
+  `(stable, testing, edge)`, nonzero-patch prereleases to `(testing, edge)`, and
+  patch-zero prereleases to `(edge,)`. Nightly remains tagless and independent.
+  Retention and slower-channel containment are unchanged: each channel keeps the
+  newest five canonical packages plus any version a slower channel still retains;
+  dependency `.pkg`s are not pruned.
+- **Catalogue/site implementation:** the publisher, retention logic, renderer,
+  declared site tree, route compatibility manifest, and their tests now live in
+  `pfBlockerNG/pkg`. Catalogues are ECDSA-signed (`secp384r1`, private key in
+  `PFB_PKG_SIGNING_KEY`); client confs verify fingerprints. The landing/browse
+  renderer preserves route-only roles for EOL tables and writes outside catalogue
+  paths, while publication promotion/Nightly combines both views in one guarded
+  commit. A pkg site-source push rerenders locally without a source checkout.
+- **Release assets:** `extra_pkgs` dependency packages remain immutable Release
+  assets beside canonical packages. The pkg publisher validates each dependency
+  against its exact ROUTE row and suffix. Canonical same-name/different-byte
+  conflicts remain hard failures; dependency placement remains place-if-missing.
 - **Generators:** `scripts/build-repo-portable.py` (primary catalog gen) and
   `scripts/build-repo.sh` (fallback + `--print-conf` conf template) both emit the client
   repo-conf; `priority: 100` — one equal priority across every project channel repo, above

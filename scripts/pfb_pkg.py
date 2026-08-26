@@ -1,10 +1,9 @@
 """Shared libpkg .pkg helpers — zstd framing + the +COMPACT_MANIFEST reader.
 
-A libpkg .pkg is a zstd-compressed tar whose first member is +COMPACT_MANIFEST
-(the package metadata). Both scripts/build-repo-portable.py and
-scripts/gen_landing.py read those manifests off-FreeBSD; this module is the one
-copy of that logic. Both run as `python3 .../scripts/<tool>.py`, so the script's
-directory (scripts/) is on sys.path and `import pfb_pkg` resolves here.
+A libpkg .pkg is a zstd-compressed tar whose first member is +COMPACT_MANIFEST,
+the package metadata. Scripts/build-repo-portable.py reads those manifests
+off-FreeBSD through this single implementation. Direct script execution puts
+scripts/ on sys.path, so ``import pfb_pkg`` resolves here.
 
 stdlib-only, with an optional fast path: the `zstandard` module if installed,
 else the `zstd` binary.
