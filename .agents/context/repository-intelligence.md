@@ -5,7 +5,10 @@ Load when: every agent session, from `AGENTS.md`.
 
 - Initialize a checkout with `sh scripts/agent/init-worktree-tools.sh .`.
   `work-branch.sh --worktree` runs the same initializer after creating a worktree and
-  removes the new worktree and branch if initialization fails.
+  removes the new worktree and branch if initialization fails; it uses Git directly
+  and does not require Worktrunk. For `wt switch --create <branch>`, the tracked
+  `.config/wt.toml` runs the initializer as its `pre-start` hook and prunes worktree metadata after
+  Worktrunk merge and remove operations.
 - CodeGraph and Graphify are mandatory. The initializer runs
   `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index first, then
   `graphify update <root>`. Install Graphify with `uv tool install graphifyy==0.9.50`.

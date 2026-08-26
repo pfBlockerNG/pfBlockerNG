@@ -153,7 +153,15 @@ Poll until every **required** check complete, excluding only the advisory contex
 - Merge with rebase (`gh pr merge N --rebase`); never `--merge` or `--squash`.
 - **Do not pass `--delete-branch`:** its local post-merge step check out base branch and fail when another worktree hold it, even though remote merge succeeded. Merge first, verify, then delete separately.
 - **Verify the merge actually landed:** PR's state must read `MERGED` (local step can error while remote merge succeeded).
-- Delete remote branch separately (`git push origin --delete <head>`), then remove worktree from OUTSIDE it.
+- Run `git fetch origin` after that verification so cleanup checks integration against the current remote base.
+- Delete the remote branch separately (`git push origin --delete <head>`).
+- From OUTSIDE the worktree, prefer `wt remove --foreground --format=json --yes <head>` when
+  `command -v wt` succeeds. Inspect and report its JSON `branch_outcome`; cleanup
+  requires `deleted`. For any other branch-deletion outcome, retain the local branch
+  and report why cleanup is incomplete rather than forcing deletion. Without `wt`,
+  retain the safe Git flow: `git worktree remove <path>` followed by
+  `git branch -d <head>`. Never force removal or branch deletion here; report a dirty
+  or unintegrated worktree instead.
 
 ## Post-merge
 

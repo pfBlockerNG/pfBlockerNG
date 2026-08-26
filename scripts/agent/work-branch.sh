@@ -5,11 +5,11 @@
 # Usage: work-branch.sh <issue|adr> <NN> [TITLE ...] [--worktree] [--claim] [--path PATH] [--base REF]
 #   Prints the branch name (`issue/NN-slug` / `adr/NN-slug`; empty slug -> bare `type/NN`).
 #   --worktree  also `git fetch origin` + `git worktree add -b BRANCH PATH BASE` at an
-#               ABSOLUTE path (default <primary checkout>/.claude/worktrees/<type>-<NN>,
-#               or <TMPDIR>/pfblockerng-<type>-<NN> under Codex; a relative --path anchors
-#               at the primary checkout); an existing branch or path gets a `-<epoch>` suffix
-#               (collision rule). Every created worktree initializes CodeGraph,
-#               Graphify, and enabled Serena tools.
+#               ABSOLUTE path (default <repo-parent>/.<repo-name>_worktrees/<branch
+#               with '/' replaced by '-'>; a relative --path anchors below that sibling
+#               root, while an absolute --path stays exact). An existing branch or path
+#               gets a `-<epoch>` suffix (collision rule). Every created worktree
+#               initializes CodeGraph, Graphify, and enabled Serena tools.
 #               Prints `BRANCH<TAB>PATH` instead.
 #   --base REF  worktree base (default origin/devel)
 #   --claim     with `issue … --worktree`: assign an UNCLAIMED issue to the caller
@@ -88,14 +88,14 @@ main() {
 	# shellcheck source=scripts/agent/agent_env.sh
 	. "$(dirname "$0")/agent_env.sh"
 	scrub_git_env "$0"
-	kind='' nn='' title='' do_worktree=0 do_claim=0 path='' base='origin/devel'
+	kind='' nn='' title='' do_worktree=0 do_claim=0 path='' path_set=0 absolute_path=0 base='origin/devel'
 	case "$1" in issue|adr) kind=$1; shift ;; *) usage ;; esac
 	case "$1" in *[!0-9]*|'') usage ;; *) nn=$1; shift ;; esac
 	while [ $# -gt 0 ]; do
 		case "$1" in
 			--worktree) do_worktree=1; shift ;;
 			--claim) do_claim=1; shift ;;
-			--path) [ $# -ge 2 ] || usage; path=$2; shift 2 ;;
+			--path) [ $# -ge 2 ] || usage; path=$2; path_set=1; shift 2 ;;
 			--base) [ $# -ge 2 ] || usage; base=$2; shift 2 ;;
 			*) title="$title $1"; shift ;;
 		esac
@@ -107,6 +107,32 @@ main() {
 	if [ "$do_worktree" -eq 0 ]; then
 		printf '%s\n' "$branch"
 		exit 0
+	fi
+
+	if [ "$path_set" -eq 1 ]; then
+		case "$path" in
+			'')
+				echo "work-branch.sh: --path must not be empty" >&2
+				exit 2
+				;;
+			/*) absolute_path=1 ;;
+			.)
+				echo "work-branch.sh: relative --path must not be '.'" >&2
+				exit 2
+				;;
+			*)
+				case "/$path/" in
+					*/../*)
+						echo "work-branch.sh: relative --path must not contain a '..' component" >&2
+						exit 2
+						;;
+				esac
+				;;
+		esac
+	fi
+	if [ "$absolute_path" -eq 1 ] && { [ -e "$path" ] || [ -L "$path" ]; }; then
+		echo "work-branch.sh: absolute --path '$path' is occupied" >&2
+		exit 2
 	fi
 
 	require_tool git
@@ -121,26 +147,101 @@ main() {
 		echo "work-branch.sh: cannot locate the primary checkout from '$common' (unsupported layout, e.g. --separate-git-dir)" >&2
 		exit 2
 	fi
+	has_origin=0
 	if git -C "$root" remote get-url origin >/dev/null 2>&1; then
+		has_origin=1
 		if ! git -C "$root" fetch origin >/dev/null 2>&1; then
 			echo "work-branch.sh: git fetch origin failed" >&2
 			exit 1
 		fi
 	fi
-	if git show-ref --verify -q "refs/heads/$branch" ||
-	   git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
-		branch="$branch-$(date +%s)"
+
+	repo_name=${root##*/}
+	repo_parent=${root%/*}
+	worktree_root="$repo_parent/.${repo_name}_worktrees"
+	if [ "$absolute_path" -eq 1 ]; then
+		mkdir -p "$(dirname "$path")" || exit 1
+	else
+		if [ -L "$worktree_root" ]; then
+			echo "work-branch.sh: sibling root must not be a symlink: '$worktree_root'" >&2
+			exit 2
+		fi
+		mkdir -p "$worktree_root" || exit 1
+		worktree_root=$(CDPATH='' cd "$worktree_root" && pwd -P) || exit 1
+		if [ "$path_set" -eq 1 ]; then
+			requested_parent=$(dirname "$worktree_root/$path")
+			mkdir -p "$requested_parent" || exit 1
+			requested_parent=$(CDPATH='' cd "$requested_parent" && pwd -P) || exit 1
+			path="$requested_parent/$(basename "$path")"
+			case "$path" in
+				"$worktree_root"/*) ;;
+				*)
+					echo "work-branch.sh: relative --path escapes sibling root '$worktree_root'" >&2
+					exit 2
+					;;
+			esac
+			path_base=$path
+			path_attempt=0
+			path_epoch=''
+			while [ -e "$path" ] || [ -L "$path" ]; do
+				path_attempt=$((path_attempt + 1))
+				if [ "$path_attempt" -eq 1 ]; then
+					path_epoch=$(date +%s) || exit 1
+					path="$path_base-$path_epoch"
+				else
+					path="$path_base-$path_epoch-$path_attempt"
+				fi
+			done
+		fi
 	fi
-	if [ -z "$path" ]; then
-		case "${CODEX_THREAD_ID:-}" in
-			'') path="$root/.claude/worktrees/$kind-$nn" ;;
-			*) tmp_root=$(CDPATH='' cd "${TMPDIR:-/tmp}" 2>/dev/null && pwd -P) || tmp_root=/tmp
-				path="$tmp_root/pfblockerng-$kind-$nn" ;;
+
+	canonical=$branch
+	branch_attempt=0
+	branch_epoch=''
+	while true; do
+		case "$branch_attempt" in
+			0) candidate=$canonical ;;
+			1)
+				branch_epoch=$(date +%s) || exit 1
+				candidate="$canonical-$branch_epoch"
+				;;
+			*) candidate="$canonical-$branch_epoch-$branch_attempt" ;;
 		esac
+		if [ "$has_origin" -eq 1 ] &&
+		   git ls-remote --exit-code --heads origin "$candidate" >/dev/null 2>&1; then
+			branch_attempt=$((branch_attempt + 1))
+			continue
+		fi
+		if git branch "$candidate" "$base" >/dev/null 2>&1; then
+			if [ "$path_set" -eq 0 ]; then
+				path="$worktree_root/${kind}-${candidate#*/}"
+				if [ -e "$path" ] || [ -L "$path" ]; then
+					git branch -D "$candidate" >/dev/null 2>&1 || {
+						echo "work-branch.sh: failed to release reserved branch '$candidate'" >&2
+						exit 1
+					}
+					branch_attempt=$((branch_attempt + 1))
+					continue
+				fi
+			fi
+			branch=$candidate
+			break
+		fi
+		if git rev-parse --verify -q "refs/heads/$candidate" >/dev/null 2>&1; then
+			branch_attempt=$((branch_attempt + 1))
+			continue
+		fi
+		echo "work-branch.sh: could not reserve branch '$candidate' at '$base'" >&2
+		exit 1
+	done
+
+	git worktree add "$path" "$branch" >/dev/null
+	worktree_status=$?
+	if [ "$worktree_status" -ne 0 ]; then
+		git branch -D "$branch" >/dev/null 2>&1 ||
+			echo "work-branch.sh: failed to delete reserved branch '$branch' after worktree creation failure" >&2
+		exit "$worktree_status"
 	fi
-	case "$path" in /*) ;; *) path="$root/$path" ;; esac   # worktree add needs ABSOLUTE paths
-	[ -e "$path" ] && path="$path-$(date +%s)"
-	git worktree add -b "$branch" "$path" "$base" >/dev/null || exit 1
 	initializer=${PFB_INIT_WORKTREE_TOOLS:-$(dirname "$0")/init-worktree-tools.sh}
 	sh "$initializer" "$path"
 	initializer_status=$?

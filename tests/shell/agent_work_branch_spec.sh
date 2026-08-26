@@ -64,6 +64,7 @@ Describe 'work-branch.sh post-add tool initialization'
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_tools.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary"
+    worktree_root="$fixture/.primary_worktrees"
     git_fixture init -q -b devel "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
@@ -123,14 +124,15 @@ GIT
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'fetches a configured origin before add and initializes the new absolute worktree'
+  It 'fetches before add and initializes a relative worktree beneath the sibling root'
     add_origin || return 1
     mkdir -p "$primary/nested"
     When run sh -c 'cd "$1" && exec sh "$2" adr 41 tools --worktree --base HEAD --path nested/worktree' _ "$primary" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'adr/41-tools\t%s/nested/worktree' "$primary")"
+    The output should equal "$(printf 'adr/41-tools\t%s/nested/worktree' "$worktree_root")"
     The stderr should include 'Preparing worktree'
-    The contents of file "$events" should equal "$(printf 'fetch\nadd\ninit:%s/nested/worktree' "$primary")"
+    The contents of file "$events" should equal "$(printf 'fetch\nadd\ninit:%s/nested/worktree' "$worktree_root")"
+    The path "$worktree_root" should be directory
   End
 
   It 'uses the co-located default initializer when no test seam is configured'
@@ -169,9 +171,9 @@ GIT
   End
 End
 
-Describe 'work-branch.sh --worktree anchors at the primary checkout'
-  # rc-mode / managed sessions run inside a linked session worktree; a new
-  # worktree must land under the PRIMARY root, never nested in the session tree.
+Describe 'work-branch.sh --worktree sibling placement'
+  # rc-mode / managed sessions run inside a linked session worktree; every
+  # implicit path must land beside the primary repository, never inside it.
   script_abs="${SHELLSPEC_PROJECT_ROOT:-$PWD}/scripts/agent/work-branch.sh"
 
   setup() {
@@ -181,7 +183,8 @@ Describe 'work-branch.sh --worktree anchors at the primary checkout'
     pfb_scrub_git_env
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_spec.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
-    primary="$fixture/primary"
+    primary="$fixture/primary repo"
+    worktree_root="$fixture/.primary repo_worktrees"
     git_fixture init -q "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init &&
@@ -202,6 +205,11 @@ case "$*" in
 esac
 GH
     chmod +x "$stubdir/gh"
+    cat > "$stubdir/date" <<'DATE'
+#!/bin/sh
+printf '%s\n' 1700000000
+DATE
+    chmod +x "$stubdir/date"
     export WB_GH_LOG="$gh_log"
     codegraph_log="$fixture/codegraph.log"
     cat > "$stubdir/codegraph" <<'CODEGRAPH'
@@ -238,43 +246,151 @@ INIT
   BeforeEach 'setup'
   AfterEach 'cleanup'
 
-  It 'defaults the path under the primary root outside Codex'
+  It 'creates the sibling root for a repository name containing spaces'
     When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
+    The output should not include "$primary/"
     The stderr should include 'Preparing worktree'
+    The path "$worktree_root" should be directory
   End
 
-  It 'defaults the path under TMPDIR when run from Codex'
+  It 'uses the same sibling root when Codex variables are set'
     When run sh -c 'cd "$1" && CODEX_THREAD_ID=thread TMPDIR="$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs" "$fixture"
     The status should equal 0
-    The output should equal "$(printf 'issue/7-tld\t%s/pfblockerng-issue-7' "$fixture")"
+    The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
+    The output should not include "$primary/"
+    The output should not include "$fixture/pfblockerng-issue-7"
     The stderr should include 'Preparing worktree'
-    The contents of file "$codegraph_log" should equal "init $fixture/pfblockerng-issue-7"
-    Assert [ -f "$fixture/pfblockerng-issue-7/.codegraph/codegraph.db" ]
+    The contents of file "$codegraph_log" should equal "init $worktree_root/issue-7-tld"
+    Assert [ -f "$worktree_root/issue-7-tld/.codegraph/codegraph.db" ]
   End
 
-  It 'anchors a relative --path at the primary root when run from a linked worktree'
+  It 'anchors a relative --path beneath the sibling root'
     When run sh -c 'cd "$1" && exec sh "$2" issue 8 tld --worktree --base HEAD --path wt/x' _ "$fixture/session" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'issue/8-tld\t%s/wt/x' "$primary")"
+    The output should equal "$(printf 'issue/8-tld\t%s/wt/x' "$worktree_root")"
+    The output should not include "$primary/"
     The stderr should include 'Preparing worktree'
   End
 
-  It 'keeps the primary-checkout default placement unchanged'
+  It 'rejects a parent-traversing relative --path before creating a branch or worktree'
+    When run sh -c 'cd "$1" && exec sh "$2" adr 45 escape --worktree --base HEAD --path ../escape' _ "$fixture/session" "$script_abs"
+    The status should equal 2
+    The stderr should include "must not contain a '..' component"
+    Assert [ ! -e "$fixture/escape" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/45-escape')" ]
+  End
+
+  It 'rejects dot as a relative --path before creating a branch or worktree'
+    When run sh -c 'cd "$1" && exec sh "$2" adr 46 dot --worktree --base HEAD --path .' _ "$fixture/session" "$script_abs"
+    The status should equal 2
+    The stderr should include "must not be '.'"
+    Assert [ ! -e "$worktree_root" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/46-dot')" ]
+  End
+
+  It 'rejects a relative --path whose parent symlink escapes the sibling root'
+    mkdir -p "$worktree_root" "$fixture/outside"
+    ln -s "$fixture/outside" "$worktree_root/link"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 47 symlink --worktree --base HEAD --path link/worktree' _ "$fixture/session" "$script_abs"
+    The status should equal 2
+    The stderr should include 'escapes sibling root'
+    Assert [ ! -e "$fixture/outside/worktree" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/47-symlink')" ]
+  End
+
+  It 'rejects a symlink at the derived sibling root'
+    mkdir -p "$fixture/outside-root"
+    ln -s "$fixture/outside-root" "$worktree_root"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 51 root-symlink --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 2
+    The stderr should include 'sibling root must not be a symlink'
+    Assert [ ! -e "$fixture/outside-root/adr-51-root-symlink" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/51-root-symlink')" ]
+  End
+
+  It 'uses sibling placement from the primary checkout too'
     When run sh -c 'cd "$1" && CODEX_THREAD_ID= exec sh "$2" issue 9 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'issue/9-tld\t%s/.claude/worktrees/issue-9' "$primary")"
+    The output should equal "$(printf 'issue/9-tld\t%s/issue-9-tld' "$worktree_root")"
+    The output should not include "$primary/"
     The stderr should include 'Preparing worktree'
   End
 
-  It 'is immune to an inherited CDPATH when resolving the primary root'
+  It 'is immune to an inherited CDPATH when resolving the sibling root'
     # A CDPATH hit makes cd echo the destination AND resolve relative to the
     # CDPATH entry instead of $PWD — either corrupts the derived root.
     When run sh -c 'mkdir -p "$3/.git" && cd "$1" && CODEX_THREAD_ID= CDPATH=$3 exec sh "$2" issue 10 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$fixture/decoy"
     The status should equal 0
-    The output should equal "$(printf 'issue/10-tld\t%s/.claude/worktrees/issue-10' "$primary")"
+    The output should equal "$(printf 'issue/10-tld\t%s/issue-10-tld' "$worktree_root")"
+    The output should not include "$primary/"
     The stderr should include 'Preparing worktree'
+  End
+
+  It 'uses the suffixed branch name for a colliding default worktree'
+    git_fixture -C "$primary" branch issue/14-tld
+    When run sh -c 'cd "$1" && exec sh "$2" issue 14 tld --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 0
+    The output should equal "$(printf 'issue/14-tld-1700000000\t%s/issue-14-tld-1700000000' "$worktree_root")"
+    The output should not include "$primary/"
+    The stderr should include 'Preparing worktree'
+  End
+
+  It 'advances past repeated deterministic branch collisions'
+    git_fixture -C "$primary" branch adr/48-collide
+    git_fixture -C "$primary" branch adr/48-collide-1700000000
+    When run sh -c 'cd "$1" && exec sh "$2" adr 48 collide --worktree --base HEAD' _ "$fixture/session" "$script_abs"
+    The status should equal 0
+    The stderr should include 'Preparing worktree'
+    The output should equal "$(printf 'adr/48-collide-1700000000-2\t%s/adr-48-collide-1700000000-2' "$worktree_root")"
+    The path "$worktree_root/adr-48-collide-1700000000-2" should be directory
+  End
+
+  It 'atomically gives synchronized creators distinct branches and default paths'
+    race_dir="$fixture/race"; race_bin="$race_dir/bin"
+    mkdir -p "$race_bin"
+    mkfifo "$race_dir/ready-one" "$race_dir/ready-two" "$race_dir/release-one" "$race_dir/release-two"
+    export WB_REAL_GIT="$(command -v git)"
+    cat > "$race_bin/git" <<'GIT'
+#!/bin/sh
+if [ "$#" -eq 4 ] && [ "$1" = show-ref ] && [ "$2" = --verify ] &&
+   [ "$3" = -q ] && [ "$4" = refs/heads/adr/49-race ]; then
+	exit 1
+fi
+exec "$WB_REAL_GIT" "$@"
+GIT
+    chmod +x "$race_bin/git"
+    When run sh -c '
+      (
+        printf "ready\n" > "$3/ready-one"
+        IFS= read -r _ < "$3/release-one"
+        cd "$1" || exit 125
+        PATH="$4:$PATH" exec sh "$2" adr 49 race --worktree --base HEAD
+      ) > "$3/one.out" 2> "$3/one.err" &
+      one=$!
+      (
+        printf "ready\n" > "$3/ready-two"
+        IFS= read -r _ < "$3/release-two"
+        cd "$1" || exit 125
+        PATH="$4:$PATH" exec sh "$2" adr 49 race --worktree --base HEAD
+      ) > "$3/two.out" 2> "$3/two.err" &
+      two=$!
+      IFS= read -r _ < "$3/ready-one"
+      IFS= read -r _ < "$3/ready-two"
+      printf "go\n" > "$3/release-one"
+      printf "go\n" > "$3/release-two"
+      wait "$one"; one_rc=$?
+      wait "$two"; two_rc=$?
+      sort "$3/one.out" "$3/two.out" > "$3/results"
+      printf "%s %s\n" "$one_rc" "$two_rc"
+      [ "$one_rc" -eq 0 ] && [ "$two_rc" -eq 0 ]
+    ' _ "$fixture/session" "$script_abs" "$race_dir" "$race_bin"
+    The status should equal 0
+    The output should equal '0 0'
+    The contents of file "$race_dir/results" should equal "$(printf 'adr/49-race\t%s/adr-49-race\nadr/49-race-1700000000\t%s/adr-49-race-1700000000' "$worktree_root" "$worktree_root")"
+    The path "$worktree_root/adr-49-race" should be directory
+    The path "$worktree_root/adr-49-race-1700000000" should be directory
   End
 
   It 'refuses a --separate-git-dir layout instead of anchoring outside the checkout'
@@ -291,6 +407,17 @@ INIT
     The status should equal 0
     The output should equal "$(printf 'issue/12-tld\t%s/abs-target' "$fixture")"
     The stderr should include 'Preparing worktree'
+  End
+
+  It 'fails an occupied explicit absolute --path without suffixing or leaking a branch'
+    mkdir -p "$fixture/occupied"
+    printf 'keep\n' > "$fixture/occupied/marker"
+    When run sh -c 'cd "$1" && exec sh "$2" adr 50 occupied --worktree --base HEAD --path "$3"' _ "$fixture/session" "$script_abs" "$fixture/occupied"
+    The status should equal 2
+    The stderr should include 'is occupied'
+    The contents of file "$fixture/occupied/marker" should equal keep
+    Assert [ ! -e "$fixture/occupied-1700000000" ]
+    Assert [ -z "$(git_fixture -C "$primary" branch --list 'adr/50-occupied*')" ]
   End
 
   It 'keeps worktree creation without a configured origin'
@@ -313,6 +440,7 @@ Describe 'work-branch.sh --worktree claim gate (workflow.md "Claim")'
     fixture=$(mktemp -d "${TMPDIR:-/tmp}/wb_claim.XXXXXX") || return 1
     fixture=$(cd "$fixture" && pwd -P) || return 1
     primary="$fixture/primary"
+    worktree_root="$fixture/.primary_worktrees"
     git_fixture init -q "$primary" &&
       git_fixture -C "$primary" -c user.email=t@t -c user.name=t -c commit.gpgsign=false \
         commit -q --allow-empty -m init || return 1
@@ -369,27 +497,27 @@ INIT
     The status should equal 3
     The stderr should include 'issue #7 is not claimed'
     The stderr should include '--claim'
-    Assert [ ! -e "$primary/.claude/worktrees/issue-7" ]
+    Assert [ ! -e "$worktree_root/issue-7-tld" ]
   End
 
   It 'refuses to cut an issue worktree claimed by someone else'
     When run sh -c 'cd "$1" && WB_ASSIGNEES=other exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 3
     The stderr should include 'claimed by other'
-    Assert [ ! -e "$primary/.claude/worktrees/issue-7" ]
+    Assert [ ! -e "$worktree_root/issue-7-tld" ]
   End
 
   It 'proceeds when the issue is assigned to the caller (among others)'
     When run sh -c 'cd "$1" && WB_ASSIGNEES=other,me exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The stderr should include 'Preparing worktree'
   End
 
   It '--claim assigns an unclaimed issue to the caller and proceeds'
     When run sh -c 'cd "$1" && WB_ASSIGNEES= exec sh "$2" issue 7 tld --worktree --base HEAD --claim' _ "$primary" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The stderr should include 'Preparing worktree'
     The contents of file "$gh_log" should include 'issue edit 7 --add-assignee @me'
   End
@@ -404,7 +532,7 @@ INIT
   It 'warns and proceeds when gh cannot answer (MCP-only or offline sessions verify the claim themselves)'
     When run sh -c 'cd "$1" && WB_GH_RC=1 exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The stderr should include 'claim NOT verified'
     The stderr should include 'issue #7'
   End
@@ -412,14 +540,14 @@ INIT
   It 'warns and proceeds when gh is not installed at all'
     When run sh -c 'cd "$1" && PATH="$4:$3" exec sh "$2" issue 7 tld --worktree --base HEAD' _ "$primary" "$script_abs" "$(dirname "$(command -v git)"):/usr/bin:/bin" "$codegraph_dir"
     The status should equal 0
-    The output should equal "$(printf 'issue/7-tld\t%s/.claude/worktrees/issue-7' "$primary")"
+    The output should equal "$(printf 'issue/7-tld\t%s/issue-7-tld' "$worktree_root")"
     The stderr should include 'claim NOT verified'
   End
 
   It 'does not gate ADR worktrees on a claim'
     When run sh -c 'cd "$1" && WB_GH_RC=1 exec sh "$2" adr 9 x --worktree --base HEAD' _ "$primary" "$script_abs"
     The status should equal 0
-    The output should equal "$(printf 'adr/9-x\t%s/.claude/worktrees/adr-9' "$primary")"
+    The output should equal "$(printf 'adr/9-x\t%s/adr-9-x' "$worktree_root")"
     The stderr should include 'Preparing worktree'
     Assert [ ! -e "$gh_log" ]
   End
