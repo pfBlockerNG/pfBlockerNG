@@ -1277,7 +1277,7 @@ function pfb_cfg_registry(): array
 			'no_grandfather' => 'v3.2.16 absent-key fallback equals current default',
 		],
 
-		// Python regex static cap ('on'|''). Default ''.
+		// Python opt-in regex length cap ('on'|''). Default ''.
 		'dnsbl/pfb_regex_cap' => [
 			'default'       => '',
 			'read_adapter'  => 'pfb_cfg_toggle_read',
