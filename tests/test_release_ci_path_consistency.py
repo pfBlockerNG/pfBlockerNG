@@ -186,6 +186,14 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
         encoding="utf-8",
     )
     fake_git.chmod(0o755)
+    builder = tmp_path / "pinned-builder/scripts/build-dep-pkg-portable.py"
+    builder.parent.mkdir(parents=True)
+    builder.write_text(
+        'print(\'{"python":"3.11.15","pip":"26.2.1","setuptools":"75.6.0",'
+        '"wheel":"0.45.1","zstandard":"0.25.0","uv":"0.12.6",'
+        '"uv_lock_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}\')\n',
+        encoding="utf-8",
+    )
 
     completed = subprocess.run(
         ["sh", "-c", script],
@@ -194,7 +202,7 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(tmp_path: Pa
         | {
             "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}",
             "GITHUB_OUTPUT": str(output),
-            "GITHUB_WORKSPACE": str(ROOT),
+            "GITHUB_WORKSPACE": str(tmp_path),
             "GIT_LOG": str(git_log),
             "MATRIX_FIXTURE": str(matrix),
             "CI_SHA": ci_sha,

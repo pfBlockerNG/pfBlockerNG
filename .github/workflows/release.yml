@@ -577,6 +577,18 @@ jobs:
           PY
           echo "source_sha=${SOURCE_SHA}" >> "$GITHUB_OUTPUT"
 
+      - name: Check out pinned dependency-builder source
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.destinations.outputs.source_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+          path: pinned-builder
+          sparse-checkout: |
+            scripts/
+            uv.lock
+          sparse-checkout-cone-mode: false
+
       - name: Pin ci-metadata, ROUTE, and Ports identities
         id: pins
         run: |
@@ -597,7 +609,8 @@ jobs:
           done
           ROUTE_MATRIX=$(git show "${CI_METADATA_SHA}:supported-versions.json" \
             | jq -ce '.versions | select(type == "array")')
-          DEPENDENCY_BUILDER="$(python3 scripts/build-dep-pkg-portable.py --print-toolchain | jq -ce .)"
+          PINNED_BUILDER="$GITHUB_WORKSPACE/pinned-builder"
+          DEPENDENCY_BUILDER="$(python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain | jq -ce .)"
           {
             echo "ci_metadata_sha=${CI_METADATA_SHA}"
             echo "ports_sha=${PORTS_SHA}"
@@ -1388,6 +1401,28 @@ jobs:
           pattern: pfBlockerNG-relpkg-*
           merge-multiple: true
           path: pkgs/
+
+      - name: Validate tagged handoff
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          SOURCE_SHA: ${{ needs.prepare-release.outputs.sha }}
+        run: |
+          set -eu
+          mkdir -p provenance
+          gh release download "$TAG" \
+            --pattern pfblockerng-release-handoff.json \
+            --dir provenance
+          set -- pkgs/*.pkg
+          if [ ! -f "$1" ]; then
+            echo "::error::No .pkg artifacts to validate."
+            exit 1
+          fi
+          python3 scripts/tagged_release_handoff.py validate-packages \
+            --handoff provenance/pfblockerng-release-handoff.json \
+            --release-tag "$TAG" \
+            --source-sha "$SOURCE_SHA" \
+            "$@"
 
       - name: Append .pkg files to the GitHub Release
         # Upload the renamed .pkg files to the still-DRAFT release using

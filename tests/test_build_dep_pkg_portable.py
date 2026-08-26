@@ -29,6 +29,8 @@ from typing import Any
 import pfb_pkg
 import pytest
 
+from tests.gitenv import scrubbed_git_env
+
 # --------------------------------------------------------------------------- #
 # Load the hyphen-named tool as a module (same convention as
 # tests/test_build_repo_portable.py:49-54 — register in sys.modules BEFORE
@@ -537,6 +539,27 @@ def test_stage_wheel_refuses_missing_or_duplicate_metadata(tmp_path: Path) -> No
         bdp.stage_wheel(duplicate, tmp_path / "duplicate-stage", "3.11")
 
 
+@pytest.mark.parametrize(
+    ("first", "second"),
+    [
+        ("Demo/module.py", "demo/module.py"),
+        ("demo/café.py", "demo/cafe\u0301.py"),
+        ("demo/module.py", "demo//module.py"),
+        ("demo/module.py", "demo/./module.py"),
+    ],
+)
+def test_stage_wheel_refuses_host_canonical_member_collisions(
+    tmp_path: Path,
+    first: str,
+    second: str,
+) -> None:
+    wheel = tmp_path / "collision-1.0-py3-none-any.whl"
+    _write_wheel(wheel, files={first: b"first", second: b"second"}, entry_points=None)
+
+    with pytest.raises(bdp.DepPkgError, match="unsafe member path|collision"):
+        bdp.stage_wheel(wheel, tmp_path / "stage", "3.11")
+
+
 # --------------------------------------------------------------------------- #
 # Full orchestration: manifest correctness of the emitted .pkg, read back via
 # pfb_pkg.read_compact_manifest (the SAME contract tests/test_pfb_pkg.py pins).
@@ -571,6 +594,11 @@ def _mock_network(monkeypatch: pytest.MonkeyPatch, *, console_scripts: str | Non
     monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
     monkeypatch.setattr(bdp, "build_wheel", fake_build_wheel)
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bdp.bpp,
+        "_snapshot_checkout",
+        lambda checkout, _sha, _dest, payload_root=None: checkout,
+    )
     monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
 
 
@@ -601,8 +629,12 @@ def test_build_dep_pkg_forwards_epoch_and_requires_exact_ports_attestation(
         calls.append(("toolchain",))
         return bdp.build_toolchain_identity()
 
-    def attest_ports(path: Path, sha: str, label: str) -> None:
-        calls.append(("attest", path, sha, label))
+    def attest_ports(path: Path, sha: str, label: str, *, payload_root: Path) -> None:
+        calls.append(("attest", path, sha, label, payload_root))
+
+    def snapshot_ports(path: Path, sha: str, dest: Path, payload_root: Path) -> Path:
+        calls.append(("snapshot", path, sha, dest, payload_root))
+        return path
 
     def build_wheel(sdist: Path, work_dir: Path, *, source_date_epoch: int) -> Path:
         calls.append(("wheel", source_date_epoch))
@@ -610,16 +642,70 @@ def test_build_dep_pkg_forwards_epoch_and_requires_exact_ports_attestation(
 
     monkeypatch.setattr(bdp, "validate_build_toolchain", validate_toolchain)
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", attest_ports)
+    monkeypatch.setattr(bdp.bpp, "_snapshot_checkout", snapshot_ports)
     monkeypatch.setattr(bdp, "build_wheel", build_wheel)
     args = _build_args(ports_root, tmp_path / "out")
 
     bdp.build_dep_pkg(args)
 
-    assert calls[:3] == [
-        ("toolchain",),
-        ("attest", Path(args.ports), args.ports_sha, "FreeBSD-ports"),
-        ("wheel", args.source_date_epoch),
-    ]
+    assert calls[0] == ("toolchain",)
+    assert calls[1] == ("attest", Path(args.ports), args.ports_sha, "FreeBSD-ports", ports_root / args.port)
+    assert calls[2][:3] == ("snapshot", Path(args.ports), args.ports_sha)
+    snapshot_dest = calls[2][3]
+    assert isinstance(snapshot_dest, Path)
+    assert snapshot_dest.name == "ports-snapshot"
+    assert calls[2][4] == ports_root / args.port
+    assert calls[3] == ("wheel", args.source_date_epoch)
+
+
+def _git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        env=scrubbed_git_env(drop_git_vars=True),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.strip()
+
+
+def test_build_dep_pkg_refuses_tracked_port_symlink_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    external_port = _write_port(tmp_path / "external")
+    ports_root = tmp_path / "ports"
+    (ports_root / "textproc").mkdir(parents=True)
+    (ports_root / "textproc" / "py-charset-normalizer").symlink_to(external_port, target_is_directory=True)
+    _git(ports_root, "init", "-q")
+    _git(ports_root, "config", "user.name", "test")
+    _git(ports_root, "config", "user.email", "test@example.invalid")
+    _git(ports_root, "add", ".")
+    _git(ports_root, "commit", "-q", "-m", "fixture")
+    ports_sha = _git(ports_root, "rev-parse", "HEAD")
+    real_attest = bdp.bpp._attest_checkout
+    real_snapshot = bdp.bpp._snapshot_checkout
+    _mock_network(monkeypatch, console_scripts=None)
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", real_attest)
+    args = _build_args(ports_root, tmp_path / "out")
+    monkeypatch.setattr(bdp.bpp, "_snapshot_checkout", real_snapshot)
+    args.ports_sha = ports_sha
+
+    with pytest.raises(bdp.bpp.BuildError, match="payload root|symlink|escapes"):
+        bdp.build_dep_pkg(args)
+
+
+def test_build_dep_pkg_refuses_unsafe_port_origin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _write_port(tmp_path / "external")
+    ports_root = tmp_path / "ports"
+    ports_root.mkdir()
+    _mock_network(monkeypatch, console_scripts=None)
+    args = _build_args(ports_root, tmp_path / "out")
+    args.port = "../external/textproc/py-charset-normalizer"
+
+    with pytest.raises(bdp.DepPkgError, match="port origin"):
+        bdp.build_dep_pkg(args)
 
 
 def test_source_epoch_changes_normalized_payload_mtimes_and_package_hash(
@@ -809,6 +895,11 @@ def test_main_stdout_is_only_the_pkg_path_line(
     monkeypatch.setattr(bdp, "fetch_verified_sdist", fake_fetch)
     monkeypatch.setattr(bdp.subprocess, "run", fake_run)
     monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bdp.bpp,
+        "_snapshot_checkout",
+        lambda checkout, _sha, _dest, payload_root=None: checkout,
+    )
     monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
 
     out_dir = tmp_path / "out"
@@ -865,9 +956,19 @@ def test_main_defaults_python_dep_version_to_0_when_omitted(tmp_path: Path, monk
     assert manifest["deps"] == {"python311": {"origin": "lang/python311", "version": "0"}}
 
 
-def test_main_returns_1_and_reports_refusal_on_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_returns_1_and_reports_refusal_on_stderr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     ports_root = tmp_path / "ports"
     _write_port(ports_root, no_arch_line="")  # missing NO_ARCH -> refusal, no network involved
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bdp.bpp,
+        "_snapshot_checkout",
+        lambda checkout, _sha, _dest, payload_root=None: checkout,
+    )
     rc = bdp.main(
         [
             "--ports", str(ports_root),

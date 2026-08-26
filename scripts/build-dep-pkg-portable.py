@@ -45,6 +45,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import urllib.request
 import zipfile
 from dataclasses import dataclass
@@ -438,15 +439,17 @@ def _validated_wheel_files(zf: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     names = [info.filename for info in files]
     if len(names) != len(set(names)):
         raise DepPkgError("wheel contains duplicate member names")
+    canonical_names = [unicodedata.normalize("NFC", name).casefold() for name in names]
+    if len(canonical_names) != len(set(canonical_names)):
+        raise DepPkgError("wheel contains host-canonical member collision")
 
     compiled_suffixes = (".dll", ".dylib", ".pyc", ".pyd", ".so")
     for info in files:
-        path = PurePosixPath(info.filename)
         if (
             not info.filename
             or info.filename.startswith("/")
             or "\\" in info.filename
-            or any(part in ("", ".", "..") for part in path.parts)
+            or any(part in ("", ".", "..") for part in info.filename.split("/"))
         ):
             raise DepPkgError(f"wheel contains unsafe member path: {info.filename!r}")
         if stat.S_ISLNK(info.external_attr >> 16):
@@ -551,16 +554,33 @@ def build_dep_pkg(args: argparse.Namespace) -> Path:
     epoch = _source_date_epoch(args)
     if not re.fullmatch(r"[0-9a-f]{40}", args.ports_sha):
         raise DepPkgError("--ports-sha must be a lowercase 40-character Git SHA")
-    port_dir = Path(args.ports).resolve() / args.port
-    port = read_port(port_dir)
+    origin = PurePosixPath(args.port)
+    if (
+        not args.port
+        or "\\" in args.port
+        or origin.is_absolute()
+        or len(origin.parts) != 2
+        or any(part in ("", ".", "..") for part in origin.parts)
+        or origin.as_posix() != args.port
+    ):
+        raise DepPkgError("--port must be a safe category/name port origin")
+    ports_root = Path(args.ports).resolve()
+    port_payload = ports_root / origin
     py_dotted = python_dotted_version(args.py_flavor)  # validates the flavor too
-
-    distfile = f"{port.distname}.tar.gz"
-    sha256, size = read_distinfo(port_dir, distfile)
     validate_build_toolchain()
-    bpp._attest_checkout(Path(args.ports), args.ports_sha, "FreeBSD-ports")
+    bpp._attest_checkout(ports_root, args.ports_sha, "FreeBSD-ports", payload_root=port_payload)
     with tempfile.TemporaryDirectory(prefix="pfbng-deppkg-") as td:
         tmp = Path(td)
+        snapshot_root = bpp._snapshot_checkout(
+            ports_root,
+            args.ports_sha,
+            tmp / "ports-snapshot",
+            payload_root=port_payload,
+        )
+        port_dir = snapshot_root / origin
+        port = read_port(port_dir)
+        distfile = f"{port.distname}.tar.gz"
+        sha256, size = read_distinfo(port_dir, distfile)
         sdist = fetch_verified_sdist(port, tmp, sha256=sha256, size=size)
         wheel = build_wheel(sdist, tmp, source_date_epoch=epoch)
 

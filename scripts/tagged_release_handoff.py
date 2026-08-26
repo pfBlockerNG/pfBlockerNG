@@ -11,9 +11,23 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 try:
-    from scripts.pfb_pkg import PkgError, validate_dependency_builder
+    from scripts.pfb_pkg import (
+        CANONICAL_EMITTED_IDENTITY,
+        PFB_BUILD_RECORD_KEY,
+        PkgError,
+        load_build_record,
+        read_compact_manifest,
+        validate_dependency_builder,
+    )
 except ImportError:
-    from pfb_pkg import PkgError, validate_dependency_builder
+    from pfb_pkg import (
+        CANONICAL_EMITTED_IDENTITY,
+        PFB_BUILD_RECORD_KEY,
+        PkgError,
+        load_build_record,
+        read_compact_manifest,
+        validate_dependency_builder,
+    )
 
 _GIT_SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _RELEASE_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:\.[abr][1-9][0-9]*)?$")
@@ -158,6 +172,26 @@ def validate_build_records(handoff: Mapping[str, object], records: Sequence[Mapp
                 raise BuildRecordIdentityError(index, name)
 
 
+def validate_packages(handoff: Mapping[str, object], packages: Sequence[str | Path]) -> None:
+    """Validate the build records embedded in every canonical package output."""
+    records: list[Mapping[str, object]] = []
+    try:
+        for package in packages:
+            manifest = read_compact_manifest(package)
+            if manifest.get("name") != CANONICAL_EMITTED_IDENTITY:
+                continue
+            annotations = manifest.get("annotations")
+            if not isinstance(annotations, Mapping):
+                raise HandoffError(f"{Path(package).name}: package annotations are missing")
+            annotation = annotations.get(PFB_BUILD_RECORD_KEY)
+            if not isinstance(annotation, str):
+                raise HandoffError(f"{Path(package).name}: package build record annotation is missing")
+            records.append(load_build_record(annotation))
+    except PkgError as exc:
+        raise HandoffError(str(exc)) from exc
+    validate_build_records(handoff, records)
+
+
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--release-tag", required=True)
@@ -171,24 +205,43 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _parse_validation_args(argv: Sequence[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Validate tagged handoff package outputs")
+    parser.add_argument("--handoff", required=True, type=Path)
+    parser.add_argument("--release-tag", required=True)
+    parser.add_argument("--source-sha", required=True)
+    parser.add_argument("packages", nargs="+", type=Path)
+    return parser.parse_args(argv)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = _parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
     try:
-        route_matrix = json.loads(args.route_matrix.read_text(encoding="utf-8"))
-        dependency_builder = json.loads(args.dependency_builder.read_text(encoding="utf-8"))
-        handoff = build_handoff(
-            release_tag=args.release_tag,
-            source_sha=args.source_sha,
-            ci_metadata_sha=args.ci_metadata_sha,
-            ports_sha=args.ports_sha,
-            route_matrix=route_matrix,
-            source_date_epoch=args.source_date_epoch,
-            dependency_builder=dependency_builder,
-        )
-        args.output.write_text(
-            json.dumps(handoff, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
-            encoding="utf-8",
-        )
+        if arguments[:1] == ["validate-packages"]:
+            args = _parse_validation_args(arguments[1:])
+            handoff = load_handoff(
+                args.handoff,
+                expected_release_tag=args.release_tag,
+                expected_source_sha=args.source_sha,
+            )
+            validate_packages(handoff, args.packages)
+        else:
+            args = _parse_args(arguments)
+            route_matrix = json.loads(args.route_matrix.read_text(encoding="utf-8"))
+            dependency_builder = json.loads(args.dependency_builder.read_text(encoding="utf-8"))
+            handoff = build_handoff(
+                release_tag=args.release_tag,
+                source_sha=args.source_sha,
+                ci_metadata_sha=args.ci_metadata_sha,
+                ports_sha=args.ports_sha,
+                route_matrix=route_matrix,
+                source_date_epoch=args.source_date_epoch,
+                dependency_builder=dependency_builder,
+            )
+            args.output.write_text(
+                json.dumps(handoff, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
+                encoding="utf-8",
+            )
     except (OSError, json.JSONDecodeError, HandoffError) as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

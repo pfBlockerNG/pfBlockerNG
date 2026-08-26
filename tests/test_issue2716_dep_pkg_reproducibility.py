@@ -65,7 +65,12 @@ def test_fresh_builds_have_identical_hashes_under_hostile_ambient_state(
     monkeypatch.setattr(bdp, "read_distinfo", lambda _path, _name: ("a" * 64, 123))
     monkeypatch.setattr(bdp, "read_descr", lambda _path, fallback: fallback)
     monkeypatch.setattr(bdp, "validate_build_toolchain", lambda: bdp.build_toolchain_identity())
-    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args: None)
+    monkeypatch.setattr(bdp.bpp, "_attest_checkout", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        bdp.bpp,
+        "_snapshot_checkout",
+        lambda checkout, _sha, _dest, payload_root=None: checkout,
+    )
     monkeypatch.setattr(
         bdp,
         "fetch_verified_sdist",

@@ -478,6 +478,13 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
     sync = next(step for step in build_steps if step.get("name") == "Sync the locked dependency-package toolchain")
     record = next(step for step in build_steps if step.get("name") == "Write the destination-bound build record")
     build = next(step for step in build_steps if step.get("name") == "Build the .pkg via build-leg.sh")
+    read_matrix_steps = workflow["jobs"]["read-matrix"]["steps"]
+    pins = next(
+        step for step in read_matrix_steps if step.get("name") == "Pin ci-metadata, ROUTE, and Ports identities"
+    )
+    pinned_builder = next(
+        step for step in read_matrix_steps if step.get("name") == "Check out pinned dependency-builder source"
+    )
     handoffs = [
         step
         for job in workflow["jobs"].values()
@@ -487,6 +494,13 @@ def test_release_dependency_builder_receives_structured_reproducibility_inputs()
 
     assert setup["with"] == {"version": "0.12.6", "activate-environment": True}
     assert sync["run"] == "uv sync --locked --only-group dep-pkg-build"
+    assert pinned_builder["uses"] == "actions/checkout@v6"
+    assert pinned_builder["with"]["ref"] == "${{ steps.destinations.outputs.source_sha }}"
+    assert pinned_builder["with"]["path"] == "pinned-builder"
+    assert "scripts/" in pinned_builder["with"]["sparse-checkout"]
+    assert "uv.lock" in pinned_builder["with"]["sparse-checkout"]
+    assert 'python3 "$PINNED_BUILDER/scripts/build-dep-pkg-portable.py" --print-toolchain' in pins["run"]
+    assert "python3 scripts/build-dep-pkg-portable.py --print-toolchain" not in pins["run"]
     assert "CREATED" in record["env"] and "DEPENDENCY_BUILDER" in record["env"]
     assert '"source_date_epoch": int(os.environ["CREATED"])' in record["run"]
     assert '"dependency_builder": json.loads(os.environ["DEPENDENCY_BUILDER"])' in record["run"]
@@ -533,6 +547,63 @@ def test_release_yml_upload_and_download_artifact_majors_match() -> None:
     assert uploads[0] == downloads[0], (
         f"upload-artifact major {uploads[0]} must equal download-artifact major {downloads[0]}"
     )
+
+
+def test_attach_pkgs_executes_tagged_handoff_package_validation(tmp_path: Path) -> None:
+    script = _step_run_script(_step(_jobs(RELEASE_WORKFLOW)["attach-pkgs"], "Validate tagged handoff"))
+    tag = "v4.0.0.b1"
+    pkg_dir = tmp_path / "pkgs"
+    pkg_dir.mkdir()
+    package = pkg_dir / "main.pkg"
+    package.touch()
+    handoff_source = tmp_path / "handoff-source.json"
+    handoff_source.write_text("{}\n", encoding="utf-8")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "gh").write_text(
+        "#!/bin/sh\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = --dir ]; then shift; out=$1; fi\n'
+        "  shift\n"
+        "done\n"
+        'mkdir -p "$out"\n'
+        'cp "$HANDOFF_SOURCE" "$out/pfblockerng-release-handoff.json"\n',
+        encoding="utf-8",
+    )
+    (fake_bin / "python3").write_text(
+        '#!/bin/sh\nprintf \'%s\\0\' "$@" > "$VALIDATOR_LOG"\nexit "${VALIDATOR_EXIT:-0}"\n',
+        encoding="utf-8",
+    )
+    for executable in (fake_bin / "gh", fake_bin / "python3"):
+        executable.chmod(0o755)
+    validator_log = tmp_path / "validator-argv"
+    env = os.environ | {
+        "GH_TOKEN": "test-token",
+        "TAG": tag,
+        "SOURCE_SHA": "a" * 40,
+        "HANDOFF_SOURCE": str(handoff_source),
+        "VALIDATOR_LOG": str(validator_log),
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+    }
+
+    completed = subprocess.run(["dash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert validator_log.read_bytes().split(b"\0")[:-1] == [
+        b"scripts/tagged_release_handoff.py",
+        b"validate-packages",
+        b"--handoff",
+        b"provenance/pfblockerng-release-handoff.json",
+        b"--release-tag",
+        tag.encode(),
+        b"--source-sha",
+        b"a" * 40,
+        b"pkgs/main.pkg",
+    ]
+
+    env["VALIDATOR_EXIT"] = "7"
+    failed = subprocess.run(["dash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert failed.returncode == 7, failed.stdout + failed.stderr
 
 
 def test_attach_pkgs_empty_pkgs_fails_the_step(tmp_path: Path) -> None:
