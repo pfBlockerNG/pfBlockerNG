@@ -689,15 +689,13 @@ def _build_swap_snapshot() -> Snapshot | None:
     stratum into FRESH dicts (mutating NO live dict), and return a new Snapshot -- or
     ``None`` to fail-closed (rebuild_and_swap then keeps the live snapshot).
 
-    Reproduces init's DNSBL load off fresh local dicts so the swapped snapshot is the
-    exact set the manifest + ini + static cap define (decision-identical to a fresh init
-    load):
+    Reproduces init's DNSBL load off fresh local dicts so the swapped snapshot is
+    decision-identical to a fresh init load:
       * dnsbl_build_from_manifest() -> data/zone/feedGroupIndex/white + FEED block-regex
         + @@/re/ allow-regex + the important_rules fast-path flag + the loaded count.
         ``None`` (absent/unparseable manifest, build error) -> the whole swap is a no-op.
       * USER REGEX-ini patterns merged on top (band PRIO_USER_BLOCK, sovereign over feed
-        allows), honouring the opt-in static cap -- so a swap NEVER drops user regex
-        (ADR-07).
+        allows), after the shared catastrophic-shape gate and opt-in length cap.
       * hstsDB reloaded from pfb_py_hsts.txt (watch-out (b): hstsDB is NOT in the
         manifest; omitting it would ship an empty hsts_db and silently flip HSTS NULL-vs-
         VIP behaviour)."""
@@ -713,7 +711,7 @@ def _build_swap_snapshot() -> Snapshot | None:
     allow_regex_db: dict[str, Any] = dict(build_result.allow_regex_db)
 
     # USER regex patterns from MAIN.regex_list merged on top of the feed block-regex,
-    # mirroring init's load (incl. the opt-in static cap).
+    # mirroring init's shared catastrophic-shape gate and opt-in length cap.
     if os.path.isfile(pfb["pfb_unbound.ini"]):
         config = ConfigParser()
         try:
@@ -1499,9 +1497,8 @@ def init_standard(id: int, env: module_env) -> bool:
     # existing early-exit path while important_rules is False (behaviour-preserving).
     pfb["allowRegexDB"] = False
     pfb["important_rules"] = False
-    # ADR-07 regex-safety defaults: cap OFF (nothing dropped at load unless the
-    # user enables "Limit long/complex regex"); runtime warn/evict ALWAYS on at the
-    # measured ceilings. The ini MAIN section overrides these.
+    # ADR-07 regex-safety defaults: opt-in length cap OFF; shared catastrophic-shape
+    # gate and runtime warn/evict ALWAYS on. The ini MAIN section overrides these.
     pfb["regex_cap"] = False
     pfb["regex_warn_ms"] = REGEX_WARN_MS_DEFAULT
     pfb["regex_evict_ms"] = REGEX_EVICT_MS_DEFAULT
@@ -1618,12 +1615,11 @@ def init_standard(id: int, env: module_env) -> bool:
     pfb["pfb_py_query"] = "pfb_py_query"
     pfb["pfb_py_query_reply"] = "pfb_py_query.reply"
     pfb["pfb_py_count"] = "pfb_py_count"
-    # ADR-07: the ADMITTED (cap-filtered) feed+user regex total -- the count
+    # ADR-07: the ADMITTED feed+user regex total -- the count
     # sync_package_pfblockerng()'s DNSBL_Regex alias-update block reads (falling
     # back to the configured regex-line count when this file is stale/absent). It
-    # is the live size of regexDB + allowRegexDB AFTER both the user REGEX-ini
-    # load and the feed-regex merge, so patterns the static cap dropped are
-    # excluded (value changes by design, ADR §2).
+    # is the live size of regexDB + allowRegexDB after the shared catastrophic-shape
+    # gate and opt-in length cap (value changes by design, ADR §2).
     pfb["pfb_py_regex_count"] = "pfb_py_regex_count"
     # ADR-48 (issue #789): the per-entry reject tally artifact (BuildResult.rejects,
     # a JSON array of nonzero-total {feed, group, shape, wire_cap} rows) -- PHP reads
@@ -1805,11 +1801,9 @@ def init_standard(id: int, env: module_env) -> bool:
             if config.has_option("MAIN", "forwarding"):
                 pfb["forwarding"] = config.getboolean("MAIN", "forwarding")
 
-            # ADR-07: regex-safety knobs. ``regex_cap`` is the opt-in "Limit
-            # long/complex regex" static pre-filter (drops over-long/nested-quantifier
-            # patterns at load -- feed AND user). ``regex_warn_ms`` / ``regex_evict_ms``
-            # are the always-on runtime warn/evict ceilings (per-match thread CPU). All
-            # default to OFF / the measured defaults when absent.
+            # ADR-07: ``regex_cap`` is the opt-in length cap for feed and user patterns;
+            # the shared catastrophic-shape gate and runtime warn/evict are always on.
+            # Missing settings use cap OFF and the measured runtime defaults.
             if config.has_option("MAIN", "regex_cap"):
                 pfb["regex_cap"] = config.getboolean("MAIN", "regex_cap")
             if config.has_option("MAIN", "regex_warn_ms"):
@@ -1996,10 +1990,9 @@ def init_standard(id: int, env: module_env) -> bool:
             _load_whitelist_and_hsts_dbs(dnsbl_built)
 
             # ADR-07: emit the ADMITTED regex total for sync_package_pfblockerng()'s
-            # DNSBL_Regex alias-update block. regexDB now holds USER regex (REGEX-ini)
-            # + FEED block regex (merged from build()); allowRegexDB holds FEED @@/re/
-            # allow regex. Both have already had over-cap patterns dropped at load
-            # when the static cap is on, so this live size is the cap-filtered
+            # DNSBL_Regex alias-update block. regexDB holds USER + FEED block regex;
+            # allowRegexDB holds FEED @@/re/ allow regex. Their shared catastrophic-
+            # shape gate and opt-in length cap already ran, so the live size is the
             # admitted count (value changes by design, ADR §2). Emitted whenever the
             # plugin is enabled so the alias is accurate even with feed regex but no
             # user regex.
@@ -4039,8 +4032,8 @@ class Snapshot:
     Immutability note (watch-out): the tuple of fields is frozen, but the
     contained dicts are ordinary dicts. ADR-07's runtime regex eviction still mutates
     ``regex_db`` in place (``_regex_evict_names`` in ``evaluate_domain``); a swap replaces
-    the whole snapshot with a freshly-compiled set, so any evicted-pattern state is
-    rebuilt from the manifest + the static cap (reconciled + documented in ADR.md SS2).
+    the whole snapshot with a freshly-compiled set, rebuilding evicted-pattern state from
+    the manifest through the shared admission gates.
 
     The fields mirror the legacy ``containers`` keys + the ``cfg`` fast-path flag so the
     refactor is byte-for-byte decision-identical (pinned by the retained ADR-06/07
@@ -4960,18 +4953,18 @@ def _dnsbl_normalise_whitelist(
 
 
 # ============================================================================ #
-# ADR-07: regex safety (opt-in static cap + always-on runtime warn/evict)      #
+# ADR-07: regex safety (always-on shape gate and runtime guard + opt-in length cap) #
 # ============================================================================ #
 # `re` does not release the GIL during a match and a Python thread cannot be
 # killed, so a query-time timeout CANNOT interrupt a catastrophic match. Bounded
 # residual instead: a pathological pattern's FIRST match may block one query,
-# then it is EVICTED so it cannot hang again. (1) opt-in static cap drops
-# over-long/nested-quantifier patterns at LOAD; (2) always-on runtime timing
-# evicts a pattern from the live regexDB/allowRegexDB over an EVICT ceiling
-# (snapshot-iterate, evict-after-loop; dict.pop is atomic under the GIL).
-
-# The catastrophic-shape gate, the complexity budget, and REGEX_STATIC_LEN_CAP
-# live in pfb_dnsbl_regex_rules.py (issue #1765), imported above.
+# then it is EVICTED so it cannot hang again. The shared catastrophic-shape gate
+# always rejects unsafe structures at LOAD; the opt-in length cap separately drops
+# over-length patterns. Always-on runtime timing evicts an admitted pattern from
+# the live regexDB/allowRegexDB over an EVICT ceiling (snapshot-iterate,
+# evict-after-loop; dict.pop is atomic under the GIL).
+#
+# The shared gate and REGEX_STATIC_LEN_CAP live in pfb_dnsbl_regex_rules.py.
 
 # Runtime warn/evict ceilings (milliseconds of per-match thread CPU; measured
 # defaults, ADR.md SS2). Overridable via the pfb_unbound.ini MAIN section
@@ -5163,14 +5156,10 @@ def _dnsbl_compile_regex_rules(
     load) -- it never aborts the build. Names are unique per pattern occurrence so two
     feeds carrying the same pattern both load.
 
-    ADR-07: a pattern carrying a catastrophic SHAPE (nested / adjacent / overlapping
-    unbounded quantifier, stacked bounded repeat, or over the complexity budget) is
-    DROPPED at load UNCONDITIONALLY -- independent of ``static_cap`` -- because such a
-    shape drives catastrophic backtracking in the `re` engine. The opt-in length ceiling
-    (the "Limit long/complex regex" setting, ``static_cap``) is the SEPARATE tunable half:
-    when True it ALSO drops over-length-but-safe patterns. All checks are pure static
-    string analysis (no execution); the always-on runtime warn/evict guard lives in the
-    matcher (it is what bounds the residual of anything that slips through).
+    ADR-07: the shared catastrophic-shape gate rejects structurally unsafe patterns
+    at load unconditionally, independent of ``static_cap``. The opt-in length ceiling
+    (the "Limit long/complex regex" setting, ``static_cap``) separately drops
+    over-length-but-safe patterns. Runtime warn/evict bounds admitted residuals.
     """
     db: dict[str, dict[str, Any]] = {}
     admitted = 0
@@ -5249,8 +5238,8 @@ def build(
     tld_wildcard_exclusion = list(config.get("tld_wildcard_exclusion", []))
     exclusion = {e.strip(".") for e in tld_wildcard_exclusion}
 
-    # ADR-07: the opt-in static cap (drop over-long / nested-quantifier feed regex
-    # at load). Read from the manifest config; OFF by default so nothing is dropped.
+    # ADR-07: the opt-in feed-regex length cap. Structural rejection is the
+    # always-on shared catastrophic-shape gate in _dnsbl_compile_regex_rules().
     static_cap = bool(config.get("regex_cap", False))
 
     psl_rules = config.get("psl_rules", PslRules())
