@@ -151,12 +151,12 @@ CURL
 printf 'uv:%s\n' "$*" >> "$DEBIAN_TOOL_LOG"
 case "$*" in
   'self update') ;;
-  'tool install --upgrade -p 3.13 serena-agent')
+  'tool install --upgrade serena-agent')
     uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
     mkdir -p "$uv_tool_bin"
     cp "$DEBIAN_INSTALLABLES/serena" "$uv_tool_bin/serena"
     ;;
-  'tool install --upgrade graphifyy==0.9.50')
+  'tool install --upgrade graphifyy')
     uv_tool_bin=${UV_TOOL_BIN_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}
     mkdir -p "$uv_tool_bin"
     cp "$DEBIAN_INSTALLABLES/graphify" "$uv_tool_bin/graphify"
@@ -363,8 +363,8 @@ GROK
       'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:install -l global -y -t auto' \
@@ -397,8 +397,8 @@ GROK
       'https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh' \
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh')"
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:install -l global -y -t auto' \
@@ -436,8 +436,8 @@ GROK
       'https://github.com/max-sixty/worktrunk/releases/latest/download/worktrunk-installer.sh'
     The contents of file "$tool_log" should equal "$(printf '%s\n' \
       'uv:self update' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
@@ -460,8 +460,8 @@ UNMANAGED_UV
       'brew:list --versions uv' \
       'brew:install uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
@@ -482,8 +482,8 @@ UNMANAGED_UV
       'brew:list --versions uv' \
       'brew:upgrade uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
@@ -493,8 +493,8 @@ UNMANAGED_UV
       'brew:list --versions uv' \
       'brew:upgrade uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:upgrade' \
@@ -517,8 +517,8 @@ UNMANAGED_UV
       'brew:list --versions uv' \
       'brew:upgrade uv' \
       'brew:--prefix uv' \
-      'uv:tool install --upgrade -p 3.13 serena-agent' \
-      'uv:tool install --upgrade graphifyy==0.9.50' \
+      'uv:tool install --upgrade serena-agent' \
+      'uv:tool install --upgrade graphifyy' \
       'uv:tool install --upgrade ast-grep-cli' \
       'uv:tool install --upgrade semgrep' \
       'codegraph:install -l global -y -t auto' \
@@ -923,8 +923,8 @@ CONFIG
     The contents of file "$worktrunk_config" should equal "$canonical_worktree_path"
     Assert [ "$(grep -Fxc "$canonical_worktree_path" "$worktrunk_config")" -eq 1 ]
     Assert [ "$(grep -c '^uv:self update$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade -p 3.13 serena-agent$' "$tool_log")" -eq 2 ]
-    Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy==0.9.50$' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade serena-agent$' "$tool_log")" -eq 2 ]
+    Assert [ "$(grep -c '^uv:tool install --upgrade graphifyy$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade ast-grep-cli$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^uv:tool install --upgrade semgrep$' "$tool_log")" -eq 2 ]
     Assert [ "$(grep -c '^codegraph:upgrade$' "$tool_log")" -eq 2 ]
