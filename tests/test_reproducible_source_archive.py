@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -340,10 +341,16 @@ def test_output_parent_retarget_uses_stable_directory(tmp_path: Path, monkeypatc
     module = _builder_module()
     real_replace = module.os.replace
 
-    def retargeting_replace(src: object, dst: object) -> None:
+    def retargeting_replace(
+        src: object,
+        dst: object,
+        *,
+        src_dir_fd: int | None = None,
+        dst_dir_fd: int | None = None,
+    ) -> None:
         output_link.unlink()
         output_link.symlink_to(second, target_is_directory=True)
-        real_replace(src, dst)
+        real_replace(src, dst, src_dir_fd=src_dir_fd, dst_dir_fd=dst_dir_fd)
 
     monkeypatch.setattr(module.os, "replace", retargeting_replace)
     module.build_archive(source, output_link / "archive.tar.gz", SOURCE_EPOCH)
@@ -353,6 +360,42 @@ def test_output_parent_retarget_uses_stable_directory(tmp_path: Path, monkeypatc
     assert (second / "archive.tar.gz").read_bytes() == b"other archive"
     assert not list(first.glob(".archive.tar.gz.*"))
     assert not list(second.glob(".archive.tar.gz.*"))
+
+
+def test_resolved_output_directory_replacement_uses_opened_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "ordinary.conf").write_text("ordinary\n", encoding="utf-8")
+    output_parent = tmp_path / "output"
+    replacement = tmp_path / "replacement"
+    moved = tmp_path / "moved-output"
+    output_parent.mkdir()
+    replacement.mkdir()
+    (output_parent / "archive.tar.gz").write_bytes(b"old archive")
+    (replacement / "archive.tar.gz").write_bytes(b"other archive")
+    module = _builder_module()
+    real_gzip = module.gzip.GzipFile
+    retargeted = False
+
+    def retargeting_gzip(*args: Any, **kwargs: Any) -> Any:
+        nonlocal retargeted
+        if not retargeted:
+            output_parent.rename(moved)
+            output_parent.symlink_to(replacement, target_is_directory=True)
+            retargeted = True
+        return real_gzip(*args, **kwargs)
+
+    monkeypatch.setattr(module.gzip, "GzipFile", retargeting_gzip)
+    module.build_archive(source, output_parent / "archive.tar.gz", SOURCE_EPOCH)
+
+    assert retargeted
+    with tarfile.open(moved / "archive.tar.gz", "r:gz") as archive:
+        assert [member.name for member in archive.getmembers()] == ["src", "src/ordinary.conf"]
+    assert (replacement / "archive.tar.gz").read_bytes() == b"other archive"
+    assert not list(moved.glob(".archive.tar.gz.*"))
+    assert not list(replacement.glob(".archive.tar.gz.*"))
 
 
 def _release_job() -> str:

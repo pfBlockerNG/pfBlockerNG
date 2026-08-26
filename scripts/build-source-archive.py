@@ -6,15 +6,17 @@ from __future__ import annotations
 import argparse
 import gzip
 import os
+import secrets
 import stat
 import tarfile
-import tempfile
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO
 
 _MAX_GZIP_EPOCH = (1 << 32) - 1
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_TEMPORARY_ATTEMPTS = 100
 
 
 class ArchiveError(Exception):
@@ -40,11 +42,55 @@ def _excluded(relative: Path) -> bool:
 
 @contextmanager
 def _open_directory(path: str | Path, *, dir_fd: int | None = None) -> Generator[int, None, None]:
-    opened = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dir_fd)
+    opened = os.open(path, _DIRECTORY_FLAGS, dir_fd=dir_fd)
     try:
         yield opened
     finally:
         os.close(opened)
+
+
+def _same_directory(first: os.stat_result, second: os.stat_result) -> bool:
+    return (first.st_dev, first.st_ino) == (second.st_dev, second.st_ino)
+
+
+def _directory_is_within(directory_fd: int, ancestor_fd: int) -> bool:
+    ancestor = os.fstat(ancestor_fd)
+    current_fd = os.dup(directory_fd)
+    try:
+        while True:
+            current = os.fstat(current_fd)
+            if _same_directory(current, ancestor):
+                return True
+            parent_fd = os.open("..", _DIRECTORY_FLAGS, dir_fd=current_fd)
+            parent = os.fstat(parent_fd)
+            if _same_directory(current, parent):
+                os.close(parent_fd)
+                return False
+            os.close(current_fd)
+            current_fd = parent_fd
+    finally:
+        os.close(current_fd)
+
+
+def _create_temporary(directory_fd: int, output_name: str) -> tuple[str, BinaryIO]:
+    for _ in range(_TEMPORARY_ATTEMPTS):
+        name = f".{output_name}.{secrets.token_hex(12)}"
+        try:
+            opened = os.open(
+                name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory_fd,
+            )
+        except FileExistsError:
+            continue
+        try:
+            return name, os.fdopen(opened, "wb")
+        except OSError:
+            os.close(opened)
+            os.unlink(name, dir_fd=directory_fd)
+            raise
+    raise ArchiveError("could not create a unique temporary archive")
 
 
 def _unchanged(expected: os.stat_result, actual: os.stat_result, path: Path) -> None:
@@ -145,38 +191,39 @@ def build_archive(source: Path, output: Path, epoch: int) -> None:
     if not stat.S_ISDIR(source_snapshot.st_mode):
         raise ArchiveError(f"source must be a real directory (not a symlink): {source}")
     output_parent = output.parent.resolve(strict=True)
-    if os.path.samefile(output_parent, source) or any(
-        os.path.samefile(parent, source) for parent in output_parent.parents
+    with (
+        _open_directory(source) as source_fd,
+        _open_directory(output_parent) as output_fd,
     ):
-        raise ArchiveError(f"output must be outside the source directory: {output}")
-    output_location = output_parent / output.name
-    with _open_directory(source) as source_fd:
         opened_source = os.fstat(source_fd)
         _unchanged(source_snapshot, opened_source, Path("src"))
-        temporary_path: Path | None = None
+        if _directory_is_within(output_fd, source_fd):
+            raise ArchiveError(f"output must be outside the source directory: {output}")
+        temporary_name, temporary = _create_temporary(output_fd, output.name)
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                prefix=f".{output.name}.",
-                dir=output_parent,
-                delete=False,
-            ) as raw_archive:
-                temporary_path = Path(raw_archive.name)
-                with (
-                    gzip.GzipFile(
-                        filename="",
-                        mode="wb",
-                        compresslevel=9,
-                        fileobj=raw_archive,
-                        mtime=epoch,
-                    ) as compressed,
-                    tarfile.open(fileobj=compressed, mode="w|", format=tarfile.USTAR_FORMAT) as archive,
-                ):
-                    count = _archive_directory(archive, source_fd, Path(), opened_source, epoch, source)
-            os.replace(temporary_path, output_location)
+            with (
+                temporary as raw_archive,
+                gzip.GzipFile(
+                    filename="",
+                    mode="wb",
+                    compresslevel=9,
+                    fileobj=raw_archive,
+                    mtime=epoch,
+                ) as compressed,
+                tarfile.open(fileobj=compressed, mode="w|", format=tarfile.USTAR_FORMAT) as archive,
+            ):
+                count = _archive_directory(archive, source_fd, Path(), opened_source, epoch, source)
+            os.replace(
+                temporary_name,
+                output.name,
+                src_dir_fd=output_fd,
+                dst_dir_fd=output_fd,
+            )
         finally:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
+            try:
+                os.unlink(temporary_name, dir_fd=output_fd)
+            except FileNotFoundError:
+                pass
 
     print(f"built {output} from {count} normalized entries at source epoch {epoch}")
 
