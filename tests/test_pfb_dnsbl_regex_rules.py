@@ -261,21 +261,25 @@ def test_group_end_scan_is_linear_and_preserves_regex_escaping() -> None:
         assert _regex_group_end(pattern, 0) == expected, pattern
 
     class CountingPattern(str):
-        reads = 0
+        indexed = 0
+        copied = 0
 
         def __getitem__(self, key: SupportsIndex | slice) -> str:
-            type(self).reads += 1
+            if isinstance(key, slice):
+                type(self).copied += len(range(*key.indices(len(self))))
+            else:
+                type(self).indexed += 1
             return super().__getitem__(key)
 
-    def scan_reads(size: int) -> int:
-        CountingPattern.reads = 0
-        pattern = CountingPattern("(" * size)
-        assert _regex_has_adjacent_unbounded_atoms(pattern) is False
-        return CountingPattern.reads
+    def scan_work(pattern: str) -> int:
+        CountingPattern.indexed = CountingPattern.copied = 0
+        assert _regex_has_adjacent_unbounded_atoms(CountingPattern(pattern)) is False
+        return CountingPattern.indexed + CountingPattern.copied
 
-    small = scan_reads(400)
-    large = scan_reads(800)
-    assert large <= small * 3, f"2x input caused {large / small:.2f}x indexed reads ({small} -> {large})"
+    for build in (lambda size: "(" * size, lambda size: "(" * size + ")" * size):
+        small = scan_work(build(400))
+        large = scan_work(build(800))
+        assert large <= small * 3, f"2x input caused {large / small:.2f}x string work ({small} -> {large})"
 
 
 def test_probe_and_resolver_agree_on_issue2364_admission_rows() -> None:

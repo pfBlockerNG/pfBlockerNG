@@ -185,10 +185,11 @@ def _regex_quantifier(pattern: str, index: int) -> tuple[int, str]:
     return end, "run" if unbounded else ("bridge" if optional else "break")
 
 
-def _regex_group_ends(pattern: str) -> dict[int, int]:
-    """Map every group opener to its closing offset in one pass."""
+def _regex_group_metadata(pattern: str) -> tuple[dict[int, int], set[int]]:
+    """Map group ends and the groups owning each top-level alternation in one pass."""
     stack: list[int] = []
     ends: dict[int, int] = {}
+    alternates: set[int] = set()
     index = 0
     while index < len(pattern):
         character = pattern[index]
@@ -199,16 +200,22 @@ def _regex_group_ends(pattern: str) -> dict[int, int]:
             stack.append(index)
         elif character == ")" and stack:
             ends[stack.pop()] = index + 1
+        elif character == "|" and stack:
+            alternates.add(stack[-1])
         index += 1
     end = len(pattern)
     for opening in stack:
         ends[opening] = end
-    return ends
+    return ends, alternates
+
+
+def _regex_group_ends(pattern: str) -> dict[int, int]:
+    return _regex_group_metadata(pattern)[0]
 
 
 def _regex_group_end(pattern: str, index: int, group_ends: dict[int, int] | None = None) -> int:
     """End offset past the matching ``)`` or the string when the group is unclosed."""
-    return (group_ends if group_ends is not None else _regex_group_ends(pattern)).get(index, len(pattern))
+    return (group_ends if group_ends is not None else _regex_group_metadata(pattern)[0]).get(index, len(pattern))
 
 
 @lru_cache(maxsize=512)
@@ -266,11 +273,6 @@ def _regex_top_level_branches(body: str) -> tuple[str, ...]:
     return tuple(branches)
 
 
-def _regex_body_alternates(body: str) -> bool:
-    """True when ``body`` carries an alternation scoped by its enclosing group."""
-    return len(_regex_top_level_branches(body)) > 1
-
-
 def _regex_conditional_body(
     pattern: str,
     index: int,
@@ -292,6 +294,7 @@ def _regex_next_unit(
     pattern: str,
     index: int,
     group_ends: dict[int, int] | None = None,
+    group_alternates: set[int] | None = None,
     depth: int = 0,
 ) -> tuple[str, str, int]:
     """Read one unit as ``(atom, quantifier role, next index)``."""
@@ -304,6 +307,11 @@ def _regex_next_unit(
         atom_end = _regex_atom_end(pattern, index)
         quantifier_end, role = _regex_quantifier(pattern, atom_end)
         return pattern[index:atom_end], role, max(quantifier_end, atom_end)
+
+    if group_ends is None or group_alternates is None:
+        metadata_ends, metadata_alternates = _regex_group_metadata(pattern)
+        group_ends = metadata_ends if group_ends is None else group_ends
+        group_alternates = metadata_alternates if group_alternates is None else group_alternates
 
     group_end = _regex_group_end(pattern, index, group_ends)
     closed = pattern[group_end - 1 : group_end] == ")"
@@ -350,17 +358,23 @@ def _regex_next_unit(
     else:
         body_start = index + 1
     quantifier_end, role = _regex_quantifier(pattern, group_end)
-    body = pattern[body_start : group_end - 1]
-    if role == "run" and body and not any(character in body for character in "()|"):
-        return body, "run", quantifier_end
-    if role != "bridge" and body and _regex_body_alternates(body) and not _regex_body_has_run(body, depth + 1):
-        return body, role, max(quantifier_end, group_end)
+    if not closed:
+        return "", "bridge", body_start
+    body: str | None = None
+    if role == "run":
+        body = pattern[body_start : group_end - 1]
+        if body and not any(character in body for character in "()|"):
+            return body, "run", quantifier_end
+    if role != "bridge" and index in group_alternates:
+        body = body if body is not None else pattern[body_start : group_end - 1]
+        if body and not _regex_body_has_run(body, depth + 1):
+            return body, role, max(quantifier_end, group_end)
     return "", "bridge", body_start
 
 
 def _regex_body_has_run(body: str, depth: int = 0) -> bool:
     """Whether a body contains a genuine backtracking, unbounded quantifier."""
-    group_ends = _regex_group_ends(body)
+    group_ends, group_alternates = _regex_group_metadata(body)
     index = 0
     while index < len(body):
         unit_start = index
@@ -368,7 +382,7 @@ def _regex_body_has_run(body: str, depth: int = 0) -> bool:
         if conditional is not None and depth < _REGEX_NESTED_SCAN_MAX:
             if any(_regex_body_has_run(branch, depth + 1) for branch in _regex_top_level_branches(conditional)):
                 return True
-        atom, role, index = _regex_next_unit(body, index, group_ends, depth)
+        atom, role, index = _regex_next_unit(body, index, group_ends, group_alternates, depth)
         if role == "run":
             return True
         if role == "nested" and depth < _REGEX_NESTED_SCAN_MAX and _regex_body_has_run(atom, depth + 1):
@@ -381,12 +395,12 @@ def _regex_body_overlaps_atom(anchor: str, body: str, depth: int = 0) -> bool:
     if depth > _REGEX_NESTED_SCAN_MAX:
         return False
     for branch in _regex_top_level_branches(body):
-        group_ends = _regex_group_ends(branch)
+        group_ends, group_alternates = _regex_group_metadata(branch)
         index = 0
         overlaps = True
         while index < len(branch):
             unit_start = index
-            atom, role, index = _regex_next_unit(branch, index, group_ends, depth)
+            atom, role, index = _regex_next_unit(branch, index, group_ends, group_alternates, depth)
             if role == "nested":
                 overlaps = False
                 break
@@ -419,7 +433,7 @@ def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
     quantified = 0
     pairs = 0
     adjacent = False
-    group_ends = _regex_group_ends(pattern)
+    group_ends, group_alternates = _regex_group_metadata(pattern)
     index = 0
     while index < len(pattern):
         unit_start = index
@@ -428,7 +442,7 @@ def _regex_has_adjacent_unbounded_atoms(pattern: str, depth: int = 0) -> bool:
             for branch in _regex_top_level_branches(conditional):
                 if _regex_has_adjacent_unbounded_atoms(branch, depth + 1):
                     return True
-        atom, role, index = _regex_next_unit(pattern, index, group_ends, depth)
+        atom, role, index = _regex_next_unit(pattern, index, group_ends, group_alternates, depth)
         if role == "nested":
             if depth < _REGEX_NESTED_SCAN_MAX and _regex_has_adjacent_unbounded_atoms(atom, depth + 1):
                 return True
