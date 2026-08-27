@@ -171,6 +171,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($end);
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
+		$this->assertStringContainsString('pfb_archive_unsafe_member', $scope);
 		$this->assertStringContainsString(
 			'pfb_blacklist_tar_finalize_staged($staged, $filename, $retval)',
 			$scope
