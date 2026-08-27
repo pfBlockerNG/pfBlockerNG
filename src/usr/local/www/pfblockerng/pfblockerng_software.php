@@ -125,9 +125,8 @@ if ($input_errors) {
 // #2379) — stays silent: this box says "the action you asked for failed", never "your cache is
 // old" (issue #2674). Fixed literal comparison, so a hostile or array-valued query is inert.
 //
-// It names the CONTROL the admin pressed, which both distinguishes it from the Status row's
-// standing-state help below and gives the UI tiers a phrase that matches this box alone: while
-// the two shared a sentence, the tiers' "a plain load stays silent" assertion tripped on the row.
+// It names the CONTROL the admin pressed, which distinguishes it from the Status row's
+// standing-state help below; the two must not share a sentence.
 if (($_GET['check'] ?? '') === 'failed') {
 	print_info_box(gettext('Check now could not read the pfBlockerNG repository catalogue. The versions below are from the last check that succeeded.'), 'warning');
 }
