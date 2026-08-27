@@ -21,8 +21,8 @@ import re
 
 def extract_step(workflow: str, step_name: str) -> str:
     """Return the body of the ``- name: <step_name>`` step in ``workflow``,
-    bounded to the next sibling step at the same indentation (or end-of-file
-    when it is the last step in its job).
+    bounded to the next list item at the same indentation — which may be one in a
+    LATER job — or end-of-file when no such item follows.
 
     Raises ``ValueError`` naming the missing marker if the step is absent — a
     silent empty-string slice would let every ``in`` assertion against it pass
@@ -61,11 +61,9 @@ def extract_job(workflow: str, job_name: str) -> str:
 
 
 def extract_after(text: str, marker: str) -> str:
-    """Return the part of ``text`` after the first ``marker``.
-
-    ``ValueError`` naming ``marker`` when it is absent — the ``split(marker, 1)[1]``
-    form raises a bare ``IndexError`` that names nothing.
-    """
+    """``text`` after the first ``marker``; absent or empty ``marker`` raises
+    ``ValueError`` naming it (``split(marker, 1)[1]`` raises a bare ``IndexError``)."""
+    _reject_empty(marker)
     start = text.find(marker)
     if start < 0:
         raise ValueError(f"marker {marker!r} not found in text")
@@ -73,11 +71,9 @@ def extract_after(text: str, marker: str) -> str:
 
 
 def extract_before(text: str, marker: str) -> str:
-    """Return the part of ``text`` before the first ``marker``.
-
-    ``ValueError`` naming ``marker`` when it is absent — this is the silent case:
-    ``split(marker, 1)[0]`` returns the whole string and the slice stops bounding.
-    """
+    """``text`` before the first ``marker``; absent or empty ``marker`` raises
+    ``ValueError`` naming it. This is the silent case ``split(marker, 1)[0]`` hides."""
+    _reject_empty(marker)
     end = text.find(marker)
     if end < 0:
         raise ValueError(f"marker {marker!r} not found in text")
@@ -85,6 +81,12 @@ def extract_before(text: str, marker: str) -> str:
 
 
 def extract_between(text: str, start_marker: str, end_marker: str) -> str:
-    """Return the region of ``text`` between ``start_marker`` and the next
-    ``end_marker`` after it; either one absent raises ``ValueError`` naming it."""
+    """``text`` between ``start_marker`` and the FIRST ``end_marker`` after it."""
     return extract_before(extract_after(text, start_marker), end_marker)
+
+
+def _reject_empty(marker: str) -> None:
+    # "" is found everywhere, so it bounds nothing — the shape these helpers exist
+    # to remove. `str.split("", 1)` raised instead; keep that floor.
+    if not marker:
+        raise ValueError("marker must not be empty")

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_before, extract_between
 from tests.gitenv import scrubbed_git_env
 
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_context_budget.py"
@@ -891,8 +892,8 @@ def test_ci_workflow_paths_match_checker_triggers() -> None:
     # lists drift exactly one-block-at-a-time, and a whole-file set comparison
     # cannot see an entry dropped from only one of them.
     assert "push:" in text, "md-only pushes straight to devel are the dominant re-accretion vector"
-    push_block, _, tail = text.partition("pull_request:")
-    pr_block = tail.partition("permissions:")[0]
+    push_block = extract_before(text, "pull_request:")
+    pr_block = extract_between(text, "pull_request:", "permissions:")
     for name, block in (("push", push_block), ("pull_request", pr_block)):
         listed = re.findall(r"^\s+- '([^']+)'\s*$", block, re.MULTILINE)
         assert len(listed) == len(expected), f"{name} paths list has duplicates or gaps: {sorted(listed)}"

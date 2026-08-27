@@ -2,8 +2,6 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
-from tests._workflow_steps import extract_between
-
 ROOT = Path(__file__).resolve().parents[1]
 
 SHELLCHECK_PIN = "v0.11.0"
@@ -103,10 +101,6 @@ def test_pin_scanner_reports_a_planted_disagreement() -> None:
 
 def _contributing() -> str:
     return (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-
-
-def _job(workflow: str, name: str, next_name: str) -> str:
-    return extract_between(workflow, f"\n  {name}:\n", f"\n  {next_name}:\n")
 
 
 def test_ci_shellcheck_pin_matches_the_documented_local_version() -> None:

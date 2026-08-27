@@ -3,13 +3,12 @@
 ``text.split(marker, 1)[0]`` returns the WHOLE string when ``marker`` is absent, so a
 slice bounded that way silently stops bounding anything the moment a documentation or
 workflow edit rewords the landmark: the slice grows to end-of-file and every assertion
-against it keeps passing. That is not hypothetical — PR #2663 reworded a doc phrase into
-the start of a sentence, the terminator vanished, the "recipe" slice grew from 655 to
-1363 characters, and the suite stayed green.
+against it keeps passing.
 
 These tests pin the replacement contract for the whole class: the landmark is
 load-bearing, an absent one raises ``ValueError`` naming it, and a present one yields
-byte-identically the same region the ``split`` form yielded.
+byte-identically the same region the ``split`` form yielded, bounding on the FIRST
+occurrence exactly as ``split(marker, 1)`` did.
 """
 
 from __future__ import annotations
@@ -78,10 +77,22 @@ def test_extract_between_raises_naming_the_absent_terminator() -> None:
     assert repr("MISSING-TERMINATOR") in str(excinfo.value)
 
 
-def test_extract_between_terminates_on_the_first_terminator_after_the_start_marker() -> None:
-    """A terminator that also appears BEFORE the start marker must not bound the slice."""
-    text = "END alpha START body END omega"
+def test_the_helpers_bound_on_the_first_occurrence_of_each_marker() -> None:
+    """Both markers repeat, and a terminator also sits BEFORE the start marker. Only
+    first-occurrence semantics — what ``split(marker, 1)`` gave — yields this region;
+    last-occurrence bounding widens it, which is the whole defect class."""
+    text = "END alpha START body END omega START again END tail"
+    assert extract_after(text, "START") == " body END omega START again END tail"
+    assert extract_before(text, "END") == ""
     assert extract_between(text, "START", "END") == " body "
+
+
+def test_an_empty_marker_raises_because_it_bounds_nothing() -> None:
+    """``"" in text`` is always true at index 0, so an empty marker is a bound that is
+    not there — the shape these helpers exist to remove. ``split("", 1)`` raised too."""
+    for helper in (extract_after, extract_before):
+        with pytest.raises(ValueError, match="must not be empty"):
+            helper(DOCUMENT, "")
 
 
 def test_extract_step_raises_naming_the_absent_step() -> None:
@@ -114,8 +125,7 @@ def test_reworded_landmark_in_a_real_document_raises_instead_of_widening(
     bounded = extract_between(document, start_marker, terminator)
     assert bounded == document.split(start_marker, 1)[1].split(terminator, 1)[0]
 
-    flipped = _reword(terminator)
-    reworded = document.replace(terminator, flipped, 1)
+    reworded = document.replace(terminator, terminator.swapcase())
     assert terminator not in reworded, f"reword did not remove {terminator!r}"
 
     widened = reworded.split(start_marker, 1)[1].split(terminator, 1)[0]
@@ -124,12 +134,3 @@ def test_reworded_landmark_in_a_real_document_raises_instead_of_widening(
     with pytest.raises(ValueError) as excinfo:
         extract_between(reworded, start_marker, terminator)
     assert repr(terminator) in str(excinfo.value)
-
-
-def _reword(marker: str) -> str:
-    """``marker`` with its first letter's case flipped — PR #2663's reword shape."""
-    for position, char in enumerate(marker):
-        if char.isalpha():
-            flipped = char.upper() if char.islower() else char.lower()
-            return marker[:position] + flipped + marker[position + 1 :]
-    raise AssertionError(f"marker {marker!r} carries no letter to reword")
