@@ -5219,7 +5219,7 @@ function pfb_software_failed_at(array $cache, bool $cache_current): int {
 		return 0;
 	}
 	$raw = $cache['last_failed'];
-	if (!is_int($raw) && !(is_string($raw) && preg_match('/^\d+$/', $raw) === 1)) {
+	if (!is_int($raw) && !(is_string($raw) && ctype_digit($raw))) {
 		return 0;
 	}
 	// An oversized decimal string saturates to PHP_INT_MAX rather than warning, so the range

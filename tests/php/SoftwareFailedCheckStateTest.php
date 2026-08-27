@@ -381,6 +381,18 @@ final class SoftwareFailedCheckStateTest extends TestCase
 		]);
 
 		$this->assertSame('3.3.2', $cache['latest'], 'the verified version is what is reported');
+		// A notice MUST fire here, or the loop below would assert nothing: installed 3.3.0 is
+		// older than the cached 3.3.2 and nothing has been notified yet.
+		$this->assertCount(
+			1,
+			$GLOBALS['pfb_test_file_notices'],
+			'the un-notified update from the last successful read is still announced'
+		);
+		$this->assertStringContainsString(
+			'3.3.2 available',
+			$GLOBALS['pfb_test_file_notices'][0]['notice'],
+			'and it names the version a successful read produced'
+		);
 		foreach ($GLOBALS['pfb_test_file_notices'] as $notice) {
 			$this->assertStringNotContainsString(
 				'3.3.4',
@@ -467,6 +479,44 @@ final class SoftwareFailedCheckStateTest extends TestCase
 			pfb_software_check_redirect($failed_ok !== FALSE),
 			'and Check now says so'
 		);
+	}
+
+	/**
+	 * The reported outcome is reset at ENTRY, so a caller reusing a by-ref variable can never
+	 * read a previous call's answer. Two gates return before any catalogue read — a build that
+	 * cannot show the page, and background checking switched off without a force — and on both
+	 * of those paths nothing was attempted, which is NULL rather than whatever the caller
+	 * happened to be holding. Each arm pre-sets the variable TRUE so the reset has to do work.
+	 */
+	public function testAGateThatRefusesBeforeAnyReadReportsNoOutcome(): void
+	{
+		$io = [
+			'installed_name' => self::NAME,
+			'installed'      => '3.3.2',
+			'installed_repo' => self::REPO,
+			'record_channel' => 'nightly',
+			'provenance_ok'  => FALSE,
+			'latest'         => '3.3.4',
+			'read_ok'        => TRUE,
+		];
+		$read_ok = TRUE;
+		pfb_software_update_check(TRUE, $io, $read_ok);
+		$this->assertNull($read_ok, 'a build that cannot show the page attempted no read');
+
+		// The other early return: checking disabled and not forced.
+		$GLOBALS['config'] = [
+			'installedpackages' => ['pfblockerng' => ['config' => [0 => ['pfb_software_check' => '']]]],
+		];
+		$io['provenance_ok'] = TRUE;
+		$read_ok = TRUE;
+		pfb_software_update_check(FALSE, $io, $read_ok);
+		$this->assertNull($read_ok, 'a disabled background check attempted no read');
+
+		// And the control: with both gates open the same call DOES report an outcome, so the
+		// two assertions above are about the gates and not about an out-param nobody writes.
+		$read_ok = NULL;
+		pfb_software_update_check(TRUE, $io, $read_ok);
+		$this->assertTrue($read_ok, 'with the gates open the read outcome is reported');
 	}
 
 	/**
@@ -629,6 +679,10 @@ final class SoftwareFailedCheckStateTest extends TestCase
 			'a negative decimal string'     => '-1',
 			'a fractional string'           => '1700000000.5',
 			'a whitespace-padded number'    => ' 1700000000 ',
+			// PCRE's $ matches before a final newline, so a regex-based digit test accepts
+			// this; the house ctype_digit() convention does not.
+			'a trailing newline'            => "1700000000\n",
+			'an oversized decimal string'   => '99999999999999999999999999',
 			'a boolean'                     => TRUE,
 		];
 
