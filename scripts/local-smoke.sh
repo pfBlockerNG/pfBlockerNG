@@ -57,6 +57,11 @@
 # Test-only (env):
 #   PFB_SELECT_BOX  override the select-box.sh path (default: scripts/select-box.sh).
 #                   Used by tests/shell/local_smoke_spec.sh to inject a fake.
+#   PFB_REF_PREFLIGHT  set to 0 to skip the branch/tag ls-remote check
+#                   (issue #2780). SHA expansion still runs. Spec rows that
+#                   use --ref dummy set this; production never does.
+#   PFB_LS_REMOTE   override the `git ls-remote` binary (same argv:
+#                   --exit-code <remote> <ref>). Spec injects a fake.
 #
 # The leased box runs scripts/smoke-on-box.sh, which:
 #   - checks out the requested ref
@@ -181,6 +186,46 @@ if [ -z "$_REF" ]; then
 fi
 
 _REF="${_REF#origin/}"
+
+# issue #2780: fail before select-box.sh when the box's git fetch cannot
+# succeed. An abbreviated SHA is not a fetch refspec (rc=128 in ~2s, zero
+# tests); a branch that exists only on this clone is the same class.
+_ref_is_hex() {
+    case "$1" in
+        *[!0-9a-fA-F]*|'') return 1 ;;
+        *) return 0 ;;
+    esac
+}
+_ref_len=${#_REF}
+if _ref_is_hex "$_REF" && [ "$_ref_len" -ge 4 ] && [ "$_ref_len" -le 39 ]; then
+    if _full="$(git -C "$REPO_ROOT" rev-parse --verify "${_REF}^{commit}" 2>/dev/null)"; then
+        _REF=$_full
+    else
+        printf 'local-smoke: abbreviated SHA %s is not in this clone; pass a full 40-character SHA or a branch that exists on %s\n' \
+            "$_REF" "$_GIT_REMOTE" >&2
+        exit 2
+    fi
+fi
+_ref_len=${#_REF}
+_skip_ls=0
+if _ref_is_hex "$_REF" && [ "$_ref_len" -eq 40 ]; then
+    # loose objects are not advertised; the box fetch of a full SHA is the
+    # check. ls-remote here would reject reachable SHAs that are not tips.
+    _skip_ls=1
+fi
+if [ "${PFB_REF_PREFLIGHT:-1}" != 0 ] && [ "$_skip_ls" -eq 0 ]; then
+    _ls_rc=0
+    if [ -n "${PFB_LS_REMOTE:-}" ]; then
+        "$PFB_LS_REMOTE" --exit-code "$_GIT_REMOTE" "$_REF" || _ls_rc=$?
+    else
+        git ls-remote --exit-code "$_GIT_REMOTE" "$_REF" >/dev/null 2>&1 || _ls_rc=$?
+    fi
+    if [ "$_ls_rc" -ne 0 ]; then
+        printf 'local-smoke: ref %s is not on %s; not leasing a box\n' \
+            "$_REF" "$_GIT_REMOTE" >&2
+        exit 2
+    fi
+fi
 
 _sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
 
