@@ -188,7 +188,10 @@ def test_repository_intelligence_initializes_each_worktree_directly() -> None:
         "scripts/agent/init-worktree-tools.sh",
         "scripts/agent/ensure-codegraph.sh",
         "graphify update",
-        "graphify extract",
+        # The initializer no longer builds the first graph: the routing document
+        # must direct that judgement call to a `/graphify` run instead.
+        "prints a notice and builds nothing",
+        "`/graphify` run",
         "serena project index",
         "OMP_CLI",
         "PI_CLI",
