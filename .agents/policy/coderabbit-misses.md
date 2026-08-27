@@ -8,6 +8,7 @@ Format: `` `SHA`  title  (#PR) ``
 
 Newest first.
 
+- `7896e379`  pfblockerng: return from gzip Blacklist success arm  (#2737) — explicit ask returned a 51-minute quota notice; owner said CodeRabbit will not re-review. Four-leg adversarial review (no blocking) on `30d6f894` carried to `8008d98b`/`cb17f9d3`; exact-head CI on `cb17f9d3` carried the merge.
 - `b9cc813d`  smoke: bootstrap ports clone into an empty pre-created dir  (#2593) — explicit ask returned a 52-minute quota notice; the single elapsed-window retry returned a second quota notice (58 minutes). Three clean adversarial legs (all-nitpick round, mutation-probed empty-dir coverage), canonical local gates, and exact-head CI on the rebased head `a97ef103` carried the merge.
 - `86792fc5`  download: reject tar-bearing feeds  (#2594) — explicit ask returned a 21-minute quota notice; the single elapsed-window retry returned a second quota notice (59 minutes). Three clean adversarial legs, mutation-probed tar MIME coverage, canonical local gates, and exact-head CI carry the landing.
 - `29c9111e`  install: fail closed when pkg reports a script failure  (#2576) — explicit ask returned a 40-minute quota notice; owner said do not re-ask. Claude three-leg (glued matcher + mktemp cleanup) and required CI on `60446096` carried the merge.
