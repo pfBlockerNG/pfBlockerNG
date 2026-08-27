@@ -2960,6 +2960,131 @@ def test_software_actions_link_to_package_manager(
             smoke_vm.ssh("/bin/rm", "-f", software_cache)
 
 
+# The two Status-section spans issue #2674 asks the page to keep apart: the last SUCCESSFUL
+# catalogue read, and the last attempt that failed. Plus the query token Check now redirects
+# with when the refresh it forced did not work.
+_SOFTWARE_CHECKED_MARKER = "pfb-sw-checked"
+_SOFTWARE_FAILED_MARKER = "pfb-sw-check-failed"
+_SOFTWARE_CHECK_FAILED_QUERY = "?check=failed"
+
+
+def test_software_page_shows_a_failed_catalogue_check(
+    smoke_vm: SmokeVM, webui: WebUI, php_error_log_guard: PhpErrorLogGuard
+) -> None:
+    """A failed catalogue refresh is visible on the page, and a successful one is not (#2674).
+
+    On a box whose webConfigurator ``pkg`` cannot reach our repository, the page reported a
+    version, an "Up to date" verdict and a recent "Last checked" while every check it ran
+    failed -- the cron tick kept the cache warm from a context where ``pkg`` works, and a
+    failed read left no field on the cache naming the failure. So the state worth rendering
+    is the one the cache now records, and this is the tier that proves it REACHES the page.
+
+    Scenario:
+      Given the hidden override forcing the provenance gate on,
+      And a cache scoped to this install that records a SUCCESSFUL check and no failure
+          (the before-state -- the page must stay calm, which is issue #2379's fallback),
+      When the Software page is GET,
+      Then the failed-attempt marker is ABSENT and the render oracle is clean;
+      And when the same cache additionally records a failed attempt,
+      Then the failed-attempt row renders its own time, distinct from the last successful
+          check's, and the page still renders clean (a state, never a ``pkg`` error dump);
+      And Check now's feedback query renders a warning, while a plain GET stays silent.
+
+    Fail-before/pass-after: on the pre-#2674 page the marker is absent in both states,
+    because nothing recorded or rendered the failure.
+    """
+    software_cache = "/var/db/pfblockerng/software_update.json"
+    pkgname = pkg_identity.branch_pkg_name(os.environ.get("SMOKE_PKG"))
+    repo_probe = smoke_vm.ssh("/usr/local/sbin/pkg", "query", "%R", pkgname)
+    installed_repo = repo_probe.stdout.strip() if repo_probe.returncode == 0 else ""
+
+    checked_at = 1735689600  # 2025-01-01 00:00:00 UTC — a fixed, recognisable success time
+    failed_at = 1767225600  # 2026-01-01 00:00:00 UTC — strictly later, so ordering is visible
+
+    def _seed(extra: dict[str, object]) -> None:
+        smoke_vm.ssh("/bin/rm", "-f", software_cache)
+        _seed_vm_file(
+            smoke_vm,
+            software_cache,
+            json.dumps(
+                {
+                    "pkgname": pkgname,
+                    "repo": installed_repo,
+                    "latest": "99.0.0",
+                    "last_checked": checked_at,
+                    **extra,
+                }
+            ),
+        )
+
+    try:
+        with software_panel_forced(smoke_vm, "on"):
+            # BEFORE: a successful check and nothing else — no failure surface at all.
+            _seed({})
+            resp = webui.get(_SOFTWARE_PAGE)
+            result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+            assert result.ok, f"Software page render oracle failed on the clean cache: {result.detail}"
+            assert _SOFTWARE_FAILED_MARKER not in resp.text, (
+                "a cache recording only a successful check must render NO failed-attempt row "
+                "(issue #2379: a benign stale read is not a scary page)"
+            )
+
+            # AFTER: the same cache, now also recording that the last attempt failed.
+            _seed({"last_failed": failed_at})
+            resp = webui.get(_SOFTWARE_PAGE)
+            result = evaluate_render(_SOFTWARE_PAGE, resp.status_code, resp.text, (_SOFTWARE_PANEL_MARKER,))
+            assert result.ok, f"Software page render oracle failed on the failed-attempt cache: {result.detail}"
+            body = resp.text
+            assert _SOFTWARE_FAILED_MARKER in body, (
+                f"the Software page must render the {_SOFTWARE_FAILED_MARKER!r} row once the cache "
+                "records a failed catalogue read (issue #2674)"
+            )
+            failure = re.search(rf'id="{_SOFTWARE_FAILED_MARKER}"[^>]*>([^<]*)<', body)
+            assert failure is not None, f"the {_SOFTWARE_FAILED_MARKER} span is absent from the body"
+            checked = re.search(rf'id="{_SOFTWARE_CHECKED_MARKER}"[^>]*>([^<]*)<', body)
+            assert checked is not None, (
+                f"the {_SOFTWARE_CHECKED_MARKER!r} span must carry the last SUCCESSFUL check time — "
+                "without it the page cannot distinguish the two (issue #2674)"
+            )
+            # Both are rendered by the guest's own date() with the guest's timezone, so the
+            # assertion is that the page names TWO DIFFERENT times, not what either formats to.
+            rendered_failure = failure.group(1).strip()
+            rendered_checked = checked.group(1).strip()
+            assert rendered_failure != "", "the failed-attempt row rendered no time at all"
+            assert rendered_checked != "", "the last-checked row rendered no time at all"
+            assert rendered_failure != rendered_checked, (
+                "the failed attempt and the last successful check must render as DIFFERENT times "
+                f"— that distinction is the whole of issue #2674; both read {rendered_failure!r}"
+            )
+            assert rendered_checked != "never", (
+                "before-state broken: the seeded successful-check time did not reach the page, so a "
+                "failed attempt could not be told apart from 'never checked' here"
+            )
+
+            # Check now's own feedback, on its reachable GET: the query token the page's
+            # failure redirect carries renders a warning an admin can actually see.
+            resp = webui.get(_SOFTWARE_PAGE + _SOFTWARE_CHECK_FAILED_QUERY)
+            result = evaluate_render(
+                _SOFTWARE_PAGE + _SOFTWARE_CHECK_FAILED_QUERY,
+                resp.status_code,
+                resp.text,
+                (_SOFTWARE_PANEL_MARKER,),
+            )
+            assert result.ok, f"Software page render oracle failed on the check-failed query: {result.detail}"
+            assert "alert-warning" in resp.text, (
+                "a forced check that failed must redisplay with a warning box, not an unchanged page"
+            )
+            assert "could not read" in resp.text, (
+                "the Check now feedback must say the catalogue could not be read (issue #2674)"
+            )
+            # And it stays feedback about THIS action: a plain GET is silent.
+            assert "alert-warning" not in webui.get(_SOFTWARE_PAGE).text, (
+                "a plain GET must not raise the Check now warning — only the forced check that failed does"
+            )
+    finally:
+        smoke_vm.ssh("/bin/rm", "-f", software_cache)
+
+
 def _pfb_output_value(body: str) -> str:
     """Return the rendered value (text between the tags) of the ``pfb_output`` textarea."""
     match = re.search(r'<textarea\b[^>]*name="pfb_output"[^>]*>(.*?)</textarea>', body, re.DOTALL)

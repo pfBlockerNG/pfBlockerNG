@@ -97,10 +97,12 @@ if ($_POST && isset($_POST['save'])) {
 $pfb_sw_check	= pfb_software_check_enabled();
 
 // "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
-// bypasses the "Check for new versions" enable-gate so a one-off check always works.
+// bypasses the "Check for new versions" enable-gate so a one-off check always works. The check's own
+// outcome is CAPTURED and routed through pfb_software_check_redirect(): a forced check whose catalogue
+// read failed redirects carrying feedback rather than silently re-serving the cached answer (#2674).
 if ($pfb_sw_action === 'check') {
-	pfb_software_update_check(TRUE);
-	header('Location: /pfblockerng/pfblockerng_software.php');
+	$pfb_sw_result = pfb_software_update_check(TRUE);
+	header('Location: ' . pfb_software_check_redirect(!isset($pfb_sw_result['last_failed'])));
 	exit;
 }
 
@@ -112,6 +114,14 @@ include_once('head.inc');
 
 if ($input_errors) {
 	print_input_errors($input_errors);
+}
+
+// Feedback for the forced check that just ran. Only the check handler's own failure redirect
+// sets this token, so a plain GET — including one served entirely off a stale cache (issue
+// #2379) — stays silent: this box says "the action you asked for failed", never "your cache is
+// old" (issue #2674). Fixed literal comparison, so a hostile or array-valued query is inert.
+if (($_GET['check'] ?? '') === 'failed') {
+	print_info_box(gettext('The version check could not read the pfBlockerNG repository catalogue. The versions below are from the last check that succeeded.'), 'warning');
 }
 
 // Tab bar (the Software tab is the active one here; gated like every page).
@@ -152,6 +162,10 @@ $disp_latest	= ($cached_latest !== '') ? $cached_latest : gettext('Not checked y
 $disp_checked	= ($cache_current && !empty($cache['last_checked']))
 			? date('Y-m-d H:i:s', (int) $cache['last_checked'])
 			: gettext('never');
+// issue #2674: WHEN the last attempt failed, or 0 for the ordinary case (the last thing that
+// happened was not a failure). Non-zero adds ONE row below; it never restyles the rest, so a
+// box serving a cached answer after a transient failure stays readable rather than alarming.
+$failed_at	= pfb_software_failed_at($cache, $cache_current);
 
 $update_available = pfb_update_available($installed_ver, $cached_latest);
 if ($update_available) {
@@ -184,8 +198,17 @@ $section->addInput(new Form_StaticText(
 ));
 $section->addInput(new Form_StaticText(
 	'Last checked',
-	htmlspecialchars((string) $disp_checked)
-));
+	'<span id="pfb-sw-checked">' . htmlspecialchars((string) $disp_checked) . '</span>'
+))->setHelp('When a version check last completed successfully.');
+if ($failed_at > 0) {
+	$section->addInput(new Form_StaticText(
+		'Last check failed',
+		'<span id="pfb-sw-check-failed" class="text-warning">'
+			. htmlspecialchars(date('Y-m-d H:i:s', $failed_at))
+			. '</span>'
+	))->setHelp('The most recent version check could not read the pfBlockerNG repository catalogue, '
+		. 'so the versions above are from the last check that succeeded.');
+}
 $form->add($section);
 
 $section = new Form_Section('Updates');

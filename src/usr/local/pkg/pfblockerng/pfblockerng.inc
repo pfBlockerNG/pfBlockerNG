@@ -5200,6 +5200,40 @@ function pfb_software_uninstall_href(string $pkgname): string {
 }
 
 /*
+ * WHEN the most recent version check failed, or 0 when the page must show nothing (issue
+ * #2674). The Software page pairs this with "Last checked" — the last SUCCESSFUL read — so an
+ * admin can tell "checked, and you are up to date" from "the check failed and you are looking
+ * at a cached answer".
+ *
+ * $cache_current is the page's own pfb_software_cache_matches_install() verdict, so a failure
+ * recorded against a previous install is never shown against the current one. The cache is a
+ * JSON file on disk, so a non-numeric or non-scalar value names no time and shows nothing
+ * rather than rendering a 1970 timestamp or emitting a conversion warning (issue #2367).
+ */
+function pfb_software_failed_at(array $cache, bool $cache_current): int {
+	if (!$cache_current || !isset($cache['last_failed']) || !is_numeric($cache['last_failed'])) {
+		return 0;
+	}
+	$at = (int) $cache['last_failed'];
+	return ($at > 0) ? $at : 0;
+}
+
+/*
+ * Where "Check now" redirects after the check it forced (issue #2674).
+ *
+ * The handler POSTs, checks, and redirects, so before #2674 an admin who explicitly asked for
+ * a fresh answer was silently re-served the old page. A failed forced check carries a query
+ * token the page's render arm turns into a warning box; a successful one redirects clean, so a
+ * benign load never raises it. Same shape as pfb_general_schedule_save_redirect().
+ */
+function pfb_software_check_redirect(
+	bool $check_ok,
+	string $failure_redirect = '/pfblockerng/pfblockerng_software.php?check=failed'
+): string {
+	return $check_ok ? '/pfblockerng/pfblockerng_software.php' : $failure_redirect;
+}
+
+/*
  * TRUE when $latest is strictly newer than $installed, via pfSense pkg_version_compare()
  * (never a string compare — it returns '<' | '=' | '>'). Empty/invalid inputs -> FALSE
  * (no update): a missing installed or latest version is never "an update is available".
@@ -5457,6 +5491,19 @@ function pfb_pkg_newest_version(array $versions): string {
 }
 
 /*
+ * Did the live catalogue read just performed actually SUCCEED? (issue #2674)
+ *
+ * All three inputs matter, and the refresh one is the reason this rule exists. A non-zero
+ * `pkg update -f` means the catalogue was NOT refreshed, so any version rquery then prints
+ * came off the STALE local DB — reading it is a fallback, never a successful check. Before
+ * #2674 the refresh's return value was discarded at the call site, so a stale answer was
+ * indistinguishable from a fresh one and the page advanced "Last checked" for it.
+ */
+function pfb_pkg_read_ok(int $refresh_ret, int $rquery_ret, string $latest): bool {
+	return $refresh_ret === 0 && $rquery_ret === 0 && $latest !== '';
+}
+
+/*
  * The pfBlockerNG repo's latest version of $pkgname: `pkg update -f -r <repo>` (forced
  * refresh of just that repo's catalog DB) then `pkg rquery -r <repo> '%v' <pkgname>`.
  * Reads ONLY that repo ($reponame) — never -r pfSense / get_pkg_info (ADR-19 §2 "Read
@@ -5466,8 +5513,18 @@ function pfb_pkg_newest_version(array $versions): string {
  *   - the pkg subsystem is locked (is_subsystem_dirty('pkg')) — never fight a base update;
  *   - DNS is unavailable (get_dnsavailable()) — never stall on a network read;
  *   - the rquery yields nothing (repo/conf absent).
+ *
+ * $read_ok reports the OUTCOME to the caller, which an empty return alone cannot (issue
+ * #2674 — a failing check was indistinguishable from a successful one):
+ *   TRUE   the catalogue was refreshed and named a version;
+ *   FALSE  the read was attempted and FAILED (either pkg call exited non-zero, or the
+ *          catalogue named nothing) — the caller records that;
+ *   NULL   no read was attempted, because a guard above deliberately deferred it. A
+ *          deferral is not a failure: turning "pkg is busy" or "no DNS yet" into a failed
+ *          check is exactly the scary page #2674 asks us not to produce.
  */
-function pfb_pkg_latest(string $pkgname, string $reponame): string {
+function pfb_pkg_latest(string $pkgname, string $reponame, ?bool &$read_ok = null): string {
+	$read_ok = null;
 	if ($pkgname === '' || $reponame === '') {
 		return '';
 	}
@@ -5482,16 +5539,21 @@ function pfb_pkg_latest(string $pkgname, string $reponame): string {
 	// Bound both networked pkg calls with timeout(1) (same idiom as the hook runner) so a
 	// hung mirror can never stall the cron pass or the page's forced "Check now".
 	$tmo = '/usr/bin/timeout -s TERM -k 5 60 ';
-	// Forced catalog refresh of the pfBlockerNG repo only; ignore failures (stale DB still reads).
+	// Forced catalog refresh of the pfBlockerNG repo only. A failure is NOT fatal -- the
+	// stale DB still reads, which is #2379's fallback -- but its return value is CAPTURED
+	// and fed to pfb_pkg_read_ok() rather than discarded, so the caller can tell a refreshed
+	// answer from a stale one (issue #2674). stderr stays redirected on both calls: what is
+	// observable is a state, never a pkg diagnostic on the page.
 	// -f is required: Pages/file:// catalogs can keep an unchanged mtime/etag (issue #2379).
-	pfb_pkg_exec("{$tmo}{$bin} update -f -r {$repo} 2>/dev/null");
+	$refresh_out = array();
+	$refresh_ret = -1;
+	pfb_pkg_exec("{$tmo}{$bin} update -f -r {$repo} 2>/dev/null", $refresh_out, $refresh_ret);
 	$out = array();
 	$ret = -1;
 	pfb_pkg_exec("{$tmo}{$bin} rquery -r {$repo} '%v' " . escapeshellarg($pkgname) . ' 2>/dev/null', $out, $ret);
-	if ($ret !== 0 || $out === array()) {
-		return '';
-	}
-	return pfb_pkg_newest_version($out);
+	$latest = ($ret === 0) ? pfb_pkg_newest_version($out) : '';
+	$read_ok = pfb_pkg_read_ok($refresh_ret, $ret, $latest);
+	return $latest;
 }
 
 /*
@@ -5636,13 +5698,22 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	$cache = pfb_software_read_cache();
 
 	// 3. Read latest from the installed repo; keep the cached value when the live read is
-	// unavailable. last_checked advances only on a successful live read (issue #2379).
+	// unavailable. last_checked advances only on a successful live read (issue #2379), and
+	// $read_ok — not merely a non-empty version — is what "successful" means (issue #2674):
+	// a version read off a catalogue whose refresh failed is a fallback, not a fresh check.
+	$read_ok = null;
 	if (array_key_exists('latest', $io)) {
 		$live_latest = (string) $io['latest'];
+		// Tests may pin the outcome independently of the value; absent, an empty injected
+		// latest means the same thing it means on the live path — the read produced nothing.
+		$read_ok = array_key_exists('read_ok', $io)
+			? (is_bool($io['read_ok']) ? $io['read_ok'] : null)
+			: ($live_latest !== '');
 	} else {
-		$live_latest = pfb_pkg_latest($pkgname, $repo);
+		$live_latest = pfb_pkg_latest($pkgname, $repo, $read_ok);
 	}
 	$live_ok = ($live_latest !== '');
+	$read_failed = ($read_ok === FALSE);
 	// Only reuse cached latest/last_notified when the cache belongs to the SAME install.
 	// pfb_software_cache_matches_install() is the whole question — name AND repo — and the
 	// Software page gates its DISPLAYED values on the identical call, so the two can never
@@ -5658,6 +5729,9 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	$kept_checked = ($cache_matches_install && array_key_exists('last_checked', $cache))
 		? $cache['last_checked']
 		: null;
+	$kept_failed = ($cache_matches_install && array_key_exists('last_failed', $cache))
+		? $cache['last_failed']
+		: null;
 
 	// 4. Refresh the cache. last_notified is written from the scoped value so a cache left
 	// by a different install (a different package name OR a different catalogue) is reset
@@ -5668,12 +5742,23 @@ function pfb_software_update_check(bool $force = FALSE, ?array $io = null): arra
 	$cache['installed']     = $installed;
 	$cache['latest']        = $latest;
 	$cache['last_notified'] = $last_notified;
-	if ($live_ok) {
+	if ($live_ok && !$read_failed) {
 		$cache['last_checked'] = time();
 	} elseif ($kept_checked !== null) {
 		$cache['last_checked'] = $kept_checked;
 	} else {
 		unset($cache['last_checked']);
+	}
+	// last_failed is the record #2674 was missing: WHEN the most recent attempt failed, or
+	// absent when the last thing that happened was not a failure. Scoped exactly like
+	// last_checked, so a failure from a previous install is never shown against this one.
+	// A successful read supersedes it; a deliberate deferral leaves the failure that stands.
+	if ($read_failed) {
+		$cache['last_failed'] = time();
+	} elseif (!$live_ok && $kept_failed !== null) {
+		$cache['last_failed'] = $kept_failed;
+	} else {
+		unset($cache['last_failed']);
 	}
 
 	if (pfb_should_notify($installed, $latest, $last_notified, $enabled)) {
