@@ -561,6 +561,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	 * its siblings — captured exec, nonzero-exit gate, and the ceiling wrap that
 	 * only an exit gate makes safe. Without the gate an aborted pass reached
 	 * PfbDownloadResult::success() with the unfiltered CSV still published.
+	 *
+	 * The refusal also has to DROP that publication. processet() rewrites the
+	 * '.orig' in place rather than staging, so at the moment the helper fails the
+	 * '.orig' this pass just published is the raw ET CSV — and the apply loop's
+	 * fail-marker fallback parses a '.orig' that is still there. It goes with BOTH
+	 * sidecar families — the content hashes and the conditional-GET validators —
+	 * because a remote feed whose ETag survives answers the next pass with a 304
+	 * and never re-fetches, leaving the list dropped until the feed itself changes.
 	 */
 	public function testEtBodyCapturesAndChecksHelperExit(): void
 	{
@@ -574,6 +582,15 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			. '{$pfb[\'etblock\']} {$pfb[\'etmatch\']} {$elog}"), $output, $retval);', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
+		$fail = strpos($scope, 'if (!pfb_download_extraction_succeeded($retval)) {');
+		$this->assertNotFalse($fail, 'the ET branch must gate on the helper exit status');
+		$refusal = substr($scope, $fail);
+		$this->assertStringContainsString('unlink_if_exists("{$orig_download}', $refusal);
+		foreach (array('.xxhash128', '.md5', '.etag', '.lastmod') as $sidecar) {
+			$this->assertStringContainsString("'{$sidecar}'", $refusal,
+				"the refusal must drop the {$sidecar} sidecar, or the next pass reuses this one's baseline");
+		}
+		$this->assertStringContainsString('unlink_if_exists($file_download);', $refusal);
 	}
 
 	/** Exclusive end index of the brace block whose `{` is at `$openBrace`. */
