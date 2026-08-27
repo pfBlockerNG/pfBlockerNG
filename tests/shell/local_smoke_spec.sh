@@ -53,7 +53,11 @@ FAKEEOF
 
     PFB_SELECT_BOX="$FAKE_SELECT_BOX"
     PFB_BOXES="dummy@dummy"
-    export PFB_SELECT_BOX PFB_BOXES WORK CALLS_DIR TMPDIR
+    # issue #2780: existing --ref dummy rows are not on any remote; skip the
+    # ls-remote preflight. SHA expansion still runs (dummy is not hex).
+    PFB_REF_PREFLIGHT=0
+    unset PFB_LS_REMOTE
+    export PFB_SELECT_BOX PFB_BOXES WORK CALLS_DIR TMPDIR PFB_REF_PREFLIGHT
   }
 
   teardown() {
@@ -325,4 +329,132 @@ FAKEEOF
     End
   End
 
+End
+
+# issue #2780: a missing or abbreviated ref used to lease a box, then git fetch
+# died rc=128 in ~2s with zero tests run. Fail before select-box.sh instead.
+Describe 'local-smoke.sh ref preflight (issue #2780)'
+  SCRIPT="${PFB_ROOT}/scripts/local-smoke.sh"
+
+  setup() {
+    scrub_git_env
+    unset PFB_REF
+    unset PFB_GIT_REMOTE
+    WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/localsmokeref.XXXXXX")"
+    CALLS_DIR="${WORK}/calls"
+    mkdir -p "$CALLS_DIR"
+
+    FAKE_SELECT_BOX="${WORK}/fake-select-box.sh"
+    cat > "$FAKE_SELECT_BOX" <<'FAKEEOF'
+#!/bin/sh
+_call_file="$(mktemp "${CALLS_DIR}/call.XXXXXX")"
+printf '%s\n' "$*" > "$_call_file"
+exit 0
+FAKEEOF
+    chmod +x "$FAKE_SELECT_BOX"
+
+    # Stub git ls-remote: records argv, exits 0 iff WORK/ls-remote-ok exists.
+    # Default is miss (exit 2) so a forgotten marker cannot leak a lease.
+    FAKE_LS_REMOTE="${WORK}/fake-ls-remote.sh"
+    cat > "$FAKE_LS_REMOTE" <<'FAKEEOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "${WORK}/ls-remote.args"
+if [ -f "${WORK}/ls-remote-ok" ]; then
+    exit 0
+fi
+exit 2
+FAKEEOF
+    chmod +x "$FAKE_LS_REMOTE"
+
+    TMPDIR="$WORK"
+    PFB_SELECT_BOX="$FAKE_SELECT_BOX"
+    PFB_BOXES="dummy@dummy"
+    PFB_LS_REMOTE="$FAKE_LS_REMOTE"
+    unset PFB_REF_PREFLIGHT
+    export PFB_SELECT_BOX PFB_BOXES WORK CALLS_DIR TMPDIR PFB_LS_REMOTE
+  }
+
+  teardown() {
+    rm -rf "$WORK"
+  }
+
+  BeforeEach 'setup'
+  AfterEach  'teardown'
+
+  call_count() { find "$CALLS_DIR" -type f 2>/dev/null | wc -l | tr -d ' '; }
+
+  run_and_diag() {
+    _out="$(sh "$SCRIPT" "$@" 2>&1)"
+    _rc=$?
+    printf 'exit=%s\n' "$_rc"
+    printf 'calls=%s\n' "$(call_count)"
+    if [ -f "${WORK}/ls-remote.args" ]; then
+      printf 'LS_REMOTE_CALLED=1\n'
+    else
+      printf 'LS_REMOTE_CALLED=0\n'
+    fi
+    printf '%s\n' "$_out"
+    cat "$CALLS_DIR"/* 2>/dev/null
+    cat "${WORK}/ls-remote.args" 2>/dev/null
+    return 0
+  }
+
+  Describe 'abbreviated SHA not in this clone'
+    It 'exits 2 and never leases a box'
+      When call run_and_diag --ref e1e1e1e1e1e1e1e1
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'abbreviated SHA'
+      The output should include '40-character'
+    End
+  End
+
+  Describe 'abbreviated SHA that resolves locally'
+    run_short_head() {
+      _full="$(git -C "${PFB_ROOT}" rev-parse HEAD)"
+      _short="$(printf '%.7s' "$_full")"
+      run_and_diag --ref "$_short"
+      _boot="$(cat "$CALLS_DIR"/* 2>/dev/null)"
+      case "$_boot" in
+        *"git fetch --quiet 'origin' '${_full}'"*) printf 'EXPANDED=1\n' ;;
+        *) printf 'EXPANDED=0\n' ;;
+      esac
+    }
+    It 'expands to the full 40-character SHA in the bootstrap fetch before leasing'
+      When call run_short_head
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include 'EXPANDED=1'
+    End
+  End
+
+  Describe 'branch missing from the box remote'
+    It 'exits 2, names the ref, and never leases a box'
+      When call run_and_diag --ref issue/not-on-remote
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+      The output should include 'issue/not-on-remote'
+      The output should include 'not leasing'
+    End
+
+    It 'does not lease N boxes when --shards is set'
+      When call run_and_diag --ref issue/not-on-remote --shards 2
+      The line 1 of output should equal 'exit=2'
+      The line 2 of output should equal 'calls=0'
+    End
+  End
+
+  Describe 'branch present on the box remote'
+    present_branch() {
+      true > "${WORK}/ls-remote-ok"
+      run_and_diag --ref dummy
+    }
+    It 'leases once after a successful ls-remote'
+      When call present_branch
+      The line 1 of output should equal 'exit=0'
+      The line 2 of output should equal 'calls=1'
+      The output should include 'LS_REMOTE_CALLED=1'
+      The output should include "git fetch --quiet 'origin' 'dummy'"
+    End
+  End
 End
