@@ -9140,6 +9140,13 @@
                 "variadic": false,
                 "type": "string",
                 "default": null
+            },
+            {
+                "name": "read_ok",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },
@@ -9173,6 +9180,33 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
+    },
+    "pfb_pkg_read_ok": {
+        "returnsRef": false,
+        "returnType": "bool",
+        "params": [
+            {
+                "name": "refresh_ret",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "rquery_ret",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            },
+            {
+                "name": "latest",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
     },
     "pfb_pkg_ver": {
         "returnsRef": false,
@@ -10846,6 +10880,26 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_software_check_redirect": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "check_ok",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
+                "default": null
+            },
+            {
+                "name": "failure_redirect",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": "'/pfblockerng/pfblockerng_software.php?check=failed'"
+            }
+        ]
+    },
     "pfb_software_check_save": {
         "returnsRef": false,
         "returnType": "string",
@@ -10855,6 +10909,26 @@
                 "byRef": false,
                 "variadic": false,
                 "type": "array",
+                "default": null
+            }
+        ]
+    },
+    "pfb_software_failed_at": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "cache",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            },
+            {
+                "name": "cache_current",
+                "byRef": false,
+                "variadic": false,
+                "type": "bool",
                 "default": null
             }
         ]

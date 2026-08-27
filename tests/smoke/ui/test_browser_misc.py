@@ -56,6 +56,8 @@ import pytest
 from .. import helpers
 from .conftest import mask_page_identity
 from .test_render_smoke import (
+    _SOFTWARE_CHECK_FAILED_QUERY,
+    _SOFTWARE_CHECKED_MARKER,
     _seed_vm_file,
     software_panel_forced,
 )
@@ -71,9 +73,12 @@ if TYPE_CHECKING:
     from ..conftest import SmokeVM
     from .webui import WebUI
 
-# The provenance-gated Software (version/upgrades) page + its panel marker (ADR-19).
+# The provenance-gated Software (version/upgrades) page + its panel marker (ADR-19). The
+# failed-check markers/query are imported from Tier A so both tiers assert the same strings.
 SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
 SOFTWARE_PANEL_MARKER = "pfb-software-panel"
+SOFTWARE_CHECKED_MARKER = _SOFTWARE_CHECKED_MARKER
+SOFTWARE_CHECK_FAILED_QUERY = _SOFTWARE_CHECK_FAILED_QUERY
 
 pytestmark = pytest.mark.ui_browser
 
@@ -316,6 +321,39 @@ def test_software_panel_screenshot_when_enabled(
         _open(browser_page, webui, SOFTWARE_PAGE)
         assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
         _shot(browser_page, screenshot_dir, "software_panel_enabled")
+
+
+def test_software_failed_check_feedback_is_visible(
+    smoke_vm: SmokeVM,
+    browser_page: Page,
+    webui: WebUI,
+    screenshot_dir: Path,
+) -> None:
+    """A forced check that failed says so in the browser, and a plain load does not (#2674).
+
+    Check now POSTs, runs the check and redirects, so before #2674 an admin who explicitly
+    asked for a fresh answer was silently re-served the old one. The handler now redirects
+    carrying ``?check=failed`` when the refresh it forced did not work, which is the state
+    this tier renders. Driving the query directly keeps the case deterministic: clicking the
+    button on a live guest runs a real ``pkg update`` whose outcome is not ours to fix.
+
+    Scenario:
+      Given the hidden override forcing the provenance gate on,
+      When the Software page is opened plainly,
+      Then no warning box is visible (a benign load stays calm — issue #2379);
+      And when it is opened with the feedback query Check now redirects with,
+      Then the warning box IS visible and names the catalogue read that failed.
+    """
+    with software_panel_forced(smoke_vm, "on"):
+        _open(browser_page, webui, SOFTWARE_PAGE)
+        assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
+        expect(browser_page.locator(".alert-warning")).to_have_count(0, timeout=JS_TIMEOUT_MS)
+
+        _open(browser_page, webui, SOFTWARE_PAGE + SOFTWARE_CHECK_FAILED_QUERY)
+        expect(browser_page.locator(".alert-warning")).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(browser_page.get_by_text("could not read", exact=False)).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(browser_page.locator(f"#{SOFTWARE_CHECKED_MARKER}")).to_be_visible(timeout=JS_TIMEOUT_MS)
+        _shot(browser_page, screenshot_dir, "software_check_failed_feedback")
 
 
 @pytest.mark.ui_browser
