@@ -41,3 +41,10 @@ Grok specifics:
 - **Reviews** use an independent spawned reviewer per `.agents/policy/landing.md`.
 - `work-branch.sh --worktree` resolve primary checkout from session worktree exactly
   as for other clients.
+- **Smoke-1 bus (`pfb-msg`).** Session-length watch is the Grok **monitor** tool with
+  `persistent: true` (`pfb-msg serve $PFB_AGENT`). Each stdout line is a turn. Do
+  **not** arm it as background bash: that notifies only on process **exit**, and
+  `serve` never exits on a message (probed 2026-08-27: unread piled for hours while
+  the SSH serve stayed alive; the 10 h harness cap then killed it and that exit
+  finally woke the session). One-shot form is `pfb-msg watch`. See
+  [`.grok/rules/bus.md`](../../.grok/rules/bus.md) (always scanned).

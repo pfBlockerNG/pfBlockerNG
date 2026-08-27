@@ -22,3 +22,6 @@ Hard invariants in `AGENTS.md` never-list, not restated here: work in dedicated 
 - Reviews use an independent spawned reviewer per `.agents/policy/landing.md`.
   Grok has no in-repo custom-agent files; spawn `general-purpose` (or `explore` /
   `plan`) rather than inventing a fourth role tree.
+- Smoke-1 `pfb-msg` bus: arm with the **monitor** tool (`persistent: true`), never
+  background bash. Details in `.grok/rules/bus.md` (always scanned) and
+  `.agents/context/grok-adapter.md`.
