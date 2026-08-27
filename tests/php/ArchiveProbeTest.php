@@ -43,6 +43,13 @@ final class ArchiveProbeTest extends TestCase
 		$this->assertSame(['/usr/bin/bzip2', '-t'], pfb_archive_probe('application/x-bzip2'));
 	}
 
+	public function test_probe_x_tar_returns_tar_tf(): void
+	{
+		// issue #2638: a newly accepted archive type must have a structural probe;
+		// without it pfb_validate_archive() treats x-tar as "non-archive: nothing to test".
+		$this->assertSame(['/usr/bin/tar', '-tf'], pfb_archive_probe('application/x-tar'));
+	}
+
 	public function test_probe_removed_archive_returns_null(): void
 	{
 		// Removed archive formats have no structural probe and must not reach an extractor.

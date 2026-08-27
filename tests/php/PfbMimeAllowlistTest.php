@@ -92,7 +92,7 @@ final class PfbMimeAllowlistTest extends TestCase
 		$this->assertTrue(pfb_mime_in_allowlist('text/plain', $this->allowlist));
 	}
 
-	public function test_shipped_allowlist_rejects_tar_feeds(): void
+	public function test_shipped_allowlist_accepts_tar_feeds(): void
 	{
 		$shipped = $GLOBALS['pfb_shipped_mime_types'] ?? [];
 
@@ -105,9 +105,9 @@ final class PfbMimeAllowlistTest extends TestCase
 			pfb_mime_in_allowlist('application/x-bzip2', $shipped),
 			'plain bzip2 feeds must still reach the compressed MIME gate'
 		);
-		$this->assertFalse(
+		$this->assertTrue(
 			pfb_mime_in_allowlist('application/x-tar', $shipped),
-			'raw tar and tar payloads inside gzip/bzip2 must be rejected'
+			'issue #2638: a tar is extractable — outer and inner gates must admit it'
 		);
 	}
 

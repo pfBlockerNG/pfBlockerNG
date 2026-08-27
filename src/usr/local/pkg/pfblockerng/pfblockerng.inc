@@ -489,7 +489,8 @@ $pfb['mime_types'] = array_flip(array(	'inode/x-empty',
 					'application/gzip',
 					'application/x-gzip',
 					'application/x-bzip2',
-					'application/zip'));
+					'application/zip',
+					'application/x-tar'));
 
 // pfb_filter constants
 define('PFB_FILTER_HTML', 1);
@@ -1129,6 +1130,8 @@ function pfb_archive_probe(string $canonical_type): ?array {
 			return array('/usr/bin/gunzip', '-t');
 		case 'application/x-bzip2':
 			return array('/usr/bin/bzip2', '-t');
+		case 'application/x-tar':
+			return array('/usr/bin/tar', '-tf');
 		default:
 			return NULL;
 	}
@@ -2181,7 +2184,7 @@ function pfb_filter($input, $type, $reference='Unknown', $default='', $escape=FA
 					if ($output[0] === 'application/octet-stream' || empty($output[0])) {
 						$recovered = pfb_octet_recover_type(
 							$input[1],
-							array('application/zip', 'application/gzip', 'application/x-bzip2'),
+							array('application/zip', 'application/gzip', 'application/x-bzip2', 'application/x-tar'),
 							'pfb_validate_archive'
 						);
 					}
@@ -14444,11 +14447,14 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 
 						// Rename any Category files with dashes
 						$list = glob("{$staged}/{$filename}*");
-						if (is_array($list) && !empty($list)) {
-							foreach ($list as $verify) {
-								if (strpos(basename($verify), '-') !== FALSE) {
-									rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
-								}
+						if (!is_array($list) || empty($list)) {
+							// issue #2638: tar exit 0 with no category file must not
+							// publish an empty tree over live categories.
+							return pfb_download_initial_retval();
+						}
+						foreach ($list as $verify) {
+							if (strpos(basename($verify), '-') !== FALSE) {
+								rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
 							}
 						}
 						return $retval;
@@ -14474,15 +14480,21 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 			else {
 				$reject_detail = array();
-				if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
+				$inner_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail);
+				if (!$inner_type) {
 					pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 					return PfbDownloadResult::failure();
 				}
 				pfb_logger('.', 1);
 				$retval = pfb_download_initial_retval();
+				$extract_tar = ($inner_type == 'application/x-tar');
 				if (!pfb_stage_publish($orig_download,
-				    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-					exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+				    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval): int {
+					if ($extract_tar) {
+						exec(pfb_extract_cmd("set -o pipefail; /usr/bin/gunzip -c {$file_dwn_esc} | /usr/bin/tar -xOf - > " . escapeshellarg($staged)), $output, $retval);
+					} else {
+						exec(pfb_extract_cmd("/usr/bin/gunzip -c {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+					}
 					return $retval;
 				})) {
 					pfb_logger("\n[pfb_download] gzip extraction failed (gunzip exit {$retval})" . pfb_extract_cap_note($retval), 2);
@@ -14504,15 +14516,21 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 			$reject_detail = array();
-			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
+			$inner_type = pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail);
+			if (!$inner_type) {
 				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
 				return PfbDownloadResult::failure();
 			}
 			pfb_logger('.', 1);
 			$retval = pfb_download_initial_retval();
+			$extract_tar = ($inner_type == 'application/x-tar');
 			if (!pfb_stage_publish($orig_download,
-			    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
-				exec(pfb_extract_cmd("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+			    static function (string $staged) use ($file_dwn_esc, $extract_tar, &$output, &$retval): int {
+				if ($extract_tar) {
+					exec(pfb_extract_cmd("set -o pipefail; /usr/bin/bzip2 -dkc {$file_dwn_esc} | /usr/bin/tar -xOf - > " . escapeshellarg($staged)), $output, $retval);
+				} else {
+					exec(pfb_extract_cmd("/usr/bin/bzip2 -dkc {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+				}
 				return $retval;
 			})) {
 				pfb_logger("\n[pfb_download] bzip2 extraction failed (bzip2 exit {$retval})" . pfb_extract_cap_note($retval), 2);
@@ -14785,6 +14803,33 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 		else {
 			// Uncompressed file format.
 			if ($type == 'geoip' || $type == 'asn') {
+				if ($file_type == 'application/x-tar') {
+					if (!pfb_validate_archive($file_download, $file_type)) {
+						pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+					$retval = pfb_download_initial_retval();
+					if ($type == 'geoip') {
+						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$header_esc} >/dev/null 2>&1"), $output, $retval);
+						unlink_if_exists($file_download);
+						if (!pfb_download_extraction_succeeded($retval)) {
+							pfb_logger("\n[pfb_download] {$type} tar extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+							return PfbDownloadResult::failure();
+						}
+						return PfbDownloadResult::success();
+					}
+					if (!pfb_stage_publish($head_download,
+					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+						return $retval;
+					})) {
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+					unlink_if_exists($file_download);
+					return PfbDownloadResult::success();
+				}
 				// Existing MaxMind/ASN path: preserve the direct rename contract.
 				$renamed = @rename("{$file_download}", "{$head_download}");
 				if (!$renamed) {
@@ -14878,6 +14923,52 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::success();
 			}
 			elseif ($type == 'blacklist') {
+				if ($file_type == 'application/x-tar') {
+					// issue #2638: a plain tar is the Blacklist category archive
+					// after a proxy decoded the outer gzip — extract, do not fail-closed.
+					if (!pfb_validate_archive($file_download, $file_type)) {
+						pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+					@rename("{$file_download}", strstr("{$file_download}", '.raw', TRUE));
+					$file_esc = trim(escapeshellarg("{$file_dwn}"), "'");
+					$filename = basename("{$file_esc}", '.tar.gz');
+					if (empty(pfb_filter($filename, PFB_FILTER_WORD, 'pfb_download category'))) {
+						pfb_logger("\n Invalid filename [{$filename}]", 1);
+						return PfbDownloadResult::failure();
+					}
+					$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_dwn));
+					if ($unsafe_member !== NULL) {
+						pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
+						unlink_if_exists($file_dwn);
+						return PfbDownloadResult::failure();
+					}
+					$cmd = "--include='*domains' -s',.*/\\(.*\\)/\\(.*\\)/domains,{$filename}_\\1_\\2,' -s',.*/\\(.*\\)/domains,{$filename}_\\1,'";
+					$retval = pfb_download_initial_retval();
+					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
+					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
+						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
+						if (!pfb_download_extraction_succeeded($retval)) {
+							return $retval;
+						}
+						$list = glob("{$staged}/{$filename}*");
+						if (!is_array($list) || empty($list)) {
+							return pfb_download_initial_retval();
+						}
+						foreach ($list as $verify) {
+							if (strpos(basename($verify), '-') !== FALSE) {
+								rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
+							}
+						}
+						return $retval;
+					})) {
+						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+						return PfbDownloadResult::failure();
+					}
+					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
+					return PfbDownloadResult::success();
+				}
 				// issue #2635: a MIME-allowlisted non-archive body is not a
 				// successful Blacklist update — leave category files untouched.
 				pfb_validate_log($header, 'extract', 'blacklist_not_archive', $file_type);
@@ -14885,13 +14976,31 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				return PfbDownloadResult::failure();
 			}
 			else {
-				// Rename file to 'orig' format
-				$renamed = @rename("{$file_download}", "{$orig_download}");
-				if (!$renamed) {
-					pfb_logger("\n[pfb_download] {$header} rename to .orig failed", 2);
-					return PfbDownloadResult::failure();
+				if ($file_type == 'application/x-tar') {
+					if (!pfb_validate_archive($file_download, $file_type)) {
+						pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+					$retval = pfb_download_initial_retval();
+					if (!pfb_stage_publish($orig_download,
+					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
+						exec(pfb_extract_cmd("/usr/bin/tar -xOf {$file_dwn_esc} > " . escapeshellarg($staged)), $output, $retval);
+						return $retval;
+					})) {
+						pfb_logger("\n[pfb_download] tar extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+						unlink_if_exists($file_download);
+						return PfbDownloadResult::failure();
+					}
+				} else {
+					// Rename file to 'orig' format
+					$renamed = @rename("{$file_download}", "{$orig_download}");
+					if (!$renamed) {
+						pfb_logger("\n[pfb_download] {$header} rename to .orig failed", 2);
+						return PfbDownloadResult::failure();
+					}
+					$retval = 0;
 				}
-				$retval = 0;
 			}
 		}
 

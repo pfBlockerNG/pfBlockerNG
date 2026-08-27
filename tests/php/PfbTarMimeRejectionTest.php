@@ -54,23 +54,27 @@ final class PfbTarMimeRejectionTest extends TestCase
 		}
 	}
 
-	public function test_raw_tar_is_rejected_at_outer_gate(): void
+	public function test_raw_tar_is_accepted_at_outer_gate(): void
 	{
-		$this->assertTarRejected('feed.tar', PFB_FILTER_FILE_MIME);
+		$path = $this->path('feed.tar');
+		$this->assertSame('application/x-tar', $this->filter($path, PFB_FILTER_FILE_MIME));
+		$this->assertFileExists($path);
 	}
 
-	public function test_tar_gzip_is_rejected_at_inner_gate(): void
+	public function test_tar_gzip_is_accepted_at_inner_gate(): void
 	{
 		$path = $this->path('feed.tar.gz');
 		$this->assertSame('application/gzip', $this->filter($path, PFB_FILTER_FILE_MIME));
-		$this->assertTarRejected('feed.tar.gz', PFB_FILTER_FILE_MIME_COMPRESSED);
+		$this->assertSame('application/x-tar', $this->filter($path, PFB_FILTER_FILE_MIME_COMPRESSED));
+		$this->assertFileExists($path);
 	}
 
-	public function test_tar_bzip2_is_rejected_at_inner_gate(): void
+	public function test_tar_bzip2_is_accepted_at_inner_gate(): void
 	{
 		$path = $this->path('feed.tar.bz2');
 		$this->assertSame('application/x-bzip2', $this->filter($path, PFB_FILTER_FILE_MIME));
-		$this->assertTarRejected('feed.tar.bz2', PFB_FILTER_FILE_MIME_COMPRESSED);
+		$this->assertSame('application/x-tar', $this->filter($path, PFB_FILTER_FILE_MIME_COMPRESSED));
+		$this->assertFileExists($path);
 	}
 
 	public function test_plain_gzip_remains_accepted(): void
@@ -94,16 +98,6 @@ final class PfbTarMimeRejectionTest extends TestCase
 		$path = $this->path('feed.zip');
 		$this->assertSame('application/zip', $this->filter($path, PFB_FILTER_FILE_MIME));
 		$this->assertFileExists($path);
-	}
-
-	private function assertTarRejected(string $name, int $filter): void
-	{
-		$path = $this->path($name);
-		$detail = [];
-
-		$this->assertFalse($this->filter($path, $filter, $detail));
-		$this->assertSame('application/x-tar', $detail['mime'] ?? NULL);
-		$this->assertFileDoesNotExist($path);
 	}
 
 	private function filter(string $path, int $filter, ?array &$detail = NULL): string|false
