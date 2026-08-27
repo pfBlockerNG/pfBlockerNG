@@ -121,7 +121,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$scope,
 			'reject must name the detected type'
 		);
-		$reject_scope = substr($scope, $reject, $publish - $reject);
+		$brace = strpos($scope, '{', $reject);
+		$this->assertNotFalse($brace);
+		$reject_scope = substr($scope, $reject, self::closingBraceExclusive($scope, $brace) - $reject);
+		$this->assertSame(
+			1,
+			substr_count($reject_scope, 'return PfbDownloadResult::failure();'),
+			'reject scope must not swallow a sibling failure return'
+		);
 		$this->assertStringContainsString('unlink_if_exists($file_download);', $reject_scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $reject_scope);
 		$this->assertStringNotContainsString('pfb_stage_publish', $reject_scope);
@@ -270,7 +277,14 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$scope,
 			'reject must name the detected type'
 		);
-		$reject_scope = substr($scope, $reject, $geoip - $reject);
+		$brace = strpos($scope, '{', $reject);
+		$this->assertNotFalse($brace);
+		$reject_scope = substr($scope, $reject, self::closingBraceExclusive($scope, $brace) - $reject);
+		$this->assertSame(
+			1,
+			substr_count($reject_scope, 'return PfbDownloadResult::failure();'),
+			'reject scope must not swallow a sibling failure return'
+		);
 		$this->assertStringContainsString('unlink_if_exists($file_download);', $reject_scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $reject_scope);
 		$this->assertStringNotContainsString('pfb_stage_publish', $reject_scope);
@@ -299,5 +313,23 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
 		$this->assertStringNotContainsString('file_exists("{$orig_download}")', $scope);
 		$this->assertStringNotContainsString('unlink_if_exists("{$orig_download}")', $scope);
+	}
+
+	/** Exclusive end index of the brace block whose `{` is at `$openBrace`. */
+	private static function closingBraceExclusive(string $source, int $openBrace): int
+	{
+		$depth = 0;
+		$length = strlen($source);
+		for ($index = $openBrace; $index < $length; $index++) {
+			if ($source[$index] === '{') {
+				$depth++;
+			} elseif ($source[$index] === '}') {
+				$depth--;
+				if ($depth === 0) {
+					return $index + 1;
+				}
+			}
+		}
+		return $length;
 	}
 }
