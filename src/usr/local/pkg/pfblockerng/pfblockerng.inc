@@ -5206,9 +5206,7 @@ function pfb_software_check_enabled(): bool {
  * default 'yes' included, canonicalises to the owner-ruled empty Off. The caller flushes
  * config.xml.
  *
- * issue #2525: this is a named function rather than an expression inside the page so the
- * persistence a test can execute IS the persistence the page runs. While it lived in the page
- * the only reachable coverage replayed it, and deleting the write left the suite green.
+ * issue #2525: named, so the persistence a test executes is the persistence the page runs.
  */
 function pfb_software_check_save(array $post): string {
 	$token = pfb_filter($post['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
