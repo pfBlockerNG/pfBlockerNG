@@ -2962,10 +2962,12 @@ def test_software_actions_link_to_package_manager(
 
 # The two Status-section spans issue #2674 asks the page to keep apart: the last SUCCESSFUL
 # catalogue read, and the last attempt that failed. Plus the query token Check now redirects
-# with when the refresh it forced did not work.
+# with when the refresh it forced did not work, and the message that token renders -- both
+# tiers assert the same strings, so the page and the tests cannot drift apart.
 _SOFTWARE_CHECKED_MARKER = "pfb-sw-checked"
 _SOFTWARE_FAILED_MARKER = "pfb-sw-check-failed"
 _SOFTWARE_CHECK_FAILED_QUERY = "?check=failed"
+_SOFTWARE_CHECK_FAILED_TEXT = "could not read the pfBlockerNG repository catalogue"
 
 
 def test_software_page_shows_a_failed_catalogue_check(
@@ -3063,6 +3065,13 @@ def test_software_page_shows_a_failed_catalogue_check(
 
             # Check now's own feedback, on its reachable GET: the query token the page's
             # failure redirect carries renders a warning an admin can actually see.
+            #
+            # Keyed on the MESSAGE, never on the ``alert-warning`` class: pfBlockerNG's
+            # pending-changes banner is also an alert-warning, and whatever ran before this
+            # case may have left it set, so a class-level absence assertion would be about
+            # that banner rather than about this feedback. The warning STYLING is pinned by
+            # SoftwareFailedCheckStateTest's page-wiring case and asserted visually by the
+            # Tier-B case, which scopes its locator to this same text.
             resp = webui.get(_SOFTWARE_PAGE + _SOFTWARE_CHECK_FAILED_QUERY)
             result = evaluate_render(
                 _SOFTWARE_PAGE + _SOFTWARE_CHECK_FAILED_QUERY,
@@ -3071,14 +3080,12 @@ def test_software_page_shows_a_failed_catalogue_check(
                 (_SOFTWARE_PANEL_MARKER,),
             )
             assert result.ok, f"Software page render oracle failed on the check-failed query: {result.detail}"
-            assert "alert-warning" in resp.text, (
-                "a forced check that failed must redisplay with a warning box, not an unchanged page"
-            )
-            assert "could not read" in resp.text, (
-                "the Check now feedback must say the catalogue could not be read (issue #2674)"
+            assert _SOFTWARE_CHECK_FAILED_TEXT in resp.text, (
+                "a forced check that failed must say so on the redisplay, not re-serve an "
+                f"unchanged page (looked for {_SOFTWARE_CHECK_FAILED_TEXT!r})"
             )
             # And it stays feedback about THIS action: a plain GET is silent.
-            assert "alert-warning" not in webui.get(_SOFTWARE_PAGE).text, (
+            assert _SOFTWARE_CHECK_FAILED_TEXT not in webui.get(_SOFTWARE_PAGE).text, (
                 "a plain GET must not raise the Check now warning — only the forced check that failed does"
             )
     finally:
