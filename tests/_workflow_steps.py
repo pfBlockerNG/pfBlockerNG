@@ -28,6 +28,7 @@ def extract_step(workflow: str, step_name: str) -> str:
     silent empty-string slice would let every ``in`` assertion against it pass
     vacuously instead of failing for the right reason.
     """
+    _reject_empty(step_name)
     marker = re.compile(rf"^( *)- name: {re.escape(step_name)}\n", re.MULTILINE)
     match = marker.search(workflow)
     if match is None:
@@ -49,6 +50,7 @@ def extract_job(workflow: str, job_name: str) -> str:
     same script needs this: a file-global index comparison can otherwise pair a
     step in one job with a step in another.
     """
+    _reject_empty(job_name)
     marker = re.compile(rf"^  {re.escape(job_name)}:\n", re.MULTILINE)
     match = marker.search(workflow)
     if match is None:
@@ -61,8 +63,8 @@ def extract_job(workflow: str, job_name: str) -> str:
 
 
 def extract_after(text: str, marker: str) -> str:
-    """``text`` after the first ``marker``; absent or empty ``marker`` raises
-    ``ValueError`` naming it (``split(marker, 1)[1]`` raises a bare ``IndexError``)."""
+    """``text`` after the first ``marker``. An absent ``marker`` raises ``ValueError``
+    naming it, where ``split(marker, 1)[1]`` raised a bare ``IndexError``."""
     _reject_empty(marker)
     start = text.find(marker)
     if start < 0:
@@ -71,8 +73,8 @@ def extract_after(text: str, marker: str) -> str:
 
 
 def extract_before(text: str, marker: str) -> str:
-    """``text`` before the first ``marker``; absent or empty ``marker`` raises
-    ``ValueError`` naming it. This is the silent case ``split(marker, 1)[0]`` hides."""
+    """``text`` before the first ``marker``. An absent ``marker`` raises ``ValueError``
+    naming it — the silent case ``split(marker, 1)[0]`` hid by returning everything."""
     _reject_empty(marker)
     end = text.find(marker)
     if end < 0:
@@ -81,12 +83,14 @@ def extract_before(text: str, marker: str) -> str:
 
 
 def extract_between(text: str, start_marker: str, end_marker: str) -> str:
-    """``text`` between ``start_marker`` and the FIRST ``end_marker`` after it."""
+    """``text`` between ``start_marker`` and the FIRST ``end_marker`` after it; either
+    one absent raises ``ValueError`` naming it."""
     return extract_before(extract_after(text, start_marker), end_marker)
 
 
 def _reject_empty(marker: str) -> None:
-    # "" is found everywhere, so it bounds nothing — the shape these helpers exist
-    # to remove. `str.split("", 1)` raised instead; keep that floor.
+    # "" matches at index 0 of every string, and an empty step/job name matches a bare
+    # `- name:` line vacuously, so an empty bound is no bound — the shape these helpers
+    # exist to remove. `str.split("", 1)` raised too; keep that floor across the family.
     if not marker:
-        raise ValueError("marker must not be empty")
+        raise ValueError(f"marker {marker!r} must not be empty")

@@ -87,12 +87,23 @@ def test_the_helpers_bound_on_the_first_occurrence_of_each_marker() -> None:
     assert extract_between(text, "START", "END") == " body "
 
 
-def test_an_empty_marker_raises_because_it_bounds_nothing() -> None:
-    """``"" in text`` is always true at index 0, so an empty marker is a bound that is
-    not there — the shape these helpers exist to remove. ``split("", 1)`` raised too."""
-    for helper in (extract_after, extract_before):
+def test_an_empty_bound_raises_across_the_whole_family() -> None:
+    """``"" in text`` is true at index 0, and an empty step or job name matches a bare
+    ``- name:``/``  :`` line vacuously, so an empty bound is no bound at all — the shape
+    these helpers exist to remove. ``split("", 1)`` raised too. Every member owes it, or
+    the floor is only nearly total."""
+    vacuous = "jobs:\n  :\n    steps:\n      - name: \n        run: echo hi\n"
+    for helper, text in (
+        (extract_after, DOCUMENT),
+        (extract_before, DOCUMENT),
+        (extract_step, vacuous),
+        (extract_job, vacuous),
+    ):
         with pytest.raises(ValueError, match="must not be empty"):
-            helper(DOCUMENT, "")
+            helper(text, "")
+    for markers in (("", "END"), ("START", "")):
+        with pytest.raises(ValueError, match="must not be empty"):
+            extract_between(DOCUMENT, *markers)
 
 
 def test_extract_step_raises_naming_the_absent_step() -> None:
