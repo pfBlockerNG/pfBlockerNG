@@ -48,6 +48,8 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import time
 import uuid
 from collections.abc import Callable, Iterable, Sequence
@@ -5285,6 +5287,32 @@ _PKG_TOKEN_QUERY_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Guest capture uses BSD sed (no I flag). Spell every letter so ?TOKEN= redacts.
+_PKG_URL_GUEST_SED_USERINFO = r"s#(https?://)[^/@:]+(:[^/@]*)?@#\1REDACTED@#g"
+_PKG_URL_GUEST_SED_QUERY = (
+    r"s#([?&]("
+    r"[Tt][Oo][Kk][Ee][Nn]|"
+    r"[Kk][Ee][Yy]|"
+    r"[Ss][Ee][Cc][Rr][Ee][Tt]|"
+    r"[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|"
+    r"[Aa][Uu][Tt][Hh]"
+    r")=)[^&[:space:]]+#\1REDACTED#g"
+)
+
+
+def apply_guest_pkg_url_sed(text: str) -> str:
+    """The on-box capture redactor (sed ERE). Host tests drive this same program."""
+    result = subprocess.run(
+        ["sed", "-E", "-e", _PKG_URL_GUEST_SED_USERINFO, "-e", _PKG_URL_GUEST_SED_QUERY],
+        input=text,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return text
+    return result.stdout
+
 
 def redact_pkg_urls(text: str) -> str:
     """Strip userinfo and token-shaped query values from pkg dump text.
@@ -5295,6 +5323,35 @@ def redact_pkg_urls(text: str) -> str:
     """
     out = _PKG_USERINFO_RE.sub(r"\1REDACTED@", text)
     return _PKG_TOKEN_QUERY_RE.sub(r"\1REDACTED", out)
+
+
+def redact_pkg_tarball(tgz_path: str) -> None:
+    """Host-side second pass over a pulled diag tarball's ``pkg/`` files.
+
+    The guest sed has no case-insensitive flag; this IGNORECASE pass is the
+    belt. No-op when the archive is missing or has no pkg dump.
+    """
+    if not os.path.isfile(tgz_path):
+        return
+    with tempfile.TemporaryDirectory() as tmp:
+        with tarfile.open(tgz_path, "r:gz") as tar:
+            tar.extractall(tmp, filter="data")
+        pkg_root = os.path.join(tmp, "pfb_smoke_diag", "pkg")
+        if os.path.isdir(pkg_root):
+            for dirpath, _, files in os.walk(pkg_root):
+                for name in files:
+                    path = os.path.join(dirpath, name)
+                    try:
+                        raw = Path(path).read_text(encoding="utf-8", errors="surrogateescape")
+                    except OSError:
+                        continue
+                    new = redact_pkg_urls(raw)
+                    if new != raw:
+                        Path(path).write_text(new, encoding="utf-8", errors="surrogateescape")
+        tmp_out = tgz_path + ".redact"
+        with tarfile.open(tmp_out, "w:gz") as tar:
+            tar.add(os.path.join(tmp, "pfb_smoke_diag"), arcname="pfb_smoke_diag")
+        os.replace(tmp_out, tgz_path)
 
 
 def redact_values(text: str, values: Iterable[str]) -> str:
@@ -5435,8 +5492,8 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         'find "$D/pkg" -type f 2>/dev/null | while IFS= read -r _pfb_pkg_f; do '
         'LC_ALL=C grep -Iq . "$_pfb_pkg_f" 2>/dev/null || continue; '
         "sed -i '' -E "
-        r"-e 's#(https?://)[^/@:]+(:[^/@]*)?@#\1REDACTED@#g' "
-        r"-e 's#([?&]([Tt]oken|[Kk]ey|[Ss]ecret|[Pp]assword|[Aa]uth)=)[^&[:space:]]+#\1REDACTED#g' "
+        f"-e '{_PKG_URL_GUEST_SED_USERINFO}' "
+        f"-e '{_PKG_URL_GUEST_SED_QUERY}' "
         '"$_pfb_pkg_f"; '
         "done; "
         # Scrub secrets from config.xml BEFORE it leaves the box.
@@ -5469,6 +5526,7 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         result = subprocess.run(scp_argv, capture_output=True, text=True, timeout=timeout, check=False)
         if result.returncode == 0:
             print(f"[smoke] collected full guest diagnostics -> {dest_dir}/pfb_smoke_diag.tgz")
+            redact_pkg_tarball(os.path.join(dest_dir, "pfb_smoke_diag.tgz"))
         else:
             print(f"[smoke] guest-diagnostics scp failed (non-fatal): {result.stderr!r}")
         # Surface the VM SERIAL CONSOLE in the uploaded artifact. boot_vm.sh runs
