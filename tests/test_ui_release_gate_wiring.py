@@ -87,7 +87,7 @@ def _trigger_blocks(workflow: Path) -> tuple[str, str]:
     """Return (workflow_call inputs block, workflow_dispatch inputs block) as raw text,
     each spanning from its own `inputs:` header to the next top-level (2-space) key."""
     text = workflow.read_text(encoding="utf-8")
-    # Leading "\n" so the trigger split below (which requires a preceding
+    # Leading "\n" so the trigger marker below (which requires a preceding
     # newline) also matches the FIRST trigger key, not just later ones.
     on_section = "\n" + extract_between(text, "\non:\n", "\npermissions:\n")
 

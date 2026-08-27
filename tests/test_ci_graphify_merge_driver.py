@@ -236,7 +236,7 @@ def test_exhaustive_push_matrix_has_graphify_driver_before_each_mutation() -> No
         workflow = (WORKFLOWS / spec.workflow).read_text(encoding="utf-8")
         try:
             _assert_job_contract(extract_job(workflow, spec.job), spec)
-        except AssertionError as error:
+        except (AssertionError, ValueError) as error:
             failures.append(str(error))
     assert not failures, "\n" + "\n".join(failures)
 

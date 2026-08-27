@@ -19,6 +19,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tests._workflow_steps import extract_after, extract_before, extract_between
 from tests.gitenv import scrubbed_git_env
 
 _TOOL = Path(__file__).resolve().parent.parent / "scripts" / "check_agent_roles.py"
@@ -175,8 +176,8 @@ def test_ci_workflow_paths_match_checker_triggers() -> None:
     # Compare each trigger block INDEPENDENTLY: the two hand-duplicated paths
     # lists drift exactly one-block-at-a-time, and a whole-file set comparison
     # cannot see an entry dropped from only one of them.
-    push_block, _, tail = text.partition("pull_request:")
-    pr_block = tail.partition("permissions:")[0]
+    push_block = extract_before(text, "pull_request:")
+    pr_block = extract_between(text, "pull_request:", "permissions:")
     for name, block in (("push", push_block), ("pull_request", pr_block)):
         listed = re.findall(r"^\s+- '([^']+)'\s*$", block, re.MULTILINE)
         assert len(listed) == len(expected), f"{name} paths list has duplicates or gaps: {sorted(listed)}"
@@ -187,7 +188,7 @@ def test_ci_workflow_runs_on_push() -> None:
     # Dev-only classes (skills, agent config, policy docs) land as direct pushes
     # to devel, so a pull_request-only gate never sees the dominant landing path.
     text = _workflow_text()
-    push_block = text.partition("pull_request:")[0]
+    push_block = extract_before(text, "pull_request:")
     assert "push:" in push_block, "dev-only surfaces land as direct pushes to devel"
     assert re.search(r"^\s+branches: \[main, devel\]$", push_block, re.MULTILINE), push_block
 
@@ -195,7 +196,7 @@ def test_ci_workflow_runs_on_push() -> None:
 def test_ci_workflow_runs_the_parity_gate() -> None:
     # Match the RUN step, not the guard's name anywhere: the name is also a trigger
     # path, so a bare substring assertion stays green with the step deleted.
-    steps = _workflow_text().partition("\njobs:")[2]
+    steps = extract_after(_workflow_text(), "\njobs:")
     assert re.search(rf"^\s+run: sh {re.escape(_PARITY_GUARD)}$", steps, re.MULTILINE), steps
 
 

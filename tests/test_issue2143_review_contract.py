@@ -8,7 +8,7 @@ import subprocess
 import textwrap
 from pathlib import Path
 
-from tests._workflow_steps import extract_after, extract_before, extract_between
+from tests._workflow_steps import extract_after, extract_between
 
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
@@ -34,8 +34,9 @@ def test_release_build_outputs_keep_source_checkout_clean_and_native_identity() 
     assert 'export PFB_RUN_ROOT="$GITHUB_WORKSPACE/out"' not in RELEASE
     assert 'RENAMED="${PKG_DIR}/${BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"' in RELEASE
     assert 'RENAMED_DEP="${DEP_PKG_DIR}/${DEP_BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"' in RELEASE
-    record_step = extract_after(RELEASE, "name: Write the destination-bound build record")
-    record_step = extract_before(record_step, "name: Build the .pkg via build-leg.sh")
+    record_step = extract_between(
+        RELEASE, "name: Write the destination-bound build record", "name: Build the .pkg via build-leg.sh"
+    )
     assert '"destinations":' not in record_step
 
 

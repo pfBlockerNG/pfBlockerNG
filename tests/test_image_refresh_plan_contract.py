@@ -57,8 +57,8 @@ def _run_plan(
     source = WORKFLOW.read_text(encoding="utf-8")
     step = extract_between(source, f"      - name: {STEP_NAME}\n", "\n      - name:")
     # The run-block body is every ≥10-space-indented line after `run: |`; the
-    # first shallower line ends it (this step is the last of its job, so a
-    # step-boundary split alone would leak the next job's YAML into the script).
+    # first shallower line ends it, because a step boundary alone can leak a later
+    # job's YAML in (the terminator matches the next `- name:` anywhere below).
     body: list[str] = []
     for line in extract_after(step, "        run: |\n").splitlines():
         if not line.strip():
