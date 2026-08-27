@@ -188,12 +188,9 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	 * shim for guiconfig.inc and what it pulls in is tracked separately.
 	 *
 	 * The branch is pinned as ONE literal sequence, with each of its three lines required to
-	 * occur exactly once on the page. Anything that resolves the handler's EXTENT -- a scan
-	 * for a closing brace, a brace-matching walk -- can select the wrong region and then pass
-	 * against it, which is how review found this assertion vacuous twice: an indented closing
-	 * brace ran a literal scan past the handler, and a '${' interpolation, whose closer is a
-	 * plain '}' token, silently shortened a brace-matching walk. A literal sequence has no
-	 * extent to get wrong.
+	 * occur exactly once on the page. Never reintroduce anything that resolves the handler's
+	 * EXTENT -- a closing-brace scan, a token walk: a wrong extent passes against the wrong
+	 * region, which happened twice here.
 	 */
 	public function testPageSaveDelegatesToTheExtractedSave(): void
 	{
