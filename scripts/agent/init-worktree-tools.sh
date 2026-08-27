@@ -23,10 +23,14 @@ main() {
 	root=$(CDPATH='' cd "$root" && pwd -P) || exit 2
 
 	sh "$(dirname "$0")/ensure-codegraph.sh" "$root" || exit $?
+	# Refreshing an existing root graph is mechanical, so it stays automated. Building
+	# the FIRST graph is not: its scope (which trees, whether the semantic layer earns
+	# its cost, what .graphifyignore allows) is a judgement call, so defer it to an
+	# AI-assisted `/graphify` run rather than picking a default unattended.
 	if [ -f "$root/graphify-out/graph.json" ]; then
 		graphify update "$root" || exit $?
 	else
-		graphify extract "$root" --code-only || exit $?
+		echo "No Graphify root graph in $root; run /graphify in your AI assistant to build one." >&2
 	fi
 
 	case "${OMP_CLI:-}${PI_CLI:-}" in

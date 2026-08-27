@@ -16,9 +16,10 @@ Load when: every agent session, from `AGENTS.md`.
   Worktrunk merge and remove operations.
 - CodeGraph and Graphify are mandatory. The initializer runs
   `scripts/agent/ensure-codegraph.sh` for the exact-root CodeGraph index first,
-  then runs `graphify extract <root> --code-only` when the root graph is absent
-  or `graphify update <root>` when it exists. Install Graphify with
-  `uv tool install graphifyy==0.9.50`.
+  then runs `graphify update <root>` when the root graph already exists. When the
+  root graph is absent the initializer prints a notice and builds nothing: the
+  first build's scope is a judgement call, so create it with a `/graphify` run in
+  an AI assistant. Install Graphify with `uv tool install graphifyy==0.9.50`.
 - Every worktree owns its ignored and untracked `graphify-out/` graph. Refresh it
   directly with `graphify update <root>`; there is no shared repository graph.
 - For indexed code discovery, understanding, cross-file architecture, call paths,
