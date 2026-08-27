@@ -299,9 +299,6 @@ final class DownloadSizeCeilingTest extends TestCase
 	public function test_every_extraction_exec_runs_under_the_ceiling(): void
 	{
 		$allowed = [
-			// Fetches a feed body; writes no archive output. Its own fetch is bounded
-			// by neither ceiling (rsync is not a libcurl transfer) -- issue #2667.
-			'exec("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}", $rsync_output, $rsync_rc);',
 			// Helper-script calls that post-process an ALREADY-extracted text feed.
 			'exec("{$pfb[\'script\']} whoisconvert {$header_esc} {$vtype} {$list_url_esc} {$elog}");',
 			'exec("{$pfb[\'script\']} asn_table {$elog}");',
