@@ -465,11 +465,10 @@ _DownloadKey = tuple[str, str, int, int, tuple[tuple[str, str], ...], tuple[str,
 
 _ARTIFACT_ACTION_REF = re.compile(r"^actions/(?P<kind>upload|download)-artifact@.+$")
 _ARTIFACT_ACTION = re.compile(r"^actions/(?P<kind>upload|download)-artifact@v(?P<major>[0-9]+)(?:\.[0-9]+){0,2}$")
-# Frozen 2026-08-26 from the GitHub API (issue #2725). upload-artifact has no v8
-# tag (latest v7.0.1); download-artifact does (v8.0.1). Highest common is v7.
+# Frozen 2026-08-27 from the GitHub API (issue #2728). Highest common is v7.
 _KNOWN_ARTIFACT_MAJORS: dict[str, frozenset[int]] = {
-    "upload": frozenset({4, 5, 6, 7}),
-    "download": frozenset({3, 4, 5, 6, 7, 8}),
+    "upload": frozenset({1, 2, 3, 4, 5, 6, 7}),
+    "download": frozenset({1, 2, 3, 4, 5, 6, 7, 8}),
 }
 _HIGHEST_COMMON_ARTIFACT_MAJOR = max(_KNOWN_ARTIFACT_MAJORS["upload"] & _KNOWN_ARTIFACT_MAJORS["download"])
 _GH_EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
