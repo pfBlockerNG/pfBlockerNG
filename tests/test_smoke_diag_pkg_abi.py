@@ -61,6 +61,31 @@ def test_redact_pkg_urls_strips_token_query() -> None:
     assert "abi=FreeBSD:15:amd64" in out
 
 
+def test_redact_pkg_urls_strips_uppercase_token_query() -> None:
+    """Given ?TOKEN= (all-caps keyword)
+    When the Python redactor runs
+    Then the secret is gone.
+    """
+    raw = "url: https://pkg.example.com/repo?TOKEN=SEKRIT&abi=FreeBSD:15:amd64\n"
+    out = helpers.redact_pkg_urls(raw)
+    assert "SEKRIT" not in out
+    assert "TOKEN=REDACTED" in out
+
+
+def test_guest_sed_redacts_uppercase_token_query() -> None:
+    """Given the on-box sed program
+    When it sees ?TOKEN= and ?KEY=
+    Then those secrets are gone (BSD sed has no I flag; every letter is spelled).
+    """
+    raw = "?token=seklower\n?Token=sekmixed\n?TOKEN=SEKRIT\n?KEY=KEYSECRET\n?tOkEn=weird\n"
+    out = helpers.apply_guest_pkg_url_sed(raw)
+    assert "seklower" not in out
+    assert "sekmixed" not in out
+    assert "SEKRIT" not in out
+    assert "KEYSECRET" not in out
+    assert "weird" not in out
+
+
 def test_redact_pkg_urls_leaves_clean_urls_intact() -> None:
     """Given a URL with no userinfo and no token query
     When capture-time redaction runs
@@ -73,7 +98,35 @@ def test_redact_pkg_urls_leaves_clean_urls_intact() -> None:
 def test_collect_host_diagnostics_redacts_pkg_urls_at_capture() -> None:
     """Given the guest snapshot script
     When it captures pkg -vv and repo confs
-    Then it redacts URLs before the tarball is built.
+    Then the live on-box sed is the tested program, and the host second pass runs.
     """
     src = inspect.getsource(helpers.collect_host_diagnostics)
-    assert "redact_pkg_urls" in src or "REDACTED@" in src
+    assert "_PKG_URL_GUEST_SED_QUERY" in src
+    assert "redact_pkg_tarball(" in src
+
+
+def test_redact_pkg_tarball_strips_uppercase_token() -> None:
+    """Given a pulled diag tarball whose pkg dump still has ?TOKEN=
+    When the host second pass runs
+    Then the secret is gone from the retarred bundle.
+    """
+    import tarfile
+    import tempfile
+    from pathlib import Path
+
+    secret = "url: https://pkg.example.com/repo?TOKEN=SEKRIT\n"
+    with tempfile.TemporaryDirectory() as tmp:
+        inner = Path(tmp) / "pkg"
+        inner.mkdir()
+        (inner / "repos.conf").write_text(secret, encoding="utf-8")
+        tgz = Path(tmp) / "pfb_smoke_diag.tgz"
+        with tarfile.open(tgz, "w:gz") as tar:
+            tar.add(inner, arcname="pfb_smoke_diag/pkg")
+        helpers.redact_pkg_tarball(str(tgz))
+        with tarfile.open(tgz, "r:gz") as tar:
+            member = tar.getmember("pfb_smoke_diag/pkg/repos.conf")
+            data = tar.extractfile(member)
+            assert data is not None
+            out = data.read().decode("utf-8")
+        assert "SEKRIT" not in out
+        assert "TOKEN=REDACTED" in out
