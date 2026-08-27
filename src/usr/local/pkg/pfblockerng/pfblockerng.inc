@@ -14465,6 +14465,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				unlink_if_exists($file_download);
 				return PfbDownloadResult::failure();
 			}
+			if ($type == 'blacklist') {
+				// issue #2739: bzip2 is not extracted into the Blacklist category tree.
+				pfb_validate_log($header, 'extract', 'blacklist_not_archive', $file_type);
+				unlink_if_exists($file_download);
+				return PfbDownloadResult::failure();
+			}
 			$reject_detail = array();
 			if (!pfb_filter(array("{$file_dwn_esc}", "{$file_download}", "{$list_download}"), PFB_FILTER_FILE_MIME_COMPRESSED, 'pfb_download', '', FALSE, $reject_detail)) {
 				pfb_validate_log($header, 'inner', 'compressed_mime_not_allowed', pfb_reject_detail_summary($reject_detail));
@@ -14485,6 +14491,12 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 		elseif ($file_type == 'application/zip') {
 			if (!pfb_validate_archive($file_download, $file_type)) {
 				pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
+				unlink_if_exists($file_download);
+				return PfbDownloadResult::failure();
+			}
+			if ($type == 'blacklist') {
+				// issue #2739: zip is not extracted into the Blacklist category tree.
+				pfb_validate_log($header, 'extract', 'blacklist_not_archive', $file_type);
 				unlink_if_exists($file_download);
 				return PfbDownloadResult::failure();
 			}
