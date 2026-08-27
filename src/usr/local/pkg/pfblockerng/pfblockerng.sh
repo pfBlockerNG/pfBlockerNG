@@ -1936,7 +1936,19 @@ EOF
 }
 
 
+# One failure exit for every writing step of an ET pass: $1 names the step, so an
+# operator reads which one failed rather than a bare status. $2 is that status.
+pfb_et_abort() {
+	echo 'ET processing failed'
+	echo " [ ${alias} ] ET processing failed at ${1}, exit ${2}; aborting ET processing [ ${now} ]" >> "${errorlog}"
+}
+
+
 # Function to split ET Pro IPREP into category files and compile selected blocked categories into outfile.
+#
+# issue #2683: the exit contract pfb_download() gates on. A failing status is
+# returned verbatim rather than collapsed to 1, so a child killed at issue
+# #2658's extraction ceiling reaches the caller as the 153 that names it.
 processet() {
 	if [ -s "${pfborig}${alias}.orig" ]; then
 		# Remove previous ET IPRep files
@@ -1944,7 +1956,7 @@ processet() {
 		if ! true > "${tempfile}" || ! true > "${tempfile2}"; then
 			log="processet [ ${alias} ]: cannot create ET scratch file(s); aborting ET processing."
 			echo "${log}" | tee -a "${errorlog}"
-			return
+			return 1
 		fi
 
 		# ET CSV format (IP, Category, Score)
@@ -1965,7 +1977,11 @@ processet() {
 					# Some ET categories are not in use (For future use)
 					;;
 				*)
-					grep ",${category}," "${pfborig}${alias}.orig" | cut -d',' -f1 > "${etdir}/${file}.txt"
+					# The pipeline's status is `cut`'s, never grep's: a category with
+					# no rows makes grep exit 1 and is entirely normal, while a failed
+					# WRITE must abort instead of publishing a truncated split.
+					grep ",${category}," "${pfborig}${alias}.orig" | cut -d',' -f1 > "${etdir}/${file}.txt" ||
+						{ etrc=$?; pfb_et_abort "the ${file} split" "${etrc}"; return "${etrc}"; }
 					;;
 			esac
 			category="$((category + 1))"
@@ -1987,26 +2003,37 @@ processet() {
 					printf "%-10s %-25s\n" '  Block: ' "${list}"
 					# issue #1263: awk 1 supplies a record terminator cat doesn't --
 					# a category file no longer welds onto the next one accumulated.
-					awk 1 "${etdir}/${list}.txt" >> "${tempfile}"
+					awk 1 "${etdir}/${list}.txt" >> "${tempfile}" ||
+						{ etrc=$?; pfb_et_abort "the ${list} block accumulation" "${etrc}"; return "${etrc}"; }
 					;;
 			esac
 			case ", ${etmatch}, " in
 				*", ${list}, "*)
 					printf "%-10s %-25s\n" '  Match: ' "${list}"
-					awk 1 "${etdir}/${list}.txt" >> "${tempfile2}"
+					awk 1 "${etdir}/${list}.txt" >> "${tempfile2}" ||
+						{ etrc=$?; pfb_et_abort "the ${list} match accumulation" "${etrc}"; return "${etrc}"; }
 					;;
 			esac
 		done
 		echo '-------------------------------------------'
 
-		if [ -f "${tempfile}" ]; then mv -f "${tempfile}" "${pfborig}${alias}.orig"; fi
-		if [ "${etmatch}" != 'x' ]; then mv -f "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt"; fi
+		if [ -f "${tempfile}" ]; then
+			mv -f "${tempfile}" "${pfborig}${alias}.orig" ||
+				{ etrc=$?; pfb_et_abort 'the block publish' "${etrc}"; return "${etrc}"; }
+		fi
+		if [ "${etmatch}" != 'x' ]; then
+			mv -f "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt" ||
+				{ etrc=$?; pfb_et_abort 'the match publish' "${etrc}"; return "${etrc}"; }
+		fi
 		# issue #1263: awk 1 supplies a record terminator cat doesn't -- an
 		# unterminated ET_* file no longer welds its last row onto the next file's first.
 		counto="$(awk 1 "${etdir}"/ET_* | grep -cv '^#\|^$')"; countf="$(grep -cv "^${ip_placeholder2}$" "${pfborig}${alias}.orig")"
 		echo; echo "All ET Folder count [ ${counto} ]  Final count [ ${countf} ]"
+		return 0
 	else
 		echo; echo 'No ET .orig File Found!'
+		echo " [ ${alias} ] No ET .orig file found; aborting ET processing [ ${now} ]" >> "${errorlog}"
+		return 1
 	fi
 }
 
@@ -2220,7 +2247,10 @@ case "${1}" in
 		reputation_pmax
 		;;
 	et)
+		# issue #2683: the tail's bare `exitnow` defaults to 0, so the status has to
+		# be threaded through here (as `recompute` does).
 		processet
+		exitnow "$?"
 		;;
 	xlsx)
 		# issue #2666: the tail's bare `exitnow` defaults to 0, so the status has to
