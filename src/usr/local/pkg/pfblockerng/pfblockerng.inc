@@ -14869,8 +14869,8 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			// an uncompressed feed, where $file_download was already renamed away (above)
 			// into $orig_download -- byte-identical to what was fetched, so the fallback is
 			// exact, not an approximation.  This covers both local and remote standard feeds
-			// (any path that finalises a plain .orig here).  The geoip/asn early-returns
-			// above do not reach this block, so they correctly never get a sidecar.
+			// (any path that finalises a plain .orig here).  The geoip/asn/top1m/blacklist
+			// archive early-returns above do not reach this block, so they correctly never get a sidecar.
 			pfb_download_finalize_text(
 				"{$orig_download}",
 				"{$orig_download}",
