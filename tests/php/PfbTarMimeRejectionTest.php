@@ -29,9 +29,11 @@ final class PfbTarMimeRejectionTest extends TestCase
 
 		$tarBytes = file_get_contents($this->path('feed.tar'));
 		$this->writeGzip('feed.tar.gz', $tarBytes);
-		$this->writeBzip2('feed.tar.bz2', $tarBytes);
 		$this->writeGzip('feed.txt.gz', self::FEED);
-		$this->writeBzip2('feed.txt.bz2', self::FEED);
+		if (function_exists('bzcompress')) {
+			$this->writeBzip2('feed.tar.bz2', $tarBytes);
+			$this->writeBzip2('feed.txt.bz2', self::FEED);
+		}
 
 		$zip = new ZipArchive();
 		if ($zip->open($this->path('feed.zip'), ZipArchive::CREATE | ZipArchive::OVERWRITE) !== TRUE ||
@@ -71,6 +73,9 @@ final class PfbTarMimeRejectionTest extends TestCase
 
 	public function test_tar_bzip2_is_accepted_at_inner_gate(): void
 	{
+		if (!function_exists('bzcompress')) {
+			$this->markTestSkipped('ext-bz2 is not loaded');
+		}
 		$path = $this->path('feed.tar.bz2');
 		$this->assertSame('application/x-bzip2', $this->filter($path, PFB_FILTER_FILE_MIME));
 		$this->assertSame('application/x-tar', $this->filter($path, PFB_FILTER_FILE_MIME_COMPRESSED));
@@ -87,6 +92,9 @@ final class PfbTarMimeRejectionTest extends TestCase
 
 	public function test_plain_bzip2_remains_accepted(): void
 	{
+		if (!function_exists('bzcompress')) {
+			$this->markTestSkipped('ext-bz2 is not loaded');
+		}
 		$path = $this->path('feed.txt.bz2');
 		$this->assertSame('application/x-bzip2', $this->filter($path, PFB_FILTER_FILE_MIME));
 		$this->assertSame('text/plain', $this->filter($path, PFB_FILTER_FILE_MIME_COMPRESSED));
