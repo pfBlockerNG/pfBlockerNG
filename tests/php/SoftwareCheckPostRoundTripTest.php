@@ -168,59 +168,33 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	}
 
 	/**
-	 * The Save handler's block, resolved by matching its braces through PhpToken so the
-	 * bound cannot be moved by whitespace.
-	 *
-	 * Scanning for a literal "\n}\n" instead pins the closing brace's INDENTATION: indent
-	 * it and the scan runs on to the next unindented brace further down the page, silently
-	 * widening the block, and every assertion below then passes against the wrong region
-	 * (found reviewing #2525 — a mutant that indented this brace AND moved the flush out of
-	 * the handler stayed green). Braces are tokens here, so one inside a string or a comment
-	 * cannot be miscounted either.
-	 */
-	private function saveHandlerBlock(string $source): string
-	{
-		$open = strpos($source, self::SAVE_OPEN);
-		$this->assertNotFalse($open, 'the Software page must keep its Save handler');
-
-		$depth = 0;
-		foreach (PhpToken::tokenize($source) as $token) {
-			if ($token->pos < $open || ($token->text !== '{' && $token->text !== '}')) {
-				continue;
-			}
-			if ($token->text === '{') {
-				$depth++;
-				continue;
-			}
-			if (--$depth === 0) {
-				return substr($source, $open, $token->pos - $open);
-			}
-		}
-
-		$this->fail("the Save handler's block is never closed");
-	}
-
-	/**
 	 * The extraction is only worth anything while the function these cases drive is the one
-	 * the page runs (issue #2525). The Save handler must delegate to
-	 * pfb_software_check_save() and persist before it flushes config.xml, and the page must
-	 * carry no second, untested write of this field.
+	 * the page runs (issue #2525). The Save branch must persist through
+	 * pfb_software_check_save() and only then flush config.xml, and the page must carry no
+	 * second, untested write of this field.
+	 *
+	 * The handler is pinned as ONE literal sequence, and each of its three lines is required
+	 * to occur exactly once on the page. Anything that resolves the handler's extent — a
+	 * scan for a closing brace, a brace-matching walk, an unbounded strpos from the opening
+	 * line — can select the wrong region and then pass against it, which is how review found
+	 * this assertion vacuous twice: an indented closing brace ran a literal scan past the
+	 * handler, and a '${' interpolation, whose closer is a plain '}' token, silently
+	 * shortened a brace-matching walk. A literal sequence has no extent to get wrong, and
+	 * the exactly-once counts leave the sequence nowhere else on the page to live.
 	 */
 	public function testPageSaveDelegatesToTheExtractedSave(): void
 	{
 		$source = (string) file_get_contents(self::PAGE);
-		$save   = $this->saveHandlerBlock($source);
 
-		// Exactly once each, so a second copy of either statement elsewhere on the page
-		// cannot stand in for the one this block is asserted to hold.
+		$this->assertSame(1, substr_count($source, self::SAVE_OPEN), 'the page must open the Save branch exactly once');
 		$this->assertSame(1, substr_count($source, self::PERSIST), 'the page must call the extracted save exactly once');
 		$this->assertSame(1, substr_count($source, self::FLUSH), 'the page must flush the Software settings exactly once');
 
-		$persist = strpos($save, self::PERSIST);
-		$flush   = strpos($save, self::FLUSH);
-		$this->assertNotFalse($persist, 'the Save handler must persist through pfb_software_check_save()');
-		$this->assertNotFalse($flush, 'the Save handler must flush config.xml');
-		$this->assertLessThan($flush, $persist, 'the token must be persisted before the flush');
+		$this->assertStringContainsString(
+			self::SAVE_OPEN . "\n\t" . self::PERSIST . "\n\t" . self::FLUSH,
+			$source,
+			'the Save branch must persist through pfb_software_check_save() and then flush config.xml'
+		);
 
 		$this->assertStringNotContainsString(
 			"PfbConfig::write('gen/pfb_software_check'",
