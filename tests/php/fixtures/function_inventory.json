@@ -707,6 +707,33 @@
             }
         ]
     },
+    "pfb_blacklist_tar_finalize_staged": {
+        "returnsRef": false,
+        "returnType": "int",
+        "params": [
+            {
+                "name": "staged",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "filename",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "retval",
+                "byRef": false,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
+    },
     "pfb_build_aggregate_aliases": {
         "returnsRef": false,
         "returnType": null,
