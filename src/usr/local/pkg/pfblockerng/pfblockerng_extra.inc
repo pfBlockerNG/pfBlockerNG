@@ -4390,6 +4390,17 @@ function pfb_due_ledger_document_valid(mixed $document): bool
 	return TRUE;
 }
 
+/**
+ * Read-modify-write one job row, stamping the document for the cache reader.
+ *
+ * pfb_due_ledger_cache_valid() requires `_meta`, so a document authored only here has
+ * to carry it or pfb_due_ledger_read_cache() rejects this writer's own output (issue
+ * #2598). An existing stamp is left alone: it names the generation the rows were
+ * computed for, and refreshing it would make a stale cache look current. With no
+ * resolvable generation there is nothing to stamp, so the row is published unstamped
+ * as before -- the same model is needed to produce the hash a reader would read with,
+ * so no reader can be looking, and the schedule refresh restores the stamp.
+ */
 function pfb_due_ledger_update_entry(
 	string $job_key,
 	callable $update,
@@ -4420,6 +4431,12 @@ function pfb_due_ledger_update_entry(
 				}
 			}
 			$data[$job_key] = $update($current);
+			if (!array_key_exists('_meta', $data)) {
+				$config_hash = pfb_schedule_runtime_config()['config_hash'] ?? NULL;
+				if (is_string($config_hash)) {
+					$data = ['_meta' => ['schema' => 1, 'config_hash' => $config_hash]] + $data;
+				}
+			}
 			return $data;
 		},
 		static fn (mixed $value): bool => pfb_due_ledger_document_valid($value),

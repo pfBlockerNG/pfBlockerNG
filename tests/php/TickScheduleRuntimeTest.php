@@ -532,6 +532,48 @@ final class TickScheduleRuntimeTest extends TestCase
 		);
 	}
 
+	/**
+	 * Scenario: the tick meets a ledger authored only by the due-ledger writer.
+	 *
+	 * Given the refresh-authored cache is gone and the rows are re-published solely
+	 *   through pfb_due_ledger_write_entry(),
+	 * When the fixed tick reads the ledger to decide what is due,
+	 * Then it does not declare the scheduled feed runtime unavailable -- the writer's
+	 *   own output has to be acceptable to the cache reader it shares (issue #2598).
+	 *
+	 * The feed pass is only a positive control that the tick ran to completion: it
+	 * dispatches on either side of this contract (an unusable cache still reaches the
+	 * dispatch block to regenerate one), so the notice is the sole discriminator.
+	 * Its presence is pinned from the other side by
+	 * testCachePublicationFailureSuppressesCronAndPreservesBytes.
+	 */
+	public function testWriterAuthoredLedgerDoesNotSuppressCronSelection(): void
+	{
+		$suppressed = 'Tick: scheduled feed runtime unavailable; cron selection suppressed.';
+		$now = time();
+		$dormant = ['last_run' => $now - 1, 'next_due' => $now + 86400, 'jitter' => 0];
+		$overdue = ['last_run' => $now - 86400, 'next_due' => $now - 1, 'jitter' => 0];
+		$this->assertTrue(unlink($this->dir . '/pfb_due_ledger.json'),
+			'precondition: the refresh-authored cache must be gone');
+		$this->assertTrue(pfb_due_ledger_write_entry('extra:dcc', $dormant, $this->dir));
+		$this->assertTrue(pfb_due_ledger_write_entry('cron', $overdue, $this->dir));
+		$this->assertSame($dormant, pfb_due_ledger_read_entry('extra:dcc', $this->dir),
+			'precondition: the writer alone must have authored the document');
+		$GLOBALS['pfb_test_logger_calls'] = [];
+
+		$this->tick();
+
+		$this->assertNotContains(
+			$suppressed,
+			array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'),
+			'a ledger authored through pfb_due_ledger_write_entry() must not read as an '
+			. 'unavailable runtime; logged='
+			. var_export(array_column($GLOBALS['pfb_test_logger_calls'] ?? [], 'message'), TRUE)
+		);
+		$this->assertSame(1, $this->feedRuns,
+			'positive control: the tick must have reached the scheduled feed dispatch');
+	}
+
 	private function recorder(): string
 	{
 		$path = $this->dir . '/php-recorder';
