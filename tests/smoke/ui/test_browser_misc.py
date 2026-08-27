@@ -57,6 +57,7 @@ from .. import helpers
 from .conftest import mask_page_identity
 from .test_render_smoke import (
     _SOFTWARE_CHECK_FAILED_QUERY,
+    _SOFTWARE_CHECK_FAILED_TEXT,
     _SOFTWARE_CHECKED_MARKER,
     _seed_vm_file,
     software_panel_forced,
@@ -79,6 +80,7 @@ SOFTWARE_PAGE = "/pfblockerng/pfblockerng_software.php"
 SOFTWARE_PANEL_MARKER = "pfb-software-panel"
 SOFTWARE_CHECKED_MARKER = _SOFTWARE_CHECKED_MARKER
 SOFTWARE_CHECK_FAILED_QUERY = _SOFTWARE_CHECK_FAILED_QUERY
+SOFTWARE_CHECK_FAILED_TEXT = _SOFTWARE_CHECK_FAILED_TEXT
 
 pytestmark = pytest.mark.ui_browser
 
@@ -340,18 +342,23 @@ def test_software_failed_check_feedback_is_visible(
     Scenario:
       Given the hidden override forcing the provenance gate on,
       When the Software page is opened plainly,
-      Then no warning box is visible (a benign load stays calm — issue #2379);
+      Then this feedback's warning box is absent (a benign load stays calm — issue #2379);
       And when it is opened with the feedback query Check now redirects with,
-      Then the warning box IS visible and names the catalogue read that failed.
+      Then the warning box IS visible, names the catalogue read that failed, and sits beside
+          the last-successful-check row rather than replacing it.
+
+    The locator is scoped to this message, never to ``.alert-warning`` alone: pfBlockerNG's
+    pending-changes banner is also an alert-warning and whatever ran before this case may have
+    left it set, so a bare class assertion would be about that banner instead of this feedback.
     """
+    failed_box = f".alert-warning:has-text('{SOFTWARE_CHECK_FAILED_TEXT}')"
     with software_panel_forced(smoke_vm, "on"):
         _open(browser_page, webui, SOFTWARE_PAGE)
         assert SOFTWARE_PANEL_MARKER in browser_page.content(), "Software panel marker absent when forced on"
-        expect(browser_page.locator(".alert-warning")).to_have_count(0, timeout=JS_TIMEOUT_MS)
+        expect(browser_page.locator(failed_box)).to_have_count(0, timeout=JS_TIMEOUT_MS)
 
         _open(browser_page, webui, SOFTWARE_PAGE + SOFTWARE_CHECK_FAILED_QUERY)
-        expect(browser_page.locator(".alert-warning")).to_be_visible(timeout=JS_TIMEOUT_MS)
-        expect(browser_page.get_by_text("could not read", exact=False)).to_be_visible(timeout=JS_TIMEOUT_MS)
+        expect(browser_page.locator(failed_box)).to_be_visible(timeout=JS_TIMEOUT_MS)
         expect(browser_page.locator(f"#{SOFTWARE_CHECKED_MARKER}")).to_be_visible(timeout=JS_TIMEOUT_MS)
         _shot(browser_page, screenshot_dir, "software_check_failed_feedback")
 

@@ -79,8 +79,10 @@ final class SoftwareCacheReadNormalisationTest extends TestCase
 
 	/**
 	 * A non-scalar value is dropped, so a caller casting it never sees it. Asserted through
-	 * the cast every consumer performs, with warnings captured rather than converted — the
-	 * point is what the code EMITS, not merely what it returns.
+	 * the cast the string-valued consumers perform, with warnings captured rather than
+	 * converted — the point is what the code EMITS, not merely what it returns. The one
+	 * consumer that does not cast (``pfb_software_failed_at()``, which validates instead)
+	 * refuses the same values, pinned in SoftwareFailedCheckStateTest.
 	 */
 	public function testNonScalarValuesAreDroppedSoConsumerCastsAreSilent(): void
 	{
