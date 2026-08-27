@@ -127,7 +127,25 @@ pkg_add_lock_retry() {
         fi
         _out=$(ssh_t "printf 'PFB_PKG_CONTEXT utc='; date -u '+%Y-%m-%dT%H:%M:%SZ'; printf 'PFB_PKG_CONTEXT absolute_abi='; /usr/local/sbin/pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT path_pkg='; command -v pkg 2>&1 || true; printf 'PFB_PKG_CONTEXT path_abi='; pkg config ABI 2>&1 || true; printf 'PFB_PKG_CONTEXT boot_pkg_processes='; ps axww -o pid= -o comm= -o args= 2>&1 | awk '((\$2 == \"sh\" && \$3 == \"/bin/sh\" && (\$4 == \"/etc/rc.update_pkg_metadata\" || \$4 == \"/usr/local/sbin/pfSense-upgrade\" || \$4 == \"/usr/local/libexec/pfSense-upgrade\")) || (\$2 == \"lockf\" && \$0 ~ /\/tmp\/pfSense-upgrade\.lock/) || \$2 == \"pkg\" || \$2 == \"pkg-static\") { found=1; print } END { if (!found) print \"none\" }'; env ASSUME_ALWAYS_YES=yes ${_pkg_add} '${_pkg_remote}'" 2>&1) || _rc=$?
         if [ -n "$_out" ]; then printf '%s\n' "$_out"; fi
-        if [ "$_rc" -eq 0 ]; then return 0; fi
+        # pkg(8) can exit 0 after POST-INSTALL/DEINSTALL still failed — files are
+        # already extracted (issue #2575). Smoke 20260827T005125Z-smoke then printed
+        # "==> Installed" and helpers.deploy treated rc=0 as PASSED. Same matcher
+        # as install.sh, including the glued ``thrown</pre>pkg: POST-INSTALL script failed``.
+        if [ "$_rc" -eq 0 ]; then
+            _script_failed=0
+            while IFS= read -r _line || [ -n "${_line:-}" ]; do
+                case "$_line" in
+                    *'pkg: '*' script failed'*) _script_failed=1; break ;;
+                esac
+            done <<EOF
+${_out}
+EOF
+            if [ "$_script_failed" -eq 1 ]; then
+                echo "install-pkg: pkg reported a package-script failure — POST-INSTALL can fail while pkg still exits 0 (issue #2575)" >&2
+                return 1
+            fi
+            return 0
+        fi
         case "$_out" in
             *'Cannot get an exclusive lock on a database'* | *'Package database is busy'*) ;;
             *) return "$_rc" ;;

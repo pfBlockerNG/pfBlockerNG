@@ -18,7 +18,7 @@ Describe 'install-pkg.sh'
 
   setup() {
     scrub_git_env
-    unset SMOKE_DEP_PKGS SMOKE_ABI FAIL_PKG_ADD_MATCH EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT
+    unset SMOKE_DEP_PKGS SMOKE_ABI FAIL_PKG_ADD_MATCH EXEC_REMOTE_PKG_CONTEXT PFB_FAKE_PS_OUTPUT POSTINSTALL_FAIL
     WORK="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/instpkgspec.XXXXXX")"
     FAKE_BIN="${WORK}/bin"
     mkdir -p "$FAKE_BIN"
@@ -63,6 +63,20 @@ case "$_a" in
                 echo "pkg: Cannot get an exclusive lock on a database, it is locked by another process" >&2
                 exit 1
             fi
+        fi
+        ;;
+esac
+# pkg(8) can exit 0 after POST-INSTALL fails (files already extracted).
+# The stub reproduces that: rc=0 plus the pkg: * script failed line.
+case "$_a" in
+    *"pkg add"*)
+        if [ -n "${POSTINSTALL_FAIL:-}" ]; then
+            case "$POSTINSTALL_FAIL" in
+                glued) printf '%s\n' 'thrown</pre>pkg: POST-INSTALL script failed' ;;
+                noise) printf '%s\n' 'the POST-INSTALL script failed to mention foo' ;;
+                *) printf '%s\n' 'pkg: POST-INSTALL script failed' ;;
+            esac
+            exit 0
         fi
         ;;
 esac
@@ -305,5 +319,39 @@ Installing pfBlockerNG-devel.pkg...'
     The status should be failure
     # A missing-dependency-style failure is not a lock: exactly one attempt.
     The result of function pkg_add_count should equal 1
+  End
+
+  # pkg(8) can exit 0 after POST-INSTALL still failed (issue #2575 class).
+  # 20260827T005125Z-smoke shard-0.log:144-147 printed "Installed" and
+  # helpers.deploy treated rc=0 as PASSED. Fail closed; do not print Installed.
+
+  It 'fails closed when pkg add exits 0 after POST-INSTALL script failed'
+    POSTINSTALL_FAIL=1
+    export POSTINSTALL_FAIL
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    The stdout should include 'pkg: POST-INSTALL script failed'
+    The stdout should not include '==> Installed'
+    The stderr should include 'package-script failure'
+    The result of function pkg_add_count should equal 1
+  End
+
+  It 'fails closed when POST-INSTALL failed is glued to hook stdout'
+    POSTINSTALL_FAIL=glued
+    export POSTINSTALL_FAIL
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be failure
+    The stdout should include 'pkg: POST-INSTALL script failed'
+    The stdout should not include '==> Installed'
+    The result of function pkg_add_count should equal 1
+  End
+
+  It 'does not treat a coincidental script-failed substring as a hook failure'
+    POSTINSTALL_FAIL=noise
+    export POSTINSTALL_FAIL
+    When run sh "$SCRIPT" root@dummy --pkg "$PKGFILE" --port 2222
+    The status should be success
+    The stdout should include 'the POST-INSTALL script failed to mention foo'
+    The stdout should include '==> Installed'
   End
 End
