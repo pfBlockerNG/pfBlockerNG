@@ -9,7 +9,7 @@
 #
 # These examples pin the contract the caller now gates on: every abort reports
 # non-zero, a failing status comes back VERBATIM (so a child killed at issue
-# #2658's extraction ceiling reaches the caller as the 153 that names it), and a
+# #2658's extraction ceiling reaches the caller as the status that names it), and a
 # failed pass leaves the live pfB_Match_ET_v4.txt publication byte-unchanged.
 #
 # Fixture shape: the feed's ".orig" is the raw ET IQRisk CSV ("IP,category,
@@ -28,6 +28,10 @@ Describe 'processet() exit contract (issue #2683)'
 		errorlog="${work}/error.log"
 		runner="${work}/run.sh"
 		mkdir -p "${orig}" "${match}" "${etdir}" "${scratch}"
+
+		# The downloaded ET feed, verbatim: two Block categories (1, 2) and one
+		# Match (3), as "IP,category,score" rows.
+		et_csv="$(printf '%s\n' '192.0.2.10,1,127' '198.51.100.20,2,88' '203.0.113.30,3,50')"
 
 		# `ls` sorts the category files, so the selected Block categories
 		# accumulate in ALPHABETICAL order (ET_Bot, category 2, before ET_Cnc,
@@ -72,10 +76,8 @@ RUNNER
 	Before 'setup'
 	After 'cleanup'
 
-	# The downloaded ET feed: two Block categories (1, 2) and one Match (3).
 	plant_et_orig() {
-		printf '%s\n' '192.0.2.10,1,127' '198.51.100.20,2,88' '203.0.113.30,3,50' \
-			> "${orig}${alias}.orig"
+		printf '%s\n' "${et_csv}" > "${orig}${alias}.orig"
 	}
 
 	# A live match publication left by a previous, successful pass.
@@ -83,8 +85,12 @@ RUNNER
 		printf '%s\n' "${prior_match}" > "${match}pfB_Match_ET_v4.txt"
 	}
 
-	# A child killed the way issue #2658's ceiling kills one: SIGXFSZ, which the
-	# shell reports as 128 + 25.
+	# A child killed the way the appliance's ceiling kills one: SIGXFSZ, which a
+	# shell reports as 128 + 25. The shim stands in for the signal because a real
+	# RLIMIT_FSIZE overrun does not report 153 everywhere -- Darwin's awk catches
+	# the write error and exits 2 -- while the status this pins is the one
+	# pfb_extract_cap_note() keys on. The real ceiling gets its own example below,
+	# asserting refusal rather than a particular status.
 	plant_killed_awk() {
 		mkdir -p "${work}/shim"
 		printf '#!/bin/sh\nexit 153\n' > "${work}/shim/awk"
@@ -144,11 +150,16 @@ RUNNER
 		Before 'plant_prior_match'
 		Before 'plant_readonly_etdir'
 
-		It 'fails and keeps the live match publication byte-unchanged'
+		It 'fails and leaves both the feed and the live match publication untouched'
 			When run sh "${runner}"
 			The status should be failure
 			The output should include 'ET processing failed'
 			The contents of file "${match}pfB_Match_ET_v4.txt" should equal "${prior_match}"
+			# The abort must not half-write the publication either. processet()
+			# rewrites the ".orig" in place, so this is the raw CSV the download
+			# left -- what pfb_download()'s refusal then has to drop, since the
+			# parser would otherwise read the unfiltered feed.
+			The contents of file "${orig}${alias}.orig" should equal "${et_csv}"
 			The stderr should be present
 		End
 	End

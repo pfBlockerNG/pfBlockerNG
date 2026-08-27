@@ -1980,8 +1980,7 @@ processet() {
 					# The pipeline's status is `cut`'s, never grep's: a category with
 					# no rows makes grep exit 1 and is entirely normal, while a failed
 					# WRITE must abort instead of publishing a truncated split.
-					grep ",${category}," "${pfborig}${alias}.orig" | cut -d',' -f1 > "${etdir}/${file}.txt" ||
-						{ etrc=$?; pfb_et_abort "the ${file} split" "${etrc}"; return "${etrc}"; }
+					grep ",${category}," "${pfborig}${alias}.orig" | cut -d',' -f1 > "${etdir}/${file}.txt" || { etrc=$?; pfb_et_abort "the ${file} split" "${etrc}"; return "${etrc}"; }
 					;;
 			esac
 			category="$((category + 1))"
@@ -2003,27 +2002,25 @@ processet() {
 					printf "%-10s %-25s\n" '  Block: ' "${list}"
 					# issue #1263: awk 1 supplies a record terminator cat doesn't --
 					# a category file no longer welds onto the next one accumulated.
-					awk 1 "${etdir}/${list}.txt" >> "${tempfile}" ||
-						{ etrc=$?; pfb_et_abort "the ${list} block accumulation" "${etrc}"; return "${etrc}"; }
+					# Both accumulations stay on ONE line: pfblockerng_cat_weld_more_spec.sh
+					# extracts each statement by line number and evals it.
+					awk 1 "${etdir}/${list}.txt" >> "${tempfile}" || { etrc=$?; pfb_et_abort "the ${list} block accumulation" "${etrc}"; return "${etrc}"; }
 					;;
 			esac
 			case ", ${etmatch}, " in
 				*", ${list}, "*)
 					printf "%-10s %-25s\n" '  Match: ' "${list}"
-					awk 1 "${etdir}/${list}.txt" >> "${tempfile2}" ||
-						{ etrc=$?; pfb_et_abort "the ${list} match accumulation" "${etrc}"; return "${etrc}"; }
+					awk 1 "${etdir}/${list}.txt" >> "${tempfile2}" || { etrc=$?; pfb_et_abort "the ${list} match accumulation" "${etrc}"; return "${etrc}"; }
 					;;
 			esac
 		done
 		echo '-------------------------------------------'
 
 		if [ -f "${tempfile}" ]; then
-			mv -f "${tempfile}" "${pfborig}${alias}.orig" ||
-				{ etrc=$?; pfb_et_abort 'the block publish' "${etrc}"; return "${etrc}"; }
+			mv -f "${tempfile}" "${pfborig}${alias}.orig" || { etrc=$?; pfb_et_abort 'the block publish' "${etrc}"; return "${etrc}"; }
 		fi
 		if [ "${etmatch}" != 'x' ]; then
-			mv -f "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt" ||
-				{ etrc=$?; pfb_et_abort 'the match publish' "${etrc}"; return "${etrc}"; }
+			mv -f "${tempfile2}" "${pfbmatchgen}pfB_Match_ET_v4.txt" || { etrc=$?; pfb_et_abort 'the match publish' "${etrc}"; return "${etrc}"; }
 		fi
 		# issue #1263: awk 1 supplies a record terminator cat doesn't -- an
 		# unterminated ET_* file no longer welds its last row onto the next file's first.
@@ -2247,8 +2244,8 @@ case "${1}" in
 		reputation_pmax
 		;;
 	et)
-		# issue #2683: the tail's bare `exitnow` defaults to 0, so the status has to
-		# be threaded through here (as `recompute` does).
+		# issue #2683: same wiring as the `xlsx` arm below -- the tail's bare
+		# `exitnow` defaults to 0.
 		processet
 		exitnow "$?"
 		;;
