@@ -99,6 +99,36 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
+	 * Issue #2739 — a bzip2 Blacklist body must fail closed. The arm
+	 * extracts onto $orig_download for IP feeds; Blacklist has no category
+	 * extract here, so a successful empty update is a lie. Comments and
+	 * docblocks cannot define this scope.
+	 */
+	public function testBzip2BlacklistBodyFailsClosedWithoutExtraction(): void
+	{
+		$bzip2 = strpos(self::$source, "elseif (\$file_type == 'application/x-bzip2') {");
+		$zip = strpos(self::$source, "elseif (\$file_type == 'application/zip') {", $bzip2 === FALSE ? 0 : $bzip2);
+		$this->assertNotFalse($bzip2);
+		$this->assertNotFalse($zip);
+		$scope = substr(self::$source, $bzip2, $zip - $bzip2);
+		$reject = strpos($scope, "if (\$type == 'blacklist') {");
+		$publish = strpos($scope, 'if (!pfb_stage_publish($orig_download,');
+		$this->assertNotFalse($reject, $scope);
+		$this->assertNotFalse($publish, $scope);
+		$this->assertLessThan($publish, $reject, 'Blacklist reject must run before the IP-feed extract');
+		$this->assertStringContainsString(
+			"pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);",
+			$scope,
+			'reject must name the detected type'
+		);
+		$reject_scope = substr($scope, $reject, $publish - $reject);
+		$this->assertStringContainsString('unlink_if_exists($file_download);', $reject_scope);
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $reject_scope);
+		$this->assertStringNotContainsString('pfb_stage_publish', $reject_scope);
+		$this->assertStringNotContainsString('$pfb[\'dbdir\']', $reject_scope);
+	}
+
+	/**
 	 * pfb_download() gunzips TOP1M into a staged file before publication; this
 	 * live filesystem/exec path is pinned independently of all other branches.
 	 * Comments/docblocks cannot define this scope.
@@ -215,6 +245,37 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$scope = substr(self::$source, $top1m, $blacklist - $top1m);
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+	}
+
+	/**
+	 * Issue #2739 — a zip Blacklist body must fail closed. After geoip/top1m
+	 * return, the arm falls into stdout extract onto $orig_download and the
+	 * text pipeline. Blacklist has no category extract here. Comments and
+	 * docblocks cannot define this scope.
+	 */
+	public function testZipBlacklistBodyFailsClosedWithoutExtraction(): void
+	{
+		$zip = strpos(self::$source, "elseif (\$file_type == 'application/zip') {");
+		$uncomp = strpos(self::$source, "if (\$type == 'geoip' || \$type == 'asn')", $zip === FALSE ? 0 : $zip);
+		$this->assertNotFalse($zip);
+		$this->assertNotFalse($uncomp);
+		$scope = substr(self::$source, $zip, $uncomp - $zip);
+		$reject = strpos($scope, "if (\$type == 'blacklist') {");
+		$geoip = strpos($scope, "if (\$type == 'geoip') {");
+		$this->assertNotFalse($reject, $scope);
+		$this->assertNotFalse($geoip, $scope);
+		$this->assertLessThan($geoip, $reject, 'Blacklist reject must run before zip geoip/generic extract');
+		$this->assertStringContainsString(
+			"pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);",
+			$scope,
+			'reject must name the detected type'
+		);
+		$reject_scope = substr($scope, $reject, $geoip - $reject);
+		$this->assertStringContainsString('unlink_if_exists($file_download);', $reject_scope);
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $reject_scope);
+		$this->assertStringNotContainsString('pfb_stage_publish', $reject_scope);
+		$this->assertStringNotContainsString('tar -xf', $reject_scope);
+		$this->assertStringNotContainsString('$pfb[\'dbdir\']', $reject_scope);
 	}
 
 	/**

@@ -57,7 +57,7 @@ import shlex
 import subprocess
 import tarfile
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -4110,6 +4110,86 @@ def test_blacklist_nongzip_body_fails_closed(deployed_vm: SmokeVM, mock_feeds: _
         assert "PFB_DL_FALSE" in out, (
             f"expected pfb_download failure on a non-gzip Blacklist HTML body; got stdout: {out!r}"
         )
+        after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+        assert after > before, (
+            f"expected a NEW {marker!r} line in {h.PFB_LOG}; before={before} after={after}\n"
+            f"recent pfb_validate lines:\n{_recent_validate_lines(deployed_vm)}"
+        )
+        kept = deployed_vm.ssh("/bin/cat", sentinel_path).stdout
+        listing = deployed_vm.ssh("/bin/ls", "-la", category_dir).stdout
+        assert kept == sentinel, (
+            f"existing category file must be untouched; {sentinel_path} now holds {kept!r}; ls={listing!r}"
+        )
+    finally:
+        deployed_vm.ssh("/bin/rm", "-rf", workdir, category_dir)
+
+
+def _blacklist_bzip2_body() -> bytes:
+    return bz2.compress(b"keep-me.example.test\n")
+
+
+def _blacklist_zip_body() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("list.txt", "keep-me.example.test\n")
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("kind", "suffix", "mime", "body_fn"),
+    [
+        ("bzip2", ".bz2", "application/x-bzip2", _blacklist_bzip2_body),
+        ("zip", ".zip", "application/zip", _blacklist_zip_body),
+    ],
+)
+@pytest.mark.timeout(120)
+def test_blacklist_bzip2_or_zip_body_fails_closed(
+    deployed_vm: SmokeVM,
+    mock_feeds: _MockFeedServer,
+    kind: str,
+    suffix: str,
+    mime: str,
+    body_fn: Callable[[], bytes],
+) -> None:
+    """issue #2739: a bzip2 or zip Blacklist body must fail, not succeed empty.
+
+    Given previously extracted Blacklist category files and an origin answering
+      the archive URL with HTTP 200 valid bzip2 or zip bytes,
+    When  pfb_download() fetches it as type='blacklist',
+    Then  the result is failure, a canonical reject names the detected type,
+      and the existing category files are left untouched.
+
+    Fail-before: those arms have no Blacklist branch, so a valid archive
+    extracts onto ``.orig`` and returns success while ``{dbdir}/{provider}/``
+    is unchanged. Pass-after: the ``blacklist_not_archive`` reject; the planted
+    sentinel stays byte-identical.
+    """
+    header = f"pfb2739{kind}"
+    workdir = f"/tmp/{header}_dl"
+    category_dir = f"{h.PFB_DBDIR}/{header}"
+    sentinel_path = f"{category_dir}/{header}_testcat"
+    sentinel = "keep-me.example.test\n"
+    archive = f"{workdir}/{header}{suffix}"
+    marker = f"pfb_validate: REJECT feed={header} stage=extract reason=blacklist_not_archive"
+    body = body_fn()
+    try:
+        deployed_vm.ssh("/bin/rm", "-rf", workdir, category_dir, timeout=30.0)
+        mk = deployed_vm.ssh("/bin/mkdir", "-p", workdir, category_dir)
+        assert mk.returncode == 0, f"mkdir failed: rc={mk.returncode} stderr={mk.stderr!r}"
+        _plant_guest_text(deployed_vm, sentinel_path, sentinel)
+        planted = deployed_vm.ssh("/bin/cat", sentinel_path).stdout
+        assert planted == sentinel, (
+            f"before-state: planted sentinel must be {sentinel!r}, got {planted!r}; "
+            f"ls={deployed_vm.ssh('/bin/ls', '-la', category_dir).stdout!r}"
+        )
+        box_mime = _box_mime_type(deployed_vm, body)
+        assert box_mime == mime, f"expected on-box MIME {mime!r} for {kind}, got {box_mime!r}"
+        feed_url = mock_feeds.register(f"{header}{suffix}", body)
+        before = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
+
+        out = _adr46_download(deployed_vm, feed_url, archive, header, "blacklist")
+
+        assert "PFB_DL_FALSE" in out, f"expected pfb_download failure on a {kind} Blacklist body; got stdout: {out!r}"
         after = h.count_log_marker(deployed_vm, h.PFB_LOG, marker)
         assert after > before, (
             f"expected a NEW {marker!r} line in {h.PFB_LOG}; before={before} after={after}\n"
