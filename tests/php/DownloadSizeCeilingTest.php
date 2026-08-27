@@ -126,7 +126,9 @@ final class DownloadSizeCeilingTest extends TestCase
 		}
 		$this->assertFalse(pfb_download_extraction_succeeded($retval),
 			'the extraction gates must read the capped run as a failure');
-		$this->assertLessThanOrEqual($blocks * 1024, filesize($target),
+		$size = filesize($target);
+		$this->assertNotFalse($size, 'the capped writer must leave measurable output');
+		$this->assertLessThanOrEqual($blocks * 1024, $size,
 			'the ceiling must bound the output, not merely report on it');
 	}
 
