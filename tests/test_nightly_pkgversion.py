@@ -99,6 +99,16 @@ def test_nightly_pkgversion_helper_uses_utc_not_local_time() -> None:
     assert _stamp_seconds_apart(a, b) <= 2, (a, b)
 
 
+def test_utc_not_local_time_calls_stamp_seconds_helper() -> None:
+    """The TZ-pair test must use the helper; integer subtract can drift back in."""
+    src = Path(__file__).read_text(encoding="utf-8")
+    start = src.index("def test_nightly_pkgversion_helper_uses_utc_not_local_time")
+    end = src.index("\ndef test_", start + 1)
+    body = src[start:end]
+    assert "_stamp_seconds_apart(a, b)" in body
+    assert "int(a.split" not in body
+
+
 def test_nightly_stamp_compare_survives_a_minute_boundary() -> None:
     """Integer YYYYMMDDHHMMSS subtract is not seconds (issue #2758 follow-up)."""
     a, b = "20260827185959.fd978e0", "20260827190000.fd978e0"
