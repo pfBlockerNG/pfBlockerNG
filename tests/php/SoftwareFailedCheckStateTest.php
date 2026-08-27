@@ -20,14 +20,21 @@ use PHPUnit\Framework\TestCase;
  *
  * What must NOT change is issue #2379's fallback: a failed live read keeps the cached
  * `latest` rather than regressing it to '', and a benign deferral (pkg locked, no DNS) is
- * not a failure at all. Observability here is a STATE, never a raw `pkg` error dump.
+ * not a failure at all. Observability here is a STATE, never a raw `pkg` error dump. And a
+ * read that FAILED contributes no version at all: promoting the stale catalogue's answer
+ * would let the cron notice announce an update off a catalogue nothing refreshed.
  *
  * Branch map, so every side of every decision is pinned:
  *   read rule      refresh ok / refresh failed x rquery ok / rquery failed x version / none
- *   attempt state  succeeded (TRUE) / failed (FALSE) / not attempted (NULL)
+ *   attempt state  succeeded (TRUE) / failed (FALSE) / not attempted (NULL) / uninterpretable
+ *   version        promoted only on a successful read; cached kept otherwise; never a
+ *                  stale-catalogue answer, and never a notice naming one
  *   cache          record a failure / clear one on success / keep one across a skip /
  *                  never carry a foreign install's failure
- *   page           show the failed-attempt row / hide it / Check-now feedback both ways
+ *   timestamps     a plain epoch renders; negative, future, oversized, non-finite and
+ *                  non-decimal values render nothing, silently
+ *   page           show the failed-attempt row / hide it / Check-now feedback keyed on THIS
+ *                  attempt's outcome, both ways, never on the cache's history
  */
 #[CoversFunction('pfb_pkg_read_ok')]
 #[CoversFunction('pfb_pkg_latest')]
@@ -245,8 +252,11 @@ final class SoftwareFailedCheckStateTest extends TestCase
 		$this->assertNotFalse($start, 'pfb_pkg_latest must exist');
 		$body = substr($src, $start, (int) strpos($src, "\n}\n", $start) - $start);
 
+		// The rc variable is pinned; the output buffer is not, because the two calls may
+		// legitimately share one (pfb_pkg_exec() clears it at entry) and its name is not
+		// the thing that has to hold.
 		$this->assertMatchesRegularExpression(
-			'/update -f -r \{\$repo\} 2>\/dev\/null",\s*\$refresh_out,\s*\$refresh_ret\)/',
+			'/update -f -r \{\$repo\} 2>\/dev\/null",\s*\$\w+,\s*\$refresh_ret\)/',
 			$body,
 			'the catalogue refresh must capture its return value, not discard it'
 		);
@@ -291,9 +301,8 @@ final class SoftwareFailedCheckStateTest extends TestCase
 
 	/**
 	 * The stale-catalogue near-miss, at the orchestrator: the refresh failed but the stale
-	 * DB named a version. The version is adopted (it is newer information than the cache),
-	 * and the successful-check time still does not move — otherwise the page reports
-	 * "Last checked: just now" beside an answer nothing refreshed.
+	 * DB named a version. The successful-check time does not move, and the version is NOT
+	 * adopted — a catalogue nothing refreshed cannot produce a new "latest".
 	 */
 	public function testAStaleCatalogueReadDoesNotAdvanceTheSuccessfulCheckTime(): void
 	{
@@ -301,9 +310,163 @@ final class SoftwareFailedCheckStateTest extends TestCase
 
 		$cache = pfb_software_update_check(TRUE, $this->io('3.3.4', FALSE));
 
-		$this->assertSame('3.3.4', $cache['latest'], 'the version that was read is still reported');
-		$this->assertSame(1000, $cache['last_checked'], 'but a failed refresh is not a successful check');
+		$this->assertSame('3.3.2', $cache['latest'], 'the last SUCCESSFULLY read version still stands');
+		$this->assertSame(1000, $cache['last_checked'], 'a failed refresh is not a successful check');
 		$this->assertArrayHasKey('last_failed', $cache, 'and the failed attempt is recorded');
+	}
+
+	/**
+	 * Scenario: the field report's near-miss, followed all the way to the notice.
+	 *
+	 * `pkg update -f` exits non-zero, the stale catalogue DB still answers rquery, and what
+	 * it answers is NEWER than the last version a successful read produced. Promoting that
+	 * would make the page announce — and the cron file_notice ANNOUNCE BY EMAIL — an update
+	 * read off a catalogue nothing refreshed. A read that failed contributes no version.
+	 *
+	 * Given a cache holding the last successfully read latest, already notified,
+	 * When a forced check's refresh fails but the stale DB names a newer version,
+	 * Then the cached latest and de-dupe state both stand, and NO notice fires.
+	 */
+	public function testAFailedRefreshNeverPromotesAStaleCatalogueVersion(): void
+	{
+		pfb_software_write_cache([
+			'pkgname'       => self::NAME,
+			'repo'          => self::REPO,
+			'channel'       => 'nightly',
+			'installed'     => '3.3.2',
+			'latest'        => '3.3.2',
+			'last_checked'  => 1000,
+			'last_notified' => '3.3.2',
+		]);
+		$this->assertSame([], $GLOBALS['pfb_test_file_notices'], 'before: no notice raised');
+
+		$cache = pfb_software_update_check(TRUE, $this->io('3.3.4', FALSE));
+
+		$this->assertSame('3.3.2', $cache['latest'], 'a version off an unrefreshed catalogue is not promoted');
+		$this->assertSame('3.3.2', $cache['last_notified'], 'and cannot rewrite the de-dupe state');
+		$this->assertSame(
+			[],
+			$GLOBALS['pfb_test_file_notices'],
+			'after: a failed refresh must never announce a version it could not verify'
+		);
+		$this->assertSame(1000, $cache['last_checked'], 'and is not a successful check');
+		$this->assertArrayHasKey('last_failed', $cache, 'the failure itself is what gets recorded');
+	}
+
+	/**
+	 * The same rule where the update is genuinely un-notified: the notice may still fire for
+	 * the last SUCCESSFULLY read version, but never for the stale one. Asserts the notice
+	 * text, so a promotion that slipped through would be visible rather than merely counted.
+	 */
+	public function testANoticeAfterAFailedRefreshNamesOnlyTheVerifiedVersion(): void
+	{
+		pfb_software_write_cache([
+			'pkgname'       => self::NAME,
+			'repo'          => self::REPO,
+			'channel'       => 'nightly',
+			'installed'     => '3.3.0',
+			'latest'        => '3.3.2',
+			'last_checked'  => 1000,
+			'last_notified' => '',
+		]);
+
+		$cache = pfb_software_update_check(TRUE, [
+			'installed_name' => self::NAME,
+			'installed'      => '3.3.0',
+			'installed_repo' => self::REPO,
+			'record_channel' => 'nightly',
+			'provenance_ok'  => TRUE,
+			'latest'         => '3.3.4',
+			'read_ok'        => FALSE,
+		]);
+
+		$this->assertSame('3.3.2', $cache['latest'], 'the verified version is what is reported');
+		foreach ($GLOBALS['pfb_test_file_notices'] as $notice) {
+			$this->assertStringNotContainsString(
+				'3.3.4',
+				$notice['notice'],
+				'no notice may name a version read off a catalogue that failed to refresh'
+			);
+		}
+	}
+
+	/**
+	 * A contradictory injected outcome fails CLOSED. The $io seam takes an explicit outcome;
+	 * anything that is not a bool names no outcome, and a version paired with no outcome
+	 * must not be promoted, timestamped or notified as if the read had succeeded.
+	 */
+	public function testAnUninterpretableInjectedOutcomeFailsClosed(): void
+	{
+		foreach ([['x'], 'false', 0, 1.0] as $bogus) {
+			$this->seedCronWarmedCache(1000, '3.3.2');
+			$cache = pfb_software_update_check(TRUE, [
+				'installed_name' => self::NAME,
+				'installed'      => '3.3.2',
+				'installed_repo' => self::REPO,
+				'record_channel' => 'nightly',
+				'provenance_ok'  => TRUE,
+				'latest'         => '3.3.4',
+				'read_ok'        => $bogus,
+			]);
+			$label = gettype($bogus);
+			$this->assertSame('3.3.2', $cache['latest'], "{$label}: no promotion without a stated outcome");
+			$this->assertSame(1000, $cache['last_checked'], "{$label}: and no successful-check time");
+			$this->assertSame([], $GLOBALS['pfb_test_file_notices'], "{$label}: and no notice");
+			@unlink($this->dbdir . '/software_update.json');
+		}
+	}
+
+	/**
+	 * Check now's feedback describes THIS attempt, never the cache's history.
+	 *
+	 * The cache deliberately keeps a standing failure across a deferral, so reading the
+	 * feedback off the cache made an identical deferral report "failed" or "fine" depending
+	 * only on what a previous tick had recorded. The outcome of the attempt just made is a
+	 * separate value.
+	 *
+	 * Given a cache that already records a failure,
+	 * When a forced check DEFERS (pkg locked — nothing failed now),
+	 * Then Check now redirects clean;
+	 * And when a forced check actually fails,
+	 * Then it redirects carrying feedback.
+	 */
+	public function testCheckNowFeedbackFollowsThisAttemptNotTheCachedHistory(): void
+	{
+		$this->seedCronWarmedCache();
+		pfb_software_update_check(TRUE, $this->io('', FALSE));
+		$this->assertArrayHasKey(
+			'last_failed',
+			(array) $this->readCache(),
+			'before: a failure from an earlier tick stands on the cache'
+		);
+
+		// A deferral now: the standing failure is preserved, but nothing failed THIS time.
+		$GLOBALS['pfb_test_pkg_locked'] = TRUE;
+		$deferred_ok = TRUE;
+		pfb_software_update_check(TRUE, [
+			'installed_name' => self::NAME,
+			'installed'      => '3.3.2',
+			'installed_repo' => self::REPO,
+			'record_channel' => 'nightly',
+			'provenance_ok'  => TRUE,
+		], $deferred_ok);
+		$this->assertNull($deferred_ok, 'a deferred check reports no outcome');
+		$this->assertSame(
+			'/pfblockerng/pfblockerng_software.php',
+			pfb_software_check_redirect($deferred_ok !== FALSE),
+			'so Check now must not claim the check failed'
+		);
+
+		// A real failure now: the same call reports it, and the redirect carries feedback.
+		$GLOBALS['pfb_test_pkg_locked'] = FALSE;
+		$failed_ok = TRUE;
+		pfb_software_update_check(TRUE, $this->io('', FALSE), $failed_ok);
+		$this->assertFalse($failed_ok, 'a failed check reports its outcome');
+		$this->assertSame(
+			'/pfblockerng/pfblockerng_software.php?check=failed',
+			pfb_software_check_redirect($failed_ok !== FALSE),
+			'and Check now says so'
+		);
 	}
 
 	/**
@@ -443,6 +606,57 @@ final class SoftwareFailedCheckStateTest extends TestCase
 	}
 
 	/**
+	 * A timestamp this box cannot have recorded shows nothing, and says nothing doing it.
+	 *
+	 * The cache is a JSON file, so `last_failed` can arrive as a hand-edited negative, a
+	 * scientific-notation string, or an integer too large for a PHP int — which json_decode
+	 * hands back as a FLOAT. Casting one of those emits "not representable as an int" into
+	 * php_error.log (which the UI tiers read as a page defect, issue #2367) and PHP_INT_MAX
+	 * renders a year-292277 date in the Status section. Warnings are CAPTURED rather than
+	 * converted, so the assertion is about what the helper emitted and not merely that it
+	 * did not throw.
+	 */
+	public function testTheFailedAttemptRowRefusesATimeThisBoxCannotHaveRecorded(): void
+	{
+		$cases = [
+			'a negative timestamp'          => -1,
+			'the integer ceiling'           => PHP_INT_MAX,
+			'a far-future time'             => time() + 86400 * 365,
+			'an oversized JSON integer'     => 1.0e54,
+			'a non-finite float'            => NAN,
+			'an infinite float'             => INF,
+			'scientific notation'           => '1e5',
+			'a negative decimal string'     => '-1',
+			'a fractional string'           => '1700000000.5',
+			'a whitespace-padded number'    => ' 1700000000 ',
+			'a boolean'                     => TRUE,
+		];
+
+		foreach ($cases as $label => $value) {
+			$seen = [];
+			set_error_handler(static function (int $errno, string $msg) use (&$seen): bool {
+				$seen[] = $msg;
+				return TRUE;
+			});
+			try {
+				$at = pfb_software_failed_at(['last_failed' => $value], TRUE);
+			} finally {
+				restore_error_handler();
+			}
+			$this->assertSame(0, $at, "{$label} must show no failed-attempt row");
+			$this->assertSame([], $seen, "{$label} must reach that verdict silently");
+		}
+
+		// The branch that must keep working: a plain epoch this box could have recorded.
+		$this->assertSame(1700000000, pfb_software_failed_at(['last_failed' => 1700000000], TRUE));
+		$this->assertSame(
+			1700000000,
+			pfb_software_failed_at(['last_failed' => '1700000000'], TRUE),
+			'a decimal integer string is the same time (json_decode can hand back either)'
+		);
+	}
+
+	/**
 	 * Check now must not redirect an admin who explicitly asked for a fresh answer back to
 	 * an unchanged page. Both branches, plus the round trip: the query the failure redirect
 	 * carries is the one the page's render arm reads, so a rename on either side is caught.
@@ -479,13 +693,15 @@ final class SoftwareFailedCheckStateTest extends TestCase
 	 * cannot run under this harness at all — including it after tests/php/bootstrap.php exits
 	 * 255 at require_once('guiconfig.inc'), before any page logic, and the sibling page
 	 * loaders sidestep that deliberately by eval()ing function definitions only. So these
-	 * assertions prove the wiring TEXT, not its reachability: an inverted condition is caught
-	 * because the branch's opening line is pinned, but a rewrite that keeps the sequence and
-	 * makes it unreachable (inside a dead `if (FALSE)`, after an unconditional exit) survives
-	 * them. Harness work to close that gap is issue #2768. The executable proof for this
-	 * behaviour is the four cases above, which drive the functions the page calls; the LIVE
-	 * proof is tests/smoke/ui (Tier A renders the failed-attempt row off a seeded cache;
-	 * Tier B drives the ?check=failed feedback in a browser).
+	 * assertions prove the wiring TEXT, not its reachability. Precisely: every branch below
+	 * has its OPENING LINE pinned, so inverting one of those conditions is caught; a rewrite
+	 * that keeps the whole sequence and makes it unreachable — inside a dead `if (FALSE)`,
+	 * after an unconditional exit — is NOT, and neither is a row that renders the wrong
+	 * value. Harness work to close that gap is issue #2768. The executable proof for this
+	 * behaviour is the cases above, which drive the functions the page calls; the LIVE proof
+	 * is tests/smoke/ui — Tier A renders the failed-attempt row off a seeded cache and
+	 * asserts its time differs from the last successful check's (which catches the
+	 * wrong-value class), Tier B drives the ?check=failed feedback in a browser.
 	 */
 	public function testThePageDrivesTheExtractedHelpers(): void
 	{
@@ -495,7 +711,7 @@ final class SoftwareFailedCheckStateTest extends TestCase
 		$this->assertNotFalse($handler, 'the Check now handler must still be the page entry point');
 		$block = substr($page, $handler, (int) strpos($page, 'exit;', $handler) - $handler);
 		$this->assertStringContainsString(
-			'pfb_software_update_check(TRUE)',
+			'pfb_software_update_check(TRUE',
 			$block,
 			'Check now still forces the check'
 		);
@@ -504,11 +720,21 @@ final class SoftwareFailedCheckStateTest extends TestCase
 			$block,
 			'and routes its outcome through the redirect helper instead of discarding it'
 		);
+		$this->assertStringContainsString(
+			'$pfb_sw_read_ok',
+			$block,
+			"and the outcome it routes is THIS attempt's, not the cache's history"
+		);
 
 		$this->assertStringContainsString(
-			'pfb_software_failed_at(',
+			'$failed_at	= pfb_software_failed_at($cache, $cache_current);',
 			$page,
-			'the Status section must gate the failed-attempt row on the shared helper'
+			'the Status section must derive the failed-attempt time from the shared helper'
+		);
+		$this->assertStringContainsString(
+			'if ($failed_at > 0) {',
+			$page,
+			'and gate the row on it — a gate rewritten to a constant renders the row never'
 		);
 		$this->assertMatchesRegularExpression(
 			'/print_info_box\(\s*gettext\(/',

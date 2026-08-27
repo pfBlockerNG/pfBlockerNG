@@ -6,10 +6,11 @@ use PHPUnit\Framework\Attributes\CoversFunction;
 use PHPUnit\Framework\TestCase;
 
 /**
- * Every consumer of the software-update cache reads its values with a ``(string)`` cast —
- * the cron orchestrator's latest/last_notified, the Software page's displayed fields, the
- * install matcher. A non-scalar value in the file therefore emits "Array to string
- * conversion" at EACH of those call sites, once per call (issue #2367).
+ * Consumers of the software-update cache read its values with a ``(string)`` cast — the cron
+ * orchestrator's latest/last_notified, the Software page's displayed fields, the install
+ * matcher — or, for a timestamp, through a validating accessor (``pfb_software_failed_at()``,
+ * issue #2674). A non-scalar value in the file therefore emits "Array to string conversion"
+ * at EACH casting call site, once per call (issue #2367).
  *
  * Guarding each site would leave the next one to be written unguarded, so the value is
  * dropped where the file becomes data: a key the reader cannot hand to a caster is a key no
