@@ -92,3 +92,13 @@ rules). Swept from `CLAUDE.md` and `docs/misc/workflow-reference.md` in Stage 1 
   regression → rebase onto the latest base before every push/dispatch (`git.md`).
 - **#930** — section writes bypassed normalisation → section writes are normalised too
   (`docs/misc/config-gateway.md`).
+- **2026-08-27 grok-dev bus deaf (twice)** — (1) `pfb-msg serve` as background
+  bash notifies only on process exit; serve never exits on a message → 8h
+  silent, 10+ unread, woke when the owner typed (10 h harness cap is what
+  kills the SSH). (2) Repo `.grok/rules/bus.md` is cwd-scoped; this session's
+  detached tree lacked it, auto-compact does not re-fire SessionStart, and a
+  long CI wait occupies the turn so monitor lines cannot start one → docs
+  alone are not a backstop. Pin: monitor `persistent: true`; home
+  `~/.grok/rules/bus.md` + PreToolUse deny bash-`serve` + Stop gate on
+  missing monitor / unread (`GROK.md`, `.grok/rules/bus.md`,
+  `.grok/hooks/`).
