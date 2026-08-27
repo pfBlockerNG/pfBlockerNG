@@ -5,7 +5,7 @@
 # leg clones that bounded checkout through build-leg.sh.
 
 Describe 'build-leg.sh real Ports parity'
-  It 'native package bytes match a direct portable-builder invocation' env:ports
+  native_parity() {
     [ -n "${REAL_PORTS_DIR:-}" ] || { echo 'REAL_PORTS_DIR is required' >&2; return 1; }
     [ -n "${PARITY_CHANNEL:-}" ] || { echo 'PARITY_CHANNEL is required' >&2; return 1; }
     [ -n "${PARITY_VARIANT:-}" ] || { echo 'PARITY_VARIANT is required' >&2; return 1; }
@@ -48,9 +48,15 @@ Describe 'build-leg.sh real Ports parity'
     fi
     cmp -s "$direct" "$routed" || {
       echo "native parity mismatch: direct=$direct routed=$routed" >&2; return 1; }
+  }
+
+  It 'native package bytes match a direct portable-builder invocation' env:ports
+    When call native_parity
+    The status should be success
+    The stderr should include '==> wrote'
   End
 
-  It 'project build-record package bytes match a direct portable-builder invocation' env:ports
+  project_parity() {
     [ -n "${REAL_PORTS_DIR:-}" ] || { echo 'REAL_PORTS_DIR is required' >&2; return 1; }
     for name in PARITY_VARIANT PARITY_ABI PARITY_PY_FLAVOR PARITY_PHP; do
       eval "value=\${$name:-}"
@@ -177,5 +183,11 @@ PY
       --out-dir "${work}/routed")"
     cmp -s "$direct" "$routed" || {
       echo "project parity mismatch: direct=$direct routed=$routed" >&2; return 1; }
+  }
+
+  It 'project build-record package bytes match a direct portable-builder invocation' env:ports
+    When call project_parity
+    The status should be success
+    The stderr should include '==> wrote'
   End
 End
