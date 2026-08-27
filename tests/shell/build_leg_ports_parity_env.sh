@@ -19,32 +19,32 @@ Describe 'build-leg.sh real Ports parity'
     [ -n "$DASH" ] || { echo 'dash is required' >&2; return 1; }
     git -C "$REAL_PORTS_DIR" rev-parse --verify HEAD >/dev/null 2>&1 || {
       echo 'REAL_PORTS_DIR must be a Git checkout' >&2; return 1; }
-    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/buildlegports.XXXXXX")"
-    trap 'rm -rf "$work"' EXIT INT TERM
-    ports_sha="$(git -C "$REAL_PORTS_DIR" rev-parse HEAD)"
-    ports_url="$(git -C "$REAL_PORTS_DIR" remote get-url origin)"
-    export SOURCE_DATE_EPOCH=1780000000 PFB_RUN_ROOT="${work}/runs" RUN_ID=native-parity
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/buildlegports.XXXXXX")" || return 1
+    trap 'rm -rf "$work"' EXIT INT TERM || return 1
+    ports_sha="$(git -C "$REAL_PORTS_DIR" rev-parse HEAD)" || return 1
+    ports_url="$(git -C "$REAL_PORTS_DIR" remote get-url origin)" || return 1
+    export SOURCE_DATE_EPOCH=1780000000 PFB_RUN_ROOT="${work}/runs" RUN_ID=native-parity || return 1
     if [ "$PARITY_CHANNEL" = nightly ]; then
-      source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)"
-      nightly_version="20260813153045.$(printf '%.7s' "$source_sha")"
+      source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)" || return 1
+      nightly_version="20260813153045.$(printf '%.7s' "$source_sha")" || return 1
       direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
         --ports "$REAL_PORTS_DIR" --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" \
         --abi "$PARITY_ABI" --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
-        --local-src "$PFB_ROOT" --pkgversion "$nightly_version" --out "${work}/direct")"
+        --local-src "$PFB_ROOT" --pkgversion "$nightly_version" --out "${work}/direct")" || return 1
       routed="$(sh "${PFB_ROOT}/scripts/build-leg.sh" \
         --ports-repo "$ports_url" --ports-ref "$ports_sha" \
         --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" --abi "$PARITY_ABI" \
         --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
-        --pkgversion "$nightly_version" --out-dir "${work}/routed")"
+        --pkgversion "$nightly_version" --out-dir "${work}/routed")" || return 1
     else
       direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
         --ports "$REAL_PORTS_DIR" --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" \
         --abi "$PARITY_ABI" --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
-        --local-src "$PFB_ROOT" --out "${work}/direct")"
+        --local-src "$PFB_ROOT" --out "${work}/direct")" || return 1
       routed="$(sh "${PFB_ROOT}/scripts/build-leg.sh" \
         --ports-repo "$ports_url" --ports-ref "$ports_sha" \
         --channel "$PARITY_CHANNEL" --variant "$PARITY_VARIANT" --abi "$PARITY_ABI" \
-        --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" --out-dir "${work}/routed")"
+        --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" --out-dir "${work}/routed")" || return 1
     fi
     cmp -s "$direct" "$routed" || {
       echo "native parity mismatch: direct=$direct routed=$routed" >&2; return 1; }
@@ -59,7 +59,7 @@ Describe 'build-leg.sh real Ports parity'
   project_parity() {
     [ -n "${REAL_PORTS_DIR:-}" ] || { echo 'REAL_PORTS_DIR is required' >&2; return 1; }
     for name in PARITY_VARIANT PARITY_ABI PARITY_PY_FLAVOR PARITY_PHP; do
-      eval "value=\${$name:-}"
+      eval "value=\${$name:-}" || return 1
       [ -n "$value" ] || { echo "$name is required" >&2; return 1; }
     done
     for tool in git python3 zstd; do
@@ -67,22 +67,22 @@ Describe 'build-leg.sh real Ports parity'
     done
     DASH="${DASH:-$(command -v dash 2>/dev/null || true)}"
     [ -n "$DASH" ] || { echo 'dash is required' >&2; return 1; }
-    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/buildlegrecord.XXXXXX")"
-    trap 'rm -rf "$work"' EXIT INT TERM
-    ports_sha="$(git -C "$REAL_PORTS_DIR" rev-parse HEAD)"
-    source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)"
-    nightly_version="20260813153045.$(printf '%.7s' "$source_sha")"
+    work="$(mktemp -d "${SHELLSPEC_TMPBASE:-/tmp}/buildlegrecord.XXXXXX")" || return 1
+    trap 'rm -rf "$work"' EXIT INT TERM || return 1
+    ports_sha="$(git -C "$REAL_PORTS_DIR" rev-parse HEAD)" || return 1
+    source_sha="$(git -C "$PFB_ROOT" rev-parse HEAD)" || return 1
+    nightly_version="20260813153045.$(printf '%.7s' "$source_sha")" || return 1
     source_checkout="${work}/source"
-    git clone -q --shared "$PFB_ROOT" "$source_checkout"
-    git -C "$source_checkout" checkout -q "$source_sha"
+    git clone -q --shared "$PFB_ROOT" "$source_checkout" || return 1
+    git -C "$source_checkout" checkout -q "$source_sha" || return 1
     # Project records intentionally use the current nightly recipe: unlike release
     # channels it needs no historical source tag, while the target facts remain the
     # caller's resolved variant/ABI/PHP/Python inputs.
-    ports_url="$(git -C "$REAL_PORTS_DIR" remote get-url origin)"
+    ports_url="$(git -C "$REAL_PORTS_DIR" remote get-url origin)" || return 1
     sh "${PFB_ROOT}/scripts/sparse-clone-ports.sh" \
       "$ports_url" "$ports_sha" "$REAL_PORTS_DIR" \
-      nightly "$PARITY_PHP" "$PARITY_PY_FLAVOR"
-    python3 - "$work/record.json" "$ports_sha" "$source_sha" "$nightly_version" <<'PY'
+      nightly "$PARITY_PHP" "$PARITY_PY_FLAVOR" || return 1
+    python3 - "$work/record.json" "$ports_sha" "$source_sha" "$nightly_version" <<'PY' || return 1
 import json
 import os
 import sys
@@ -169,18 +169,18 @@ record = {
 record["build_input_digest"] = build_input_digest(record)
 Path(path).write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="utf-8")
 PY
-    export SOURCE_DATE_EPOCH=1780000000 PFB_RUN_ROOT="${work}/runs" RUN_ID=record-parity
+    export SOURCE_DATE_EPOCH=1780000000 PFB_RUN_ROOT="${work}/runs" RUN_ID=record-parity || return 1
     direct="$(python3 "${PFB_ROOT}/scripts/build-pkg-portable.py" \
       --ports "$REAL_PORTS_DIR" --channel nightly --variant "$PARITY_VARIANT" \
       --abi "$PARITY_ABI" --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" \
       --local-src "$source_checkout" --pkgversion "$nightly_version" \
-      --build-record "$work/record.json" --out "${work}/direct")"
+      --build-record "$work/record.json" --out "${work}/direct")" || return 1
     routed="$(sh "${PFB_ROOT}/scripts/build-leg.sh" \
       --ports-repo "$ports_url" --ports-ref "$ports_sha" \
       --channel nightly --variant "$PARITY_VARIANT" --abi "$PARITY_ABI" \
       --py-flavor "$PARITY_PY_FLAVOR" --php "$PARITY_PHP" --pkgversion "$nightly_version" \
       --local-src "$source_checkout" --build-record "$work/record.json" \
-      --out-dir "${work}/routed")"
+      --out-dir "${work}/routed")" || return 1
     cmp -s "$direct" "$routed" || {
       echo "project parity mismatch: direct=$direct routed=$routed" >&2; return 1; }
   }
