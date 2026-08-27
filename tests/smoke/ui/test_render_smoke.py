@@ -2967,9 +2967,8 @@ def test_software_actions_link_to_package_manager(
 _SOFTWARE_CHECKED_MARKER = "pfb-sw-checked"
 _SOFTWARE_FAILED_MARKER = "pfb-sw-check-failed"
 _SOFTWARE_CHECK_FAILED_QUERY = "?check=failed"
-# Matches the Check-now info box ALONE: the Status row's help text also says "could not read
-# the pfBlockerNG repository catalogue", so keying on that sentence made the "a plain load
-# stays silent" assertion trip on the row. SoftwareFailedCheckStateTest pins the uniqueness.
+# Must match the Check-now info box ALONE -- the Status row's help text speaks about the same
+# failure, so a phrase both carry cannot support the "a plain load stays silent" assertion.
 _SOFTWARE_CHECK_FAILED_TEXT = "Check now could not read"
 
 
@@ -2995,8 +2994,8 @@ def test_software_page_shows_a_failed_catalogue_check(
           check's, and the page still renders clean (a state, never a ``pkg`` error dump);
       And Check now's feedback query renders a warning, while a plain GET stays silent.
 
-    Fail-before/pass-after: on the pre-#2674 page the marker is absent in both states,
-    because nothing recorded or rendered the failure.
+    Fail-before/pass-after: without the fix the marker is absent in both states, because
+    nothing records or renders the failure.
     """
     software_cache = "/var/db/pfblockerng/software_update.json"
     pkgname = pkg_identity.branch_pkg_name(os.environ.get("SMOKE_PKG"))
@@ -3070,11 +3069,8 @@ def test_software_page_shows_a_failed_catalogue_check(
             # failure redirect carries renders a warning an admin can actually see.
             #
             # Keyed on the MESSAGE, never on the ``alert-warning`` class: pfBlockerNG's
-            # pending-changes banner is also an alert-warning, and whatever ran before this
-            # case may have left it set, so a class-level absence assertion would be about
-            # that banner rather than about this feedback. The warning STYLING is pinned by
-            # SoftwareFailedCheckStateTest's page-wiring case and asserted visually by the
-            # Tier-B case, which scopes its locator to this same text.
+            # pending-changes banner is also an alert-warning and may be set, so a class-level
+            # absence assertion would be about that banner rather than about this feedback.
             resp = webui.get(_SOFTWARE_PAGE + _SOFTWARE_CHECK_FAILED_QUERY)
             result = evaluate_render(
                 _SOFTWARE_PAGE + _SOFTWARE_CHECK_FAILED_QUERY,

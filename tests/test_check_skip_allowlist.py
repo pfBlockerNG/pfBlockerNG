@@ -632,10 +632,8 @@ def test_canary_fixture_is_never_on_the_real_allowlist(suite: str, capsys: pytes
 # --------------------------------------------------------------------------- #
 
 
-# Suite prefixes the allowlist may legitimately carry. Enumerated from the invocations, not
-# from memory: run-gates.sh passes --suite pytest/phpunit/shellspec, and ui-tests.yml passes
-# --suite ui (pinned twice by tests/test_ui_release_gate_wiring.py). `ui` was missing here,
-# so the first live-VM leg to observe a conditional UI skip could not be allowlisted at all.
+# Suite prefixes the allowlist may legitimately carry, one per --suite value the gates pass:
+# run-gates.sh uses pytest/phpunit/shellspec and ui-tests.yml uses ui.
 _ALLOWLIST_SUITES = ("pytest", "phpunit", "shellspec", "ui")
 
 

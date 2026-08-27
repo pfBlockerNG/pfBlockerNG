@@ -46,7 +46,10 @@ pytest:tests.test_build_pkg_origins::test_sparse_build_byte_identical_to_full_bu
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/tmp-/private/tmp]  # macOS-only alias case; the runner is Linux
 pytest:tests.test_build_pkg_portable::test_output_macos_os_alias_is_allowed[/var-/private/var]  # macOS-only alias case; the runner is Linux
 
-# ui -- observed on the live-VM Tier-B browser legs. The `ui-tests` label gates that fan-out,
-# so it runs seldom and this data-dependent skip had never been observed by the gate before;
-# the skip itself predates the PR that first surfaced it (it landed in 5792d6fb).
-ui:tests.smoke.ui.test_browser_misc::test_feeds_alt_radio_submit_wiring  # whether any pre-defined feed exposes an Alternate-URL radio is feed-data dependent; the case skips cleanly when none render
+# ui -- the live-VM Tier-B browser legs. Whether any pre-defined feed exposes an
+# Alternate-URL radio is feed-data dependent, so the case has always skipped cleanly when
+# none render; the `ui-tests` label gates that fan-out, so the gate had not observed it.
+ui:tests.smoke.ui.test_browser_misc::test_feeds_alt_radio_submit_wiring  # no pre-defined feed exposes an Alternate-URL radio on this box
+
+# phpunit -- only on a host that carries the pkg(8) port binary (a FreeBSD/pfSense dev box).
+phpunit:SoftwareFailedCheckStateTest::testPkgLatestReportsAFailedAttemptToItsCaller  # drives the real pkg shellout; its outcome is host repository state where /usr/local/sbin/pkg exists
