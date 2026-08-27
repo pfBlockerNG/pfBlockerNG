@@ -5279,6 +5279,24 @@ def _sed_escape_literal(value: str) -> str:
     return out
 
 
+_PKG_USERINFO_RE = re.compile(r"(https?://)[^/@:]+(?::[^/@]*)?@", re.IGNORECASE)
+_PKG_TOKEN_QUERY_RE = re.compile(
+    r"([?&](?:token|key|secret|password|auth)=)[^&\s]+",
+    re.IGNORECASE,
+)
+
+
+def redact_pkg_urls(text: str) -> str:
+    """Strip userinfo and token-shaped query values from pkg dump text.
+
+    ``pkg -vv`` and ``/usr/local/etc/pkg/repos/*`` can embed credentials.
+    Capture-time redaction (issue #2754) so the diag tarball never holds them.
+    ABI / ALTABI / ``uname -mr`` have no URLs and are unchanged.
+    """
+    out = _PKG_USERINFO_RE.sub(r"\1REDACTED@", text)
+    return _PKG_TOKEN_QUERY_RE.sub(r"\1REDACTED", out)
+
+
 def redact_values(text: str, values: Iterable[str]) -> str:
     """Replace every non-empty ``value`` (matched LITERALLY, not as a regex, and
     CASE-INSENSITIVELY) in ``text`` with ``REDACTED``.
@@ -5405,6 +5423,22 @@ def collect_host_diagnostics(vm: SmokeVM, dest_dir: str = "smoke-diag", *, timeo
         'tar czf "$D/var_db_pfblockerng.tgz" -C /var/db pfblockerng 2>/dev/null; '
         'tar czf "$D/var_db_aliastables.tgz" -C /var/db aliastables 2>/dev/null; '
         '/bin/ps auxww > "$D/ps.txt" 2>&1; '
+        # pkg ABI / repos (issue #2754): ABI drift is otherwise invisible after
+        # teardown. pkg -vv and repo confs can carry credentials — redact
+        # userinfo and token-shaped query parameters before the tarball.
+        'mkdir -p "$D/pkg"; '
+        'pkg config ABI > "$D/pkg/abi.txt" 2>&1; '
+        'pkg config ALTABI > "$D/pkg/altabi.txt" 2>&1; '
+        'uname -mr > "$D/pkg/uname_mr.txt" 2>&1; '
+        'pkg -vv > "$D/pkg/pkg_vv.txt" 2>&1; '
+        'cp -a /usr/local/etc/pkg/repos "$D/pkg/repos" 2>/dev/null; '
+        'find "$D/pkg" -type f 2>/dev/null | while IFS= read -r _pfb_pkg_f; do '
+        'LC_ALL=C grep -Iq . "$_pfb_pkg_f" 2>/dev/null || continue; '
+        "sed -i '' -E "
+        r"-e 's#(https?://)[^/@:]+(:[^/@]*)?@#\1REDACTED@#g' "
+        r"-e 's#([?&]([Tt]oken|[Kk]ey|[Ss]ecret|[Pp]assword|[Aa]uth)=)[^&[:space:]]+#\1REDACTED#g' "
+        '"$_pfb_pkg_f"; '
+        "done; "
         # Scrub secrets from config.xml BEFORE it leaves the box.
         + config_scrub
         # ADR-24: value-redact the Plus secret identity across the WHOLE bundle
