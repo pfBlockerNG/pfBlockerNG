@@ -85,10 +85,12 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 // without 'save'.
 $input_errors = array();
 
-// "Save" the settings (standard pfSense CSRF POST). A checkbox is absent from the POST when
-// unticked, so persist the owner-ruled empty Off token; an absent config key defaults On.
+// "Save" the settings (standard pfSense CSRF POST). pfb_software_check_save() owns the token
+// (a checkbox is absent from the POST when unticked, so it persists the owner-ruled empty Off
+// token; an absent config key defaults On) -- issue #2525: the page keeps only the decision to
+// save, the flush and the redirect, so what a test can drive is what this handler runs.
 if ($_POST && isset($_POST['save'])) {
-	PfbConfig::write('gen/pfb_software_check', pfb_filter($_POST['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '');
+	pfb_software_check_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');
 	header('Location: /pfblockerng/pfblockerng_software.php');
 	exit;
