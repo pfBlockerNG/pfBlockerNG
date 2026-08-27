@@ -12,6 +12,9 @@ payload=$(cat || true)
 [ -n "${payload}" ] || exit 0
 
 # Genuine turn ends only. Session-end / cancel / error: observe, do not block.
+# Last payload for diagnosis. Do not treat this as a bus message.
+printf '%s\n' "${payload}" > "${HOME}/.grok/bus-stop-last.json" 2>/dev/null || true
+
 reason=$(printf '%s\n' "${payload}" | python3 -c '
 import json, sys
 raw = sys.stdin.read()
@@ -23,6 +26,16 @@ except Exception:
 print(d.get("reason") or "end_turn")
 ' 2>/dev/null) || reason="skip"
 [ "${reason}" = "end_turn" ] || exit 0
+
+stop_active=$(printf '%s\n' "${payload}" | python3 -c '
+import json, sys
+try:
+    d = json.loads(sys.stdin.read())
+except Exception:
+    print("0")
+    sys.exit(0)
+print("1" if d.get("stopHookActive") else "0")
+' 2>/dev/null) || stop_active=0
 
 eval "$(printf '%s\n' "${payload}" | python3 -c '
 import json, sys
@@ -70,6 +83,13 @@ case "${unread}" in
 esac
 if [ -n "${unread}" ]; then
 	reasons="${reasons} Unread pfb-msg — read and act before going idle: ${unread}"
+fi
+
+# Persistent monitors are not always listed in backgroundTasks (probed: Stop
+# looped after a live monitor printed its watching line). After one block this
+# turn, do not re-block on missing-monitor alone. Unread and bash-serve still block.
+if [ "${stop_active}" = "1" ] && [ "${has_shell_serve:-0}" != "1" ] && [ -z "${unread}" ]; then
+	exit 0
 fi
 
 [ -n "${reasons}" ] || exit 0
