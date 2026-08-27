@@ -675,8 +675,7 @@ jobs:
           MARKER: ${{ steps.tier.outputs.marker }}
         run: |
           set -eu
-          python3 scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite ui --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           # Run-body exports, not env: map values — GitHub Actions never
           # shell-expands env-map values (issue #2231).
           export SMOKE_IMAGE_DIR="$GITHUB_WORKSPACE/image"

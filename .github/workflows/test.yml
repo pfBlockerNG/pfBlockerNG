@@ -154,8 +154,7 @@ jobs:
         # the identical command shape and requires nonzero before trusting the
         # real report below (testing.md's red-canary rule).
         run: |
-          python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt /tmp/pytest-junit.xml
 
       - name: Branch coverage (informational)
@@ -534,8 +533,7 @@ jobs:
         # specs (tests/shell/agent_run_gates_git_spec.sh and siblings, by design)
         # -- the checker heals that before parsing; see its module docstring.
         run: |
-          python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt /tmp/shellspec-report/results_junit.xml
 
       - name: Run parity-guard on .github/workflows
@@ -860,8 +858,7 @@ jobs:
         # real report below (testing.md's red-canary rule). This job is matrixed
         # over PHP 8.3/8.5, so the gate runs once per PHP version too.
         run: |
-          python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt /tmp/phpunit-junit.xml
 
   markdownlint:
@@ -909,8 +906,7 @@ jobs:
         # the existing live log while JUnit records the skip set.
         run: |
           command node --test --test-reporter=junit --test-reporter-destination=/tmp/widget-js-canary.xml tests/fixtures/skip-allowlist-node-canary.test.mjs
-          python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/widget-js-junit.xml tests/js/*.test.js
           python3 scripts/check_skip_allowlist.py --suite widget-js --allowlist tests/skip-allowlist.txt /tmp/widget-js-junit.xml
 
@@ -948,16 +944,13 @@ jobs:
           npm --prefix tools/webassets/lezer-regexp run generate
           npm --prefix tools/webassets/lezer-pfb-regex-list run generate
           command node --test --test-reporter=junit --test-reporter-destination=/tmp/webassets-node-canary.xml tests/fixtures/skip-allowlist-node-canary.test.mjs
-          python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-grammar-junit.xml tools/webassets/lezer-regexp/test/parse.test.js
           python3 scripts/check_skip_allowlist.py --suite webassets-grammar --allowlist tests/skip-allowlist.txt /tmp/webassets-grammar-junit.xml
-          python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-listgrammar-junit.xml tools/webassets/lezer-pfb-regex-list/test/parse.test.js
           python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist tests/skip-allowlist.txt /tmp/webassets-listgrammar-junit.xml
-          python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \
-            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }
+          python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-node-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }
           node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=/tmp/webassets-bundle-junit.xml tools/webassets/test/cm-lint.test.js tools/webassets/test/cm-regex-source.test.js tools/webassets/test/cm-hooks-source.test.js tools/webassets/test/cm-shell-source.test.js tools/webassets/test/plain-list-language.test.js
           python3 scripts/check_skip_allowlist.py --suite webassets-bundle --allowlist tests/skip-allowlist.txt /tmp/webassets-bundle-junit.xml
 

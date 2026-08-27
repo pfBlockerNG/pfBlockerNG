@@ -252,16 +252,16 @@ def test_non_node_rows_require_their_native_junit_producer_flags() -> None:
 
 def test_each_shared_webassets_prefix_requires_its_own_canary_guard() -> None:
     texts = _workflow_texts()
+    checker = (
+        "python3 scripts/check_skip_allowlist.py --suite webassets-listgrammar --allowlist "
+        "tests/skip-allowlist.txt /tmp/webassets-node-canary.xml"
+    )
     guarded = (
-        "check_skip_allowlist.py --suite webassets-listgrammar --allowlist "
-        "tests/skip-allowlist.txt /tmp/webassets-node-canary.xml \\\n"
-        "            && { echo 'red canary failed: an unlisted skip did not fail the gate'; exit 1; }"
+        f'{checker} && :; canary_status=$?; [ "$canary_status" -eq 1 ] || '
+        '{ echo "red canary failed: an unlisted skip did not fail the gate '
+        '(checker exit $canary_status, expected 1)"; exit 1; }'
     )
-    texts["test.yml"] = texts["test.yml"].replace(
-        guarded,
-        guarded.split(" \\\n", 1)[0],
-        1,
-    )
+    texts["test.yml"] = texts["test.yml"].replace(guarded, checker, 1)
     errors = _validation_errors(texts)
     assert any("webassets-listgrammar: canary does not require nonzero" in error for error in errors)
 

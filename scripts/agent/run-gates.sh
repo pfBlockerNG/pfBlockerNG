@@ -120,13 +120,13 @@ is_vendor_gate() {
 gate_command() {
 	case "$1" in
 	'uv run --locked pytest')
-		printf '%s' 'uv run --locked pytest --junitxml="$PFB_SKIP_REPORT_DIR/pytest.xml" || exit $?; python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && { echo "red canary failed: an unlisted skip did not fail the gate"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/pytest.xml"'
+		printf '%s' 'uv run --locked pytest --junitxml="$PFB_SKIP_REPORT_DIR/pytest.xml" || exit $?; python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite pytest --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/pytest.xml"'
 		;;
 	'vendor/bin/phpunit')
-		printf '%s' 'vendor/bin/phpunit --log-junit "$PFB_SKIP_REPORT_DIR/phpunit.xml" || exit $?; python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && { echo "red canary failed: an unlisted skip did not fail the gate"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/phpunit.xml"'
+		printf '%s' 'vendor/bin/phpunit --log-junit "$PFB_SKIP_REPORT_DIR/phpunit.xml" || exit $?; python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite phpunit --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/phpunit.xml"'
 		;;
 	'shellspec --shell $(command -v dash || command -v sh)')
-		printf '%s' 'shellspec --shell $(command -v dash || command -v sh) -o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec" || exit $?; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && { echo "red canary failed: an unlisted skip did not fail the gate"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/shellspec/results_junit.xml"'
+		printf '%s' 'shellspec --shell $(command -v dash || command -v sh) -o junit --reportdir "$PFB_SKIP_REPORT_DIR/shellspec" || exit $?; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt tests/fixtures/skip-allowlist-canary.xml && :; canary_status=$?; [ "$canary_status" -eq 1 ] || { echo "red canary failed: an unlisted skip did not fail the gate (checker exit $canary_status, expected 1)"; exit 1; }; python3 scripts/check_skip_allowlist.py --suite shellspec --allowlist tests/skip-allowlist.txt "$PFB_SKIP_REPORT_DIR/shellspec/results_junit.xml"'
 		;;
 	*) printf '%s' "$1" ;;
 	esac
