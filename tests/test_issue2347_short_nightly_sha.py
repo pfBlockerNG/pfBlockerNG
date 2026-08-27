@@ -24,8 +24,7 @@ def test_nightly_version_uses_seven_character_source_sha() -> None:
 def test_nightly_workflow_shortens_only_the_package_version_sha() -> None:
     workflow = NIGHTLY_WORKFLOW.read_text(encoding="utf-8")
 
-    assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in workflow
-    assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHORT_SHA}"' in workflow
+    assert 'PKG_VERSION="$(sh "$TRUSTED_DIR/scripts/nightly-pkgversion.sh" "$SOURCE_SHA")"' in workflow
     assert "printf '%s\\n' \"$SOURCE_SHA\" > plan/source-sha" in workflow
 
 
@@ -33,6 +32,5 @@ def test_smoke_fixture_keeps_full_sha_annotation() -> None:
     workflow = SMOKE_WORKFLOW.read_text(encoding="utf-8")
     nightly = extract_between(workflow, "- name: Build a nightly .pkg", "\n      # ADR-24")
 
-    assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in nightly
-    assert 'NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHORT_SHA}"' in nightly
+    assert 'NIGHTLY_VERSION="$(sh scripts/nightly-pkgversion.sh "$SOURCE_SHA")"' in nightly
     assert '--annotate   "commit=${SOURCE_SHA}"' in nightly

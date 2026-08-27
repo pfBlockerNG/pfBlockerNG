@@ -15,6 +15,12 @@
 #   --channel C      pkg channel to build: stable|testing|edge|nightly (default: edge).
 #                    The channel selects the port, and the port names the package, so this
 #                    decides WHICH artifact the suite installs (issue #2206).
+#   --pkgversion V   nightly identity YYYYMMDDHHMMSS.<7-sha>. When omitted on
+#                    --channel nightly, derived from scripts/nightly-pkgversion.sh
+#                    using the just-checked-out HEAD (the commit this script
+#                    builds, issue #2754). An explicit flag or
+#                    PFB_NIGHTLY_PKGVERSION is the documented exception: the
+#                    operator may stamp any identity. Ignored on other channels.
 #   --marker M       pytest -m marker (default: smoke)
 #   --filter EXPR    pytest -k filter expr (default: none)
 #   --no-two-vm      skip civm image pull and set NO_TWO_VM=1
@@ -66,6 +72,7 @@ set -eu
 _REF=""        # resolved below (HEAD) if not given
 _ABI="FreeBSD:15:amd64"  # version-literal-ok: local-dev default; overridden by --abi
 _CHANNEL="edge"          # the devel branch's release line; overridden by --channel
+_PKGVERSION="${PFB_NIGHTLY_PKGVERSION:-}"
 _MARKER="smoke"
 _FILTER=""
 _NO_TWO_VM=0
@@ -118,6 +125,7 @@ while [ "$#" -gt 0 ]; do
         --ref)      shift; _REF="$1";    shift ;;
         --abi)      shift; _ABI="$1";    shift ;;
         --channel)  shift; _CHANNEL="$1"; shift ;;
+        --pkgversion) shift; _PKGVERSION="$1"; shift ;;
         --marker)   shift; _MARKER="$1"; shift ;;
         --filter)   shift; _FILTER="$1";      shift ;;
         --no-two-vm) _NO_TWO_VM=1;       shift ;;
@@ -305,14 +313,26 @@ export SMOKE_STUB_DNS_PORT="${SMOKE_STUB_DNS_PORT:-53}"
 pkill -9 -f qemu-system-x86_64 2>/dev/null || true
 
 # ── Step 5: build .pkg ─────────────────────────────────────────────────────── #
+# Nightly builds require explicit --pkgversion (YYYYMMDDHHMMSS.<7-sha>).
+# Derive from the just-checked-out HEAD so the identity matches what this
+# run builds (issue #2754). An explicit --pkgversion / PFB_NIGHTLY_PKGVERSION
+# is the operator override and is not re-derived.
 printf 'smoke-on-box: building .pkg (abi=%s channel=%s)...\n' "$_ABI" "$_CHANNEL" >&2
-SMOKE_PKG="$(sh scripts/build-leg.sh \
+set -- \
     --ports-dir  "$PORTS_DIR" \
     --channel    "$_CHANNEL" \
     --abi        "$_ABI" \
     --php        "$_php_ver" \
     --py-flavor  "$_py_flavor" \
-    --local-src  "$REPO_ROOT")"
+    --local-src  "$REPO_ROOT"
+if [ "$_CHANNEL" = nightly ]; then
+    if [ -z "$_PKGVERSION" ]; then
+        _PKGVERSION="$(sh scripts/nightly-pkgversion.sh "$(git -C "$REPO_ROOT" rev-parse HEAD)")"
+    fi
+    set -- "$@" --pkgversion "$_PKGVERSION"
+    printf 'smoke-on-box: nightly pkgversion %s\n' "$_PKGVERSION" >&2
+fi
+SMOKE_PKG="$(sh scripts/build-leg.sh "$@")"
 export SMOKE_PKG
 printf 'smoke-on-box: pkg built: %s\n' "$SMOKE_PKG" >&2
 
