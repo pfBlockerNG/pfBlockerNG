@@ -10999,6 +10999,13 @@
                 "variadic": false,
                 "type": "?array",
                 "default": "NULL"
+            },
+            {
+                "name": "read_ok",
+                "byRef": true,
+                "variadic": false,
+                "type": "?bool",
+                "default": "NULL"
             }
         ]
     },

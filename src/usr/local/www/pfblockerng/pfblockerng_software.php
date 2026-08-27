@@ -97,12 +97,16 @@ if ($_POST && isset($_POST['save'])) {
 $pfb_sw_check	= pfb_software_check_enabled();
 
 // "Check now" — a manual, explicit cache refresh from the pfBlockerNG repo, then redisplay. $force=true
-// bypasses the "Check for new versions" enable-gate so a one-off check always works. The check's own
-// outcome is CAPTURED and routed through pfb_software_check_redirect(): a forced check whose catalogue
-// read failed redirects carrying feedback rather than silently re-serving the cached answer (#2674).
+// bypasses the "Check for new versions" enable-gate so a one-off check always works. The outcome of
+// THIS read is captured out-of-band and routed through pfb_software_check_redirect(): a forced check
+// whose catalogue read failed redirects carrying feedback rather than silently re-serving the cached
+// answer (#2674). It is deliberately not read off the returned cache, which KEEPS a failure across a
+// later deferral — that would make an identical deferral report "failed" or "fine" depending only on
+// what an earlier tick recorded. NULL (nothing was attempted) is not a failure.
 if ($pfb_sw_action === 'check') {
-	$pfb_sw_result = pfb_software_update_check(TRUE);
-	header('Location: ' . pfb_software_check_redirect(!isset($pfb_sw_result['last_failed'])));
+	$pfb_sw_read_ok = NULL;
+	pfb_software_update_check(TRUE, NULL, $pfb_sw_read_ok);
+	header('Location: ' . pfb_software_check_redirect($pfb_sw_read_ok !== FALSE));
 	exit;
 }
 
