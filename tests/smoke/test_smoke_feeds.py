@@ -4026,7 +4026,9 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
         # When -- the blacklist branch fetches it.
         out = _adr46_download(deployed_vm, feed_url, archive, "pfb2634", "blacklist")
 
-        # Then -- success, the published bytes on disk, and the category extracted from them.
+        # Then -- three independently failable asserts (issue #2638 B4 / PR #2639).
+        # The stored-mime check must fail on its own if the body is a decoded tar
+        # even when download succeeded and categories extracted.
         assert "PFB_DL_TRUE" in out, (
             f"expected pfb_download success on a valid .tar.gz served with Content-Encoding: gzip; got stdout: {out!r}"
         )
