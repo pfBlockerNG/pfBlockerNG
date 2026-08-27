@@ -95,34 +95,39 @@ final class DownloadSizeCeilingTest extends TestCase
 	 * Given  a wrapped command whose ceiling is two blocks and whose child
 	 *        writes one MiB
 	 * When   the command runs through the same exec() the extraction sites use
-	 * Then   the child is killed for exceeding the file-size limit, exec()
-	 *        reports the nonzero status the extraction gates already reject,
-	 *        and the output stops far short of what was asked for.
-	 *
-	 * The brace group only silences the shell's own "Filesize limit exceeded"
-	 * notice so the suite output stays readable; the wrapped command is verbatim.
+	 * Then   Linux reports SIGXFSZ, Darwin reports dd's EFBIG exit, the
+	 *        extraction gates reject either, and output stays within the ceiling.
 	 */
-	public function test_extract_cmd_ceiling_kills_a_child_that_writes_past_it(): void
+	public function test_extract_cmd_ceiling_stops_a_child_that_writes_past_it(): void
 	{
 		if (!is_executable('/bin/dd')) {
 			$this->markTestSkipped('/bin/dd not available on this host');
 		}
 
+		$blocks = 2;
 		$target = $this->dir . '/overflow.bin';
+		$stderr = $this->dir . '/overflow.err';
 		$output = [];
 		$retval = 0;
 		exec(
-			'{ ' . pfb_extract_cmd('/bin/dd if=/dev/zero of=' . escapeshellarg($target) . ' bs=1024 count=1024', 2) . '; } 2>/dev/null',
+			'{ ' . pfb_extract_cmd('LC_ALL=C /bin/dd if=/dev/zero of=' . escapeshellarg($target) . ' bs=1024 count=1024',
+				$blocks) . '; } 2>' . escapeshellarg($stderr),
 			$output,
 			$retval
 		);
 
-		$this->assertSame(PFB_EXTRACT_SIGXFSZ_EXIT, $retval,
-			'a write past the ceiling must surface as the SIGXFSZ exit status');
+		if (PHP_OS_FAMILY === 'Darwin') {
+			$this->assertSame(1, $retval, 'Darwin dd must surface RLIMIT_FSIZE as its EFBIG exit');
+			$this->assertStringStartsWith("dd: {$target}: File too large\n", (string) file_get_contents($stderr),
+				'Darwin exit 1 must be the diagnosed EFBIG refusal, not an arbitrary failure');
+		} else {
+			$this->assertSame(PFB_EXTRACT_SIGXFSZ_EXIT, $retval,
+				'a write past the ceiling must surface as the SIGXFSZ exit status');
+		}
 		$this->assertFalse(pfb_download_extraction_succeeded($retval),
 			'the extraction gates must read the capped run as a failure');
-		$this->assertLessThan(1024 * 1024, filesize($target),
-			'the ceiling must stop the write, not merely report on it');
+		$this->assertLessThanOrEqual($blocks * 1024, filesize($target),
+			'the ceiling must bound the output, not merely report on it');
 	}
 
 	/**
