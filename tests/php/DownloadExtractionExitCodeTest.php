@@ -487,6 +487,11 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			'touch("{$pfb[\'dbdir\']}/{$filename}/{$filename}.update")',
 			$body
 		);
+		// issue #2735: success return is immediately after the update marker.
+		$this->assertMatchesRegularExpression(
+			'/touch\("\{\$pfb\[.dbdir.\]\}\/\{\$filename\}\/\{\$filename\}\.update"\);\s*return PfbDownloadResult::success\(\);/',
+			$body
+		);
 	}
 
 	/**
