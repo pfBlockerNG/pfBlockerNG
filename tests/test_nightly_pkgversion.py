@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+from datetime import datetime
 from pathlib import Path
 
 from scripts import release_version as rv
@@ -20,6 +21,17 @@ SMOKE_SINGLE_YML = ROOT / ".github" / "workflows" / "smoke-single.yml"
 
 _SHA = "fd978e098ecdd3b982c7a3f8e02fefde36df14e5"
 _VERSION_RE = re.compile(r"^[0-9]{14}\.[0-9a-f]{7}$")
+_STAMP_FMT = "%Y%m%d%H%M%S"
+
+
+def _stamp_seconds_apart(a: str, b: str) -> float:
+    """Compare YYYYMMDDHHMMSS prefixes as UTC instants, not as integers.
+
+    ``int("20260827190000") - int("20260827185959")`` is 4041, not 1.
+    """
+    ta = datetime.strptime(a.split(".", 1)[0], _STAMP_FMT)
+    tb = datetime.strptime(b.split(".", 1)[0], _STAMP_FMT)
+    return abs((ta - tb).total_seconds())
 
 
 def test_nightly_pkgversion_helper_exists() -> None:
@@ -84,7 +96,14 @@ def test_nightly_pkgversion_helper_uses_utc_not_local_time() -> None:
     assert a.endswith(".fd978e0")
     assert b.endswith(".fd978e0")
     # Local clocks in these zones differ by hours; UTC stamps agree within 2s.
-    assert abs(int(a.split(".", 1)[0]) - int(b.split(".", 1)[0])) <= 2, (a, b)
+    assert _stamp_seconds_apart(a, b) <= 2, (a, b)
+
+
+def test_nightly_stamp_compare_survives_a_minute_boundary() -> None:
+    """Integer YYYYMMDDHHMMSS subtract is not seconds (issue #2758 follow-up)."""
+    a, b = "20260827185959.fd978e0", "20260827190000.fd978e0"
+    assert abs(int(a.split(".", 1)[0]) - int(b.split(".", 1)[0])) > 2
+    assert _stamp_seconds_apart(a, b) <= 2
 
 
 def test_nightly_pkgversion_helper_rejects_short_sha() -> None:
