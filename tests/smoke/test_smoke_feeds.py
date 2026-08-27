@@ -4095,15 +4095,15 @@ def test_ip_tar_feed_imports_members(deployed_vm: SmokeVM, mock_feeds: _MockFeed
     publishes the inner list and the member IP loads.
     """
     payload = _ADR44_BODY.encode()
-    framing = b"NOT-A-LIST-TOKEN\n"
+    framing_bytes = b"NOT-A-LIST-TOKEN\n"
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         info = tarfile.TarInfo("list.txt")
         info.size = len(payload)
         tar.addfile(info, io.BytesIO(payload))
         readme = tarfile.TarInfo("README")
-        readme.size = len(framing)
-        tar.addfile(readme, io.BytesIO(framing))
+        readme.size = len(framing_bytes)
+        tar.addfile(readme, io.BytesIO(framing_bytes))
     feed_url = mock_feeds.register("adr2638.tar", buf.getvalue())
     spec = h.IpCase(aliasname="adr2638tar", feed_url=feed_url, header="adr2638tar", family="v4")
     assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the tar feed was ever loaded"
@@ -4112,8 +4112,7 @@ def test_ip_tar_feed_imports_members(deployed_vm: SmokeVM, mock_feeds: _MockFeed
         assert h.member_present(members, _ADR44_MEMBER), (
             f"expected {_ADR44_MEMBER!r} in {spec.alias} after tar extraction, got: {members}"
         )
-        framing = "NOT-A-LIST-TOKEN"
-        assert not any(framing in m or "README" in m for m in members), (
+        assert not any("NOT-A-LIST-TOKEN" in m or "README" in m for m in members), (
             f"tar framing must not reach the alias; members={members}"
         )
 
