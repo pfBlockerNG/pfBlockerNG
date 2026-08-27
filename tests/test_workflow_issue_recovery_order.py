@@ -10,15 +10,17 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_after
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 def _recovery_script(path: Path) -> str:
     source = path.read_text(encoding="utf-8")
-    tail = source.split("      - name: Close the recovered tracking issue\n", 1)[1]
+    tail = extract_after(source, "      - name: Close the recovered tracking issue\n")
     step = re.split(r"\n(?:      - name:|  [a-z][a-z0-9_-]*:)", tail, maxsplit=1)[0]
-    return "\n".join(line[10:] for line in step.split("        run: |\n", 1)[1].splitlines())
+    return "\n".join(line[10:] for line in extract_after(step, "        run: |\n").splitlines())
 
 
 def _run_recovery(

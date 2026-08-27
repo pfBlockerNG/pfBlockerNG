@@ -17,7 +17,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _workflow_steps import extract_step
+from _workflow_steps import extract_after, extract_between, extract_step
 
 _JOB_HEADER_RE = re.compile(r"^  ([A-Za-z][A-Za-z0-9_-]*):[ \t]*$")
 
@@ -96,7 +96,7 @@ def test_issue_2388_ports_sync_runs_only_after_published_release_resolution() ->
     assert "sync-ports-fork" in published_jobs, "publishing must trigger the FreeBSD-ports bump"
     job_names = list(published_jobs)
     assert job_names.index("sync-ports-fork") == job_names.index("resolve") + 1
-    concurrency = published.split("\nconcurrency:\n", 1)[1].split("\njobs:\n", 1)[0]
+    concurrency = extract_between(published, "\nconcurrency:\n", "\njobs:\n")
     assert "  queue: max" in concurrency, "every published release must keep its queued ports bump"
 
     sync = "\n".join(published_jobs["sync-ports-fork"])
@@ -170,7 +170,7 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
 ) -> None:
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
     script = textwrap.dedent(
-        extract_step(release, "Pin ci-metadata, ROUTE, and Ports identities").split("run: |\n", 1)[1]
+        extract_after(extract_step(release, "Pin ci-metadata, ROUTE, and Ports identities"), "run: |\n")
     )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -304,7 +304,7 @@ def test_issue_2387_pin_step_executes_against_exact_ci_metadata_sha(
 
 def test_release_dependency_loop_executes_every_origin_with_locked_python(tmp_path: Path) -> None:
     release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
-    script = textwrap.dedent(extract_step(release, "Build the .pkg via build-leg.sh").split("run: |\n", 1)[1])
+    script = textwrap.dedent(extract_after(extract_step(release, "Build the .pkg via build-leg.sh"), "run: |\n"))
     lines = script.splitlines()
     start = next(index for index, line in enumerate(lines) if line.strip().startswith("DEP_PKG_DIR="))
     end = next(index for index, line in enumerate(lines[start:], start) if line.strip().startswith("for DEP_PKG in"))

@@ -28,6 +28,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_after
 from tests.smoke import helpers
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -360,7 +361,7 @@ def test_ui_job_budget_covers_live_vm_leg() -> None:
     smoke-single.yml already uses -- so a slow-but-healthy leg (setup alone ran
     ~23 of the observed 20m04s pass) isn't cancelled mid-run."""
     workflow = (_REPO_ROOT / ".github/workflows/ui-tests.yml").read_text(encoding="utf-8")
-    ui_job = workflow.split("\n  ui:\n", 1)[1]
+    ui_job = extract_after(workflow, "\n  ui:\n")
     match = re.search(r"^\s*timeout-minutes:\s*(\S+)\s*$", ui_job, re.MULTILINE)
     assert match, f"expected a timeout-minutes key under the `ui` job, found none in:\n{ui_job[:200]}"
 

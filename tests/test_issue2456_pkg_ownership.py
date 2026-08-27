@@ -6,7 +6,7 @@ import textwrap
 import unittest
 from pathlib import Path
 
-from tests._workflow_steps import extract_job, extract_step
+from tests._workflow_steps import extract_after, extract_before, extract_job, extract_step
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -122,9 +122,9 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
             finalize,
         )
         step = extract_step(finalize, "Promote a green stage or discard every other outcome")
-        script = textwrap.dedent(step.split("        run: |\n", 1)[1]).split(
-            "sh scripts/dispatch-pkg-publication.sh", 1
-        )[0]
+        script = extract_before(
+            textwrap.dedent(extract_after(step, "        run: |\n")), "sh scripts/dispatch-pkg-publication.sh"
+        )
         script += '\nprintf "%s\\n" "$PKG_OPERATION"\n'
         for gate_green, expected in (("true", "tagged-promote"), ("false", "tagged-discard")):
             completed = subprocess.run(

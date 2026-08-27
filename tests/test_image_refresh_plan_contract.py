@@ -21,6 +21,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from tests._workflow_steps import extract_after, extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "image-refresh.yml"
 STEP_NAME = "Build refresh matrix from ci-metadata"
@@ -53,12 +55,12 @@ def _run_plan(
 ) -> dict[str, Any]:
     """Extract the plan step's run script and execute it against a fixture."""
     source = WORKFLOW.read_text(encoding="utf-8")
-    step = source.split(f"      - name: {STEP_NAME}\n", 1)[1].split("\n      - name:", 1)[0]
+    step = extract_between(source, f"      - name: {STEP_NAME}\n", "\n      - name:")
     # The run-block body is every ≥10-space-indented line after `run: |`; the
     # first shallower line ends it (this step is the last of its job, so a
     # step-boundary split alone would leak the next job's YAML into the script).
     body: list[str] = []
-    for line in step.split("        run: |\n", 1)[1].splitlines():
+    for line in extract_after(step, "        run: |\n").splitlines():
         if not line.strip():
             body.append("")
         elif line.startswith("          "):
@@ -350,9 +352,9 @@ class TestActivationPr:
         expect_failure: bool = False,
     ) -> tuple[str, str, Path]:
         source = WORKFLOW.read_text(encoding="utf-8")
-        step = source.split(f"      - name: {ACTIVATION_STEP}\n", 1)[1].split("\n      - name:", 1)[0]
+        step = extract_between(source, f"      - name: {ACTIVATION_STEP}\n", "\n      - name:")
         body: list[str] = []
-        for line in step.split("        run: |\n", 1)[1].splitlines():
+        for line in extract_after(step, "        run: |\n").splitlines():
             if not line.strip():
                 body.append("")
             elif line.startswith("          "):

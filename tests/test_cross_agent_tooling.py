@@ -7,6 +7,8 @@ import json
 import subprocess
 from pathlib import Path
 
+from tests._workflow_steps import extract_between
+
 ROOT = Path(__file__).resolve().parent.parent
 REPO_SKILLS = {
     "coderabbit",
@@ -157,7 +159,7 @@ def test_repository_intelligence_routing_is_canonical_for_every_client() -> None
     bootstrap = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
     heading = "## Repository intelligence routing"
     assert heading in bootstrap, "repository-intelligence routing must be vendor-neutral"
-    routing = bootstrap.split(heading, 1)[1].split("\n## ", 1)[0]
+    routing = extract_between(bootstrap, heading, "\n## ")
     for contract in (
         "scripts/agent/ensure-codegraph.sh",
         "codegraph_explore",

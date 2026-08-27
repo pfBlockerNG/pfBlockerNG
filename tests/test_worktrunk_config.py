@@ -3,6 +3,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 PROJECT_CONFIG = ROOT / ".config" / "wt.toml"
 WORKTREE_DOCS = (
@@ -44,7 +46,7 @@ def test_worktrunk_creation_guard_rejects_the_legacy_command() -> None:
 
 def test_landing_fetches_before_json_cleanup_and_reports_branch_deletion() -> None:
     landing = LANDING_POLICY.read_text(encoding="utf-8")
-    merge_section = landing.split("## Merge step", 1)[1].split("## Post-merge", 1)[0]
+    merge_section = extract_between(landing, "## Merge step", "## Post-merge")
 
     merged = merge_section.index("PR's state must read `MERGED`")
     fetch = merge_section.index("Run `git fetch origin` after that verification", merged)

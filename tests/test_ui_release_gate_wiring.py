@@ -25,6 +25,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from tests._workflow_steps import extract_after, extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 UI_WORKFLOW = ROOT / ".github/workflows/ui-tests.yml"
 SMOKE_WORKFLOW = ROOT / ".github/workflows/smoke.yml"
@@ -87,10 +89,10 @@ def _trigger_blocks(workflow: Path) -> tuple[str, str]:
     text = workflow.read_text(encoding="utf-8")
     # Leading "\n" so the trigger split below (which requires a preceding
     # newline) also matches the FIRST trigger key, not just later ones.
-    on_section = "\n" + text.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    on_section = "\n" + extract_between(text, "\non:\n", "\npermissions:\n")
 
     def _block(trigger: str) -> str:
-        after = on_section.split(f"\n  {trigger}:\n", 1)[1]
+        after = extract_after(on_section, f"\n  {trigger}:\n")
         # Ends at the next 2-space-indented key (another trigger, or the section end).
         m = re.search(r"\n  [A-Za-z]", after)
         return after[: m.start()] if m else after
@@ -148,7 +150,7 @@ def test_pkg_artifact_prefix_declared_in_both_trigger_blocks(workflow: Path) -> 
         assert "pkg_artifact_prefix:" in block, f"{workflow.name}: {name} is missing pkg_artifact_prefix"
         # the input's own sub-block (description/required/type/default) ends well
         # within a generous slice; scan that for the default line.
-        sub = block.split("pkg_artifact_prefix:\n", 1)[1][:400]
+        sub = extract_after(block, "pkg_artifact_prefix:\n")[:400]
         assert re.search(r"^\s*default:\s*\"\"\s*$", sub, re.MULTILINE), (
             f"{workflow.name}: {name}'s pkg_artifact_prefix must default to '' -- block was:\n{sub}"
         )
@@ -216,7 +218,7 @@ def test_ui_job_if_condition_shape() -> None:
     jobs = _jobs(UI_WORKFLOW)
     job_text = "\n".join(jobs["ui"])
     # The if: may be a folded multi-line block (`if: >-`); grab up to the `runs-on:` line.
-    if_block = job_text.split("if:", 1)[1].split("\n    runs-on:", 1)[0]
+    if_block = extract_between(job_text, "if:", "\n    runs-on:")
     assert "!cancelled()" in if_block
     assert "needs.prepare.result == 'success'" in if_block
     assert "needs.prepare.outputs.run == 'true'" in if_block
@@ -842,7 +844,7 @@ def test_checkout_ref_input_declared_in_both_trigger_blocks(workflow: Path) -> N
     call_block, dispatch_block = _trigger_blocks(workflow)
     for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
         assert "checkout_ref:" in block, f"{workflow.name}: {name} is missing checkout_ref"
-        sub = block.split("checkout_ref:\n", 1)[1][:400]
+        sub = extract_after(block, "checkout_ref:\n")[:400]
         assert re.search(r"^\s*default:\s*\"\"\s*$", sub, re.MULTILINE), (
             f"{workflow.name}: {name}'s checkout_ref must default to '' -- block was:\n{sub}"
         )
@@ -887,7 +889,7 @@ def test_release_gate_input_declared_in_both_trigger_blocks(workflow: Path) -> N
     call_block, dispatch_block = _trigger_blocks(workflow)
     for name, block in (("workflow_call", call_block), ("workflow_dispatch", dispatch_block)):
         assert "release_gate:" in block, f"{workflow.name}: {name} is missing release_gate"
-        sub = block.split("release_gate:\n", 1)[1][:400]
+        sub = extract_after(block, "release_gate:\n")[:400]
         assert re.search(r"^\s*default:\s*false\s*$", sub, re.MULTILINE), (
             f"{workflow.name}: {name}'s release_gate must default to false -- block was:\n{sub}"
         )
@@ -1127,14 +1129,14 @@ def test_release_channel_metadata_and_edge_following_do_not_start_a_second_relea
 
 def test_tagged_release_recipe_never_mutates_the_nightly_port() -> None:
     published = PUBLISHED_WORKFLOW.read_text(encoding="utf-8")
-    sync = published.split("\n  sync-ports-fork:\n", 1)[1].split("\n  publish-pkg:\n", 1)[0]
+    sync = extract_between(published, "\n  sync-ports-fork:\n", "\n  publish-pkg:\n")
     assert "pfSense-pkg-pfBlockerNG-nightly" not in sync, sync
     assert 'PORT_PATHS="net/pfSense-pkg-pfBlockerNG-devel net/pfSense-pkg-pfBlockerNG-nightly"' not in published
 
 
 def test_smoke_single_nightly_fixture_uses_utc_timestamp_and_source_sha() -> None:
     text = SMOKE_SINGLE_WORKFLOW.read_text(encoding="utf-8")
-    nightly = text.split("- name: Build a nightly .pkg", 1)[1].split("\n      # ADR-24", 1)[0]
+    nightly = extract_between(text, "- name: Build a nightly .pkg", "\n      # ADR-24")
     assert 'SOURCE_SHA="$(git rev-parse HEAD)"' in nightly, nightly
     assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in nightly, nightly
     assert 'NIGHTLY_VERSION="$(date -u +%Y%m%d%H%M%S).${SOURCE_SHORT_SHA}"' in nightly, nightly

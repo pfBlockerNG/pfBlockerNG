@@ -8,6 +8,8 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+from tests._workflow_steps import extract_after, extract_before, extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 REPUBLISH = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
@@ -32,8 +34,8 @@ def test_release_build_outputs_keep_source_checkout_clean_and_native_identity() 
     assert 'export PFB_RUN_ROOT="$GITHUB_WORKSPACE/out"' not in RELEASE
     assert 'RENAMED="${PKG_DIR}/${BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"' in RELEASE
     assert 'RENAMED_DEP="${DEP_PKG_DIR}/${DEP_BASE}-${VARIANT}-${PFSENSE_VERSION}.pkg"' in RELEASE
-    record_step = RELEASE.split("name: Write the destination-bound build record", 1)[1]
-    record_step = record_step.split("name: Build the .pkg via build-leg.sh", 1)[0]
+    record_step = extract_after(RELEASE, "name: Write the destination-bound build record")
+    record_step = extract_before(record_step, "name: Build the .pkg via build-leg.sh")
     assert '"destinations":' not in record_step
 
 
@@ -44,14 +46,14 @@ def test_manual_republish_inputs_are_individually_required() -> None:
 
 def test_release_build_leg_step_binds_variant_from_the_matrix_row() -> None:
     """The invocation test supplies VARIANT itself, so pin the step env that defines it."""
-    step = RELEASE.split("      - name: Build the .pkg via build-leg.sh", 1)[1].split("        run: |", 1)[0]
+    step = extract_between(RELEASE, "      - name: Build the .pkg via build-leg.sh", "        run: |")
     assert "VARIANT:" in step
-    assert "${{ matrix.variant }}" in step.split("VARIANT:", 1)[1].split("\n", 1)[0]
+    assert "${{ matrix.variant }}" in extract_after(step, "VARIANT:").split("\n", 1)[0]
 
 
 def test_release_build_leg_passes_variant_to_builder(tmp_path: Path) -> None:
     marker = '          PKG="$(sh scripts/build-leg.sh \\\n'
-    invocation = marker + RELEASE.split(marker, 1)[1].split("          PKG_DIR=", 1)[0]
+    invocation = marker + extract_between(RELEASE, marker, "          PKG_DIR=")
     fake_builder = tmp_path / "build-leg.sh"
     captured = tmp_path / "args"
     fake_builder.write_text(
@@ -101,8 +103,8 @@ def test_release_build_leg_passes_variant_to_builder(tmp_path: Path) -> None:
 
 
 def test_release_build_leg_places_generated_trees_outside_source(tmp_path: Path) -> None:
-    block = RELEASE.split("      - name: Build the .pkg via build-leg.sh", 1)[1]
-    invocation = textwrap.dedent(block.split("        run: |\n", 1)[1].split("          PKG_DIR=", 1)[0])
+    block = extract_after(RELEASE, "      - name: Build the .pkg via build-leg.sh")
+    invocation = textwrap.dedent(extract_between(block, "        run: |\n", "          PKG_DIR="))
     fake_dir = tmp_path / "fake scripts;safe"
     fake_dir.mkdir()
     fake_builder = fake_dir / "build-leg.sh"

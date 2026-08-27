@@ -7,6 +7,8 @@ from pathlib import Path
 
 import yaml
 
+from tests._workflow_steps import extract_after
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -85,7 +87,7 @@ def test_the_shellspec_job_provides_the_locale_the_adr26_contract_needs() -> Non
     resolves, in the job itself, through commands that exit NONZERO when it does not:
     that it is listed at all, that LC_NUMERIC carries the decimal comma, and that awk
     — the interpreter the shard and module-duration specs probe through — reads it."""
-    rest = _read(".github/workflows/test.yml").split("\n  shell-tests:\n", 1)[1]
+    rest = extract_after(_read(".github/workflows/test.yml"), "\n  shell-tests:\n")
     end = re.search(r"^  [A-Za-z0-9_.-]+:\s*$", rest, re.MULTILINE)
     job = rest[: end.start()] if end else rest
     gaps = _locale_proof_gaps(job)

@@ -10,19 +10,21 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_after, extract_between
+
 ROOT = Path(__file__).resolve().parents[1]
 RELEASE = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
 REPUBLISH = (ROOT / ".github/workflows/pkg-republish.yml").read_text(encoding="utf-8")
 
 
 def _build_record_script() -> str:
-    block = RELEASE.split("      - name: Write the destination-bound build record", 1)[1]
-    return textwrap.dedent(block.split("        run: |\n", 1)[1].split("\n      - name:", 1)[0])
+    block = extract_after(RELEASE, "      - name: Write the destination-bound build record")
+    return textwrap.dedent(extract_between(block, "        run: |\n", "\n      - name:"))
 
 
 def _republish_validate_script() -> str:
-    block = REPUBLISH.split("      - name: Resolve exact immutable Release", 1)[1]
-    script = block.split("        run: |\n", 1)[1].split("\n          git fetch", 1)[0]
+    block = extract_after(REPUBLISH, "      - name: Resolve exact immutable Release")
+    script = extract_between(block, "        run: |\n", "\n          git fetch")
     return textwrap.dedent(script) + "\nexit 0\n"
 
 

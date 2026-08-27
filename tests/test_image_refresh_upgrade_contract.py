@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from tests._workflow_steps import extract_after
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "image-refresh.yml"
 
@@ -20,7 +22,7 @@ def _upgrade_script() -> str:
     step_end = source.index("\n      - name:", step_id)
     step = source[step_start:step_end]
     body: list[str] = []
-    for line in step.split("        run: |\n", 1)[1].splitlines():
+    for line in extract_after(step, "        run: |\n").splitlines():
         if not line.strip():
             body.append("")
         elif line.startswith("          "):

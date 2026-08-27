@@ -38,6 +38,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from tests._workflow_steps import extract_between
+
 from .. import helpers, pkg_identity
 from .render_oracle import PhpErrorLogGuard, evaluate_render
 from .test_category import _snapshot_node
@@ -3272,7 +3274,7 @@ def test_dnsbl_regex_save_uses_package_python_wrapper() -> None:
     """
     source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng_dnsbl.php"
     source = source_path.read_text(encoding="utf-8")
-    block = source.split("// A usable validator always runs", 1)[1].split("// Validate DNSBL VIP address", 1)[0]
+    block = extract_between(source, "// A usable validator always runs", "// Validate DNSBL VIP address")
 
     assert "$pfb_regex_python = pfb_python_interpreter();" in block
     assert re.search(
@@ -3287,7 +3289,7 @@ def test_pfblockerng_tick_delegates_safesearch_to_due_ledger() -> None:
     source_path = helpers.SMOKE_DIR.parent.parent / "src/usr/local/www/pfblockerng/pfblockerng.php"
     source = source_path.read_text(encoding="utf-8")
 
-    tick_branch = source.split("elseif ($argv[1] == 'tick') {", 1)[1].split("elseif ($argv[1] == 'cron-tick') {", 1)[0]
+    tick_branch = extract_between(source, "elseif ($argv[1] == 'tick') {", "elseif ($argv[1] == 'cron-tick') {")
     assert tick_branch.count("pfblockerng_tick();") == 1
     assert "pfblockerng_ss_refresh" not in tick_branch
 

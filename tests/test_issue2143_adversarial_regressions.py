@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.release_version import derive_destinations, derive_destinations_from_git
+from tests._workflow_steps import extract_between
 from tests.gitenv import scrubbed_git_env
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -82,7 +83,7 @@ def test_other_tags_ordered_or_branch_mapped_never_change_current_tag_destinatio
 
 
 def test_sync_ports_uses_only_exact_channel_recipe_paths() -> None:
-    sync = PUBLISHED.split("\n  sync-ports-fork:\n", 1)[1].split("\n  publish-pkg:\n", 1)[0]
+    sync = extract_between(PUBLISHED, "\n  sync-ports-fork:\n", "\n  publish-pkg:\n")
     assert '"stable") PORT_PATH="net/pfSense-pkg-pfBlockerNG"' in sync
     assert '"testing") PORT_PATH="net/pfSense-pkg-pfBlockerNG-testing"' in sync
     assert '"edge") PORT_PATH="net/pfSense-pkg-pfBlockerNG-edge"' in sync
