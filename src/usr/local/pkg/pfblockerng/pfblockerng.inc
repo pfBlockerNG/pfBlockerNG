@@ -15216,10 +15216,9 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 				exec(pfb_extract_cmd("{$pfb['script']} et {$header_esc} x x x x x {$pfb['etblock']} {$pfb['etmatch']} {$elog}"), $output, $retval);
 				if (!pfb_download_extraction_succeeded($retval)) {
 					pfb_logger("\n[pfb_download] et processing failed (script exit {$retval})" . pfb_extract_cap_note($retval), 2);
-					// The '.orig' this pass published is the raw ET CSV (processet() rewrites
-					// it in place), which the apply loop's fail-marker fallback would parse.
-					// Both sidecar families go too (pfb_force_clear_validators()' suffix set)
-					// or a remote feed answers the next pass with a 304 and never re-fetches.
+					// The '.orig' this pass published is the raw ET CSV (processet() rewrites it
+					// in place), which the apply loop's fail-marker fallback would parse. Both sidecar
+					// families go (pfb_force_clear_validators()' set) or a surviving ETag 304s the next pass.
 					foreach (array('', '.xxhash128', '.md5', '.etag', '.lastmod') as $et_sfx) {
 						unlink_if_exists("{$orig_download}{$et_sfx}");
 					}
