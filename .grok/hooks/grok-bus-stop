@@ -69,6 +69,15 @@ if [ "${has_shell_serve:-0}" = "1" ]; then
 	reasons="${reasons} pfb-msg serve is running as background bash (id=${shell_id}). Kill it and arm the Grok monitor tool with persistent:true -- bash only notifies on exit and serve never exits on a message."
 fi
 
+# One grok-dev inbox. If smoke already has a watcher, do not make every
+# other Grok TUI on this box arm a second consumer (they steal mail).
+if [ "${has_monitor:-0}" != "1" ]; then
+	n_watch=$(ssh -o BatchMode=yes -o ConnectTimeout=2 -o StrictHostKeyChecking=accept-new \
+		smoke 'ps -ef | awk "/[p]fb-msg/ && /grok-dev/ && !/awk/ { n++ } END { print n+0 }"' \
+		2>/dev/null) || n_watch=0
+	[ "${n_watch:-0}" -ge 1 ] && has_monitor=1
+fi
+
 if [ "${has_monitor:-0}" != "1" ]; then
 	reasons="${reasons} No persistent pfb-msg serve monitor is running. Arm it now: monitor(command=\"ssh -o BatchMode=yes smoke 'export PFB_AGENT=grok-dev; exec /srv/Smoke/bin/pfb-msg serve grok-dev'\", persistent=true). Owner standing order: keep comms on unless they said stop (~/.grok/pfb-msg-off)."
 fi
