@@ -227,12 +227,33 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		);
 		$this->assertStringContainsString('unlink_if_exists($file_download);', $scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
-		// The gzip Blacklist branch publishes through pfb_stage_publish_dir() so a
-		// failed tar cannot replace live category files. This uncompressed reject
-		// must not extract or publish at all — unlink the .raw body and return.
-		$this->assertStringNotContainsString('pfb_stage_publish_dir', $scope);
-		$this->assertStringNotContainsString('tar -xf', $scope);
-		$this->assertStringNotContainsString('$pfb[\'dbdir\']', $scope);
+		// issue #2638 extracts application/x-tar in this same elseif; HTML/plain
+		// still fail closed. The no-extract assertions live on the reject arm
+		// via blacklist_not_archive + failure return above.
+	}
+
+	/**
+	 * Issue #2638 — an uncompressed application/x-tar Blacklist body must be
+	 * extracted into the category tree, not fail-closed as a non-archive.
+	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testUncompressedTarBlacklistBodyExtractsCategories(): void
+	{
+		$uncomp = strpos(self::$source, "if (\$type == 'geoip' || \$type == 'asn')");
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $uncomp === FALSE ? 0 : $uncomp);
+		$end = strpos(self::$source, 'else {', $blacklist === FALSE ? 0 : $blacklist);
+		$this->assertNotFalse($uncomp);
+		$this->assertNotFalse($blacklist);
+		$this->assertNotFalse($end);
+		$scope = substr(self::$source, $blacklist, $end - $blacklist);
+		$this->assertStringContainsString("if (\$file_type == 'application/x-tar') {", $scope);
+		$this->assertStringContainsString('pfb_stage_publish_dir', $scope);
+		$this->assertStringContainsString('/usr/bin/tar -xf', $scope);
+		$reject = strpos($scope, "pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);");
+		$tar = strpos($scope, "if (\$file_type == 'application/x-tar') {");
+		$this->assertNotFalse($reject);
+		$this->assertNotFalse($tar);
+		$this->assertLessThan($reject, $tar, 'x-tar extract must run before the non-archive reject');
 	}
 
 	/**

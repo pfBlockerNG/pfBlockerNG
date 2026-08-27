@@ -4046,6 +4046,70 @@ def test_blacklist_archive_survives_gzip_content_encoding(deployed_vm: SmokeVM, 
         deployed_vm.ssh(f"/bin/rm -rf {workdir} {category_dir}")
 
 
+def _blacklist_tar(top: str, category: str, domain: str) -> bytes:
+    """UT1-shaped blacklist archive as a plain tar (issue #2632 / #2638)."""
+    payload = f"{domain}\n".encode()
+    raw = io.BytesIO()
+    with tarfile.open(fileobj=raw, mode="w") as tar:
+        info = tarfile.TarInfo(f"{top}/{category}/domains")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    return raw.getvalue()
+
+
+@pytest.mark.timeout(120)
+def test_blacklist_plain_tar_extracts_categories(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2638: a plain-tar Blacklist body extracts categories (the #2632 unpack).
+
+    Given an origin serving a UT1-shaped tar (no gzip wrapper),
+    When  pfb_download() fetches it as type='blacklist',
+    Then  the download succeeds and the category file is extracted.
+    """
+    domain = h.unique_domain("pfb2638")
+    workdir = "/tmp/pfb2638_dl"
+    archive = f"{workdir}/pfb2638.tar"
+    category_dir = f"{h.PFB_DBDIR}/pfb2638"
+    try:
+        deployed_vm.ssh("/bin/rm", "-rf", workdir, category_dir, timeout=30.0)
+        mk = deployed_vm.ssh("/bin/mkdir", "-p", workdir)
+        assert mk.returncode == 0, f"mkdir failed: rc={mk.returncode} stderr={mk.stderr!r}"
+        box_mime = _box_mime_type(deployed_vm, _blacklist_tar("pfb2638", "testcat", domain))
+        assert box_mime == "application/x-tar", f"expected application/x-tar, got {box_mime!r}"
+        feed_url = mock_feeds.register("pfb2638.tar", _blacklist_tar("pfb2638", "testcat", domain))
+        out = _adr46_download(deployed_vm, feed_url, archive, "pfb2638", "blacklist")
+        assert "PFB_DL_TRUE" in out, f"expected pfb_download success on a plain-tar Blacklist body; got {out!r}"
+        extracted = deployed_vm.ssh(f"/bin/cat {category_dir}/pfb2638_testcat 2>&1").stdout
+        assert domain in extracted, (
+            f"expected {domain!r} in {category_dir}/pfb2638_testcat; got {extracted!r}; "
+            f"ls={deployed_vm.ssh(f'/bin/ls -A {category_dir} 2>&1').stdout!r}"
+        )
+    finally:
+        deployed_vm.ssh("/bin/rm", "-rf", workdir, category_dir)
+
+
+@pytest.mark.timeout(120)
+def test_ip_tar_feed_imports_members(deployed_vm: SmokeVM, mock_feeds: _MockFeedServer) -> None:
+    """issue #2638 / #2510: a tar-wrapped IP list imports member addresses, not framing.
+
+    Fail-before: x-tar was rejected (or scraped as text). Pass-after: tar -xOf
+    publishes the inner list and the member IP loads.
+    """
+    payload = _ADR44_BODY.encode()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w") as tar:
+        info = tarfile.TarInfo("list.txt")
+        info.size = len(payload)
+        tar.addfile(info, io.BytesIO(payload))
+    feed_url = mock_feeds.register("adr2638.tar", buf.getvalue())
+    spec = h.IpCase(aliasname="adr2638tar", feed_url=feed_url, header="adr2638tar", family="v4")
+    assert spec.alias not in h.pfctl_tables(deployed_vm), f"{spec.alias} present before the tar feed was ever loaded"
+    with h.CaseContext(deployed_vm, spec):
+        members = h.pfctl_table_members(deployed_vm, spec.alias)
+        assert h.member_present(members, _ADR44_MEMBER), (
+            f"expected {_ADR44_MEMBER!r} in {spec.alias} after tar extraction, got: {members}"
+        )
+
+
 def _plant_guest_text(vm: SmokeVM, path: str, contents: str) -> None:
     """Write ``contents`` to ``path`` on the guest via tee stdin.
 

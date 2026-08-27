@@ -60,6 +60,17 @@ final class ArchiveValidateTest extends TestCase
 		$this->assertFalse($result, 'Archive probe exit 1 must return FALSE (archive is corrupt/invalid)');
 	}
 
+	public function test_x_tar_probe_exit_1_returns_false(): void
+	{
+		// issue #2638: accepting x-tar without a failing probe would wave a corrupt
+		// tar through as "non-archive: nothing to test".
+		$runner = fn(array $argv): int => 1;
+
+		$result = pfb_validate_archive('/var/db/pfblockerng/feed.tar', 'application/x-tar', $runner);
+
+		$this->assertFalse($result, 'x-tar probe exit 1 must return FALSE');
+	}
+
 	public function test_archive_type_runner_exit_2_returns_false(): void
 	{
 		// Any non-zero exit code signals failure, not just exit 1.
