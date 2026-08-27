@@ -14430,6 +14430,11 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						return PfbDownloadResult::failure();
 					}
 
+					// issue #2738: unlink leftover orig/hash sidecars — Blacklist has no consumer.
+					foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $blacklist_stale) {
+						unlink_if_exists($blacklist_stale);
+					}
+
 					// Create update file indicator for update process
 					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
 					// issue #2735: do not fall through into @touch($orig_download).
