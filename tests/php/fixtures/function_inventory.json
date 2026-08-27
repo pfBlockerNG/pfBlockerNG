@@ -734,6 +734,26 @@
             }
         ]
     },
+    "pfb_blacklist_tar_mark_updated": {
+        "returnsRef": false,
+        "returnType": "PfbDownloadResult",
+        "params": [
+            {
+                "name": "file_dwn",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "filename",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            }
+        ]
+    },
     "pfb_build_aggregate_aliases": {
         "returnsRef": false,
         "returnType": null,
@@ -5056,6 +5076,40 @@
         "returnsRef": false,
         "returnType": "string",
         "params": []
+    },
+    "pfb_geoip_extract_tar_to_share": {
+        "returnsRef": false,
+        "returnType": "PfbDownloadResult",
+        "params": [
+            {
+                "name": "header",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "file_download",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "file_dwn_esc",
+                "byRef": false,
+                "variadic": false,
+                "type": "string",
+                "default": null
+            },
+            {
+                "name": "retval",
+                "byRef": true,
+                "variadic": false,
+                "type": "int",
+                "default": null
+            }
+        ]
     },
     "pfb_geoip_generation_publication_lock": {
         "returnsRef": false,

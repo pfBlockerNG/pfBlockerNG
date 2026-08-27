@@ -57,10 +57,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($asn);
 		$scope = substr(self::$source, $geoip, $asn - $geoip);
 		// issue #2638: bsdtar auto-detects compression; -xf serves gzip and plain tar.
-		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
-		$this->assertStringContainsString('-C {$pfb[\'geoipshare\']}', $scope);
-		$this->assertStringContainsString('pfb_archive_unsafe_member', $scope);
-		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+		$this->assertStringContainsString(
+			'pfb_geoip_extract_tar_to_share($header, $file_download, $file_dwn_esc, $retval)',
+			$scope
+		);
 	}
 
 	/**
@@ -176,10 +176,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			'pfb_blacklist_tar_finalize_staged($staged, $filename, $retval)',
 			$scope
 		);
-		// issue #2735: success return is immediately after the update marker (not a
-		// decoy elsewhere in the 1710-byte scope).
-		$this->assertMatchesRegularExpression(
-			'/touch\("\{\$pfb\[.dbdir.\]\}\/\{\$filename\}\/\{\$filename\}\.update"\);\s*return PfbDownloadResult::success\(\);/',
+		$this->assertStringContainsString(
+			'pfb_blacklist_tar_mark_updated($file_dwn, $filename)',
 			$scope
 		);
 	}
@@ -201,8 +199,8 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($blacklist);
 		$this->assertNotFalse($end);
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
-		$this->assertMatchesRegularExpression(
-			'/foreach \(array\("\{\$file_dwn\}\.orig", "\{\$file_dwn\}\.xxhash128", "\{\$file_dwn\}\.md5"\) as \$blacklist_stale\) \{\s*unlink_if_exists\(\$blacklist_stale\);\s*\}\s*touch\("\{\$pfb\[.dbdir.\]\}\/\{\$filename\}\/\{\$filename\}\.update"\);\s*return PfbDownloadResult::success\(\);/',
+		$this->assertStringContainsString(
+			'pfb_blacklist_tar_mark_updated($file_dwn, $filename)',
 			$scope
 		);
 	}
@@ -274,6 +272,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($reject);
 		$this->assertNotFalse($tar);
 		$this->assertLessThan($reject, $tar, 'x-tar extract must run before the non-archive reject');
+		$this->assertStringContainsString(
+			'pfb_blacklist_tar_mark_updated($file_dwn, $filename)',
+			$scope
+		);
 	}
 
 	/**
@@ -373,6 +375,15 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$scope,
 			'geoip tar -C must be geoipshare, not $header (.mmdb file)'
 		);
+		$geoip = strpos($scope, "if (\$type == 'geoip') {");
+		$this->assertNotFalse($geoip);
+		$brace = strpos($scope, '{', $geoip);
+		$this->assertNotFalse($brace);
+		$geoip_scope = substr($scope, $geoip, self::closingBraceExclusive($scope, $brace) - $geoip);
+		$this->assertStringContainsString(
+			'pfb_geoip_extract_tar_to_share($header, $file_download, $file_dwn_esc, $retval)',
+			$geoip_scope
+		);
 	}
 
 	/**
@@ -419,6 +430,16 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			substr_count(self::$source, 'pfb_blacklist_tar_finalize_staged($staged'),
 			'gzip and uncompressed Blacklist tar arms must both call the helper'
 		);
+		$this->assertGreaterThanOrEqual(
+			2,
+			substr_count(self::$source, 'pfb_blacklist_tar_mark_updated($file_dwn, $filename)'),
+			'gzip and uncompressed Blacklist tar arms must both mark updated via the helper'
+		);
+		$this->assertGreaterThanOrEqual(
+			2,
+			substr_count(self::$source, 'pfb_geoip_extract_tar_to_share($header, $file_download, $file_dwn_esc, $retval)'),
+			'gzip and uncompressed geoip tar arms must both call the share helper'
+		);
 		$this->assertStringContainsString(
 			"array_filter(\$list, 'is_file')",
 			self::$source,
@@ -445,6 +466,45 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			@rmdir($staged . '/feed_cat');
 			@rmdir($staged);
 		}
+	}
+
+	/**
+	 * Issue #2764 F2 — sidecar purge and .update live in one helper so gzip/x-tar
+	 * cannot drift. Comments/docblocks cannot define this scope.
+	 */
+	public function testBlacklistTarMarkUpdatedUnlinksSidecarsAndTouchesUpdate(): void
+	{
+		$start = strpos(self::$source, 'function pfb_blacklist_tar_mark_updated(');
+		$this->assertNotFalse($start);
+		$brace = strpos(self::$source, '{', $start);
+		$this->assertNotFalse($brace);
+		$body = substr(self::$source, $start, self::closingBraceExclusive(self::$source, $brace) - $start);
+		$this->assertMatchesRegularExpression(
+			'/foreach \(array\("\{\$file_dwn\}\.orig", "\{\$file_dwn\}\.xxhash128", "\{\$file_dwn\}\.md5"\) as \$blacklist_stale\) \{\s*unlink_if_exists\(\$blacklist_stale\);\s*\}/',
+			$body
+		);
+		$this->assertStringContainsString(
+			'touch("{$pfb[\'dbdir\']}/{$filename}/{$filename}.update")',
+			$body
+		);
+	}
+
+	/**
+	 * Issue #2764 F3 — geoip tar -C is geoipshare with ADR-46, in one helper.
+	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testGeoipTarExtractHelperWritesShareNotHeader(): void
+	{
+		$start = strpos(self::$source, 'function pfb_geoip_extract_tar_to_share(');
+		$this->assertNotFalse($start);
+		$brace = strpos(self::$source, '{', $start);
+		$this->assertNotFalse($brace);
+		$body = substr(self::$source, $start, self::closingBraceExclusive(self::$source, $brace) - $start);
+		$this->assertStringContainsString('-C {$pfb[\'geoipshare\']}', $body);
+		$this->assertStringNotContainsString('-C {$header_esc}', $body);
+		$this->assertStringContainsString('pfb_archive_unsafe_member', $body);
+		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $body);
+		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $body);
 	}
 
 	/**
