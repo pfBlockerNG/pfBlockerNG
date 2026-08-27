@@ -68,7 +68,7 @@ under the **Apache License 2.0**.
 Run this **on the firewall** over SSH (as root), picking the channel you want:
 
 ```sh
-fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel stable
+t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel stable; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
 ```
 
 One command from **any** starting state: a fresh firewall, an existing Netgate
@@ -109,7 +109,7 @@ Run the same one-liner as [Installation](#installation), just with a
 different `--channel`:
 
 ```sh
-fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel edge
+t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel edge; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
 ```
 
 It moves the subscription, moves the installed package onto it, replaces a

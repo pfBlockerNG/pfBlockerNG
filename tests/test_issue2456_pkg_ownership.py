@@ -163,7 +163,13 @@ class SourcePublicationBoundaryTests(unittest.TestCase):
     def test_source_readme_install_recipes_match_the_pkg_client_contract(self) -> None:
         for channel in ("stable", "edge"):
             self.assertIn(
-                f"fetch -qo - https://pkg.pfblockerng.com/install.sh | sh -s -- --channel {channel}",
+                (
+                    't=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && '
+                    'fetch -T 60 -o "$t" https://pkg.pfblockerng.com/install.sh && '
+                    '[ -s "$t" ] && '
+                    f'/bin/sh "$t" --channel {channel}'
+                    '; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)'
+                ),
                 README,
             )
 
