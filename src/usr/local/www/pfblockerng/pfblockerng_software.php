@@ -86,9 +86,7 @@ if ($_POST && !empty($_POST['pfb_sw_action'])) {
 $input_errors = array();
 
 // "Save" the settings (standard pfSense CSRF POST). pfb_software_check_save() owns the token
-// (a checkbox is absent from the POST when unticked, so it persists the owner-ruled empty Off
-// token; an absent config key defaults On) -- issue #2525: the page keeps only the decision to
-// save, the flush and the redirect, so what a test can drive is what this handler runs.
+// (issue #2525); this handler owns only the flush and the redirect.
 if ($_POST && isset($_POST['save'])) {
 	pfb_software_check_save($_POST);
 	write_config('[pfBlockerNG] save Software settings');

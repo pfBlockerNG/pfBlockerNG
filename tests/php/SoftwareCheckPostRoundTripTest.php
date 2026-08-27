@@ -21,18 +21,20 @@ use PHPUnit\Framework\TestCase;
  * of what the page renders: drop the explicit value again and the extraction falls back to
  * pfSense's 'yes' and these cases go red.
  *
- * issue #2525 — the persistence half is EXECUTED, never modelled. Every case below drives
- * pfb_software_check_save(), the function the page's Save handler calls, so deleting its
- * PfbConfig::write() turns cases red. The earlier version of this file replayed the save
- * instead: it called PfbConfig::write() itself with a filter constant scraped out of the
- * page by regex, which is what the page SHOULD do and never what it DID — deleting the
- * page's own write left the whole 5459-test suite green.
+ * issue #2525 — the persistence half is EXECUTED, never modelled: every case below drives
+ * pfb_software_check_save(), the function the page's Save handler calls, so deleting that
+ * function's PfbConfig::write() turns cases red.
  */
 #[CoversFunction('pfb_software_check_save')]
 #[CoversFunction('pfb_software_check_enabled')]
 final class SoftwareCheckPostRoundTripTest extends TestCase
 {
 	private const PAGE = __DIR__ . '/../../src/usr/local/www/pfblockerng/pfblockerng_software.php';
+
+	/** The Save handler's opening line, and the two statements it must carry, in order. */
+	private const SAVE_OPEN = "if (\$_POST && isset(\$_POST['save'])) {";
+	private const PERSIST   = 'pfb_software_check_save($_POST);';
+	private const FLUSH     = "write_config('[pfBlockerNG] save Software settings');";
 
 	/**
 	 * The value the rendered checkbox posts when ticked: the Form_Checkbox call's 5th
@@ -132,24 +134,17 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	/**
 	 * The trap itself, named: the page must pass its checkbox value explicitly. Sibling
 	 * pages that pass 'on' (pfblockerng_sync.php) round-trip; one that relies on the
-	 * default posts 'yes' and cannot.
+	 * default posts 'yes' and cannot. The save oracle for that token lives in
+	 * testCheckedSavePersistsEnabled() — this case states only what the page must render.
 	 */
 	public function testCheckboxPostsATokenTheFilterAccepts(): void
 	{
-		$posted = $this->postedWhenChecked();
-
 		$this->assertNotSame(
 			'yes',
-			$posted,
+			$this->postedWhenChecked(),
 			"the checkbox must pass its value explicitly; pfSense's Form_Checkbox default 'yes' "
 			. 'is rejected by PFB_FILTER_ON_OFF'
 		);
-		$this->assertSame(
-			$posted,
-			pfb_software_check_save(['pfb_software_check' => $posted]),
-			'the posted token must survive the save path unchanged'
-		);
-		$this->assertTrue(pfb_software_check_enabled(), 'and must land as the enabled token');
 	}
 
 	/**
@@ -173,6 +168,39 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	}
 
 	/**
+	 * The Save handler's block, resolved by matching its braces through PhpToken so the
+	 * bound cannot be moved by whitespace.
+	 *
+	 * Scanning for a literal "\n}\n" instead pins the closing brace's INDENTATION: indent
+	 * it and the scan runs on to the next unindented brace further down the page, silently
+	 * widening the block, and every assertion below then passes against the wrong region
+	 * (found reviewing #2525 — a mutant that indented this brace AND moved the flush out of
+	 * the handler stayed green). Braces are tokens here, so one inside a string or a comment
+	 * cannot be miscounted either.
+	 */
+	private function saveHandlerBlock(string $source): string
+	{
+		$open = strpos($source, self::SAVE_OPEN);
+		$this->assertNotFalse($open, 'the Software page must keep its Save handler');
+
+		$depth = 0;
+		foreach (PhpToken::tokenize($source) as $token) {
+			if ($token->pos < $open || ($token->text !== '{' && $token->text !== '}')) {
+				continue;
+			}
+			if ($token->text === '{') {
+				$depth++;
+				continue;
+			}
+			if (--$depth === 0) {
+				return substr($source, $open, $token->pos - $open);
+			}
+		}
+
+		$this->fail("the Save handler's block is never closed");
+	}
+
+	/**
 	 * The extraction is only worth anything while the function these cases drive is the one
 	 * the page runs (issue #2525). The Save handler must delegate to
 	 * pfb_software_check_save() and persist before it flushes config.xml, and the page must
@@ -181,17 +209,18 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	public function testPageSaveDelegatesToTheExtractedSave(): void
 	{
 		$source = (string) file_get_contents(self::PAGE);
-		$start  = strpos($source, "if (\$_POST && isset(\$_POST['save'])) {");
-		$this->assertNotFalse($start, 'the Software page must keep its Save handler');
-		$end = strpos($source, "\n}\n", $start);
-		$this->assertNotFalse($end, "the Save handler's block must close at column 0");
-		$save = substr($source, $start, $end - $start);
+		$save   = $this->saveHandlerBlock($source);
 
-		$persist = strpos($save, 'pfb_software_check_save($_POST);');
-		$flush   = strpos($save, "write_config('[pfBlockerNG] save Software settings');");
+		// Exactly once each, so a second copy of either statement elsewhere on the page
+		// cannot stand in for the one this block is asserted to hold.
+		$this->assertSame(1, substr_count($source, self::PERSIST), 'the page must call the extracted save exactly once');
+		$this->assertSame(1, substr_count($source, self::FLUSH), 'the page must flush the Software settings exactly once');
+
+		$persist = strpos($save, self::PERSIST);
+		$flush   = strpos($save, self::FLUSH);
 		$this->assertNotFalse($persist, 'the Save handler must persist through pfb_software_check_save()');
 		$this->assertNotFalse($flush, 'the Save handler must flush config.xml');
-		$this->assertTrue($persist < $flush, 'the token must be persisted before the flush');
+		$this->assertLessThan($flush, $persist, 'the token must be persisted before the flush');
 
 		$this->assertStringNotContainsString(
 			"PfbConfig::write('gen/pfb_software_check'",
