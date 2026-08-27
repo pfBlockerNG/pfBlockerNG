@@ -13788,11 +13788,38 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 		}
 		$rsync_src_esc = escapeshellarg("{$rsync_src}");
 
+		// issue #2667: bound the rsync ingest path, which writes the fetched body
+		// straight to {file}.raw and was bounded by neither #2658 ceiling. Two halves:
+		//  - kernel backstop: run rsync under pfb_extract_cmd()'s ulimit -f at TWICE
+		//    the ceiling. rsync writes through an atomic temp file and renames only on
+		//    a clean exit, so a body just over the ceiling must still land whole for
+		//    the named check below; the backstop bounds what can hit disk even beyond
+		//    that. Its kill surfaces as rsync's own nonzero exit ("File too large" on
+		//    openrsync, SIGXFSZ status on GNU) -- the existing nonzero-exit gate refuses.
+		//  - named refusal: a body that lands whole but over the ceiling is refused,
+		//    removed, and logged stage=size reason=rsync_too_large, so an operator can
+		//    tell "too large" from any other rsync failure on every platform.
+		// --max-size was rejected: probed, openrsync exits 0 silently when the SOURCE
+		// exceeds it (it bounds per-file transfer, not refusal), so it cannot be the
+		// bound alone. $pfb['rsync_max_bytes'] is the test seam, mirroring #2658's
+		// $pfb['curl_defaults'] ceiling seam.
+		$rsync_ceiling = isset($GLOBALS['pfb']['rsync_max_bytes']) ? (int) $GLOBALS['pfb']['rsync_max_bytes'] : PFB_DOWNLOAD_MAX_BYTES;
 		// exec() returns the command's LAST output line, not its exit status; the
 		// real return code rides in the third argument. Test that, so a normal
 		// rsync transfer (which prints progress/stats) is not mistaken for a failure.
-		exec("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}", $rsync_output, $rsync_rc);
+		// ulimit -f counts 512-byte blocks, so twice the ceiling is ceiling / 256;
+		// integer division keeps the bound exact for every ceiling (a float cast is
+		// undefined once 2 * ceiling leaves the integer range).
+		$rsync_blocks = intdiv($rsync_ceiling, 256);
+		exec(pfb_extract_cmd("/usr/local/bin/rsync --timeout=5 {$rsync_src_esc} {$file_dwn_esc}", $rsync_blocks), $rsync_output, $rsync_rc);
 		if ($rsync_rc === 0) {
+			clearstatcache(TRUE, "{$file_dwn}.raw");
+			$rsync_size = @filesize("{$file_dwn}.raw");
+			if ($rsync_size === FALSE || $rsync_size > $rsync_ceiling) {
+				pfb_validate_log($header, 'size', 'rsync_too_large', pfb_redact_url($list_url));
+				unlink_if_exists("{$file_dwn}.raw");
+				return PfbDownloadResult::failure();
+			}
 			$http_status = '200';
 		} else {
 			$rsync_msg = trim(implode(' ', $rsync_output));
