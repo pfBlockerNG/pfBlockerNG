@@ -4327,6 +4327,49 @@ function pfb_blacklist_tar_finalize_staged(string $staged, string $filename, int
 }
 
 /**
+ * After a successful Blacklist tar publish, drop leftover orig/hash sidecars
+ * and write the category update marker. Gzip and uncompressed x-tar share this.
+ */
+function pfb_blacklist_tar_mark_updated(string $file_dwn, string $filename): PfbDownloadResult {
+	global $pfb;
+
+	foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $blacklist_stale) {
+		unlink_if_exists($blacklist_stale);
+	}
+	touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
+	return PfbDownloadResult::success();
+}
+
+/**
+ * Disk-writing GeoIP tar extract into geoipshare. Gzip and uncompressed x-tar
+ * share this path; -C must be the share directory, never a .mmdb file.
+ */
+function pfb_geoip_extract_tar_to_share(
+	string $header,
+	string $file_download,
+	string $file_dwn_esc,
+	int &$retval
+): PfbDownloadResult {
+	global $pfb;
+
+	$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_download));
+	if ($unsafe_member !== NULL) {
+		pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
+		unlink_if_exists($file_download);
+		return PfbDownloadResult::failure();
+	}
+	$output = array();
+	$retval = pfb_download_initial_retval();
+	exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1"), $output, $retval);
+	unlink_if_exists($file_download);
+	if (!pfb_download_extraction_succeeded($retval)) {
+		pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
+		return PfbDownloadResult::failure();
+	}
+	return PfbDownloadResult::success();
+}
+
+/**
  * Publish an extraction atomically. $extract writes to a staged path beside $target and
  * returns its exit code; $target is replaced only once that code reports success, so a
  * failed extraction leaves the publication already in service untouched.
@@ -14447,21 +14490,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			}
 			if ($type == 'geoip') {
 				// Extras - MaxMind downloads
-				// ADR-46: disk-writing extraction -- reject hostile member names first
-				// (a NULL member list = unlistable archive rejects too, fail-closed).
-				$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_download));
-				if ($unsafe_member !== NULL) {
-					pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
-					unlink_if_exists($file_download);
-					return PfbDownloadResult::failure();
-				}
-				exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1"), $output, $retval);
-				unlink_if_exists($file_download);
-				if (!pfb_download_extraction_succeeded($retval)) {
-					pfb_logger("\n[pfb_download] geoip extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
-					return PfbDownloadResult::failure();
-				}
-				return PfbDownloadResult::success();
+				return pfb_geoip_extract_tar_to_share($header, $file_download, $file_dwn_esc, $retval);
 			}
 			elseif ($type == 'asn') {
 				$retval = pfb_download_initial_retval();
@@ -14603,14 +14632,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 
 					// issue #2738: unlink leftover orig/hash sidecars — Blacklist has no consumer.
-					foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $blacklist_stale) {
-						unlink_if_exists($blacklist_stale);
-					}
-
-					// Create update file indicator for update process
-					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
-					// issue #2735: do not fall through into @touch($orig_download).
-					return PfbDownloadResult::success();
+					return pfb_blacklist_tar_mark_updated($file_dwn, $filename);
 				}
 				else {
 					pfb_logger("\n Invalid filename [{$filename}]", 1);
@@ -14950,19 +14972,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					}
 					$retval = pfb_download_initial_retval();
 					if ($type == 'geoip') {
-						$unsafe_member = pfb_archive_unsafe_member(pfb_archive_member_names($file_download));
-						if ($unsafe_member !== NULL) {
-							pfb_validate_log($header, 'member', 'unsafe_member_name', $unsafe_member);
-							unlink_if_exists($file_download);
-							return PfbDownloadResult::failure();
-						}
-						exec(pfb_extract_cmd("/usr/bin/tar -xf {$file_dwn_esc} --strip=1 -C {$pfb['geoipshare']} >/dev/null 2>&1"), $output, $retval);
-						unlink_if_exists($file_download);
-						if (!pfb_download_extraction_succeeded($retval)) {
-							pfb_logger("\n[pfb_download] {$type} tar extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
-							return PfbDownloadResult::failure();
-						}
-						return PfbDownloadResult::success();
+						return pfb_geoip_extract_tar_to_share($header, $file_download, $file_dwn_esc, $retval);
 					}
 					if (!pfb_stage_publish($head_download,
 					    static function (string $staged) use ($file_dwn_esc, &$output, &$retval): int {
@@ -15128,11 +15138,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 						return PfbDownloadResult::failure();
 					}
-					foreach (array("{$file_dwn}.orig", "{$file_dwn}.xxhash128", "{$file_dwn}.md5") as $blacklist_stale) {
-						unlink_if_exists($blacklist_stale);
-					}
-					touch("{$pfb['dbdir']}/{$filename}/{$filename}.update");
-					return PfbDownloadResult::success();
+					return pfb_blacklist_tar_mark_updated($file_dwn, $filename);
 				}
 				// issue #2635: a MIME-allowlisted non-archive body is not a
 				// successful Blacklist update — leave category files untouched.
