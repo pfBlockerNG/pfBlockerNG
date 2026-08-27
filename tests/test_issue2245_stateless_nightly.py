@@ -24,9 +24,7 @@ def test_every_nightly_invocation_builds_without_durable_state() -> None:
 
     assert 'TOOLS_SHA="$(git -C "$TRUSTED_DIR" rev-parse HEAD)"' in workflow
     assert 'SOURCE_SHA="$(git -C "$SOURCE_DIR" rev-parse HEAD)"' in workflow
-    assert 'BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"' in workflow
-    assert 'SOURCE_SHORT_SHA="$(printf \'%.7s\' "$SOURCE_SHA")"' in workflow
-    assert 'PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHORT_SHA}"' in workflow
+    assert 'PKG_VERSION="$(sh "$TRUSTED_DIR/scripts/nightly-pkgversion.sh" "$SOURCE_SHA")"' in workflow
     assert "queue: max" in workflow
     assert "nightly-state" not in workflow
     assert 'nightly_provenance.py" allocate' not in workflow

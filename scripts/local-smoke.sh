@@ -14,6 +14,7 @@
 # Usage:
 #   scripts/local-smoke.sh [--ref REF] [--abi ABI] [--marker M] [--filter EXPR]
 #                          [--no-two-vm] [--shards N] [--git-remote URL|NAME]
+#                          [--pkgversion V]
 #
 # Required (env):
 #   PFB_BOXES   space-separated ssh targets, e.g. "root@10.0.0.23 root@10.0.0.24"
@@ -27,6 +28,11 @@
 #               build-pkg-linux.yml builds, issue #2166). The channel picks the port,
 #               and the port names the package, so a run on the wrong channel verifies a
 #               differently-named artifact than CI ships (issue #2206).
+#   --pkgversion V  nightly identity YYYYMMDDHHMMSS.<7-sha>, forwarded to
+#               smoke-on-box.sh. Omit to let smoke-on-box.sh derive it from the
+#               box's just-checked-out HEAD (the commit it actually builds).
+#               Do not derive from this clone: --git-remote may point at a
+#               fork/mirror whose ref is a different commit (issue #2754).
 #   --marker M  pytest -m marker (default: smoke); see also --filter
 #   --filter EXPR  pytest -k filter expression (optional)
 #   --no-two-vm skip civm image pull and LAN-client tests
@@ -104,6 +110,7 @@ _SHARDS=1
 # Per-run, never box state: repointing each box's origin is persistent and invisible
 # in the artifacts, so a forgotten switch-back silently changes every later run.
 _GIT_REMOTE="${PFB_GIT_REMOTE:-origin}"
+_PKGVERSION="${PFB_NIGHTLY_PKGVERSION:-}"
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -115,6 +122,7 @@ while [ "$#" -gt 0 ]; do
         --no-two-vm) _NO_TWO_VM=1;        shift ;;
         --shards)   shift; _SHARDS="$1"; shift ;;
         --git-remote) shift; _GIT_REMOTE="$1"; shift ;;
+        --pkgversion) shift; _PKGVERSION="$1"; shift ;;
         --) shift; break ;;
         -*) printf 'local-smoke: unknown flag: %s\n' "$1" >&2; exit 2 ;;
         *)  break ;;
@@ -206,6 +214,14 @@ _PFSENSE_REF_Q="$(_sq "${SMOKE_PFSENSE_REF:-}")"
 _CIVM_REF_Q="$(_sq "${CIVM_REF:-}")"
 
 _ob_flags="--ref '$_REF_Q' --abi '$_ABI_Q' --channel '$_CHANNEL' --marker '$_MARKER_Q'"
+# Nightly identity: smoke-on-box.sh derives from the just-checked-out HEAD
+# (definitionally the built commit). Forward an explicit override only —
+# deriving here from the orchestrator clone stamps a different SHA when
+# --git-remote's ref diverges, and hard-fails when the ref is remote-only
+# (issue #2754 M1). Other channels never forward the flag.
+if [ "$_CHANNEL" = nightly ] && [ -n "$_PKGVERSION" ]; then
+    _ob_flags="$_ob_flags --pkgversion '$(_sq "$_PKGVERSION")'"
+fi
 if [ -n "$_FILTER" ]; then
     _ob_flags="$_ob_flags --filter '$(_sq "$_FILTER")'"
 fi

@@ -138,9 +138,7 @@ jobs:
             '{tools_sha: $tools_sha, matrix_sha: $matrix_sha, build: $build, route: $route}')"
           MATRIX_DIGEST="$(printf '%s' "$MATRIX_PAYLOAD" | sha256sum | cut -d' ' -f1)"
           mkdir -p plan
-          BUILD_TIMESTAMP="$(date -u +%Y%m%d%H%M%S)"
-          SOURCE_SHORT_SHA="$(printf '%.7s' "$SOURCE_SHA")"
-          PKG_VERSION="${BUILD_TIMESTAMP}.${SOURCE_SHORT_SHA}"
+          PKG_VERSION="$(sh "$TRUSTED_DIR/scripts/nightly-pkgversion.sh" "$SOURCE_SHA")"
           python3 "$TRUSTED_DIR/scripts/build-dep-pkg-portable.py" --print-toolchain \
             > plan/dependency-builder.json
           printf '%s\n' "$BUILD_MATRIX" > plan/build-matrix.json

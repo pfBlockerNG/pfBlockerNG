@@ -471,6 +471,7 @@ identically locally and in CI.
 | [`smoke-on-box.sh`](smoke-on-box.sh) | On-box smoke entrypoint: checkout, ports update, image pull, build, run. |
 | [`run-smoke.sh`](run-smoke.sh) | Canonical pytest argv emitter for the smoke suite (same script CI and local use). |
 | [`build-leg.sh`](build-leg.sh) | Build a `.pkg` for a specific leg (ABI, channel, version). |
+| [`nightly-pkgversion.sh`](nightly-pkgversion.sh) | `YYYYMMDDHHMMSS.<7-sha>` for `--channel nightly`. Called from `nightly.yml`, `smoke-single.yml`, and `smoke-on-box.sh` (from the just-checked-out HEAD). `local-smoke.sh` forwards an explicit override only — it does not derive from the orchestrator clone, which can diverge from `--git-remote` (issue #2754). |
 | [`sparse-clone-ports.sh`](sparse-clone-ports.sh) | Blobless sparse clone of FreeBSD-ports to the needed port dirs only. |
 
 ## Two install paths: CI/local vs release
