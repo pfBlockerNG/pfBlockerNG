@@ -11,17 +11,20 @@
 # nothing (check-then-act throughout). Four near-identical per-channel wrapper
 # scripts added nothing but drift risk over a single --channel argument.
 #
-# WHY EVERY pkg(8) CALL REDIRECTS STDIN FROM /dev/null: the published form is piped into
-# `sh` (`fetch -qo - .../install.sh | sh -s -- --channel <ch>`), so the script's own
-# stdin IS the script text — any child process that reads stdin without redirection
-# would consume trailing script bytes and corrupt the run.
+# WHY EVERY pkg(8) CALL REDIRECTS STDIN FROM /dev/null: a leftover pipe user
+# (`fetch | sh`) still exists in the wild, and under that form the script's own
+# stdin IS the script text — any child that reads stdin without redirection would
+# consume trailing script bytes and corrupt the run. The documented form is
+# mktemp + fetch-to-file (issue #2754): a POSIX pipeline's status is the last
+# command, so `fetch | sh` exits 0 when fetch delivers zero bytes (`sh` on empty
+# stdin succeeds). `[ -s "$t" ]` also refuses a successful empty write.
 #
 # Usage:
 #   install.sh --channel <stable|testing|edge|nightly>   subscribe + install/converge
 #   install.sh -h|--help                                  this text
 #
 # Published at https://${PFB_REPO_HOST}/install.sh; run ON the box:
-#   fetch -qo - https://${PFB_REPO_HOST}/install.sh | sh -s -- --channel stable
+#   t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://${PFB_REPO_HOST}/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel stable; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)
 #
 # Env (all overridable; forks/staging/tests set these):
 #   PKG_BIN           pkg(8) binary path (default: /usr/local/sbin/pkg)
@@ -308,7 +311,12 @@ Usage:
   install.sh -h|--help                                  this text
 
 Published at https://${PFB_REPO_HOST}/install.sh; run ON the box:
-  fetch -qo - https://${PFB_REPO_HOST}/install.sh | sh -s -- --channel <stable|testing|edge|nightly>
+USAGE
+    # Single-quoted format: dash/set -u must not expand $t or $(mktemp) while
+    # printing help. ${PFB_REPO_HOST} is the %s argument (issue #2756).
+    # shellcheck disable=SC2016
+    printf '  t=$(mktemp "${TMPDIR:-/tmp}/pfb-install.XXXXXX") && fetch -T 60 -o "$t" https://%s/install.sh && [ -s "$t" ] && /bin/sh "$t" --channel <stable|testing|edge|nightly>; e=$?; [ -n "$t" ] && rm -f "$t"; (exit $e)\n' "${PFB_REPO_HOST}"
+    cat <<'USAGE_TAIL'
 
 Installs the boot-time repo-conf generator hook (ADR-39), subscribes this box to the
 named channel ALONE (retiring any other pfBlockerNG channel conf), then installs or
@@ -323,7 +331,7 @@ Exit codes:
      catalogue offers nothing, or pkg version -t gave no usable answer
   5  a pkg operation (delete/install) failed, including a package-script failure while pkg exited 0
   6  post-install verification failed
-USAGE
+USAGE_TAIL
 }
 
 # pfb_emit_embedded_hook — print the rc.d generator hook to stdout. In the repository
@@ -332,7 +340,7 @@ USAGE
 # directly from a checkout via HOOK_SRC. The pkg-owned website renderer replaces
 # the body between the PFB_EMBED markers with the hook in a single-quoted
 # heredoc, producing the self-contained install.sh served at <base>/install.sh
-# for `fetch | sh`.
+# for leftover `fetch | sh` users and the published fetch-to-file form.
 pfb_emit_embedded_hook() {
     # PFB_EMBED_HOOK_BEGIN — do not edit; replaced by the pkg-owned website renderer.
     printf 'install.sh: no embedded hook in this copy — run from a checkout, or use the published %s/install.sh\n' "https://${PFB_REPO_HOST}" >&2
