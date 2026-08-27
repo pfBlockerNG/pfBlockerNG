@@ -218,21 +218,31 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($blacklist);
 		$this->assertNotFalse($end);
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
+		$tar = strpos($scope, "if (\$file_type == 'application/x-tar') {");
+		$this->assertNotFalse($tar);
+		$tarBrace = strpos($scope, '{', $tar);
+		$this->assertNotFalse($tarBrace);
+		$reject_scope = substr($scope, self::closingBraceExclusive($scope, $tarBrace));
 		$this->assertStringNotContainsString(
 			'$retval = 0;',
-			$scope,
+			$reject_scope,
 			'uncompressed Blacklist must not treat a non-archive body as a successful extract'
 		);
 		$this->assertStringContainsString(
 			"pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);",
-			$scope,
+			$reject_scope,
 			'reject must name the detected type'
 		);
-		$this->assertStringContainsString('unlink_if_exists($file_download);', $scope);
-		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
-		// issue #2638 extracts application/x-tar in this same elseif; HTML/plain
-		// still fail closed. The no-extract assertions live on the reject arm
-		// via blacklist_not_archive + failure return above.
+		$this->assertSame(
+			1,
+			substr_count($reject_scope, 'return PfbDownloadResult::failure();'),
+			'reject scope must not swallow the x-tar arm failure return'
+		);
+		$this->assertStringContainsString('unlink_if_exists($file_download);', $reject_scope);
+		$this->assertStringContainsString('return PfbDownloadResult::failure();', $reject_scope);
+		$this->assertStringNotContainsString('pfb_stage_publish_dir', $reject_scope);
+		$this->assertStringNotContainsString('tar -xf', $reject_scope);
+		$this->assertStringNotContainsString('$pfb[\'dbdir\']', $reject_scope);
 	}
 
 	/**
@@ -254,6 +264,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertStringContainsString('/usr/bin/tar -xf', $scope);
 		// issue #2632 smoke: downloadPath may end in .tar, not .tar.gz; WORD rejects a leftover dot.
 		$this->assertStringContainsString("basename(basename(\"{\$file_esc}\", '.tar.gz'), '.tar')", $scope);
+		$this->assertStringContainsString('pfb_archive_unsafe_member', $scope);
 		$reject = strpos($scope, "pfb_validate_log(\$header, 'extract', 'blacklist_not_archive', \$file_type);");
 		$tar = strpos($scope, "if (\$file_type == 'application/x-tar') {");
 		$this->assertNotFalse($reject);
@@ -367,10 +378,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	 */
 	public function testBlacklistEmptyTreeGuardCountsFilesNotDirectories(): void
 	{
-		$this->assertStringContainsString(
-			"array_filter(\$list, 'is_file')",
-			self::$source,
-			'glob() of staged categories must drop directory hits before the empty-tree guard'
+		$this->assertSame(
+			2,
+			substr_count(self::$source, "array_filter(\$list, 'is_file')"),
+			'both Blacklist staging sites must drop directory glob hits'
 		);
 	}
 
@@ -381,11 +392,16 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	 */
 	public function testPlainTarTop1mRoutesThroughArchiveExtract(): void
 	{
-		$this->assertStringContainsString(
-			"\$file_type == 'application/x-tar' && \$type == 'top1m'",
-			self::$source,
-			'plain tar TOP1M must extract as a container archive, not copy-as-text'
-		);
+		$uncomp = strpos(self::$source, "if (\$type == 'geoip' || \$type == 'asn')");
+		$top1m = strpos(self::$source, "if (\$type == 'top1m') {", $uncomp === FALSE ? 0 : $uncomp);
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $top1m === FALSE ? 0 : $top1m);
+		$this->assertNotFalse($uncomp);
+		$this->assertNotFalse($top1m);
+		$this->assertNotFalse($blacklist);
+		$scope = substr(self::$source, $top1m, $blacklist - $top1m);
+		$this->assertStringContainsString("if (\$file_type == 'application/x-tar') {", $scope);
+		$this->assertStringContainsString('tar -xOf', $scope);
+		$this->assertStringContainsString('count($archive_members) !== 1', $scope);
 	}
 
 	/**

@@ -14851,7 +14851,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 			if ($type == 'top1m') {
 				// Stage TOP1M's plain body before publishing; baseline persistence
 				// commits after active publication and rolls both back on failure.
-				if ($file_type == 'application/x-tar' && $type == 'top1m') {
+				if ($file_type == 'application/x-tar') {
 					if (!pfb_validate_archive($file_download, $file_type)) {
 						pfb_validate_log($header, 'structural', 'probe_failed', "{$file_type} " . basename($file_download));
 						unlink_if_exists($file_download);
