@@ -4303,6 +4303,30 @@ function pfb_download_initial_retval(): int {
 }
 
 /**
+ * After a Blacklist tar extract, keep only staged category files.
+ * glob('*domains') matches directories; an empty file list must not publish.
+ */
+function pfb_blacklist_tar_finalize_staged(string $staged, string $filename, int $retval): int {
+	if (!pfb_download_extraction_succeeded($retval)) {
+		return $retval;
+	}
+	$list = glob("{$staged}/{$filename}*");
+	if (!is_array($list)) {
+		$list = array();
+	}
+	$list = array_values(array_filter($list, 'is_file'));
+	if (empty($list)) {
+		return pfb_download_initial_retval();
+	}
+	foreach ($list as $verify) {
+		if (strpos(basename($verify), '-') !== FALSE) {
+			rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
+		}
+	}
+	return $retval;
+}
+
+/**
  * Publish an extraction atomically. $extract writes to a staged path beside $target and
  * returns its exit code; $target is replaced only once that code reports success, so a
  * failed extraction leaves the publication already in service untouched.
@@ -14456,27 +14480,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
 					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
 						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
-						if (!pfb_download_extraction_succeeded($retval)) {
-							return $retval;
-						}
-
-						// Rename any Category files with dashes
-						$list = glob("{$staged}/{$filename}*");
-						if (!is_array($list)) {
-							$list = array();
-						}
-						$list = array_values(array_filter($list, 'is_file'));
-						if (empty($list)) {
-							// issue #2638: tar exit 0 with no category file must not
-							// publish an empty tree over live categories.
-							return pfb_download_initial_retval();
-						}
-						foreach ($list as $verify) {
-							if (strpos(basename($verify), '-') !== FALSE) {
-								rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
-							}
-						}
-						return $retval;
+						return pfb_blacklist_tar_finalize_staged($staged, $filename, $retval);
 					})) {
 						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 						return PfbDownloadResult::failure();
@@ -15003,23 +15007,7 @@ function pfb_download(PfbDownloadRequest $request): PfbDownloadResult {
 					if (!pfb_stage_publish_dir("{$pfb['dbdir']}/{$filename}",
 					    static function (string $staged) use ($file_dwn, $filename, $cmd, &$output, &$retval): int {
 						exec(pfb_extract_cmd("/usr/bin/tar -xf " . escapeshellarg("{$file_dwn}") . " {$cmd} -C " . escapeshellarg("{$staged}/") . " >/dev/null 2>&1"), $output, $retval);
-						if (!pfb_download_extraction_succeeded($retval)) {
-							return $retval;
-						}
-						$list = glob("{$staged}/{$filename}*");
-						if (!is_array($list)) {
-							$list = array();
-						}
-						$list = array_values(array_filter($list, 'is_file'));
-						if (empty($list)) {
-							return pfb_download_initial_retval();
-						}
-						foreach ($list as $verify) {
-							if (strpos(basename($verify), '-') !== FALSE) {
-								rename($verify, dirname($verify) . '/' . str_replace('-', '_', basename($verify)));
-							}
-						}
-						return $retval;
+						return pfb_blacklist_tar_finalize_staged($staged, $filename, $retval);
 					})) {
 						pfb_logger("\n[pfb_download] blacklist extraction failed (tar exit {$retval})" . pfb_extract_cap_note($retval), 2);
 						return PfbDownloadResult::failure();

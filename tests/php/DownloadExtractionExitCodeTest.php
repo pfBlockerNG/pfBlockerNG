@@ -171,7 +171,10 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$this->assertNotFalse($end);
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
-		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
+		$this->assertStringContainsString(
+			'pfb_blacklist_tar_finalize_staged($staged, $filename, $retval)',
+			$scope
+		);
 		// issue #2735: success return is immediately after the update marker (not a
 		// decoy elsewhere in the 1710-byte scope).
 		$this->assertMatchesRegularExpression(
@@ -372,17 +375,75 @@ final class DownloadExtractionExitCodeTest extends TestCase
 	}
 
 	/**
-	 * Issue #2638 B9 — glob() matches directories, so a *domains directory
-	 * satisfies an empty($list) guard. Category publish must count files.
+	 * Issue #2764 — gzip inner-tar extract (generic/IP) must stdout-extract
+	 * (`tar -xOf -`) and only when the inner MIME is x-tar. Mutations (c)
+	 * drop `-O` and (e) invert the comparison stay green without this pin.
 	 * Comments/docblocks cannot define this scope.
+	 */
+	public function testGzipInnerTarExtractIsStdoutAndTypeGated(): void
+	{
+		$gzip = strpos(self::$source, "if (\$file_type == 'application/x-gzip' || \$file_type == 'application/gzip')");
+		$blacklist = strpos(self::$source, "elseif (\$type == 'blacklist') {", $gzip === FALSE ? 0 : $gzip);
+		$inner = strpos(self::$source, 'else { $reject_detail = array();', $blacklist === FALSE ? 0 : $blacklist);
+		$bzip = strpos(self::$source, "elseif (\$file_type == 'application/x-bzip2')", $inner === FALSE ? 0 : $inner);
+		$this->assertNotFalse($gzip);
+		$this->assertNotFalse($inner);
+		$this->assertNotFalse($bzip);
+		$scope = substr(self::$source, $inner, $bzip - $inner);
+		$this->assertStringContainsString(
+			'$extract_tar = ($inner_type == \'application/x-tar\')',
+			$scope,
+			'inner tar extract must be gated on application/x-tar'
+		);
+		$this->assertStringContainsString(
+			'tar -xOf -',
+			$scope,
+			'gzip inner tar must stdout-extract (-O); dropping it writes a tar archive as a feed'
+		);
+	}
+
+	/**
+	 * Issue #2764 — both Blacklist tar staging sites share one helper that
+	 * drops directory glob hits. A site-count of 2 breaks when the arms
+	 * unify. Comments/docblocks cannot define this scope.
 	 */
 	public function testBlacklistEmptyTreeGuardCountsFilesNotDirectories(): void
 	{
-		$this->assertSame(
-			2,
-			substr_count(self::$source, "array_filter(\$list, 'is_file')"),
-			'both Blacklist staging sites must drop directory glob hits'
+		$this->assertTrue(
+			function_exists('pfb_blacklist_tar_finalize_staged'),
+			'Blacklist tar staging must share pfb_blacklist_tar_finalize_staged'
 		);
+		$this->assertGreaterThanOrEqual(
+			2,
+			substr_count(self::$source, 'pfb_blacklist_tar_finalize_staged($staged'),
+			'gzip and uncompressed Blacklist tar arms must both call the helper'
+		);
+		$this->assertStringContainsString(
+			"array_filter(\$list, 'is_file')",
+			self::$source,
+			'helper must still drop directory glob hits'
+		);
+	}
+
+	/**
+	 * Issue #2764 — a *domains directory in the staged tree is not a
+	 * category file. The helper returns the empty-tree sentinel.
+	 */
+	public function testBlacklistTarFinalizeTreatsDirectoryOnlyTreeAsEmpty(): void
+	{
+		$this->assertTrue(function_exists('pfb_blacklist_tar_finalize_staged'));
+		$staged = sys_get_temp_dir() . '/pfb2764_' . (string) getmypid();
+		@mkdir($staged, 0700, TRUE);
+		@mkdir($staged . '/feed_cat', 0700);
+		try {
+			$this->assertSame(
+				pfb_download_initial_retval(),
+				pfb_blacklist_tar_finalize_staged($staged, 'feed', 0)
+			);
+		} finally {
+			@rmdir($staged . '/feed_cat');
+			@rmdir($staged);
+		}
 	}
 
 	/**
