@@ -132,8 +132,12 @@ final class DownloadExtractionExitCodeTest extends TestCase
 		$scope = substr(self::$source, $blacklist, $end - $blacklist);
 		$this->assertMatchesRegularExpression('/exec\(pfb_extract_cmd\(".*tar -xf .*\\$output, \\$retval\);/', $scope);
 		$this->assertStringContainsString('pfb_download_extraction_succeeded($retval)', $scope);
-		// issue #2735: success must return, not fall through into @touch($orig_download).
-		$this->assertStringContainsString('return PfbDownloadResult::success();', $scope);
+		// issue #2735: success return is immediately after the update marker (not a
+		// decoy elsewhere in the 1710-byte scope).
+		$this->assertMatchesRegularExpression(
+			'/touch\("\{\$pfb\[.dbdir.\]\}\/\{\$filename\}\/\{\$filename\}\.update"\);\s*return PfbDownloadResult::success\(\);/',
+			$scope
+		);
 	}
 
 	/**
@@ -161,6 +165,7 @@ final class DownloadExtractionExitCodeTest extends TestCase
 			$scope,
 			'reject must name the detected type'
 		);
+		$this->assertStringContainsString('unlink_if_exists($file_download);', $scope);
 		$this->assertStringContainsString('return PfbDownloadResult::failure();', $scope);
 		// The gzip Blacklist branch publishes through pfb_stage_publish_dir() so a
 		// failed tar cannot replace live category files. This uncompressed reject
