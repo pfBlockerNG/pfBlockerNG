@@ -5200,6 +5200,23 @@ function pfb_software_check_enabled(): bool {
 }
 
 /*
+ * Persist the "Check for new versions" token from a Software-page Save POST, and return the
+ * token that was stored. A checkbox is absent from the POST when unticked, and
+ * PFB_FILTER_ON_OFF accepts only 'on' and '' -- so every other token, pfSense's Form_Checkbox
+ * default 'yes' included, canonicalises to the owner-ruled empty Off. The caller flushes
+ * config.xml.
+ *
+ * issue #2525: this is a named function rather than an expression inside the page so the
+ * persistence a test can execute IS the persistence the page runs. While it lived in the page
+ * the only reachable coverage replayed it, and deleting the write left the suite green.
+ */
+function pfb_software_check_save(array $post): string {
+	$token = pfb_filter($post['pfb_software_check'] ?? '', PFB_FILTER_ON_OFF, 'software') ?: '';
+	PfbConfig::write('gen/pfb_software_check', $token);
+	return $token;
+}
+
+/*
  * The notify state machine: TRUE iff a `file_notice` should fire THIS tick.
  *
  * The single "Check for new versions" boolean ($enabled) gates notifications equally on every

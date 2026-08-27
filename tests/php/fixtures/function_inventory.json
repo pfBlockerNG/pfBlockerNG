@@ -10819,6 +10819,19 @@
         "returnType": "bool",
         "params": []
     },
+    "pfb_software_check_save": {
+        "returnsRef": false,
+        "returnType": "string",
+        "params": [
+            {
+                "name": "post",
+                "byRef": false,
+                "variadic": false,
+                "type": "array",
+                "default": null
+            }
+        ]
+    },
     "pfb_software_is_our_build": {
         "returnsRef": false,
         "returnType": "bool",

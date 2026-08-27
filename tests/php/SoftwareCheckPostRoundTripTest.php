@@ -7,7 +7,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * The Software page's "New version check" checkbox has to POST a token its own save path
- * accepts (issue #2367).
+ * accepts (issue #2367), and that save path has to be the one the page actually runs
+ * (issue #2525).
  *
  * pfSense's Form_Checkbox posts 'yes' unless the caller passes a value:
  * ``__construct($name, $title, $description, $checked, $value = 'yes')``. The save path
@@ -17,9 +18,17 @@ use PHPUnit\Framework\TestCase;
  * and no UI path can turn the check back on.
  *
  * The posted token is read OUT OF THE PAGE here rather than assumed, so this stays a test
- * of what the page does: drop the explicit value again and the extraction falls back to
+ * of what the page renders: drop the explicit value again and the extraction falls back to
  * pfSense's 'yes' and these cases go red.
+ *
+ * issue #2525 — the persistence half is EXECUTED, never modelled. Every case below drives
+ * pfb_software_check_save(), the function the page's Save handler calls, so deleting its
+ * PfbConfig::write() turns cases red. The earlier version of this file replayed the save
+ * instead: it called PfbConfig::write() itself with a filter constant scraped out of the
+ * page by regex, which is what the page SHOULD do and never what it DID — deleting the
+ * page's own write left the whole 5459-test suite green.
  */
+#[CoversFunction('pfb_software_check_save')]
 #[CoversFunction('pfb_software_check_enabled')]
 final class SoftwareCheckPostRoundTripTest extends TestCase
 {
@@ -52,32 +61,6 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 		return trim($args[3], "'\"");
 	}
 
-	/**
-	 * The page's save filter, applied through the SAME constant the page names, so swapping
-	 * the page to another filter cannot leave this modelling the old one.
-	 */
-	private function saveFilter(string $posted): string
-	{
-		$source = php_strip_whitespace(self::PAGE);
-		$found  = preg_match(
-			"/pfb_filter\\(\\\$_POST\\['pfb_software_check'\\] \\?\\? '', (PFB_FILTER_[A-Z_]+), 'software'\\) \\?: ''/",
-			$source,
-			$m
-		);
-		$this->assertSame(1, $found, 'the modelled save expression no longer matches the page');
-		// Applied through the page's own constant so this cannot model a filter the page
-		// stopped using, AND pinned to the one that makes the round-trip meaningful: a save
-		// widened to accept a looser token set is a different contract, not a refactor.
-		$this->assertSame(
-			'PFB_FILTER_ON_OFF',
-			$m[1],
-			'the Save must keep filtering with PFB_FILTER_ON_OFF; a looser filter would accept tokens '
-			. 'that no longer round-trip through the toggle gateway'
-		);
-
-		return pfb_filter($posted, constant($m[1]), 'software') ?: '';
-	}
-
 	private bool $hadConfig = FALSE;
 	private mixed $originalConfig = NULL;
 
@@ -105,22 +88,29 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 
 	/**
 	 * Save with the box ticked persists ENABLED. This is the defect's direct oracle: with a
-	 * posted 'yes' the filter rejects the token, the page stores '', and the setting reads
+	 * posted 'yes' the filter rejects the token, the save stores '', and the setting reads
 	 * back disabled however many times it is saved.
 	 */
 	public function testCheckedSavePersistsEnabled(): void
 	{
 		// Before: an unticked Save has left the setting off, so a green below is this
-		// save's doing and not the registry's enabled-by-default.
-		PfbConfig::write('gen/pfb_software_check', $this->saveFilter(''));
+		// save's doing and not the registry's enabled-by-default. Asserting that BEFORE
+		// state is also what makes a save that persists nothing at all fail here: an
+		// absent key reads as the registered On default.
+		$this->assertSame('', pfb_software_check_save([]), 'an absent checkbox saves the empty Off token');
 		$this->assertFalse(pfb_software_check_enabled(), 'precondition: the check starts disabled');
 
-		PfbConfig::write('gen/pfb_software_check', $this->saveFilter($this->postedWhenChecked()));
+		$posted = $this->postedWhenChecked();
+		$this->assertSame(
+			$posted,
+			pfb_software_check_save(['pfb_software_check' => $posted]),
+			'the token the rendered checkbox posts must survive the save unchanged'
+		);
 
 		$this->assertTrue(
 			pfb_software_check_enabled(),
 			'a Save with the box ticked must persist the enabled token; the posted value was '
-			. var_export($this->postedWhenChecked(), TRUE)
+			. var_export($posted, TRUE)
 		);
 	}
 
@@ -130,11 +120,11 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 	 */
 	public function testUncheckedSavePersistsDisabled(): void
 	{
-		PfbConfig::write('gen/pfb_software_check', $this->saveFilter($this->postedWhenChecked()));
+		PfbConfig::write('gen/pfb_software_check', PfbToggle::On);
 		$this->assertTrue(pfb_software_check_enabled(), 'precondition: the check is enabled first');
 
-		// An absent POST key reaches the save path as ''.
-		PfbConfig::write('gen/pfb_software_check', $this->saveFilter(''));
+		// An absent POST key is exactly what a browser sends for an unticked checkbox.
+		$this->assertSame('', pfb_software_check_save([]), 'an unticked Save returns the empty Off token');
 
 		$this->assertFalse(pfb_software_check_enabled(), 'an unticked Save must persist the disabled token');
 	}
@@ -156,8 +146,57 @@ final class SoftwareCheckPostRoundTripTest extends TestCase
 		);
 		$this->assertSame(
 			$posted,
-			$this->saveFilter($posted),
-			'the posted token must survive the page\'s own save path unchanged'
+			pfb_software_check_save(['pfb_software_check' => $posted]),
+			'the posted token must survive the save path unchanged'
+		);
+		$this->assertTrue(pfb_software_check_enabled(), 'and must land as the enabled token');
+	}
+
+	/**
+	 * The save keeps rejecting every token the toggle gateway cannot round-trip, stated as
+	 * behaviour rather than as a regex over the source: widening the filter to accept
+	 * pfSense's 'yes' would be a different contract, not a refactor. 'yes' is the exact
+	 * token the checkbox posted for a release (issue #2367), so this is the input class
+	 * that actually reached the save in the field.
+	 */
+	public function testSaveRejectsATokenTheToggleGatewayCannotRoundTrip(): void
+	{
+		PfbConfig::write('gen/pfb_software_check', PfbToggle::On);
+		$this->assertTrue(pfb_software_check_enabled(), 'precondition: the check is enabled first');
+
+		$this->assertSame('', pfb_software_check_save(['pfb_software_check' => 'yes']));
+
+		$this->assertFalse(
+			pfb_software_check_enabled(),
+			"'yes' is not an accepted token: it must persist as the disabled token, never enable the check"
+		);
+	}
+
+	/**
+	 * The extraction is only worth anything while the function these cases drive is the one
+	 * the page runs (issue #2525). The Save handler must delegate to
+	 * pfb_software_check_save() and persist before it flushes config.xml, and the page must
+	 * carry no second, untested write of this field.
+	 */
+	public function testPageSaveDelegatesToTheExtractedSave(): void
+	{
+		$source = (string) file_get_contents(self::PAGE);
+		$start  = strpos($source, "if (\$_POST && isset(\$_POST['save'])) {");
+		$this->assertNotFalse($start, 'the Software page must keep its Save handler');
+		$end = strpos($source, "\n}\n", $start);
+		$this->assertNotFalse($end, "the Save handler's block must close at column 0");
+		$save = substr($source, $start, $end - $start);
+
+		$persist = strpos($save, 'pfb_software_check_save($_POST);');
+		$flush   = strpos($save, "write_config('[pfBlockerNG] save Software settings');");
+		$this->assertNotFalse($persist, 'the Save handler must persist through pfb_software_check_save()');
+		$this->assertNotFalse($flush, 'the Save handler must flush config.xml');
+		$this->assertTrue($persist < $flush, 'the token must be persisted before the flush');
+
+		$this->assertStringNotContainsString(
+			"PfbConfig::write('gen/pfb_software_check'",
+			$source,
+			'the page must not persist this field itself: an inline write is a path no test executes'
 		);
 	}
 }
